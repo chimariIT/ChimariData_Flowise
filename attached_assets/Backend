@@ -1,0 +1,160 @@
+from fastapi import FastAPI, UploadFile, Form, Depends, HTTPException
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional, List
+from datetime import datetime
+import pandas as pd
+import io, json, uuid, hashlib
+from sqlalchemy import create_engine, Column, String, Text, DateTime, ForeignKey
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship
+from sqlalchemy.exc import IntegrityError
+
+DATABASE_URL = "sqlite:///./test.db"  # Replace with your PostgreSQL URI for production
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(bind=engine)
+Base = declarative_base()
+
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Database Models
+class User(Base):
+    __tablename__ = "users"
+    username = Column(String, primary_key=True, unique=True, index=True)
+    hashed_password = Column(String)
+    projects = relationship("Project", back_populates="owner")
+
+class Project(Base):
+    __tablename__ = "projects"
+    id = Column(String, primary_key=True, index=True)
+    name = Column(String)
+    schema = Column(Text)
+    questions = Column(Text)
+    insights = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    owner_username = Column(String, ForeignKey("users.username"))
+    owner = relationship("User", back_populates="projects")
+
+Base.metadata.create_all(bind=engine)
+
+# Auth and Utility
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
+tokens_db = {}
+SECRET_KEY = "CHANGE_THIS"
+
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+def get_current_user(token: str = Depends(oauth2_scheme)):
+    if token not in tokens_db:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return tokens_db[token]
+
+# Pydantic model for registration
+class UserRegister(BaseModel):
+    username: str
+    password: str
+
+# Auth Endpoints
+@app.post("/register")
+def register(user: UserRegister, db=Depends(get_db)):
+    hashed = hash_password(user.password)
+    db_user = User(username=user.username, hashed_password=hashed)
+    try:
+        db.add(db_user)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="User already exists")
+    return {"message": "User registered"}
+
+@app.post("/login")
+def login(form_data: OAuth2PasswordRequestForm = Depends(), db=Depends(get_db)):
+    db_user = db.query(User).filter(User.username == form_data.username).first()
+    if not db_user or db_user.hashed_password != hash_password(form_data.password):
+        raise HTTPException(status_code=400, detail="Invalid credentials")
+    token = str(uuid.uuid4())
+    tokens_db[token] = db_user.username
+    return {"access_token": token, "token_type": "bearer"}
+
+# Project Endpoints
+@app.post("/upload_project")
+async def upload_project(
+    file: UploadFile,
+    name: str = Form(...),
+    schema: Optional[str] = Form(None),
+    questions: Optional[str] = Form(None),
+    user: str = Depends(get_current_user),
+    db=Depends(get_db)
+):
+    content = await file.read()
+    try:
+        if file.filename.endswith(".csv"):
+            df = pd.read_csv(io.StringIO(content.decode("utf-8")))
+        elif file.filename.endswith(".json"):
+            df = pd.read_json(io.BytesIO(content))
+        elif file.filename.endswith(".xlsx"):
+            df = pd.read_excel(io.BytesIO(content))
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported file type")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"File read error: {str(e)}")
+
+    schema_dict = json.loads(schema) if schema else {col: str(dtype) for col, dtype in df.dtypes.items()}
+    question_list = json.loads(questions) if questions else []
+    insights = {q: f"[Placeholder insight for '{q}']" for q in question_list}
+
+    project_id = str(uuid.uuid4())
+    db_project = Project(
+        id=project_id,
+        name=name,
+        schema=json.dumps(schema_dict),
+        questions=json.dumps(question_list),
+        insights=json.dumps(insights),
+        owner_username=user
+    )
+    db.add(db_project)
+    db.commit()
+    return {"project_id": project_id, "preview": df.head(5).to_dict(orient="records")}
+
+@app.get("/projects")
+def list_user_projects(user: str = Depends(get_current_user), db=Depends(get_db)):
+    projects = db.query(Project).filter(Project.owner_username == user).all()
+    return {"projects": [
+        {
+            "id": p.id,
+            "name": p.name,
+            "schema": json.loads(p.schema),
+            "questions": json.loads(p.questions),
+            "insights": json.loads(p.insights),
+            "created_at": p.created_at
+        } for p in projects
+    ]}
+
+@app.get("/project/{project_id}")
+def get_project(project_id: str, user: str = Depends(get_current_user), db=Depends(get_db)):
+    project = db.query(Project).filter(Project.id == project_id, Project.owner_username == user).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {
+        "id": project.id,
+        "name": project.name,
+        "schema": json.loads(project.schema),
+        "questions": json.loads(project.questions),
+        "insights": json.loads(project.insights),
+        "created_at": project.created_at
+    }
