@@ -4,6 +4,7 @@ import { storage } from "./storage";
 import { loginSchema, registerSchema, aiQuerySchema } from "@shared/schema";
 import { aiService } from "./ai-service";
 import { PricingService } from "./pricing-service";
+import { mlService } from "./ml-service";
 import passport from "passport";
 import session from "express-session";
 import { spawn } from "child_process";
@@ -753,6 +754,120 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ 
         error: "Failed to cancel subscription",
         message: error.message 
+      });
+    }
+  });
+
+  // ML Analysis endpoints
+  app.get("/api/ml/analysis-types", requireAuth, (req, res) => {
+    try {
+      const analysisTypes = mlService.getAnalysisTypes();
+      res.json(analysisTypes);
+    } catch (error: any) {
+      console.error("Error getting analysis types:", error);
+      res.status(500).json({ message: "Failed to get analysis types" });
+    }
+  });
+
+  app.post("/api/ml/recommend-analysis/:projectId", requireAuth, async (req: any, res) => {
+    try {
+      const { projectId } = req.params;
+      const userId = req.user!.id;
+      
+      const project = await storage.getProject(projectId, userId);
+      if (!project) {
+        return res.status(404).json({ message: "Project not found" });
+      }
+
+      const recommendations = mlService.getRecommendedAnalysis(project.schema, project.recordCount);
+      res.json({ recommendations });
+    } catch (error: any) {
+      console.error("Error getting analysis recommendations:", error);
+      res.status(500).json({ message: "Failed to get analysis recommendations" });
+    }
+  });
+
+  app.post("/api/ml/validate-request", authenticate, async (req: any, res) => {
+    try {
+      const { projectId, analysisType, targetColumn, features } = req.body;
+      const userId = req.user!.id;
+      
+      const project = await storage.getProject(projectId, userId);
+      if (!project) {
+        return res.status(404).json({ message: "Project not found" });
+      }
+
+      const validation = await mlService.validateAnalysisRequest(
+        { projectId, analysisType, targetColumn, features, userId },
+        project.schema
+      );
+      
+      res.json(validation);
+    } catch (error: any) {
+      console.error("Error validating analysis request:", error);
+      res.status(500).json({ message: "Failed to validate analysis request" });
+    }
+  });
+
+  app.post("/api/ml/run-analysis", authenticate, async (req: any, res) => {
+    try {
+      const { projectId, analysisType, targetColumn, features, parameters } = req.body;
+      const userId = req.user!.id;
+      
+      const project = await storage.getProject(projectId, userId);
+      if (!project) {
+        return res.status(404).json({ message: "Project not found" });
+      }
+
+      // Check usage quota
+      const canMakeQuery = await storage.canUserMakeQuery(userId);
+      if (!canMakeQuery) {
+        return res.status(429).json({ message: "Usage quota exceeded" });
+      }
+
+      // Validate request
+      const validation = await mlService.validateAnalysisRequest(
+        { projectId, analysisType, targetColumn, features, userId },
+        project.schema
+      );
+      
+      if (!validation.valid) {
+        return res.status(400).json({ errors: validation.errors });
+      }
+
+      // Find the uploaded data file
+      const dataPath = path.join(process.cwd(), 'uploads', `${projectId}.csv`);
+      if (!fs.existsSync(dataPath)) {
+        return res.status(404).json({ message: "Project data file not found" });
+      }
+
+      // Run ML analysis
+      const analysisRequest = {
+        projectId,
+        analysisType,
+        targetColumn,
+        features,
+        parameters,
+        userId
+      };
+
+      const result = await mlService.runAnalysis(analysisRequest, dataPath);
+
+      // Log usage
+      await storage.logUsage({
+        userId,
+        queryType: `ml_${analysisType}`,
+        provider: 'platform',
+        cost: 0,
+        metadata: { projectId, analysisType }
+      });
+
+      res.json(result);
+    } catch (error: any) {
+      console.error("Error running ML analysis:", error);
+      res.status(500).json({ 
+        message: "ML analysis failed", 
+        error: error.message 
       });
     }
   });
