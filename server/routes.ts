@@ -169,8 +169,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/ai/providers", (req, res) => {
     res.json({
       providers: aiService.getAvailableProviders(),
-      info: aiService.getProviderInfo()
+      info: aiService.getProviderInfo(),
+      tiers: aiService.getSubscriptionTiers()
     });
+  });
+
+  // Subscription management
+  app.post("/api/subscription/upgrade", requireAuth, async (req, res) => {
+    try {
+      const { tier } = req.body;
+      
+      if (!["starter", "professional", "enterprise"].includes(tier)) {
+        return res.status(400).json({ error: "Invalid subscription tier" });
+      }
+
+      const settings = await storage.getUserSettings(req.user.userId);
+      if (!settings) {
+        return res.status(404).json({ error: "User settings not found" });
+      }
+
+      const quotaMap = {
+        starter: 50,
+        professional: 500,
+        enterprise: -1 // Unlimited
+      };
+
+      const updated = await storage.updateUserSettings(req.user.userId, {
+        subscriptionTier: tier,
+        usageQuota: quotaMap[tier as keyof typeof quotaMap]
+      });
+
+      res.json({ 
+        message: `Subscription upgraded to ${tier}`,
+        settings: updated 
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to upgrade subscription" });
+    }
   });
 
   // AI Query route

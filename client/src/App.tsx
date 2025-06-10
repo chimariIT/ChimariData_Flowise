@@ -106,7 +106,10 @@ function App() {
         )}
         
         {currentView === "settings" && (
-          <SettingsPage onBack={handleBackFromSettings} />
+          <SettingsPage 
+            onBack={handleBackFromSettings} 
+            onPricing={() => setCurrentView("pricing")}
+          />
         )}
       </TooltipProvider>
     </QueryClientProvider>
