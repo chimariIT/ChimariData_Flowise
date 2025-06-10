@@ -264,61 +264,96 @@ export default function SettingsPage({ onBack, onPricing }: SettingsPageProps) {
             </Card>
           </div>
 
-          {/* Provider Information */}
-          <div className="lg:col-span-1">
+          {/* Right Sidebar */}
+          <div className="space-y-6">
+            {/* Usage Tracking */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center">
+                  <BarChart3 className="w-5 h-5 text-primary mr-2" />
+                  Usage This Month
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div>
+                    <div className="flex justify-between text-sm mb-2">
+                      <span>AI Queries</span>
+                      <span>
+                        {settings?.usageCount || 0} / {settings?.usageQuota === -1 ? "∞" : settings?.usageQuota || 50}
+                      </span>
+                    </div>
+                    <Progress value={usagePercentage} className="h-2" />
+                  </div>
+                  
+                  <div className="pt-3 border-t">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <Badge variant={currentTier === "starter" ? "secondary" : "default"}>
+                          {tierInfo.name}
+                        </Badge>
+                      </div>
+                      <Button variant="outline" size="sm" onClick={onPricing}>
+                        {currentTier === "starter" ? "Upgrade" : "Change Plan"}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Current Plan Features */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center">
+                  <Crown className="w-5 h-5 text-primary mr-2" />
+                  Your Plan Features
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  {tierInfo.features?.map((feature: string, index: number) => (
+                    <div key={index} className="flex items-start space-x-2">
+                      <Check className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
+                      <span className="text-sm text-slate-700">{feature}</span>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Provider Information */}
             {selectedProviderInfo && (
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center">
-                    <Info className="w-5 h-5 text-primary mr-2" />
-                    Provider Info
+                    <Info className="w-5 h-5 text-blue-500 mr-2" />
+                    {selectedProviderInfo.name}
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div>
-                    <h4 className="font-medium text-slate-900">{selectedProviderInfo.name}</h4>
-                    <p className="text-sm text-slate-600">{selectedProviderInfo.model}</p>
-                  </div>
-                  
-                  <div>
-                    <h5 className="font-medium text-slate-700 mb-1">Pricing</h5>
-                    <p className="text-sm text-slate-600">{selectedProviderInfo.pricing}</p>
-                  </div>
-                  
-                  <div>
-                    <h5 className="font-medium text-slate-700 mb-1">Description</h5>
                     <p className="text-sm text-slate-600">{selectedProviderInfo.description}</p>
                   </div>
-
-                  <div className="pt-4 border-t border-slate-200">
-                    <h5 className="font-medium text-slate-700 mb-2">Getting Your API Key</h5>
-                    <div className="text-sm text-slate-600 space-y-1">
-                      {formData.aiProvider === "anthropic" && (
-                        <>
-                          <p>1. Visit console.anthropic.com</p>
-                          <p>2. Create an account or sign in</p>
-                          <p>3. Go to API Keys section</p>
-                          <p>4. Create a new API key</p>
-                        </>
-                      )}
-                      {formData.aiProvider === "openai" && (
-                        <>
-                          <p>1. Visit platform.openai.com</p>
-                          <p>2. Create an account or sign in</p>
-                          <p>3. Go to API Keys section</p>
-                          <p>4. Create a new secret key</p>
-                        </>
-                      )}
-                      {formData.aiProvider === "gemini" && (
-                        <>
-                          <p>1. Visit console.cloud.google.com</p>
-                          <p>2. Enable the Gemini API</p>
-                          <p>3. Create credentials</p>
-                          <p>4. Generate an API key</p>
-                        </>
-                      )}
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span className="font-medium">Model:</span>
+                      <span>{selectedProviderInfo.model}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="font-medium">Pricing:</span>
+                      <span>{selectedProviderInfo.pricing}</span>
                     </div>
                   </div>
+                  
+                  {formData.aiProvider !== "platform" && (
+                    <div className="bg-blue-50 p-3 rounded-lg">
+                      <p className="text-sm text-blue-800">
+                        <strong>Getting your API key:</strong> Visit the provider's website to create an account and generate an API key. 
+                        Keep your key secure and never share it publicly.
+                      </p>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             )}
