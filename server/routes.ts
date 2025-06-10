@@ -787,7 +787,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/ml/validate-request", authenticate, async (req: any, res) => {
+  app.post("/api/ml/validate-request", requireAuth, async (req: any, res) => {
     try {
       const { projectId, analysisType, targetColumn, features } = req.body;
       const userId = req.user!.id;
@@ -809,7 +809,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/ml/run-analysis", authenticate, async (req: any, res) => {
+  app.post("/api/ml/run-analysis", requireAuth, async (req: any, res) => {
     try {
       const { projectId, analysisType, targetColumn, features, parameters } = req.body;
       const userId = req.user!.id;
