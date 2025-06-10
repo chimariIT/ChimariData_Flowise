@@ -190,39 +190,75 @@ export default function SettingsPage({ onBack, onPricing }: SettingsPageProps) {
                         <SelectValue placeholder="Select AI provider" />
                       </SelectTrigger>
                       <SelectContent>
-                        {providersData?.providers.map((provider) => (
+                        {providers.map((provider: string) => (
                           <SelectItem key={provider} value={provider}>
-                            {providersData.info[provider]?.name || provider}
+                            {providerInfo[provider]?.name || provider}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
 
-                  <div>
-                    <Label htmlFor="apiKey" className="flex items-center">
-                      <Key className="w-4 h-4 mr-1" />
-                      API Key
-                    </Label>
-                    <Input
-                      id="apiKey"
-                      type="password"
-                      placeholder="Enter your API key"
-                      value={formData.aiApiKey}
-                      onChange={(e) => handleInputChange("aiApiKey", e.target.value)}
-                    />
-                    <p className="text-sm text-slate-500 mt-1">
-                      Your API key is stored securely and only used for processing your data queries.
-                    </p>
-                  </div>
+                  {/* API Key field - only show for non-platform providers */}
+                  {formData.aiProvider !== "platform" && (
+                    <div>
+                      <Label htmlFor="apiKey" className="flex items-center">
+                        <Key className="w-4 h-4 mr-1" />
+                        API Key
+                        {requiresUpgrade && (
+                          <Badge variant="secondary" className="ml-2">Upgrade Required</Badge>
+                        )}
+                      </Label>
+                      <Input
+                        id="apiKey"
+                        type="password"
+                        placeholder="Enter your API key"
+                        value={formData.aiApiKey}
+                        onChange={(e) => handleInputChange("aiApiKey", e.target.value)}
+                        disabled={requiresUpgrade}
+                      />
+                      {requiresUpgrade ? (
+                        <p className="text-sm text-amber-600 mt-1 flex items-center">
+                          <AlertTriangle className="w-4 h-4 mr-1" />
+                          This provider requires a Professional plan or higher.
+                        </p>
+                      ) : (
+                        <p className="text-sm text-slate-500 mt-1">
+                          Your API key is stored securely and only used for processing your data queries.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {formData.aiProvider === "platform" && (
+                    <div className="bg-green-50 p-4 rounded-lg">
+                      <h4 className="font-medium text-green-800 mb-2">Platform AI Service</h4>
+                      <p className="text-sm text-green-700">
+                        You're using our default AI service powered by Google Gemini. No API key required! 
+                        This service is included in your plan and ready to use immediately.
+                      </p>
+                    </div>
+                  )}
 
                   <Button 
                     type="submit" 
-                    disabled={updateSettingsMutation.isPending}
+                    disabled={updateSettingsMutation.isPending || requiresUpgrade}
                     className="w-full"
                   >
                     {updateSettingsMutation.isPending ? "Saving..." : "Save Settings"}
                   </Button>
+
+                  {requiresUpgrade && (
+                    <Button 
+                      type="button" 
+                      onClick={onPricing}
+                      className="w-full mt-2"
+                      variant="outline"
+                    >
+                      <Crown className="w-4 h-4 mr-2" />
+                      Upgrade to Use This Provider
+                    </Button>
+                  )}
                 </form>
               </CardContent>
             </Card>

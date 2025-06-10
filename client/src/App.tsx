@@ -9,11 +9,12 @@ import AuthPage from "./pages/auth";
 import Dashboard from "./pages/dashboard";
 import ProjectResults from "./pages/project-results";
 import SettingsPage from "./pages/settings";
+import PricingPage from "./pages/pricing";
 import NotFound from "@/pages/not-found";
 
 function App() {
   const [user, setUser] = useState<{ id: number; username: string } | null>(null);
-  const [currentView, setCurrentView] = useState<"auth" | "dashboard" | "project" | "settings">("auth");
+  const [currentView, setCurrentView] = useState<"auth" | "dashboard" | "project" | "settings" | "pricing">("auth");
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -110,6 +111,10 @@ function App() {
             onBack={handleBackFromSettings} 
             onPricing={() => setCurrentView("pricing")}
           />
+        )}
+        
+        {currentView === "pricing" && (
+          <PricingPage onBack={() => setCurrentView("settings")} />
         )}
       </TooltipProvider>
     </QueryClientProvider>
