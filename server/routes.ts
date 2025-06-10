@@ -7,6 +7,8 @@ import { PricingService } from "./pricing-service";
 import { spawn } from "child_process";
 import path from "path";
 import Stripe from "stripe";
+import multer from "multer";
+import fs from "fs";
 
 // Extend Express Request type to include user property
 declare global {
@@ -19,6 +21,30 @@ declare global {
 
 // Simple session storage for demo purposes
 const sessions = new Map<string, { userId: number; username: string }>();
+
+// Configure multer for file uploads
+const upload = multer({
+  dest: 'uploads/',
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    // Accept CSV, Excel, and JSON files
+    const allowedTypes = [
+      'text/csv',
+      'application/csv',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/json'
+    ];
+    
+    if (allowedTypes.includes(file.mimetype) || file.originalname.endsWith('.csv')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Please upload CSV, Excel, or JSON files only.'));
+    }
+  }
+});
 
 // Initialize Stripe
 if (!process.env.STRIPE_SECRET_KEY) {
@@ -142,6 +168,115 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(project);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch project" });
+    }
+  });
+
+  // File upload route
+  app.post("/api/projects/upload", requireAuth, upload.single('file'), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "No file uploaded" });
+      }
+
+      if (!req.user) {
+        return res.status(401).json({ error: "Authentication required" });
+      }
+
+      const { name, questions } = req.body;
+      if (!name) {
+        return res.status(400).json({ error: "Project name is required" });
+      }
+
+      // Parse questions if provided
+      let questionsArray: string[] = [];
+      try {
+        if (questions) {
+          questionsArray = JSON.parse(questions);
+        }
+      } catch (e) {
+        return res.status(400).json({ error: "Invalid questions format" });
+      }
+
+      // Read and process the uploaded file
+      const filePath = req.file.path;
+      const fileContent = fs.readFileSync(filePath, 'utf-8');
+      
+      // Parse CSV data (simple implementation)
+      const lines = fileContent.split('\n').filter(line => line.trim());
+      if (lines.length < 2) {
+        return res.status(400).json({ error: "File must contain at least header and one data row" });
+      }
+
+      const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
+      const dataRows = lines.slice(1).map(line => 
+        line.split(',').map(cell => cell.trim().replace(/"/g, ''))
+      );
+
+      // Create schema from headers
+      const schema: Record<string, string> = {};
+      headers.forEach(header => {
+        schema[header] = 'text'; // Simple type detection
+      });
+
+      // Sample data for AI analysis (first 10 rows)
+      const sampleData = dataRows.slice(0, 10).map(row => {
+        const obj: Record<string, any> = {};
+        headers.forEach((header, index) => {
+          obj[header] = row[index] || '';
+        });
+        return obj;
+      });
+
+      // Calculate data size
+      const dataSizeMB = Math.round(req.file.size / (1024 * 1024) * 100) / 100;
+
+      // Create project
+      const project = await storage.createProject({
+        name,
+        schema,
+        questions: questionsArray,
+        insights: {},
+        recordCount: dataRows.length,
+        status: "active",
+        dataSnapshot: sampleData,
+        dataSizeMB,
+        paymentType: "subscription",
+        analysisType: "standard",
+        complexityScore: PricingService.assessDataComplexity(schema, dataRows.length) === 'simple' ? 1 : 
+                       PricingService.assessDataComplexity(schema, dataRows.length) === 'moderate' ? 3 : 5,
+        ownerId: req.user.userId
+      });
+
+      // Clean up uploaded file
+      fs.unlinkSync(filePath);
+
+      res.json({
+        success: true,
+        project: {
+          id: project.id,
+          name: project.name,
+          recordCount: project.recordCount,
+          status: project.status,
+          createdAt: project.createdAt
+        }
+      });
+
+    } catch (error: any) {
+      console.error("Upload error:", error);
+      
+      // Clean up file if it exists
+      if (req.file?.path) {
+        try {
+          fs.unlinkSync(req.file.path);
+        } catch (e) {
+          console.error("Failed to cleanup file:", e);
+        }
+      }
+      
+      res.status(500).json({ 
+        error: "Upload failed", 
+        message: error.message 
+      });
     }
   });
 

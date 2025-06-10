@@ -76,7 +76,7 @@ export const projects = {
     formData.append("name", name);
     formData.append("questions", JSON.stringify(questions));
 
-    const res = await fetch("http://localhost:8000/upload_project", {
+    const res = await fetch(`${API_BASE}/projects/upload`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${auth.getToken()}`
@@ -86,7 +86,7 @@ export const projects = {
 
     if (!res.ok) {
       const error = await res.json();
-      throw new Error(error.detail || "Upload failed");
+      throw new Error(error.message || "Upload failed");
     }
 
     return res.json();
