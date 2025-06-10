@@ -13,11 +13,12 @@ import SettingsPage from "./pages/settings";
 import PricingPage from "./pages/pricing";
 import SubscribePage from "./pages/subscribe";
 import AnalysisPaymentPage from "./pages/analysis-payment";
+import MLAnalysisPage from "./pages/ml-analysis";
 import NotFound from "@/pages/not-found";
 
 function App() {
   const [user, setUser] = useState<{ id: number; username: string } | null>(null);
-  const [currentView, setCurrentView] = useState<"landing" | "auth" | "dashboard" | "project" | "settings" | "pricing" | "subscribe" | "analysis-payment">("landing");
+  const [currentView, setCurrentView] = useState<"landing" | "auth" | "dashboard" | "project" | "settings" | "pricing" | "subscribe" | "analysis-payment" | "ml-analysis">("landing");
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedProjectData, setSelectedProjectData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
