@@ -107,8 +107,10 @@ async def upload_project(
         else:
             insights[question] = f"Analysis of this business question reveals important insights from the dataset. Key findings are based on {len(df)} data points."
     
-    # Create project
+    # Create project with data snapshot for AI analysis
     project_id = str(uuid.uuid4())
+    sample_data = df.head(10).to_dict(orient="records")  # Store more sample data for AI
+    
     project = {
         "id": project_id,
         "name": name,
@@ -118,7 +120,8 @@ async def upload_project(
         "created_at": datetime.utcnow().isoformat(),
         "owner_id": user["user_id"],
         "record_count": len(df),
-        "status": "active"
+        "status": "active",
+        "data_snapshot": sample_data
     }
     
     projects_db[project_id] = project

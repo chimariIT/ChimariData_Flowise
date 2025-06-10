@@ -4,15 +4,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
 import { projects, type Project } from "@/lib/api";
-import { ArrowLeft, Download, Share, Database, Lightbulb, BarChart3, PieChart, Calendar, CheckCircle } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart as RechartsPieChart, Cell } from "recharts";
+import { ArrowLeft, Download, Share, Database, Lightbulb, BarChart3, PieChart, Calendar, CheckCircle, Settings } from "lucide-react";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart as RechartsPieChart, Cell, Pie } from "recharts";
+import AIChat from "@/components/ai-chat";
 
 interface ProjectResultsProps {
   projectId: string;
   onBack: () => void;
+  onSettings: () => void;
 }
 
-export default function ProjectResults({ projectId, onBack }: ProjectResultsProps) {
+export default function ProjectResults({ projectId, onBack, onSettings }: ProjectResultsProps) {
   const { toast } = useToast();
 
   const { data: project, isLoading } = useQuery({
