@@ -4,6 +4,8 @@ import { storage } from "./storage";
 import { loginSchema, registerSchema, aiQuerySchema } from "@shared/schema";
 import { aiService } from "./ai-service";
 import { PricingService } from "./pricing-service";
+import passport from "passport";
+import session from "express-session";
 import { spawn } from "child_process";
 import path from "path";
 import Stripe from "stripe";
