@@ -31,6 +31,9 @@ export const userSettings = pgTable("user_settings", {
   usageQuota: integer("usage_quota").default(50), // monthly AI queries allowed
   usageCount: integer("usage_count").default(0), // current month usage
   lastResetDate: timestamp("last_reset_date").defaultNow(),
+  stripeCustomerId: text("stripe_customer_id"),
+  stripeSubscriptionId: text("stripe_subscription_id"),
+  monthlyUsage: integer("monthly_usage").default(0),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

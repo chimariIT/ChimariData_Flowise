@@ -5,9 +5,18 @@ import { loginSchema, registerSchema, aiQuerySchema } from "@shared/schema";
 import { aiService } from "./ai-service";
 import { spawn } from "child_process";
 import path from "path";
+import Stripe from "stripe";
 
 // Simple session storage for demo purposes
 const sessions = new Map<string, { userId: number; username: string }>();
+
+// Initialize Stripe
+if (!process.env.STRIPE_SECRET_KEY) {
+  throw new Error('Missing required Stripe secret: STRIPE_SECRET_KEY');
+}
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+  apiVersion: "2023-10-16",
+});
 
 function generateToken(): string {
   return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
@@ -291,6 +300,229 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error("AI Query Error:", error);
       res.status(500).json({ 
         error: error instanceof Error ? error.message : "Failed to process AI query" 
+      });
+    }
+  });
+
+  // Stripe Payment Routes
+  app.post("/api/create-payment-intent", async (req, res) => {
+    try {
+      const { amount, planName } = req.body;
+      
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: Math.round(amount * 100), // Convert to cents
+        currency: "usd",
+        metadata: {
+          planName: planName || "professional"
+        }
+      });
+      
+      res.json({ 
+        clientSecret: paymentIntent.client_secret,
+        amount: amount,
+        planName: planName
+      });
+    } catch (error: any) {
+      console.error("Payment intent creation error:", error);
+      res.status(500).json({ 
+        error: "Failed to create payment intent",
+        message: error.message 
+      });
+    }
+  });
+
+  // Create or retrieve subscription
+  app.post('/api/subscription', async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      return res.status(401).json({ error: "Authorization required" });
+    }
+
+    const token = authHeader.substring(7);
+    const session = sessions.get(token);
+    if (!session) {
+      return res.status(401).json({ error: "Invalid session" });
+    }
+
+    try {
+      const { planType, paymentMethodId } = req.body;
+      
+      // Get user settings to check for existing customer
+      let settings = await storage.getUserSettings(session.userId);
+      if (!settings) {
+        settings = await storage.createUserSettings({
+          userId: session.userId,
+          aiProvider: "gemini",
+          subscriptionTier: "starter",
+          usageQuota: 50,
+          monthlyUsage: 0,
+          lastResetDate: new Date().toISOString(),
+          stripeCustomerId: null,
+          stripeSubscriptionId: null
+        });
+      }
+
+      let customerId = settings.stripeCustomerId;
+      
+      // Create customer if doesn't exist
+      if (!customerId) {
+        const customer = await stripe.customers.create({
+          metadata: {
+            userId: session.userId.toString(),
+            username: session.username
+          }
+        });
+        customerId = customer.id;
+        
+        // Update user settings with customer ID
+        await storage.updateUserSettings(session.userId, {
+          stripeCustomerId: customerId
+        });
+      }
+
+      // Attach payment method to customer
+      if (paymentMethodId) {
+        await stripe.paymentMethods.attach(paymentMethodId, {
+          customer: customerId,
+        });
+
+        // Set as default payment method
+        await stripe.customers.update(customerId, {
+          invoice_settings: {
+            default_payment_method: paymentMethodId,
+          },
+        });
+      }
+
+      // Create subscription based on plan type
+      let priceId: string;
+      let newTier: string;
+      let newQuota: number;
+
+      switch (planType) {
+        case "professional":
+          priceId = "price_professional"; // You'll need to create this in Stripe Dashboard
+          newTier = "professional";
+          newQuota = 1000;
+          break;
+        case "enterprise":
+          priceId = "price_enterprise"; // You'll need to create this in Stripe Dashboard
+          newTier = "enterprise";
+          newQuota = -1; // Unlimited
+          break;
+        default:
+          return res.status(400).json({ error: "Invalid plan type" });
+      }
+
+      const subscription = await stripe.subscriptions.create({
+        customer: customerId,
+        items: [{ price: priceId }],
+        payment_behavior: 'default_incomplete',
+        payment_settings: { save_default_payment_method: 'on_subscription' },
+        expand: ['latest_invoice.payment_intent'],
+      });
+
+      // Update user settings with subscription info
+      await storage.updateUserSettings(session.userId, {
+        stripeSubscriptionId: subscription.id,
+        subscriptionTier: newTier,
+        usageQuota: newQuota
+      });
+
+      res.json({
+        subscriptionId: subscription.id,
+        clientSecret: subscription.latest_invoice?.payment_intent?.client_secret,
+        status: subscription.status
+      });
+
+    } catch (error: any) {
+      console.error("Subscription creation error:", error);
+      res.status(500).json({ 
+        error: "Failed to create subscription",
+        message: error.message 
+      });
+    }
+  });
+
+  // Get subscription status
+  app.get('/api/subscription/status', async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      return res.status(401).json({ error: "Authorization required" });
+    }
+
+    const token = authHeader.substring(7);
+    const session = sessions.get(token);
+    if (!session) {
+      return res.status(401).json({ error: "Invalid session" });
+    }
+
+    try {
+      const settings = await storage.getUserSettings(session.userId);
+      if (!settings?.stripeSubscriptionId) {
+        return res.json({ 
+          hasSubscription: false,
+          tier: "starter",
+          quota: 50
+        });
+      }
+
+      const subscription = await stripe.subscriptions.retrieve(settings.stripeSubscriptionId);
+      
+      res.json({
+        hasSubscription: true,
+        subscriptionId: subscription.id,
+        status: subscription.status,
+        tier: settings.subscriptionTier,
+        quota: settings.usageQuota,
+        currentPeriodEnd: subscription.current_period_end,
+        cancelAtPeriodEnd: subscription.cancel_at_period_end
+      });
+
+    } catch (error: any) {
+      console.error("Subscription status error:", error);
+      res.status(500).json({ 
+        error: "Failed to get subscription status",
+        message: error.message 
+      });
+    }
+  });
+
+  // Cancel subscription
+  app.post('/api/subscription/cancel', async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      return res.status(401).json({ error: "Authorization required" });
+    }
+
+    const token = authHeader.substring(7);
+    const session = sessions.get(token);
+    if (!session) {
+      return res.status(401).json({ error: "Invalid session" });
+    }
+
+    try {
+      const settings = await storage.getUserSettings(session.userId);
+      if (!settings?.stripeSubscriptionId) {
+        return res.status(404).json({ error: "No active subscription found" });
+      }
+
+      const subscription = await stripe.subscriptions.update(
+        settings.stripeSubscriptionId,
+        { cancel_at_period_end: true }
+      );
+
+      res.json({
+        message: "Subscription will be canceled at the end of the current period",
+        cancelAtPeriodEnd: true,
+        currentPeriodEnd: subscription.current_period_end
+      });
+
+    } catch (error: any) {
+      console.error("Subscription cancellation error:", error);
+      res.status(500).json({ 
+        error: "Failed to cancel subscription",
+        message: error.message 
       });
     }
   });
