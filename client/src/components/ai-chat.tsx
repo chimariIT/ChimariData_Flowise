@@ -42,13 +42,47 @@ export default function AIChat({ projectId }: AIChatProps) {
         provider: data.provider
       };
       setMessages(prev => [...prev, aiMessage]);
+      
+      // Show usage information if available
+      if (data.usage) {
+        const { current, quota, remaining } = data.usage;
+        if (remaining <= 5 && remaining > 0) {
+          toast({
+            title: "Usage Alert",
+            description: `You have ${remaining} queries remaining this month.`,
+            variant: "default"
+          });
+        } else if (remaining <= 0) {
+          toast({
+            title: "Quota Reached",
+            description: "You've reached your monthly limit. Upgrade for more queries.",
+            variant: "destructive"
+          });
+        }
+      }
     },
     onError: (error: any) => {
-      toast({
-        title: "AI Query Failed",
-        description: error.message || "Failed to process your question. Please check your AI settings.",
-        variant: "destructive"
-      });
+      const errorMsg = error.message || "Failed to process your question.";
+      
+      if (errorMsg.includes("quota exceeded")) {
+        toast({
+          title: "Monthly Limit Reached",
+          description: "Upgrade your plan to continue asking questions about your data.",
+          variant: "destructive"
+        });
+      } else if (errorMsg.includes("not configured")) {
+        toast({
+          title: "AI Setup Required", 
+          description: "Configure your AI provider in settings to start asking questions.",
+          variant: "destructive"
+        });
+      } else {
+        toast({
+          title: "AI Query Failed",
+          description: errorMsg,
+          variant: "destructive"
+        });
+      }
     }
   });
 

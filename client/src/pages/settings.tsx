@@ -4,14 +4,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Progress } from "@/components/ui/progress";
+import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Settings, Brain, Key, Info } from "lucide-react";
+import { ArrowLeft, Settings, Brain, Key, Info, Crown, BarChart3, AlertTriangle } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { auth } from "@/lib/api";
 
 interface SettingsPageProps {
   onBack: () => void;
+  onPricing: () => void;
 }
 
 interface AIProviderInfo {
@@ -19,16 +22,18 @@ interface AIProviderInfo {
   model: string;
   pricing: string;
   description: string;
+  tier?: string;
 }
 
 interface ProvidersData {
   providers: string[];
   info: Record<string, AIProviderInfo>;
+  tiers: Record<string, any>;
 }
 
-export default function SettingsPage({ onBack }: SettingsPageProps) {
+export default function SettingsPage({ onBack, onPricing }: SettingsPageProps) {
   const [formData, setFormData] = useState({
-    aiProvider: "anthropic",
+    aiProvider: "platform",
     aiApiKey: ""
   });
   const { toast } = useToast();
@@ -50,7 +55,7 @@ export default function SettingsPage({ onBack }: SettingsPageProps) {
     queryFn: async () => {
       const res = await fetch("/api/ai/providers");
       if (!res.ok) throw new Error("Failed to fetch providers");
-      return res.json() as ProvidersData;
+      return res.json();
     },
   });
 
@@ -78,7 +83,7 @@ export default function SettingsPage({ onBack }: SettingsPageProps) {
   useEffect(() => {
     if (settings) {
       setFormData({
-        aiProvider: settings.aiProvider || "anthropic",
+        aiProvider: settings.aiProvider || "platform",
         aiApiKey: settings.aiApiKey || ""
       });
     }
@@ -94,10 +99,11 @@ export default function SettingsPage({ onBack }: SettingsPageProps) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!formData.aiApiKey.trim()) {
+    // Platform provider doesn't need API key
+    if (formData.aiProvider !== "platform" && !formData.aiApiKey.trim()) {
       toast({
         title: "API Key Required",
-        description: "Please enter your API key to enable AI features.",
+        description: "Please enter your API key to enable this AI provider.",
         variant: "destructive"
       });
       return;
@@ -114,7 +120,24 @@ export default function SettingsPage({ onBack }: SettingsPageProps) {
     );
   }
 
-  const selectedProviderInfo = providersData?.info[formData.aiProvider];
+  const providers = providersData?.providers || [];
+  const providerInfo = providersData?.info || {};
+  const tiers = providersData?.tiers || {};
+  
+  // Calculate usage percentage for progress bar
+  const usagePercentage = settings?.usageQuota ? 
+    Math.min((settings.usageCount / settings.usageQuota) * 100, 100) : 0;
+  
+  // Get current tier info
+  const currentTier = settings?.subscriptionTier || "starter";
+  const tierInfo = tiers[currentTier] || { name: "Starter", features: [] };
+  
+  const selectedProviderInfo = providerInfo[formData.aiProvider];
+  
+  // Check if provider requires upgrade
+  const requiresUpgrade = selectedProviderInfo?.tier && 
+    selectedProviderInfo.tier !== "starter" && 
+    currentTier === "starter";
 
   return (
     <div className="min-h-screen bg-slate-50">
