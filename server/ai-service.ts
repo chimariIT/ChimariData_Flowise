@@ -132,28 +132,35 @@ export class AIService {
         model: 'Gemini 1.5 Pro (Platform)',
         pricing: 'Included in your plan',
         description: 'Our default AI service - get started immediately with no setup required',
-        tier: 'starter'
+        tier: 'starter',
+        requiresApiKey: false
       },
       anthropic: {
         name: 'Anthropic Claude',
         model: 'Claude 3.5 Sonnet',
         pricing: '$3 per million input tokens, $15 per million output tokens',
-        description: 'High-quality analysis with excellent reasoning capabilities',
-        tier: 'professional'
+        description: 'High-quality analysis with excellent reasoning capabilities for complex data relationships',
+        tier: 'professional',
+        requiresApiKey: true,
+        setupInstructions: 'Get your API key from console.anthropic.com'
       },
       openai: {
-        name: 'OpenAI GPT-4o',
+        name: 'OpenAI GPT-4',
         model: 'GPT-4o',
         pricing: '$2.50 per million input tokens, $10 per million output tokens',
         description: 'Balanced performance and cost with strong analytical skills',
-        tier: 'professional'
+        tier: 'professional',
+        requiresApiKey: true,
+        setupInstructions: 'Get your API key from platform.openai.com'
       },
       gemini: {
         name: 'Google Gemini',
         model: 'Gemini 1.5 Pro',
-        pricing: '$3.50 per million input tokens, $10.50 per million output tokens',
-        description: 'Google\'s advanced model with multimodal capabilities',
-        tier: 'professional'
+        pricing: '$1.25 per million input tokens, $5 per million output tokens',
+        description: 'Google\'s advanced AI with excellent multimodal capabilities',
+        tier: 'professional',
+        requiresApiKey: true,
+        setupInstructions: 'Get your API key from ai.google.dev'
       }
     };
   }

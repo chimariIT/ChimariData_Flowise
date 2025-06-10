@@ -4,7 +4,9 @@ export interface IStorage {
   // User methods
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
+  updateUserTokens(userId: number, accessToken: string, refreshToken: string): Promise<User | undefined>;
   
   // Project methods
   createProject(project: InsertProject & { ownerId: number }): Promise<Project>;
@@ -51,6 +53,23 @@ export class MemStorage implements IStorage {
     return Array.from(this.users.values()).find(
       (user) => user.username === username,
     );
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    return Array.from(this.users.values()).find(
+      (user) => user.email === email,
+    );
+  }
+
+  async updateUserTokens(userId: number, accessToken: string, refreshToken: string): Promise<User | undefined> {
+    const user = this.users.get(userId);
+    if (user) {
+      user.accessToken = accessToken;
+      user.refreshToken = refreshToken;
+      this.users.set(userId, user);
+      return user;
+    }
+    return undefined;
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
