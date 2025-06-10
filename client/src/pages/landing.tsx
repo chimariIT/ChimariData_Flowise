@@ -300,7 +300,7 @@ export default function LandingPage({ onGetStarted }: LandingPageProps) {
               </CardHeader>
             </Card>
 
-            <Card className={`text-center group hover:shadow-xl transition-all duration-500 hover:-translate-y-2 animate-float ${isVisible ? 'animate-fadeIn' : ''}`} style={{animationDelay: '0.6s', animationDelay: '1s'}}>
+            <Card className={`text-center group hover:shadow-xl transition-all duration-500 hover:-translate-y-2 animate-float ${isVisible ? 'animate-fadeIn' : ''}`} style={{animationDelay: '0.6s'}}>
               <CardHeader>
                 <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:animate-bounce group-hover:bg-green-200 transition-colors duration-300">
                   <MessageSquare className="w-8 h-8 text-green-600 group-hover:scale-110 transition-transform duration-300" />
@@ -312,7 +312,7 @@ export default function LandingPage({ onGetStarted }: LandingPageProps) {
               </CardHeader>
             </Card>
 
-            <Card className={`text-center group hover:shadow-xl transition-all duration-500 hover:-translate-y-2 animate-float ${isVisible ? 'animate-slideInRight' : ''}`} style={{animationDelay: '0.8s', animationDelay: '2s'}}>
+            <Card className={`text-center group hover:shadow-xl transition-all duration-500 hover:-translate-y-2 animate-float ${isVisible ? 'animate-slideInRight' : ''}`} style={{animationDelay: '0.8s'}}>
               <CardHeader>
                 <div className="w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:animate-bounce group-hover:bg-purple-200 transition-colors duration-300">
                   <TrendingUp className="w-8 h-8 text-purple-600 group-hover:scale-110 transition-transform duration-300" />
@@ -329,70 +329,70 @@ export default function LandingPage({ onGetStarted }: LandingPageProps) {
 
       {/* Features */}
       <section className="py-16 px-4 sm:px-6 lg:px-8 bg-white">
-        <div className="max-w-6xl mx-auto">
+        <div className={`max-w-6xl mx-auto transition-all duration-1000 ${isVisible ? 'opacity-100' : 'opacity-0'}`}>
           <div className="text-center mb-12">
-            <h2 className="text-3xl font-bold text-slate-900 mb-4">
+            <h2 className={`text-3xl font-bold text-slate-900 mb-4 transition-all duration-700 ${isVisible ? 'translate-y-0 opacity-100' : 'translate-y-5 opacity-0'}`}>
               Powerful Features, Simple Experience
             </h2>
           </div>
 
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-            <div className="flex items-start space-x-4">
-              <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                <Brain className="w-5 h-5 text-blue-600" />
+            <div className={`flex items-start space-x-4 group hover:scale-105 transition-all duration-300 cursor-pointer ${isVisible ? 'animate-fadeIn' : ''}`} style={{animationDelay: '0.1s'}}>
+              <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:animate-bounce group-hover:bg-blue-200 transition-colors duration-300">
+                <Brain className="w-5 h-5 text-blue-600 group-hover:scale-110 transition-transform duration-300" />
               </div>
               <div>
-                <h3 className="font-semibold text-slate-900 mb-2">AI-Powered Analysis</h3>
+                <h3 className="font-semibold text-slate-900 mb-2 group-hover:text-blue-600 transition-colors duration-300">AI-Powered Analysis</h3>
                 <p className="text-slate-600">Advanced AI understands your data and provides human-like insights.</p>
               </div>
             </div>
 
-            <div className="flex items-start space-x-4">
-              <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                <Zap className="w-5 h-5 text-green-600" />
+            <div className={`flex items-start space-x-4 group hover:scale-105 transition-all duration-300 cursor-pointer ${isVisible ? 'animate-fadeIn' : ''}`} style={{animationDelay: '0.2s'}}>
+              <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:animate-bounce group-hover:bg-green-200 transition-colors duration-300">
+                <Zap className="w-5 h-5 text-green-600 group-hover:scale-110 transition-transform duration-300" />
               </div>
               <div>
-                <h3 className="font-semibold text-slate-900 mb-2">Instant Results</h3>
+                <h3 className="font-semibold text-slate-900 mb-2 group-hover:text-green-600 transition-colors duration-300">Instant Results</h3>
                 <p className="text-slate-600">Get answers in seconds, not hours. No waiting for reports.</p>
               </div>
             </div>
 
-            <div className="flex items-start space-x-4">
-              <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                <Database className="w-5 h-5 text-purple-600" />
+            <div className={`flex items-start space-x-4 group hover:scale-105 transition-all duration-300 cursor-pointer ${isVisible ? 'animate-fadeIn' : ''}`} style={{animationDelay: '0.3s'}}>
+              <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:animate-bounce group-hover:bg-purple-200 transition-colors duration-300">
+                <Database className="w-5 h-5 text-purple-600 group-hover:scale-110 transition-transform duration-300" />
               </div>
               <div>
-                <h3 className="font-semibold text-slate-900 mb-2">Any Data Format</h3>
+                <h3 className="font-semibold text-slate-900 mb-2 group-hover:text-purple-600 transition-colors duration-300">Any Data Format</h3>
                 <p className="text-slate-600">Support for CSV, Excel, JSON, and more data sources.</p>
               </div>
             </div>
 
-            <div className="flex items-start space-x-4">
-              <div className="w-10 h-10 bg-orange-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                <Shield className="w-5 h-5 text-orange-600" />
+            <div className={`flex items-start space-x-4 group hover:scale-105 transition-all duration-300 cursor-pointer ${isVisible ? 'animate-fadeIn' : ''}`} style={{animationDelay: '0.4s'}}>
+              <div className="w-10 h-10 bg-orange-100 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:animate-bounce group-hover:bg-orange-200 transition-colors duration-300">
+                <Shield className="w-5 h-5 text-orange-600 group-hover:scale-110 transition-transform duration-300" />
               </div>
               <div>
-                <h3 className="font-semibold text-slate-900 mb-2">Enterprise Security</h3>
+                <h3 className="font-semibold text-slate-900 mb-2 group-hover:text-orange-600 transition-colors duration-300">Enterprise Security</h3>
                 <p className="text-slate-600">Your data is encrypted and never shared. Complete privacy guaranteed.</p>
               </div>
             </div>
 
-            <div className="flex items-start space-x-4">
-              <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                <Users className="w-5 h-5 text-indigo-600" />
+            <div className={`flex items-start space-x-4 group hover:scale-105 transition-all duration-300 cursor-pointer ${isVisible ? 'animate-fadeIn' : ''}`} style={{animationDelay: '0.5s'}}>
+              <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:animate-bounce group-hover:bg-indigo-200 transition-colors duration-300">
+                <Users className="w-5 h-5 text-indigo-600 group-hover:scale-110 transition-transform duration-300" />
               </div>
               <div>
-                <h3 className="font-semibold text-slate-900 mb-2">Team Collaboration</h3>
+                <h3 className="font-semibold text-slate-900 mb-2 group-hover:text-indigo-600 transition-colors duration-300">Team Collaboration</h3>
                 <p className="text-slate-600">Share insights and collaborate with your team seamlessly.</p>
               </div>
             </div>
 
-            <div className="flex items-start space-x-4">
-              <div className="w-10 h-10 bg-pink-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                <BarChart3 className="w-5 h-5 text-pink-600" />
+            <div className={`flex items-start space-x-4 group hover:scale-105 transition-all duration-300 cursor-pointer ${isVisible ? 'animate-fadeIn' : ''}`} style={{animationDelay: '0.6s'}}>
+              <div className="w-10 h-10 bg-pink-100 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:animate-bounce group-hover:bg-pink-200 transition-colors duration-300">
+                <BarChart3 className="w-5 h-5 text-pink-600 group-hover:scale-110 transition-transform duration-300" />
               </div>
               <div>
-                <h3 className="font-semibold text-slate-900 mb-2">Visual Dashboards</h3>
+                <h3 className="font-semibold text-slate-900 mb-2 group-hover:text-pink-600 transition-colors duration-300">Visual Dashboards</h3>
                 <p className="text-slate-600">Beautiful charts and graphs that make data easy to understand.</p>
               </div>
             </div>
@@ -461,37 +461,44 @@ export default function LandingPage({ onGetStarted }: LandingPageProps) {
       </section>
 
       {/* CTA Section */}
-      <section className="py-20 px-4 sm:px-6 lg:px-8 bg-gradient-to-r from-blue-600 to-indigo-600">
-        <div className="max-w-4xl mx-auto text-center">
-          <h2 className="text-4xl font-bold text-white mb-6">
+      <section className="py-20 px-4 sm:px-6 lg:px-8 bg-gradient-to-r from-blue-600 to-indigo-600 relative overflow-hidden">
+        {/* Animated background elements */}
+        <div className="absolute inset-0 -z-10">
+          <div className="absolute top-10 left-10 w-32 h-32 bg-white/10 rounded-full animate-float"></div>
+          <div className="absolute bottom-20 right-20 w-24 h-24 bg-white/10 rounded-full animate-float" style={{animationDelay: '1s'}}></div>
+          <div className="absolute top-1/2 left-1/3 w-16 h-16 bg-white/10 rounded-full animate-float" style={{animationDelay: '2s'}}></div>
+        </div>
+        
+        <div className={`max-w-4xl mx-auto text-center transition-all duration-1000 ${isVisible ? 'opacity-100' : 'opacity-0'}`}>
+          <h2 className={`text-4xl font-bold text-white mb-6 transition-all duration-700 ${isVisible ? 'translate-y-0 opacity-100' : 'translate-y-5 opacity-0'}`}>
             Ready to Transform Your Data Into Insights?
           </h2>
-          <p className="text-xl text-blue-100 mb-8">
+          <p className={`text-xl text-blue-100 mb-8 transition-all duration-700 delay-200 ${isVisible ? 'translate-y-0 opacity-100' : 'translate-y-5 opacity-0'}`}>
             Join thousands of teams who've discovered the power of conversational data analysis.
           </p>
           
-          <div className="flex flex-col sm:flex-row gap-4 justify-center mb-8">
+          <div className={`flex flex-col sm:flex-row gap-4 justify-center mb-8 transition-all duration-700 delay-400 ${isVisible ? 'translate-y-0 opacity-100' : 'translate-y-5 opacity-0'}`}>
             <Button 
               size="lg" 
               onClick={onGetStarted}
-              className="bg-white text-blue-600 hover:bg-slate-50 text-lg px-8 py-6"
+              className="bg-white text-blue-600 hover:bg-slate-50 text-lg px-8 py-6 hover:scale-110 transition-all duration-300 hover:shadow-2xl animate-glow"
             >
               Start Free Trial
-              <ArrowRight className="w-5 h-5 ml-2" />
+              <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform duration-200" />
             </Button>
           </div>
 
-          <div className="flex items-center justify-center space-x-6 text-blue-100">
-            <div className="flex items-center">
-              <CheckCircle className="w-5 h-5 mr-2" />
+          <div className={`flex items-center justify-center space-x-6 text-blue-100 flex-wrap transition-all duration-700 delay-600 ${isVisible ? 'translate-y-0 opacity-100' : 'translate-y-5 opacity-0'}`}>
+            <div className="flex items-center hover:scale-105 transition-transform duration-200">
+              <CheckCircle className="w-5 h-5 mr-2 animate-pulse" />
               <span>No credit card required</span>
             </div>
-            <div className="flex items-center">
-              <CheckCircle className="w-5 h-5 mr-2" />
+            <div className="flex items-center hover:scale-105 transition-transform duration-200">
+              <CheckCircle className="w-5 h-5 mr-2 animate-pulse" style={{animationDelay: '0.5s'}} />
               <span>50 free queries</span>
             </div>
-            <div className="flex items-center">
-              <CheckCircle className="w-5 h-5 mr-2" />
+            <div className="flex items-center hover:scale-105 transition-transform duration-200">
+              <CheckCircle className="w-5 h-5 mr-2 animate-pulse" style={{animationDelay: '1s'}} />
               <span>Setup in 2 minutes</span>
             </div>
           </div>
