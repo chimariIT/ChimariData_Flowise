@@ -83,7 +83,6 @@ class PlatformProvider implements AIProvider {
       throw new Error("Platform AI service temporarily unavailable. Please configure your own API key in settings.");
     }
     
-    const { GoogleGenerativeAI } = require('@google/generative-ai');
     const genAI = new GoogleGenerativeAI(platformKey);
     
     const systemPrompt = `You are a data analyst AI provided by DataInsight Pro. You have access to a dataset with the following schema and sample data:
