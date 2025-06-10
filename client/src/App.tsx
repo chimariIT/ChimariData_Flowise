@@ -5,6 +5,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { auth } from "./lib/api";
+import LandingPage from "./pages/landing";
 import AuthPage from "./pages/auth";
 import Dashboard from "./pages/dashboard";
 import ProjectResults from "./pages/project-results";
@@ -14,7 +15,7 @@ import NotFound from "@/pages/not-found";
 
 function App() {
   const [user, setUser] = useState<{ id: number; username: string } | null>(null);
-  const [currentView, setCurrentView] = useState<"auth" | "dashboard" | "project" | "settings" | "pricing">("auth");
+  const [currentView, setCurrentView] = useState<"landing" | "auth" | "dashboard" | "project" | "settings" | "pricing">("landing");
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -47,7 +48,8 @@ function App() {
   const handleLogout = () => {
     setUser(null);
     localStorage.removeItem("user");
-    setCurrentView("auth");
+    auth.logout();
+    setCurrentView("landing");
   };
 
   const handleProjectSelect = (projectId: string) => {
@@ -84,6 +86,10 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <Toaster />
+        
+        {currentView === "landing" && (
+          <LandingPage onGetStarted={() => setCurrentView("auth")} />
+        )}
         
         {currentView === "auth" && (
           <AuthPage onLogin={handleLogin} />
