@@ -55,7 +55,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(401).json({ error: 'Authentication required' });
     }
     
-    req.user = session;
+    req.user = {
+      id: session.userId,
+      userId: session.userId,
+      username: session.username
+    };
     next();
   };
 
@@ -364,10 +368,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           aiProvider: "gemini",
           subscriptionTier: "starter",
           usageQuota: 50,
-          monthlyUsage: 0,
-          lastResetDate: new Date().toISOString(),
-          stripeCustomerId: null,
-          stripeSubscriptionId: null
+          monthlyUsage: 0
         });
       }
 
