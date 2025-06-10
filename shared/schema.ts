@@ -5,7 +5,15 @@ import { z } from "zod";
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   username: text("username").notNull().unique(),
-  password: text("password").notNull(),
+  password: text("password"),
+  email: text("email").unique(),
+  firstName: text("first_name"),
+  lastName: text("last_name"),
+  profileImageUrl: text("profile_image_url"),
+  provider: text("provider").default("local"), // local, google, microsoft, apple
+  providerId: text("provider_id"),
+  accessToken: text("access_token"),
+  refreshToken: text("refresh_token"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
