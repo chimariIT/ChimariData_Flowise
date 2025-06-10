@@ -88,6 +88,10 @@ export default function ProjectResults({ projectId, onBack, onSettings }: Projec
               </div>
             </div>
             <div className="flex items-center space-x-4">
+              <Button variant="outline" onClick={onSettings}>
+                <Settings className="w-4 h-4 mr-2" />
+                AI Settings
+              </Button>
               <Button variant="outline" onClick={handleExport}>
                 <Download className="w-4 h-4 mr-2" />
                 Export
@@ -186,7 +190,12 @@ export default function ProjectResults({ projectId, onBack, onSettings }: Projec
 
         {/* Main Content Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Left Column - Schema & Questions */}
+          {/* Left Column - AI Chat */}
+          <div className="lg:col-span-1 space-y-6">
+            <AIChat projectId={projectId} />
+          </div>
+
+          {/* Middle Column - Schema & Questions */}
           <div className="lg:col-span-1 space-y-6">
             {/* Data Schema */}
             <Card>
@@ -234,7 +243,7 @@ export default function ProjectResults({ projectId, onBack, onSettings }: Projec
           </div>
 
           {/* Right Column - Visualizations */}
-          <div className="lg:col-span-2 space-y-6">
+          <div className="lg:col-span-1 space-y-6">
             {/* Sample Bar Chart */}
             <Card>
               <CardHeader>

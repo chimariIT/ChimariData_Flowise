@@ -8,11 +8,12 @@ import { auth } from "./lib/api";
 import AuthPage from "./pages/auth";
 import Dashboard from "./pages/dashboard";
 import ProjectResults from "./pages/project-results";
+import SettingsPage from "./pages/settings";
 import NotFound from "@/pages/not-found";
 
 function App() {
   const [user, setUser] = useState<{ id: number; username: string } | null>(null);
-  const [currentView, setCurrentView] = useState<"auth" | "dashboard" | "project">("auth");
+  const [currentView, setCurrentView] = useState<"auth" | "dashboard" | "project" | "settings">("auth");
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -58,6 +59,18 @@ function App() {
     setCurrentView("dashboard");
   };
 
+  const handleSettings = () => {
+    setCurrentView("settings");
+  };
+
+  const handleBackFromSettings = () => {
+    if (selectedProjectId) {
+      setCurrentView("project");
+    } else {
+      setCurrentView("dashboard");
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -80,6 +93,7 @@ function App() {
             user={user}
             onLogout={handleLogout}
             onProjectSelect={handleProjectSelect}
+            onSettings={handleSettings}
           />
         )}
         
@@ -87,7 +101,12 @@ function App() {
           <ProjectResults
             projectId={selectedProjectId}
             onBack={handleBackToDashboard}
+            onSettings={handleSettings}
           />
+        )}
+        
+        {currentView === "settings" && (
+          <SettingsPage onBack={handleBackFromSettings} />
         )}
       </TooltipProvider>
     </QueryClientProvider>
