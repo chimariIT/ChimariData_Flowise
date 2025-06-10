@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
 import { projects, type Project } from "@/lib/api";
-import { ArrowLeft, Download, Share, Database, Lightbulb, BarChart3, PieChart, Calendar, CheckCircle, Settings } from "lucide-react";
+import { ArrowLeft, Download, Share, Database, Lightbulb, BarChart3, PieChart, Calendar, CheckCircle, Settings, CreditCard, Zap } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart as RechartsPieChart, Cell, Pie } from "recharts";
 import AIChat from "@/components/ai-chat";
 
@@ -89,6 +89,18 @@ export default function ProjectResults({ projectId, onBack, onSettings, onPayFor
               </div>
             </div>
             <div className="flex items-center space-x-4">
+              {onPayForAnalysis && (
+                <Button variant="default" onClick={() => onPayForAnalysis({
+                  name: project.name,
+                  recordCount: project.recordCount || 0,
+                  dataSizeMB: Math.max(1, Math.round((project.recordCount || 0) * 0.001)),
+                  schema: project.schema || {},
+                  questions: Array.isArray(project.questions) ? project.questions : []
+                })}>
+                  <CreditCard className="w-4 h-4 mr-2" />
+                  Pay for Analysis
+                </Button>
+              )}
               <Button variant="outline" onClick={onSettings}>
                 <Settings className="w-4 h-4 mr-2" />
                 AI Settings
