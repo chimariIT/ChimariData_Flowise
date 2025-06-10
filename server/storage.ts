@@ -1,4 +1,4 @@
-import { users, projects, type User, type InsertUser, type Project, type InsertProject } from "@shared/schema";
+import { users, projects, userSettings, type User, type InsertUser, type Project, type InsertProject, type UserSettings, type InsertUserSettings } from "@shared/schema";
 
 export interface IStorage {
   // User methods
@@ -11,16 +11,23 @@ export interface IStorage {
   getUserProjects(userId: number): Promise<Project[]>;
   getProject(id: string, userId: number): Promise<Project | undefined>;
   updateProject(id: string, userId: number, updates: Partial<Project>): Promise<Project | undefined>;
+  
+  // User settings methods
+  getUserSettings(userId: number): Promise<UserSettings | undefined>;
+  createUserSettings(settings: InsertUserSettings): Promise<UserSettings>;
+  updateUserSettings(userId: number, updates: Partial<UserSettings>): Promise<UserSettings | undefined>;
 }
 
 export class MemStorage implements IStorage {
   private users: Map<number, User>;
   private projects: Map<string, Project>;
+  private userSettings: Map<number, UserSettings>;
   private currentUserId: number;
 
   constructor() {
     this.users = new Map();
     this.projects = new Map();
+    this.userSettings = new Map();
     this.currentUserId = 1;
   }
 
@@ -48,8 +55,15 @@ export class MemStorage implements IStorage {
   async createProject(projectData: InsertProject & { ownerId: number }): Promise<Project> {
     const id = Math.random().toString(36).substring(2, 15);
     const project: Project = {
-      ...projectData,
       id,
+      name: projectData.name,
+      schema: projectData.schema || {},
+      questions: projectData.questions || [],
+      insights: projectData.insights || {},
+      status: projectData.status || "active",
+      recordCount: projectData.recordCount || 0,
+      dataSnapshot: projectData.dataSnapshot || null,
+      ownerId: projectData.ownerId,
       createdAt: new Date(),
     };
     this.projects.set(id, project);
@@ -76,6 +90,34 @@ export class MemStorage implements IStorage {
       const updatedProject = { ...project, ...updates };
       this.projects.set(id, updatedProject);
       return updatedProject;
+    }
+    return undefined;
+  }
+
+  async getUserSettings(userId: number): Promise<UserSettings | undefined> {
+    return this.userSettings.get(userId);
+  }
+
+  async createUserSettings(insertSettings: InsertUserSettings): Promise<UserSettings> {
+    const id = Date.now();
+    const settings: UserSettings = {
+      id,
+      userId: insertSettings.userId,
+      aiProvider: insertSettings.aiProvider || "anthropic",
+      aiApiKey: insertSettings.aiApiKey || null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.userSettings.set(insertSettings.userId, settings);
+    return settings;
+  }
+
+  async updateUserSettings(userId: number, updates: Partial<UserSettings>): Promise<UserSettings | undefined> {
+    const settings = this.userSettings.get(userId);
+    if (settings) {
+      const updatedSettings = { ...settings, ...updates, updatedAt: new Date() };
+      this.userSettings.set(userId, updatedSettings);
+      return updatedSettings;
     }
     return undefined;
   }
