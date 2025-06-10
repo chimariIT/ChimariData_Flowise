@@ -12,9 +12,10 @@ interface ProjectResultsProps {
   projectId: string;
   onBack: () => void;
   onSettings: () => void;
+  onPayForAnalysis?: (projectData: any) => void;
 }
 
-export default function ProjectResults({ projectId, onBack, onSettings }: ProjectResultsProps) {
+export default function ProjectResults({ projectId, onBack, onSettings, onPayForAnalysis }: ProjectResultsProps) {
   const { toast } = useToast();
 
   const { data: project, isLoading } = useQuery({
