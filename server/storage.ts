@@ -17,6 +17,8 @@ export interface IStorage {
   createUserSettings(settings: InsertUserSettings): Promise<UserSettings>;
   updateUserSettings(userId: number, updates: Partial<UserSettings>): Promise<UserSettings | undefined>;
   resetMonthlyUsage(userId: number): Promise<void>;
+  updateStripeCustomerId(userId: number, customerId: string): Promise<UserSettings | undefined>;
+  updateUserStripeInfo(userId: number, info: { customerId: string; subscriptionId: string }): Promise<UserSettings | undefined>;
   
   // Usage tracking methods
   logUsage(log: InsertUsageLog): Promise<UsageLog>;
@@ -119,6 +121,9 @@ export class MemStorage implements IStorage {
       usageQuota: insertSettings.usageQuota || 50,
       usageCount: insertSettings.usageCount || 0,
       lastResetDate: new Date(),
+      stripeCustomerId: insertSettings.stripeCustomerId || null,
+      stripeSubscriptionId: insertSettings.stripeSubscriptionId || null,
+      monthlyUsage: insertSettings.monthlyUsage || 0,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -147,6 +152,27 @@ export class MemStorage implements IStorage {
       };
       this.userSettings.set(userId, updatedSettings);
     }
+  }
+
+  async updateStripeCustomerId(userId: number, customerId: string): Promise<UserSettings | undefined> {
+    const settings = this.userSettings.get(userId);
+    if (settings) {
+      settings.stripeCustomerId = customerId;
+      settings.updatedAt = new Date();
+      return settings;
+    }
+    return undefined;
+  }
+
+  async updateUserStripeInfo(userId: number, info: { customerId: string; subscriptionId: string }): Promise<UserSettings | undefined> {
+    const settings = this.userSettings.get(userId);
+    if (settings) {
+      settings.stripeCustomerId = info.customerId;
+      settings.stripeSubscriptionId = info.subscriptionId;
+      settings.updatedAt = new Date();
+      return settings;
+    }
+    return undefined;
   }
 
   async logUsage(insertLog: InsertUsageLog): Promise<UsageLog> {

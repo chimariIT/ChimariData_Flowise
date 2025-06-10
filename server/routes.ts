@@ -1,4 +1,4 @@
-import type { Express } from "express";
+import type { Express, Request } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { loginSchema, registerSchema, aiQuerySchema } from "@shared/schema";
@@ -6,6 +6,15 @@ import { aiService } from "./ai-service";
 import { spawn } from "child_process";
 import path from "path";
 import Stripe from "stripe";
+
+// Extend Express Request type to include user property
+declare global {
+  namespace Express {
+    interface Request {
+      user?: { id: number; userId: number; username: string };
+    }
+  }
+}
 
 // Simple session storage for demo purposes
 const sessions = new Map<string, { userId: number; username: string }>();
@@ -16,7 +25,7 @@ if (!process.env.STRIPE_SECRET_KEY) {
 }
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: "2024-06-20",
-});
+} as any);
 
 function generateToken(): string {
   return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
