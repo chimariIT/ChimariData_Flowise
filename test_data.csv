@@ -1,0 +1,21 @@
+product_name,category,price,units_sold,revenue,quarter
+Laptop Pro,Electronics,1299.99,145,188498.55,Q1
+Wireless Headphones,Electronics,199.99,423,84596.77,Q1
+Office Chair,Furniture,349.99,89,31149.11,Q1
+Standing Desk,Furniture,599.99,67,40199.33,Q1
+Smartphone,Electronics,899.99,312,280797.88,Q1
+Coffee Maker,Appliances,129.99,201,26117.99,Q1
+Tablet,Electronics,449.99,178,80098.22,Q1
+Bookshelf,Furniture,189.99,134,25478.66,Q1
+Gaming Mouse,Electronics,79.99,298,23837.02,Q1
+Desk Lamp,Furniture,69.99,156,10918.44,Q1
+Laptop Pro,Electronics,1299.99,178,231398.22,Q2
+Wireless Headphones,Electronics,199.99,501,100195.99,Q2
+Office Chair,Furniture,349.99,112,39198.88,Q2
+Standing Desk,Furniture,599.99,89,53399.11,Q2
+Smartphone,Electronics,899.99,389,349896.11,Q2
+Coffee Maker,Appliances,129.99,267,34697.33,Q2
+Tablet,Electronics,449.99,234,105297.66,Q2
+Bookshelf,Furniture,189.99,167,31718.33,Q2
+Gaming Mouse,Electronics,79.99,345,27596.55,Q2
+Desk Lamp,Furniture,69.99,198,13858.02,Q2
