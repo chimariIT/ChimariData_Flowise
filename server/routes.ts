@@ -1,7 +1,8 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { loginSchema, registerSchema } from "@shared/schema";
+import { loginSchema, registerSchema, aiQuerySchema } from "@shared/schema";
+import { aiService } from "./ai-service";
 import { spawn } from "child_process";
 import path from "path";
 
@@ -118,6 +119,100 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(project);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch project" });
+    }
+  });
+
+  // AI Settings routes
+  app.get("/api/settings", requireAuth, async (req, res) => {
+    try {
+      const settings = await storage.getUserSettings(req.user.userId);
+      if (!settings) {
+        // Create default settings if none exist
+        const newSettings = await storage.createUserSettings({
+          userId: req.user.userId,
+          aiProvider: "anthropic",
+          aiApiKey: null,
+        });
+        return res.json(newSettings);
+      }
+      res.json(settings);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch settings" });
+    }
+  });
+
+  app.post("/api/settings", requireAuth, async (req, res) => {
+    try {
+      const { aiProvider, aiApiKey } = req.body;
+      
+      const existingSettings = await storage.getUserSettings(req.user.userId);
+      
+      if (existingSettings) {
+        const updated = await storage.updateUserSettings(req.user.userId, {
+          aiProvider,
+          aiApiKey,
+        });
+        res.json(updated);
+      } else {
+        const created = await storage.createUserSettings({
+          userId: req.user.userId,
+          aiProvider,
+          aiApiKey,
+        });
+        res.json(created);
+      }
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update settings" });
+    }
+  });
+
+  app.get("/api/ai/providers", (req, res) => {
+    res.json({
+      providers: aiService.getAvailableProviders(),
+      info: aiService.getProviderInfo()
+    });
+  });
+
+  // AI Query route
+  app.post("/api/ai/query", requireAuth, async (req, res) => {
+    try {
+      const data = aiQuerySchema.parse(req.body);
+      
+      // Get user settings
+      const settings = await storage.getUserSettings(req.user.userId);
+      if (!settings || !settings.aiApiKey) {
+        return res.status(400).json({ 
+          error: "AI provider not configured. Please add your API key in settings." 
+        });
+      }
+
+      // Get project data
+      const project = await storage.getProject(data.projectId, req.user.userId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+
+      // Prepare data context for AI
+      const dataContext = {
+        schema: project.schema,
+        sampleData: project.dataSnapshot || [],
+        recordCount: project.recordCount || 0,
+      };
+
+      // Query AI
+      const response = await aiService.queryData(
+        settings.aiProvider || "anthropic",
+        settings.aiApiKey,
+        data.query,
+        dataContext
+      );
+
+      res.json({ response, provider: settings.aiProvider });
+    } catch (error) {
+      console.error("AI Query Error:", error);
+      res.status(500).json({ 
+        error: error instanceof Error ? error.message : "Failed to process AI query" 
+      });
     }
   });
 
