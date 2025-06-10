@@ -135,7 +135,7 @@ export default function LandingPage({ onGetStarted }: LandingPageProps) {
             <Button 
               size="lg" 
               onClick={onGetStarted}
-              className="bg-gradient-to-r from-blue-600 to-indigo-600 text-lg px-8 py-6 hover:scale-105 transition-all duration-200 hover:shadow-xl animate-pulse"
+              className="bg-gradient-to-r from-blue-600 to-indigo-600 text-lg px-8 py-6 hover:scale-105 transition-all duration-200 hover:shadow-xl hover:from-blue-700 hover:to-indigo-700 border-2 border-transparent hover:border-blue-300"
             >
               Start Analyzing Free
               <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform duration-200" />
@@ -441,62 +441,49 @@ export default function LandingPage({ onGetStarted }: LandingPageProps) {
         </div>
       </section>
 
-      {/* Social Proof */}
+      {/* Founders Experience */}
       <section className="py-16 px-4 sm:px-6 lg:px-8 bg-slate-50">
         <div className="max-w-4xl mx-auto text-center">
-          <h2 className="text-3xl font-bold text-slate-900 mb-8">
-            Trusted by Data-Driven Teams
-          </h2>
-          
-          <div className="grid md:grid-cols-3 gap-8 mb-12">
-            <div>
-              <div className="text-3xl font-bold text-blue-600 mb-2">10,000+</div>
-              <div className="text-slate-600">Datasets Analyzed</div>
+          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-2xl p-8 border border-blue-100">
+            <div className="flex items-center justify-center mb-6">
+              <div className="w-16 h-16 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-full flex items-center justify-center">
+                <Brain className="w-8 h-8 text-white" />
+              </div>
             </div>
-            <div>
-              <div className="text-3xl font-bold text-green-600 mb-2">500+</div>
-              <div className="text-slate-600">Happy Customers</div>
-            </div>
-            <div>
-              <div className="text-3xl font-bold text-purple-600 mb-2">99.9%</div>
-              <div className="text-slate-600">Uptime Guarantee</div>
-            </div>
-          </div>
-
-          <div className="grid md:grid-cols-2 gap-8">
-            <Card>
-              <CardContent className="p-6">
-                <p className="text-slate-700 mb-4">
-                  "ChimariData transformed how we understand our sales data. Questions that used to take our analyst days now get answered in seconds."
-                </p>
-                <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
-                    <span className="text-blue-600 font-semibold">JD</span>
-                  </div>
-                  <div>
-                    <div className="font-semibold text-slate-900">Jane Doe</div>
-                    <div className="text-slate-600 text-sm">VP of Sales, TechCorp</div>
-                  </div>
+            
+            <h2 className="text-3xl font-bold text-slate-900 mb-6">
+              Our Founders have been doing Data, AI and Insights for over 20 Years
+            </h2>
+            
+            <p className="text-lg text-slate-700 mb-8 max-w-2xl mx-auto leading-relaxed">
+              Built by seasoned data professionals who understand the challenges of extracting meaningful insights from complex datasets. We've spent decades solving these problems and built ChimariData to democratize advanced analytics.
+            </p>
+            
+            <div className="grid md:grid-cols-3 gap-6">
+              <div className="flex flex-col items-center p-4">
+                <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mb-3">
+                  <Database className="w-6 h-6 text-blue-600" />
                 </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardContent className="p-6">
-                <p className="text-slate-700 mb-4">
-                  "Finally, a tool that speaks our language. No more waiting for IT to run reports - we get insights instantly."
-                </p>
-                <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
-                    <span className="text-green-600 font-semibold">MS</span>
-                  </div>
-                  <div>
-                    <div className="font-semibold text-slate-900">Mike Smith</div>
-                    <div className="text-slate-600 text-sm">Marketing Director, GrowthCo</div>
-                  </div>
+                <div className="font-semibold text-slate-900 mb-1">Enterprise Data</div>
+                <div className="text-sm text-slate-600">Fortune 500 analytics experience</div>
+              </div>
+              
+              <div className="flex flex-col items-center p-4">
+                <div className="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center mb-3">
+                  <Brain className="w-6 h-6 text-indigo-600" />
                 </div>
-              </CardContent>
-            </Card>
+                <div className="font-semibold text-slate-900 mb-1">AI Research</div>
+                <div className="text-sm text-slate-600">Published machine learning experts</div>
+              </div>
+              
+              <div className="flex flex-col items-center p-4">
+                <div className="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center mb-3">
+                  <TrendingUp className="w-6 h-6 text-purple-600" />
+                </div>
+                <div className="font-semibold text-slate-900 mb-1">Business Impact</div>
+                <div className="text-sm text-slate-600">Proven ROI in data-driven decisions</div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
