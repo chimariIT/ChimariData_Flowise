@@ -5,16 +5,17 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
 import { projects, auth, type Project } from "@/lib/api";
-import { ChartLine, Folder, FileText, Lightbulb, Plus, Search, Calendar, Database, TrendingUp, Bell, LogOut } from "lucide-react";
+import { ChartLine, Folder, FileText, Lightbulb, Plus, Search, Calendar, Database, TrendingUp, Bell, LogOut, Settings } from "lucide-react";
 import UploadModal from "@/components/upload-modal";
 
 interface DashboardProps {
   user: { id: number; username: string };
   onLogout: () => void;
   onProjectSelect: (projectId: string) => void;
+  onSettings: () => void;
 }
 
-export default function Dashboard({ user, onLogout, onProjectSelect }: DashboardProps) {
+export default function Dashboard({ user, onLogout, onProjectSelect, onSettings }: DashboardProps) {
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const { toast } = useToast();
