@@ -94,6 +94,9 @@ export default function Dashboard({ user, onLogout, onProjectSelect, onSettings 
               <Button variant="ghost" size="sm">
                 <Bell className="w-4 h-4" />
               </Button>
+              <Button variant="ghost" size="sm" onClick={onSettings}>
+                <Settings className="w-4 h-4" />
+              </Button>
               <div className="flex items-center space-x-2">
                 <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center">
                   <span className="text-white text-sm font-medium">
