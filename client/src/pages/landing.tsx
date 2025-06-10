@@ -22,67 +22,54 @@ interface LandingPageProps {
 }
 
 export default function LandingPage({ onGetStarted }: LandingPageProps) {
-  const [activeDemo, setActiveDemo] = useState(0);
   const [isVisible, setIsVisible] = useState(false);
-  const [typingText, setTypingText] = useState("");
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  const [showResponse, setShowResponse] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
+  const [currentRecommendation, setCurrentRecommendation] = useState(0);
 
-  const demoQuestions = [
-    "What are my top selling products?",
-    "Which quarter had the highest revenue?", 
-    "Show me trends by product category",
-    "What's the average order value?"
+  const dataScenarios = [
+    {
+      title: "E-commerce Sales Data",
+      description: "Customer purchase patterns and product performance",
+      insights: [
+        "📈 Revenue increased 89% in Q2 driven by electronics sales",
+        "🏆 Laptop Pro: highest value product at $1,299 per unit", 
+        "📱 Smartphones: highest volume with 701 units sold",
+        "💡 Recommendation: Bundle smartphones with accessories to increase AOV"
+      ]
+    },
+    {
+      title: "Marketing Campaign Data", 
+      description: "Multi-channel campaign performance metrics",
+      insights: [
+        "🎯 Email campaigns show 34% higher conversion than social media",
+        "📧 Newsletter subscribers have 2.3x higher lifetime value",
+        "📊 Mobile traffic accounts for 67% of all conversions",
+        "💡 Recommendation: Increase email marketing budget by 40%"
+      ]
+    },
+    {
+      title: "Customer Behavior Data",
+      description: "User engagement and retention patterns", 
+      insights: [
+        "👥 Users who engage in first 7 days have 85% retention",
+        "🔄 Feature adoption peaks on day 3 after onboarding",
+        "📱 Mobile users are 2.1x more likely to become premium",
+        "💡 Recommendation: Optimize mobile onboarding experience"
+      ]
+    }
   ];
 
-  const demoResponses = [
-    "Based on your sales data, your top 3 products are: 1) Laptop Pro with 323 units sold generating $419,897, 2) Smartphone with 701 units sold generating $630,693, and 3) Wireless Headphones with 924 units sold generating $184,792. The Laptop Pro has the highest revenue per unit at $1,299.99.",
-    "Q2 had your highest revenue at $1,347,293 compared to Q1's $710,136 - that's an 89.7% increase! This growth was driven primarily by increased smartphone sales (389 vs 312 units) and strong performance in the Electronics category overall.",
-    "Electronics dominates with 68% of total revenue ($1.4M), followed by Furniture at 22% ($463K) and Appliances at 10% ($202K). Electronics shows the strongest growth trajectory with consistent quarter-over-quarter increases.",
-    "Your average order value is $487.33. Electronics has the highest AOV at $612.50, while Appliances has the lowest at $129.99. Consider bundling strategies to increase AOV in lower-performing categories."
-  ];
-
-  // Animation effects
   useEffect(() => {
     setIsVisible(true);
-    
-    // Auto-cycle through demo questions with typing effect
-    const cycleQuestions = () => {
-      const question = demoQuestions[currentQuestionIndex];
-      setTypingText("");
-      setShowResponse(false);
-      
-      let i = 0;
-      const typeInterval = setInterval(() => {
-        if (i < question.length) {
-          setTypingText(question.slice(0, i + 1));
-          i++;
-        } else {
-          clearInterval(typeInterval);
-          setShowResponse(true);
-          
-          // Show response for 3 seconds, then move to next question
-          setTimeout(() => {
-            setCurrentQuestionIndex((prev) => (prev + 1) % demoQuestions.length);
-          }, 3000);
-        }
-      }, 50);
-    };
+  }, []);
 
-    const interval = setInterval(cycleQuestions, 6000);
-    cycleQuestions(); // Start immediately
-    
-    return () => clearInterval(interval);
-  }, [currentQuestionIndex]);
+  const handlePreviewClick = () => {
+    setShowPreview(true);
+    setCurrentRecommendation(0);
+  };
 
-  // Floating animation for icons
-  const floatingAnimation = {
-    y: [0, -10, 0],
-    transition: {
-      duration: 2,
-      repeat: Infinity,
-      ease: "easeInOut"
-    }
+  const nextRecommendation = () => {
+    setCurrentRecommendation((prev) => (prev + 1) % dataScenarios.length);
   };
 
   return (
@@ -181,82 +168,133 @@ export default function LandingPage({ onGetStarted }: LandingPageProps) {
         </div>
       </section>
 
-      {/* Interactive Demo */}
+      {/* AI Recommendation Engine Preview */}
       <section className="py-16 px-4 sm:px-6 lg:px-8 bg-white">
-        <div className={`max-w-6xl mx-auto transition-all duration-1000 ${isVisible ? 'opacity-100' : 'opacity-0'}`}>
+        <div className="max-w-6xl mx-auto">
           <div className="text-center mb-12">
-            <h2 className={`text-3xl font-bold text-slate-900 mb-4 transition-all duration-700 ${isVisible ? 'translate-y-0 opacity-100' : 'translate-y-5 opacity-0'}`}>
-              See It In Action
+            <h2 className="text-3xl font-bold text-slate-900 mb-4">
+              AI-Powered Data Recommendation Engine
             </h2>
-            <p className={`text-lg text-slate-600 transition-all duration-700 delay-200 ${isVisible ? 'translate-y-0 opacity-100' : 'translate-y-5 opacity-0'}`}>
-              Watch the AI typing effect as it cycles through real data questions automatically
+            <p className="text-lg text-slate-600 max-w-2xl mx-auto">
+              See how our AI analyzes real data patterns and provides actionable business recommendations instantly
             </p>
           </div>
 
-          <div className="grid lg:grid-cols-2 gap-8 items-center">
-            <div className={`space-y-4 transition-all duration-700 delay-400 ${isVisible ? 'translate-x-0 opacity-100' : '-translate-x-10 opacity-0'}`}>
-              <h3 className="text-xl font-semibold text-slate-900 mb-4">Live AI Demo:</h3>
-              <div className="bg-slate-900 rounded-lg p-6 font-mono text-sm shadow-2xl transform hover:scale-105 transition-all duration-300">
-                <div className="flex items-center mb-4">
-                  <div className="w-3 h-3 bg-red-500 rounded-full mr-2 animate-pulse"></div>
-                  <div className="w-3 h-3 bg-yellow-500 rounded-full mr-2 animate-pulse" style={{animationDelay: '0.5s'}}></div>
-                  <div className="w-3 h-3 bg-green-500 rounded-full mr-2 animate-pulse" style={{animationDelay: '1s'}}></div>
-                  <span className="text-slate-400 ml-2">ChimariData AI Terminal</span>
-                </div>
-
-                <div className="space-y-4 min-h-[200px]">
-                  <div className="flex items-start">
-                    <span className="text-blue-400">user@data:</span>
-                    <span className="text-white ml-2 flex-1">
-                      {typingText}
-                      <span className="animate-pulse text-green-400">|</span>
-                    </span>
-                  </div>
-                  
-                  {showResponse && (
-                    <div className="text-green-400 animate-fadeIn">
-                      <div className="flex items-center mb-2">
-                        <Brain className="w-4 h-4 mr-2 animate-spin" style={{animationDuration: '2s'}} />
-                        <span className="animate-pulse">Analyzing data patterns...</span>
-                      </div>
-                      <div className="text-slate-300 text-xs leading-relaxed bg-slate-800/50 p-3 rounded border-l-2 border-green-400">
-                        {demoResponses[currentQuestionIndex]}
-                      </div>
+          <div className="grid lg:grid-cols-2 gap-8 items-start">
+            {!showPreview ? (
+              <div className="space-y-6">
+                <Card className="border-2 border-dashed border-blue-200 bg-blue-50/50">
+                  <CardHeader className="text-center">
+                    <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <Brain className="w-8 h-8 text-blue-600" />
                     </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="text-center text-sm text-slate-500">
-                <div className="flex items-center justify-center space-x-2">
-                  <div className="animate-pulse w-2 h-2 bg-blue-500 rounded-full"></div>
-                  <span>Auto-cycling through sample questions</span>
-                </div>
-              </div>
-            </div>
-
-            <div className={`space-y-6 transition-all duration-700 delay-600 ${isVisible ? 'translate-x-0 opacity-100' : 'translate-x-10 opacity-0'}`}>
-              <Card className="group hover:shadow-xl transition-all duration-300 hover:scale-105">
-                <CardHeader>
-                  <CardTitle className="flex items-center group-hover:text-blue-600 transition-colors duration-200">
-                    <MessageSquare className="w-5 h-5 text-blue-600 mr-2 group-hover:animate-bounce" />
-                    Try These Questions
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {demoQuestions.map((question, index) => (
-                    <div 
-                      key={index}
-                      className={`p-3 rounded-lg cursor-pointer transition-all duration-300 hover:scale-105 ${
-                        currentQuestionIndex === index 
-                          ? 'bg-blue-100 border-l-4 border-blue-500 animate-pulse' 
-                          : 'bg-slate-50 hover:bg-slate-100'
-                      }`}
-                      onClick={() => setCurrentQuestionIndex(index)}
+                    <CardTitle className="text-blue-900">Ready to See AI in Action?</CardTitle>
+                    <CardDescription className="text-blue-700">
+                      Click below to see how our AI analyzes sample business data and generates intelligent recommendations
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="text-center">
+                    <Button 
+                      onClick={handlePreviewClick}
+                      size="lg"
+                      className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-4"
                     >
-                      <span className="text-slate-700 text-sm">{question}</span>
+                      <Sparkles className="w-5 h-5 mr-2" />
+                      Preview AI Recommendations
+                    </Button>
+                  </CardContent>
+                </Card>
+
+                <div className="space-y-4">
+                  <h3 className="font-semibold text-slate-900">Sample Data Types:</h3>
+                  {dataScenarios.map((scenario, index) => (
+                    <div key={index} className="flex items-center space-x-3 p-3 bg-slate-50 rounded-lg">
+                      <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                      <div>
+                        <div className="font-medium text-slate-900">{scenario.title}</div>
+                        <div className="text-sm text-slate-600">{scenario.description}</div>
+                      </div>
                     </div>
                   ))}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                <Card>
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="flex items-center">
+                        <Brain className="w-5 h-5 text-blue-600 mr-2" />
+                        {dataScenarios[currentRecommendation].title}
+                      </CardTitle>
+                      <Badge variant="outline" className="text-green-600 border-green-600">
+                        Live Analysis
+                      </Badge>
+                    </div>
+                    <CardDescription>
+                      {dataScenarios[currentRecommendation].description}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-3">
+                      {dataScenarios[currentRecommendation].insights.map((insight, index) => (
+                        <div key={index} className="flex items-start space-x-3 p-3 bg-slate-50 rounded-lg">
+                          <span className="text-lg">{insight.split(' ')[0]}</span>
+                          <span className="text-slate-700 text-sm leading-relaxed">
+                            {insight.substring(insight.indexOf(' ') + 1)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    
+                    <div className="flex justify-between items-center mt-6 pt-4 border-t">
+                      <Button 
+                        variant="outline" 
+                        onClick={nextRecommendation}
+                        className="flex items-center"
+                      >
+                        <ArrowRight className="w-4 h-4 mr-1" />
+                        Next Scenario
+                      </Button>
+                      <div className="text-sm text-slate-500">
+                        {currentRecommendation + 1} of {dataScenarios.length}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+
+            <div className="space-y-6">
+              <Card className="bg-gradient-to-br from-green-50 to-blue-50 border-green-200">
+                <CardHeader>
+                  <CardTitle className="flex items-center text-green-800">
+                    <TrendingUp className="w-5 h-5 mr-2" />
+                    Why Our AI Recommendations Work
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex items-start space-x-3">
+                    <CheckCircle className="w-5 h-5 text-green-600 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <div className="font-medium text-green-800">Pattern Recognition</div>
+                      <div className="text-sm text-green-700">Identifies trends humans miss in complex datasets</div>
+                    </div>
+                  </div>
+                  <div className="flex items-start space-x-3">
+                    <CheckCircle className="w-5 h-5 text-green-600 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <div className="font-medium text-green-800">Contextual Analysis</div>
+                      <div className="text-sm text-green-700">Considers business context, not just raw numbers</div>
+                    </div>
+                  </div>
+                  <div className="flex items-start space-x-3">
+                    <CheckCircle className="w-5 h-5 text-green-600 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <div className="font-medium text-green-800">Actionable Insights</div>
+                      <div className="text-sm text-green-700">Provides specific, implementable recommendations</div>
+                    </div>
+                  </div>
                 </CardContent>
               </Card>
 
@@ -264,11 +302,14 @@ export default function LandingPage({ onGetStarted }: LandingPageProps) {
                 <Button 
                   onClick={onGetStarted}
                   size="lg"
-                  className="bg-gradient-to-r from-green-600 to-blue-600 hover:scale-110 transition-all duration-300 hover:shadow-xl animate-pulse"
+                  className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:shadow-lg transition-all duration-200"
                 >
-                  <Sparkles className="w-5 h-5 mr-2" />
-                  Try With Your Data
+                  <Upload className="w-5 h-5 mr-2" />
+                  Analyze Your Data Now
                 </Button>
+                <p className="text-sm text-slate-500 mt-2">
+                  Upload your data and get AI recommendations in minutes
+                </p>
               </div>
             </div>
           </div>
