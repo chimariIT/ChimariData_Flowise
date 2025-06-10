@@ -25,10 +25,25 @@ export const projects = pgTable("projects", {
 export const userSettings = pgTable("user_settings", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").references(() => users.id).notNull(),
-  aiProvider: text("ai_provider").default("anthropic"), // anthropic, openai, gemini
-  aiApiKey: text("ai_api_key"), // encrypted API key
+  aiProvider: text("ai_provider").default("platform"), // platform, anthropic, openai, gemini
+  aiApiKey: text("ai_api_key"), // encrypted API key (null for platform provider)
+  subscriptionTier: text("subscription_tier").default("starter"), // starter, professional, enterprise
+  usageQuota: integer("usage_quota").default(50), // monthly AI queries allowed
+  usageCount: integer("usage_count").default(0), // current month usage
+  lastResetDate: timestamp("last_reset_date").defaultNow(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const usageLogs = pgTable("usage_logs", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").references(() => users.id).notNull(),
+  projectId: text("project_id").references(() => projects.id),
+  action: text("action").notNull(), // query, upload, export, etc.
+  provider: text("provider"), // which AI provider was used
+  tokensUsed: integer("tokens_used").default(0),
+  cost: text("cost"), // estimated cost in USD
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({
@@ -46,6 +61,12 @@ export const insertUserSettingsSchema = createInsertSchema(userSettings).omit({
   id: true,
   createdAt: true,
   updatedAt: true,
+  lastResetDate: true,
+});
+
+export const insertUsageLogSchema = createInsertSchema(usageLogs).omit({
+  id: true,
+  createdAt: true,
 });
 
 export const loginSchema = z.object({
@@ -63,12 +84,19 @@ export const aiQuerySchema = z.object({
   projectId: z.string().min(1, "Project ID is required"),
 });
 
+export const subscriptionUpgradeSchema = z.object({
+  tier: z.enum(["starter", "professional", "enterprise"]),
+});
+
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 export type InsertProject = z.infer<typeof insertProjectSchema>;
 export type Project = typeof projects.$inferSelect;
 export type InsertUserSettings = z.infer<typeof insertUserSettingsSchema>;
 export type UserSettings = typeof userSettings.$inferSelect;
+export type InsertUsageLog = z.infer<typeof insertUsageLogSchema>;
+export type UsageLog = typeof usageLogs.$inferSelect;
 export type LoginData = z.infer<typeof loginSchema>;
 export type RegisterData = z.infer<typeof registerSchema>;
 export type AIQueryData = z.infer<typeof aiQuerySchema>;
+export type SubscriptionUpgrade = z.infer<typeof subscriptionUpgradeSchema>;

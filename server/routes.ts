@@ -179,10 +179,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const data = aiQuerySchema.parse(req.body);
       
       // Get user settings
-      const settings = await storage.getUserSettings(req.user.userId);
-      if (!settings || !settings.aiApiKey) {
+      let settings = await storage.getUserSettings(req.user.userId);
+      if (!settings) {
+        // Create default settings for new users
+        settings = await storage.createUserSettings({
+          userId: req.user.userId,
+          aiProvider: "platform",
+          aiApiKey: null,
+          subscriptionTier: "starter",
+          usageQuota: 50,
+          usageCount: 0,
+        });
+      }
+
+      // Check usage limits
+      const canMakeQuery = await storage.canUserMakeQuery(req.user.userId);
+      if (!canMakeQuery) {
+        const currentUsage = await storage.getUserUsageThisMonth(req.user.userId);
+        return res.status(429).json({ 
+          error: `Monthly quota exceeded (${currentUsage}/${settings.usageQuota}). Upgrade your plan for more queries.`,
+          usage: currentUsage,
+          quota: settings.usageQuota
+        });
+      }
+
+      // For non-platform providers, check API key
+      if (settings.aiProvider !== "platform" && !settings.aiApiKey) {
         return res.status(400).json({ 
-          error: "AI provider not configured. Please add your API key in settings." 
+          error: "AI provider not configured. Please add your API key in settings or switch to platform provider." 
         });
       }
 
@@ -201,13 +225,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Query AI
       const response = await aiService.queryData(
-        settings.aiProvider || "anthropic",
-        settings.aiApiKey,
+        settings.aiProvider || "platform",
+        settings.aiApiKey || "",
         data.query,
         dataContext
       );
 
-      res.json({ response, provider: settings.aiProvider });
+      // Log usage
+      await storage.logUsage({
+        userId: req.user.userId,
+        projectId: data.projectId,
+        action: "ai_query",
+        provider: settings.aiProvider,
+        tokensUsed: Math.ceil(data.query.length / 4), // Rough estimate
+        cost: settings.aiProvider === "platform" ? "0.00" : "estimated"
+      });
+
+      const currentUsage = await storage.getUserUsageThisMonth(req.user.userId);
+      
+      res.json({ 
+        response, 
+        provider: settings.aiProvider,
+        usage: {
+          current: currentUsage,
+          quota: settings.usageQuota,
+          remaining: (settings.usageQuota || 50) - currentUsage
+        }
+      });
     } catch (error) {
       console.error("AI Query Error:", error);
       res.status(500).json({ 

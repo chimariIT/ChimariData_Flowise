@@ -1,4 +1,4 @@
-import { users, projects, userSettings, type User, type InsertUser, type Project, type InsertProject, type UserSettings, type InsertUserSettings } from "@shared/schema";
+import { users, projects, userSettings, usageLogs, type User, type InsertUser, type Project, type InsertProject, type UserSettings, type InsertUserSettings, type UsageLog, type InsertUsageLog } from "@shared/schema";
 
 export interface IStorage {
   // User methods
@@ -16,19 +16,29 @@ export interface IStorage {
   getUserSettings(userId: number): Promise<UserSettings | undefined>;
   createUserSettings(settings: InsertUserSettings): Promise<UserSettings>;
   updateUserSettings(userId: number, updates: Partial<UserSettings>): Promise<UserSettings | undefined>;
+  resetMonthlyUsage(userId: number): Promise<void>;
+  
+  // Usage tracking methods
+  logUsage(log: InsertUsageLog): Promise<UsageLog>;
+  getUserUsageThisMonth(userId: number): Promise<number>;
+  canUserMakeQuery(userId: number): Promise<boolean>;
 }
 
 export class MemStorage implements IStorage {
   private users: Map<number, User>;
   private projects: Map<string, Project>;
   private userSettings: Map<number, UserSettings>;
+  private usageLogs: Map<string, UsageLog>;
   private currentUserId: number;
+  private currentLogId: number;
 
   constructor() {
     this.users = new Map();
     this.projects = new Map();
     this.userSettings = new Map();
+    this.usageLogs = new Map();
     this.currentUserId = 1;
+    this.currentLogId = 1;
   }
 
   async getUser(id: number): Promise<User | undefined> {
@@ -103,8 +113,12 @@ export class MemStorage implements IStorage {
     const settings: UserSettings = {
       id,
       userId: insertSettings.userId,
-      aiProvider: insertSettings.aiProvider || "anthropic",
+      aiProvider: insertSettings.aiProvider || "platform",
       aiApiKey: insertSettings.aiApiKey || null,
+      subscriptionTier: insertSettings.subscriptionTier || "starter",
+      usageQuota: insertSettings.usageQuota || 50,
+      usageCount: insertSettings.usageCount || 0,
+      lastResetDate: new Date(),
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -120,6 +134,68 @@ export class MemStorage implements IStorage {
       return updatedSettings;
     }
     return undefined;
+  }
+
+  async resetMonthlyUsage(userId: number): Promise<void> {
+    const settings = this.userSettings.get(userId);
+    if (settings) {
+      const updatedSettings = { 
+        ...settings, 
+        usageCount: 0, 
+        lastResetDate: new Date(),
+        updatedAt: new Date() 
+      };
+      this.userSettings.set(userId, updatedSettings);
+    }
+  }
+
+  async logUsage(insertLog: InsertUsageLog): Promise<UsageLog> {
+    const id = this.currentLogId++;
+    const log: UsageLog = {
+      id,
+      userId: insertLog.userId,
+      projectId: insertLog.projectId || null,
+      action: insertLog.action,
+      provider: insertLog.provider || null,
+      tokensUsed: insertLog.tokensUsed || null,
+      cost: insertLog.cost || null,
+      createdAt: new Date(),
+    };
+    this.usageLogs.set(id.toString(), log);
+    
+    // Increment user usage count
+    const settings = await this.getUserSettings(insertLog.userId);
+    if (settings) {
+      await this.updateUserSettings(insertLog.userId, {
+        usageCount: (settings.usageCount || 0) + 1
+      });
+    }
+    
+    return log;
+  }
+
+  async getUserUsageThisMonth(userId: number): Promise<number> {
+    const settings = await this.getUserSettings(userId);
+    if (!settings) return 0;
+    
+    const now = new Date();
+    const lastReset = settings.lastResetDate ? new Date(settings.lastResetDate) : new Date();
+    
+    // Check if we need to reset monthly usage
+    if (now.getMonth() !== lastReset.getMonth() || now.getFullYear() !== lastReset.getFullYear()) {
+      await this.resetMonthlyUsage(userId);
+      return 0;
+    }
+    
+    return settings.usageCount || 0;
+  }
+
+  async canUserMakeQuery(userId: number): Promise<boolean> {
+    const settings = await this.getUserSettings(userId);
+    if (!settings) return false;
+    
+    const currentUsage = await this.getUserUsageThisMonth(userId);
+    return currentUsage < (settings.usageQuota || 50);
   }
 }
 
