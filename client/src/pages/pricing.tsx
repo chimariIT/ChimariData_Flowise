@@ -10,10 +10,11 @@ import { auth } from "@/lib/api";
 
 interface PricingPageProps {
   onBack: () => void;
+  onSubscribe: (plan: string) => void;
   currentTier?: string;
 }
 
-export default function PricingPage({ onBack, currentTier = "starter" }: PricingPageProps) {
+export default function PricingPage({ onBack, onSubscribe, currentTier = "starter" }: PricingPageProps) {
   const [selectedTier, setSelectedTier] = useState(currentTier);
   const { toast } = useToast();
   const queryClient = useQueryClient();

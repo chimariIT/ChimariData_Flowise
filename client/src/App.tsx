@@ -11,11 +11,12 @@ import Dashboard from "./pages/dashboard";
 import ProjectResults from "./pages/project-results";
 import SettingsPage from "./pages/settings";
 import PricingPage from "./pages/pricing";
+import SubscribePage from "./pages/subscribe";
 import NotFound from "@/pages/not-found";
 
 function App() {
   const [user, setUser] = useState<{ id: number; username: string } | null>(null);
-  const [currentView, setCurrentView] = useState<"landing" | "auth" | "dashboard" | "project" | "settings" | "pricing">("landing");
+  const [currentView, setCurrentView] = useState<"landing" | "auth" | "dashboard" | "project" | "settings" | "pricing" | "subscribe">("landing");
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -120,7 +121,14 @@ function App() {
         )}
         
         {currentView === "pricing" && (
-          <PricingPage onBack={() => setCurrentView("settings")} />
+          <PricingPage 
+            onBack={() => setCurrentView("settings")}
+            onSubscribe={(plan) => setCurrentView("subscribe")}
+          />
+        )}
+        
+        {currentView === "subscribe" && (
+          <SubscribePage onBack={() => setCurrentView("pricing")} />
         )}
       </TooltipProvider>
     </QueryClientProvider>
