@@ -76,6 +76,13 @@ export class MemStorage implements IStorage {
       recordCount: projectData.recordCount || 0,
       dataSnapshot: projectData.dataSnapshot || null,
       ownerId: projectData.ownerId,
+      analysisType: projectData.analysisType || "standard",
+      paymentType: projectData.paymentType || "subscription",
+      paymentAmount: projectData.paymentAmount || null,
+      paymentStatus: projectData.paymentStatus || "pending",
+      stripePaymentIntentId: projectData.stripePaymentIntentId || null,
+      dataSizeMB: projectData.dataSizeMB || 0,
+      complexityScore: projectData.complexityScore || 1,
       createdAt: new Date(),
     };
     this.projects.set(id, project);

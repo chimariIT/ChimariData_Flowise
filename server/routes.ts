@@ -3,6 +3,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { loginSchema, registerSchema, aiQuerySchema } from "@shared/schema";
 import { aiService } from "./ai-service";
+import { PricingService } from "./pricing-service";
 import { spawn } from "child_process";
 import path from "path";
 import Stripe from "stripe";
@@ -341,6 +342,88 @@ export async function registerRoutes(app: Express): Promise<Server> {
         error: "Failed to create payment intent",
         message: error.message 
       });
+    }
+  });
+
+  // Calculate pricing for data analysis
+  app.post("/api/calculate-pricing", requireAuth, async (req, res) => {
+    try {
+      const { dataSizeMB, questionsCount, analysisType, schema, recordCount } = req.body;
+      
+      const dataComplexity = PricingService.assessDataComplexity(schema, recordCount);
+      const pricing = PricingService.calculatePrice({
+        dataSizeMB: dataSizeMB || 0,
+        recordCount: recordCount || 0,
+        columnCount: schema ? Object.keys(schema).length : 0,
+        questionsCount: questionsCount || 0,
+        analysisType: analysisType || 'standard',
+        dataComplexity
+      });
+      
+      res.json({
+        pricing,
+        dataComplexity,
+        estimatedProcessingTime: analysisType === 'custom' ? '10-30 minutes' : '2-10 minutes'
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: "Error calculating pricing: " + error.message });
+    }
+  });
+
+  // Create payment intent for one-time analysis
+  app.post("/api/create-analysis-payment", requireAuth, async (req, res) => {
+    try {
+      const { projectId, analysisType = 'standard' } = req.body;
+      
+      if (!req.user) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+      
+      const project = await storage.getProject(projectId, req.user.userId);
+      if (!project) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+      
+      // Calculate pricing based on project data
+      const dataComplexity = PricingService.assessDataComplexity(project.schema, project.recordCount || 0);
+      const questionsCount = Array.isArray(project.questions) ? project.questions.length : 0;
+      
+      const pricing = PricingService.calculatePrice({
+        dataSizeMB: project.dataSizeMB || 1,
+        recordCount: project.recordCount || 0,
+        columnCount: project.schema ? Object.keys(project.schema).length : 0,
+        questionsCount,
+        analysisType: analysisType as any,
+        dataComplexity
+      });
+      
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: pricing.priceInCents,
+        currency: "usd",
+        metadata: {
+          projectId,
+          userId: req.user.userId.toString(),
+          analysisType,
+          dataComplexity
+        }
+      });
+      
+      // Update project with payment info
+      await storage.updateProject(projectId, req.user.userId, {
+        paymentType: 'one_time',
+        paymentAmount: pricing.priceInCents,
+        stripePaymentIntentId: paymentIntent.id,
+        analysisType,
+        complexityScore: dataComplexity === 'simple' ? 1 : dataComplexity === 'moderate' ? 3 : 5
+      });
+      
+      res.json({ 
+        clientSecret: paymentIntent.client_secret,
+        pricing,
+        dataComplexity
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: "Error creating payment intent: " + error.message });
     }
   });
 

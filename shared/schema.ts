@@ -20,6 +20,13 @@ export const projects = pgTable("projects", {
   recordCount: integer("record_count").default(0),
   status: text("status").default("active"),
   dataSnapshot: jsonb("data_snapshot"), // Store sample data for AI analysis
+  analysisType: text("analysis_type").default("standard"), // standard, advanced, custom
+  paymentType: text("payment_type").default("subscription"), // subscription, one_time
+  paymentAmount: integer("payment_amount"), // amount in cents for one-time payments
+  paymentStatus: text("payment_status").default("pending"), // pending, paid, failed
+  stripePaymentIntentId: text("stripe_payment_intent_id"),
+  dataSizeMB: integer("data_size_mb").default(0),
+  complexityScore: integer("complexity_score").default(1), // 1-5 based on data structure and questions
 });
 
 export const userSettings = pgTable("user_settings", {
