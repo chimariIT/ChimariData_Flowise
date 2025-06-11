@@ -191,6 +191,125 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Google Drive integration routes
+  app.get("/api/google-drive/files", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.user!.id);
+      if (!user || !user.accessToken || !user.refreshToken) {
+        return res.status(401).json({ error: "Google Drive access not authorized. Please reconnect your Google account." });
+      }
+
+      const { GoogleDriveService } = await import("./oauth-auth");
+      const driveService = new GoogleDriveService(user.accessToken, user.refreshToken);
+      const files = await driveService.listFiles();
+      
+      res.json({ files });
+    } catch (error: any) {
+      console.error("Google Drive files error:", error);
+      res.status(500).json({ error: "Failed to fetch Google Drive files", message: error.message });
+    }
+  });
+
+  app.post("/api/projects/import-from-drive", requireAuth, async (req, res) => {
+    try {
+      const { fileId, fileName, name, questions } = req.body;
+      
+      if (!fileId || !fileName || !name) {
+        return res.status(400).json({ error: "Missing required fields: fileId, fileName, and project name" });
+      }
+
+      const user = await storage.getUser(req.user!.id);
+      if (!user || !user.accessToken || !user.refreshToken) {
+        return res.status(401).json({ error: "Google Drive access not authorized. Please reconnect your Google account." });
+      }
+
+      // Download file from Google Drive
+      const { GoogleDriveService } = await import("./oauth-auth");
+      const driveService = new GoogleDriveService(user.accessToken, user.refreshToken);
+      const fileData = await driveService.downloadFile(fileId);
+      
+      // Save temporarily for processing
+      const tempPath = path.join('uploads', `drive-${Date.now()}-${fileName}`);
+      fs.writeFileSync(tempPath, fileData as any);
+
+      // Parse questions if provided
+      let questionsArray: string[] = [];
+      try {
+        if (questions) {
+          questionsArray = Array.isArray(questions) ? questions : JSON.parse(questions);
+        }
+      } catch (e) {
+        fs.unlinkSync(tempPath); // Clean up temp file
+        return res.status(400).json({ error: "Invalid questions format" });
+      }
+
+      // Process the file using the same logic as regular uploads
+      let processedFile;
+      try {
+        processedFile = await FileProcessor.processFile(tempPath, fileName);
+      } catch (error: any) {
+        fs.unlinkSync(tempPath); // Clean up temp file
+        return res.status(400).json({ 
+          error: `File processing failed: ${error.message}`,
+          details: "Ensure your Google Drive file is a valid CSV or Excel file with proper data structure."
+        });
+      }
+
+      // Calculate pricing
+      const dataSizeMB = Math.round(fs.statSync(tempPath).size / (1024 * 1024) * 100) / 100;
+      const dataComplexity = PricingService.assessDataComplexity(processedFile.schema, processedFile.data.length);
+      const questionComplexity = PricingService.assessQuestionComplexity(questionsArray);
+      const estimatedArtifacts = PricingService.estimateAnalysisArtifacts("standard", processedFile.data.length, Object.keys(processedFile.schema).length);
+
+      const pricingFactors = {
+        dataSizeMB,
+        recordCount: processedFile.data.length,
+        columnCount: Object.keys(processedFile.schema).length,
+        featureCount: Object.keys(processedFile.schema).length,
+        questionsCount: questionsArray.length,
+        questionComplexity,
+        analysisType: "standard" as const,
+        analysisArtifacts: estimatedArtifacts,
+        dataComplexity
+      };
+
+      const pricingResult = PricingService.calculatePrice(pricingFactors);
+
+      // Create project
+      const project = await storage.createProject({
+        name,
+        schema: processedFile.schema,
+        questions: questionsArray,
+        insights: {},
+        recordCount: processedFile.data.length,
+        filePath: tempPath,
+        fileName: fileName,
+        fileSize: fs.statSync(tempPath).size,
+        uploadedAt: new Date(),
+        estimatedPrice: pricingResult.finalPrice,
+        ownerId: req.user!.id
+      });
+
+      // Clean up temp file after project creation
+      try {
+        fs.unlinkSync(tempPath);
+      } catch (e) {
+        console.warn("Failed to clean up temp file:", tempPath);
+      }
+
+      res.json({
+        message: "Project imported from Google Drive successfully",
+        project,
+        pricing: pricingResult,
+        dataPreview: processedFile.dataSnapshot
+      });
+
+    } catch (error: any) {
+      console.error("Google Drive import error:", error);
+      res.status(500).json({ error: "Failed to import from Google Drive", message: error.message });
+    }
+  });
+
   // File upload route
   app.post("/api/projects/upload", requireAuth, upload.single('file'), async (req, res) => {
     try {
