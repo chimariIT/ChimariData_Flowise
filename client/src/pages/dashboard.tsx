@@ -82,7 +82,7 @@ export default function Dashboard({ user, onLogout, onProjectSelect, onSettings 
             <div className="flex items-center space-x-4">
               <div className="flex items-center space-x-2">
                 <ChartLine className="w-6 h-6 text-primary" />
-                <span className="text-xl font-bold text-slate-900">DataInsight Pro</span>
+                <span className="text-xl font-bold text-slate-900">ChimariData+AI</span>
               </div>
               <div className="hidden md:flex items-center space-x-6 ml-8">
                 <a href="#" className="text-slate-700 hover:text-primary font-medium">Dashboard</a>
