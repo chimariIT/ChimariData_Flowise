@@ -189,7 +189,7 @@ Additional Notes: ${formData.additionalNotes}
       `.trim();
 
       // Open email client
-      const mailto = `mailto:chimaridata@gmail.com?subject=Expert Consultation Request - ${formData.name}&body=${encodeURIComponent(emailBody)}`;
+      const mailto = `mailto:sales@chimaridata.com?subject=Expert Consultation Request - ${formData.name}&body=${encodeURIComponent(emailBody)}`;
       window.location.href = mailto;
 
       setIsSubmitted(true);

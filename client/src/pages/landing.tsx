@@ -882,6 +882,14 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
                 <li><a href="#" className="hover:text-white">Privacy</a></li>
                 <li><a href="#" className="hover:text-white">Terms</a></li>
               </ul>
+              <div className="mt-6">
+                <h4 className="font-semibold mb-2">Contact</h4>
+                <p className="text-slate-400 text-sm">
+                  <a href="mailto:sales@chimaridata.com" className="hover:text-white">
+                    sales@chimaridata.com
+                  </a>
+                </p>
+              </div>
             </div>
           </div>
           

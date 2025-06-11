@@ -179,8 +179,9 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
                 <p className="text-slate-600">
                   {isLogin ? "Don't have an account? " : "Already have an account? "}
                   <button 
+                    type="button"
                     onClick={() => setIsLogin(!isLogin)}
-                    className="text-primary hover:text-primary/80 font-medium"
+                    className="text-primary hover:text-primary/80 font-medium underline"
                   >
                     {isLogin ? "Sign up" : "Sign in"}
                   </button>
