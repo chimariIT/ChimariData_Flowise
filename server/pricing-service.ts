@@ -2,32 +2,46 @@ export interface PricingFactors {
   dataSizeMB: number;
   recordCount: number;
   columnCount: number;
+  featureCount: number;
   questionsCount: number;
+  questionComplexity: 'simple' | 'moderate' | 'complex';
   analysisType: 'standard' | 'advanced' | 'custom';
+  analysisArtifacts: number;
   dataComplexity: 'simple' | 'moderate' | 'complex';
 }
 
 export interface PricingResult {
   basePrice: number;
   dataSizeMultiplier: number;
+  recordCountMultiplier: number;
+  featureCountMultiplier: number;
   complexityMultiplier: number;
   questionsMultiplier: number;
+  questionComplexityMultiplier: number;
   analysisTypeMultiplier: number;
+  analysisArtifactsMultiplier: number;
   finalPrice: number;
   priceInCents: number;
   breakdown: {
     basePrice: number;
     dataSizeCharge: number;
+    recordCountCharge: number;
+    featureCountCharge: number;
     complexityCharge: number;
     questionsCharge: number;
+    questionComplexityCharge: number;
     analysisTypeCharge: number;
+    analysisArtifactsCharge: number;
   };
 }
 
 export class PricingService {
   private static readonly BASE_PRICE = 5.00; // $5 base price
   private static readonly PRICE_PER_MB = 0.10; // $0.10 per MB
+  private static readonly PRICE_PER_1K_RECORDS = 0.05; // $0.05 per 1K records
+  private static readonly PRICE_PER_FEATURE = 0.25; // $0.25 per feature beyond 10
   private static readonly PRICE_PER_QUESTION = 1.00; // $1 per question beyond first 3
+  private static readonly PRICE_PER_ARTIFACT = 0.50; // $0.50 per analysis artifact
   
   private static readonly ANALYSIS_TYPE_MULTIPLIERS = {
     standard: 1.0,
@@ -39,6 +53,12 @@ export class PricingService {
     simple: 1.0,
     moderate: 1.3,
     complex: 1.6
+  };
+
+  private static readonly QUESTION_COMPLEXITY_MULTIPLIERS = {
+    simple: 1.0,
+    moderate: 1.2,
+    complex: 1.5
   };
 
   static calculatePrice(factors: PricingFactors): PricingResult {
