@@ -117,7 +117,16 @@ function App() {
                 
                 <div className="space-y-3 mb-6">
                   <button 
-                    onClick={() => window.location.href = "/auth/google"}
+                    onClick={() => {
+                      fetch("/auth/google")
+                        .then(res => res.json())
+                        .then(data => {
+                          alert("OAuth Setup Required: " + data.message);
+                        })
+                        .catch(() => {
+                          alert("OAuth Setup Required: Please configure Google OAuth credentials in environment variables");
+                        });
+                    }}
                     className="w-full h-11 px-4 py-2 border border-gray-300 rounded-md shadow-sm bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 flex items-center justify-center gap-2"
                   >
                     <svg className="w-4 h-4" viewBox="0 0 24 24">
@@ -130,7 +139,16 @@ function App() {
                   </button>
                   
                   <button 
-                    onClick={() => window.location.href = "/auth/microsoft"}
+                    onClick={() => {
+                      fetch("/auth/microsoft")
+                        .then(res => res.json())
+                        .then(data => {
+                          alert("OAuth Setup Required: " + data.message);
+                        })
+                        .catch(() => {
+                          alert("OAuth Setup Required: Please configure Microsoft OAuth credentials in environment variables");
+                        });
+                    }}
                     className="w-full h-11 px-4 py-2 border border-gray-300 rounded-md shadow-sm bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 flex items-center justify-center gap-2"
                   >
                     <svg className="w-4 h-4" viewBox="0 0 23 23">
@@ -144,7 +162,16 @@ function App() {
                   </button>
                   
                   <button 
-                    onClick={() => window.location.href = "/auth/apple"}
+                    onClick={() => {
+                      fetch("/auth/apple")
+                        .then(res => res.json())
+                        .then(data => {
+                          alert("OAuth Setup Required: " + data.message);
+                        })
+                        .catch(() => {
+                          alert("OAuth Setup Required: Please configure Apple OAuth credentials in environment variables");
+                        });
+                    }}
                     className="w-full h-11 px-4 py-2 border border-gray-300 rounded-md shadow-sm bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 flex items-center justify-center gap-2"
                   >
                     <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">

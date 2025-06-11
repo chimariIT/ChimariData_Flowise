@@ -199,7 +199,7 @@ export default function DemoPage() {
                 Experience the Power of AI-Driven Analytics
               </h2>
               <p className="text-xl text-slate-600 max-w-3xl mx-auto">
-                See how DataInsight Pro transforms raw data into actionable business intelligence in minutes, not hours.
+                See how ChimariData+AI transforms raw data into actionable business intelligence in minutes, not hours.
               </p>
             </div>
 
