@@ -19,9 +19,11 @@ import {
 
 interface LandingPageProps {
   onGetStarted: () => void;
+  onPayPerAnalysis: () => void;
+  onExpertConsultation: () => void;
 }
 
-export default function LandingPage({ onGetStarted }: LandingPageProps) {
+export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertConsultation }: LandingPageProps) {
   const [isVisible, setIsVisible] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [currentRecommendation, setCurrentRecommendation] = useState(0);
@@ -567,14 +569,35 @@ export default function LandingPage({ onGetStarted }: LandingPageProps) {
                 </div>
               </div>
 
-              <Button 
-                onClick={onGetStarted}
-                size="lg"
-                className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:scale-105 transition-all duration-200"
-              >
-                <Sparkles className="w-5 h-5 mr-2" />
-                Try Live Demo Now
-              </Button>
+              <div className="space-y-3">
+                <Button 
+                  onClick={onGetStarted}
+                  size="lg"
+                  className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:scale-105 transition-all duration-200"
+                >
+                  <Sparkles className="w-5 h-5 mr-2" />
+                  Try Live Demo Now
+                </Button>
+                
+                <div className="grid grid-cols-2 gap-2">
+                  <Button 
+                    onClick={onPayPerAnalysis}
+                    variant="outline"
+                    size="sm"
+                    className="text-xs"
+                  >
+                    Pay-Per-Analysis
+                  </Button>
+                  <Button 
+                    onClick={onExpertConsultation}
+                    variant="outline"
+                    size="sm"
+                    className="text-xs"
+                  >
+                    Expert Consultation
+                  </Button>
+                </div>
+              </div>
             </div>
 
             <div className="bg-white rounded-2xl shadow-2xl p-8 border border-slate-200">
@@ -750,13 +773,22 @@ export default function LandingPage({ onGetStarted }: LandingPageProps) {
             <p className="text-slate-600 mb-4">
               All plans include secure data handling and GDPR compliance
             </p>
-            <Button 
-              onClick={() => window.location.href = 'mailto:chimaridata@gmail.com?subject=Pay-per-Analysis Inquiry&body=Hi, I am interested in the pay-per-analysis option instead of a monthly subscription. Can you provide more details?'}
-              variant="ghost"
-              className="text-blue-600 hover:text-blue-700"
-            >
-              Need pay-per-analysis? Start here →
-            </Button>
+            <div className="flex gap-4 justify-center">
+              <Button 
+                onClick={onPayPerAnalysis}
+                variant="ghost"
+                className="text-blue-600 hover:text-blue-700"
+              >
+                Need pay-per-analysis? Start here →
+              </Button>
+              <Button 
+                onClick={onExpertConsultation}
+                variant="ghost"
+                className="text-purple-600 hover:text-purple-700"
+              >
+                Consult with Expert →
+              </Button>
+            </div>
           </div>
         </div>
       </section>
