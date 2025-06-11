@@ -111,7 +111,7 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
               </Button>
               <Button 
                 variant="ghost" 
-                onClick={() => scrollToSection('demo')}
+                onClick={() => window.location.href = "/demo"}
                 className="hover:scale-105 transition-transform duration-200"
               >
                 Demo
@@ -571,7 +571,7 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
 
               <div className="space-y-3">
                 <Button 
-                  onClick={onGetStarted}
+                  onClick={() => window.location.href = "/demo"}
                   size="lg"
                   className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:scale-105 transition-all duration-200"
                 >
