@@ -26,6 +26,14 @@ export default function LandingPage({ onGetStarted }: LandingPageProps) {
   const [showPreview, setShowPreview] = useState(false);
   const [currentRecommendation, setCurrentRecommendation] = useState(0);
 
+  // Navigation scroll handlers
+  const scrollToSection = (sectionId: string) => {
+    const element = document.getElementById(sectionId);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
   const dataScenarios = [
     {
       title: "E-commerce Sales Data",
@@ -85,6 +93,27 @@ export default function LandingPage({ onGetStarted }: LandingPageProps) {
               <span className="text-xl font-bold text-slate-900">ChimariData</span>
             </div>
             <div className="flex items-center space-x-4">
+              <Button 
+                variant="ghost" 
+                onClick={() => scrollToSection('features')}
+                className="hover:scale-105 transition-transform duration-200"
+              >
+                Features
+              </Button>
+              <Button 
+                variant="ghost" 
+                onClick={() => scrollToSection('pricing')}
+                className="hover:scale-105 transition-transform duration-200"
+              >
+                Pricing
+              </Button>
+              <Button 
+                variant="ghost" 
+                onClick={() => scrollToSection('demo')}
+                className="hover:scale-105 transition-transform duration-200"
+              >
+                Demo
+              </Button>
               <Button 
                 variant="ghost" 
                 onClick={onGetStarted}
@@ -369,7 +398,7 @@ export default function LandingPage({ onGetStarted }: LandingPageProps) {
       </section>
 
       {/* Features */}
-      <section className="py-16 px-4 sm:px-6 lg:px-8 bg-white">
+      <section id="features" className="py-16 px-4 sm:px-6 lg:px-8 bg-white">
         <div className={`max-w-6xl mx-auto transition-all duration-1000 ${isVisible ? 'opacity-100' : 'opacity-0'}`}>
           <div className="text-center mb-12">
             <h2 className={`text-3xl font-bold text-slate-900 mb-4 transition-all duration-700 ${isVisible ? 'translate-y-0 opacity-100' : 'translate-y-5 opacity-0'}`}>
@@ -484,6 +513,250 @@ export default function LandingPage({ onGetStarted }: LandingPageProps) {
                 <div className="text-sm text-slate-600">Proven ROI in data-driven decisions</div>
               </div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Demo Section */}
+      <section id="demo" className="py-20 px-4 sm:px-6 lg:px-8 bg-gradient-to-br from-slate-50 to-blue-50">
+        <div className="max-w-6xl mx-auto">
+          <div className="text-center mb-16">
+            <h2 className="text-3xl md:text-4xl font-bold text-slate-900 mb-4">
+              See ChimariData in Action
+            </h2>
+            <p className="text-xl text-slate-600 max-w-3xl mx-auto">
+              Watch how our platform transforms complex data into actionable insights in under 2 minutes
+            </p>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-12 items-center">
+            <div className="space-y-8">
+              <div className="bg-white p-6 rounded-xl shadow-lg border border-blue-100">
+                <div className="flex items-start space-x-4">
+                  <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center flex-shrink-0">
+                    <span className="text-blue-600 font-bold">1</span>
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-slate-900 mb-2">Upload Your Dataset</h3>
+                    <p className="text-slate-600 text-sm">Drop a CSV or Excel file - we automatically detect headers and data types</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white p-6 rounded-xl shadow-lg border border-green-100">
+                <div className="flex items-start space-x-4">
+                  <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center flex-shrink-0">
+                    <span className="text-green-600 font-bold">2</span>
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-slate-900 mb-2">Ask Natural Language Questions</h3>
+                    <p className="text-slate-600 text-sm">"What are the top revenue drivers?" or "Show me seasonal trends"</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white p-6 rounded-xl shadow-lg border border-purple-100">
+                <div className="flex items-start space-x-4">
+                  <div className="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center flex-shrink-0">
+                    <span className="text-purple-600 font-bold">3</span>
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-slate-900 mb-2">Get Instant AI Insights</h3>
+                    <p className="text-slate-600 text-sm">Detailed analysis with visualizations and actionable recommendations</p>
+                  </div>
+                </div>
+              </div>
+
+              <Button 
+                onClick={onGetStarted}
+                size="lg"
+                className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:scale-105 transition-all duration-200"
+              >
+                <Sparkles className="w-5 h-5 mr-2" />
+                Try Live Demo Now
+              </Button>
+            </div>
+
+            <div className="bg-white rounded-2xl shadow-2xl p-8 border border-slate-200">
+              <div className="mb-6">
+                <div className="flex items-center space-x-2 mb-4">
+                  <div className="w-3 h-3 bg-red-500 rounded-full"></div>
+                  <div className="w-3 h-3 bg-yellow-500 rounded-full"></div>
+                  <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+                  <span className="text-sm text-slate-500 ml-4">ChimariData Analytics</span>
+                </div>
+                <div className="bg-slate-50 rounded-lg p-4 border">
+                  <div className="text-xs text-slate-500 mb-2">Dataset: sales_data.csv (505 records)</div>
+                  <div className="text-sm text-slate-700 mb-3">
+                    <strong>Question:</strong> "What are the key factors driving our revenue growth?"
+                  </div>
+                  <div className="space-y-2">
+                    <div className="bg-blue-50 p-3 rounded border-l-4 border-blue-400">
+                      <div className="text-sm text-blue-800">
+                        <strong>Key Finding:</strong> Revenue increased 89% in Q2, primarily driven by electronics category
+                      </div>
+                    </div>
+                    <div className="bg-green-50 p-3 rounded border-l-4 border-green-400">
+                      <div className="text-sm text-green-800">
+                        <strong>Recommendation:</strong> Focus marketing budget on electronics segment for Q3
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="text-center">
+                <div className="text-2xl font-bold text-slate-900 mb-1">2 minutes</div>
+                <div className="text-sm text-slate-600">From upload to insights</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Pricing Section */}
+      <section id="pricing" className="py-20 px-4 sm:px-6 lg:px-8 bg-white">
+        <div className="max-w-6xl mx-auto">
+          <div className="text-center mb-16">
+            <h2 className="text-3xl md:text-4xl font-bold text-slate-900 mb-4">
+              Simple, Transparent Pricing
+            </h2>
+            <p className="text-xl text-slate-600 max-w-3xl mx-auto">
+              Choose the plan that fits your data analysis needs
+            </p>
+          </div>
+
+          <div className="grid md:grid-cols-3 gap-8">
+            {/* Free Plan */}
+            <Card className="border-2 border-slate-200 hover:border-blue-300 transition-all duration-300">
+              <CardHeader className="text-center">
+                <CardTitle className="text-2xl font-bold text-slate-900">Free</CardTitle>
+                <div className="text-4xl font-bold text-slate-900 my-4">$0</div>
+                <CardDescription>Perfect for getting started</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-3">
+                  <div className="flex items-center">
+                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
+                    <span className="text-slate-700">50 AI queries per month</span>
+                  </div>
+                  <div className="flex items-center">
+                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
+                    <span className="text-slate-700">Up to 10MB file uploads</span>
+                  </div>
+                  <div className="flex items-center">
+                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
+                    <span className="text-slate-700">Basic visualizations</span>
+                  </div>
+                  <div className="flex items-center">
+                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
+                    <span className="text-slate-700">Community support</span>
+                  </div>
+                </div>
+                <Button 
+                  onClick={onGetStarted}
+                  className="w-full"
+                  variant="outline"
+                >
+                  Get Started Free
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* Pro Plan */}
+            <Card className="border-2 border-blue-500 relative hover:shadow-xl transition-all duration-300">
+              <div className="absolute -top-3 left-1/2 transform -translate-x-1/2">
+                <Badge className="bg-blue-600 text-white px-4 py-1">Most Popular</Badge>
+              </div>
+              <CardHeader className="text-center">
+                <CardTitle className="text-2xl font-bold text-slate-900">Pro</CardTitle>
+                <div className="text-4xl font-bold text-slate-900 my-4">$29<span className="text-lg text-slate-600">/month</span></div>
+                <CardDescription>For professional data analysts</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-3">
+                  <div className="flex items-center">
+                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
+                    <span className="text-slate-700">1,000 AI queries per month</span>
+                  </div>
+                  <div className="flex items-center">
+                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
+                    <span className="text-slate-700">Up to 100MB file uploads</span>
+                  </div>
+                  <div className="flex items-center">
+                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
+                    <span className="text-slate-700">Advanced ML analysis</span>
+                  </div>
+                  <div className="flex items-center">
+                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
+                    <span className="text-slate-700">Priority support</span>
+                  </div>
+                  <div className="flex items-center">
+                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
+                    <span className="text-slate-700">API access</span>
+                  </div>
+                </div>
+                <Button 
+                  onClick={onGetStarted}
+                  className="w-full bg-blue-600 hover:bg-blue-700"
+                >
+                  Start Pro Trial
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* Enterprise Plan */}
+            <Card className="border-2 border-slate-200 hover:border-purple-300 transition-all duration-300">
+              <CardHeader className="text-center">
+                <CardTitle className="text-2xl font-bold text-slate-900">Enterprise</CardTitle>
+                <div className="text-4xl font-bold text-slate-900 my-4">Custom</div>
+                <CardDescription>For large organizations</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-3">
+                  <div className="flex items-center">
+                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
+                    <span className="text-slate-700">Unlimited AI queries</span>
+                  </div>
+                  <div className="flex items-center">
+                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
+                    <span className="text-slate-700">Unlimited file uploads</span>
+                  </div>
+                  <div className="flex items-center">
+                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
+                    <span className="text-slate-700">Custom integrations</span>
+                  </div>
+                  <div className="flex items-center">
+                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
+                    <span className="text-slate-700">Dedicated support</span>
+                  </div>
+                  <div className="flex items-center">
+                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
+                    <span className="text-slate-700">On-premise deployment</span>
+                  </div>
+                </div>
+                <Button 
+                  onClick={onGetStarted}
+                  className="w-full"
+                  variant="outline"
+                >
+                  Contact Sales
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="text-center mt-12">
+            <p className="text-slate-600 mb-4">
+              All plans include secure data handling and GDPR compliance
+            </p>
+            <Button 
+              onClick={onGetStarted}
+              variant="ghost"
+              className="text-blue-600 hover:text-blue-700"
+            >
+              Need pay-per-analysis? Start here →
+            </Button>
           </div>
         </div>
       </section>
