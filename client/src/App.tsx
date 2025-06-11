@@ -159,9 +159,7 @@ function App() {
           <SubscribePage onBack={() => setLocation("/pricing")} />
         )}
         
-        {!user && !["/", "/demo", "/auth", "/pay-per-analysis", "/expert-consultation"].includes(location) && (
-          setLocation("/auth")
-        )}
+
       </TooltipProvider>
     </QueryClientProvider>
   );
