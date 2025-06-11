@@ -5,6 +5,7 @@ import { loginSchema, registerSchema, aiQuerySchema } from "@shared/schema";
 import { aiService } from "./ai-service";
 import { PricingService } from "./pricing-service";
 import { mlService } from "./ml-service";
+import { FileProcessor } from "./file-processor";
 import passport from "passport";
 import session from "express-session";
 import { spawn } from "child_process";
@@ -200,53 +201,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Invalid questions format" });
       }
 
-      // Read and process the uploaded file
+      // Process the uploaded file with comprehensive file processor
       const filePath = req.file.path;
-      const fileContent = fs.readFileSync(filePath, 'utf-8');
+      let processedFile;
       
-      // Parse CSV data (simple implementation)
-      const lines = fileContent.split('\n').filter(line => line.trim());
-      if (lines.length < 2) {
-        return res.status(400).json({ error: "File must contain at least header and one data row" });
+      try {
+        processedFile = await FileProcessor.processFile(
+          filePath, 
+          req.file.originalname,
+          {
+            // Allow user to specify processing options in future
+            headerRow: req.body.headerRow ? parseInt(req.body.headerRow) : undefined,
+            selectedSheet: req.body.selectedSheet,
+            encoding: req.body.encoding,
+          }
+        );
+      } catch (error: any) {
+        return res.status(400).json({ 
+          error: `File processing failed: ${error.message}`,
+          details: "Ensure your file is a valid CSV or Excel file with proper data structure."
+        });
       }
 
-      const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
-      const dataRows = lines.slice(1).map(line => 
-        line.split(',').map(cell => cell.trim().replace(/"/g, ''))
-      );
+      // Calculate data size in MB
+      const dataSizeMB = Math.round(processedFile.metadata.fileSize / (1024 * 1024) * 100) / 100;
 
-      // Create schema from headers
-      const schema: Record<string, string> = {};
-      headers.forEach(header => {
-        schema[header] = 'text'; // Simple type detection
-      });
+      // Calculate comprehensive pricing based on all factors
+      const dataComplexity = PricingService.assessDataComplexity(processedFile.schema, processedFile.data.length);
+      const questionComplexity = PricingService.assessQuestionComplexity(questionsArray);
+      const estimatedArtifacts = PricingService.estimateAnalysisArtifacts("standard", processedFile.data.length, Object.keys(processedFile.schema).length);
 
-      // Sample data for AI analysis (first 10 rows)
-      const sampleData = dataRows.slice(0, 10).map(row => {
-        const obj: Record<string, any> = {};
-        headers.forEach((header, index) => {
-          obj[header] = row[index] || '';
-        });
-        return obj;
-      });
+      const pricingFactors = {
+        dataSizeMB,
+        recordCount: processedFile.data.length,
+        columnCount: Object.keys(processedFile.schema).length,
+        featureCount: Object.keys(processedFile.schema).length,
+        questionsCount: questionsArray.length,
+        questionComplexity,
+        analysisType: "standard" as const,
+        analysisArtifacts: estimatedArtifacts,
+        dataComplexity
+      };
 
-      // Calculate data size
-      const dataSizeMB = Math.round(req.file.size / (1024 * 1024) * 100) / 100;
+      const pricingResult = PricingService.calculatePrice(pricingFactors);
 
-      // Create project
+      // Create project with comprehensive data
       const project = await storage.createProject({
         name,
-        schema,
+        schema: processedFile.schema,
         questions: questionsArray,
         insights: {},
-        recordCount: dataRows.length,
+        recordCount: processedFile.data.length,
         status: "active",
-        dataSnapshot: sampleData,
+        dataSnapshot: processedFile.dataSnapshot,
         dataSizeMB,
-        paymentType: "subscription",
+        paymentType: "one_time",
+        paymentAmount: pricingResult.priceInCents,
         analysisType: "standard",
-        complexityScore: PricingService.assessDataComplexity(schema, dataRows.length) === 'simple' ? 1 : 
-                       PricingService.assessDataComplexity(schema, dataRows.length) === 'moderate' ? 3 : 5,
+        complexityScore: dataComplexity === 'simple' ? 1 : dataComplexity === 'moderate' ? 3 : 5,
+        isPaid: false, // Payment required before insights
+        fileMetadata: processedFile.metadata,
         ownerId: req.user.userId
       });
 
@@ -842,6 +856,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const project = await storage.getProject(projectId, userId);
       if (!project) {
         return res.status(404).json({ message: "Project not found" });
+      }
+
+      // Check if project analysis has been paid for
+      if (!project.isPaid) {
+        return res.status(402).json({ 
+          error: "Payment required for ML analysis. Please complete payment to access advanced analytics.",
+          needsPayment: true,
+          projectId: projectId,
+          paymentAmount: project.paymentAmount
+        });
       }
 
       // Check usage quota
