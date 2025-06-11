@@ -614,6 +614,180 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Generate comprehensive data insights
+  app.post("/api/ai/insights", requireAuth, async (req, res) => {
+    try {
+      const { projectId } = req.body;
+      
+      if (!projectId) {
+        return res.status(400).json({ error: "Project ID is required" });
+      }
+
+      const project = await storage.getProject(projectId, req.user.userId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+
+      // Check if project analysis has been paid for
+      if (!project.isPaid) {
+        return res.status(402).json({ 
+          error: "Payment required for insights. Please complete payment to access AI analysis.",
+          needsPayment: true,
+          projectId
+        });
+      }
+
+      let settings = await storage.getUserSettings(req.user.userId);
+      if (!settings) {
+        settings = await storage.createUserSettings({
+          userId: req.user.userId,
+          aiProvider: "platform",
+          aiApiKey: null,
+          subscriptionTier: "starter",
+          usageQuota: 50,
+          usageCount: 0,
+        });
+      }
+
+      // Check usage limits
+      const canQuery = await storage.canUserMakeQuery(req.user.userId);
+      if (!canQuery) {
+        const currentUsage = await storage.getUserUsageThisMonth(req.user.userId);
+        return res.status(429).json({ 
+          error: `Monthly quota exceeded (${currentUsage}/${settings.usageQuota}). Upgrade your plan for more queries.`,
+          usage: currentUsage,
+          quota: settings.usageQuota
+        });
+      }
+
+      const dataContext = {
+        schema: project.schema,
+        sampleData: project.dataSnapshot || [],
+        recordCount: project.recordCount || 0
+      };
+
+      try {
+        const insights = await aiService.generateDataInsights(
+          settings.aiProvider || "platform",
+          settings.aiApiKey || "",
+          dataContext
+        );
+
+        // Log usage
+        await storage.logUsage({
+          userId: req.user.userId,
+          projectId,
+          action: "comprehensive_analysis",
+          provider: settings.aiProvider,
+          tokensUsed: 1000,
+          cost: settings.aiProvider === "platform" ? "0.00" : "estimated"
+        });
+
+        const currentUsage = await storage.getUserUsageThisMonth(req.user.userId);
+
+        res.json({ 
+          insights,
+          usage: {
+            current: currentUsage,
+            quota: settings.usageQuota,
+            remaining: (settings.usageQuota || 50) - currentUsage
+          }
+        });
+
+      } catch (aiError: any) {
+        console.error("AI Insights Error:", aiError);
+        res.status(500).json({ 
+          error: "Insights generation failed", 
+          message: aiError.message 
+        });
+      }
+
+    } catch (error: any) {
+      console.error("Insights generation error:", error);
+      res.status(500).json({ 
+        error: "Failed to generate insights",
+        message: error.message 
+      });
+    }
+  });
+
+  // Generate visualization suggestions
+  app.post("/api/ai/visualizations", requireAuth, async (req, res) => {
+    try {
+      const { projectId } = req.body;
+      
+      if (!projectId) {
+        return res.status(400).json({ error: "Project ID is required" });
+      }
+
+      const project = await storage.getProject(projectId, req.user.userId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+
+      // Check if project analysis has been paid for
+      if (!project.isPaid) {
+        return res.status(402).json({ 
+          error: "Payment required for insights. Please complete payment to access AI analysis.",
+          needsPayment: true,
+          projectId
+        });
+      }
+
+      let settings = await storage.getUserSettings(req.user.userId);
+      if (!settings) {
+        settings = await storage.createUserSettings({
+          userId: req.user.userId,
+          aiProvider: "platform",
+          aiApiKey: null,
+          subscriptionTier: "starter",
+          usageQuota: 50,
+          usageCount: 0,
+        });
+      }
+
+      const dataContext = {
+        schema: project.schema,
+        sampleData: project.dataSnapshot || [],
+        recordCount: project.recordCount || 0
+      };
+
+      try {
+        const suggestions = await aiService.generateVisualizationSuggestions(
+          settings.aiProvider || "platform",
+          settings.aiApiKey || "",
+          dataContext
+        );
+
+        // Log usage
+        await storage.logUsage({
+          userId: req.user.userId,
+          projectId,
+          action: "visualization_analysis",
+          provider: settings.aiProvider,
+          tokensUsed: 500,
+          cost: settings.aiProvider === "platform" ? "0.00" : "estimated"
+        });
+
+        res.json({ suggestions });
+
+      } catch (aiError: any) {
+        console.error("AI Visualization Error:", aiError);
+        res.status(500).json({ 
+          error: "Visualization suggestions failed", 
+          message: aiError.message 
+        });
+      }
+
+    } catch (error: any) {
+      console.error("Visualization suggestions error:", error);
+      res.status(500).json({ 
+        error: "Failed to generate visualization suggestions",
+        message: error.message 
+      });
+    }
+  });
+
   // Stripe Payment Routes
   app.post("/api/create-payment-intent", async (req, res) => {
     try {
