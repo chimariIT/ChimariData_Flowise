@@ -6,6 +6,7 @@ import { aiService } from "./ai-service";
 import { PricingService } from "./pricing-service";
 import { mlService } from "./ml-service";
 import { FileProcessor } from "./file-processor";
+import { setupOAuthProviders } from "./oauth-auth";
 import passport from "passport";
 import session from "express-session";
 import { spawn } from "child_process";
@@ -72,6 +73,21 @@ function verifyPassword(password: string, hash: string): boolean {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Setup session middleware
+  app.use(session({
+    secret: process.env.SESSION_SECRET || 'your-secret-key',
+    resave: false,
+    saveUninitialized: false,
+    cookie: { secure: false } // Set to true in production with HTTPS
+  }));
+
+  // Initialize Passport
+  app.use(passport.initialize());
+  app.use(passport.session());
+
+  // Setup OAuth providers
+  setupOAuthProviders(app);
+
   // Start FastAPI backend
   const fastApiProcess = spawn('python', [path.join(process.cwd(), 'server', 'fastapi-backend.py')], {
     stdio: 'inherit'

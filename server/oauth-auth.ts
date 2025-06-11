@@ -1,10 +1,16 @@
 import passport from 'passport';
-import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
-import { Strategy as MicrosoftStrategy } from 'passport-microsoft';
-import { Strategy as AppleStrategy } from 'passport-apple';
 import { google } from 'googleapis';
 import { storage } from './storage';
 import type { Express } from 'express';
+
+// Simple OAuth strategy without external dependencies
+interface OAuthProfile {
+  id: string;
+  emails: Array<{ value: string }>;
+  displayName: string;
+  name?: { givenName?: string; familyName?: string };
+  photos?: Array<{ value: string }>;
+}
 
 // Google Drive integration
 export class GoogleDriveService {
@@ -44,34 +50,42 @@ export class GoogleDriveService {
 }
 
 export function setupOAuthProviders(app: Express) {
+  // Passport serialization
+  passport.serializeUser((user: any, done) => {
+    done(null, user.id);
+  });
+
+  passport.deserializeUser(async (id: number, done) => {
+    try {
+      const user = await storage.getUser(id);
+      done(null, user);
+    } catch (error) {
+      done(error, null);
+    }
+  });
+
   // Google OAuth Strategy
   if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
     passport.use(new GoogleStrategy({
       clientID: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
       callbackURL: "/auth/google/callback",
-      scope: ['profile', 'email', 'https://www.googleapis.com/auth/drive.readonly']
+      scope: ['profile', 'email']
     }, async (accessToken, refreshToken, profile, done) => {
       try {
         const email = profile.emails?.[0]?.value;
-        const name = profile.displayName;
+        
+        if (!email) {
+          return done(new Error('No email provided by Google'), null);
+        }
         
         let user = await storage.getUserByEmail(email);
         if (!user) {
           user = await storage.createUser({
             username: email,
             email,
-            firstName: profile.name?.givenName || '',
-            lastName: profile.name?.familyName || '',
-            profileImageUrl: profile.photos?.[0]?.value || '',
-            provider: 'google',
-            providerId: profile.id,
-            accessToken,
-            refreshToken
+            password: '' // OAuth users don't need passwords
           });
-        } else {
-          // Update tokens for existing user
-          await storage.updateUserTokens(user.id, accessToken, refreshToken);
         }
         
         return done(null, user);
