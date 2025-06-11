@@ -13,6 +13,7 @@ export interface IStorage {
   getUserProjects(userId: number): Promise<Project[]>;
   getProject(id: string, userId: number): Promise<Project | undefined>;
   updateProject(id: string, userId: number, updates: Partial<Project>): Promise<Project | undefined>;
+  updateProjectPaymentStatus(projectId: string, isPaid: boolean, paymentIntentId?: string): Promise<Project | undefined>;
   
   // User settings methods
   getUserSettings(userId: number): Promise<UserSettings | undefined>;
@@ -99,9 +100,11 @@ export class MemStorage implements IStorage {
       paymentType: projectData.paymentType || "subscription",
       paymentAmount: projectData.paymentAmount || null,
       paymentStatus: projectData.paymentStatus || "pending",
+      isPaid: projectData.isPaid || false,
       stripePaymentIntentId: projectData.stripePaymentIntentId || null,
       dataSizeMB: projectData.dataSizeMB || 0,
       complexityScore: projectData.complexityScore || 1,
+      fileMetadata: projectData.fileMetadata || null,
       createdAt: new Date(),
     };
     this.projects.set(id, project);
@@ -127,6 +130,21 @@ export class MemStorage implements IStorage {
     if (project && project.ownerId === userId) {
       const updatedProject = { ...project, ...updates };
       this.projects.set(id, updatedProject);
+      return updatedProject;
+    }
+    return undefined;
+  }
+
+  async updateProjectPaymentStatus(projectId: string, isPaid: boolean, paymentIntentId?: string): Promise<Project | undefined> {
+    const project = this.projects.get(projectId);
+    if (project) {
+      const updatedProject = { 
+        ...project, 
+        isPaid, 
+        paymentStatus: isPaid ? "paid" : "pending",
+        stripePaymentIntentId: paymentIntentId || project.stripePaymentIntentId
+      };
+      this.projects.set(projectId, updatedProject);
       return updatedProject;
     }
     return undefined;
