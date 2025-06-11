@@ -5,9 +5,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { projects } from "@/lib/api";
-import { X, Upload, File, CheckCircle, FileSpreadsheet, AlertCircle } from "lucide-react";
+import { X, Upload, File, CheckCircle, FileSpreadsheet, AlertCircle, HardDrive } from "lucide-react";
+import GoogleDriveImport from "./google-drive-import";
 
 interface UploadModalProps {
   isOpen: boolean;
@@ -27,9 +29,15 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
   });
   const [fileType, setFileType] = useState<'csv' | 'excel' | null>(null);
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
+  const [activeTab, setActiveTab] = useState("upload");
   const { toast } = useToast();
 
   if (!isOpen) return null;
+
+  const handleGoogleDriveImportSuccess = (project: any) => {
+    onSuccess();
+    onClose();
+  };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -152,9 +160,22 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
         </CardHeader>
         
         <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Project Name */}
-            <div>
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="upload" className="flex items-center gap-2">
+                <Upload className="w-4 h-4" />
+                Local Upload
+              </TabsTrigger>
+              <TabsTrigger value="drive" className="flex items-center gap-2">
+                <HardDrive className="w-4 h-4" />
+                Google Drive
+              </TabsTrigger>
+            </TabsList>
+            
+            <TabsContent value="upload" className="mt-6">
+              <form onSubmit={handleSubmit} className="space-y-6">
+                {/* Project Name */}
+                <div>
               <Label htmlFor="projectName">Project Name</Label>
               <Input
                 id="projectName"
@@ -244,6 +265,15 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
               </Button>
             </div>
           </form>
+            </TabsContent>
+            
+            <TabsContent value="drive" className="mt-6">
+              <GoogleDriveImport 
+                onImportSuccess={handleGoogleDriveImportSuccess}
+                onClose={onClose}
+              />
+            </TabsContent>
+          </Tabs>
         </CardContent>
       </Card>
     </div>
