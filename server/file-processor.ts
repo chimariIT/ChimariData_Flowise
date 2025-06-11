@@ -39,7 +39,22 @@ export class FileProcessor {
     options: ProcessingOptions = {}
   ): Promise<FileProcessingResult> {
     const fileExtension = path.extname(originalName).toLowerCase();
+    
+    // Validate file exists and is readable
+    if (!fs.existsSync(filePath)) {
+      throw new Error('Uploaded file not found');
+    }
+    
     const fileSize = fs.statSync(filePath).size;
+    
+    // Check file size limits
+    if (fileSize === 0) {
+      throw new Error('File is empty');
+    }
+    
+    if (fileSize > 50 * 1024 * 1024) { // 50MB limit
+      throw new Error('File size exceeds 50MB limit');
+    }
 
     try {
       switch (fileExtension) {
@@ -49,10 +64,11 @@ export class FileProcessor {
         case '.csv':
           return await this.processCsvFile(filePath, originalName, fileSize, options);
         default:
-          throw new Error(`Unsupported file format: ${fileExtension}`);
+          throw new Error(`Unsupported file format: ${fileExtension}. Please upload CSV or Excel files only.`);
       }
     } catch (error) {
-      throw new Error(`File processing failed: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown processing error';
+      throw new Error(`File processing failed: ${errorMessage}`);
     }
   }
 
@@ -67,11 +83,21 @@ export class FileProcessor {
   ): Promise<FileProcessingResult> {
     let workbook;
     try {
-      // Read file with proper error handling
+      // Validate file is actually an Excel file by checking magic bytes
       const fileBuffer = fs.readFileSync(filePath);
-      workbook = XLSX.read(fileBuffer, { type: 'buffer' });
+      
+      // Check for Excel file signatures
+      const isXLSX = fileBuffer.slice(0, 4).toString('hex') === '504b0304'; // ZIP signature for XLSX
+      const isXLS = fileBuffer.slice(0, 8).toString('hex').startsWith('d0cf11e0a1b11ae1'); // OLE signature for XLS
+      
+      if (!isXLSX && !isXLS) {
+        throw new Error('File is not a valid Excel format. Please ensure the file is properly saved as .xlsx or .xls');
+      }
+      
+      workbook = XLSX.read(fileBuffer, { type: 'buffer', cellStyles: false, cellHTML: false });
     } catch (error) {
-      throw new Error(`Failed to read Excel file: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error reading Excel file';
+      throw new Error(`Excel file processing failed: ${errorMessage}`);
     }
     const sheetNames = workbook.SheetNames;
 
