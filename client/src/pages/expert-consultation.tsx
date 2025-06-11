@@ -37,13 +37,13 @@ export default function ExpertConsultation({ onBack }: ExpertConsultationProps) 
     // Project Details
     projectDescription: '',
     dataType: '',
-    dataSources: [],
+    dataSources: [] as string[],
     dataVolume: '',
     currentChallenges: '',
     
     // AI Requirements
     analysisGoals: '',
-    specificAINeeds: [],
+    specificAINeeds: [] as string[],
     timeframe: '',
     budget: '',
     
@@ -454,7 +454,7 @@ Additional Notes: ${formData.additionalNotes}
                           <SelectItem value="small">Small (&lt; 1GB)</SelectItem>
                           <SelectItem value="medium">Medium (1GB - 100GB)</SelectItem>
                           <SelectItem value="large">Large (100GB - 1TB)</SelectItem>
-                          <SelectItem value="enterprise">Enterprise (> 1TB)</SelectItem>
+                          <SelectItem value="enterprise">Enterprise (&gt; 1TB)</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
@@ -514,7 +514,7 @@ Additional Notes: ${formData.additionalNotes}
                           <SelectValue placeholder="Select timeframe" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="immediate">Immediate (< 1 month)</SelectItem>
+                          <SelectItem value="immediate">Immediate (&lt; 1 month)</SelectItem>
                           <SelectItem value="short">Short-term (1-3 months)</SelectItem>
                           <SelectItem value="medium">Medium-term (3-6 months)</SelectItem>
                           <SelectItem value="long">Long-term (6+ months)</SelectItem>

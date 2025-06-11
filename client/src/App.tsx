@@ -20,7 +20,7 @@ import NotFound from "@/pages/not-found";
 
 function App() {
   const [user, setUser] = useState<{ id: number; username: string } | null>(null);
-  const [currentView, setCurrentView] = useState<"landing" | "auth" | "dashboard" | "project" | "settings" | "pricing" | "subscribe" | "analysis-payment" | "ml-analysis">("landing");
+  const [currentView, setCurrentView] = useState<"landing" | "auth" | "dashboard" | "project" | "settings" | "pricing" | "subscribe" | "analysis-payment" | "ml-analysis" | "pay-per-analysis" | "expert-consultation">("landing");
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedProjectData, setSelectedProjectData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -94,7 +94,11 @@ function App() {
         <Toaster />
         
         {currentView === "landing" && (
-          <LandingPage onGetStarted={() => setCurrentView("auth")} />
+          <LandingPage 
+            onGetStarted={() => setCurrentView("auth")}
+            onPayPerAnalysis={() => setCurrentView("pay-per-analysis")}
+            onExpertConsultation={() => setCurrentView("expert-consultation")}
+          />
         )}
         
         {currentView === "auth" && (
@@ -147,6 +151,17 @@ function App() {
         
         {currentView === "subscribe" && (
           <SubscribePage onBack={() => setCurrentView("pricing")} />
+        )}
+
+        {currentView === "pay-per-analysis" && (
+          <PayPerAnalysis 
+            onBack={() => setCurrentView("landing")}
+            onLogin={() => setCurrentView("auth")}
+          />
+        )}
+
+        {currentView === "expert-consultation" && (
+          <ExpertConsultation onBack={() => setCurrentView("landing")} />
         )}
       </TooltipProvider>
     </QueryClientProvider>
