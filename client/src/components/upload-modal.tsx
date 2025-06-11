@@ -89,10 +89,19 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
     setIsUploading(true);
 
     try {
-      const questionsArray = formData.questions
+      let questionsArray = formData.questions
         .split('\n')
         .map(q => q.trim())
         .filter(q => q.length > 0);
+
+      // If no questions provided, add default analysis questions
+      if (questionsArray.length === 0) {
+        questionsArray = [
+          "What are the key trends in this data?",
+          "What insights can you provide about this dataset?",
+          "What are the most important patterns or correlations?"
+        ];
+      }
 
       await projects.upload(selectedFile, formData.projectName, questionsArray);
       

@@ -14,6 +14,8 @@ import PricingPage from "./pages/pricing";
 import SubscribePage from "./pages/subscribe";
 import AnalysisPaymentPage from "./pages/analysis-payment";
 import MLAnalysisPage from "./pages/ml-analysis";
+import PayPerAnalysis from "./pages/pay-per-analysis";
+import ExpertConsultation from "./pages/expert-consultation";
 import NotFound from "@/pages/not-found";
 
 function App() {

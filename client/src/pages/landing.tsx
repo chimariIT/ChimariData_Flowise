@@ -736,7 +736,7 @@ export default function LandingPage({ onGetStarted }: LandingPageProps) {
                   </div>
                 </div>
                 <Button 
-                  onClick={onGetStarted}
+                  onClick={() => window.location.href = 'mailto:chimaridata@gmail.com?subject=Enterprise Plan Inquiry&body=Hi, I am interested in learning more about the Enterprise plan for my organization.'}
                   className="w-full"
                   variant="outline"
                 >
@@ -751,7 +751,7 @@ export default function LandingPage({ onGetStarted }: LandingPageProps) {
               All plans include secure data handling and GDPR compliance
             </p>
             <Button 
-              onClick={onGetStarted}
+              onClick={() => window.location.href = 'mailto:chimaridata@gmail.com?subject=Pay-per-Analysis Inquiry&body=Hi, I am interested in the pay-per-analysis option instead of a monthly subscription. Can you provide more details?'}
               variant="ghost"
               className="text-blue-600 hover:text-blue-700"
             >
