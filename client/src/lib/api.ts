@@ -71,9 +71,33 @@ export const projects = {
   },
 
   upload: async (file: File, name: string, questions: string[]): Promise<any> => {
+    // Validate inputs
+    if (!file) {
+      throw new Error("Please select a file to upload");
+    }
+    if (!name.trim()) {
+      throw new Error("Please enter a project name");
+    }
+    if (questions.length === 0) {
+      throw new Error("Please add at least one analysis question");
+    }
+
+    // Check file type
+    const allowedTypes = ['.csv', '.xlsx', '.xls'];
+    const fileExtension = '.' + file.name.split('.').pop()?.toLowerCase();
+    if (!allowedTypes.includes(fileExtension)) {
+      throw new Error(`Unsupported file type. Please upload a CSV or Excel file (${allowedTypes.join(', ')})`);
+    }
+
+    // Check file size (50MB limit)
+    const maxSize = 50 * 1024 * 1024; // 50MB
+    if (file.size > maxSize) {
+      throw new Error("File size must be less than 50MB");
+    }
+
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("name", name);
+    formData.append("name", name.trim());
     formData.append("questions", JSON.stringify(questions));
 
     const res = await fetch(`/api/projects/upload`, {
@@ -87,13 +111,20 @@ export const projects = {
     if (!res.ok) {
       const errorText = await res.text();
       let errorMessage = "Upload failed";
+      
       try {
         const errorObj = JSON.parse(errorText);
-        errorMessage = errorObj.message || errorMessage;
+        errorMessage = errorObj.error || errorObj.message || errorMessage;
+        
+        // Add specific error details if available
+        if (errorObj.details) {
+          errorMessage += `: ${errorObj.details}`;
+        }
       } catch {
-        // If not JSON, use the text directly
-        errorMessage = errorText || errorMessage;
+        // If not JSON, use status text or raw text
+        errorMessage = res.statusText || errorText || `HTTP ${res.status} error`;
       }
+      
       throw new Error(errorMessage);
     }
 
