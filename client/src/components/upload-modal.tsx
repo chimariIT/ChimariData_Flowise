@@ -4,9 +4,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { projects } from "@/lib/api";
-import { X, Upload, File, CheckCircle } from "lucide-react";
+import { X, Upload, File, CheckCircle, FileSpreadsheet, AlertCircle } from "lucide-react";
 
 interface UploadModalProps {
   isOpen: boolean;
@@ -19,8 +20,13 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [formData, setFormData] = useState({
     projectName: "",
-    questions: ""
+    questions: "",
+    selectedSheet: "",
+    headerRow: "0",
+    encoding: "utf8"
   });
+  const [fileType, setFileType] = useState<'csv' | 'excel' | null>(null);
+  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const { toast } = useToast();
 
   if (!isOpen) return null;
@@ -29,6 +35,19 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
     const file = e.target.files?.[0];
     if (file) {
       setSelectedFile(file);
+      
+      // Determine file type
+      const extension = file.name.toLowerCase().split('.').pop();
+      if (extension === 'csv') {
+        setFileType('csv');
+        setShowAdvancedOptions(true);
+      } else if (extension === 'xlsx' || extension === 'xls') {
+        setFileType('excel');
+        setShowAdvancedOptions(true);
+      } else {
+        setFileType(null);
+        setShowAdvancedOptions(false);
+      }
     }
   };
 
