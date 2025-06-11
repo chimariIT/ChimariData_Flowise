@@ -58,6 +58,13 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
     }));
   };
 
+  const handleSelectChange = (name: string, value: string) => {
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -93,7 +100,13 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
       
       // Reset form
       setSelectedFile(null);
-      setFormData({ projectName: "", questions: "" });
+      setFormData({
+        projectName: "",
+        questions: "",
+        selectedSheet: "",
+        headerRow: "0",
+        encoding: "utf8"
+      });
       
     } catch (error) {
       toast({
