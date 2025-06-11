@@ -2,7 +2,7 @@ import * as XLSX from 'xlsx';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as csv from 'csv-parser';
-import * as iconv from 'iconv-lite';
+// Removed iconv-lite dependency - using native Node.js encoding
 
 export interface FileProcessingResult {
   data: any[];
@@ -131,7 +131,7 @@ export class FileProcessor {
     const encoding = options.encoding || this.detectEncoding(buffer);
     
     // Read and parse CSV
-    const csvContent = iconv.decode(buffer, encoding);
+    const csvContent = buffer.toString(encoding === 'utf8' ? 'utf8' : 'latin1');
     const lines = csvContent.split('\n').filter(line => line.trim());
 
     if (lines.length === 0) {
