@@ -85,7 +85,7 @@ export default function ProjectResults({ projectId, onBack, onSettings, onPayFor
               </Button>
               <div className="flex items-center space-x-2">
                 <BarChart3 className="w-6 h-6 text-primary" />
-                <span className="text-xl font-bold text-slate-900">DataInsight Pro</span>
+                <span className="text-xl font-bold text-slate-900">ChimariData+AI</span>
               </div>
             </div>
             <div className="flex items-center space-x-4">
