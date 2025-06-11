@@ -65,7 +65,14 @@ export class FileProcessor {
     fileSize: number,
     options: ProcessingOptions
   ): Promise<FileProcessingResult> {
-    const workbook = XLSX.readFile(filePath);
+    let workbook;
+    try {
+      // Read file with proper error handling
+      const fileBuffer = fs.readFileSync(filePath);
+      workbook = XLSX.read(fileBuffer, { type: 'buffer' });
+    } catch (error) {
+      throw new Error(`Failed to read Excel file: ${error.message}`);
+    }
     const sheetNames = workbook.SheetNames;
 
     if (sheetNames.length === 0) {
