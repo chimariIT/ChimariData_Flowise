@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
 import { projects, type Project } from "@/lib/api";
-import { ArrowLeft, Download, Share, Database, Lightbulb, BarChart3, PieChart, Calendar, CheckCircle, Settings, CreditCard, Zap } from "lucide-react";
+import { ArrowLeft, Download, Share, Database, Lightbulb, BarChart3, PieChart, Calendar, CheckCircle, Settings, CreditCard, Zap, Brain, MessageSquare, Eye } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart as RechartsPieChart, Cell, Pie } from "recharts";
 import AIChat from "@/components/ai-chat";
+import AIInsightsPanel from "@/components/ai-insights-panel";
 
 interface ProjectResultsProps {
   projectId: string;
@@ -49,7 +51,7 @@ export default function ProjectResults({ projectId, onBack, onSettings, onPayFor
   const handleShare = () => {
     toast({
       title: "Share link copied",
-      description: "Project share link has been copied to clipboard."
+      description: "Share link has been copied to clipboard."
     });
   };
 
@@ -201,124 +203,143 @@ export default function ProjectResults({ projectId, onBack, onSettings, onPayFor
           </Card>
         </div>
 
-        {/* Main Content Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Left Column - AI Chat */}
-          <div className="lg:col-span-1 space-y-6">
-            <AIChat projectId={projectId} />
-          </div>
+        {/* AI Analysis Tabs */}
+        <Tabs defaultValue="insights" className="space-y-6">
+          <TabsList className="grid w-full grid-cols-4">
+            <TabsTrigger value="insights" className="flex items-center gap-2">
+              <Brain className="w-4 h-4" />
+              AI Insights
+            </TabsTrigger>
+            <TabsTrigger value="chat" className="flex items-center gap-2">
+              <MessageSquare className="w-4 h-4" />
+              AI Chat
+            </TabsTrigger>
+            <TabsTrigger value="visualizations" className="flex items-center gap-2">
+              <Eye className="w-4 h-4" />
+              Charts
+            </TabsTrigger>
+            <TabsTrigger value="data" className="flex items-center gap-2">
+              <Database className="w-4 h-4" />
+              Data Schema
+            </TabsTrigger>
+          </TabsList>
 
-          {/* Middle Column - Schema & Questions */}
-          <div className="lg:col-span-1 space-y-6">
-            {/* Data Schema */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center">
-                  <Database className="w-5 h-5 text-primary mr-2" />
-                  Data Schema
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3 text-sm">
-                  {Object.entries(project.schema || {}).map(([field, type]) => (
-                    <div key={field} className="flex justify-between items-center py-2 border-b border-slate-100">
-                      <span className="font-medium text-slate-700">{field}</span>
-                      <span className="text-slate-500 bg-slate-100 px-2 py-1 rounded">{type}</span>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+          {/* AI Insights Tab */}
+          <TabsContent value="insights">
+            <AIInsightsPanel projectId={projectId} />
+          </TabsContent>
 
-            {/* Business Questions */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center">
-                  <Lightbulb className="w-5 h-5 text-primary mr-2" />
-                  Business Questions
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {project.questions && project.questions.length > 0 ? (
-                  project.questions.map((question, index) => (
-                    <div key={index} className="p-4 bg-blue-50 rounded-lg border-l-4 border-primary">
-                      <p className="font-medium text-slate-900 mb-2">{question}</p>
-                      <p className="text-sm text-slate-600">
-                        {project.insights?.[question] || "Analysis in progress..."}
-                      </p>
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-slate-500 text-sm">No business questions specified.</p>
-                )}
-              </CardContent>
-            </Card>
-          </div>
+          {/* AI Chat Tab */}
+          <TabsContent value="chat">
+            <div className="max-w-4xl mx-auto">
+              <AIChat projectId={projectId} />
+            </div>
+          </TabsContent>
 
-          {/* Right Column - Visualizations */}
-          <div className="lg:col-span-1 space-y-6">
-            {/* Sample Bar Chart */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center">
-                  <BarChart3 className="w-5 h-5 text-primary mr-2" />
-                  Data Trends
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={chartData}>
-                    <XAxis dataKey="name" />
-                    <YAxis />
-                    <Tooltip />
-                    <Bar dataKey="value" fill="#3b82f6" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
+          {/* Visualizations Tab */}
+          <TabsContent value="visualizations">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Sample Bar Chart */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center">
+                    <BarChart3 className="w-5 h-5 text-primary mr-2" />
+                    Data Trends
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <ResponsiveContainer width="100%" height={300}>
+                    <BarChart data={chartData}>
+                      <XAxis dataKey="name" />
+                      <YAxis />
+                      <Tooltip />
+                      <Bar dataKey="value" fill="#3b82f6" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
 
-            {/* Sample Pie Chart */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center">
-                  <PieChart className="w-5 h-5 text-primary mr-2" />
-                  Distribution Analysis
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <RechartsPieChart>
-                    <Pie
-                      data={pieData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={60}
-                      outerRadius={120}
-                      paddingAngle={5}
-                      dataKey="value"
-                    >
-                      {pieData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.color} />
-                      ))}
-                    </Pie>
-                    <Tooltip />
-                  </RechartsPieChart>
-                </ResponsiveContainer>
-                <div className="flex justify-center space-x-4 mt-4">
-                  {pieData.map((entry, index) => (
-                    <div key={index} className="flex items-center space-x-2">
-                      <div 
-                        className="w-3 h-3 rounded-full" 
-                        style={{ backgroundColor: entry.color }}
-                      ></div>
-                      <span className="text-sm text-slate-600">{entry.name}</span>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
+              {/* Sample Pie Chart */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center">
+                    <PieChart className="w-5 h-5 text-primary mr-2" />
+                    Distribution Analysis
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <ResponsiveContainer width="100%" height={300}>
+                    <RechartsPieChart>
+                      <Pie
+                        data={pieData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={60}
+                        outerRadius={120}
+                        paddingAngle={5}
+                        dataKey="value"
+                      >
+                        {pieData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip />
+                    </RechartsPieChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+
+          {/* Data Schema Tab */}
+          <TabsContent value="data">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Data Schema */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center">
+                    <Database className="w-5 h-5 text-primary mr-2" />
+                    Data Schema
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3 text-sm">
+                    {Object.entries(project.schema || {}).map(([field, type]) => (
+                      <div key={field} className="flex justify-between items-center py-2 border-b border-slate-100">
+                        <span className="font-medium text-slate-700">{field}</span>
+                        <span className="text-slate-500 bg-slate-100 px-2 py-1 rounded">{String(type)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Business Questions */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center">
+                    <Lightbulb className="w-5 h-5 text-primary mr-2" />
+                    Business Questions
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {project.questions && Array.isArray(project.questions) && project.questions.length > 0 ? (
+                    project.questions.map((question: string, index: number) => (
+                      <div key={index} className="p-4 bg-blue-50 rounded-lg border-l-4 border-primary">
+                        <p className="font-medium text-slate-900 mb-2">{question}</p>
+                        <p className="text-sm text-slate-600">
+                          {project.insights?.[question] || "Analysis in progress..."}
+                        </p>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-slate-500 text-sm">No business questions specified.</p>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
   );
