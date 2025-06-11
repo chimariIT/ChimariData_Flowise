@@ -374,6 +374,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const data = aiQuerySchema.parse(req.body);
       
+      // Get project data first to check payment status
+      const project = await storage.getProject(data.projectId, req.user.userId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+
+      // Check if project analysis has been paid for
+      if (!project.isPaid) {
+        return res.status(402).json({ 
+          error: "Payment required for insights. Please complete payment to access AI analysis.",
+          needsPayment: true,
+          projectId: data.projectId
+        });
+      }
+      
       // Get user settings
       let settings = await storage.getUserSettings(req.user.userId);
       if (!settings) {
@@ -388,7 +403,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      // Check usage limits
+      // Check usage limits only for paid projects
       const canMakeQuery = await storage.canUserMakeQuery(req.user.userId);
       if (!canMakeQuery) {
         const currentUsage = await storage.getUserUsageThisMonth(req.user.userId);
@@ -404,12 +419,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ 
           error: "AI provider not configured. Please add your API key in settings or switch to platform provider." 
         });
-      }
-
-      // Get project data
-      const project = await storage.getProject(data.projectId, req.user.userId);
-      if (!project) {
-        return res.status(404).json({ error: "Project not found" });
       }
 
       // Prepare data context for AI
