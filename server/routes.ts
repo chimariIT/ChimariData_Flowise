@@ -489,12 +489,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { dataSizeMB, questionsCount, analysisType, schema, recordCount } = req.body;
       
       const dataComplexity = PricingService.assessDataComplexity(schema, recordCount);
+      const columnCount = schema ? Object.keys(schema).length : 0;
+      const featureCount = Math.max(0, columnCount - 2); // Exclude ID and target columns
+      const questionComplexity = PricingService.assessQuestionComplexity([]);
+      const analysisArtifacts = PricingService.estimateAnalysisArtifacts(analysisType || 'standard', recordCount || 0, featureCount);
+      
       const pricing = PricingService.calculatePrice({
         dataSizeMB: dataSizeMB || 0,
         recordCount: recordCount || 0,
-        columnCount: schema ? Object.keys(schema).length : 0,
+        columnCount,
+        featureCount,
         questionsCount: questionsCount || 0,
+        questionComplexity,
         analysisType: analysisType || 'standard',
+        analysisArtifacts,
         dataComplexity
       });
       
@@ -526,12 +534,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const dataComplexity = PricingService.assessDataComplexity(project.schema, project.recordCount || 0);
       const questionsCount = Array.isArray(project.questions) ? project.questions.length : 0;
       
+      const columnCount = project.schema ? Object.keys(project.schema).length : 0;
+      const featureCount = Math.max(0, columnCount - 2);
+      const questionComplexity = PricingService.assessQuestionComplexity(project.questions || []);
+      const analysisArtifacts = PricingService.estimateAnalysisArtifacts(analysisType, project.recordCount || 0, featureCount);
+      
       const pricing = PricingService.calculatePrice({
         dataSizeMB: project.dataSizeMB || 1,
         recordCount: project.recordCount || 0,
-        columnCount: project.schema ? Object.keys(project.schema).length : 0,
+        columnCount,
+        featureCount,
         questionsCount,
+        questionComplexity,
         analysisType: analysisType as any,
+        analysisArtifacts,
         dataComplexity
       });
       

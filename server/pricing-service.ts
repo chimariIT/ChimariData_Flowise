@@ -64,38 +64,47 @@ export class PricingService {
   static calculatePrice(factors: PricingFactors): PricingResult {
     const basePrice = this.BASE_PRICE;
     
-    // Data size pricing
-    const dataSizeCharge = Math.max(0, factors.dataSizeMB - 1) * this.PRICE_PER_MB; // First MB free
-    
-    // Questions pricing (first 3 questions free)
+    // Calculate individual charges
+    const dataSizeCharge = factors.dataSizeMB * this.PRICE_PER_MB;
+    const recordCountCharge = Math.max(0, factors.recordCount - 1000) / 1000 * this.PRICE_PER_1K_RECORDS;
+    const featureCountCharge = Math.max(0, factors.featureCount - 10) * this.PRICE_PER_FEATURE;
     const questionsCharge = Math.max(0, factors.questionsCount - 3) * this.PRICE_PER_QUESTION;
+    const analysisArtifactsCharge = factors.analysisArtifacts * this.PRICE_PER_ARTIFACT;
     
-    // Analysis type multiplier
-    const analysisTypeMultiplier = this.ANALYSIS_TYPE_MULTIPLIERS[factors.analysisType];
-    const analysisTypeCharge = basePrice * (analysisTypeMultiplier - 1);
-    
-    // Complexity multiplier
+    // Apply complexity multipliers
     const complexityMultiplier = this.COMPLEXITY_MULTIPLIERS[factors.dataComplexity];
-    const complexityCharge = basePrice * (complexityMultiplier - 1);
+    const questionComplexityMultiplier = this.QUESTION_COMPLEXITY_MULTIPLIERS[factors.questionComplexity];
+    const analysisTypeMultiplier = this.ANALYSIS_TYPE_MULTIPLIERS[factors.analysisType];
     
-    // Calculate final price
-    const subtotal = basePrice + dataSizeCharge + questionsCharge + analysisTypeCharge + complexityCharge;
-    const finalPrice = Math.max(5.00, subtotal); // Minimum $5
+    // Calculate subtotal before multipliers
+    const subtotal = basePrice + dataSizeCharge + recordCountCharge + featureCountCharge + 
+                    questionsCharge + analysisArtifactsCharge;
+    
+    // Apply all multipliers to get final price
+    const finalPrice = subtotal * complexityMultiplier * questionComplexityMultiplier * analysisTypeMultiplier;
     
     return {
       basePrice,
-      dataSizeMultiplier: factors.dataSizeMB > 1 ? this.PRICE_PER_MB : 0,
+      dataSizeMultiplier: dataSizeCharge,
+      recordCountMultiplier: recordCountCharge,
+      featureCountMultiplier: featureCountCharge,
       complexityMultiplier,
-      questionsMultiplier: factors.questionsCount > 3 ? this.PRICE_PER_QUESTION : 0,
+      questionsMultiplier: questionsCharge,
+      questionComplexityMultiplier,
       analysisTypeMultiplier,
+      analysisArtifactsMultiplier: analysisArtifactsCharge,
       finalPrice: Math.round(finalPrice * 100) / 100,
       priceInCents: Math.round(finalPrice * 100),
       breakdown: {
         basePrice,
         dataSizeCharge,
-        complexityCharge,
+        recordCountCharge,
+        featureCountCharge,
+        complexityCharge: subtotal * (complexityMultiplier - 1),
         questionsCharge,
-        analysisTypeCharge
+        questionComplexityCharge: subtotal * complexityMultiplier * (questionComplexityMultiplier - 1),
+        analysisTypeCharge: subtotal * complexityMultiplier * questionComplexityMultiplier * (analysisTypeMultiplier - 1),
+        analysisArtifactsCharge
       }
     };
   }
@@ -123,16 +132,70 @@ export class PricingService {
   }
 
   static getEstimatedPrice(dataSizeMB: number, questionsCount: number, analysisType: 'standard' | 'advanced' | 'custom' = 'standard'): string {
+    const estimatedRecords = Math.max(100, dataSizeMB * 1000);
+    const estimatedFeatures = Math.max(5, Math.min(20, Math.floor(estimatedRecords / 100)));
+    
     const factors: PricingFactors = {
       dataSizeMB,
-      recordCount: dataSizeMB * 1000, // Rough estimation
-      columnCount: 10, // Average assumption
+      recordCount: estimatedRecords,
+      columnCount: estimatedFeatures + 2,
+      featureCount: estimatedFeatures,
       questionsCount,
+      questionComplexity: this.assessQuestionComplexity([]),
       analysisType,
-      dataComplexity: 'moderate' // Conservative estimate
+      analysisArtifacts: this.estimateAnalysisArtifacts(analysisType, estimatedRecords, estimatedFeatures),
+      dataComplexity: 'moderate'
     };
     
     const pricing = this.calculatePrice(factors);
     return `$${pricing.finalPrice.toFixed(2)}`;
+  }
+
+  static assessQuestionComplexity(questions: string[]): 'simple' | 'moderate' | 'complex' {
+    if (!questions || questions.length === 0) return 'simple';
+    
+    const complexPatterns = [
+      /correlation|relationship|predict|forecast|model|algorithm/i,
+      /optimization|maximize|minimize|efficiency/i,
+      /segmentation|clustering|classification|categorization/i,
+      /anomaly|outlier|unusual|abnormal/i,
+      /time.?series|temporal|seasonal|trend/i,
+      /multi.?variate|interaction|causation/i
+    ];
+    
+    const moderatePatterns = [
+      /compare|contrast|difference|versus/i,
+      /distribution|pattern|behavior/i,
+      /impact|effect|influence|factor/i,
+      /performance|metric|kpi|indicator/i
+    ];
+    
+    let complexScore = 0;
+    let moderateScore = 0;
+    
+    questions.forEach(question => {
+      if (complexPatterns.some(pattern => pattern.test(question))) {
+        complexScore++;
+      } else if (moderatePatterns.some(pattern => pattern.test(question))) {
+        moderateScore++;
+      }
+    });
+    
+    if (complexScore > 0 || questions.length > 5) return 'complex';
+    if (moderateScore > 0 || questions.length > 2) return 'moderate';
+    return 'simple';
+  }
+
+  static estimateAnalysisArtifacts(analysisType: string, recordCount: number, featureCount: number): number {
+    let baseArtifacts = 2; // Basic summary + data quality report
+    
+    if (analysisType === 'advanced') baseArtifacts += 2;
+    if (analysisType === 'custom') baseArtifacts += 4;
+    
+    // Add artifacts based on data complexity
+    if (recordCount > 10000) baseArtifacts += 1;
+    if (featureCount > 20) baseArtifacts += 1;
+    
+    return Math.min(baseArtifacts, 8); // Cap at 8 artifacts
   }
 }
