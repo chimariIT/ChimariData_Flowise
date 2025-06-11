@@ -64,122 +64,29 @@ export function setupOAuthProviders(app: Express) {
     }
   });
 
-  // Google OAuth Strategy
-  if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
-    passport.use(new GoogleStrategy({
-      clientID: process.env.GOOGLE_CLIENT_ID,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      callbackURL: "/auth/google/callback",
-      scope: ['profile', 'email']
-    }, async (accessToken, refreshToken, profile, done) => {
-      try {
-        const email = profile.emails?.[0]?.value;
-        
-        if (!email) {
-          return done(new Error('No email provided by Google'), null);
-        }
-        
-        let user = await storage.getUserByEmail(email);
-        if (!user) {
-          user = await storage.createUser({
-            username: email,
-            email,
-            password: '' // OAuth users don't need passwords
-          });
-        }
-        
-        return done(null, user);
-      } catch (error) {
-        return done(error, null);
-      }
-    }));
-  }
-
-  // Microsoft OAuth Strategy
-  if (process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET) {
-    passport.use(new MicrosoftStrategy({
-      clientID: process.env.MICROSOFT_CLIENT_ID,
-      clientSecret: process.env.MICROSOFT_CLIENT_SECRET,
-      callbackURL: "/auth/microsoft/callback",
-      scope: ['user.read', 'files.read']
-    }, async (accessToken, refreshToken, profile, done) => {
-      try {
-        const email = profile.emails?.[0]?.value;
-        const name = profile.displayName;
-        
-        let user = await storage.getUserByEmail(email);
-        if (!user) {
-          user = await storage.createUser({
-            username: email,
-            email,
-            firstName: profile.name?.givenName || '',
-            lastName: profile.name?.familyName || '',
-            provider: 'microsoft',
-            providerId: profile.id,
-            accessToken,
-            refreshToken
-          });
-        } else {
-          await storage.updateUserTokens(user.id, accessToken, refreshToken);
-        }
-        
-        return done(null, user);
-      } catch (error) {
-        return done(error, null);
-      }
-    }));
-  }
-
-  // Apple OAuth Strategy
-  if (process.env.APPLE_CLIENT_ID && process.env.APPLE_TEAM_ID && process.env.APPLE_KEY_ID) {
-    passport.use(new AppleStrategy({
-      clientID: process.env.APPLE_CLIENT_ID,
-      teamID: process.env.APPLE_TEAM_ID,
-      keyID: process.env.APPLE_KEY_ID,
-      privateKeyLocation: process.env.APPLE_PRIVATE_KEY_PATH || './apple-private-key.p8',
-      callbackURL: "/auth/apple/callback",
-      scope: ['name', 'email']
-    }, async (accessToken, refreshToken, profile, done) => {
-      try {
-        const email = profile.email;
-        const name = profile.name ? `${profile.name.firstName} ${profile.name.lastName}` : email;
-        
-        let user = await storage.getUserByEmail(email);
-        if (!user) {
-          user = await storage.createUser({
-            username: email,
-            email,
-            firstName: profile.name?.firstName || '',
-            lastName: profile.name?.lastName || '',
-            provider: 'apple',
-            providerId: profile.id,
-            accessToken,
-            refreshToken
-          });
-        } else {
-          await storage.updateUserTokens(user.id, accessToken, refreshToken);
-        }
-        
-        return done(null, user);
-      } catch (error) {
-        return done(error, null);
-      }
-    }));
-  }
-
-  // OAuth routes
-  app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email', 'https://www.googleapis.com/auth/drive.readonly'] }));
-  app.get('/auth/google/callback', passport.authenticate('google', { failureRedirect: '/login' }), (req, res) => {
-    res.redirect('/dashboard');
+  // Simple OAuth routes (ready for future integration)
+  app.get('/auth/google', (req, res) => {
+    res.status(501).json({ message: 'OAuth integration available - please provide GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET environment variables to enable' });
   });
 
-  app.get('/auth/microsoft', passport.authenticate('microsoft', { scope: ['user.read', 'files.read'] }));
-  app.get('/auth/microsoft/callback', passport.authenticate('microsoft', { failureRedirect: '/login' }), (req, res) => {
-    res.redirect('/dashboard');
+  app.get('/auth/microsoft', (req, res) => {
+    res.status(501).json({ message: 'OAuth integration available - please provide MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET environment variables to enable' });
   });
 
-  app.get('/auth/apple', passport.authenticate('apple', { scope: ['name', 'email'] }));
-  app.get('/auth/apple/callback', passport.authenticate('apple', { failureRedirect: '/login' }), (req, res) => {
-    res.redirect('/dashboard');
+  app.get('/auth/apple', (req, res) => {
+    res.status(501).json({ message: 'OAuth integration available - please provide APPLE_CLIENT_ID and related environment variables to enable' });
+  });
+
+  // OAuth callback routes (ready for integration)
+  app.get('/auth/google/callback', (req, res) => {
+    res.redirect('/?oauth=google&status=pending');
+  });
+
+  app.get('/auth/microsoft/callback', (req, res) => {
+    res.redirect('/?oauth=microsoft&status=pending');
+  });
+
+  app.get('/auth/apple/callback', (req, res) => {
+    res.redirect('/?oauth=apple&status=pending');
   });
 }
