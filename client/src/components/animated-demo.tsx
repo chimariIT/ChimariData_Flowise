@@ -292,7 +292,7 @@ export default function AnimatedDemo({ onGetStarted }: AnimatedDemoProps) {
             <div className="flex items-center space-x-3">
               <BarChart3 className="w-8 h-8 text-primary" />
               <div>
-                <h1 className="text-2xl font-bold text-slate-900">DataInsight Pro</h1>
+                <h1 className="text-2xl font-bold text-slate-900">ChimariData+AI</h1>
                 <p className="text-sm text-slate-600">Interactive Demo</p>
               </div>
             </div>
@@ -314,7 +314,7 @@ export default function AnimatedDemo({ onGetStarted }: AnimatedDemoProps) {
             {/* Demo Selection */}
             <div className="text-center mb-12">
               <h2 className="text-4xl font-bold text-slate-900 mb-4">
-                See DataInsight Pro in Action
+                See ChimariData+AI in Action
               </h2>
               <p className="text-xl text-slate-600 max-w-3xl mx-auto">
                 Choose a demo to see how we transform data into actionable insights

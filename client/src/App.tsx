@@ -82,7 +82,7 @@ function App() {
                   <div className="flex items-center space-x-3">
                     <div className="w-8 h-8 bg-primary rounded" />
                     <div>
-                      <h1 className="text-2xl font-bold text-slate-900">DataInsight Pro</h1>
+                      <h1 className="text-2xl font-bold text-slate-900">ChimariData+AI</h1>
                       <p className="text-sm text-slate-600">Interactive Demo</p>
                     </div>
                   </div>
@@ -105,7 +105,7 @@ function App() {
               <div className="text-center mb-8">
                 <div className="flex items-center justify-center space-x-2 mb-4">
                   <div className="w-8 h-8 bg-primary rounded" />
-                  <span className="text-2xl font-bold text-slate-900">DataInsight Pro</span>
+                  <span className="text-2xl font-bold text-slate-900">ChimariData+AI</span>
                 </div>
                 <p className="text-slate-600">Welcome back to your data analytics platform</p>
               </div>

@@ -85,7 +85,7 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
         </div>
         
         <div className="text-center">
-          <h1 className="text-4xl font-bold mb-4">DataInsight Pro</h1>
+          <h1 className="text-4xl font-bold mb-4">ChimariData+AI</h1>
           <p className="text-xl opacity-90 leading-relaxed mb-8">
             Upload, analyze, and visualize your data with powerful AI-driven insights. 
             Make data-driven decisions with confidence.
