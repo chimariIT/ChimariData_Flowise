@@ -1,4 +1,4 @@
-import { users, projects, userSettings, usageLogs, type User, type InsertUser, type Project, type InsertProject, type UserSettings, type InsertUserSettings, type UsageLog, type InsertUsageLog } from "@shared/schema";
+import { users, projects, userSettings, usageLogs, enterpriseInquiries, type User, type InsertUser, type Project, type InsertProject, type UserSettings, type InsertUserSettings, type UsageLog, type InsertUsageLog, type EnterpriseInquiry, type InsertEnterpriseInquiry } from "@shared/schema";
 
 export interface IStorage {
   // User methods
