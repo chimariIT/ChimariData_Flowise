@@ -12,7 +12,7 @@
         "test": "Event Handlers",
         "status": "WARN",
         "message": "Using inline arrow functions for onClick (may cause re-renders)",
-        "timestamp": "2025-06-12T01:01:19.334Z"
+        "timestamp": "2025-06-12T01:36:43.334Z"
       }
     ],
     "Passing Tests": [
@@ -20,73 +20,73 @@
         "test": "Server Status",
         "status": "PASS",
         "message": "Server responding correctly",
-        "timestamp": "2025-06-12T01:01:19.328Z"
+        "timestamp": "2025-06-12T01:36:43.328Z"
       },
       {
         "test": "Router Setup",
         "status": "PASS",
         "message": "React routing properly configured",
-        "timestamp": "2025-06-12T01:01:19.330Z"
+        "timestamp": "2025-06-12T01:36:43.330Z"
       },
       {
         "test": "Demo Route",
         "status": "PASS",
         "message": "Demo route exists in App.tsx",
-        "timestamp": "2025-06-12T01:01:19.330Z"
+        "timestamp": "2025-06-12T01:36:43.330Z"
       },
       {
         "test": "Demo Callback",
         "status": "PASS",
         "message": "Demo callback properly passed to LandingPage",
-        "timestamp": "2025-06-12T01:01:19.330Z"
+        "timestamp": "2025-06-12T01:36:43.330Z"
       },
       {
         "test": "Component Props",
         "status": "PASS",
         "message": "LandingPage props properly defined and used",
-        "timestamp": "2025-06-12T01:01:19.331Z"
+        "timestamp": "2025-06-12T01:36:43.331Z"
       },
       {
         "test": "Demo Buttons",
         "status": "PASS",
         "message": "Found 3 demo buttons using onDemo callback",
-        "timestamp": "2025-06-12T01:01:19.331Z"
+        "timestamp": "2025-06-12T01:36:43.331Z"
       },
       {
         "test": "Navigation Method",
         "status": "PASS",
         "message": "Using proper React routing navigation",
-        "timestamp": "2025-06-12T01:01:19.331Z"
+        "timestamp": "2025-06-12T01:36:43.331Z"
       },
       {
         "test": "Navigation Flow",
         "status": "PASS",
         "message": "Complete navigation flow properly implemented",
-        "timestamp": "2025-06-12T01:01:19.332Z"
+        "timestamp": "2025-06-12T01:36:43.332Z"
       },
       {
         "test": "Demo Component",
         "status": "PASS",
         "message": "AnimatedDemo component properly structured",
-        "timestamp": "2025-06-12T01:01:19.333Z"
+        "timestamp": "2025-06-12T01:36:43.333Z"
       },
       {
         "test": "Demo Content",
         "status": "PASS",
         "message": "Demo page has proper content",
-        "timestamp": "2025-06-12T01:01:19.333Z"
+        "timestamp": "2025-06-12T01:36:43.333Z"
       },
       {
         "test": "React Hooks",
         "status": "PASS",
         "message": "React hooks properly imported",
-        "timestamp": "2025-06-12T01:01:19.334Z"
+        "timestamp": "2025-06-12T01:36:43.334Z"
       },
       {
         "test": "TypeScript Types",
         "status": "PASS",
         "message": "TypeScript types properly defined",
-        "timestamp": "2025-06-12T01:01:19.334Z"
+        "timestamp": "2025-06-12T01:36:43.334Z"
       }
     ]
   },
@@ -95,80 +95,80 @@
       "test": "Server Status",
       "status": "PASS",
       "message": "Server responding correctly",
-      "timestamp": "2025-06-12T01:01:19.328Z"
+      "timestamp": "2025-06-12T01:36:43.328Z"
     },
     {
       "test": "Router Setup",
       "status": "PASS",
       "message": "React routing properly configured",
-      "timestamp": "2025-06-12T01:01:19.330Z"
+      "timestamp": "2025-06-12T01:36:43.330Z"
     },
     {
       "test": "Demo Route",
       "status": "PASS",
       "message": "Demo route exists in App.tsx",
-      "timestamp": "2025-06-12T01:01:19.330Z"
+      "timestamp": "2025-06-12T01:36:43.330Z"
     },
     {
       "test": "Demo Callback",
       "status": "PASS",
       "message": "Demo callback properly passed to LandingPage",
-      "timestamp": "2025-06-12T01:01:19.330Z"
+      "timestamp": "2025-06-12T01:36:43.330Z"
     },
     {
       "test": "Component Props",
       "status": "PASS",
       "message": "LandingPage props properly defined and used",
-      "timestamp": "2025-06-12T01:01:19.331Z"
+      "timestamp": "2025-06-12T01:36:43.331Z"
     },
     {
       "test": "Demo Buttons",
       "status": "PASS",
       "message": "Found 3 demo buttons using onDemo callback",
-      "timestamp": "2025-06-12T01:01:19.331Z"
+      "timestamp": "2025-06-12T01:36:43.331Z"
     },
     {
       "test": "Navigation Method",
       "status": "PASS",
       "message": "Using proper React routing navigation",
-      "timestamp": "2025-06-12T01:01:19.331Z"
+      "timestamp": "2025-06-12T01:36:43.331Z"
     },
     {
       "test": "Navigation Flow",
       "status": "PASS",
       "message": "Complete navigation flow properly implemented",
-      "timestamp": "2025-06-12T01:01:19.332Z"
+      "timestamp": "2025-06-12T01:36:43.332Z"
     },
     {
       "test": "Demo Component",
       "status": "PASS",
       "message": "AnimatedDemo component properly structured",
-      "timestamp": "2025-06-12T01:01:19.333Z"
+      "timestamp": "2025-06-12T01:36:43.333Z"
     },
     {
       "test": "Demo Content",
       "status": "PASS",
       "message": "Demo page has proper content",
-      "timestamp": "2025-06-12T01:01:19.333Z"
+      "timestamp": "2025-06-12T01:36:43.333Z"
     },
     {
       "test": "React Hooks",
       "status": "PASS",
       "message": "React hooks properly imported",
-      "timestamp": "2025-06-12T01:01:19.334Z"
+      "timestamp": "2025-06-12T01:36:43.334Z"
     },
     {
       "test": "Event Handlers",
       "status": "WARN",
       "message": "Using inline arrow functions for onClick (may cause re-renders)",
-      "timestamp": "2025-06-12T01:01:19.334Z"
+      "timestamp": "2025-06-12T01:36:43.334Z"
     },
     {
       "test": "TypeScript Types",
       "status": "PASS",
       "message": "TypeScript types properly defined",
-      "timestamp": "2025-06-12T01:01:19.334Z"
+      "timestamp": "2025-06-12T01:36:43.334Z"
     }
   ],
-  "timestamp": "2025-06-12T01:01:19.336Z"
+  "timestamp": "2025-06-12T01:36:43.336Z"
 }
