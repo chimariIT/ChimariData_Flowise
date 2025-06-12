@@ -18,6 +18,7 @@ import PayPerAnalysis from "./pages/pay-per-analysis";
 import ExpertConsultation from "./pages/expert-consultation";
 import FreeTrial from "./pages/free-trial";
 import EnterpriseContact from "./pages/enterprise-contact";
+import ComingSoon from "./pages/coming-soon";
 import AnimatedDemo from "./components/animated-demo";
 import NotFound from "@/pages/not-found";
 
@@ -116,6 +117,13 @@ function App() {
         
         {location === "/enterprise-contact" && (
           <EnterpriseContact />
+        )}
+        
+        {location.startsWith("/coming-soon") && (
+          <ComingSoon 
+            onBack={() => setLocation("/")} 
+            pageTitle={new URLSearchParams(location.split('?')[1] || '').get('feature') || 'Feature'}
+          />
         )}
         
         {user && location === "/dashboard" && (
