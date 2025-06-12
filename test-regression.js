@@ -5,8 +5,8 @@
  * Run this script after every change to ensure core functionality works
  */
 
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
 
 class RegressionTester {
   constructor() {
