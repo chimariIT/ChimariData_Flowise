@@ -58,21 +58,21 @@ export class PricingService {
   // Three-tier pricing structure
   private static readonly PRICING_TIERS: PricingTier[] = [
     {
-      name: "Free",
+      name: "Free Trial",
       price: 0,
       priceLabel: "Free",
       features: [
-        "3 AI analyses per month",
-        "Up to 10MB data uploads",
+        "1 file upload (no sign-in required)",
+        "1 simple data summarization",
+        "1 AI question",
         "Basic visualizations",
-        "Standard AI models",
         "Community support"
       ],
       limits: {
-        analysesPerMonth: 3,
+        analysesPerMonth: 1,
         maxDataSizeMB: 10,
-        maxRecords: 5000,
-        aiQueries: 50,
+        maxRecords: 1000,
+        aiQueries: 1,
         supportLevel: "community",
         customModels: false,
         apiAccess: false,
@@ -80,43 +80,109 @@ export class PricingService {
       }
     },
     {
-      name: "Professional",
-      price: 49,
-      priceLabel: "$49/month",
+      name: "Starter",
+      price: 5,
+      priceLabel: "$5/month",
       features: [
-        "Unlimited AI analyses",
-        "Up to 500MB data uploads",
-        "Advanced visualizations",
-        "Premium AI models",
-        "Priority email support",
-        "Custom dashboards",
+        "Single file uploads up to 10MB",
+        "5 simple analyses per month",
+        "Basic visualizations",
+        "Email support",
         "Export capabilities"
       ],
       limits: {
-        analysesPerMonth: -1, // unlimited
-        maxDataSizeMB: 500,
-        maxRecords: 100000,
-        aiQueries: 1000,
+        analysesPerMonth: 5,
+        maxDataSizeMB: 10,
+        maxRecords: 10000,
+        aiQueries: 0,
         supportLevel: "email",
-        customModels: true,
-        apiAccess: true,
+        customModels: false,
+        apiAccess: false,
+        teamCollaboration: false
+      }
+    },
+    {
+      name: "Basic",
+      price: 15,
+      priceLabel: "$15/month",
+      features: [
+        "File uploads up to 15MB",
+        "10 simple analyses per month",
+        "5 AI queries",
+        "Advanced visualizations",
+        "Priority email support"
+      ],
+      limits: {
+        analysesPerMonth: 10,
+        maxDataSizeMB: 15,
+        maxRecords: 25000,
+        aiQueries: 5,
+        supportLevel: "email",
+        customModels: false,
+        apiAccess: false,
         teamCollaboration: false
       },
       recommended: true
     },
     {
-      name: "Enterprise",
-      price: 299,
-      priceLabel: "$299/month",
+      name: "Professional",
+      price: 20,
+      priceLabel: "$20/month",
       features: [
-        "Unlimited everything",
+        "Up to 10 files, 40MB each",
+        "10 simple to medium analyses",
+        "10 AI queries",
+        "Advanced visualizations",
+        "Custom dashboards",
+        "Priority support"
+      ],
+      limits: {
+        analysesPerMonth: 10,
+        maxDataSizeMB: 40,
+        maxRecords: 100000,
+        aiQueries: 10,
+        supportLevel: "email",
+        customModels: true,
+        apiAccess: false,
+        teamCollaboration: false
+      }
+    },
+    {
+      name: "Premium",
+      price: 50,
+      priceLabel: "$50/month",
+      features: [
         "Unlimited data uploads",
+        "Complex analysis capabilities",
+        "50 AI queries per month",
+        "Premium AI models",
+        "Advanced visualizations",
+        "API access",
+        "Priority support"
+      ],
+      limits: {
+        analysesPerMonth: -1, // unlimited
+        maxDataSizeMB: -1, // unlimited
+        maxRecords: -1, // unlimited
+        aiQueries: 50,
+        supportLevel: "email",
+        customModels: true,
+        apiAccess: true,
+        teamCollaboration: false
+      }
+    },
+    {
+      name: "Enterprise",
+      price: -1, // contact for quote
+      priceLabel: "Contact Us",
+      features: [
+        "Everything in Premium",
         "Custom AI model training",
         "24/7 phone & email support",
         "Team collaboration tools",
-        "API access & integrations",
         "Dedicated account manager",
-        "SLA guarantee"
+        "SLA guarantee",
+        "Custom integrations"
       ],
       limits: {
         analysesPerMonth: -1, // unlimited
