@@ -111,7 +111,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   };
 
   // Auth routes
-  app.post("/api/register", async (req, res) => {
+  app.post("/api/auth/register", async (req, res) => {
     try {
       const data = registerSchema.parse(req.body);
       
@@ -140,7 +140,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/login", async (req, res) => {
+  app.post("/api/auth/login", async (req, res) => {
     try {
       const data = loginSchema.parse(req.body);
       
