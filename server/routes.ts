@@ -1347,6 +1347,79 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Pricing tier API routes
+  app.get('/api/pricing/tiers', (req, res) => {
+    const tiers = PricingService.getPricingTiers();
+    res.json({ tiers });
+  });
+
+  app.post('/api/pricing/validate', async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      return res.status(401).json({ error: "Authorization required" });
+    }
+
+    const token = authHeader.substring(7);
+    const session = sessions.get(token);
+    if (!session) {
+      return res.status(401).json({ error: "Invalid session" });
+    }
+
+    try {
+      const { dataSizeMB, recordCount } = req.body;
+      
+      let userTier: 'free' | 'professional' | 'enterprise' = 'free';
+      const settings = await storage.getUserSettings(session.userId);
+      if (settings?.subscriptionTier) {
+        userTier = settings.subscriptionTier as 'free' | 'professional' | 'enterprise';
+      }
+
+      const currentMonthAnalyses = await storage.getUserUsageThisMonth(session.userId);
+
+      const validation = PricingService.validateUserLimits(userTier, {
+        dataSizeMB: Number(dataSizeMB),
+        recordCount: Number(recordCount),
+        currentMonthAnalyses
+      });
+
+      res.json({
+        ...validation,
+        currentTier: userTier,
+        currentMonthAnalyses
+      });
+
+    } catch (error: any) {
+      res.status(500).json({ 
+        error: "Failed to validate limits",
+        message: error.message 
+      });
+    }
+  });
+
+  app.post('/api/pricing/recommend', (req, res) => {
+    const { dataSizeMB, recordCount, analysesPerMonth } = req.body;
+    
+    const recommendedTier = PricingService.getRecommendedTier(
+      Number(dataSizeMB),
+      Number(recordCount),
+      Number(analysesPerMonth)
+    );
+
+    res.json({ recommendedTier });
+  });
+
+  app.get('/api/pricing/estimate', (req, res) => {
+    const { dataSizeMB = 1, questionsCount = 3, analysisType = 'standard' } = req.query;
+    
+    const estimate = PricingService.getEstimatedPrice(
+      Number(dataSizeMB), 
+      Number(questionsCount), 
+      analysisType as 'standard' | 'advanced' | 'custom'
+    );
+    
+    res.json({ estimate });
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

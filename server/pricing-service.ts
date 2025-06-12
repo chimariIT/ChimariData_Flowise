@@ -1,3 +1,21 @@
+export interface PricingTier {
+  name: string;
+  price: number;
+  priceLabel: string;
+  features: string[];
+  limits: {
+    analysesPerMonth: number;
+    maxDataSizeMB: number;
+    maxRecords: number;
+    aiQueries: number;
+    supportLevel: string;
+    customModels: boolean;
+    apiAccess: boolean;
+    teamCollaboration: boolean;
+  };
+  recommended?: boolean;
+}
+
 export interface PricingFactors {
   dataSizeMB: number;
   recordCount: number;
@@ -8,6 +26,7 @@ export interface PricingFactors {
   analysisType: 'standard' | 'advanced' | 'custom';
   analysisArtifacts: number;
   dataComplexity: 'simple' | 'moderate' | 'complex';
+  tier?: 'free' | 'professional' | 'enterprise';
 }
 
 export interface PricingResult {
@@ -36,7 +55,83 @@ export interface PricingResult {
 }
 
 export class PricingService {
-  private static readonly BASE_PRICE = 5.00; // $5 base price
+  // Three-tier pricing structure
+  private static readonly PRICING_TIERS: PricingTier[] = [
+    {
+      name: "Free",
+      price: 0,
+      priceLabel: "Free",
+      features: [
+        "3 AI analyses per month",
+        "Up to 10MB data uploads",
+        "Basic visualizations",
+        "Standard AI models",
+        "Community support"
+      ],
+      limits: {
+        analysesPerMonth: 3,
+        maxDataSizeMB: 10,
+        maxRecords: 5000,
+        aiQueries: 50,
+        supportLevel: "community",
+        customModels: false,
+        apiAccess: false,
+        teamCollaboration: false
+      }
+    },
+    {
+      name: "Professional",
+      price: 49,
+      priceLabel: "$49/month",
+      features: [
+        "Unlimited AI analyses",
+        "Up to 500MB data uploads",
+        "Advanced visualizations",
+        "Premium AI models",
+        "Priority email support",
+        "Custom dashboards",
+        "Export capabilities"
+      ],
+      limits: {
+        analysesPerMonth: -1, // unlimited
+        maxDataSizeMB: 500,
+        maxRecords: 100000,
+        aiQueries: 1000,
+        supportLevel: "email",
+        customModels: true,
+        apiAccess: true,
+        teamCollaboration: false
+      },
+      recommended: true
+    },
+    {
+      name: "Enterprise",
+      price: 299,
+      priceLabel: "$299/month",
+      features: [
+        "Unlimited everything",
+        "Unlimited data uploads",
+        "Custom AI model training",
+        "24/7 phone & email support",
+        "Team collaboration tools",
+        "API access & integrations",
+        "Dedicated account manager",
+        "SLA guarantee"
+      ],
+      limits: {
+        analysesPerMonth: -1, // unlimited
+        maxDataSizeMB: -1, // unlimited
+        maxRecords: -1, // unlimited
+        aiQueries: -1, // unlimited
+        supportLevel: "phone",
+        customModels: true,
+        apiAccess: true,
+        teamCollaboration: true
+      }
+    }
+  ];
+
+  private static readonly BASE_PRICE = 5.00; // $5 base price for pay-per-use
   private static readonly PRICE_PER_MB = 0.10; // $0.10 per MB
   private static readonly PRICE_PER_1K_RECORDS = 0.05; // $0.05 per 1K records
   private static readonly PRICE_PER_FEATURE = 0.25; // $0.25 per feature beyond 10
@@ -197,5 +292,104 @@ export class PricingService {
     if (featureCount > 20) baseArtifacts += 1;
     
     return Math.min(baseArtifacts, 8); // Cap at 8 artifacts
+  }
+
+  // New methods for three-tier pricing system
+  static getPricingTiers(): PricingTier[] {
+    return this.PRICING_TIERS;
+  }
+
+  static getTierByName(tierName: 'free' | 'professional' | 'enterprise'): PricingTier | null {
+    return this.PRICING_TIERS.find(tier => tier.name.toLowerCase() === tierName) || null;
+  }
+
+  static validateUserLimits(
+    userTier: 'free' | 'professional' | 'enterprise',
+    request: {
+      dataSizeMB: number;
+      recordCount: number;
+      currentMonthAnalyses?: number;
+    }
+  ): { valid: boolean; errors: string[]; upgradeSuggestion?: string } {
+    const tier = this.getTierByName(userTier);
+    if (!tier) {
+      return { valid: false, errors: ['Invalid tier'] };
+    }
+
+    const errors: string[] = [];
+
+    // Check data size limits
+    if (tier.limits.maxDataSizeMB !== -1 && request.dataSizeMB > tier.limits.maxDataSizeMB) {
+      errors.push(`Data size ${request.dataSizeMB}MB exceeds ${tier.name} limit of ${tier.limits.maxDataSizeMB}MB`);
+    }
+
+    // Check record count limits
+    if (tier.limits.maxRecords !== -1 && request.recordCount > tier.limits.maxRecords) {
+      errors.push(`Record count ${request.recordCount} exceeds ${tier.name} limit of ${tier.limits.maxRecords.toLocaleString()}`);
+    }
+
+    // Check monthly analysis limits
+    if (tier.limits.analysesPerMonth !== -1 && request.currentMonthAnalyses && 
+        request.currentMonthAnalyses >= tier.limits.analysesPerMonth) {
+      errors.push(`Monthly analysis limit of ${tier.limits.analysesPerMonth} reached`);
+    }
+
+    const valid = errors.length === 0;
+    let upgradeSuggestion: string | undefined;
+
+    if (!valid) {
+      if (userTier === 'free') {
+        upgradeSuggestion = 'professional';
+      } else if (userTier === 'professional') {
+        upgradeSuggestion = 'enterprise';
+      }
+    }
+
+    return { valid, errors, upgradeSuggestion };
+  }
+
+  static getRecommendedTier(dataSizeMB: number, recordCount: number, analysesPerMonth: number): PricingTier {
+    // If data requirements exceed free tier limits
+    if (dataSizeMB > 10 || recordCount > 5000 || analysesPerMonth > 3) {
+      // If data requirements exceed professional tier limits
+      if (dataSizeMB > 500 || recordCount > 100000 || analysesPerMonth > 50) {
+        return this.PRICING_TIERS[2]; // Enterprise
+      }
+      return this.PRICING_TIERS[1]; // Professional
+    }
+    return this.PRICING_TIERS[0]; // Free
+  }
+
+  static calculateOverageCharges(
+    userTier: 'free' | 'professional' | 'enterprise',
+    usage: {
+      dataSizeMB: number;
+      recordCount: number;
+      analysesThisMonth: number;
+    }
+  ): { overageCharges: number; breakdown: string[] } {
+    const tier = this.getTierByName(userTier);
+    if (!tier) return { overageCharges: 0, breakdown: [] };
+
+    let overageCharges = 0;
+    const breakdown: string[] = [];
+
+    // Data size overage (only for tiers with limits)
+    if (tier.limits.maxDataSizeMB !== -1 && usage.dataSizeMB > tier.limits.maxDataSizeMB) {
+      const excessMB = usage.dataSizeMB - tier.limits.maxDataSizeMB;
+      const charge = excessMB * 0.50; // $0.50 per MB overage
+      overageCharges += charge;
+      breakdown.push(`Data overage: ${excessMB}MB × $0.50 = $${charge.toFixed(2)}`);
+    }
+
+    // Analysis overage (only for free tier)
+    if (userTier === 'free' && usage.analysesThisMonth > tier.limits.analysesPerMonth) {
+      const excessAnalyses = usage.analysesThisMonth - tier.limits.analysesPerMonth;
+      const charge = excessAnalyses * 5.00; // $5 per analysis overage
+      overageCharges += charge;
+      breakdown.push(`Analysis overage: ${excessAnalyses} × $5.00 = $${charge.toFixed(2)}`);
+    }
+
+    return { overageCharges, breakdown };
   }
 }
