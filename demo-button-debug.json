@@ -1,0 +1,23 @@
+{
+  "summary": {
+    "critical": 1,
+    "errors": 1,
+    "warnings": 0,
+    "total": 2
+  },
+  "issues": [
+    {
+      "category": "Button Rendering",
+      "severity": "CRITICAL",
+      "description": "Watch 2-Minute Demo button not rendering in HTML",
+      "timestamp": "2025-06-12T01:02:07.615Z"
+    },
+    {
+      "category": "Demo Page Access",
+      "severity": "ERROR",
+      "description": "Demo page not accessible via direct URL",
+      "timestamp": "2025-06-12T01:02:07.623Z"
+    }
+  ],
+  "timestamp": "2025-06-12T01:02:07.627Z"
+}
