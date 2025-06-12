@@ -1,0 +1,148 @@
+{
+  "summary": {
+    "total": 21,
+    "passed": 16,
+    "failed": 4,
+    "partial": 1,
+    "critical": 0,
+    "success_rate": "76%",
+    "deployment_ready": false
+  },
+  "test_results": [
+    {
+      "test": "Server Health",
+      "status": "PASS",
+      "message": "Server responding correctly",
+      "timestamp": "2025-06-12T17:58:51.140Z"
+    },
+    {
+      "test": "Database Connection",
+      "status": "PASS",
+      "message": "Found 6 pricing tiers",
+      "timestamp": "2025-06-12T17:58:51.145Z"
+    },
+    {
+      "test": "API Endpoint /api/ai/providers",
+      "status": "PASS",
+      "message": "Endpoint accessible",
+      "timestamp": "2025-06-12T17:58:51.152Z"
+    },
+    {
+      "test": "API Endpoint /api/pricing/tiers",
+      "status": "PASS",
+      "message": "Endpoint accessible",
+      "timestamp": "2025-06-12T17:58:51.155Z"
+    },
+    {
+      "test": "API Endpoint /api/health",
+      "status": "PASS",
+      "message": "Endpoint accessible",
+      "timestamp": "2025-06-12T17:58:51.160Z"
+    },
+    {
+      "test": "User Registration",
+      "status": "PASS",
+      "message": "User registration successful",
+      "timestamp": "2025-06-12T17:58:51.169Z"
+    },
+    {
+      "test": "User Login",
+      "status": "FAIL",
+      "message": "Login failed or no token returned",
+      "timestamp": "2025-06-12T17:58:51.177Z"
+    },
+    {
+      "test": "Services - Pay Per Analysis",
+      "status": "FAIL",
+      "message": "Pay-per-analysis service not prominently featured",
+      "timestamp": "2025-06-12T17:58:51.184Z"
+    },
+    {
+      "test": "Services - Expert Consultation",
+      "status": "FAIL",
+      "message": "Expert consultation service not prominently featured",
+      "timestamp": "2025-06-12T17:58:51.184Z"
+    },
+    {
+      "test": "Services - Section Integration",
+      "status": "FAIL",
+      "message": "Services section missing from landing page",
+      "timestamp": "2025-06-12T17:58:51.186Z"
+    },
+    {
+      "test": "Navigation - Pay-Per-Analysis Page",
+      "status": "PASS",
+      "message": "Page accessible",
+      "timestamp": "2025-06-12T17:58:51.191Z"
+    },
+    {
+      "test": "Pay-Per-Analysis Content",
+      "status": "PASS",
+      "message": "Page contains relevant content",
+      "timestamp": "2025-06-12T17:58:51.191Z"
+    },
+    {
+      "test": "Navigation - Expert Consultation Page",
+      "status": "PASS",
+      "message": "Page accessible",
+      "timestamp": "2025-06-12T17:58:51.203Z"
+    },
+    {
+      "test": "Expert Consultation Content",
+      "status": "PARTIAL",
+      "message": "Page loads but content needs verification",
+      "timestamp": "2025-06-12T17:58:51.204Z"
+    },
+    {
+      "test": "Navigation - Pricing Page",
+      "status": "PASS",
+      "message": "Page accessible",
+      "timestamp": "2025-06-12T17:58:51.211Z"
+    },
+    {
+      "test": "Navigation - Free Trial Page",
+      "status": "PASS",
+      "message": "Page accessible",
+      "timestamp": "2025-06-12T17:58:51.223Z"
+    },
+    {
+      "test": "Navigation - Demo Page",
+      "status": "PASS",
+      "message": "Page accessible",
+      "timestamp": "2025-06-12T17:58:51.230Z"
+    },
+    {
+      "test": "Navigation - Enterprise Contact Page",
+      "status": "PASS",
+      "message": "Page accessible",
+      "timestamp": "2025-06-12T17:58:51.236Z"
+    },
+    {
+      "test": "AI Providers",
+      "status": "PASS",
+      "message": "Found 4 AI providers",
+      "timestamp": "2025-06-12T17:58:51.240Z"
+    },
+    {
+      "test": "Free Trial Upload",
+      "status": "PASS",
+      "message": "Free trial upload endpoint accessible",
+      "timestamp": "2025-06-12T17:58:51.245Z"
+    },
+    {
+      "test": "Enterprise Contact",
+      "status": "PASS",
+      "message": "Enterprise contact form working",
+      "timestamp": "2025-06-12T17:58:51.249Z"
+    }
+  ],
+  "services_status": {
+    "pay_per_analysis": "0/1 tests passed",
+    "expert_consultation": "1/3 tests passed",
+    "enterprise_contact": "2/2 tests passed"
+  },
+  "recommendations": [
+    "Verify services integration on landing page and routing configuration"
+  ],
+  "timestamp": "2025-06-12T17:58:51.250Z"
+}
