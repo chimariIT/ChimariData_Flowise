@@ -1,5 +1,5 @@
 {
-  "timestamp": "2025-06-12T22:17:17.426Z",
+  "timestamp": "2025-06-12T22:18:56.495Z",
   "summary": {
     "passed": 7,
     "failed": 6,
@@ -17,79 +17,79 @@
       "testName": "Server Connection",
       "status": "PASSED",
       "message": "Server is responding",
-      "timestamp": "2025-06-12T22:17:17.367Z"
+      "timestamp": "2025-06-12T22:18:56.427Z"
     },
     {
       "testName": "Pricing Tiers API",
       "status": "PASSED",
       "message": "Found 7 pricing tiers",
-      "timestamp": "2025-06-12T22:17:17.372Z"
+      "timestamp": "2025-06-12T22:18:56.433Z"
     },
     {
       "testName": "Pay-Per-Analysis Tier",
       "status": "PASSED",
       "message": "Found tier: Pay-Per-Analysis - $25",
-      "timestamp": "2025-06-12T22:17:17.372Z"
+      "timestamp": "2025-06-12T22:18:56.434Z"
     },
     {
       "testName": "Analysis Price Calculation",
       "status": "FAILED",
       "message": "Calculation error: Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON",
-      "timestamp": "2025-06-12T22:17:17.382Z"
+      "timestamp": "2025-06-12T22:18:56.445Z"
     },
     {
       "testName": "Start Analysis Endpoint",
       "status": "PASSED",
       "message": "Analysis start endpoint responding",
-      "timestamp": "2025-06-12T22:17:17.388Z"
+      "timestamp": "2025-06-12T22:18:56.452Z"
     },
     {
       "testName": "Pay-Per-Analysis Button",
       "status": "FAILED",
       "message": "Button not found in page content",
-      "timestamp": "2025-06-12T22:17:17.393Z"
+      "timestamp": "2025-06-12T22:18:56.458Z"
     },
     {
       "testName": "Pricing Display",
       "status": "FAILED",
       "message": "$25 analysis pricing not clearly displayed",
-      "timestamp": "2025-06-12T22:17:17.393Z"
+      "timestamp": "2025-06-12T22:18:56.459Z"
     },
     {
       "testName": "Pricing Comparison API",
       "status": "FAILED",
       "message": "API error: Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON",
-      "timestamp": "2025-06-12T22:17:17.399Z"
+      "timestamp": "2025-06-12T22:18:56.465Z"
     },
     {
       "testName": "Pricing Model Separation",
       "status": "FAILED",
       "message": "Missing subscription or pay-per-use options",
-      "timestamp": "2025-06-12T22:17:17.402Z"
+      "timestamp": "2025-06-12T22:18:56.469Z"
     },
     {
       "testName": "Analysis Navigation Link",
       "status": "FAILED",
       "message": "Navigation link missing from landing page",
-      "timestamp": "2025-06-12T22:17:17.405Z"
+      "timestamp": "2025-06-12T22:18:56.472Z"
     },
     {
       "testName": "Route /pay-per-analysis",
       "status": "PASSED",
       "message": "Route accessible",
-      "timestamp": "2025-06-12T22:17:17.412Z"
+      "timestamp": "2025-06-12T22:18:56.479Z"
     },
     {
       "testName": "Route /pricing",
       "status": "PASSED",
       "message": "Route accessible",
-      "timestamp": "2025-06-12T22:17:17.417Z"
+      "timestamp": "2025-06-12T22:18:56.486Z"
     },
     {
       "testName": "Route /expert-consultation",
       "status": "PASSED",
       "message": "Route accessible",
-      "timestamp": "2025-06-12T22:17:17.421Z"
+      "timestamp": "2025-06-12T22:18:56.491Z"
     }
   ],
   "recommendations": [

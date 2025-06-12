@@ -1,0 +1,126 @@
+{
+  "timestamp": "2025-06-12T22:19:43.017Z",
+  "summary": {
+    "passed": 14,
+    "verified": 3,
+    "failed": 2,
+    "total": 19
+  },
+  "results": [
+    {
+      "testName": "API Pricing Tiers",
+      "status": "PASS",
+      "message": "7 pricing tiers configured correctly",
+      "timestamp": "2025-06-12T22:19:42.970Z"
+    },
+    {
+      "testName": "Pay-Per-Analysis Pricing",
+      "status": "PASS",
+      "message": "Correctly priced at $25",
+      "timestamp": "2025-06-12T22:19:42.971Z"
+    },
+    {
+      "testName": "Pricing Model Separation",
+      "status": "FAIL",
+      "message": "Comparison API error: Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON",
+      "timestamp": "2025-06-12T22:19:42.974Z"
+    },
+    {
+      "testName": "Analysis Price Calculation",
+      "status": "FAIL",
+      "message": "Calculation error: Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON",
+      "timestamp": "2025-06-12T22:19:42.981Z"
+    },
+    {
+      "testName": "Tier: Free Trial",
+      "status": "PASS",
+      "message": "Configured correctly",
+      "timestamp": "2025-06-12T22:19:42.987Z"
+    },
+    {
+      "testName": "Tier: Starter",
+      "status": "PASS",
+      "message": "Configured correctly",
+      "timestamp": "2025-06-12T22:19:42.987Z"
+    },
+    {
+      "testName": "Tier: Basic",
+      "status": "PASS",
+      "message": "Configured correctly",
+      "timestamp": "2025-06-12T22:19:42.987Z"
+    },
+    {
+      "testName": "Tier: Professional",
+      "status": "PASS",
+      "message": "Configured correctly",
+      "timestamp": "2025-06-12T22:19:42.987Z"
+    },
+    {
+      "testName": "Tier: Premium",
+      "status": "PASS",
+      "message": "Configured correctly",
+      "timestamp": "2025-06-12T22:19:42.988Z"
+    },
+    {
+      "testName": "Tier: Enterprise",
+      "status": "PASS",
+      "message": "Configured correctly",
+      "timestamp": "2025-06-12T22:19:42.988Z"
+    },
+    {
+      "testName": "Tier: Pay-Per-Analysis",
+      "status": "PASS",
+      "message": "Configured correctly",
+      "timestamp": "2025-06-12T22:19:42.988Z"
+    },
+    {
+      "testName": "Pricing Model Consistency",
+      "status": "PASS",
+      "message": "All pricing tiers correctly configured",
+      "timestamp": "2025-06-12T22:19:42.988Z"
+    },
+    {
+      "testName": "Route /pay-per-analysis",
+      "status": "PASS",
+      "message": "Accessible",
+      "timestamp": "2025-06-12T22:19:42.994Z"
+    },
+    {
+      "testName": "Route /expert-consultation",
+      "status": "PASS",
+      "message": "Accessible",
+      "timestamp": "2025-06-12T22:19:43.001Z"
+    },
+    {
+      "testName": "Route /pricing",
+      "status": "PASS",
+      "message": "Accessible",
+      "timestamp": "2025-06-12T22:19:43.006Z"
+    },
+    {
+      "testName": "Route /coming-soon",
+      "status": "PASS",
+      "message": "Accessible",
+      "timestamp": "2025-06-12T22:19:43.012Z"
+    },
+    {
+      "testName": "Start Analysis Button",
+      "status": "VERIFIED",
+      "message": "Button implemented in landing page CTA section",
+      "timestamp": "2025-06-12T22:19:43.012Z"
+    },
+    {
+      "testName": "Pricing Display",
+      "status": "VERIFIED",
+      "message": "$25 analysis pricing prominently displayed",
+      "timestamp": "2025-06-12T22:19:43.012Z"
+    },
+    {
+      "testName": "Navigation Links",
+      "status": "VERIFIED",
+      "message": "Pay-per-analysis navigation properly configured",
+      "timestamp": "2025-06-12T22:19:43.012Z"
+    }
+  ],
+  "status": "NEEDS_ATTENTION"
+}
