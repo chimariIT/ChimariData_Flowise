@@ -161,7 +161,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/logout", requireAuth, (req, res) => {
+  app.post("/api/auth/logout", requireAuth, (req, res) => {
     const token = req.headers.authorization?.replace('Bearer ', '');
     if (token) {
       sessions.delete(token);
