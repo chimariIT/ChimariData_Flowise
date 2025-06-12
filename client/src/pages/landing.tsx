@@ -701,6 +701,51 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
               </div>
             </div>
           </div>
+
+          {/* Special Services Section */}
+          <div className="grid md:grid-cols-2 gap-6 mb-8">
+            <div className="bg-gradient-to-br from-orange-50 to-red-50 rounded-2xl p-6 border-2 border-orange-200">
+              <div className="flex items-start space-x-4">
+                <div className="w-12 h-12 bg-orange-100 rounded-lg flex items-center justify-center">
+                  <CreditCard className="w-6 h-6 text-orange-600" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold text-slate-900 mb-2">Pay-per-Analysis</h3>
+                  <p className="text-slate-700 mb-4">
+                    One-time analysis for $25. Perfect for ad-hoc insights without monthly commitment.
+                  </p>
+                  <Button 
+                    onClick={onPayPerAnalysis}
+                    className="bg-orange-600 hover:bg-orange-700 text-white"
+                  >
+                    Start Analysis ($25)
+                    <ArrowRight className="w-4 h-4 ml-2" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-gradient-to-br from-purple-50 to-indigo-50 rounded-2xl p-6 border-2 border-purple-200">
+              <div className="flex items-start space-x-4">
+                <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
+                  <Users className="w-6 h-6 text-purple-600" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold text-slate-900 mb-2">Expert Consultation</h3>
+                  <p className="text-slate-700 mb-4">
+                    1-hour session with data science experts. Strategy, interpretation, and guidance.
+                  </p>
+                  <Button 
+                    onClick={onExpertConsultation}
+                    className="bg-purple-600 hover:bg-purple-700 text-white"
+                  >
+                    Book Consultation ($150)
+                    <ArrowRight className="w-4 h-4 ml-2" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
           
           <div className="space-y-4">
             <Button 
