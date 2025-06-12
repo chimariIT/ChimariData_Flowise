@@ -21,7 +21,8 @@ import {
   TrendingUp,
   Settings,
   Cpu,
-  Key
+  Key,
+  Shield
 } from "lucide-react";
 import { Link } from "wouter";
 
@@ -32,6 +33,11 @@ interface PayPerAnalysisProps {
 export default function PayPerAnalysis({ onBack }: PayPerAnalysisProps) {
   const [currentStep, setCurrentStep] = useState(1);
   const [showCalculator, setShowCalculator] = useState(false);
+  const [showProviderSelection, setShowProviderSelection] = useState(false);
+  
+  // API Provider selection state
+  const [selectedProvider, setSelectedProvider] = useState("platform");
+  const [userApiKey, setUserApiKey] = useState("");
   
   // Price calculator state
   const [fileSize, setFileSize] = useState([1]); // MB
@@ -46,6 +52,65 @@ export default function PayPerAnalysis({ onBack }: PayPerAnalysisProps) {
     prioritySupport: false
   });
   const [calculatedPrice, setCalculatedPrice] = useState(25);
+
+  // Available AI providers
+  const aiProviders = [
+    {
+      id: "platform",
+      name: "ChimariData+AI",
+      model: "Gemini 1.5 Pro",
+      pricing: "Included in service",
+      description: "Our default AI service - get started immediately",
+      icon: Brain,
+      color: "bg-blue-500",
+      requiresKey: false,
+      setupUrl: ""
+    },
+    {
+      id: "openai",
+      name: "OpenAI GPT-4",
+      model: "GPT-4o",
+      pricing: "$2.50/M tokens",
+      description: "Balanced performance and cost with strong analytical skills",
+      icon: Cpu,
+      color: "bg-green-500",
+      requiresKey: true,
+      setupUrl: "https://platform.openai.com"
+    },
+    {
+      id: "anthropic",
+      name: "Anthropic Claude",
+      model: "Claude 3.5 Sonnet",
+      pricing: "$3/M tokens",
+      description: "High-quality analysis with excellent reasoning capabilities",
+      icon: Brain,
+      color: "bg-purple-500",
+      requiresKey: true,
+      setupUrl: "https://console.anthropic.com"
+    },
+    {
+      id: "gemini",
+      name: "Google Gemini",
+      model: "Gemini 1.5 Pro",
+      pricing: "$1.25/M tokens",
+      description: "Google's advanced AI with excellent multimodal capabilities",
+      icon: Zap,
+      color: "bg-orange-500",
+      requiresKey: true,
+      setupUrl: "https://ai.google.dev"
+    },
+    {
+      id: "meta",
+      name: "Meta Llama",
+      model: "Llama 2 70B",
+      pricing: "$0.65/M tokens",
+      description: "Meta's open-source model via Replicate API",
+      icon: Shield,
+      color: "bg-indigo-500",
+      requiresKey: true,
+      setupUrl: "https://replicate.com"
+    }
+  ];
 
   // Price calculation logic
   const calculatePrice = () => {
@@ -281,15 +346,27 @@ export default function PayPerAnalysis({ onBack }: PayPerAnalysisProps) {
                   <ArrowRight className="w-5 h-5 ml-2" />
                 </Button>
                 
-                <Button 
-                  size="lg"
-                  variant="outline"
-                  className="w-full border-orange-200 hover:border-orange-400 hover:bg-orange-50"
-                  onClick={() => setShowCalculator(!showCalculator)}
-                >
-                  <Calculator className="w-5 h-5 mr-2" />
-                  Calculate Custom Price
-                </Button>
+                <div className="space-y-3">
+                  <Button 
+                    size="lg"
+                    variant="outline"
+                    className="w-full border-orange-200 hover:border-orange-400 hover:bg-orange-50"
+                    onClick={() => setShowCalculator(!showCalculator)}
+                  >
+                    <Calculator className="w-5 h-5 mr-2" />
+                    Calculate Custom Price
+                  </Button>
+                  
+                  <Button 
+                    size="lg"
+                    variant="outline"
+                    className="w-full border-purple-200 hover:border-purple-400 hover:bg-purple-50"
+                    onClick={() => setShowProviderSelection(!showProviderSelection)}
+                  >
+                    <Settings className="w-5 h-5 mr-2" />
+                    Choose AI Provider
+                  </Button>
+                </div>
               </div>
             </div>
 
@@ -456,6 +533,115 @@ export default function PayPerAnalysis({ onBack }: PayPerAnalysisProps) {
                       Start Analysis - ${calculatedPrice}
                       <ArrowRight className="w-5 h-5 ml-2" />
                     </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* API Provider Selection */}
+            {showProviderSelection && (
+              <div className="bg-white rounded-2xl shadow-lg p-8 border border-purple-200">
+                <div className="flex items-center mb-6">
+                  <Settings className="w-6 h-6 text-purple-600 mr-3" />
+                  <h3 className="text-2xl font-bold text-slate-900">Choose Your AI Provider</h3>
+                </div>
+                
+                <p className="text-slate-600 mb-6">
+                  Select your preferred AI provider for data analysis. Use our platform service to get started immediately, 
+                  or configure your own API keys for direct access to premium AI models.
+                </p>
+                
+                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+                  {aiProviders.map((provider) => {
+                    const IconComponent = provider.icon;
+                    return (
+                      <div
+                        key={provider.id}
+                        className={`relative p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                          selectedProvider === provider.id
+                            ? 'border-purple-500 bg-purple-50'
+                            : 'border-slate-200 hover:border-slate-300'
+                        }`}
+                        onClick={() => setSelectedProvider(provider.id)}
+                      >
+                        <div className="flex items-start space-x-3">
+                          <div className={`w-10 h-10 ${provider.color} rounded-lg flex items-center justify-center`}>
+                            <IconComponent className="w-5 h-5 text-white" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <h4 className="font-semibold text-slate-900 text-sm">{provider.name}</h4>
+                            <p className="text-xs text-slate-500 mb-1">{provider.model}</p>
+                            <p className="text-xs font-medium text-green-600">{provider.pricing}</p>
+                            <p className="text-xs text-slate-600 mt-1 line-clamp-2">{provider.description}</p>
+                          </div>
+                        </div>
+                        {selectedProvider === provider.id && (
+                          <div className="absolute top-2 right-2">
+                            <CheckCircle className="w-5 h-5 text-purple-600" />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* API Key Configuration */}
+                {selectedProvider !== "platform" && (
+                  <div className="bg-slate-50 rounded-xl p-6">
+                    <div className="flex items-center mb-4">
+                      <Key className="w-5 h-5 text-slate-600 mr-2" />
+                      <h4 className="font-semibold text-slate-900">API Key Configuration</h4>
+                    </div>
+                    <p className="text-sm text-slate-600 mb-4">
+                      To use {aiProviders.find(p => p.id === selectedProvider)?.name}, you'll need to provide your API key. 
+                      Your key is encrypted and only used for your analysis requests.
+                    </p>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-2">
+                          API Key
+                        </label>
+                        <input
+                          type="password"
+                          value={userApiKey}
+                          onChange={(e) => setUserApiKey(e.target.value)}
+                          placeholder={`Enter your ${aiProviders.find(p => p.id === selectedProvider)?.name} API key`}
+                          className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:ring-purple-500 focus:border-purple-500"
+                        />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <a
+                          href={aiProviders.find(p => p.id === selectedProvider)?.setupUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm text-purple-600 hover:text-purple-700 underline"
+                        >
+                          Get API Key →
+                        </a>
+                        <Button
+                          size="sm"
+                          className="bg-purple-600 hover:bg-purple-700"
+                          disabled={!userApiKey.trim()}
+                        >
+                          Save Configuration
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="mt-6 p-4 bg-blue-50 rounded-lg">
+                  <div className="flex items-start">
+                    <Brain className="w-5 h-5 text-blue-600 mr-3 mt-0.5" />
+                    <div>
+                      <h5 className="font-medium text-blue-900 mb-1">Why Choose Your Own Provider?</h5>
+                      <ul className="text-sm text-blue-700 space-y-1">
+                        <li>• Direct access to latest AI models</li>
+                        <li>• Your own API usage and billing control</li>
+                        <li>• Enhanced privacy with direct API calls</li>
+                        <li>• Access to provider-specific features</li>
+                      </ul>
+                    </div>
                   </div>
                 </div>
               </div>

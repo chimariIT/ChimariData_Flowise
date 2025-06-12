@@ -20,7 +20,11 @@ import {
   Star,
   MessageSquare,
   Calculator,
-  TrendingUp
+  TrendingUp,
+  Settings,
+  Cpu,
+  Key,
+  Shield
 } from "lucide-react";
 import { Link } from "wouter";
 
@@ -31,6 +35,11 @@ interface ExpertConsultationProps {
 export default function ExpertConsultation({ onBack }: ExpertConsultationProps) {
   const [bookingStep, setBookingStep] = useState(1);
   const [showCalculator, setShowCalculator] = useState(false);
+  const [showProviderSelection, setShowProviderSelection] = useState(false);
+  
+  // API Provider selection state
+  const [selectedProvider, setSelectedProvider] = useState("platform");
+  const [userApiKey, setUserApiKey] = useState("");
   
   // Consultation pricing state
   const [sessionDuration, setSessionDuration] = useState([1]); // hours
