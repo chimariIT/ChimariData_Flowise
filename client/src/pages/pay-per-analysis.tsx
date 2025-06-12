@@ -18,7 +18,10 @@ import {
   Calculator,
   Database,
   Zap,
-  TrendingUp
+  TrendingUp,
+  Settings,
+  Cpu,
+  Key
 } from "lucide-react";
 import { Link } from "wouter";
 
