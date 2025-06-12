@@ -1,0 +1,46 @@
+{
+  "summary": {
+    "passed": 6,
+    "failed": 0,
+    "total": 6
+  },
+  "tests": [
+    {
+      "test": "Demo Route Configuration",
+      "status": "PASS",
+      "message": "Demo route properly configured in App.tsx",
+      "timestamp": "2025-06-12T00:47:07.793Z"
+    },
+    {
+      "test": "2-Minute Demo Button",
+      "status": "PASS",
+      "message": "New 2-minute demo button properly implemented",
+      "timestamp": "2025-06-12T00:47:07.794Z"
+    },
+    {
+      "test": "Main Demo Button",
+      "status": "PASS",
+      "message": "Main demo button properly implemented",
+      "timestamp": "2025-06-12T00:47:07.794Z"
+    },
+    {
+      "test": "Play Icon Import",
+      "status": "PASS",
+      "message": "Play icon properly imported",
+      "timestamp": "2025-06-12T00:47:07.794Z"
+    },
+    {
+      "test": "Demo Content",
+      "status": "PASS",
+      "message": "Demo component has proper content structure",
+      "timestamp": "2025-06-12T00:47:07.795Z"
+    },
+    {
+      "test": "Demo Navigation Props",
+      "status": "PASS",
+      "message": "Demo component has proper navigation props",
+      "timestamp": "2025-06-12T00:47:07.796Z"
+    }
+  ],
+  "timestamp": "2025-06-12T00:47:07.797Z"
+}

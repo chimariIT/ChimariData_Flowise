@@ -14,7 +14,8 @@ import {
   Sparkles,
   Database,
   Zap,
-  Shield
+  Shield,
+  Play
 } from "lucide-react";
 
 interface LandingPageProps {
@@ -630,7 +631,14 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
               
               <div className="text-center">
                 <div className="text-2xl font-bold text-slate-900 mb-1">2 minutes</div>
-                <div className="text-sm text-slate-600">From upload to insights</div>
+                <div className="text-sm text-slate-600 mb-4">From upload to insights</div>
+                <Button 
+                  onClick={() => window.location.href = "/demo"}
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  <Play className="w-4 h-4 mr-2" />
+                  Watch 2-Minute Demo
+                </Button>
               </div>
             </div>
           </div>
