@@ -1,10 +1,13 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Slider } from "@/components/ui/slider";
 import { 
   ArrowLeft, 
   CheckCircle, 
@@ -15,7 +18,9 @@ import {
   Calendar,
   ArrowRight,
   Star,
-  MessageSquare
+  MessageSquare,
+  Calculator,
+  TrendingUp
 } from "lucide-react";
 import { Link } from "wouter";
 
@@ -25,6 +30,154 @@ interface ExpertConsultationProps {
 
 export default function ExpertConsultation({ onBack }: ExpertConsultationProps) {
   const [bookingStep, setBookingStep] = useState(1);
+  const [showCalculator, setShowCalculator] = useState(false);
+  
+  // Consultation pricing state
+  const [sessionDuration, setSessionDuration] = useState([1]); // hours
+  const [expertLevel, setExpertLevel] = useState("senior");
+  const [consultationType, setConsultationType] = useState("general");
+  const [addOns, setAddOns] = useState({
+    followUpReport: true,
+    recordedSession: false,
+    additionalMaterials: false,
+    priorityScheduling: false,
+    multipleExperts: false
+  });
+  const [calculatedPrice, setCalculatedPrice] = useState(150);
+
+  // Price calculation logic
+  const calculateConsultationPrice = () => {
+    let basePrice = 150;
+    
+    // Session duration
+    const duration = sessionDuration[0];
+    if (duration > 1) {
+      basePrice += (duration - 1) * 120; // Additional hours at $120/hour
+    }
+    
+    // Expert level multiplier
+    switch (expertLevel) {
+      case "director":
+        basePrice *= 1.5;
+        break;
+      case "principal":
+        basePrice *= 2.0;
+        break;
+      case "senior":
+      default:
+        break;
+    }
+    
+    // Consultation type adjustments
+    switch (consultationType) {
+      case "strategic":
+        basePrice += 50;
+        break;
+      case "technical":
+        basePrice += 25;
+        break;
+      case "implementation":
+        basePrice += 75;
+        break;
+      case "general":
+      default:
+        break;
+    }
+    
+    // Add-on services
+    if (addOns.recordedSession) basePrice += 25;
+    if (addOns.additionalMaterials) basePrice += 50;
+    if (addOns.priorityScheduling) basePrice += 30;
+    if (addOns.multipleExperts) basePrice += 100;
+    
+    return Math.round(basePrice);
+  };
+
+  useEffect(() => {
+    setCalculatedPrice(calculateConsultationPrice());
+  }, [sessionDuration, expertLevel, consultationType, addOns]);
+
+  const expertLevels = [
+    {
+      value: "senior",
+      label: "Senior Data Scientist",
+      description: "10+ years experience, specialized expertise",
+      multiplier: "1x"
+    },
+    {
+      value: "director",
+      label: "Director Level",
+      description: "15+ years, strategic and technical leadership",
+      multiplier: "1.5x"
+    },
+    {
+      value: "principal",
+      label: "Principal/VP Level",
+      description: "20+ years, executive strategy and vision",
+      multiplier: "2x"
+    }
+  ];
+
+  const consultationTypes = [
+    {
+      value: "general",
+      label: "General Consultation",
+      description: "Data strategy and general guidance",
+      price: "Base price"
+    },
+    {
+      value: "technical",
+      label: "Technical Deep Dive",
+      description: "Hands-on technical implementation",
+      price: "+$25"
+    },
+    {
+      value: "strategic",
+      label: "Strategic Planning",
+      description: "Business strategy and ROI optimization",
+      price: "+$50"
+    },
+    {
+      value: "implementation",
+      label: "Implementation Planning",
+      description: "End-to-end implementation roadmap",
+      price: "+$75"
+    }
+  ];
+
+  const addOnOptions = [
+    {
+      key: "followUpReport",
+      label: "Follow-up Report",
+      description: "Detailed written summary and action plan",
+      price: "Included",
+      required: true
+    },
+    {
+      key: "recordedSession",
+      label: "Session Recording",
+      description: "Video recording for future reference",
+      price: "+$25"
+    },
+    {
+      key: "additionalMaterials",
+      label: "Additional Materials",
+      description: "Custom templates and frameworks",
+      price: "+$50"
+    },
+    {
+      key: "priorityScheduling",
+      label: "Priority Scheduling",
+      description: "Schedule within 24 hours",
+      price: "+$30"
+    },
+    {
+      key: "multipleExperts",
+      label: "Multiple Experts",
+      description: "2-3 experts in the same session",
+      price: "+$100"
+    }
+  ];
 
   const consultationFeatures = [
     {
