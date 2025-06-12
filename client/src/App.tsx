@@ -121,9 +121,8 @@ function App() {
         
         {user && location === "/pricing" && (
           <PricingPage 
-            onBack={() => setLocation("/settings")}
-            onSubscribe={() => setLocation("/subscribe")}
-            currentTier="free"
+            onGetStarted={() => setLocation("/dashboard")}
+            onSubscribe={(tier) => setLocation("/subscribe")}
           />
         )}
         
