@@ -41,7 +41,7 @@ export default function PricingPage({ onGetStarted, onSubscribe, onBack }: Prici
     queryKey: ['/api/pricing/tiers'],
   });
 
-  const tiers: PricingTier[] = pricingData?.tiers || [];
+  const tiers: PricingTier[] = (pricingData as any)?.tiers || [];
 
   const getIcon = (tierName: string) => {
     switch (tierName.toLowerCase()) {
@@ -74,12 +74,26 @@ export default function PricingPage({ onGetStarted, onSubscribe, onBack }: Prici
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
       {/* Header */}
       <section className="py-20 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-6xl mx-auto text-center">
-          <div className={`transition-all duration-1000 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}>
-            <Badge variant="outline" className="mb-6 px-4 py-2 bg-blue-50 border-blue-200">
-              <Sparkles className="w-4 h-4 mr-2 text-blue-600" />
-              Transparent Pricing
-            </Badge>
+        <div className="max-w-6xl mx-auto">
+          {onBack && (
+            <div className="mb-8">
+              <Button 
+                onClick={onBack}
+                variant="ghost"
+                className="text-slate-600 hover:text-slate-900"
+              >
+                <ArrowLeft className="w-4 h-4 mr-2" />
+                Back to Home
+              </Button>
+            </div>
+          )}
+          
+          <div className="text-center">
+            <div className={`transition-all duration-1000 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}>
+              <Badge variant="outline" className="mb-6 px-4 py-2 bg-blue-50 border-blue-200">
+                <Sparkles className="w-4 h-4 mr-2 text-blue-600" />
+                Transparent Pricing
+              </Badge>
             
             <h1 className="text-4xl md:text-5xl font-bold text-slate-900 mb-6">
               Choose the Perfect Plan for Your{" "}
