@@ -39,6 +39,25 @@ export const projects = pgTable("projects", {
   fileMetadata: jsonb("file_metadata"), // Store original filename, sheets, header info
 });
 
+export const enterpriseInquiries = pgTable("enterprise_inquiries", {
+  id: serial("id").primaryKey(),
+  companyName: text("company_name").notNull(),
+  contactName: text("contact_name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone"),
+  projectDescription: text("project_description").notNull(),
+  estimatedDataSize: text("estimated_data_size"),
+  timeline: text("timeline"),
+  budget: text("budget"),
+  specificRequirements: text("specific_requirements"),
+  status: text("status").default("new"), // new, in_progress, contacted, closed
+  priority: text("priority").default("medium"), // low, medium, high
+  assignedTo: text("assigned_to"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 export const userSettings = pgTable("user_settings", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").references(() => users.id).notNull(),
@@ -75,6 +94,12 @@ export const insertProjectSchema = createInsertSchema(projects).omit({
   id: true,
   createdAt: true,
   ownerId: true,
+});
+
+export const insertEnterpriseInquirySchema = createInsertSchema(enterpriseInquiries).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
 });
 
 export const insertUserSettingsSchema = createInsertSchema(userSettings).omit({
@@ -116,6 +141,8 @@ export type InsertUserSettings = z.infer<typeof insertUserSettingsSchema>;
 export type UserSettings = typeof userSettings.$inferSelect;
 export type InsertUsageLog = z.infer<typeof insertUsageLogSchema>;
 export type UsageLog = typeof usageLogs.$inferSelect;
+export type EnterpriseInquiry = typeof enterpriseInquiries.$inferSelect;
+export type InsertEnterpriseInquiry = z.infer<typeof insertEnterpriseInquirySchema>;
 export type LoginData = z.infer<typeof loginSchema>;
 export type RegisterData = z.infer<typeof registerSchema>;
 export type AIQueryData = z.infer<typeof aiQuerySchema>;
