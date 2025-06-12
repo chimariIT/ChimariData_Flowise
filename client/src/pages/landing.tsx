@@ -946,28 +946,28 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
               <ul className="space-y-2 text-slate-400">
                 <li><button onClick={() => document.getElementById('demo')?.scrollIntoView({ behavior: 'smooth' })} className="hover:text-white cursor-pointer">Features</button></li>
                 <li><button onClick={onPricing} className="hover:text-white cursor-pointer">Pricing</button></li>
-                <li><a href="mailto:security@chimaridata.com?subject=Security Inquiry" className="hover:text-white">Security</a></li>
-                <li><a href="mailto:integrations@chimaridata.com?subject=Integration Request" className="hover:text-white">Integrations</a></li>
+                <li><button onClick={() => window.location.href = '/coming-soon?feature=Security'} className="hover:text-white cursor-pointer">Security</button></li>
+                <li><button onClick={() => window.location.href = '/coming-soon?feature=Integrations'} className="hover:text-white cursor-pointer">Integrations</button></li>
               </ul>
             </div>
             
             <div>
               <h4 className="font-semibold mb-4">Resources</h4>
               <ul className="space-y-2 text-slate-400">
-                <li><a href="mailto:docs@chimaridata.com?subject=Documentation Request" className="hover:text-white">Documentation</a></li>
+                <li><button onClick={() => window.location.href = '/coming-soon?feature=Documentation'} className="hover:text-white cursor-pointer">Documentation</button></li>
                 <li><button onClick={onDemo} className="hover:text-white cursor-pointer">Tutorials</button></li>
-                <li><a href="mailto:content@chimaridata.com?subject=Blog Inquiry" className="hover:text-white">Blog</a></li>
-                <li><a href="mailto:support@chimaridata.com?subject=Support Request" className="hover:text-white">Support</a></li>
+                <li><button onClick={() => window.location.href = '/coming-soon?feature=Blog'} className="hover:text-white cursor-pointer">Blog</button></li>
+                <li><button onClick={() => window.location.href = '/coming-soon?feature=Support'} className="hover:text-white cursor-pointer">Support</button></li>
               </ul>
             </div>
             
             <div>
               <h4 className="font-semibold mb-4">Company</h4>
               <ul className="space-y-2 text-slate-400">
-                <li><a href="mailto:about@chimaridata.com?subject=About ChimariData" className="hover:text-white">About</a></li>
-                <li><a href="mailto:careers@chimaridata.com?subject=Career Opportunities" className="hover:text-white">Careers</a></li>
-                <li><a href="mailto:privacy@chimaridata.com?subject=Privacy Policy Inquiry" className="hover:text-white">Privacy</a></li>
-                <li><a href="mailto:legal@chimaridata.com?subject=Terms of Service" className="hover:text-white">Terms</a></li>
+                <li><button onClick={() => window.location.href = '/coming-soon?feature=About'} className="hover:text-white cursor-pointer">About</button></li>
+                <li><button onClick={() => window.location.href = '/coming-soon?feature=Careers'} className="hover:text-white cursor-pointer">Careers</button></li>
+                <li><button onClick={() => window.location.href = '/coming-soon?feature=Privacy'} className="hover:text-white cursor-pointer">Privacy</button></li>
+                <li><button onClick={() => window.location.href = '/coming-soon?feature=Terms'} className="hover:text-white cursor-pointer">Terms</button></li>
               </ul>
               <div className="mt-6">
                 <h4 className="font-semibold mb-2">Contact</h4>

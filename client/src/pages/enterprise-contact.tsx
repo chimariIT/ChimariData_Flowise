@@ -385,10 +385,6 @@ export default function EnterpriseContact() {
               Questions? Contact us directly at{" "}
               <a href="mailto:sales@chimaridata.com" className="text-purple-600 dark:text-purple-400 hover:underline">
                 sales@chimaridata.com
-              </a>{" "}
-              or call{" "}
-              <a href="tel:+1-555-CHIMARI" className="text-purple-600 dark:text-purple-400 hover:underline">
-                +1 (555) CHIMARI
               </a>
             </p>
           </div>
