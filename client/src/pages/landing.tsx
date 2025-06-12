@@ -778,26 +778,31 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
             <div>
               <h4 className="font-semibold mb-4">Resources</h4>
               <ul className="space-y-2 text-slate-400">
-                <li><a href="#" className="hover:text-white">Documentation</a></li>
-                <li><a href="#" className="hover:text-white">Tutorials</a></li>
-                <li><a href="#" className="hover:text-white">Blog</a></li>
-                <li><a href="#" className="hover:text-white">Support</a></li>
+                <li><a href="mailto:docs@chimaridata.com?subject=Documentation Request" className="hover:text-white">Documentation</a></li>
+                <li><button onClick={onDemo} className="hover:text-white cursor-pointer">Tutorials</button></li>
+                <li><a href="mailto:content@chimaridata.com?subject=Blog Inquiry" className="hover:text-white">Blog</a></li>
+                <li><a href="mailto:support@chimaridata.com?subject=Support Request" className="hover:text-white">Support</a></li>
               </ul>
             </div>
             
             <div>
               <h4 className="font-semibold mb-4">Company</h4>
               <ul className="space-y-2 text-slate-400">
-                <li><a href="#" className="hover:text-white">About</a></li>
-                <li><a href="#" className="hover:text-white">Careers</a></li>
-                <li><a href="#" className="hover:text-white">Privacy</a></li>
-                <li><a href="#" className="hover:text-white">Terms</a></li>
+                <li><a href="mailto:about@chimaridata.com?subject=About ChimariData" className="hover:text-white">About</a></li>
+                <li><a href="mailto:careers@chimaridata.com?subject=Career Opportunities" className="hover:text-white">Careers</a></li>
+                <li><a href="mailto:privacy@chimaridata.com?subject=Privacy Policy Inquiry" className="hover:text-white">Privacy</a></li>
+                <li><a href="mailto:legal@chimaridata.com?subject=Terms of Service" className="hover:text-white">Terms</a></li>
               </ul>
               <div className="mt-6">
                 <h4 className="font-semibold mb-2">Contact</h4>
                 <p className="text-slate-400 text-sm">
-                  <a href="mailto:sales@chimaridata.com" className="hover:text-white">
+                  <a href="mailto:sales@chimaridata.com?subject=Sales Inquiry&body=Hi, I'm interested in learning more about ChimariData's AI-powered analytics platform." className="hover:text-white">
                     sales@chimaridata.com
+                  </a>
+                </p>
+                <p className="text-slate-400 text-sm mt-1">
+                  <a href="mailto:support@chimaridata.com?subject=Support Request&body=Hi, I need assistance with:" className="hover:text-white">
+                    support@chimaridata.com
                   </a>
                 </p>
               </div>
