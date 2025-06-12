@@ -170,11 +170,20 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
           <div className={`flex flex-col sm:flex-row gap-4 justify-center mb-12 transition-all duration-1000 delay-600 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}>
             <Button 
               size="lg" 
-              onClick={onGetStarted}
-              className="bg-gradient-to-r from-blue-600 to-indigo-600 text-lg px-8 py-6 hover:scale-105 transition-all duration-200 hover:shadow-xl hover:from-blue-700 hover:to-indigo-700 border-2 border-transparent hover:border-blue-300"
+              onClick={onFreeTrial}
+              className="bg-gradient-to-r from-green-600 to-emerald-600 text-lg px-8 py-6 hover:scale-105 transition-all duration-200 hover:shadow-xl hover:from-green-700 hover:to-emerald-700 border-2 border-transparent hover:border-green-300"
             >
-              Start Analyzing Free
+              <Sparkles className="w-5 h-5 mr-2" />
+              Try Free - No Sign-up
               <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform duration-200" />
+            </Button>
+            <Button 
+              size="lg" 
+              variant="outline"
+              onClick={onGetStarted}
+              className="text-lg px-8 py-6 hover:scale-105 transition-all duration-200 border-2 border-blue-200 hover:border-blue-400 hover:bg-blue-50"
+            >
+              Sign Up for Full Access
             </Button>
           </div>
 
@@ -653,24 +662,42 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
           </p>
           
           <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-2xl p-8 border border-blue-100 mb-8">
-            <div className="grid md:grid-cols-3 gap-6 text-center">
-              <div className="bg-white rounded-lg p-6 shadow-sm">
-                <h3 className="font-bold text-lg text-slate-900 mb-2">Free Tier</h3>
-                <div className="text-2xl font-bold text-green-600 mb-2">$0</div>
-                <div className="text-sm text-slate-600">3 analyses • 10MB uploads</div>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 text-center">
+              <div className="bg-white rounded-lg p-4 shadow-sm border-2 border-green-200">
+                <h3 className="font-bold text-sm text-slate-900 mb-1">Free Trial</h3>
+                <div className="text-xl font-bold text-green-600 mb-1">$0</div>
+                <div className="text-xs text-slate-600">1 analysis • No sign-up</div>
               </div>
               
-              <div className="bg-white rounded-lg p-6 shadow-sm border-2 border-blue-500">
-                <h3 className="font-bold text-lg text-slate-900 mb-2">Professional</h3>
-                <div className="text-2xl font-bold text-blue-600 mb-2">$49/month</div>
-                <div className="text-sm text-slate-600">Unlimited analyses • 500MB</div>
-                <Badge className="mt-2 bg-blue-600">Recommended</Badge>
+              <div className="bg-white rounded-lg p-4 shadow-sm">
+                <h3 className="font-bold text-sm text-slate-900 mb-1">Starter</h3>
+                <div className="text-xl font-bold text-blue-600 mb-1">$5/mo</div>
+                <div className="text-xs text-slate-600">5 analyses • 10MB</div>
               </div>
               
-              <div className="bg-white rounded-lg p-6 shadow-sm">
-                <h3 className="font-bold text-lg text-slate-900 mb-2">Enterprise</h3>
-                <div className="text-2xl font-bold text-purple-600 mb-2">$299/month</div>
-                <div className="text-sm text-slate-600">Unlimited everything</div>
+              <div className="bg-white rounded-lg p-4 shadow-sm border-2 border-blue-500">
+                <h3 className="font-bold text-sm text-slate-900 mb-1">Basic</h3>
+                <div className="text-xl font-bold text-blue-600 mb-1">$15/mo</div>
+                <div className="text-xs text-slate-600">10 analyses • 15MB</div>
+                <Badge className="mt-1 bg-blue-600 text-xs">Popular</Badge>
+              </div>
+              
+              <div className="bg-white rounded-lg p-4 shadow-sm">
+                <h3 className="font-bold text-sm text-slate-900 mb-1">Professional</h3>
+                <div className="text-xl font-bold text-purple-600 mb-1">$20/mo</div>
+                <div className="text-xs text-slate-600">10 files • 40MB</div>
+              </div>
+              
+              <div className="bg-white rounded-lg p-4 shadow-sm">
+                <h3 className="font-bold text-sm text-slate-900 mb-1">Premium</h3>
+                <div className="text-xl font-bold text-indigo-600 mb-1">$50/mo</div>
+                <div className="text-xs text-slate-600">Unlimited • Complex</div>
+              </div>
+              
+              <div className="bg-white rounded-lg p-4 shadow-sm">
+                <h3 className="font-bold text-sm text-slate-900 mb-1">Enterprise</h3>
+                <div className="text-xl font-bold text-slate-600 mb-1">Quote</div>
+                <div className="text-xs text-slate-600">Custom solution</div>
               </div>
             </div>
           </div>
