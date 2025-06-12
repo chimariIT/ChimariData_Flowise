@@ -95,6 +95,13 @@ function App() {
           <ExpertConsultation onBack={() => setLocation("/")} />
         )}
         
+        {location === "/pricing" && (
+          <PricingPage 
+            onGetStarted={() => setLocation("/auth")}
+            onSubscribe={(tier) => setLocation("/auth")}
+          />
+        )}
+        
         {user && location === "/dashboard" && (
           <Dashboard 
             user={user} 
@@ -117,13 +124,6 @@ function App() {
           <SettingsPage 
             onBack={() => setLocation("/dashboard")}
             onPricing={() => setLocation("/pricing")}
-          />
-        )}
-        
-        {user && location === "/pricing" && (
-          <PricingPage 
-            onGetStarted={() => setLocation("/dashboard")}
-            onSubscribe={(tier) => setLocation("/subscribe")}
           />
         )}
         

@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { CheckCircle, ArrowRight, Sparkles, Users, Shield, Zap } from "lucide-react";
+import { CheckCircle, ArrowRight, Sparkles, Users, Shield, Zap, ArrowLeft } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 
 interface PricingTier {
@@ -26,9 +26,10 @@ interface PricingTier {
 interface PricingPageProps {
   onGetStarted: () => void;
   onSubscribe?: (tier: string) => void;
+  onBack?: () => void;
 }
 
-export default function PricingPage({ onGetStarted, onSubscribe }: PricingPageProps) {
+export default function PricingPage({ onGetStarted, onSubscribe, onBack }: PricingPageProps) {
   const [isVisible, setIsVisible] = useState(false);
   const [billingCycle, setBillingCycle] = useState<'monthly' | 'yearly'>('monthly');
 
