@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { CheckCircle, ArrowRight, Sparkles, Users, Shield, Zap, ArrowLeft } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "wouter";
 
 interface PricingTier {
   name: string;
@@ -185,11 +186,18 @@ export default function PricingPage({ onGetStarted, onSubscribe, onBack }: Prici
                     
                     <div className="mb-4">
                       <div className="text-4xl font-bold text-slate-900">
-                        {tier.price === 0 ? 'Free' : `$${displayPrice}`}
+                        {tier.price === 0 ? 'Free' : 
+                         tier.price === -1 ? 'Custom' : 
+                         `$${displayPrice}`}
                       </div>
-                      {tier.price > 0 && (
+                      {tier.price > 0 && tier.price !== -1 && (
                         <div className="text-slate-600">
                           {billingCycle === 'yearly' ? '/year' : '/month'}
+                        </div>
+                      )}
+                      {tier.price === -1 && (
+                        <div className="text-slate-600">
+                          Contact for quote
                         </div>
                       )}
                     </div>
@@ -226,19 +234,28 @@ export default function PricingPage({ onGetStarted, onSubscribe, onBack }: Prici
                       </div>
                     </div>
 
-                    <Button 
-                      onClick={() => tier.price === 0 ? onGetStarted() : onSubscribe?.(tier.name)}
-                      className={`w-full ${
-                        tier.recommended 
-                          ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:shadow-lg' 
-                          : tier.price === 0
-                            ? 'bg-green-600 hover:bg-green-700'
-                            : 'bg-slate-900 hover:bg-slate-800'
-                      }`}
-                    >
-                      {tier.price === 0 ? 'Get Started Free' : 'Choose Plan'}
-                      <ArrowRight className="w-4 h-4 ml-2" />
-                    </Button>
+                    {tier.price === -1 ? (
+                      <Button asChild className="w-full bg-purple-600 hover:bg-purple-700">
+                        <Link href="/enterprise-contact">
+                          Contact for Quote
+                          <ArrowRight className="w-4 h-4 ml-2" />
+                        </Link>
+                      </Button>
+                    ) : (
+                      <Button 
+                        onClick={() => tier.price === 0 ? onGetStarted() : onSubscribe?.(tier.name)}
+                        className={`w-full ${
+                          tier.recommended 
+                            ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:shadow-lg' 
+                            : tier.price === 0
+                              ? 'bg-green-600 hover:bg-green-700'
+                              : 'bg-slate-900 hover:bg-slate-800'
+                        }`}
+                      >
+                        {tier.price === 0 ? 'Get Started Free' : 'Choose Plan'}
+                        <ArrowRight className="w-4 h-4 ml-2" />
+                      </Button>
+                    )}
                   </CardContent>
                 </Card>
               );

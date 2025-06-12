@@ -1,0 +1,41 @@
+{
+  "summary": {
+    "total": 5,
+    "passed": 5,
+    "failed": 0,
+    "successRate": 100,
+    "timestamp": "2025-06-12T17:42:08.521Z"
+  },
+  "results": [
+    {
+      "test": "Enterprise Contact Page Access",
+      "status": "PASS",
+      "message": "Page accessible",
+      "timestamp": "2025-06-12T17:42:08.469Z"
+    },
+    {
+      "test": "Enterprise Inquiry Submission",
+      "status": "PASS",
+      "message": "Inquiry created with ID: 1",
+      "timestamp": "2025-06-12T17:42:08.511Z"
+    },
+    {
+      "test": "Inquiry Retrieval",
+      "status": "PASS",
+      "message": "Found submitted inquiry: Test Corp",
+      "timestamp": "2025-06-12T17:42:08.515Z"
+    },
+    {
+      "test": "Inquiry Data Integrity",
+      "status": "PASS",
+      "message": "All inquiry data properly stored",
+      "timestamp": "2025-06-12T17:42:08.515Z"
+    },
+    {
+      "test": "Enterprise Tier Configuration",
+      "status": "PASS",
+      "message": "Enterprise tier configured with quote pricing (-1)",
+      "timestamp": "2025-06-12T17:42:08.518Z"
+    }
+  ]
+}
