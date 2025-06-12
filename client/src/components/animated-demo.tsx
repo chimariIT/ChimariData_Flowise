@@ -24,6 +24,7 @@ import {
 
 interface AnimatedDemoProps {
   onGetStarted: () => void;
+  onBackHome?: () => void;
 }
 
 const steps = {
@@ -145,7 +146,7 @@ const insights = {
   ]
 };
 
-export default function AnimatedDemo({ onGetStarted }: AnimatedDemoProps) {
+export default function AnimatedDemo({ onGetStarted, onBackHome }: AnimatedDemoProps) {
   const [activeDemo, setActiveDemo] = useState<"dataToInsights" | "aiRecommendations" | null>(null);
   const [currentStep, setCurrentStep] = useState(0);
   const [progress, setProgress] = useState(0);
@@ -298,7 +299,7 @@ export default function AnimatedDemo({ onGetStarted }: AnimatedDemoProps) {
             </div>
             <Button 
               variant="outline" 
-              onClick={() => window.location.href = "/"}
+              onClick={onBackHome || (() => window.location.href = "/")}
               className="flex items-center gap-2"
             >
               <Home className="w-4 h-4" />

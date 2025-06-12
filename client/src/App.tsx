@@ -75,28 +75,7 @@ function App() {
         )}
         
         {location === "/demo" && (
-          <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
-            <div className="border-b bg-white/80 backdrop-blur-sm">
-              <div className="container mx-auto px-4 py-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-3">
-                    <div className="w-8 h-8 bg-primary rounded" />
-                    <div>
-                      <h1 className="text-2xl font-bold text-slate-900">ChimariData+AI</h1>
-                      <p className="text-sm text-slate-600">Interactive Demo</p>
-                    </div>
-                  </div>
-                  <button 
-                    onClick={() => setLocation("/")}
-                    className="px-4 py-2 border border-gray-300 rounded-md text-sm hover:bg-gray-50"
-                  >
-                    Back to Home
-                  </button>
-                </div>
-              </div>
-            </div>
-            <AnimatedDemo onGetStarted={() => setLocation("/auth")} />
-          </div>
+          <AnimatedDemo onGetStarted={() => setLocation("/auth")} onBackHome={() => setLocation("/")} />
         )}
         
         {location === "/auth" && (
