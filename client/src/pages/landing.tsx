@@ -891,20 +891,28 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
         
         <div className={`max-w-4xl mx-auto text-center transition-all duration-1000 ${isVisible ? 'opacity-100' : 'opacity-0'}`}>
           <h2 className={`text-4xl font-bold text-white mb-6 transition-all duration-700 ${isVisible ? 'translate-y-0 opacity-100' : 'translate-y-5 opacity-0'}`}>
-            Ready to Transform Your Data Into Insights?
+            Ready to Analyze Your Data?
           </h2>
           <p className={`text-xl text-blue-100 mb-8 transition-all duration-700 delay-200 ${isVisible ? 'translate-y-0 opacity-100' : 'translate-y-5 opacity-0'}`}>
-            Join thousands of teams who've discovered the power of conversational data analysis.
+            Get professional insights in minutes, not hours. No monthly commitment required.
           </p>
           
           <div className={`flex flex-col sm:flex-row gap-4 justify-center mb-8 transition-all duration-700 delay-400 ${isVisible ? 'translate-y-0 opacity-100' : 'translate-y-5 opacity-0'}`}>
             <Button 
               size="lg" 
+              onClick={onPayPerAnalysis}
+              className="bg-white text-orange-600 hover:bg-slate-50 text-lg px-8 py-6 hover:scale-110 transition-all duration-300 hover:shadow-2xl animate-glow"
+            >
+              Start $25 Analysis
+              <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform duration-200" />
+            </Button>
+            <Button 
+              size="lg" 
               onClick={onGetStarted}
-              className="bg-white text-blue-600 hover:bg-slate-50 text-lg px-8 py-6 hover:scale-110 transition-all duration-300 hover:shadow-2xl animate-glow"
+              variant="outline"
+              className="border-white text-white hover:bg-white hover:text-blue-600 text-lg px-8 py-6 hover:scale-110 transition-all duration-300"
             >
               Start Free Trial
-              <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform duration-200" />
             </Button>
           </div>
 
