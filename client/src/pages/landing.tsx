@@ -758,7 +758,7 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
       <section id="pricing" className="py-20 px-4 sm:px-6 lg:px-8 bg-white">
         <div className="max-w-4xl mx-auto text-center">
           <h2 className="text-3xl md:text-4xl font-bold text-slate-900 mb-4">
-            Three-Tier Pricing System
+            Tiered Pricing Model
           </h2>
           <p className="text-xl text-slate-600 mb-8">
             From free exploration to enterprise solutions - we have the right plan for every data need
@@ -923,7 +923,7 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
             </div>
             <div className="flex items-center hover:scale-105 transition-transform duration-200">
               <CheckCircle className="w-5 h-5 mr-2 animate-pulse" style={{animationDelay: '0.5s'}} />
-              <span>50 free queries</span>
+              <span>up to 50 free queries</span>
             </div>
             <div className="flex items-center hover:scale-105 transition-transform duration-200">
               <CheckCircle className="w-5 h-5 mr-2 animate-pulse" style={{animationDelay: '1s'}} />

@@ -258,14 +258,14 @@ export default function PayPerAnalysis({ onBack }: PayPerAnalysisProps) {
   ];
 
   const pricingComparison = [
-    { feature: "Data Upload", payper: "✓", starter: "✓", basic: "✓" },
-    { feature: "AI Analysis", payper: "✓", starter: "✓", basic: "✓" },
-    { feature: "Visual Reports", payper: "✓", starter: "✓", basic: "✓" },
-    { feature: "Download Results", payper: "✓", starter: "✓", basic: "✓" },
-    { feature: "Monthly Analyses", payper: "1 analysis", starter: "5 analyses", basic: "10 analyses" },
-    { feature: "File Size Limit", payper: "50MB", starter: "10MB", basic: "15MB" },
-    { feature: "Priority Support", payper: "Standard", starter: "Standard", basic: "Priority" },
-    { feature: "Cost", payper: "$25 one-time", starter: "$5/month", basic: "$15/month" }
+    { feature: "Data Upload", freetrial: "✓", payper: "✓", starter: "✓", basic: "✓" },
+    { feature: "AI Analysis", freetrial: "✓", payper: "✓", starter: "✓", basic: "✓" },
+    { feature: "Visual Reports", freetrial: "Basic", payper: "✓", starter: "✓", basic: "✓" },
+    { feature: "Download Results", freetrial: "✓", payper: "✓", starter: "✓", basic: "✓" },
+    { feature: "Monthly Analyses", freetrial: "1 trial", payper: "1 analysis", starter: "5 analyses", basic: "10 analyses" },
+    { feature: "File Size Limit", freetrial: "10MB", payper: "50MB", starter: "10MB", basic: "15MB" },
+    { feature: "Priority Support", freetrial: "Community", payper: "Standard", starter: "Standard", basic: "Priority" },
+    { feature: "Cost", freetrial: "Free", payper: "$25 one-time", starter: "$5/month", basic: "$15/month" }
   ];
 
   return (
@@ -722,6 +722,7 @@ export default function PayPerAnalysis({ onBack }: PayPerAnalysisProps) {
               <thead>
                 <tr className="bg-slate-50">
                   <th className="text-left p-4 font-semibold text-slate-900">Feature</th>
+                  <th className="text-center p-4 font-semibold text-green-600">Free Trial</th>
                   <th className="text-center p-4 font-semibold text-orange-600">Pay-per-Analysis</th>
                   <th className="text-center p-4 font-semibold text-blue-600">Starter Plan</th>
                   <th className="text-center p-4 font-semibold text-blue-600">Basic Plan</th>
