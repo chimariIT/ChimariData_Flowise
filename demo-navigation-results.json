@@ -1,46 +1,34 @@
 {
   "summary": {
-    "passed": 6,
+    "passed": 3,
     "failed": 0,
-    "total": 6
+    "partial": 1
   },
-  "tests": [
+  "timestamp": "2025-06-12T01:38:18.256Z",
+  "results": [
     {
-      "test": "Demo Route Configuration",
-      "status": "PASS",
-      "message": "Demo route properly configured in App.tsx",
-      "timestamp": "2025-06-12T00:47:07.793Z"
+      "test": "Landing Page Load",
+      "status": "PARTIAL",
+      "message": "Landing page loads but missing some elements",
+      "timestamp": "2025-06-12T01:38:18.246Z"
     },
     {
-      "test": "2-Minute Demo Button",
+      "test": "Demo Page Access",
       "status": "PASS",
-      "message": "New 2-minute demo button properly implemented",
-      "timestamp": "2025-06-12T00:47:07.794Z"
+      "message": "Demo route accessible and returns React app",
+      "timestamp": "2025-06-12T01:38:18.252Z"
     },
     {
-      "test": "Main Demo Button",
+      "test": "Demo Component Structure",
       "status": "PASS",
-      "message": "Main demo button properly implemented",
-      "timestamp": "2025-06-12T00:47:07.794Z"
+      "message": "Demo component properly structured",
+      "timestamp": "2025-06-12T01:38:18.253Z"
     },
     {
-      "test": "Play Icon Import",
+      "test": "Navigation Configuration",
       "status": "PASS",
-      "message": "Play icon properly imported",
-      "timestamp": "2025-06-12T00:47:07.794Z"
-    },
-    {
-      "test": "Demo Content",
-      "status": "PASS",
-      "message": "Demo component has proper content structure",
-      "timestamp": "2025-06-12T00:47:07.795Z"
-    },
-    {
-      "test": "Demo Navigation Props",
-      "status": "PASS",
-      "message": "Demo component has proper navigation props",
-      "timestamp": "2025-06-12T00:47:07.796Z"
+      "message": "Navigation properly configured",
+      "timestamp": "2025-06-12T01:38:18.254Z"
     }
-  ],
-  "timestamp": "2025-06-12T00:47:07.797Z"
+  ]
 }
