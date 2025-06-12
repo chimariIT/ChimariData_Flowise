@@ -90,7 +90,6 @@ function App() {
         {location === "/pay-per-analysis" && (
           <PayPerAnalysis 
             onBack={() => setLocation("/")} 
-            onLogin={() => setLocation("/auth")} 
           />
         )}
         

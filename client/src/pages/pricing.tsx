@@ -28,6 +28,8 @@ interface PricingPageProps {
   onGetStarted: () => void;
   onSubscribe?: (tier: string) => void;
   onBack?: () => void;
+  onPayPerAnalysis?: () => void;
+  onExpertConsultation?: () => void;
 }
 
 export default function PricingPage({ onGetStarted, onSubscribe, onBack }: PricingPageProps) {
@@ -260,6 +262,110 @@ export default function PricingPage({ onGetStarted, onSubscribe, onBack }: Prici
                 </Card>
               );
             })}
+          </div>
+
+          {/* Special Services Section */}
+          <div className="mt-16">
+            <div className="text-center mb-8">
+              <h2 className="text-2xl font-bold text-slate-900 mb-2">
+                Additional Services
+              </h2>
+              <p className="text-slate-600">
+                Professional options for one-time analysis and expert guidance
+              </p>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
+              <Card className="border-2 border-orange-200 bg-gradient-to-br from-orange-50 to-red-50">
+                <CardHeader>
+                  <div className="flex items-center space-x-3">
+                    <div className="w-12 h-12 bg-orange-100 rounded-lg flex items-center justify-center">
+                      <div className="w-6 h-6 bg-orange-600 rounded flex items-center justify-center">
+                        <span className="text-white text-sm font-bold">$</span>
+                      </div>
+                    </div>
+                    <div>
+                      <CardTitle className="text-xl text-slate-900">Pay-per-Analysis</CardTitle>
+                      <div className="text-2xl font-bold text-orange-600">$25</div>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <CardDescription className="text-slate-700 mb-4">
+                    Perfect for one-time insights without monthly commitment. Upload your data, get comprehensive analysis and actionable recommendations.
+                  </CardDescription>
+                  <div className="space-y-2 mb-6">
+                    <div className="flex items-center text-sm text-slate-600">
+                      <CheckCircle className="w-4 h-4 text-green-600 mr-2" />
+                      Complete data analysis
+                    </div>
+                    <div className="flex items-center text-sm text-slate-600">
+                      <CheckCircle className="w-4 h-4 text-green-600 mr-2" />
+                      AI-powered insights
+                    </div>
+                    <div className="flex items-center text-sm text-slate-600">
+                      <CheckCircle className="w-4 h-4 text-green-600 mr-2" />
+                      Visual reports & charts
+                    </div>
+                    <div className="flex items-center text-sm text-slate-600">
+                      <CheckCircle className="w-4 h-4 text-green-600 mr-2" />
+                      Downloadable results
+                    </div>
+                  </div>
+                  <Button 
+                    onClick={onPayPerAnalysis}
+                    className="w-full bg-orange-600 hover:bg-orange-700"
+                  >
+                    Start Analysis ($25)
+                    <ArrowRight className="w-4 h-4 ml-2" />
+                  </Button>
+                </CardContent>
+              </Card>
+
+              <Card className="border-2 border-purple-200 bg-gradient-to-br from-purple-50 to-indigo-50">
+                <CardHeader>
+                  <div className="flex items-center space-x-3">
+                    <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
+                      <Users className="w-6 h-6 text-purple-600" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-xl text-slate-900">Expert Consultation</CardTitle>
+                      <div className="text-2xl font-bold text-purple-600">$150</div>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <CardDescription className="text-slate-700 mb-4">
+                    1-hour session with our data science experts. Get strategic guidance, data interpretation, and implementation roadmaps.
+                  </CardDescription>
+                  <div className="space-y-2 mb-6">
+                    <div className="flex items-center text-sm text-slate-600">
+                      <CheckCircle className="w-4 h-4 text-green-600 mr-2" />
+                      60-minute video call
+                    </div>
+                    <div className="flex items-center text-sm text-slate-600">
+                      <CheckCircle className="w-4 h-4 text-green-600 mr-2" />
+                      Data strategy planning
+                    </div>
+                    <div className="flex items-center text-sm text-slate-600">
+                      <CheckCircle className="w-4 h-4 text-green-600 mr-2" />
+                      Custom recommendations
+                    </div>
+                    <div className="flex items-center text-sm text-slate-600">
+                      <CheckCircle className="w-4 h-4 text-green-600 mr-2" />
+                      Follow-up summary
+                    </div>
+                  </div>
+                  <Button 
+                    onClick={onExpertConsultation}
+                    className="w-full bg-purple-600 hover:bg-purple-700"
+                  >
+                    Book Consultation ($150)
+                    <ArrowRight className="w-4 h-4 ml-2" />
+                  </Button>
+                </CardContent>
+              </Card>
+            </div>
           </div>
         </div>
       </section>

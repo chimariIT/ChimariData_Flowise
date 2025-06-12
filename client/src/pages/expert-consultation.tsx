@@ -1,598 +1,402 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Checkbox } from "@/components/ui/checkbox";
-import { useToast } from "@/hooks/use-toast";
+import { Label } from "@/components/ui/label";
 import { 
-  Brain, 
-  Users, 
+  ArrowLeft, 
   CheckCircle, 
-  ArrowRight,
+  Users, 
+  Clock, 
+  Video,
+  FileText,
   Calendar,
-  Clock,
+  ArrowRight,
   Star,
-  Zap,
-  Target,
-  TrendingUp,
-  BarChart3
+  MessageSquare
 } from "lucide-react";
+import { Link } from "wouter";
 
 interface ExpertConsultationProps {
   onBack: () => void;
 }
 
 export default function ExpertConsultation({ onBack }: ExpertConsultationProps) {
-  const [formData, setFormData] = useState({
-    // Contact Information
-    name: '',
-    email: '',
-    company: '',
-    jobTitle: '',
-    phone: '',
-    
-    // Project Details
-    projectDescription: '',
-    dataType: '',
-    dataSources: [] as string[],
-    dataVolume: '',
-    currentChallenges: '',
-    
-    // AI Requirements
-    analysisGoals: '',
-    specificAINeeds: [] as string[],
-    timeframe: '',
-    budget: '',
-    
-    // Consultation Preferences
-    consultationType: 'strategy',
-    urgency: 'standard',
-    preferredTime: '',
-    additionalNotes: ''
-  });
+  const [bookingStep, setBookingStep] = useState(1);
 
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isSubmitted, setIsSubmitted] = useState(false);
-  const { toast } = useToast();
-
-  const dataTypes = [
-    'Sales & Revenue Data',
-    'Customer Data & Analytics',
-    'Marketing Campaign Data',
-    'Financial & Accounting Data',
-    'Operations & Supply Chain',
-    'HR & Employee Data',
-    'Product & Inventory Data',
-    'Web & App Analytics',
-    'IoT & Sensor Data',
-    'Research & Survey Data',
-    'Other'
+  const consultationFeatures = [
+    {
+      icon: Video,
+      title: "1-Hour Video Session",
+      description: "Face-to-face consultation with senior data scientists"
+    },
+    {
+      icon: FileText,
+      title: "Custom Strategy",
+      description: "Tailored data strategy and implementation roadmap"
+    },
+    {
+      icon: MessageSquare,
+      title: "Expert Guidance",
+      description: "Professional interpretation of your data insights"
+    },
+    {
+      icon: CheckCircle,
+      title: "Follow-up Summary",
+      description: "Detailed written summary with actionable recommendations"
+    }
   ];
 
-  const aiNeeds = [
-    'Predictive Analytics',
-    'Customer Segmentation',
-    'Anomaly Detection',
-    'Natural Language Processing',
-    'Computer Vision',
-    'Recommendation Systems',
-    'Fraud Detection',
-    'Demand Forecasting',
-    'Price Optimization',
-    'Risk Assessment',
-    'Automation & Process Mining',
-    'Real-time Analytics'
+  const expertProfiles = [
+    {
+      name: "Dr. Sarah Chen",
+      title: "Senior Data Scientist",
+      experience: "15+ years",
+      specialties: ["Machine Learning", "Predictive Analytics", "Business Intelligence"],
+      image: "https://images.unsplash.com/photo-1494790108755-2616b612b47c?w=150&h=150&fit=crop&crop=face"
+    },
+    {
+      name: "Michael Rodriguez",
+      title: "AI Strategy Consultant", 
+      experience: "12+ years",
+      specialties: ["AI Implementation", "Data Architecture", "ROI Optimization"],
+      image: "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150&h=150&fit=crop&crop=face"
+    },
+    {
+      name: "Dr. Emily Wang",
+      title: "Analytics Director",
+      experience: "18+ years",
+      specialties: ["Statistical Analysis", "Research Design", "Data Visualization"],
+      image: "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=150&h=150&fit=crop&crop=face"
+    }
   ];
 
-  const consultationTypes = [
+  const consultationProcess = [
     { 
-      id: 'strategy', 
-      name: 'AI Strategy Consultation', 
-      description: 'High-level AI roadmap and implementation strategy',
-      duration: '90 minutes',
-      price: '$299'
+      step: 1, 
+      title: "Book Session", 
+      description: "Choose your preferred time and expert",
+      icon: Calendar 
     },
     { 
-      id: 'technical', 
-      name: 'Technical Deep Dive', 
-      description: 'Detailed technical assessment and solution design',
-      duration: '2 hours',
-      price: '$499'
+      step: 2, 
+      title: "Preparation", 
+      description: "Share your data challenges and objectives",
+      icon: FileText 
     },
     { 
-      id: 'implementation', 
-      name: 'Implementation Planning', 
-      description: 'Step-by-step implementation plan with timeline',
-      duration: '3 hours',
-      price: '$799'
+      step: 3, 
+      title: "Consultation", 
+      description: "60-minute video call with your expert",
+      icon: Video 
+    },
+    { 
+      step: 4, 
+      title: "Follow-up", 
+      description: "Receive detailed summary and action plan",
+      icon: CheckCircle 
     }
   ];
 
-  const urgencyOptions = [
-    { id: 'standard', name: 'Standard (5-7 days)', price: '+$0' },
-    { id: 'priority', name: 'Priority (2-3 days)', price: '+$149' },
-    { id: 'urgent', name: 'Urgent (24 hours)', price: '+$299' }
+  const useCases = [
+    {
+      title: "Data Strategy Planning",
+      description: "Define comprehensive data strategy for your organization",
+      duration: "Perfect for: New data initiatives"
+    },
+    {
+      title: "Analysis Interpretation", 
+      description: "Deep dive into your existing data analysis results",
+      duration: "Perfect for: Complex datasets"
+    },
+    {
+      title: "Implementation Guidance",
+      description: "Step-by-step guidance for implementing data solutions",
+      duration: "Perfect for: Technical teams"
+    },
+    {
+      title: "ROI Optimization",
+      description: "Maximize return on investment from your data projects",
+      duration: "Perfect for: Business leaders"
+    }
   ];
-
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
-  };
-
-  const handleSelectChange = (name: string, value: string) => {
-    setFormData(prev => ({ ...prev, [name]: value }));
-  };
-
-  const handleMultiSelectChange = (name: string, value: string, checked: boolean) => {
-    setFormData(prev => ({
-      ...prev,
-      [name]: checked 
-        ? [...(prev[name as keyof typeof prev] as string[]), value]
-        : (prev[name as keyof typeof prev] as string[]).filter(item => item !== value)
-    }));
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!formData.name || !formData.email || !formData.projectDescription) {
-      toast({
-        title: "Error",
-        description: "Please fill in all required fields",
-        variant: "destructive"
-      });
-      return;
-    }
-
-    setIsSubmitting(true);
-
-    try {
-      // Send consultation request via email
-      const consultationData = {
-        ...formData,
-        submittedAt: new Date().toISOString(),
-        consultationDetails: consultationTypes.find(c => c.id === formData.consultationType),
-        urgencyDetails: urgencyOptions.find(u => u.id === formData.urgency)
-      };
-
-      // Create email content
-      const emailBody = `
-New Expert Consultation Request
-
-CONTACT INFORMATION:
-Name: ${formData.name}
-Email: ${formData.email}
-Company: ${formData.company}
-Job Title: ${formData.jobTitle}
-Phone: ${formData.phone}
-
-PROJECT DETAILS:
-Description: ${formData.projectDescription}
-Data Type: ${formData.dataType}
-Data Volume: ${formData.dataVolume}
-Current Challenges: ${formData.currentChallenges}
-
-AI REQUIREMENTS:
-Analysis Goals: ${formData.analysisGoals}
-Specific AI Needs: ${formData.specificAINeeds.join(', ')}
-Timeframe: ${formData.timeframe}
-Budget: ${formData.budget}
-
-CONSULTATION PREFERENCES:
-Type: ${consultationTypes.find(c => c.id === formData.consultationType)?.name}
-Urgency: ${urgencyOptions.find(u => u.id === formData.urgency)?.name}
-Preferred Time: ${formData.preferredTime}
-Additional Notes: ${formData.additionalNotes}
-      `.trim();
-
-      // Open email client
-      const mailto = `mailto:sales@chimaridata.com?subject=Expert Consultation Request - ${formData.name}&body=${encodeURIComponent(emailBody)}`;
-      window.location.href = mailto;
-
-      setIsSubmitted(true);
-      
-      toast({
-        title: "Consultation Request Sent",
-        description: "We'll contact you within 24 hours to schedule your consultation",
-      });
-
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to submit consultation request. Please try again.",
-        variant: "destructive"
-      });
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  if (isSubmitted) {
-    return (
-      <div className="min-h-screen bg-slate-50">
-        {/* Header */}
-        <nav className="bg-white shadow-sm border-b">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex justify-between items-center h-16">
-              <div className="flex items-center space-x-3">
-                <Button variant="ghost" onClick={onBack}>
-                  ← Back
-                </Button>
-                <div className="flex items-center space-x-2">
-                  <Brain className="w-6 h-6 text-blue-600" />
-                  <span className="text-xl font-bold text-slate-900">Expert Consultation</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </nav>
-
-        <div className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-16 text-center">
-          <div className="bg-green-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6">
-            <CheckCircle className="w-8 h-8 text-green-600" />
-          </div>
-          
-          <h1 className="text-3xl font-bold text-slate-900 mb-4">
-            Consultation Request Submitted
-          </h1>
-          
-          <p className="text-lg text-slate-600 mb-8">
-            Thank you for your interest in our expert consultation services. We've received your request and will contact you within 24 hours to schedule your consultation.
-          </p>
-
-          <div className="bg-white rounded-lg p-6 shadow-sm border mb-8">
-            <h3 className="font-semibold text-slate-900 mb-4">What happens next?</h3>
-            <div className="space-y-3 text-left">
-              <div className="flex items-start space-x-3">
-                <div className="w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <span className="text-xs font-bold text-blue-600">1</span>
-                </div>
-                <div>
-                  <div className="font-medium text-slate-900">Review & Contact</div>
-                  <div className="text-sm text-slate-600">Our experts will review your request and contact you to discuss details</div>
-                </div>
-              </div>
-              
-              <div className="flex items-start space-x-3">
-                <div className="w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <span className="text-xs font-bold text-blue-600">2</span>
-                </div>
-                <div>
-                  <div className="font-medium text-slate-900">Schedule Consultation</div>
-                  <div className="text-sm text-slate-600">We'll find a time that works for your schedule and preferences</div>
-                </div>
-              </div>
-              
-              <div className="flex items-start space-x-3">
-                <div className="w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <span className="text-xs font-bold text-blue-600">3</span>
-                </div>
-                <div>
-                  <div className="font-medium text-slate-900">Expert Session</div>
-                  <div className="text-sm text-slate-600">Detailed consultation with actionable recommendations</div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <Button onClick={onBack} variant="outline">
-            Return to Home
-          </Button>
-        </div>
-      </div>
-    );
-  }
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-purple-50">
       {/* Header */}
-      <nav className="bg-white shadow-sm border-b">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-3">
-              <Button variant="ghost" onClick={onBack}>
-                ← Back
-              </Button>
-              <div className="flex items-center space-x-2">
-                <Brain className="w-6 h-6 text-blue-600" />
-                <span className="text-xl font-bold text-slate-900">Expert Consultation</span>
+      <div className="bg-white shadow-sm border-b">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex items-center justify-between">
+            <Button
+              variant="ghost"
+              onClick={onBack}
+              className="flex items-center text-slate-600 hover:text-slate-900"
+            >
+              <ArrowLeft className="w-4 h-4 mr-2" />
+              Back
+            </Button>
+            <div className="flex items-center space-x-2">
+              <div className="w-8 h-8 bg-purple-600 rounded flex items-center justify-center">
+                <Users className="w-5 h-5 text-white" />
               </div>
-            </div>
-            <div className="text-sm text-slate-600">
-              Get personalized AI strategy from our experts
+              <span className="font-semibold text-slate-900">Expert Consultation</span>
             </div>
           </div>
         </div>
-      </nav>
-
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Hero Section */}
-        <div className="text-center mb-12">
-          <h1 className="text-3xl font-bold text-slate-900 mb-4">
-            Consult with Our AI Experts
-          </h1>
-          <p className="text-xl text-slate-600 max-w-3xl mx-auto">
-            Get personalized guidance on your AI and data strategy from seasoned professionals with 20+ years of experience
-          </p>
-        </div>
-
-        {/* Consultation Types */}
-        <div className="grid md:grid-cols-3 gap-6 mb-12">
-          {consultationTypes.map((type) => (
-            <Card 
-              key={type.id}
-              className={`cursor-pointer transition-all hover:shadow-lg ${
-                formData.consultationType === type.id ? 'ring-2 ring-blue-500 bg-blue-50' : ''
-              }`}
-              onClick={() => handleSelectChange('consultationType', type.id)}
-            >
-              <CardHeader className="text-center">
-                <CardTitle className="text-lg">{type.name}</CardTitle>
-                <div className="text-2xl font-bold text-blue-600">{type.price}</div>
-                <CardDescription>{type.description}</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="text-center">
-                  <div className="flex items-center justify-center text-sm text-slate-600">
-                    <Clock className="w-4 h-4 mr-1" />
-                    {type.duration}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-
-        {/* Form */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Consultation Request Form</CardTitle>
-            <CardDescription>
-              Tell us about your project and AI needs so we can provide the most relevant consultation
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-8">
-              {/* Contact Information */}
-              <div>
-                <h3 className="text-lg font-semibold text-slate-900 mb-4">Contact Information</h3>
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div>
-                    <Label htmlFor="name">Full Name *</Label>
-                    <Input
-                      id="name"
-                      name="name"
-                      value={formData.name}
-                      onChange={handleInputChange}
-                      required
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="email">Email Address *</Label>
-                    <Input
-                      id="email"
-                      name="email"
-                      type="email"
-                      value={formData.email}
-                      onChange={handleInputChange}
-                      required
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="company">Company</Label>
-                    <Input
-                      id="company"
-                      name="company"
-                      value={formData.company}
-                      onChange={handleInputChange}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="jobTitle">Job Title</Label>
-                    <Input
-                      id="jobTitle"
-                      name="jobTitle"
-                      value={formData.jobTitle}
-                      onChange={handleInputChange}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="phone">Phone Number</Label>
-                    <Input
-                      id="phone"
-                      name="phone"
-                      type="tel"
-                      value={formData.phone}
-                      onChange={handleInputChange}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* Project Details */}
-              <div>
-                <h3 className="text-lg font-semibold text-slate-900 mb-4">Project Details</h3>
-                <div className="space-y-4">
-                  <div>
-                    <Label htmlFor="projectDescription">Project Description *</Label>
-                    <Textarea
-                      id="projectDescription"
-                      name="projectDescription"
-                      placeholder="Describe your current project, business goals, and what you're trying to achieve with AI"
-                      rows={4}
-                      value={formData.projectDescription}
-                      onChange={handleInputChange}
-                      required
-                    />
-                  </div>
-                  
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <div>
-                      <Label htmlFor="dataType">Primary Data Type</Label>
-                      <Select value={formData.dataType} onValueChange={(value) => handleSelectChange('dataType', value)}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select data type" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {dataTypes.map((type) => (
-                            <SelectItem key={type} value={type}>{type}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    
-                    <div>
-                      <Label htmlFor="dataVolume">Data Volume</Label>
-                      <Select value={formData.dataVolume} onValueChange={(value) => handleSelectChange('dataVolume', value)}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select data volume" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="small">Small (&lt; 1GB)</SelectItem>
-                          <SelectItem value="medium">Medium (1GB - 100GB)</SelectItem>
-                          <SelectItem value="large">Large (100GB - 1TB)</SelectItem>
-                          <SelectItem value="enterprise">Enterprise (&gt; 1TB)</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-
-                  <div>
-                    <Label htmlFor="currentChallenges">Current Challenges</Label>
-                    <Textarea
-                      id="currentChallenges"
-                      name="currentChallenges"
-                      placeholder="What are the main challenges you're facing with your data or current analytics approach?"
-                      rows={3}
-                      value={formData.currentChallenges}
-                      onChange={handleInputChange}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* AI Requirements */}
-              <div>
-                <h3 className="text-lg font-semibold text-slate-900 mb-4">AI & Analytics Requirements</h3>
-                <div className="space-y-4">
-                  <div>
-                    <Label htmlFor="analysisGoals">Analysis Goals</Label>
-                    <Textarea
-                      id="analysisGoals"
-                      name="analysisGoals"
-                      placeholder="What specific insights or outcomes are you hoping to achieve?"
-                      rows={3}
-                      value={formData.analysisGoals}
-                      onChange={handleInputChange}
-                    />
-                  </div>
-
-                  <div>
-                    <Label>Specific AI Needs (Select all that apply)</Label>
-                    <div className="grid md:grid-cols-3 gap-3 mt-2">
-                      {aiNeeds.map((need) => (
-                        <div key={need} className="flex items-center space-x-2">
-                          <Checkbox
-                            id={need}
-                            checked={formData.specificAINeeds.includes(need)}
-                            onCheckedChange={(checked) => handleMultiSelectChange('specificAINeeds', need, !!checked)}
-                          />
-                          <Label htmlFor={need} className="text-sm">{need}</Label>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <div>
-                      <Label htmlFor="timeframe">Project Timeframe</Label>
-                      <Select value={formData.timeframe} onValueChange={(value) => handleSelectChange('timeframe', value)}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select timeframe" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="immediate">Immediate (&lt; 1 month)</SelectItem>
-                          <SelectItem value="short">Short-term (1-3 months)</SelectItem>
-                          <SelectItem value="medium">Medium-term (3-6 months)</SelectItem>
-                          <SelectItem value="long">Long-term (6+ months)</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    
-                    <div>
-                      <Label htmlFor="budget">Estimated Budget Range</Label>
-                      <Select value={formData.budget} onValueChange={(value) => handleSelectChange('budget', value)}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select budget range" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="startup">Startup (&lt; $10K)</SelectItem>
-                          <SelectItem value="small">Small Business ($10K - $50K)</SelectItem>
-                          <SelectItem value="medium">Medium Business ($50K - $200K)</SelectItem>
-                          <SelectItem value="enterprise">Enterprise ($200K+)</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Consultation Preferences */}
-              <div>
-                <h3 className="text-lg font-semibold text-slate-900 mb-4">Consultation Preferences</h3>
-                <div className="space-y-4">
-                  <div>
-                    <Label htmlFor="urgency">Urgency</Label>
-                    <Select value={formData.urgency} onValueChange={(value) => handleSelectChange('urgency', value)}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {urgencyOptions.map((option) => (
-                          <SelectItem key={option.id} value={option.id}>
-                            {option.name} {option.price}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div>
-                    <Label htmlFor="preferredTime">Preferred Meeting Time</Label>
-                    <Input
-                      id="preferredTime"
-                      name="preferredTime"
-                      placeholder="e.g., Weekdays 2-4pm EST, or specific dates"
-                      value={formData.preferredTime}
-                      onChange={handleInputChange}
-                    />
-                  </div>
-
-                  <div>
-                    <Label htmlFor="additionalNotes">Additional Notes</Label>
-                    <Textarea
-                      id="additionalNotes"
-                      name="additionalNotes"
-                      placeholder="Any additional information you'd like our experts to know before the consultation"
-                      rows={3}
-                      value={formData.additionalNotes}
-                      onChange={handleInputChange}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <Button type="submit" disabled={isSubmitting} className="w-full" size="lg">
-                {isSubmitting ? 'Submitting Request...' : 'Request Expert Consultation'}
-                <ArrowRight className="w-4 h-4 ml-2" />
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
       </div>
+
+      {/* Hero Section */}
+      <section className="py-16 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-4xl mx-auto text-center">
+          <Badge className="mb-4 bg-purple-100 text-purple-800 border-purple-200">
+            1-Hour Session
+          </Badge>
+          <h1 className="text-4xl md:text-5xl font-bold text-slate-900 mb-6">
+            Expert Data Consultation
+          </h1>
+          <p className="text-xl text-slate-600 mb-8 max-w-2xl mx-auto">
+            Get strategic guidance from senior data scientists. Perfect for complex challenges, 
+            implementation planning, and maximizing your data investment ROI.
+          </p>
+          
+          <div className="bg-white rounded-2xl shadow-lg p-8 border border-purple-200">
+            <div className="flex items-center justify-center mb-6">
+              <div className="text-6xl font-bold text-purple-600">$150</div>
+              <div className="ml-4 text-left">
+                <div className="text-lg font-semibold text-slate-900">Per 1-hour session</div>
+                <div className="text-slate-600">Includes follow-up summary</div>
+              </div>
+            </div>
+            
+            <div className="grid md:grid-cols-2 gap-4 mb-8">
+              <div className="flex items-center text-slate-700">
+                <Video className="w-5 h-5 text-purple-600 mr-3" />
+                Video consultation
+              </div>
+              <div className="flex items-center text-slate-700">
+                <Clock className="w-5 h-5 text-blue-600 mr-3" />
+                60 minutes duration
+              </div>
+              <div className="flex items-center text-slate-700">
+                <Users className="w-5 h-5 text-green-600 mr-3" />
+                Senior data experts
+              </div>
+              <div className="flex items-center text-slate-700">
+                <FileText className="w-5 h-5 text-indigo-600 mr-3" />
+                Written summary included
+              </div>
+            </div>
+            
+            <Button 
+              size="lg"
+              className="bg-purple-600 hover:bg-purple-700 text-white px-8 py-4"
+              onClick={() => setBookingStep(1)}
+            >
+              Book Consultation Now
+              <ArrowRight className="w-5 h-5 ml-2" />
+            </Button>
+          </div>
+        </div>
+      </section>
+
+      {/* Expert Profiles */}
+      <section className="py-16 px-4 sm:px-6 lg:px-8 bg-white">
+        <div className="max-w-6xl mx-auto">
+          <h2 className="text-3xl font-bold text-center text-slate-900 mb-12">
+            Meet Our Data Experts
+          </h2>
+          
+          <div className="grid md:grid-cols-3 gap-8">
+            {expertProfiles.map((expert, index) => (
+              <Card key={index} className="text-center hover:shadow-lg transition-shadow">
+                <CardHeader>
+                  <div className="w-24 h-24 mx-auto mb-4 rounded-full overflow-hidden">
+                    <img 
+                      src={expert.image} 
+                      alt={expert.name}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  <CardTitle className="text-xl">{expert.name}</CardTitle>
+                  <CardDescription className="text-purple-600 font-medium">
+                    {expert.title}
+                  </CardDescription>
+                  <div className="flex items-center justify-center space-x-1 mt-2">
+                    {[...Array(5)].map((_, i) => (
+                      <Star key={i} className="w-4 h-4 fill-yellow-400 text-yellow-400" />
+                    ))}
+                    <span className="text-sm text-slate-500 ml-2">{expert.experience}</span>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium text-slate-900">Specialties:</div>
+                    {expert.specialties.map((specialty, idx) => (
+                      <Badge key={idx} variant="outline" className="text-xs mr-1 mb-1">
+                        {specialty}
+                      </Badge>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Process */}
+      <section className="py-16 px-4 sm:px-6 lg:px-8 bg-slate-50">
+        <div className="max-w-6xl mx-auto">
+          <h2 className="text-3xl font-bold text-center text-slate-900 mb-12">
+            Consultation Process
+          </h2>
+          
+          <div className="grid md:grid-cols-4 gap-8">
+            {consultationProcess.map((process, index) => (
+              <div key={process.step} className="text-center">
+                <div className={`w-16 h-16 mx-auto rounded-full flex items-center justify-center mb-4 ${
+                  bookingStep >= process.step 
+                    ? 'bg-purple-600 text-white' 
+                    : 'bg-slate-200 text-slate-500'
+                }`}>
+                  <process.icon className="w-8 h-8" />
+                </div>
+                <h3 className="font-semibold text-slate-900 mb-2">{process.title}</h3>
+                <p className="text-sm text-slate-600">{process.description}</p>
+                {index < consultationProcess.length - 1 && (
+                  <div className="hidden md:block absolute transform translate-x-8 translate-y-8">
+                    <ArrowRight className="w-6 h-6 text-slate-300" />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Use Cases */}
+      <section className="py-16 px-4 sm:px-6 lg:px-8 bg-white">
+        <div className="max-w-6xl mx-auto">
+          <h2 className="text-3xl font-bold text-center text-slate-900 mb-12">
+            What We Help With
+          </h2>
+          
+          <div className="grid md:grid-cols-2 gap-8">
+            {useCases.map((useCase, index) => (
+              <Card key={index} className="hover:shadow-lg transition-shadow">
+                <CardHeader>
+                  <CardTitle className="text-xl text-slate-900">{useCase.title}</CardTitle>
+                  <CardDescription className="text-slate-600">
+                    {useCase.description}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Badge variant="outline" className="text-purple-600 border-purple-200">
+                    {useCase.duration}
+                  </Badge>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Features */}
+      <section className="py-16 px-4 sm:px-6 lg:px-8 bg-slate-50">
+        <div className="max-w-6xl mx-auto">
+          <h2 className="text-3xl font-bold text-center text-slate-900 mb-12">
+            What's Included
+          </h2>
+          
+          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
+            {consultationFeatures.map((feature, index) => (
+              <Card key={index} className="text-center hover:shadow-lg transition-shadow">
+                <CardHeader>
+                  <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+                    <feature.icon className="w-6 h-6 text-purple-600" />
+                  </div>
+                  <CardTitle className="text-lg">{feature.title}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <CardDescription>{feature.description}</CardDescription>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Booking Form Preview */}
+      <section className="py-16 px-4 sm:px-6 lg:px-8 bg-white">
+        <div className="max-w-2xl mx-auto">
+          <h2 className="text-3xl font-bold text-center text-slate-900 mb-12">
+            Ready to Book?
+          </h2>
+          
+          <Card className="border-2 border-purple-200">
+            <CardHeader>
+              <CardTitle className="text-center">Consultation Booking</CardTitle>
+              <CardDescription className="text-center">
+                Schedule your 1-hour session with a data expert
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label htmlFor="name">Your Name</Label>
+                <Input id="name" placeholder="Enter your full name" />
+              </div>
+              <div>
+                <Label htmlFor="email">Email Address</Label>
+                <Input id="email" type="email" placeholder="your@email.com" />
+              </div>
+              <div>
+                <Label htmlFor="company">Company</Label>
+                <Input id="company" placeholder="Your company name" />
+              </div>
+              <div>
+                <Label htmlFor="challenge">Data Challenge Description</Label>
+                <Textarea 
+                  id="challenge" 
+                  placeholder="Briefly describe your data challenge or what you'd like to discuss..."
+                  rows={4}
+                />
+              </div>
+              <Button className="w-full bg-purple-600 hover:bg-purple-700">
+                Schedule Consultation ($150)
+                <Calendar className="w-4 h-4 ml-2" />
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </section>
+
+      {/* CTA Section */}
+      <section className="py-16 px-4 sm:px-6 lg:px-8 bg-gradient-to-r from-purple-600 to-indigo-600">
+        <div className="max-w-4xl mx-auto text-center">
+          <h2 className="text-3xl font-bold text-white mb-6">
+            Get Expert Guidance Today
+          </h2>
+          <p className="text-xl text-purple-100 mb-8">
+            Don't let data challenges slow you down. Get professional guidance from our experienced team.
+          </p>
+          <div className="space-x-4">
+            <Button 
+              size="lg"
+              className="bg-white text-purple-600 hover:bg-slate-100 px-8 py-4"
+            >
+              Book Consultation ($150)
+              <ArrowRight className="w-5 h-5 ml-2" />
+            </Button>
+            <Button asChild size="lg" variant="outline" className="border-white text-white hover:bg-white hover:text-purple-600">
+              <Link href="/pricing">
+                View All Services
+              </Link>
+            </Button>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }
