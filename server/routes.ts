@@ -1498,6 +1498,59 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ estimate });
   });
 
+  // Enterprise inquiry endpoints
+  app.post('/api/enterprise/inquiry', async (req, res) => {
+    try {
+      const inquiry = await storage.createEnterpriseInquiry(req.body);
+      res.status(201).json({ 
+        success: true, 
+        inquiry: {
+          id: inquiry.id,
+          status: inquiry.status,
+          createdAt: inquiry.createdAt
+        }
+      });
+    } catch (error: any) {
+      console.error("Enterprise inquiry error:", error);
+      res.status(500).json({ 
+        error: "Failed to submit inquiry", 
+        message: error.message 
+      });
+    }
+  });
+
+  app.get('/api/enterprise/inquiries', async (req, res) => {
+    try {
+      const inquiries = await storage.getEnterpriseInquiries();
+      res.json({ inquiries });
+    } catch (error: any) {
+      console.error("Get inquiries error:", error);
+      res.status(500).json({ 
+        error: "Failed to fetch inquiries", 
+        message: error.message 
+      });
+    }
+  });
+
+  app.patch('/api/enterprise/inquiries/:id', async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const inquiry = await storage.updateEnterpriseInquiry(id, req.body);
+      
+      if (!inquiry) {
+        return res.status(404).json({ error: "Inquiry not found" });
+      }
+      
+      res.json({ inquiry });
+    } catch (error: any) {
+      console.error("Update inquiry error:", error);
+      res.status(500).json({ 
+        error: "Failed to update inquiry", 
+        message: error.message 
+      });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

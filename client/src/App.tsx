@@ -17,6 +17,7 @@ import MLAnalysisPage from "./pages/ml-analysis";
 import PayPerAnalysis from "./pages/pay-per-analysis";
 import ExpertConsultation from "./pages/expert-consultation";
 import FreeTrial from "./pages/free-trial";
+import EnterpriseContact from "./pages/enterprise-contact";
 import AnimatedDemo from "./components/animated-demo";
 import NotFound from "@/pages/not-found";
 
@@ -110,6 +111,10 @@ function App() {
             onBack={() => setLocation("/")}
             onSignUp={() => setLocation("/auth")}
           />
+        )}
+        
+        {location === "/enterprise-contact" && (
+          <EnterpriseContact />
         )}
         
         {user && location === "/dashboard" && (

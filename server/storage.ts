@@ -27,6 +27,11 @@ export interface IStorage {
   logUsage(log: InsertUsageLog): Promise<UsageLog>;
   getUserUsageThisMonth(userId: number): Promise<number>;
   canUserMakeQuery(userId: number): Promise<boolean>;
+  
+  // Enterprise inquiry methods
+  createEnterpriseInquiry(inquiry: InsertEnterpriseInquiry): Promise<EnterpriseInquiry>;
+  getEnterpriseInquiries(): Promise<EnterpriseInquiry[]>;
+  updateEnterpriseInquiry(id: number, updates: Partial<EnterpriseInquiry>): Promise<EnterpriseInquiry | undefined>;
 }
 
 export class MemStorage implements IStorage {
@@ -34,16 +39,20 @@ export class MemStorage implements IStorage {
   private projects: Map<string, Project>;
   private userSettings: Map<number, UserSettings>;
   private usageLogs: Map<string, UsageLog>;
+  private enterpriseInquiries: Map<number, EnterpriseInquiry>;
   private currentUserId: number;
   private currentLogId: number;
+  private currentInquiryId: number;
 
   constructor() {
     this.users = new Map();
     this.projects = new Map();
     this.userSettings = new Map();
     this.usageLogs = new Map();
+    this.enterpriseInquiries = new Map();
     this.currentUserId = 1;
     this.currentLogId = 1;
+    this.currentInquiryId = 1;
   }
 
   async getUser(id: number): Promise<User | undefined> {
@@ -266,6 +275,43 @@ export class MemStorage implements IStorage {
     
     const currentUsage = await this.getUserUsageThisMonth(userId);
     return currentUsage < (settings.usageQuota || 50);
+  }
+
+  async createEnterpriseInquiry(inquiry: InsertEnterpriseInquiry): Promise<EnterpriseInquiry> {
+    const id = this.currentInquiryId++;
+    const newInquiry: EnterpriseInquiry = {
+      id,
+      ...inquiry,
+      status: inquiry.status || "new",
+      priority: inquiry.priority || "medium",
+      assignedTo: inquiry.assignedTo || null,
+      notes: inquiry.notes || null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    
+    this.enterpriseInquiries.set(id, newInquiry);
+    return newInquiry;
+  }
+
+  async getEnterpriseInquiries(): Promise<EnterpriseInquiry[]> {
+    return Array.from(this.enterpriseInquiries.values()).sort((a, b) => 
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }
+
+  async updateEnterpriseInquiry(id: number, updates: Partial<EnterpriseInquiry>): Promise<EnterpriseInquiry | undefined> {
+    const inquiry = this.enterpriseInquiries.get(id);
+    if (!inquiry) return undefined;
+
+    const updated = {
+      ...inquiry,
+      ...updates,
+      updatedAt: new Date(),
+    };
+    
+    this.enterpriseInquiries.set(id, updated);
+    return updated;
   }
 }
 
