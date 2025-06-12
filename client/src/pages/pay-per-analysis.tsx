@@ -732,6 +732,7 @@ export default function PayPerAnalysis({ onBack }: PayPerAnalysisProps) {
                 {pricingComparison.map((row, index) => (
                   <tr key={index} className={index % 2 === 0 ? 'bg-slate-50' : 'bg-white'}>
                     <td className="p-4 font-medium text-slate-900">{row.feature}</td>
+                    <td className="p-4 text-center text-slate-700">{row.freetrial}</td>
                     <td className="p-4 text-center text-slate-700">{row.payper}</td>
                     <td className="p-4 text-center text-slate-700">{row.starter}</td>
                     <td className="p-4 text-center text-slate-700">{row.basic}</td>
