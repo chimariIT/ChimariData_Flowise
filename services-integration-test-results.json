@@ -11,67 +11,67 @@
       "test": "Server Connection",
       "status": "PASS",
       "message": "Server is responding correctly",
-      "timestamp": "2025-06-12T17:52:46.508Z"
+      "timestamp": "2025-06-12T17:53:46.049Z"
     },
     {
       "test": "Landing Page - Pay Per Analysis",
       "status": "FAIL",
       "message": "Pay-per-analysis service not found on landing page",
-      "timestamp": "2025-06-12T17:52:46.527Z"
+      "timestamp": "2025-06-12T17:53:46.067Z"
     },
     {
       "test": "Landing Page - Expert Consultation",
       "status": "FAIL",
       "message": "Expert consultation service not found on landing page",
-      "timestamp": "2025-06-12T17:52:46.527Z"
+      "timestamp": "2025-06-12T17:53:46.067Z"
     },
     {
       "test": "Pay-Per-Analysis Page",
       "status": "PARTIAL",
       "message": "Page loads but content may be incomplete",
-      "timestamp": "2025-06-12T17:52:46.544Z"
+      "timestamp": "2025-06-12T17:53:46.491Z"
     },
     {
       "test": "Pay-Per-Analysis Pricing",
       "status": "FAIL",
       "message": "Pricing tiers not found",
-      "timestamp": "2025-06-12T17:52:46.545Z"
+      "timestamp": "2025-06-12T17:53:46.491Z"
     },
     {
       "test": "Expert Consultation Page",
       "status": "PASS",
       "message": "Expert consultation page loads with correct content",
-      "timestamp": "2025-06-12T17:52:46.564Z"
+      "timestamp": "2025-06-12T17:53:46.506Z"
     },
     {
       "test": "Expert Profiles",
       "status": "FAIL",
       "message": "Expert profiles not found",
-      "timestamp": "2025-06-12T17:52:46.564Z"
+      "timestamp": "2025-06-12T17:53:46.506Z"
     },
     {
       "test": "Pricing Page Integration",
       "status": "FAIL",
       "message": "Services not properly integrated",
-      "timestamp": "2025-06-12T17:52:46.573Z"
+      "timestamp": "2025-06-12T17:53:46.514Z"
     },
     {
       "test": "Subscription Tiers",
       "status": "FAIL",
       "message": "Subscription tiers not found",
-      "timestamp": "2025-06-12T17:52:46.573Z"
+      "timestamp": "2025-06-12T17:53:46.514Z"
     },
     {
       "test": "Navigation Flow",
       "status": "PASS",
       "message": "All service pages are accessible via navigation",
-      "timestamp": "2025-06-12T17:52:46.617Z"
+      "timestamp": "2025-06-12T17:53:46.541Z"
     },
     {
       "test": "Back Navigation",
       "status": "FAIL",
       "message": "Back navigation missing on service pages",
-      "timestamp": "2025-06-12T17:52:46.618Z"
+      "timestamp": "2025-06-12T17:53:46.541Z"
     }
   ],
   "recommendations": [
@@ -79,5 +79,5 @@
     "Check App.tsx routing setup and navigation props",
     "Ensure service components are properly integrated into pricing page"
   ],
-  "timestamp": "2025-06-12T17:52:46.618Z"
+  "timestamp": "2025-06-12T17:53:46.542Z"
 }

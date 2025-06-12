@@ -206,6 +206,109 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
         </div>
       </section>
 
+      {/* Services Section */}
+      <section className="py-16 px-4 sm:px-6 lg:px-8 bg-gradient-to-br from-slate-50 to-blue-50">
+        <div className="max-w-6xl mx-auto">
+          <div className="text-center mb-12">
+            <h2 className="text-3xl font-bold text-slate-900 mb-4">
+              Professional Data Services
+            </h2>
+            <p className="text-lg text-slate-600 max-w-2xl mx-auto">
+              Get expert help when you need it most. Choose from our flexible service options.
+            </p>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-8">
+            {/* Pay-Per-Analysis Service */}
+            <Card className="border-2 border-orange-200 bg-white hover:shadow-xl transition-all duration-300 hover:scale-105">
+              <CardHeader className="text-center">
+                <div className="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <CreditCard className="w-8 h-8 text-orange-600" />
+                </div>
+                <CardTitle className="text-2xl text-slate-900">Pay-Per-Analysis</CardTitle>
+                <CardDescription className="text-slate-600">
+                  No subscription needed. Pay only for what you use.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="text-center space-y-4">
+                <div className="text-4xl font-bold text-orange-600">$25-$50</div>
+                <div className="text-sm text-slate-500">Per dataset analysis</div>
+                <ul className="space-y-2 text-sm text-slate-600">
+                  <li className="flex items-center justify-center space-x-2">
+                    <CheckCircle className="w-4 h-4 text-green-500" />
+                    <span>Instant data processing</span>
+                  </li>
+                  <li className="flex items-center justify-center space-x-2">
+                    <CheckCircle className="w-4 h-4 text-green-500" />
+                    <span>AI-powered insights</span>
+                  </li>
+                  <li className="flex items-center justify-center space-x-2">
+                    <CheckCircle className="w-4 h-4 text-green-500" />
+                    <span>Professional reports</span>
+                  </li>
+                </ul>
+                <Button 
+                  onClick={onPayPerAnalysis}
+                  className="w-full bg-orange-600 hover:bg-orange-700 text-white"
+                >
+                  Start Analysis
+                  <ArrowRight className="w-4 h-4 ml-2" />
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* Expert Consultation Service */}
+            <Card className="border-2 border-purple-200 bg-white hover:shadow-xl transition-all duration-300 hover:scale-105">
+              <CardHeader className="text-center">
+                <div className="w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <Users className="w-8 h-8 text-purple-600" />
+                </div>
+                <CardTitle className="text-2xl text-slate-900">Expert Consultation</CardTitle>
+                <CardDescription className="text-slate-600">
+                  1-hour video session with senior data scientists.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="text-center space-y-4">
+                <div className="text-4xl font-bold text-purple-600">$150</div>
+                <div className="text-sm text-slate-500">Per 1-hour session</div>
+                <ul className="space-y-2 text-sm text-slate-600">
+                  <li className="flex items-center justify-center space-x-2">
+                    <CheckCircle className="w-4 h-4 text-green-500" />
+                    <span>Video consultation</span>
+                  </li>
+                  <li className="flex items-center justify-center space-x-2">
+                    <CheckCircle className="w-4 h-4 text-green-500" />
+                    <span>Custom strategy</span>
+                  </li>
+                  <li className="flex items-center justify-center space-x-2">
+                    <CheckCircle className="w-4 h-4 text-green-500" />
+                    <span>Follow-up summary</span>
+                  </li>
+                </ul>
+                <Button 
+                  onClick={onExpertConsultation}
+                  className="w-full bg-purple-600 hover:bg-purple-700 text-white"
+                >
+                  Book Consultation
+                  <ArrowRight className="w-4 h-4 ml-2" />
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="text-center mt-8">
+            <Button 
+              variant="outline" 
+              onClick={onPricing}
+              className="border-slate-300 hover:border-slate-400"
+            >
+              View All Pricing Options
+              <ArrowRight className="w-4 h-4 ml-2" />
+            </Button>
+          </div>
+        </div>
+      </section>
+
       {/* AI Recommendation Engine Preview */}
       <section className="py-16 px-4 sm:px-6 lg:px-8 bg-white">
         <div className="max-w-6xl mx-auto">
