@@ -72,6 +72,7 @@ function App() {
             onPayPerAnalysis={() => setLocation("/pay-per-analysis")}
             onExpertConsultation={() => setLocation("/expert-consultation")}
             onDemo={() => setLocation("/demo")}
+            onPricing={() => setLocation("/pricing")}
           />
         )}
         

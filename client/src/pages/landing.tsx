@@ -15,7 +15,8 @@ import {
   Database,
   Zap,
   Shield,
-  Play
+  Play,
+  CreditCard
 } from "lucide-react";
 
 interface LandingPageProps {
@@ -23,9 +24,10 @@ interface LandingPageProps {
   onPayPerAnalysis: () => void;
   onExpertConsultation: () => void;
   onDemo: () => void;
+  onPricing: () => void;
 }
 
-export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertConsultation, onDemo }: LandingPageProps) {
+export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertConsultation, onDemo, onPricing }: LandingPageProps) {
   const [isVisible, setIsVisible] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [currentRecommendation, setCurrentRecommendation] = useState(0);
@@ -641,154 +643,61 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
 
       {/* Pricing Section */}
       <section id="pricing" className="py-20 px-4 sm:px-6 lg:px-8 bg-white">
-        <div className="max-w-6xl mx-auto">
-          <div className="text-center mb-16">
-            <h2 className="text-3xl md:text-4xl font-bold text-slate-900 mb-4">
-              Simple, Transparent Pricing
-            </h2>
-            <p className="text-xl text-slate-600 max-w-3xl mx-auto">
-              Choose the plan that fits your data analysis needs
-            </p>
-          </div>
-
-          <div className="grid md:grid-cols-3 gap-8">
-            {/* Free Plan */}
-            <Card className="border-2 border-slate-200 hover:border-blue-300 transition-all duration-300">
-              <CardHeader className="text-center">
-                <CardTitle className="text-2xl font-bold text-slate-900">Free</CardTitle>
-                <div className="text-4xl font-bold text-slate-900 my-4">$0</div>
-                <CardDescription>Perfect for getting started</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-3">
-                  <div className="flex items-center">
-                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
-                    <span className="text-slate-700">50 AI queries per month</span>
-                  </div>
-                  <div className="flex items-center">
-                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
-                    <span className="text-slate-700">Up to 10MB file uploads</span>
-                  </div>
-                  <div className="flex items-center">
-                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
-                    <span className="text-slate-700">Basic visualizations</span>
-                  </div>
-                  <div className="flex items-center">
-                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
-                    <span className="text-slate-700">Community support</span>
-                  </div>
-                </div>
-                <Button 
-                  onClick={onGetStarted}
-                  className="w-full"
-                  variant="outline"
-                >
-                  Get Started Free
-                </Button>
-              </CardContent>
-            </Card>
-
-            {/* Pro Plan */}
-            <Card className="border-2 border-blue-500 relative hover:shadow-xl transition-all duration-300">
-              <div className="absolute -top-3 left-1/2 transform -translate-x-1/2">
-                <Badge className="bg-blue-600 text-white px-4 py-1">Most Popular</Badge>
+        <div className="max-w-4xl mx-auto text-center">
+          <h2 className="text-3xl md:text-4xl font-bold text-slate-900 mb-4">
+            Three-Tier Pricing System
+          </h2>
+          <p className="text-xl text-slate-600 mb-8">
+            From free exploration to enterprise solutions - we have the right plan for every data need
+          </p>
+          
+          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-2xl p-8 border border-blue-100 mb-8">
+            <div className="grid md:grid-cols-3 gap-6 text-center">
+              <div className="bg-white rounded-lg p-6 shadow-sm">
+                <h3 className="font-bold text-lg text-slate-900 mb-2">Free Tier</h3>
+                <div className="text-2xl font-bold text-green-600 mb-2">$0</div>
+                <div className="text-sm text-slate-600">3 analyses • 10MB uploads</div>
               </div>
-              <CardHeader className="text-center">
-                <CardTitle className="text-2xl font-bold text-slate-900">Pro</CardTitle>
-                <div className="text-4xl font-bold text-slate-900 my-4">$29<span className="text-lg text-slate-600">/month</span></div>
-                <CardDescription>For professional data analysts</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-3">
-                  <div className="flex items-center">
-                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
-                    <span className="text-slate-700">1,000 AI queries per month</span>
-                  </div>
-                  <div className="flex items-center">
-                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
-                    <span className="text-slate-700">Up to 100MB file uploads</span>
-                  </div>
-                  <div className="flex items-center">
-                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
-                    <span className="text-slate-700">Advanced ML analysis</span>
-                  </div>
-                  <div className="flex items-center">
-                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
-                    <span className="text-slate-700">Priority support</span>
-                  </div>
-                  <div className="flex items-center">
-                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
-                    <span className="text-slate-700">API access</span>
-                  </div>
-                </div>
-                <Button 
-                  onClick={onGetStarted}
-                  className="w-full bg-blue-600 hover:bg-blue-700"
-                >
-                  Start Pro Trial
-                </Button>
-              </CardContent>
-            </Card>
-
-            {/* Enterprise Plan */}
-            <Card className="border-2 border-slate-200 hover:border-purple-300 transition-all duration-300">
-              <CardHeader className="text-center">
-                <CardTitle className="text-2xl font-bold text-slate-900">Enterprise</CardTitle>
-                <div className="text-4xl font-bold text-slate-900 my-4">Custom</div>
-                <CardDescription>For large organizations</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-3">
-                  <div className="flex items-center">
-                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
-                    <span className="text-slate-700">Unlimited AI queries</span>
-                  </div>
-                  <div className="flex items-center">
-                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
-                    <span className="text-slate-700">Unlimited file uploads</span>
-                  </div>
-                  <div className="flex items-center">
-                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
-                    <span className="text-slate-700">Custom integrations</span>
-                  </div>
-                  <div className="flex items-center">
-                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
-                    <span className="text-slate-700">Dedicated support</span>
-                  </div>
-                  <div className="flex items-center">
-                    <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
-                    <span className="text-slate-700">On-premise deployment</span>
-                  </div>
-                </div>
-                <Button 
-                  onClick={() => window.location.href = 'mailto:chimaridata@gmail.com?subject=Enterprise Plan Inquiry&body=Hi, I am interested in learning more about the Enterprise plan for my organization.'}
-                  className="w-full"
-                  variant="outline"
-                >
-                  Contact Sales
-                </Button>
-              </CardContent>
-            </Card>
+              
+              <div className="bg-white rounded-lg p-6 shadow-sm border-2 border-blue-500">
+                <h3 className="font-bold text-lg text-slate-900 mb-2">Professional</h3>
+                <div className="text-2xl font-bold text-blue-600 mb-2">$49/month</div>
+                <div className="text-sm text-slate-600">Unlimited analyses • 500MB</div>
+                <Badge className="mt-2 bg-blue-600">Recommended</Badge>
+              </div>
+              
+              <div className="bg-white rounded-lg p-6 shadow-sm">
+                <h3 className="font-bold text-lg text-slate-900 mb-2">Enterprise</h3>
+                <div className="text-2xl font-bold text-purple-600 mb-2">$299/month</div>
+                <div className="text-sm text-slate-600">Unlimited everything</div>
+              </div>
+            </div>
           </div>
-
-          <div className="text-center mt-12">
-            <p className="text-slate-600 mb-4">
-              All plans include secure data handling and GDPR compliance
-            </p>
+          
+          <div className="space-y-4">
+            <Button 
+              onClick={onPricing}
+              size="lg"
+              className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:scale-105 transition-all duration-200"
+            >
+              <CreditCard className="w-5 h-5 mr-2" />
+              View Detailed Pricing Plans
+            </Button>
+            
             <div className="flex gap-4 justify-center">
               <Button 
                 onClick={onPayPerAnalysis}
                 variant="ghost"
                 className="text-blue-600 hover:text-blue-700"
               >
-                Need pay-per-analysis? Start here →
+                Pay-per-analysis option →
               </Button>
               <Button 
                 onClick={onExpertConsultation}
                 variant="ghost"
                 className="text-purple-600 hover:text-purple-700"
               >
-                Consult with Expert →
+                Expert consultation →
               </Button>
             </div>
           </div>
@@ -859,10 +768,10 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
             <div>
               <h4 className="font-semibold mb-4">Product</h4>
               <ul className="space-y-2 text-slate-400">
-                <li><a href="#" className="hover:text-white">Features</a></li>
-                <li><a href="#" className="hover:text-white">Pricing</a></li>
-                <li><a href="#" className="hover:text-white">Security</a></li>
-                <li><a href="#" className="hover:text-white">Integrations</a></li>
+                <li><button onClick={() => document.getElementById('demo')?.scrollIntoView({ behavior: 'smooth' })} className="hover:text-white cursor-pointer">Features</button></li>
+                <li><button onClick={onPricing} className="hover:text-white cursor-pointer">Pricing</button></li>
+                <li><a href="mailto:security@chimaridata.com?subject=Security Inquiry" className="hover:text-white">Security</a></li>
+                <li><a href="mailto:integrations@chimaridata.com?subject=Integration Request" className="hover:text-white">Integrations</a></li>
               </ul>
             </div>
             
