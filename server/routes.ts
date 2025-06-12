@@ -1431,6 +1431,58 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ tiers });
   });
 
+  // Pricing comparison endpoint
+  app.get('/api/pricing/compare', (req, res) => {
+    const tiers = PricingService.getPricingTiers();
+    
+    // Separate subscription tiers from pay-per-use options
+    const subscriptionTiers = tiers.filter(tier => tier.type !== 'pay-per-use');
+    const payPerUseOptions = tiers.filter(tier => tier.type === 'pay-per-use');
+    
+    res.json({
+      plans: tiers,
+      subscriptionTiers,
+      payPerUseOptions,
+      comparison: {
+        subscriptions: subscriptionTiers.length,
+        payPerUse: payPerUseOptions.length,
+        total: tiers.length
+      }
+    });
+  });
+
+  // Calculate analysis pricing endpoint
+  app.post('/api/pricing/calculate-analysis', (req, res) => {
+    try {
+      const { dataSize, complexity, provider } = req.body;
+      
+      // Base calculation for pay-per-analysis
+      let basePrice = 25; // Starting price
+      
+      // Add complexity multipliers
+      const complexityMultiplier = complexity === 'simple' ? 1 : complexity === 'medium' ? 1.2 : 1.5;
+      const sizeMultiplier = Math.max(1, (dataSize || 1000) / 1000 * 0.1 + 1);
+      
+      const finalPrice = Math.max(25, Math.round(basePrice * complexityMultiplier * sizeMultiplier));
+      
+      res.json({
+        price: finalPrice,
+        basePrice,
+        multipliers: {
+          complexity: complexityMultiplier,
+          size: sizeMultiplier
+        },
+        breakdown: {
+          base: basePrice,
+          complexityCharge: (finalPrice - basePrice) * 0.6,
+          sizeCharge: (finalPrice - basePrice) * 0.4
+        }
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to calculate analysis pricing" });
+    }
+  });
+
   app.post('/api/pricing/validate', async (req, res) => {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
