@@ -99,6 +99,7 @@ function App() {
           <PricingPage 
             onGetStarted={() => setLocation("/auth")}
             onSubscribe={(tier) => setLocation("/auth")}
+            onBack={() => setLocation("/")}
           />
         )}
         
