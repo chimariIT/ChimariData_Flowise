@@ -314,42 +314,228 @@ export default function ExpertConsultation({ onBack }: ExpertConsultationProps) 
             implementation planning, and maximizing your data investment ROI.
           </p>
           
-          <div className="bg-white rounded-2xl shadow-lg p-8 border border-purple-200">
-            <div className="flex items-center justify-center mb-6">
-              <div className="text-6xl font-bold text-purple-600">$150</div>
-              <div className="ml-4 text-left">
-                <div className="text-lg font-semibold text-slate-900">Per 1-hour session</div>
-                <div className="text-slate-600">Includes follow-up summary</div>
+          <div className="space-y-6">
+            {/* Quick Booking Option */}
+            <div className="bg-white rounded-2xl shadow-lg p-8 border border-purple-200">
+              <div className="flex items-center justify-center mb-6">
+                <div className="text-6xl font-bold text-purple-600">From $150</div>
+                <div className="ml-4 text-left">
+                  <div className="text-lg font-semibold text-slate-900">Starting price</div>
+                  <div className="text-slate-600">Customized by expertise & duration</div>
+                </div>
+              </div>
+              
+              <div className="grid md:grid-cols-2 gap-4 mb-8">
+                <div className="flex items-center text-slate-700">
+                  <Video className="w-5 h-5 text-purple-600 mr-3" />
+                  Video consultation
+                </div>
+                <div className="flex items-center text-slate-700">
+                  <Clock className="w-5 h-5 text-blue-600 mr-3" />
+                  Flexible duration
+                </div>
+                <div className="flex items-center text-slate-700">
+                  <Users className="w-5 h-5 text-green-600 mr-3" />
+                  Senior data experts
+                </div>
+                <div className="flex items-center text-slate-700">
+                  <FileText className="w-5 h-5 text-indigo-600 mr-3" />
+                  Written summary included
+                </div>
+              </div>
+              
+              <div className="space-y-4">
+                <Button 
+                  size="lg"
+                  className="w-full bg-purple-600 hover:bg-purple-700 text-white px-8 py-4"
+                  onClick={() => setBookingStep(1)}
+                >
+                  Book Standard Consultation
+                  <ArrowRight className="w-5 h-5 ml-2" />
+                </Button>
+                
+                <Button 
+                  size="lg"
+                  variant="outline"
+                  className="w-full border-purple-200 hover:border-purple-400 hover:bg-purple-50"
+                  onClick={() => setShowCalculator(!showCalculator)}
+                >
+                  <Calculator className="w-5 h-5 mr-2" />
+                  Customize Your Session
+                </Button>
               </div>
             </div>
-            
-            <div className="grid md:grid-cols-2 gap-4 mb-8">
-              <div className="flex items-center text-slate-700">
-                <Video className="w-5 h-5 text-purple-600 mr-3" />
-                Video consultation
+
+            {/* Consultation Calculator */}
+            {showCalculator && (
+              <div className="bg-white rounded-2xl shadow-lg p-8 border border-blue-200">
+                <div className="flex items-center mb-6">
+                  <Calculator className="w-6 h-6 text-blue-600 mr-3" />
+                  <h3 className="text-2xl font-bold text-slate-900">Consultation Calculator</h3>
+                </div>
+                
+                <div className="grid lg:grid-cols-2 gap-8">
+                  <div className="space-y-6">
+                    {/* Session Duration */}
+                    <div>
+                      <label className="block text-sm font-medium text-slate-900 mb-3">
+                        Session Duration: {sessionDuration[0]} hour{sessionDuration[0] > 1 ? 's' : ''}
+                      </label>
+                      <Slider
+                        value={sessionDuration}
+                        onValueChange={setSessionDuration}
+                        max={4}
+                        min={1}
+                        step={0.5}
+                        className="w-full"
+                      />
+                      <div className="flex justify-between text-xs text-slate-500 mt-1">
+                        <span>1 hour</span>
+                        <span>4 hours</span>
+                      </div>
+                    </div>
+
+                    {/* Expert Level */}
+                    <div>
+                      <label className="block text-sm font-medium text-slate-900 mb-3">
+                        Expert Level
+                      </label>
+                      <Select value={expertLevel} onValueChange={setExpertLevel}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select expert level" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {expertLevels.map((level) => (
+                            <SelectItem key={level.value} value={level.value}>
+                              <div>
+                                <div className="font-medium">{level.label} ({level.multiplier})</div>
+                                <div className="text-xs text-slate-500">{level.description}</div>
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Consultation Type */}
+                    <div>
+                      <label className="block text-sm font-medium text-slate-900 mb-3">
+                        Consultation Type
+                      </label>
+                      <Select value={consultationType} onValueChange={setConsultationType}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select consultation type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {consultationTypes.map((type) => (
+                            <SelectItem key={type.value} value={type.value}>
+                              <div>
+                                <div className="font-medium">{type.label}</div>
+                                <div className="text-xs text-slate-500">{type.description} - {type.price}</div>
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Add-on Services */}
+                    <div>
+                      <label className="block text-sm font-medium text-slate-900 mb-3">
+                        Add-on Services
+                      </label>
+                      <div className="space-y-3">
+                        {addOnOptions.map((addon) => (
+                          <div key={addon.key} className="flex items-start space-x-3">
+                            <Checkbox
+                              id={addon.key}
+                              checked={addOns[addon.key as keyof typeof addOns]}
+                              onCheckedChange={(checked) => 
+                                setAddOns(prev => ({ ...prev, [addon.key]: checked }))
+                              }
+                              disabled={addon.required}
+                            />
+                            <div className="flex-1">
+                              <label htmlFor={addon.key} className="text-sm font-medium text-slate-900 cursor-pointer">
+                                {addon.label}
+                              </label>
+                              <div className="text-xs text-slate-500">{addon.description}</div>
+                            </div>
+                            <div className="text-sm font-medium text-slate-900">
+                              {addon.price}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Price Summary */}
+                  <div className="bg-slate-50 rounded-xl p-6">
+                    <h4 className="text-lg font-bold text-slate-900 mb-4">Price Breakdown</h4>
+                    
+                    <div className="space-y-3 text-sm">
+                      <div className="flex justify-between">
+                        <span>Base consultation (1 hour)</span>
+                        <span>$150</span>
+                      </div>
+                      
+                      {sessionDuration[0] > 1 && (
+                        <div className="flex justify-between text-orange-600">
+                          <span>Additional time ({sessionDuration[0] - 1} hours)</span>
+                          <span>+${(sessionDuration[0] - 1) * 120}</span>
+                        </div>
+                      )}
+                      
+                      {expertLevel !== 'senior' && (
+                        <div className="flex justify-between text-purple-600">
+                          <span>
+                            {expertLevels.find(l => l.value === expertLevel)?.label}
+                            ({expertLevels.find(l => l.value === expertLevel)?.multiplier})
+                          </span>
+                          <span>
+                            {expertLevel === 'director' ? '1.5x' : '2x'}
+                          </span>
+                        </div>
+                      )}
+                      
+                      {consultationType !== 'general' && (
+                        <div className="flex justify-between text-blue-600">
+                          <span>{consultationTypes.find(t => t.value === consultationType)?.label}</span>
+                          <span>{consultationTypes.find(t => t.value === consultationType)?.price}</span>
+                        </div>
+                      )}
+                      
+                      {Object.entries(addOns).map(([key, enabled]) => {
+                        const addon = addOnOptions.find(a => a.key === key);
+                        return enabled && !addon?.required ? (
+                          <div key={key} className="flex justify-between text-green-600">
+                            <span>{addon?.label}</span>
+                            <span>{addon?.price}</span>
+                          </div>
+                        ) : null;
+                      })}
+                      
+                      <div className="border-t pt-3 mt-4">
+                        <div className="flex justify-between text-lg font-bold text-slate-900">
+                          <span>Total Price</span>
+                          <span className="text-purple-600">${calculatedPrice}</span>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <Button 
+                      size="lg"
+                      className="w-full mt-6 bg-purple-600 hover:bg-purple-700 text-white"
+                      onClick={() => setBookingStep(1)}
+                    >
+                      Book Consultation - ${calculatedPrice}
+                      <ArrowRight className="w-5 h-5 ml-2" />
+                    </Button>
+                  </div>
+                </div>
               </div>
-              <div className="flex items-center text-slate-700">
-                <Clock className="w-5 h-5 text-blue-600 mr-3" />
-                60 minutes duration
-              </div>
-              <div className="flex items-center text-slate-700">
-                <Users className="w-5 h-5 text-green-600 mr-3" />
-                Senior data experts
-              </div>
-              <div className="flex items-center text-slate-700">
-                <FileText className="w-5 h-5 text-indigo-600 mr-3" />
-                Written summary included
-              </div>
-            </div>
-            
-            <Button 
-              size="lg"
-              className="bg-purple-600 hover:bg-purple-700 text-white px-8 py-4"
-              onClick={() => setBookingStep(1)}
-            >
-              Book Consultation Now
-              <ArrowRight className="w-5 h-5 ml-2" />
-            </Button>
+            )}
           </div>
         </div>
       </section>
