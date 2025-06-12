@@ -1,7 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Slider } from "@/components/ui/slider";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import { 
   ArrowLeft, 
   CheckCircle, 
@@ -11,7 +14,11 @@ import {
   Download,
   CreditCard,
   Clock,
-  ArrowRight
+  ArrowRight,
+  Calculator,
+  Database,
+  Zap,
+  TrendingUp
 } from "lucide-react";
 import { Link } from "wouter";
 
@@ -21,6 +28,136 @@ interface PayPerAnalysisProps {
 
 export default function PayPerAnalysis({ onBack }: PayPerAnalysisProps) {
   const [currentStep, setCurrentStep] = useState(1);
+  const [showCalculator, setShowCalculator] = useState(false);
+  
+  // Price calculator state
+  const [fileSize, setFileSize] = useState([1]); // MB
+  const [recordCount, setRecordCount] = useState([1000]); // Number of records
+  const [analysisType, setAnalysisType] = useState("basic");
+  const [features, setFeatures] = useState({
+    aiInsights: true,
+    visualizations: false,
+    predictiveAnalysis: false,
+    customReports: false,
+    apiAccess: false,
+    prioritySupport: false
+  });
+  const [calculatedPrice, setCalculatedPrice] = useState(25);
+
+  // Price calculation logic
+  const calculatePrice = () => {
+    let basePrice = 25;
+    
+    // File size multiplier
+    const sizeMB = fileSize[0];
+    if (sizeMB > 100) basePrice += 20;
+    else if (sizeMB > 50) basePrice += 15;
+    else if (sizeMB > 10) basePrice += 10;
+    else if (sizeMB > 5) basePrice += 5;
+    
+    // Record count multiplier
+    const records = recordCount[0];
+    if (records > 100000) basePrice += 25;
+    else if (records > 50000) basePrice += 20;
+    else if (records > 10000) basePrice += 15;
+    else if (records > 5000) basePrice += 10;
+    else if (records > 1000) basePrice += 5;
+    
+    // Analysis type multiplier
+    switch (analysisType) {
+      case "advanced":
+        basePrice *= 1.5;
+        break;
+      case "premium":
+        basePrice *= 2.0;
+        break;
+      case "enterprise":
+        basePrice *= 2.5;
+        break;
+      default: // basic
+        break;
+    }
+    
+    // Feature add-ons
+    if (features.visualizations) basePrice += 15;
+    if (features.predictiveAnalysis) basePrice += 25;
+    if (features.customReports) basePrice += 20;
+    if (features.apiAccess) basePrice += 30;
+    if (features.prioritySupport) basePrice += 10;
+    
+    return Math.round(basePrice);
+  };
+
+  useEffect(() => {
+    setCalculatedPrice(calculatePrice());
+  }, [fileSize, recordCount, analysisType, features]);
+
+  const analysisTypes = [
+    {
+      value: "basic",
+      label: "Basic Analysis",
+      description: "Standard data insights and visualizations",
+      multiplier: "1x"
+    },
+    {
+      value: "advanced", 
+      label: "Advanced Analysis",
+      description: "Deep statistical analysis and ML insights",
+      multiplier: "1.5x"
+    },
+    {
+      value: "premium",
+      label: "Premium Analysis", 
+      description: "Advanced ML models and predictive analytics",
+      multiplier: "2x"
+    },
+    {
+      value: "enterprise",
+      label: "Enterprise Analysis",
+      description: "Custom models and comprehensive business intelligence",
+      multiplier: "2.5x"
+    }
+  ];
+
+  const featureOptions = [
+    {
+      key: "aiInsights",
+      label: "AI Insights",
+      description: "Natural language insights and recommendations",
+      price: "Included",
+      required: true
+    },
+    {
+      key: "visualizations",
+      label: "Advanced Visualizations",
+      description: "Interactive charts and custom dashboards", 
+      price: "+$15"
+    },
+    {
+      key: "predictiveAnalysis",
+      label: "Predictive Analysis",
+      description: "Future trend predictions and forecasting",
+      price: "+$25"
+    },
+    {
+      key: "customReports",
+      label: "Custom Reports",
+      description: "Branded reports with executive summaries",
+      price: "+$20"
+    },
+    {
+      key: "apiAccess",
+      label: "API Access",
+      description: "Programmatic access to results and data",
+      price: "+$30"
+    },
+    {
+      key: "prioritySupport",
+      label: "Priority Support",
+      description: "24/7 priority support and faster processing",
+      price: "+$10"
+    }
+  ];
 
   const steps = [
     { id: 1, title: "Upload Data", icon: Upload },
@@ -101,42 +238,225 @@ export default function PayPerAnalysis({ onBack }: PayPerAnalysisProps) {
             quick decisions, or testing our platform before subscribing.
           </p>
           
-          <div className="bg-white rounded-2xl shadow-lg p-8 border border-orange-200">
-            <div className="flex items-center justify-center mb-6">
-              <div className="text-6xl font-bold text-orange-600">$25</div>
-              <div className="ml-4 text-left">
-                <div className="text-lg font-semibold text-slate-900">One-time payment</div>
-                <div className="text-slate-600">Complete analysis included</div>
+          <div className="space-y-6">
+            {/* Quick Start Option */}
+            <div className="bg-white rounded-2xl shadow-lg p-8 border border-orange-200">
+              <div className="flex items-center justify-center mb-6">
+                <div className="text-6xl font-bold text-orange-600">From $25</div>
+                <div className="ml-4 text-left">
+                  <div className="text-lg font-semibold text-slate-900">Starting price</div>
+                  <div className="text-slate-600">Calculated by complexity</div>
+                </div>
+              </div>
+              
+              <div className="grid md:grid-cols-2 gap-4 mb-8">
+                <div className="flex items-center text-slate-700">
+                  <Clock className="w-5 h-5 text-green-600 mr-3" />
+                  Results in 2-5 minutes
+                </div>
+                <div className="flex items-center text-slate-700">
+                  <Upload className="w-5 h-5 text-blue-600 mr-3" />
+                  Up to 500MB file size
+                </div>
+                <div className="flex items-center text-slate-700">
+                  <Brain className="w-5 h-5 text-purple-600 mr-3" />
+                  AI-powered insights
+                </div>
+                <div className="flex items-center text-slate-700">
+                  <Download className="w-5 h-5 text-indigo-600 mr-3" />
+                  Downloadable reports
+                </div>
+              </div>
+              
+              <div className="space-y-4">
+                <Button 
+                  size="lg"
+                  className="w-full bg-orange-600 hover:bg-orange-700 text-white px-8 py-4"
+                  onClick={() => setCurrentStep(1)}
+                >
+                  Start Analysis Now (Quick)
+                  <ArrowRight className="w-5 h-5 ml-2" />
+                </Button>
+                
+                <Button 
+                  size="lg"
+                  variant="outline"
+                  className="w-full border-orange-200 hover:border-orange-400 hover:bg-orange-50"
+                  onClick={() => setShowCalculator(!showCalculator)}
+                >
+                  <Calculator className="w-5 h-5 mr-2" />
+                  Calculate Custom Price
+                </Button>
               </div>
             </div>
-            
-            <div className="grid md:grid-cols-2 gap-4 mb-8">
-              <div className="flex items-center text-slate-700">
-                <Clock className="w-5 h-5 text-green-600 mr-3" />
-                Results in 2-5 minutes
+
+            {/* Price Calculator */}
+            {showCalculator && (
+              <div className="bg-white rounded-2xl shadow-lg p-8 border border-blue-200">
+                <div className="flex items-center mb-6">
+                  <Calculator className="w-6 h-6 text-blue-600 mr-3" />
+                  <h3 className="text-2xl font-bold text-slate-900">Price Calculator</h3>
+                </div>
+                
+                <div className="grid lg:grid-cols-2 gap-8">
+                  <div className="space-y-6">
+                    {/* File Size */}
+                    <div>
+                      <label className="block text-sm font-medium text-slate-900 mb-3">
+                        File Size: {fileSize[0]} MB
+                      </label>
+                      <Slider
+                        value={fileSize}
+                        onValueChange={setFileSize}
+                        max={500}
+                        min={1}
+                        step={1}
+                        className="w-full"
+                      />
+                      <div className="flex justify-between text-xs text-slate-500 mt-1">
+                        <span>1 MB</span>
+                        <span>500 MB</span>
+                      </div>
+                    </div>
+
+                    {/* Record Count */}
+                    <div>
+                      <label className="block text-sm font-medium text-slate-900 mb-3">
+                        Estimated Records: {recordCount[0].toLocaleString()}
+                      </label>
+                      <Slider
+                        value={recordCount}
+                        onValueChange={setRecordCount}
+                        max={500000}
+                        min={100}
+                        step={100}
+                        className="w-full"
+                      />
+                      <div className="flex justify-between text-xs text-slate-500 mt-1">
+                        <span>100</span>
+                        <span>500,000</span>
+                      </div>
+                    </div>
+
+                    {/* Analysis Type */}
+                    <div>
+                      <label className="block text-sm font-medium text-slate-900 mb-3">
+                        Analysis Type
+                      </label>
+                      <Select value={analysisType} onValueChange={setAnalysisType}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select analysis type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {analysisTypes.map((type) => (
+                            <SelectItem key={type.value} value={type.value}>
+                              <div>
+                                <div className="font-medium">{type.label} ({type.multiplier})</div>
+                                <div className="text-xs text-slate-500">{type.description}</div>
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Feature Add-ons */}
+                    <div>
+                      <label className="block text-sm font-medium text-slate-900 mb-3">
+                        Feature Add-ons
+                      </label>
+                      <div className="space-y-3">
+                        {featureOptions.map((feature) => (
+                          <div key={feature.key} className="flex items-start space-x-3">
+                            <Checkbox
+                              id={feature.key}
+                              checked={features[feature.key as keyof typeof features]}
+                              onCheckedChange={(checked) => 
+                                setFeatures(prev => ({ ...prev, [feature.key]: checked }))
+                              }
+                              disabled={feature.required}
+                            />
+                            <div className="flex-1">
+                              <label htmlFor={feature.key} className="text-sm font-medium text-slate-900 cursor-pointer">
+                                {feature.label}
+                              </label>
+                              <div className="text-xs text-slate-500">{feature.description}</div>
+                            </div>
+                            <div className="text-sm font-medium text-slate-900">
+                              {feature.price}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Price Summary */}
+                  <div className="bg-slate-50 rounded-xl p-6">
+                    <h4 className="text-lg font-bold text-slate-900 mb-4">Price Breakdown</h4>
+                    
+                    <div className="space-y-3 text-sm">
+                      <div className="flex justify-between">
+                        <span>Base analysis</span>
+                        <span>$25</span>
+                      </div>
+                      
+                      {fileSize[0] > 5 && (
+                        <div className="flex justify-between text-orange-600">
+                          <span>File size ({fileSize[0]} MB)</span>
+                          <span>+${fileSize[0] > 100 ? '20' : fileSize[0] > 50 ? '15' : fileSize[0] > 10 ? '10' : '5'}</span>
+                        </div>
+                      )}
+                      
+                      {recordCount[0] > 1000 && (
+                        <div className="flex justify-between text-blue-600">
+                          <span>Records ({recordCount[0].toLocaleString()})</span>
+                          <span>+${recordCount[0] > 100000 ? '25' : recordCount[0] > 50000 ? '20' : recordCount[0] > 10000 ? '15' : recordCount[0] > 5000 ? '10' : '5'}</span>
+                        </div>
+                      )}
+                      
+                      {analysisType !== 'basic' && (
+                        <div className="flex justify-between text-purple-600">
+                          <span>
+                            {analysisTypes.find(t => t.value === analysisType)?.label} 
+                            ({analysisTypes.find(t => t.value === analysisType)?.multiplier})
+                          </span>
+                          <span>
+                            {analysisType === 'advanced' ? '1.5x' : analysisType === 'premium' ? '2x' : '2.5x'}
+                          </span>
+                        </div>
+                      )}
+                      
+                      {Object.entries(features).map(([key, enabled]) => {
+                        const feature = featureOptions.find(f => f.key === key);
+                        return enabled && !feature?.required ? (
+                          <div key={key} className="flex justify-between text-green-600">
+                            <span>{feature?.label}</span>
+                            <span>{feature?.price}</span>
+                          </div>
+                        ) : null;
+                      })}
+                      
+                      <div className="border-t pt-3 mt-4">
+                        <div className="flex justify-between text-lg font-bold text-slate-900">
+                          <span>Total Price</span>
+                          <span className="text-orange-600">${calculatedPrice}</span>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <Button 
+                      size="lg"
+                      className="w-full mt-6 bg-orange-600 hover:bg-orange-700 text-white"
+                      onClick={() => setCurrentStep(1)}
+                    >
+                      Start Analysis - ${calculatedPrice}
+                      <ArrowRight className="w-5 h-5 ml-2" />
+                    </Button>
+                  </div>
+                </div>
               </div>
-              <div className="flex items-center text-slate-700">
-                <Upload className="w-5 h-5 text-blue-600 mr-3" />
-                Up to 50MB file size
-              </div>
-              <div className="flex items-center text-slate-700">
-                <Brain className="w-5 h-5 text-purple-600 mr-3" />
-                AI-powered insights
-              </div>
-              <div className="flex items-center text-slate-700">
-                <Download className="w-5 h-5 text-indigo-600 mr-3" />
-                Downloadable reports
-              </div>
-            </div>
-            
-            <Button 
-              size="lg"
-              className="bg-orange-600 hover:bg-orange-700 text-white px-8 py-4"
-              onClick={() => setCurrentStep(1)}
-            >
-              Start Analysis Now
-              <ArrowRight className="w-5 h-5 ml-2" />
-            </Button>
+            )}
           </div>
         </div>
       </section>

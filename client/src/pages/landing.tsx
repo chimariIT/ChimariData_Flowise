@@ -231,8 +231,8 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
                 </CardDescription>
               </CardHeader>
               <CardContent className="text-center space-y-4">
-                <div className="text-4xl font-bold text-orange-600">$25-$50</div>
-                <div className="text-sm text-slate-500">Per dataset analysis</div>
+                <div className="text-4xl font-bold text-orange-600">From $25</div>
+                <div className="text-sm text-slate-500">Starting price - calculated by complexity</div>
                 <ul className="space-y-2 text-sm text-slate-600">
                   <li className="flex items-center justify-center space-x-2">
                     <CheckCircle className="w-4 h-4 text-green-500" />
