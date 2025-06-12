@@ -25,9 +25,10 @@ interface LandingPageProps {
   onExpertConsultation: () => void;
   onDemo: () => void;
   onPricing: () => void;
+  onFreeTrial: () => void;
 }
 
-export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertConsultation, onDemo, onPricing }: LandingPageProps) {
+export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertConsultation, onDemo, onPricing, onFreeTrial }: LandingPageProps) {
   const [isVisible, setIsVisible] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [currentRecommendation, setCurrentRecommendation] = useState(0);

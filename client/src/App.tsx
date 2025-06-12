@@ -16,6 +16,7 @@ import AnalysisPaymentPage from "./pages/analysis-payment";
 import MLAnalysisPage from "./pages/ml-analysis";
 import PayPerAnalysis from "./pages/pay-per-analysis";
 import ExpertConsultation from "./pages/expert-consultation";
+import FreeTrial from "./pages/free-trial";
 import AnimatedDemo from "./components/animated-demo";
 import NotFound from "@/pages/not-found";
 
@@ -73,6 +74,7 @@ function App() {
             onExpertConsultation={() => setLocation("/expert-consultation")}
             onDemo={() => setLocation("/demo")}
             onPricing={() => setLocation("/pricing")}
+            onFreeTrial={() => setLocation("/free-trial")}
           />
         )}
         
@@ -100,6 +102,13 @@ function App() {
             onGetStarted={() => setLocation("/auth")}
             onSubscribe={(tier) => setLocation("/auth")}
             onBack={() => setLocation("/")}
+          />
+        )}
+        
+        {location === "/free-trial" && (
+          <FreeTrial 
+            onBack={() => setLocation("/")}
+            onSignUp={() => setLocation("/auth")}
           />
         )}
         
