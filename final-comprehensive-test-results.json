@@ -13,127 +13,127 @@
       "test": "Server Health",
       "status": "PASS",
       "message": "Server responding correctly",
-      "timestamp": "2025-06-12T17:58:51.140Z"
+      "timestamp": "2025-06-12T21:05:14.620Z"
     },
     {
       "test": "Database Connection",
       "status": "PASS",
       "message": "Found 6 pricing tiers",
-      "timestamp": "2025-06-12T17:58:51.145Z"
+      "timestamp": "2025-06-12T21:05:14.626Z"
     },
     {
       "test": "API Endpoint /api/ai/providers",
       "status": "PASS",
       "message": "Endpoint accessible",
-      "timestamp": "2025-06-12T17:58:51.152Z"
+      "timestamp": "2025-06-12T21:05:14.632Z"
     },
     {
       "test": "API Endpoint /api/pricing/tiers",
       "status": "PASS",
       "message": "Endpoint accessible",
-      "timestamp": "2025-06-12T17:58:51.155Z"
+      "timestamp": "2025-06-12T21:05:14.634Z"
     },
     {
       "test": "API Endpoint /api/health",
       "status": "PASS",
       "message": "Endpoint accessible",
-      "timestamp": "2025-06-12T17:58:51.160Z"
+      "timestamp": "2025-06-12T21:05:14.639Z"
     },
     {
       "test": "User Registration",
       "status": "PASS",
       "message": "User registration successful",
-      "timestamp": "2025-06-12T17:58:51.169Z"
+      "timestamp": "2025-06-12T21:05:14.671Z"
     },
     {
       "test": "User Login",
       "status": "FAIL",
       "message": "Login failed or no token returned",
-      "timestamp": "2025-06-12T17:58:51.177Z"
+      "timestamp": "2025-06-12T21:05:14.679Z"
     },
     {
       "test": "Services - Pay Per Analysis",
       "status": "FAIL",
       "message": "Pay-per-analysis service not prominently featured",
-      "timestamp": "2025-06-12T17:58:51.184Z"
+      "timestamp": "2025-06-12T21:05:14.686Z"
     },
     {
       "test": "Services - Expert Consultation",
       "status": "FAIL",
       "message": "Expert consultation service not prominently featured",
-      "timestamp": "2025-06-12T17:58:51.184Z"
+      "timestamp": "2025-06-12T21:05:14.686Z"
     },
     {
       "test": "Services - Section Integration",
       "status": "FAIL",
       "message": "Services section missing from landing page",
-      "timestamp": "2025-06-12T17:58:51.186Z"
+      "timestamp": "2025-06-12T21:05:14.687Z"
     },
     {
       "test": "Navigation - Pay-Per-Analysis Page",
       "status": "PASS",
       "message": "Page accessible",
-      "timestamp": "2025-06-12T17:58:51.191Z"
+      "timestamp": "2025-06-12T21:05:14.694Z"
     },
     {
       "test": "Pay-Per-Analysis Content",
       "status": "PASS",
       "message": "Page contains relevant content",
-      "timestamp": "2025-06-12T17:58:51.191Z"
+      "timestamp": "2025-06-12T21:05:14.694Z"
     },
     {
       "test": "Navigation - Expert Consultation Page",
       "status": "PASS",
       "message": "Page accessible",
-      "timestamp": "2025-06-12T17:58:51.203Z"
+      "timestamp": "2025-06-12T21:05:14.702Z"
     },
     {
       "test": "Expert Consultation Content",
       "status": "PARTIAL",
       "message": "Page loads but content needs verification",
-      "timestamp": "2025-06-12T17:58:51.204Z"
+      "timestamp": "2025-06-12T21:05:14.702Z"
     },
     {
       "test": "Navigation - Pricing Page",
       "status": "PASS",
       "message": "Page accessible",
-      "timestamp": "2025-06-12T17:58:51.211Z"
+      "timestamp": "2025-06-12T21:05:14.709Z"
     },
     {
       "test": "Navigation - Free Trial Page",
       "status": "PASS",
       "message": "Page accessible",
-      "timestamp": "2025-06-12T17:58:51.223Z"
+      "timestamp": "2025-06-12T21:05:14.716Z"
     },
     {
       "test": "Navigation - Demo Page",
       "status": "PASS",
       "message": "Page accessible",
-      "timestamp": "2025-06-12T17:58:51.230Z"
+      "timestamp": "2025-06-12T21:05:14.722Z"
     },
     {
       "test": "Navigation - Enterprise Contact Page",
       "status": "PASS",
       "message": "Page accessible",
-      "timestamp": "2025-06-12T17:58:51.236Z"
+      "timestamp": "2025-06-12T21:05:14.728Z"
     },
     {
       "test": "AI Providers",
       "status": "PASS",
-      "message": "Found 4 AI providers",
-      "timestamp": "2025-06-12T17:58:51.240Z"
+      "message": "Found 5 AI providers",
+      "timestamp": "2025-06-12T21:05:14.737Z"
     },
     {
       "test": "Free Trial Upload",
       "status": "PASS",
       "message": "Free trial upload endpoint accessible",
-      "timestamp": "2025-06-12T17:58:51.245Z"
+      "timestamp": "2025-06-12T21:05:14.744Z"
     },
     {
       "test": "Enterprise Contact",
       "status": "PASS",
       "message": "Enterprise contact form working",
-      "timestamp": "2025-06-12T17:58:51.249Z"
+      "timestamp": "2025-06-12T21:05:14.748Z"
     }
   ],
   "services_status": {
@@ -144,5 +144,5 @@
   "recommendations": [
     "Verify services integration on landing page and routing configuration"
   ],
-  "timestamp": "2025-06-12T17:58:51.250Z"
+  "timestamp": "2025-06-12T21:05:14.749Z"
 }
