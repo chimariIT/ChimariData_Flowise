@@ -22,10 +22,9 @@ interface LandingPageProps {
   onGetStarted: () => void;
   onPayPerAnalysis: () => void;
   onExpertConsultation: () => void;
-  onDemo: () => void;
 }
 
-export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertConsultation, onDemo }: LandingPageProps) {
+export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertConsultation }: LandingPageProps) {
   const [isVisible, setIsVisible] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [currentRecommendation, setCurrentRecommendation] = useState(0);
@@ -113,7 +112,7 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
               </Button>
               <Button 
                 variant="ghost" 
-                onClick={onDemo}
+                onClick={() => scrollToSection('demo')}
                 className="hover:scale-105 transition-transform duration-200"
               >
                 Demo
@@ -172,13 +171,6 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
             >
               Start Analyzing Free
               <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform duration-200" />
-            </Button>
-            <Button 
-              size="lg" 
-              variant="outline" 
-              className="text-lg px-8 py-6 hover:scale-105 transition-all duration-200 hover:shadow-lg"
-            >
-              Watch 2-min Demo
             </Button>
           </div>
 
@@ -573,7 +565,7 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
 
               <div className="space-y-3">
                 <Button 
-                  onClick={onDemo}
+                  onClick={() => scrollToSection('demo')}
                   size="lg"
                   className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:scale-105 transition-all duration-200"
                 >
@@ -634,7 +626,7 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
                 <div className="text-2xl font-bold text-slate-900 mb-1">2 minutes</div>
                 <div className="text-sm text-slate-600 mb-4">From upload to insights</div>
                 <Button 
-                  onClick={onDemo}
+                  onClick={() => scrollToSection('demo')}
                   className="bg-blue-600 hover:bg-blue-700 text-white"
                 >
                   <Play className="w-4 h-4 mr-2" />
