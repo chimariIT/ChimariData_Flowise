@@ -75,6 +75,64 @@ User Query: ${prompt}`;
   }
 }
 
+class MetaProvider implements AIProvider {
+  async queryData(apiKey: string, prompt: string, dataContext: any): Promise<string> {
+    // Meta Llama via API (e.g., Replicate, Hugging Face, or direct endpoint)
+    const systemPrompt = `You are a data analyst AI. You have access to a dataset with the following schema and sample data:
+
+Schema: ${JSON.stringify(dataContext.schema, null, 2)}
+Sample Data (first 5 rows): ${JSON.stringify(dataContext.sampleData, null, 2)}
+Total Records: ${dataContext.recordCount}
+
+Provide insights, analysis, and answers based on this data. Be specific and reference actual data patterns when possible.
+
+User Query: ${prompt}`;
+
+    // Using Replicate API as an example endpoint for Llama models
+    const response = await fetch('https://api.replicate.com/v1/predictions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Token ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        version: "meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3",
+        input: {
+          prompt: systemPrompt,
+          max_new_tokens: 1024,
+          temperature: 0.1,
+        }
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Meta API error: ${response.statusText}`);
+    }
+
+    const result = await response.json();
+    
+    // Poll for completion if needed (Replicate returns prediction ID)
+    if (result.id) {
+      let prediction = result;
+      while (prediction.status === 'starting' || prediction.status === 'processing') {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        const pollResponse = await fetch(`https://api.replicate.com/v1/predictions/${result.id}`, {
+          headers: { 'Authorization': `Token ${apiKey}` }
+        });
+        prediction = await pollResponse.json();
+      }
+      
+      if (prediction.status === 'succeeded') {
+        return prediction.output?.join('') || 'Unable to process response';
+      } else {
+        throw new Error(`Meta model processing failed: ${prediction.error}`);
+      }
+    }
+
+    return result.output || 'Unable to process response';
+  }
+}
+
 class PlatformProvider implements AIProvider {
   async queryData(apiKey: string, prompt: string, dataContext: any): Promise<string> {
     // Use platform's default Google AI API key
@@ -109,6 +167,7 @@ export class AIService {
     anthropic: new AnthropicProvider(),
     openai: new OpenAIProvider(),
     gemini: new GeminiProvider(),
+    meta: new MetaProvider(),
   };
 
   async queryData(provider: string, apiKey: string, prompt: string, dataContext: any): Promise<string> {
@@ -311,6 +370,15 @@ Format as JSON array.`;
         tier: 'professional',
         requiresApiKey: true,
         setupInstructions: 'Get your API key from ai.google.dev'
+      },
+      meta: {
+        name: 'Meta Llama',
+        model: 'Llama 2 70B Chat',
+        pricing: '$0.65 per million input tokens, $2.75 per million output tokens',
+        description: 'Meta\'s open-source large language model via Replicate API',
+        tier: 'professional',
+        requiresApiKey: true,
+        setupInstructions: 'Get your API key from replicate.com'
       }
     };
   }
