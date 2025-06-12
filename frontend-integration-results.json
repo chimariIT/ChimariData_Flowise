@@ -1,0 +1,52 @@
+{
+  "summary": {
+    "passed": 4,
+    "failed": 3,
+    "total": 7
+  },
+  "tests": [
+    {
+      "test": "Duplicate Prevention Logic",
+      "status": "PASS",
+      "message": "Server properly handles duplicate project names",
+      "timestamp": "2025-06-12T00:12:09.733Z"
+    },
+    {
+      "test": "Authentication Middleware",
+      "status": "PASS",
+      "message": "Authentication middleware properly implemented",
+      "timestamp": "2025-06-12T00:12:09.734Z"
+    },
+    {
+      "test": "Landing Page Access",
+      "status": "FAIL",
+      "message": "Landing page content not found",
+      "timestamp": "2025-06-12T00:12:09.794Z"
+    },
+    {
+      "test": "Auth Route Configuration",
+      "status": "FAIL",
+      "message": "Authentication routes not properly configured",
+      "timestamp": "2025-06-12T00:12:09.795Z"
+    },
+    {
+      "test": "Upload Error Handling",
+      "status": "PASS",
+      "message": "Upload modal has proper error handling and user feedback",
+      "timestamp": "2025-06-12T00:12:09.795Z"
+    },
+    {
+      "test": "File Validation",
+      "status": "FAIL",
+      "message": "File validation not properly implemented",
+      "timestamp": "2025-06-12T00:12:09.796Z"
+    },
+    {
+      "test": "Demo Page Structure",
+      "status": "PASS",
+      "message": "Demo page properly structured without duplicate headers",
+      "timestamp": "2025-06-12T00:12:09.796Z"
+    }
+  ],
+  "timestamp": "2025-06-12T00:12:09.798Z"
+}
