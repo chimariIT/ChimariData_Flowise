@@ -95,41 +95,42 @@ export default function PricingPage({ onGetStarted, onSubscribe, onBack }: Prici
                 Transparent Pricing
               </Badge>
             
-            <h1 className="text-4xl md:text-5xl font-bold text-slate-900 mb-6">
-              Choose the Perfect Plan for Your{" "}
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">
-                Data Journey
-              </span>
-            </h1>
-            
-            <p className="text-xl text-slate-600 mb-8 max-w-3xl mx-auto">
-              Start free with 3 analyses and 10MB data uploads. Scale up as you grow with powerful AI insights and advanced features.
-            </p>
+              <h1 className="text-4xl md:text-5xl font-bold text-slate-900 mb-6">
+                Choose the Perfect Plan for Your{" "}
+                <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">
+                  Data Journey
+                </span>
+              </h1>
+              
+              <p className="text-xl text-slate-600 mb-8 max-w-3xl mx-auto">
+                Start free with 3 analyses and 10MB data uploads. Scale up as you grow with powerful AI insights and advanced features.
+              </p>
 
-            {/* Billing Toggle */}
-            <div className="flex items-center justify-center mb-12">
-              <div className="bg-white p-1 rounded-lg border border-slate-200 flex">
-                <button
-                  onClick={() => setBillingCycle('monthly')}
-                  className={`px-6 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
-                    billingCycle === 'monthly'
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  Monthly
-                </button>
-                <button
-                  onClick={() => setBillingCycle('yearly')}
-                  className={`px-6 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
-                    billingCycle === 'yearly'
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  Yearly
-                  <Badge className="ml-2 bg-green-100 text-green-700 text-xs">Save 17%</Badge>
-                </button>
+              {/* Billing Toggle */}
+              <div className="flex items-center justify-center mb-12">
+                <div className="bg-white p-1 rounded-lg border border-slate-200 flex">
+                  <button
+                    onClick={() => setBillingCycle('monthly')}
+                    className={`px-6 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
+                      billingCycle === 'monthly'
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Monthly
+                  </button>
+                  <button
+                    onClick={() => setBillingCycle('yearly')}
+                    className={`px-6 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
+                      billingCycle === 'yearly'
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Yearly
+                    <Badge className="ml-2 bg-green-100 text-green-700 text-xs">Save 17%</Badge>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -178,129 +179,70 @@ export default function PricingPage({ onGetStarted, onSubscribe, onBack }: Prici
                       {getIcon(tier.name)}
                     </div>
                     
-                    <CardTitle className="text-2xl font-bold">{tier.name}</CardTitle>
+                    <CardTitle className="text-2xl font-bold text-slate-900 mb-2">
+                      {tier.name}
+                    </CardTitle>
                     
-                    <div className="mt-4">
+                    <div className="mb-4">
                       <div className="text-4xl font-bold text-slate-900">
-                        {priceLabel}
+                        {tier.price === 0 ? 'Free' : `$${displayPrice}`}
                       </div>
-                      {tier.price > 0 && billingCycle === 'yearly' && (
-                        <div className="text-sm text-slate-500 mt-1">
-                          ${tier.price}/month billed annually
+                      {tier.price > 0 && (
+                        <div className="text-slate-600">
+                          {billingCycle === 'yearly' ? '/year' : '/month'}
                         </div>
                       )}
                     </div>
-                    
-                    <CardDescription className="mt-4 text-slate-600">
-                      {tier.name.toLowerCase() === 'free' && "Perfect for getting started with AI data analysis"}
-                      {tier.name.toLowerCase() === 'professional' && "Ideal for growing businesses and data teams"}
-                      {tier.name.toLowerCase() === 'enterprise' && "For large organizations with advanced needs"}
-                    </CardDescription>
                   </CardHeader>
 
-                  <CardContent className="space-y-4">
-                    {/* Key Limits */}
-                    <div className="bg-slate-50 rounded-lg p-4 space-y-2">
-                      <div className="flex justify-between text-sm">
-                        <span className="text-slate-600">Monthly Analyses:</span>
-                        <span className="font-medium">{formatLimit(tier.limits.analysesPerMonth)}</span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span className="text-slate-600">Max Data Size:</span>
-                        <span className="font-medium">{formatLimit(tier.limits.maxDataSizeMB)}MB</span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span className="text-slate-600">AI Queries:</span>
-                        <span className="font-medium">{formatLimit(tier.limits.aiQueries)}</span>
-                      </div>
-                    </div>
-
-                    {/* Features */}
+                  <CardContent className="space-y-6">
                     <div className="space-y-3">
-                      {tier.features.map((feature, featureIndex) => (
-                        <div key={featureIndex} className="flex items-start space-x-3">
-                          <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" />
-                          <span className="text-sm text-slate-700">{feature}</span>
+                      {tier.features.map((feature, idx) => (
+                        <div key={idx} className="flex items-start">
+                          <CheckCircle className="w-5 h-5 text-green-600 mr-3 mt-0.5 flex-shrink-0" />
+                          <span className="text-slate-700 text-sm">{feature}</span>
                         </div>
                       ))}
                     </div>
 
-                    {/* CTA Button */}
-                    <div className="pt-6">
-                      <Button 
-                        onClick={() => {
-                          if (tier.name.toLowerCase() === 'free') {
-                            onGetStarted();
-                          } else if (onSubscribe) {
-                            onSubscribe(tier.name.toLowerCase());
-                          }
-                        }}
-                        className={`w-full py-6 text-lg font-medium transition-all duration-200 ${
-                          tier.recommended
-                            ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white'
-                            : tier.name.toLowerCase() === 'free'
-                              ? 'bg-green-600 hover:bg-green-700 text-white'
-                              : 'bg-slate-900 hover:bg-slate-800 text-white'
-                        }`}
-                      >
-                        {tier.name.toLowerCase() === 'free' ? 'Start Free' : `Choose ${tier.name}`}
-                        <ArrowRight className="w-5 h-5 ml-2" />
-                      </Button>
+                    <div className="pt-6 border-t border-slate-200">
+                      <div className="grid grid-cols-2 gap-4 text-sm">
+                        <div>
+                          <div className="font-medium text-slate-900">Analyses</div>
+                          <div className="text-slate-600">{formatLimit(tier.limits.analysesPerMonth)}/month</div>
+                        </div>
+                        <div>
+                          <div className="font-medium text-slate-900">Data Size</div>
+                          <div className="text-slate-600">{formatLimit(tier.limits.maxDataSizeMB)}MB</div>
+                        </div>
+                        <div>
+                          <div className="font-medium text-slate-900">Records</div>
+                          <div className="text-slate-600">{formatLimit(tier.limits.maxRecords)}</div>
+                        </div>
+                        <div>
+                          <div className="font-medium text-slate-900">Support</div>
+                          <div className="text-slate-600 capitalize">{tier.limits.supportLevel}</div>
+                        </div>
+                      </div>
                     </div>
+
+                    <Button 
+                      onClick={() => tier.price === 0 ? onGetStarted() : onSubscribe?.(tier.name)}
+                      className={`w-full ${
+                        tier.recommended 
+                          ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:shadow-lg' 
+                          : tier.price === 0
+                            ? 'bg-green-600 hover:bg-green-700'
+                            : 'bg-slate-900 hover:bg-slate-800'
+                      }`}
+                    >
+                      {tier.price === 0 ? 'Get Started Free' : 'Choose Plan'}
+                      <ArrowRight className="w-4 h-4 ml-2" />
+                    </Button>
                   </CardContent>
                 </Card>
               );
             })}
-          </div>
-        </div>
-      </section>
-
-      {/* FAQ Section */}
-      <section className="py-20 px-4 sm:px-6 lg:px-8 bg-white">
-        <div className="max-w-4xl mx-auto">
-          <div className="text-center mb-16">
-            <h2 className="text-3xl font-bold text-slate-900 mb-4">
-              Frequently Asked Questions
-            </h2>
-            <p className="text-lg text-slate-600">
-              Everything you need to know about our pricing and plans
-            </p>
-          </div>
-
-          <div className="grid md:grid-cols-2 gap-8">
-            <div className="space-y-6">
-              <div>
-                <h3 className="font-semibold text-slate-900 mb-2">Can I upgrade or downgrade anytime?</h3>
-                <p className="text-slate-600 text-sm">Yes, you can change your plan at any time. Changes take effect immediately with prorated billing.</p>
-              </div>
-              
-              <div>
-                <h3 className="font-semibold text-slate-900 mb-2">What happens if I exceed my limits?</h3>
-                <p className="text-slate-600 text-sm">Free tier users will be prompted to upgrade. Paid plans have overage protection with reasonable additional charges.</p>
-              </div>
-              
-              <div>
-                <h3 className="font-semibold text-slate-900 mb-2">Is my data secure?</h3>
-                <p className="text-slate-600 text-sm">Absolutely. We use enterprise-grade encryption and never store your data longer than necessary for analysis.</p>
-              </div>
-            </div>
-
-            <div className="space-y-6">
-              <div>
-                <h3 className="font-semibold text-slate-900 mb-2">Do you offer refunds?</h3>
-                <p className="text-slate-600 text-sm">Yes, we offer a 30-day money-back guarantee on all paid plans, no questions asked.</p>
-              </div>
-              
-              <div>
-                <h3 className="font-semibold text-slate-900 mb-2">Can I cancel anytime?</h3>
-                <p className="text-slate-600 text-sm">Yes, you can cancel your subscription at any time. You'll continue to have access until your current billing period ends.</p>
-              </div>
-              
-              <div>
-                <h3 className="font-semibold text-slate-900 mb-2">Need a custom plan?</h3>
-                <p className="text-slate-600 text-sm">Contact our sales team for custom enterprise solutions with dedicated support and special pricing.</p>
-              </div>
-            </div>
           </div>
         </div>
       </section>
