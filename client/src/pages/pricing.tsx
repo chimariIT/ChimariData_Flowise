@@ -10,6 +10,7 @@ interface PricingTier {
   name: string;
   price: number;
   priceLabel: string;
+  type?: string;
   features: string[];
   limits: {
     analysesPerMonth: number;
