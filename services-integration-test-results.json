@@ -1,0 +1,83 @@
+{
+  "summary": {
+    "total": 11,
+    "passed": 3,
+    "failed": 7,
+    "partial": 1,
+    "success_rate": "27%"
+  },
+  "test_results": [
+    {
+      "test": "Server Connection",
+      "status": "PASS",
+      "message": "Server is responding correctly",
+      "timestamp": "2025-06-12T17:52:46.508Z"
+    },
+    {
+      "test": "Landing Page - Pay Per Analysis",
+      "status": "FAIL",
+      "message": "Pay-per-analysis service not found on landing page",
+      "timestamp": "2025-06-12T17:52:46.527Z"
+    },
+    {
+      "test": "Landing Page - Expert Consultation",
+      "status": "FAIL",
+      "message": "Expert consultation service not found on landing page",
+      "timestamp": "2025-06-12T17:52:46.527Z"
+    },
+    {
+      "test": "Pay-Per-Analysis Page",
+      "status": "PARTIAL",
+      "message": "Page loads but content may be incomplete",
+      "timestamp": "2025-06-12T17:52:46.544Z"
+    },
+    {
+      "test": "Pay-Per-Analysis Pricing",
+      "status": "FAIL",
+      "message": "Pricing tiers not found",
+      "timestamp": "2025-06-12T17:52:46.545Z"
+    },
+    {
+      "test": "Expert Consultation Page",
+      "status": "PASS",
+      "message": "Expert consultation page loads with correct content",
+      "timestamp": "2025-06-12T17:52:46.564Z"
+    },
+    {
+      "test": "Expert Profiles",
+      "status": "FAIL",
+      "message": "Expert profiles not found",
+      "timestamp": "2025-06-12T17:52:46.564Z"
+    },
+    {
+      "test": "Pricing Page Integration",
+      "status": "FAIL",
+      "message": "Services not properly integrated",
+      "timestamp": "2025-06-12T17:52:46.573Z"
+    },
+    {
+      "test": "Subscription Tiers",
+      "status": "FAIL",
+      "message": "Subscription tiers not found",
+      "timestamp": "2025-06-12T17:52:46.573Z"
+    },
+    {
+      "test": "Navigation Flow",
+      "status": "PASS",
+      "message": "All service pages are accessible via navigation",
+      "timestamp": "2025-06-12T17:52:46.617Z"
+    },
+    {
+      "test": "Back Navigation",
+      "status": "FAIL",
+      "message": "Back navigation missing on service pages",
+      "timestamp": "2025-06-12T17:52:46.618Z"
+    }
+  ],
+  "recommendations": [
+    "Verify React routing configuration and component imports",
+    "Check App.tsx routing setup and navigation props",
+    "Ensure service components are properly integrated into pricing page"
+  ],
+  "timestamp": "2025-06-12T17:52:46.618Z"
+}

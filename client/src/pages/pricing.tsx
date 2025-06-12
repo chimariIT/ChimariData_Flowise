@@ -32,7 +32,7 @@ interface PricingPageProps {
   onExpertConsultation?: () => void;
 }
 
-export default function PricingPage({ onGetStarted, onSubscribe, onBack }: PricingPageProps) {
+export default function PricingPage({ onGetStarted, onSubscribe, onBack, onPayPerAnalysis, onExpertConsultation }: PricingPageProps) {
   const [isVisible, setIsVisible] = useState(false);
   const [billingCycle, setBillingCycle] = useState<'monthly' | 'yearly'>('monthly');
 

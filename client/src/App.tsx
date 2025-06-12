@@ -102,6 +102,8 @@ function App() {
             onGetStarted={() => setLocation("/auth")}
             onSubscribe={(tier) => setLocation("/auth")}
             onBack={() => setLocation("/")}
+            onPayPerAnalysis={() => setLocation("/pay-per-analysis")}
+            onExpertConsultation={() => setLocation("/expert-consultation")}
           />
         )}
         
