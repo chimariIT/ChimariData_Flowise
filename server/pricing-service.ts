@@ -55,7 +55,7 @@ export interface PricingResult {
 }
 
 export class PricingService {
-  // Three-tier pricing structure
+  // Six-tier pricing structure with pay-per-analysis option
   private static readonly PRICING_TIERS: PricingTier[] = [
     {
       name: "Free Trial",
@@ -193,6 +193,30 @@ export class PricingService {
         customModels: true,
         apiAccess: true,
         teamCollaboration: true
+      }
+    },
+    {
+      name: "Pay-Per-Analysis",
+      price: 25,
+      priceLabel: "From $25",
+      type: "pay-per-use",
+      features: [
+        "No monthly commitment",
+        "Pay only for what you use",
+        "Professional-grade analysis",
+        "AI-powered insights",
+        "Full data visualization",
+        "Export all results"
+      ],
+      limits: {
+        analysesPerMonth: -1, // pay per use
+        maxDataSizeMB: 50,
+        maxRecords: 100000,
+        aiQueries: 5,
+        supportLevel: "email",
+        customModels: false,
+        apiAccess: false,
+        teamCollaboration: false
       }
     }
   ];
