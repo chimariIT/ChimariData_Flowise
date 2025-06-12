@@ -275,6 +275,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const pricingResult = PricingService.calculatePrice(pricingFactors);
 
+      // Check for duplicate project names
+      const existingProjects = await storage.getUserProjects(req.user!.id);
+      const duplicateProject = existingProjects.find(p => p.name.toLowerCase() === name.toLowerCase());
+      
+      if (duplicateProject) {
+        // Clean up temp file
+        try {
+          fs.unlinkSync(tempPath);
+        } catch (e) {
+          console.warn("Failed to clean up temp file:", tempPath);
+        }
+        return res.status(409).json({ 
+          error: "Project name already exists", 
+          message: "A project with this name already exists. Please choose a different name." 
+        });
+      }
+
       // Create project
       const project = await storage.createProject({
         name,
@@ -379,6 +396,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
 
       const pricingResult = PricingService.calculatePrice(pricingFactors);
+
+      // Check for duplicate project names
+      const existingProjects = await storage.getUserProjects(req.user.userId);
+      const duplicateProject = existingProjects.find(p => p.name.toLowerCase() === name.toLowerCase());
+      
+      if (duplicateProject) {
+        // Clean up uploaded file
+        fs.unlinkSync(filePath);
+        return res.status(409).json({ 
+          error: "Project name already exists", 
+          message: "A project with this name already exists. Please choose a different name." 
+        });
+      }
 
       // Create project with comprehensive data
       const project = await storage.createProject({
@@ -1230,10 +1260,91 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Proxy requests to FastAPI for file upload
-  app.use("/api/upload", (req, res) => {
-    // This would proxy to the FastAPI backend running on port 8000
-    res.status(501).json({ error: "File upload endpoint not implemented - connect to FastAPI backend" });
+  // File upload endpoint with authentication
+  app.post("/api/upload", requireAuth, upload.single('file'), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "No file uploaded" });
+      }
+
+      const { name, questions } = req.body;
+      if (!name) {
+        return res.status(400).json({ error: "Project name is required" });
+      }
+
+      // Check for duplicate project names
+      const existingProjects = await storage.getUserProjects(req.user.userId);
+      const duplicateProject = existingProjects.find(p => p.name.toLowerCase() === name.toLowerCase());
+      
+      if (duplicateProject) {
+        // Clean up uploaded file
+        fs.unlinkSync(req.file.path);
+        return res.status(409).json({ 
+          error: "Project name already exists", 
+          message: "A project with this name already exists. Please choose a different name." 
+        });
+      }
+
+      // Parse questions if provided
+      let questionsArray: string[] = [];
+      try {
+        if (questions) {
+          questionsArray = Array.isArray(questions) ? questions : JSON.parse(questions);
+        }
+      } catch (e) {
+        fs.unlinkSync(req.file.path);
+        return res.status(400).json({ error: "Invalid questions format" });
+      }
+
+      // Process the uploaded file
+      const { FileProcessor } = await import("./file-processor");
+      const processedFile = await FileProcessor.processFile(req.file.path);
+
+      // Create project
+      const project = await storage.createProject({
+        name,
+        schema: processedFile.schema,
+        questions: questionsArray,
+        insights: {},
+        recordCount: processedFile.data.length,
+        status: "active",
+        dataSnapshot: processedFile.dataSnapshot,
+        fileMetadata: processedFile.metadata,
+        ownerId: req.user.userId
+      });
+
+      // Clean up uploaded file
+      fs.unlinkSync(req.file.path);
+
+      res.json({
+        success: true,
+        project: {
+          id: project.id,
+          name: project.name,
+          recordCount: project.recordCount,
+          status: project.status,
+          createdAt: project.createdAt
+        },
+        dataPreview: processedFile.dataSnapshot
+      });
+
+    } catch (error: any) {
+      console.error("Upload error:", error);
+      
+      // Clean up file if it exists
+      if (req.file?.path) {
+        try {
+          fs.unlinkSync(req.file.path);
+        } catch (e) {
+          console.error("Failed to cleanup file:", e);
+        }
+      }
+      
+      res.status(500).json({ 
+        error: "Upload failed", 
+        message: error.message 
+      });
+    }
   });
 
   const httpServer = createServer(app);

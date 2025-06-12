@@ -23,14 +23,14 @@ export interface Project {
 
 export const auth = {
   login: async (username: string, password: string): Promise<AuthResponse> => {
-    const res = await apiRequest("POST", `${API_BASE}/login`, { username, password });
+    const res = await apiRequest("POST", `${API_BASE}/auth/login`, { username, password });
     const data = await res.json();
     localStorage.setItem("token", data.token);
     return data;
   },
 
   register: async (username: string, password: string): Promise<AuthResponse> => {
-    const res = await apiRequest("POST", `${API_BASE}/register`, { username, password });
+    const res = await apiRequest("POST", `${API_BASE}/auth/register`, { username, password });
     const data = await res.json();
     localStorage.setItem("token", data.token);
     return data;
@@ -39,7 +39,7 @@ export const auth = {
   logout: async (): Promise<void> => {
     const token = localStorage.getItem("token");
     if (token) {
-      await apiRequest("POST", `${API_BASE}/logout`);
+      await apiRequest("POST", `${API_BASE}/auth/logout`);
       localStorage.removeItem("token");
     }
   },
