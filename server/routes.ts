@@ -210,6 +210,84 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Free trial upload endpoint (no authentication required)
+  app.post('/api/upload-trial', upload.single('file'), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: 'No file uploaded' });
+      }
+
+      const { name, questions } = req.body;
+      const questionsArray = questions ? JSON.parse(questions) : [];
+
+      // Process the file with trial limitations
+      const result = await FileProcessor.processFile(req.file.path, {
+        maxRows: 1000, // Limit for trial
+      });
+
+      // Generate basic insights for trial
+      const basicInsights = await aiService.generateDataInsights(
+        'platform', // Use free platform provider
+        '', // No API key needed for platform provider
+        {
+          schema: result.schema,
+          dataSnapshot: result.dataSnapshot.slice(0, 100), // Further limit for trial
+          metadata: result.metadata
+        }
+      );
+
+      // Generate response to the question if provided
+      let questionResponse = null;
+      if (questionsArray.length > 0) {
+        try {
+          questionResponse = await aiService.queryData(
+            'platform',
+            '',
+            questionsArray[0],
+            {
+              schema: result.schema,
+              dataSnapshot: result.dataSnapshot.slice(0, 100),
+              metadata: result.metadata
+            }
+          );
+        } catch (error) {
+          console.error('Error generating question response:', error);
+          questionResponse = "Analysis complete! Your data shows interesting patterns. Sign up for detailed AI insights.";
+        }
+      }
+
+      // Clean up uploaded file
+      if (fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path);
+      }
+
+      res.json({
+        id: 'trial-' + Date.now(),
+        name: name || 'Trial Analysis',
+        recordCount: result.data.length,
+        columnCount: Object.keys(result.schema).length,
+        insights: basicInsights.summary || "Your data has been successfully analyzed! Sign up to unlock detailed insights and advanced features.",
+        questionResponse,
+        metadata: result.metadata,
+        schema: result.schema,
+        isTrial: true
+      });
+
+    } catch (error) {
+      console.error('Trial upload error:', error);
+      
+      // Clean up file on error
+      if (req.file?.path && fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path);
+      }
+      
+      res.status(500).json({ 
+        error: 'Failed to process trial upload',
+        message: error.message 
+      });
+    }
+  });
+
   app.post("/api/projects/import-from-drive", requireAuth, async (req, res) => {
     try {
       const { fileId, fileName, name, questions } = req.body;
