@@ -71,6 +71,7 @@ function App() {
             onGetStarted={() => setLocation("/auth")}
             onPayPerAnalysis={() => setLocation("/pay-per-analysis")}
             onExpertConsultation={() => setLocation("/expert-consultation")}
+            onDemo={() => setLocation("/demo")}
           />
         )}
         

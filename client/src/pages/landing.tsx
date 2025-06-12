@@ -22,9 +22,10 @@ interface LandingPageProps {
   onGetStarted: () => void;
   onPayPerAnalysis: () => void;
   onExpertConsultation: () => void;
+  onDemo: () => void;
 }
 
-export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertConsultation }: LandingPageProps) {
+export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertConsultation, onDemo }: LandingPageProps) {
   const [isVisible, setIsVisible] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [currentRecommendation, setCurrentRecommendation] = useState(0);
@@ -112,7 +113,7 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
               </Button>
               <Button 
                 variant="ghost" 
-                onClick={() => scrollToSection('demo')}
+                onClick={onDemo}
                 className="hover:scale-105 transition-transform duration-200"
               >
                 Demo
@@ -565,7 +566,7 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
 
               <div className="space-y-3">
                 <Button 
-                  onClick={() => scrollToSection('demo')}
+                  onClick={onDemo}
                   size="lg"
                   className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:scale-105 transition-all duration-200"
                 >
@@ -626,7 +627,7 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
                 <div className="text-2xl font-bold text-slate-900 mb-1">2 minutes</div>
                 <div className="text-sm text-slate-600 mb-4">From upload to insights</div>
                 <Button 
-                  onClick={() => scrollToSection('demo')}
+                  onClick={onDemo}
                   className="bg-blue-600 hover:bg-blue-700 text-white"
                 >
                   <Play className="w-4 h-4 mr-2" />
