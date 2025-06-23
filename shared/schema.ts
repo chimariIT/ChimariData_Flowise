@@ -37,6 +37,38 @@ export const projects = pgTable("projects", {
   dataSizeMB: integer("data_size_mb").default(0),
   complexityScore: integer("complexity_score").default(1), // 1-5 based on data structure and questions
   fileMetadata: jsonb("file_metadata"), // Store original filename, sheets, header info
+  serviceType: text("service_type").notNull(), // pay_per_analysis, expert_consulting, automated_analysis, enterprise
+  workflowStep: text("workflow_step").default("questions"), // questions, upload, scan, schema, analysis, complete
+  dataSource: text("data_source"), // computer, google, microsoft, apple, rest_api
+  malwareScanStatus: text("malware_scan_status").default("pending"), // pending, scanning, clean, infected
+  columnSummaries: jsonb("column_summaries"), // AI-generated column descriptions
+});
+
+// Service workflow tracking
+export const serviceWorkflows = pgTable("service_workflows", {
+  id: serial("id").primaryKey(),
+  projectId: text("project_id").references(() => projects.id).notNull(),
+  serviceType: text("service_type").notNull(), // pay_per_analysis, expert_consulting, automated_analysis, enterprise
+  currentStep: text("current_step").default("questions"), // questions, upload, scan, schema, analysis, complete
+  stepData: jsonb("step_data"), // Store step-specific data
+  completedSteps: jsonb("completed_steps").default([]),
+  userId: integer("user_id").references(() => users.id).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Data upload sources
+export const dataUploads = pgTable("data_uploads", {
+  id: serial("id").primaryKey(),
+  projectId: text("project_id").references(() => projects.id).notNull(),
+  sourceType: text("source_type").notNull(), // computer, google_drive, onedrive, icloud, rest_api
+  originalFilename: text("original_filename"),
+  fileSize: integer("file_size"), // in bytes
+  mimeType: text("mime_type"),
+  uploadPath: text("upload_path"), // local file path or cloud reference
+  malwareScanResult: jsonb("malware_scan_result"),
+  processingStatus: text("processing_status").default("pending"), // pending, processing, complete, failed
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 export const enterpriseInquiries = pgTable("enterprise_inquiries", {
