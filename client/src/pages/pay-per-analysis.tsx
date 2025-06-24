@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ServiceWorkflow } from "@/components/ServiceWorkflow";
 import { 
   ArrowLeft, 
   CheckCircle, 
@@ -32,6 +33,7 @@ interface PayPerAnalysisProps {
 
 export default function PayPerAnalysis({ onBack }: PayPerAnalysisProps) {
   const [currentStep, setCurrentStep] = useState(1);
+  const [showWorkflow, setShowWorkflow] = useState(false);
   const [showCalculator, setShowCalculator] = useState(false);
   const [showProviderSelection, setShowProviderSelection] = useState(false);
   
