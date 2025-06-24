@@ -121,6 +121,13 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
         return;
       }
 
+      // Check if PII was detected and handled
+      if (uploadInfo.piiHandled) {
+        // Add PII information to upload info
+        uploadInfo.piiDetected = true;
+        uploadInfo.anonymized = uploadInfo.anonymizationApplied || false;
+      }
+
       await new Promise(resolve => setTimeout(resolve, 1000));
       updateWorkflowStep('upload', { uploadInfo });
     } catch (err) {
