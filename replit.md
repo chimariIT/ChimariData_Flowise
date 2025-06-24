@@ -32,6 +32,9 @@ Each service follows the same structured workflow:
 - Added PIIDetector service to identify SSN, addresses, names, emails, and phone numbers
 - Created PIIDetectionDialog for user consent and anonymization options
 - Integrated anonymization with lookup table generation for data translation
+- Fixed React hooks errors in FreeTrialWorkflow by eliminating duplicate function declarations
+- Replaced mock PII detection with real backend API integration in MultiSourceUpload component
+- Added PII detection to trial upload endpoint for consistent behavior across all upload flows
 
 ## User Preferences
 - Prefers comprehensive solutions with complete workflow implementation

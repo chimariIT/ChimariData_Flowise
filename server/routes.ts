@@ -229,9 +229,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const questionsArray = questions ? JSON.parse(questions) : [];
 
       // Process the file with trial limitations
-      const result = await FileProcessor.processFile(req.file.path, {
-        maxRows: 1000, // Limit for trial
-      });
+      const result = await FileProcessor.processFile(req.file.path, req.file.originalname);
+
+      // Check for PII in trial upload too
+      const { piiHandled, anonymizationApplied, selectedColumns } = req.body;
+      
+      if (!piiHandled || piiHandled === 'false') {
+        try {
+          const piiResult = await PIIDetector.detectPII(result.data, result.schema);
+          console.log('Trial PII detection result:', piiResult.hasPII ? 'PII found' : 'No PII detected');
+          
+          if (piiResult.hasPII) {
+            console.log('PII detected in trial upload, returning for user decision');
+            return res.json({
+              requiresPIIDecision: true,
+              piiResult,
+              tempFileId: req.file.filename,
+              name: name || req.file.originalname,
+              questions: questionsArray
+            });
+          }
+        } catch (piiError) {
+          console.error('Trial PII detection error:', piiError);
+        }
+      }
 
       // Generate basic insights for trial
       const basicInsights = await aiService.generateDataInsights(

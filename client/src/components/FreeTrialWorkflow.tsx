@@ -66,7 +66,7 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
     if (currentStep === 'scan' && data.uploadInfo && !isProcessing && !data.scanResult) {
       const timer = setTimeout(() => {
         updateWorkflowStep('scan', { scanResult: { clean: true, threats: 0 } });
-      }, 1500);
+      }, 1000);
       return () => clearTimeout(timer);
     }
     
@@ -78,7 +78,7 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
             dataTypes: ['string', 'number', 'date'] 
           } 
         });
-      }, 1500);
+      }, 1000);
       return () => clearTimeout(timer);
     }
   }, [workflowState.currentStep, workflowState.data, isProcessing]);
