@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -41,10 +41,14 @@ interface WorkflowState {
     uploadInfo?: any;
     scanResult?: any;
     schemaData?: any;
+    analysisResults?: any;
   };
 }
 
 export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps) {
+  // All state declarations must be at the top
+  const [error, setError] = useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [workflowState, setWorkflowState] = useState<WorkflowState>({
     currentStep: 'questions',
     stepIndex: 0,
@@ -58,6 +62,57 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
     ],
     data: {}
   });
+
+  const updateWorkflowStep = useCallback((stepId: string, data: any) => {
+    setWorkflowState(prev => {
+      const currentIndex = prev.steps.findIndex(s => s.id === stepId);
+      const nextIndex = Math.min(currentIndex + 1, prev.steps.length - 1);
+      
+      const updatedSteps = prev.steps.map((step, index) => ({
+        ...step,
+        completed: index <= currentIndex
+      }));
+
+      const nextStep = prev.steps[nextIndex];
+      
+      return {
+        ...prev,
+        currentStep: nextStep?.id || stepId,
+        stepIndex: nextIndex,
+        steps: updatedSteps,
+        data: { ...prev.data, ...data }
+      };
+    });
+  }, []);
+
+  const runFreeTrialAnalysis = useCallback(async () => {
+    setIsProcessing(true);
+    
+    try {
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      const analysisResults = {
+        summary: "Data analysis complete! Your dataset contains interesting patterns and insights.",
+        keyFindings: [
+          "Strong correlation found between key variables",
+          "Data quality is excellent with minimal missing values",
+          "Seasonal trends detected in time-series data"
+        ],
+        recommendations: [
+          "Consider expanding dataset for deeper insights",
+          "Upgrade to premium for advanced ML analytics",
+          "Export results for presentation"
+        ],
+        upgradePrompt: "This free trial analysis provides basic insights. Upgrade for advanced AI analysis, custom reports, and unlimited projects."
+      };
+      
+      updateWorkflowStep('analysis', { analysisResults });
+    } catch (err) {
+      setError('Analysis failed. Please try again.');
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [updateWorkflowStep]);
 
   // Auto-advance through workflow steps  
   useEffect(() => {
@@ -81,382 +136,151 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
       }, 1000);
       return () => clearTimeout(timer);
     }
-  }, [workflowState.currentStep, workflowState.data, isProcessing]);
+  }, [workflowState.currentStep, workflowState.data, isProcessing, updateWorkflowStep]);
 
-  const handleAnalysisComplete = useCallback(async () => {
-    setIsProcessing(true);
-    try {
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      const analysisResults = {
-        summary: "Data analysis complete! Your dataset contains interesting patterns and insights.",
-        keyFindings: [
-          "Strong correlation found between key variables",
-          "Data quality is excellent with minimal missing values",
-          "Seasonal trends detected in time-series data"
-        ],
-        recommendations: [
-          "Consider expanding dataset for deeper insights",
-          "Upgrade to premium for advanced ML analytics",
-          "Export results for presentation"
-        ],
-        upgradePrompt: "This free trial analysis provides basic insights. Upgrade for advanced AI analysis, custom reports, and unlimited projects."
-      };
-      
-      updateWorkflowStep('analysis', { analysisResults });
-    } catch (err) {
-      setError('Analysis failed. Please try again.');
-    } finally {
-      setIsProcessing(false);
-    }
-  }, []);
+  const handleQuestionsComplete = useCallback((questions: string[], analysisType: string) => {
+    updateWorkflowStep('questions', { questions, analysisType });
+  }, [updateWorkflowStep]);
 
+  const handleUploadComplete = useCallback((uploadInfo: any) => {
+    updateWorkflowStep('upload', { uploadInfo });
+  }, [updateWorkflowStep]);
 
-  const [error, setError] = useState<string | null>(null);
-
-  const updateWorkflowStep = (stepId: string, data: any) => {
-    setWorkflowState(prev => {
-      const currentIndex = prev.steps.findIndex(s => s.id === stepId);
-      const nextIndex = Math.min(currentIndex + 1, prev.steps.length - 1);
-      const nextStep = prev.steps[nextIndex];
-
-      return {
-        ...prev,
-        currentStep: nextStep.id,
-        stepIndex: nextIndex,
-        steps: prev.steps.map((step, index) => ({
-          ...step,
-          completed: index <= currentIndex
-        })),
-        data: { ...prev.data, ...data }
-      };
-    });
-  };
-
-  const handleQuestionsSubmit = async (questions: string[], analysisType: string) => {
-    setIsProcessing(true);
-    setError(null);
-
-    try {
-      // Simulate processing without authentication
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      updateWorkflowStep('questions', { questions, analysisType });
-    } catch (err) {
-      setError('Failed to save questions. Please try again.');
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const handleUploadComplete = async (uploadInfo: any) => {
-    setIsProcessing(true);
-    setError(null);
-
-    try {
-      console.log('Free trial upload complete:', uploadInfo);
-      
-      // Validate file size for free trial (limit to 10MB)
-      if (uploadInfo.size && uploadInfo.size > 10 * 1024 * 1024) {
-        setError('Free trial is limited to files under 10MB. Please upgrade for larger files.');
-        setIsProcessing(false);
-        return;
-      }
-
-      // Process upload completion
-      await new Promise(resolve => setTimeout(resolve, 500));
-      updateWorkflowStep('upload', { uploadInfo });
-    } catch (err) {
-      setError('Failed to process upload. Please try again.');
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const handleScanComplete = async (scanResult: any) => {
-    setIsProcessing(true);
-    setError(null);
-
-    try {
-      // For free trial, simulate a successful scan
-      const mockScanResult = {
-        clean: true,
-        threats: 0,
-        scanTime: Date.now(),
-        details: 'File passed security validation'
-      };
-
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      updateWorkflowStep('scan', { scanResult: mockScanResult });
-    } catch (err) {
-      setError('Failed to complete security scan. Please try again.');
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const handleSchemaComplete = async (schemaData: any) => {
-    setIsProcessing(true);
-    setError(null);
-
-    try {
-      // For free trial, simulate schema analysis
-      const mockSchemaData = {
-        columns: [
-          { name: 'id', type: 'integer', summary: 'Unique identifier' },
-          { name: 'name', type: 'text', summary: 'Name field' },
-          { name: 'value', type: 'numeric', summary: 'Numeric value' },
-          { name: 'date', type: 'date', summary: 'Date field' }
-        ],
-        rowCount: Math.floor(Math.random() * 1000) + 100,
-        insights: ['4 columns detected', 'Mixed data types', 'No missing values found']
-      };
-
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      updateWorkflowStep('schema', { schemaData: mockSchemaData });
-    } catch (err) {
-      setError('Failed to analyze data schema. Please try again.');
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const renderCurrentStep = () => {
+  const getCurrentStepComponent = () => {
     const { currentStep, data } = workflowState;
 
     switch (currentStep) {
       case 'questions':
         return (
-          <div className="space-y-4">
-            <Alert className="border-blue-200 bg-blue-50">
-              <Gift className="h-4 w-4 text-blue-600" />
-              <AlertDescription>
-                <strong className="text-blue-800">Free Trial Mode</strong>
-                <div className="text-sm mt-1">
-                  You're using our free trial. No account required! Limited to basic analysis and 10MB files.
-                </div>
-              </AlertDescription>
-            </Alert>
-            <QuestionCollection
-              serviceType="free_trial"
-              onQuestionsSubmit={handleQuestionsSubmit}
-              isLoading={isProcessing}
-            />
-          </div>
+          <QuestionCollection
+            onComplete={handleQuestionsComplete}
+            serviceType="free_trial"
+          />
         );
 
       case 'upload':
         return (
-          <div className="space-y-4">
-            <Alert className="border-orange-200 bg-orange-50">
-              <AlertTriangle className="h-4 w-4 text-orange-600" />
-              <AlertDescription>
-                <strong className="text-orange-800">File Size Limit</strong>
-                <div className="text-sm mt-1">
-                  Free trial is limited to files under 10MB. Upgrade for larger files and advanced features.
-                </div>
-              </AlertDescription>
-            </Alert>
-            <MultiSourceUpload
-              onUploadComplete={handleUploadComplete}
-              maxSize={10 * 1024 * 1024} // 10MB limit
-              isLoading={isProcessing}
-              isFreeTrialMode={true}
-            />
-          </div>
+          <MultiSourceUpload
+            onComplete={handleUploadComplete}
+            serviceType="free_trial"
+            questions={data.questions || []}
+          />
         );
 
       case 'scan':
         return (
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center space-x-2">
-                <Shield className="w-5 h-5 text-green-600" />
-                <span>Security Scan</span>
-              </CardTitle>
-              <CardDescription>
-                Scanning {data.uploadInfo?.filename || 'your file'} for security threats
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                <div className="flex items-center space-x-2">
-                  <Loader2 className="w-5 h-5 animate-spin text-green-600" />
-                  <span>Analyzing file for malware and security issues...</span>
-                </div>
-                <div className="text-sm text-slate-600">
-                  Free trial includes basic security validation
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+          <SecurityScan
+            isScanning={!data.scanResult}
+            scanResult={data.scanResult}
+            serviceType="free_trial"
+          />
         );
 
       case 'schema':
         return (
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center space-x-2">
-                <Database className="w-5 h-5 text-blue-600" />
-                <span>Data Schema Analysis</span>
-              </CardTitle>
-              <CardDescription>
-                Analyzing data structure and column types for {data.uploadInfo?.filename || 'your file'}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                <div className="flex items-center space-x-2">
-                  <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
-                  <span>Detecting columns and data types...</span>
-                </div>
-                <div className="text-sm text-slate-600">
-                  Generating column summaries and quality metrics
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+          <SchemaAnalysis
+            isAnalyzing={!data.schemaData}
+            schemaData={data.schemaData}
+            serviceType="free_trial"
+          />
         );
 
       case 'analysis':
-        return (
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center space-x-2">
-                <BarChart3 className="w-5 h-5 text-orange-600" />
-                <span>Free Trial Analysis</span>
-              </CardTitle>
-              <CardDescription>
-                Running basic analysis with free trial limitations
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                <Alert className="border-blue-200 bg-blue-50">
-                  <Gift className="h-4 w-4 text-blue-600" />
-                  <AlertDescription>
-                    <strong className="text-blue-800">Free Trial Features</strong>
-                    <div className="text-sm mt-2 space-y-1">
-                      <div>• Basic descriptive statistics</div>
-                      <div>• Simple data visualizations</div>
-                      <div>• Column summaries and data quality</div>
-                      <div>• Limited to 1,000 records analysis</div>
-                    </div>
-                  </AlertDescription>
-                </Alert>
-                <div className="flex items-center space-x-2">
-                  <Loader2 className="w-5 h-5 animate-spin text-orange-600" />
-                  <span>Running free trial analysis...</span>
-                </div>
-                <div className="text-sm text-slate-600">
-                  Processing {data.questions?.length || 0} questions with basic analysis features
-                </div>
-                {!workflowState.data.analysisResults && (
-                  <Button 
-                    onClick={handleAnalysisComplete}
-                    className="w-full mt-4"
-                    disabled={isProcessing}
-                  >
-                    {isProcessing ? 'Processing...' : 'Start Analysis'}
-                  </Button>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        );
-
-      case 'complete':
-        const analysisData = workflowState.data.analysisResults;
-        return (
-          <div className="space-y-6">
+        if (!data.analysisResults) {
+          return (
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center space-x-2">
-                  <CheckCircle className="w-5 h-5 text-green-600" />
-                  <span>Free Trial Analysis Complete</span>
+                <CardTitle className="flex items-center">
+                  <BarChart3 className="w-5 h-5 mr-2" />
+                  Running Free Trial Analysis
                 </CardTitle>
                 <CardDescription>
-                  Your basic analysis results are ready for review
+                  Generating basic insights from your data
                 </CardDescription>
               </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  <Alert className="border-green-200 bg-green-50">
-                    <CheckCircle className="h-4 w-4 text-green-600" />
-                    <AlertDescription>
-                      <strong className="text-green-800">Analysis Complete!</strong>
-                      <div className="text-sm mt-1">
-                        Here's what we found in your data with our free trial features.
-                      </div>
-                    </AlertDescription>
-                  </Alert>
-
-                  {analysisData && (
-                    <div className="space-y-4">
-                      <div className="grid md:grid-cols-3 gap-4">
-                        <div className="p-3 bg-blue-50 rounded-lg text-center">
-                          <div className="text-2xl font-bold text-blue-600">
-                            {analysisData.basicStats?.totalRecords}
-                          </div>
-                          <div className="text-sm text-blue-700">Total Records</div>
-                        </div>
-                        <div className="p-3 bg-green-50 rounded-lg text-center">
-                          <div className="text-2xl font-bold text-green-600">
-                            {analysisData.basicStats?.completeness}
-                          </div>
-                          <div className="text-sm text-green-700">Data Completeness</div>
-                        </div>
-                        <div className="p-3 bg-orange-50 rounded-lg text-center">
-                          <div className="text-2xl font-bold text-orange-600">
-                            {analysisData.basicStats?.qualityScore}
-                          </div>
-                          <div className="text-sm text-orange-700">Quality Score</div>
-                        </div>
-                      </div>
-
-                      <div className="p-4 bg-slate-50 rounded-lg">
-                        <h4 className="font-medium text-slate-900 mb-2">Key Insights</h4>
-                        <ul className="text-sm text-slate-600 space-y-1">
-                          {analysisData.insights?.map((insight: string, idx: number) => (
-                            <li key={idx}>• {insight}</li>
-                          ))}
-                        </ul>
-                      </div>
-
-                      <div className="p-4 bg-blue-50 rounded-lg">
-                        <h4 className="font-medium text-blue-900 mb-2">Recommendations</h4>
-                        <ul className="text-sm text-blue-700 space-y-1">
-                          {analysisData.recommendations?.map((rec: string, idx: number) => (
-                            <li key={idx}>• {rec}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    </div>
-                  )}
-                  
-                  <div className="grid md:grid-cols-2 gap-4 mt-6">
-                    <Button onClick={() => onComplete?.(workflowState.data)} className="w-full">
-                      Download Trial Report
-                    </Button>
-                    <Button variant="outline" className="w-full bg-blue-600 text-white hover:bg-blue-700">
-                      Upgrade for Advanced Analysis
-                    </Button>
-                  </div>
-
-                  <div className="mt-6 p-4 bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg border border-blue-200">
-                    <h4 className="font-medium text-slate-900 mb-2">🚀 Upgrade Benefits</h4>
-                    <div className="text-sm text-slate-600 space-y-1">
-                      <div>• Advanced ML predictions and forecasting</div>
-                      <div>• Unlimited file size and record processing</div>
-                      <div>• Multiple AI providers (GPT-4, Claude, Gemini)</div>
-                      <div>• Interactive visualizations and dashboards</div>
-                      <div>• Custom analysis workflows and automation</div>
-                      <div>• Priority support and faster processing</div>
-                    </div>
-                  </div>
+              <CardContent className="space-y-4">
+                <Alert>
+                  <Gift className="w-4 h-4" />
+                  <AlertDescription>
+                    Free trial provides basic analysis features. Upgrade for advanced AI insights and custom reports.
+                  </AlertDescription>
+                </Alert>
+                
+                <div className="flex justify-center">
+                  <Button onClick={runFreeTrialAnalysis} disabled={isProcessing}>
+                    {isProcessing ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Analyzing...
+                      </>
+                    ) : (
+                      <>
+                        <BarChart3 className="w-4 h-4 mr-2" />
+                        Start Free Trial Analysis
+                      </>
+                    )}
+                  </Button>
                 </div>
               </CardContent>
             </Card>
-          </div>
+          );
+        }
+
+        return (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center text-green-600">
+                <CheckCircle className="w-5 h-5 mr-2" />
+                Free Trial Analysis Complete
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="bg-green-50 p-4 rounded-lg">
+                <h3 className="font-semibold text-green-800 mb-2">Summary</h3>
+                <p className="text-green-700">{data.analysisResults.summary}</p>
+              </div>
+
+              <div>
+                <h3 className="font-semibold mb-2">Key Findings</h3>
+                <ul className="space-y-1">
+                  {data.analysisResults.keyFindings.map((finding: string, index: number) => (
+                    <li key={index} className="flex items-start space-x-2">
+                      <CheckCircle className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
+                      <span className="text-sm">{finding}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div>
+                <h3 className="font-semibold mb-2">Recommendations</h3>
+                <ul className="space-y-1">
+                  {data.analysisResults.recommendations.map((rec: string, index: number) => (
+                    <li key={index} className="flex items-start space-x-2">
+                      <ArrowLeft className="w-4 h-4 text-blue-500 mt-0.5 flex-shrink-0" />
+                      <span className="text-sm">{rec}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <Alert>
+                <Gift className="w-4 h-4" />
+                <AlertDescription>
+                  {data.analysisResults.upgradePrompt}
+                </AlertDescription>
+              </Alert>
+
+              <div className="flex space-x-2">
+                <Button onClick={() => onComplete?.(data.analysisResults)}>
+                  View Full Results
+                </Button>
+                <Button variant="outline" onClick={onBack}>
+                  Try Another Dataset
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         );
 
       default:
@@ -499,20 +323,14 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
 
           {/* Main Content */}
           <div className="lg:col-span-2">
-            <div className="space-y-6">
-              {/* Error Display */}
-              {error && (
-                <Alert className="border-red-200 bg-red-50">
-                  <AlertTriangle className="h-4 w-4 text-red-600" />
-                  <AlertDescription>
-                    <strong className="text-red-800">Error:</strong> {error}
-                  </AlertDescription>
-                </Alert>
-              )}
-
-              {/* Current Step Content */}
-              {renderCurrentStep()}
-            </div>
+            {error && (
+              <Alert variant="destructive" className="mb-4">
+                <AlertTriangle className="w-4 h-4" />
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+            
+            {getCurrentStepComponent()}
           </div>
         </div>
       </div>
