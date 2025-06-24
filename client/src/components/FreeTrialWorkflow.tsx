@@ -1,5 +1,4 @@
 import { useState, useEffect } from "react";
-import * as React from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -65,13 +64,11 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
     const { currentStep, data } = workflowState;
     
     if (currentStep === 'scan' && data.uploadInfo && !isProcessing && !data.scanResult) {
-      const timer = setTimeout(() => handleScanComplete({}), 1000);
-      return () => clearTimeout(timer);
+      handleScanComplete({});
     }
     
     if (currentStep === 'schema' && data.scanResult && !isProcessing && !data.schemaData) {
-      const timer = setTimeout(() => handleSchemaComplete({}), 1000);
-      return () => clearTimeout(timer);
+      handleSchemaComplete({});
     }
   }, [workflowState.currentStep, workflowState.data, isProcessing]);
 

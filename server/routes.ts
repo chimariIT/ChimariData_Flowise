@@ -168,15 +168,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-      const token = generateToken();
-      sessions.set(token, { userId: user.id, username: user.username });
-
-      res.json({ 
-        token, 
-        user: { id: user.id, username: user.username } 
-      });
-  });
-
   app.post("/api/auth/logout", requireAuth, (req, res) => {
     const token = req.headers.authorization?.replace('Bearer ', '');
     if (token) {
