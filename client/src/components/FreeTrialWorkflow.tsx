@@ -64,6 +64,7 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
   });
 
   const updateWorkflowStep = useCallback((stepId: string, data: any) => {
+    console.log('Updating workflow step:', stepId, data);
     setWorkflowState(prev => {
       const currentIndex = prev.steps.findIndex(s => s.id === stepId);
       const nextIndex = Math.min(currentIndex + 1, prev.steps.length - 1);
@@ -74,6 +75,8 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
       }));
 
       const nextStep = prev.steps[nextIndex];
+      
+      console.log('Next step:', nextStep?.id, 'Current index:', currentIndex, 'Next index:', nextIndex);
       
       return {
         ...prev,
@@ -139,6 +142,7 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
   }, [workflowState.currentStep, workflowState.data, isProcessing, updateWorkflowStep]);
 
   const handleQuestionsComplete = useCallback((questions: string[], analysisType: string) => {
+    console.log('Questions completed:', { questions, analysisType });
     updateWorkflowStep('questions', { questions, analysisType });
   }, [updateWorkflowStep]);
 
@@ -148,6 +152,7 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
 
   const getCurrentStepComponent = () => {
     const { currentStep, data } = workflowState;
+    console.log('Rendering step:', currentStep, 'Data:', data);
 
     switch (currentStep) {
       case 'questions':
