@@ -516,13 +516,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         processedFile = await FileProcessor.processFile(
           filePath, 
-          req.file.originalname,
-          {
-            // Allow user to specify processing options in future
-            headerRow: req.body.headerRow ? parseInt(req.body.headerRow) : undefined,
-            selectedSheet: req.body.selectedSheet,
-            encoding: req.body.encoding,
-          }
+          req.file.originalname
         );
       } catch (error: any) {
         return res.status(400).json({ 
