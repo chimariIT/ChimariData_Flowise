@@ -224,41 +224,6 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
     }
   };
 
-  const handleAnalysisComplete = async () => {
-    setIsProcessing(true);
-    setError(null);
-
-    try {
-      // Simulate analysis processing
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      
-      const analysisResults = {
-        basicStats: {
-          totalRecords: workflowState.data.schemaData?.rowCount || 250,
-          completeness: '95%',
-          qualityScore: 'Good'
-        },
-        insights: [
-          'Data quality is good with minimal missing values',
-          'Numeric columns show normal distribution',
-          'Date range spans 6 months',
-          'Top category represents 35% of records'
-        ],
-        recommendations: [
-          'Consider data validation for improved quality',
-          'Monitor trends in the value column',
-          'Explore seasonal patterns in date field'
-        ]
-      };
-
-      updateWorkflowStep('analysis', { analysisResults });
-    } catch (err) {
-      setError('Failed to complete analysis. Please try again.');
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
   const renderCurrentStep = () => {
     const { currentStep, data } = workflowState;
 
