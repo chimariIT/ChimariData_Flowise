@@ -59,27 +59,27 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
     data: {}
   });
 
-  // Auto-advance through workflow steps
+  // Auto-advance through workflow steps  
   useEffect(() => {
     const { currentStep, data } = workflowState;
     
     if (currentStep === 'scan' && data.uploadInfo && !isProcessing && !data.scanResult) {
-      const scanTimer = setTimeout(() => {
+      const timer = setTimeout(() => {
         updateWorkflowStep('scan', { scanResult: { clean: true, threats: 0 } });
-      }, 1000);
-      return () => clearTimeout(scanTimer);
+      }, 1500);
+      return () => clearTimeout(timer);
     }
     
     if (currentStep === 'schema' && data.scanResult && !isProcessing && !data.schemaData) {
-      const schemaTimer = setTimeout(() => {
+      const timer = setTimeout(() => {
         updateWorkflowStep('schema', { 
           schemaData: { 
             columns: 5, 
             dataTypes: ['string', 'number', 'date'] 
           } 
         });
-      }, 1000);
-      return () => clearTimeout(schemaTimer);
+      }, 1500);
+      return () => clearTimeout(timer);
     }
   }, [workflowState.currentStep, workflowState.data, isProcessing]);
 

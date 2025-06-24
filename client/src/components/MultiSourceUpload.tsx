@@ -210,9 +210,54 @@ export function MultiSourceUpload({
     }
   };
 
-  const handlePIIDecision = (requiresPII: boolean, anonymizeData: boolean, selectedColumns: string[]) => {
+  const handlePIIDecision = async (requiresPII: boolean, anonymizeData: boolean, selectedColumns: string[]) => {
     setShowPIIDialog(false);
-    completeUpload(uploadedFile!, requiresPII, anonymizeData, selectedColumns);
+    
+    if (tempFileId && uploadedFile) {
+      // Re-upload with PII decision
+      try {
+        const formData = new FormData();
+        formData.append('file', uploadedFile);
+        formData.append('name', uploadedFile.name.split('.')[0]);
+        formData.append('questions', JSON.stringify([]));
+        formData.append('piiHandled', 'true');
+        formData.append('anonymizationApplied', anonymizeData.toString());
+        formData.append('selectedColumns', JSON.stringify(selectedColumns));
+        
+        const endpoint = isFreeTrialMode ? '/api/upload-trial' : '/api/projects/upload';
+        const token = localStorage.getItem('auth_token');
+        
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            ...(token && !isFreeTrialMode && { 'Authorization': `Bearer ${token}` })
+          },
+          body: formData
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          setUploadStatus('complete');
+          onUploadComplete({
+            sourceType: selectedSource,
+            filename: uploadedFile.name,
+            size: uploadedFile.size,
+            mimeType: uploadedFile.type,
+            uploadPath: result.uploadPath || `/uploads/${Date.now()}_${uploadedFile.name}`,
+            piiHandled: true,
+            anonymizationApplied: anonymizeData
+          });
+        } else {
+          setUploadStatus('error');
+        }
+      } catch (error) {
+        console.error('PII processing error:', error);
+        setUploadStatus('error');
+      }
+    } else {
+      // Fallback for direct upload completion
+      completeUpload(uploadedFile!, requiresPII, anonymizeData, selectedColumns);
+    }
   };
 
   const handlePIIReject = () => {
