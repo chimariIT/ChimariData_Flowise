@@ -212,7 +212,7 @@ export function MultiSourceUpload({
 
   const handlePIIDecision = (requiresPII: boolean, anonymizeData: boolean, selectedColumns: string[]) => {
     setShowPIIDialog(false);
-    completeUpload(uploadedFile!, requiresPII, anonymizeData);
+    completeUpload(uploadedFile!, requiresPII, anonymizeData, selectedColumns);
   };
 
   const handlePIIReject = () => {
@@ -222,18 +222,62 @@ export function MultiSourceUpload({
     setUploadProgress(0);
   };
 
-  const completeUpload = (file: File, piiHandled: boolean, anonymizationApplied: boolean) => {
+  const completeUpload = async (file: File, piiHandled: boolean, anonymizationApplied: boolean, selectedColumns?: string[]) => {
     setUploadStatus('complete');
     
-    onUploadComplete({
-      sourceType: selectedSource,
-      filename: file.name,
-      size: file.size,
-      mimeType: file.type,
-      uploadPath: `/uploads/${Date.now()}_${file.name}`,
-      piiHandled,
-      anonymizationApplied
-    });
+    // If this is a real upload (not simulation), we need to call the server
+    if (!isFreeTrialMode) {
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('name', file.name);
+        formData.append('piiHandled', piiHandled.toString());
+        formData.append('anonymizationApplied', anonymizationApplied.toString());
+        if (selectedColumns) {
+          formData.append('selectedColumns', JSON.stringify(selectedColumns));
+        }
+
+        const response = await fetch('/api/upload', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
+          },
+          body: formData
+        });
+
+        const result = await response.json();
+        
+        if (!response.ok) {
+          throw new Error(result.error || 'Upload failed');
+        }
+
+        onUploadComplete({
+          sourceType: selectedSource,
+          filename: file.name,
+          size: file.size,
+          mimeType: file.type,
+          uploadPath: `/uploads/${Date.now()}_${file.name}`,
+          piiHandled,
+          anonymizationApplied,
+          projectId: result.project?.id
+        });
+      } catch (error) {
+        console.error('Upload error:', error);
+        setUploadStatus('error');
+        return;
+      }
+    } else {
+      // Free trial mode - simulate completion
+      onUploadComplete({
+        sourceType: selectedSource,
+        filename: file.name,
+        size: file.size,
+        mimeType: file.type,
+        uploadPath: `/uploads/${Date.now()}_${file.name}`,
+        piiHandled,
+        anonymizationApplied
+      });
+    }
   };
 
   const handleCloudAuth = async (provider: string) => {
@@ -493,27 +537,68 @@ export function MultiSourceUpload({
           {selectedSource === 'apple' && renderCloudUpload('iCloud')}
           {selectedSource === 'rest_api' && renderApiUpload()}
 
-          {/* Upload Progress */}
-          {uploadStatus === 'uploading' && (
-            <div className="mt-6 space-y-2">
-              <div className="flex justify-between text-sm">
-                <span>Uploading...</span>
-                <span>{uploadProgress}%</span>
+          {/* Upload Progress and Status */}
+          <div className="mt-6 space-y-4">
+            {uploadStatus === 'uploading' && (
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span>Uploading {uploadedFile?.name}...</span>
+                  <span>{uploadProgress}%</span>
+                </div>
+                <Progress value={uploadProgress} />
               </div>
-              <Progress value={uploadProgress} />
-            </div>
-          )}
+            )}
+
+            {uploadStatus === 'pii_check' && (
+              <div className="space-y-2">
+                <div className="flex items-center space-x-2">
+                  <Shield className="w-5 h-5 text-blue-600 animate-pulse" />
+                  <span className="text-sm font-medium">Scanning for sensitive data...</span>
+                </div>
+                <div className="text-xs text-slate-500">
+                  Detecting PII, SSN, addresses, and other sensitive information
+                </div>
+                <Progress value={100} className="animate-pulse" />
+              </div>
+            )}
+
+            {uploadStatus === 'complete' && uploadedFile && (
+              <div className="flex items-center space-x-2 text-green-600">
+                <CheckCircle className="w-5 h-5" />
+                <span className="text-sm font-medium">
+                  {uploadedFile.name} processed successfully
+                </span>
+              </div>
+            )}
+
+            {uploadStatus === 'error' && (
+              <div className="flex items-center space-x-2 text-red-600">
+                <X className="w-5 h-5" />
+                <span className="text-sm">Upload failed. Please try again.</span>
+              </div>
+            )}
+          </div>
 
           {/* Security Notice */}
           <Alert className="mt-6">
             <Shield className="h-4 w-4" />
             <AlertDescription>
-              <strong>Security Scan:</strong> All uploaded files are automatically scanned for malware 
-              and security threats before processing. Your data is encrypted and stored securely.
+              <strong>Security & Privacy:</strong> All files are scanned for malware and PII data. 
+              Sensitive information is detected and you'll be asked for consent before processing.
             </AlertDescription>
           </Alert>
         </CardContent>
       </Card>
+
+      {/* PII Detection Dialog */}
+      {piiDetectionResult && (
+        <PIIDetectionDialog
+          isOpen={showPIIDialog}
+          piiResult={piiDetectionResult}
+          onAccept={handlePIIDecision}
+          onReject={handlePIIReject}
+        />
+      )}
     </div>
   );
 }
