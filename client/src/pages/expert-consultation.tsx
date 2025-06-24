@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Slider } from "@/components/ui/slider";
+import { ServiceWorkflow } from "@/components/ServiceWorkflow";
 import { 
   ArrowLeft, 
   CheckCircle, 
@@ -36,6 +37,7 @@ interface ExpertConsultationProps {
 
 export default function ExpertConsultation({ onBack }: ExpertConsultationProps) {
   const [bookingStep, setBookingStep] = useState(1);
+  const [showWorkflow, setShowWorkflow] = useState(false);
   const [showCalculator, setShowCalculator] = useState(false);
   const [showProviderSelection, setShowProviderSelection] = useState(false);
   
@@ -418,7 +420,7 @@ export default function ExpertConsultation({ onBack }: ExpertConsultationProps) 
                 <Button 
                   size="lg"
                   className="w-full bg-purple-600 hover:bg-purple-700 text-white px-8 py-4"
-                  onClick={() => setBookingStep(1)}
+                  onClick={() => setShowWorkflow(true)}
                 >
                   Book Standard Consultation
                   <ArrowRight className="w-5 h-5 ml-2" />

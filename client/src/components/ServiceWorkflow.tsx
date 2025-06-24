@@ -8,6 +8,7 @@ import { WorkflowSteps } from "./WorkflowSteps";
 import { QuestionCollection } from "./QuestionCollection";
 import { MultiSourceUpload } from "./MultiSourceUpload";
 import { SecurityScan } from "./SecurityScan";
+import { SchemaAnalysis } from "./SchemaAnalysis";
 import { 
   ArrowLeft, 
   CheckCircle, 
@@ -173,29 +174,14 @@ export function ServiceWorkflow({
 
       case 'schema':
         return (
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center space-x-2">
-                <Database className="w-5 h-5 text-purple-600" />
-                <span>Schema Analysis</span>
-              </CardTitle>
-              <CardDescription>
-                Analyzing your data structure and generating column summaries
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                <div className="flex items-center space-x-2">
-                  <Loader2 className="w-5 h-5 animate-spin text-purple-600" />
-                  <span>Analyzing data schema...</span>
-                </div>
-                <Progress value={75} />
-                <div className="text-sm text-slate-600">
-                  Detecting column types, relationships, and generating AI-powered summaries
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+          <SchemaAnalysis
+            uploadId={456} // This would come from upload step
+            filename={data.uploadInfo?.filename || 'uploaded_file.csv'}
+            onAnalysisComplete={(schemaData) => {
+              updateWorkflowStep('schema', { schemaData });
+            }}
+            isAnalyzing={true}
+          />
         );
 
       case 'analysis':
