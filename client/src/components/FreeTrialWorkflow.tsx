@@ -111,7 +111,7 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
     }
   }, []);
 
-  const [isProcessing, setIsProcessing] = useState(false);
+
   const [error, setError] = useState<string | null>(null);
 
   const updateWorkflowStep = (stepId: string, data: any) => {
