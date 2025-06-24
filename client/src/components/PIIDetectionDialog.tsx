@@ -41,9 +41,9 @@ interface PIIDetectionResult {
 
 interface PIIDetectionDialogProps {
   isOpen: boolean;
+  onClose: () => void;
   piiResult: PIIDetectionResult;
-  onAccept: (requiresPII: boolean, anonymizeData: boolean, selectedColumns: string[]) => void;
-  onReject: () => void;
+  onDecision: (requiresPII: boolean, anonymizeData: boolean, selectedColumns: string[]) => void;
 }
 
 const PII_TYPE_LABELS = {
