@@ -167,7 +167,7 @@ export class PIIDetector {
       summary: {
         totalRecords: data.length,
         anonymizedFields: piiColumns.length,
-        preservedStructure
+        preservedStructure: preserveStructure
       }
     };
   }
