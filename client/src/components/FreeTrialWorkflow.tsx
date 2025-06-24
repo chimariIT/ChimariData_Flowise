@@ -64,15 +64,52 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
     const { currentStep, data } = workflowState;
     
     if (currentStep === 'scan' && data.uploadInfo && !isProcessing && !data.scanResult) {
-      const timer = setTimeout(() => handleScanComplete({}), 1000);
+      const timer = setTimeout(() => {
+        updateWorkflowStep('scan', { scanResult: { clean: true, threats: 0 } });
+      }, 1000);
       return () => clearTimeout(timer);
     }
     
     if (currentStep === 'schema' && data.scanResult && !isProcessing && !data.schemaData) {
-      const timer = setTimeout(() => handleSchemaComplete({}), 1000);
+      const timer = setTimeout(() => {
+        updateWorkflowStep('schema', { 
+          schemaData: { 
+            columns: 5, 
+            dataTypes: ['string', 'number', 'date'] 
+          } 
+        });
+      }, 1000);
       return () => clearTimeout(timer);
     }
   }, [workflowState.currentStep, workflowState.data, isProcessing]);
+
+  const handleAnalysisComplete = useCallback(async () => {
+    setIsProcessing(true);
+    try {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      const analysisResults = {
+        summary: "Data analysis complete! Your dataset contains interesting patterns and insights.",
+        keyFindings: [
+          "Strong correlation found between key variables",
+          "Data quality is excellent with minimal missing values",
+          "Seasonal trends detected in time-series data"
+        ],
+        recommendations: [
+          "Consider expanding dataset for deeper insights",
+          "Upgrade to premium for advanced ML analytics",
+          "Export results for presentation"
+        ],
+        upgradePrompt: "This free trial analysis provides basic insights. Upgrade for advanced AI analysis, custom reports, and unlimited projects."
+      };
+      
+      updateWorkflowStep('analysis', { analysisResults });
+    } catch (err) {
+      setError('Analysis failed. Please try again.');
+    } finally {
+      setIsProcessing(false);
+    }
+  }, []);
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);

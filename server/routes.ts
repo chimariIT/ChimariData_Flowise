@@ -484,7 +484,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ error: "Authentication required" });
       }
 
-      const { name, questions } = req.body;
+      const { name, questions, piiHandled, anonymizationApplied, selectedColumns } = req.body;
       if (!name) {
         return res.status(400).json({ error: "Project name is required" });
       }
@@ -497,6 +497,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       } catch (e) {
         return res.status(400).json({ error: "Invalid questions format" });
+      }
+
+      // Parse selected columns for anonymization
+      let parsedSelectedColumns: string[] = [];
+      try {
+        if (selectedColumns) {
+          parsedSelectedColumns = JSON.parse(selectedColumns);
+        }
+      } catch (e) {
+        console.error('Error parsing selected columns:', e);
       }
 
       // Process the uploaded file with comprehensive file processor
