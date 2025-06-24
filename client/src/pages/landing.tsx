@@ -30,8 +30,9 @@ interface LandingPageProps {
   onFreeTrial: () => void;
 }
 
-
+export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertConsultation, onDemo, onPricing, onFreeTrial }: LandingPageProps) {
   const [showFreeTrialWorkflow, setShowFreeTrialWorkflow] = useState(false);
+  const [isVisible, setIsVisible] = useState(false);
 
   // Show free trial workflow if user wants to try without signing up
   if (showFreeTrialWorkflow) {
@@ -46,8 +47,6 @@ interface LandingPageProps {
     );
   }
 
-export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertConsultation, onDemo, onPricing, onFreeTrial }: LandingPageProps) {
-  const [isVisible, setIsVisible] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [currentRecommendation, setCurrentRecommendation] = useState(0);
 
