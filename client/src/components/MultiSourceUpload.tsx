@@ -41,6 +41,7 @@ interface MultiSourceUploadProps {
   allowedTypes?: string[];
   maxSize?: number;
   isLoading?: boolean;
+  isFreeTrialMode?: boolean;
 }
 
 const UPLOAD_SOURCES: UploadSource[] = [
@@ -90,7 +91,8 @@ export function MultiSourceUpload({
   onUploadComplete, 
   allowedTypes = ['.csv', '.xlsx', '.xls', '.json'],
   maxSize = 500 * 1024 * 1024, // 500MB
-  isLoading = false 
+  isLoading = false,
+  isFreeTrialMode = false
 }: MultiSourceUploadProps) {
   const [selectedSource, setSelectedSource] = useState<string>('computer');
   const [uploadProgress, setUploadProgress] = useState(0);

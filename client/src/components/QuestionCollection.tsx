@@ -24,7 +24,7 @@ interface Question {
 }
 
 interface QuestionCollectionProps {
-  serviceType: string;
+  serviceType: 'pay_per_analysis' | 'expert_consulting' | 'automated_analysis' | 'enterprise' | 'free_trial';
   onQuestionsSubmit: (questions: string[], analysisType: string) => void;
   isLoading?: boolean;
 }
