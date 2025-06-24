@@ -544,14 +544,12 @@ export function MultiSourceUpload({
       </Card>
 
       {/* PII Detection Dialog */}
-      {piiDetectionResult && (
-        <PIIDetectionDialog
-          isOpen={showPIIDialog}
-          piiResult={piiDetectionResult}
-          onAccept={handlePIIDecision}
-          onReject={handlePIIReject}
-        />
-      )}
+      <PIIDetectionDialog
+        isOpen={showPIIDialog}
+        piiResult={piiDetectionResult}
+        onDecision={handlePIIDecision}
+        onReject={handlePIIReject}
+      />
     </div>
   );
 }
