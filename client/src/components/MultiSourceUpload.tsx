@@ -111,6 +111,7 @@ export function MultiSourceUpload({
   const [cloudAuthStatus, setCloudAuthStatus] = useState<Record<string, boolean>>({});
   const [piiDetectionResult, setPiiDetectionResult] = useState<any>(null);
   const [showPIIDialog, setShowPIIDialog] = useState(false);
+  const [tempFileId, setTempFileId] = useState<string | null>(null);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     handleFileUpload(acceptedFiles);
@@ -148,13 +149,16 @@ export function MultiSourceUpload({
       setUploadStatus('pii_check');
 
       console.log('API Response:', result);
+      console.log('PII Decision Required:', result.requiresPIIDecision);
+      console.log('PII Result:', result.piiResult);
 
       if (result.requiresPIIDecision && result.piiResult) {
         console.log('PII detected - showing dialog');
-        setPiiDetectionResult(result.piiResult);
-        setShowPIIDialog(true);
-        setTempFileId(result.tempFileId);
         setUploadProgress(100);
+        setPiiDetectionResult(result.piiResult);
+        setTempFileId(result.tempFileId);
+        setShowPIIDialog(true);
+        console.log('Dialog state set - showPIIDialog:', true);
       } else {
         // Upload complete
         setUploadProgress(100);
