@@ -83,7 +83,7 @@ export function PIIDetectionDialog({
   };
 
   const handleAccept = () => {
-    onAccept(requiresPII, anonymizeData, selectedColumns);
+    onDecision(requiresPII, anonymizeData, selectedColumns);
   };
 
   const getRiskIcon = () => {
