@@ -25,7 +25,7 @@ interface Question {
 
 interface QuestionCollectionProps {
   serviceType: 'pay_per_analysis' | 'expert_consulting' | 'automated_analysis' | 'enterprise' | 'free_trial';
-  onQuestionsSubmit: (questions: string[], analysisType: string) => void;
+  onComplete: (questions: string[], analysisType: string) => void;
   isLoading?: boolean;
 }
 
@@ -112,7 +112,7 @@ export function QuestionCollection({
       .map(q => q.text.trim());
     
     if (validQuestions.length > 0) {
-      onQuestionsSubmit(validQuestions, analysisType);
+      onComplete(validQuestions, analysisType);
     }
   };
 

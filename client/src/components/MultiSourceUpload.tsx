@@ -115,6 +115,14 @@ export function MultiSourceUpload({
   const [showPIIDialog, setShowPIIDialog] = useState(false);
   const [tempFileId, setTempFileId] = useState<string | null>(null);
 
+  const handleFileUpload = useCallback(async (files: File[]) => {
+    if (files.length === 0) return;
+    
+    const file = files[0];
+    setUploadedFile(file);
+    await uploadFileToBackend(file);
+  }, [uploadFileToBackend]);
+
   const onDrop = useCallback((acceptedFiles: File[]) => {
     handleFileUpload(acceptedFiles);
   }, [handleFileUpload]);
