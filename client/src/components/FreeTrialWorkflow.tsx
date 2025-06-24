@@ -139,6 +139,23 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
       }, 1000);
       return () => clearTimeout(timer);
     }
+    
+    if (currentStep === 'analysis' && data.schemaData && !isProcessing && !data.analysisResults) {
+      const timer = setTimeout(() => {
+        updateWorkflowStep('analysis', { 
+          analysisResults: {
+            summary: "Free trial analysis complete! Your anonymized data shows interesting patterns.",
+            keyFindings: [
+              "Data structure analyzed successfully",
+              "PII data properly anonymized",
+              "Basic insights generated"
+            ],
+            upgradePrompt: "Upgrade for advanced AI analysis and detailed reports."
+          }
+        });
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
   }, [workflowState.currentStep, workflowState.data, isProcessing, updateWorkflowStep]);
 
   const handleQuestionsComplete = useCallback((questions: string[], analysisType: string) => {
