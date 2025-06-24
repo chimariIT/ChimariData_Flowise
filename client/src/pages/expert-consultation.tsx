@@ -274,29 +274,7 @@ export default function ExpertConsultation({ onBack }: ExpertConsultationProps) 
     }
   ];
 
-  const expertProfiles = [
-    {
-      name: "Dr. Sarah Chen",
-      title: "Senior Data Scientist",
-      experience: "15+ years",
-      specialties: ["Machine Learning", "Predictive Analytics", "Business Intelligence"],
-      image: "https://images.unsplash.com/photo-1494790108755-2616b612b47c?w=150&h=150&fit=crop&crop=face"
-    },
-    {
-      name: "Michael Rodriguez",
-      title: "AI Strategy Consultant", 
-      experience: "12+ years",
-      specialties: ["AI Implementation", "Data Architecture", "ROI Optimization"],
-      image: "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150&h=150&fit=crop&crop=face"
-    },
-    {
-      name: "Dr. Emily Wang",
-      title: "Analytics Director",
-      experience: "18+ years",
-      specialties: ["Statistical Analysis", "Research Design", "Data Visualization"],
-      image: "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=150&h=150&fit=crop&crop=face"
-    }
-  ];
+
 
   const consultationProcess = [
     { 
@@ -733,50 +711,7 @@ export default function ExpertConsultation({ onBack }: ExpertConsultationProps) 
         </div>
       </section>
 
-      {/* Expert Profiles */}
-      <section className="py-16 px-4 sm:px-6 lg:px-8 bg-white">
-        <div className="max-w-6xl mx-auto">
-          <h2 className="text-3xl font-bold text-center text-slate-900 mb-12">
-            Meet Our Data Experts
-          </h2>
-          
-          <div className="grid md:grid-cols-3 gap-8">
-            {expertProfiles.map((expert, index) => (
-              <Card key={index} className="text-center hover:shadow-lg transition-shadow">
-                <CardHeader>
-                  <div className="w-24 h-24 mx-auto mb-4 rounded-full overflow-hidden">
-                    <img 
-                      src={expert.image} 
-                      alt={expert.name}
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-                  <CardTitle className="text-xl">{expert.name}</CardTitle>
-                  <CardDescription className="text-purple-600 font-medium">
-                    {expert.title}
-                  </CardDescription>
-                  <div className="flex items-center justify-center space-x-1 mt-2">
-                    {[...Array(5)].map((_, i) => (
-                      <Star key={i} className="w-4 h-4 fill-yellow-400 text-yellow-400" />
-                    ))}
-                    <span className="text-sm text-slate-500 ml-2">{expert.experience}</span>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-2">
-                    <div className="text-sm font-medium text-slate-900">Specialties:</div>
-                    {expert.specialties.map((specialty, idx) => (
-                      <Badge key={idx} variant="outline" className="text-xs mr-1 mb-1">
-                        {specialty}
-                      </Badge>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </div>
-      </section>
+
 
       {/* Process */}
       <section className="py-16 px-4 sm:px-6 lg:px-8 bg-slate-50">

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { FreeTrialWorkflow } from "@/components/FreeTrialWorkflow";
 import { 
   BarChart3, 
   Brain, 
@@ -16,7 +17,8 @@ import {
   Zap,
   Shield,
   Play,
-  CreditCard
+  CreditCard,
+  Gift
 } from "lucide-react";
 
 interface LandingPageProps {
@@ -27,6 +29,22 @@ interface LandingPageProps {
   onPricing: () => void;
   onFreeTrial: () => void;
 }
+
+
+  const [showFreeTrialWorkflow, setShowFreeTrialWorkflow] = useState(false);
+
+  // Show free trial workflow if user wants to try without signing up
+  if (showFreeTrialWorkflow) {
+    return (
+      <FreeTrialWorkflow
+        onComplete={(result) => {
+          console.log('Free trial complete:', result);
+          setShowFreeTrialWorkflow(false);
+        }}
+        onBack={() => setShowFreeTrialWorkflow(false)}
+      />
+    );
+  }
 
 export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertConsultation, onDemo, onPricing, onFreeTrial }: LandingPageProps) {
   const [isVisible, setIsVisible] = useState(false);
@@ -170,10 +188,10 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
           <div className={`flex flex-col sm:flex-row gap-4 justify-center mb-12 transition-all duration-1000 delay-600 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}>
             <Button 
               size="lg" 
-              onClick={onFreeTrial}
+              onClick={() => setShowFreeTrialWorkflow(true)}
               className="bg-gradient-to-r from-green-600 to-emerald-600 text-lg px-8 py-6 hover:scale-105 transition-all duration-200 hover:shadow-xl hover:from-green-700 hover:to-emerald-700 border-2 border-transparent hover:border-green-300"
             >
-              <Sparkles className="w-5 h-5 mr-2" />
+              <Gift className="w-5 h-5 mr-2" />
               Try Free - No Sign-up
               <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform duration-200" />
             </Button>
