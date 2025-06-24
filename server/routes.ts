@@ -6,6 +6,7 @@ import { aiService } from "./ai-service";
 import { PricingService } from "./pricing-service";
 import { mlService } from "./ml-service";
 import { FileProcessor } from "./file-processor";
+import { PIIDetector } from "./pii-detector";
 import { setupOAuthProviders } from "./oauth-auth";
 import passport from "passport";
 import session from "express-session";
