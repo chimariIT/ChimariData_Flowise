@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
-import { projects, type Project } from "@/lib/api";
+import { apiClient } from "@/lib/api";
 import { ArrowLeft, Download, Share, Database, Lightbulb, BarChart3, PieChart, Calendar, CheckCircle, Settings, CreditCard, Zap, Brain, MessageSquare, Eye } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart as RechartsPieChart, Cell, Pie } from "recharts";
 import AIChat from "@/components/ai-chat";
@@ -22,7 +22,10 @@ export default function ProjectResults({ projectId, onBack, onSettings, onPayFor
 
   const { data: project, isLoading } = useQuery({
     queryKey: ["/api/projects", projectId],
-    queryFn: () => projects.get(projectId),
+    queryFn: async () => {
+      const result = await apiClient.getProjects();
+      return result.projects?.find((p: any) => p.id === projectId);
+    },
   });
 
   if (isLoading) {
