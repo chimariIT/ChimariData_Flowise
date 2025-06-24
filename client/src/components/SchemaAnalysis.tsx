@@ -35,7 +35,7 @@ interface SchemaData {
 interface SchemaAnalysisProps {
   uploadId: number;
   filename: string;
-  onAnalysisComplete: (schemaData: SchemaData) => void;
+  onComplete: (schemaData: SchemaData) => void;
   isAnalyzing?: boolean;
 }
 
@@ -60,7 +60,7 @@ const TYPE_COLORS = {
 export function SchemaAnalysis({ 
   uploadId, 
   filename, 
-  onAnalysisComplete, 
+  onComplete, 
   isAnalyzing = false 
 }: SchemaAnalysisProps) {
   const [analysisProgress, setAnalysisProgress] = useState(0);
@@ -144,7 +144,7 @@ export function SchemaAnalysis({
 
     setSchemaData(mockSchemaData);
     setAnalysisStatus('complete');
-    onAnalysisComplete(mockSchemaData);
+    onComplete(mockSchemaData);
   };
 
   const renderColumnCard = (column: ColumnInfo) => {
