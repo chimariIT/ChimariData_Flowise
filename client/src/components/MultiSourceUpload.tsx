@@ -114,7 +114,7 @@ export function MultiSourceUpload({
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     handleFileUpload(acceptedFiles);
-  }, []);
+  }, [handleFileUpload]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -128,7 +128,7 @@ export function MultiSourceUpload({
     multiple: false
   });
 
-  const uploadFileToBackend = async (file: File, piiOptions?: {
+  const uploadFileToBackend = useCallback(async (file: File, piiOptions?: {
     piiHandled: boolean;
     anonymizationApplied: boolean;
     selectedColumns?: string[];
@@ -174,9 +174,9 @@ export function MultiSourceUpload({
       console.error('Upload error:', error);
       setUploadStatus('error');
     }
-  };
+  }, [isFreeTrialMode, selectedSource, onUploadComplete]);
 
-  const handleFileUpload = async (files: File[]) => {
+  const handleFileUpload = useCallback(async (files: File[]) => {
     const file = files[0];
     if (!file) return;
 
@@ -192,7 +192,7 @@ export function MultiSourceUpload({
 
     // Upload file to backend for real PII detection
     await uploadFileToBackend(file);
-  };
+  }, [maxSize, uploadFileToBackend]);
 
   const handlePIIDecision = async (requiresPII: boolean, anonymizeData: boolean, selectedColumns: string[]) => {
     setShowPIIDialog(false);
