@@ -33,7 +33,7 @@ interface UploadSource {
 }
 
 interface MultiSourceUploadProps {
-  onUploadComplete: (uploadInfo: {
+  onComplete: (uploadInfo: {
     sourceType: string;
     filename: string;
     size: number;
@@ -42,10 +42,11 @@ interface MultiSourceUploadProps {
     piiHandled?: boolean;
     anonymizationApplied?: boolean;
   }) => void;
+  serviceType?: string;
+  questions?: string[];
   allowedTypes?: string[];
   maxSize?: number;
   isLoading?: boolean;
-  isFreeTrialMode?: boolean;
 }
 
 const UPLOAD_SOURCES: UploadSource[] = [
@@ -140,8 +141,8 @@ export function MultiSourceUpload({
 
       const result = await apiClient.uploadFile(file, {
         name: file.name.split('.')[0],
-        questions: [],
-        isTrial: isFreeTrialMode,
+        questions: questions,
+        isTrial: serviceType === 'free_trial',
         ...piiOptions
       });
 
@@ -164,7 +165,7 @@ export function MultiSourceUpload({
         setUploadProgress(100);
         setUploadStatus('complete');
         
-        onUploadComplete({
+        onComplete({
           sourceType: selectedSource,
           filename: file.name,
           size: file.size,
@@ -222,7 +223,7 @@ export function MultiSourceUpload({
     setUploadStatus('complete');
     
     // Complete the upload flow
-    onUploadComplete({
+    onComplete({
       sourceType: selectedSource,
       filename: file.name,
       size: file.size,
