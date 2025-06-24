@@ -33,20 +33,6 @@ interface LandingPageProps {
 export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertConsultation, onDemo, onPricing, onFreeTrial }: LandingPageProps) {
   const [showFreeTrialWorkflow, setShowFreeTrialWorkflow] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
-
-  // Show free trial workflow if user wants to try without signing up
-  if (showFreeTrialWorkflow) {
-    return (
-      <FreeTrialWorkflow
-        onComplete={(result) => {
-          console.log('Free trial complete:', result);
-          setShowFreeTrialWorkflow(false);
-        }}
-        onBack={() => setShowFreeTrialWorkflow(false)}
-      />
-    );
-  }
-
   const [showPreview, setShowPreview] = useState(false);
   const [currentRecommendation, setCurrentRecommendation] = useState(0);
 
