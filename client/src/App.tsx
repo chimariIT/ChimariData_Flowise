@@ -29,14 +29,14 @@ function App() {
 
   useEffect(() => {
     // Check if user is already logged in
-    const token = auth.getToken();
+    const token = localStorage.getItem('auth_token');
     if (token) {
       const storedUser = localStorage.getItem("user");
       if (storedUser) {
         try {
           setUser(JSON.parse(storedUser));
         } catch {
-          localStorage.removeItem("token");
+          localStorage.removeItem("auth_token");
           localStorage.removeItem("user");
         }
       }

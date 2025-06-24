@@ -43,7 +43,7 @@ export default function SettingsPage({ onBack, onPricing }: SettingsPageProps) {
     queryKey: ["/api/settings"],
     queryFn: async () => {
       const res = await fetch("/api/settings", {
-        headers: { Authorization: `Bearer ${auth.getToken()}` }
+        headers: { Authorization: `Bearer ${localStorage.getItem('auth_token')}` }
       });
       if (!res.ok) throw new Error("Failed to fetch settings");
       return res.json();

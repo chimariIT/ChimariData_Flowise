@@ -31,8 +31,8 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
       }
 
       const result = isLogin 
-        ? await auth.login(formData.username, formData.password)
-        : await auth.register(formData.username, formData.password);
+        ? await apiClient.login({ username: formData.username, password: formData.password })
+        : await apiClient.register({ username: formData.username, email: formData.username, password: formData.password });
 
       onLogin(result.user);
       
