@@ -153,6 +153,8 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
     setError(null);
 
     try {
+      console.log('Free trial upload complete:', uploadInfo);
+      
       // Validate file size for free trial (limit to 10MB)
       if (uploadInfo.size && uploadInfo.size > 10 * 1024 * 1024) {
         setError('Free trial is limited to files under 10MB. Please upgrade for larger files.');
@@ -160,14 +162,8 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
         return;
       }
 
-      // Check if PII was detected and handled
-      if (uploadInfo.piiHandled) {
-        // Add PII information to upload info
-        uploadInfo.piiDetected = true;
-        uploadInfo.anonymized = uploadInfo.anonymizationApplied || false;
-      }
-
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Process upload completion
+      await new Promise(resolve => setTimeout(resolve, 500));
       updateWorkflowStep('upload', { uploadInfo });
     } catch (err) {
       setError('Failed to process upload. Please try again.');

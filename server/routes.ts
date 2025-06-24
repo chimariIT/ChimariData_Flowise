@@ -225,16 +225,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: 'No file uploaded' });
       }
 
-      const { name, questions } = req.body;
+      const { name, questions, piiHandled, anonymizationApplied, selectedColumns } = req.body;
       const questionsArray = questions ? JSON.parse(questions) : [];
+      const parsedSelectedColumns = selectedColumns ? JSON.parse(selectedColumns) : [];
 
       // Process the file with trial limitations
       const result = await FileProcessor.processFile(req.file.path, req.file.originalname);
 
-      // Check for PII in trial upload too
-      const { piiHandled, anonymizationApplied, selectedColumns } = req.body;
-      
-      if (!piiHandled || piiHandled === 'false') {
+      // Handle PII for trial uploads
+      let finalData = result.data;
+      let lookupTable = null;
+
+      if (piiHandled === 'true' && anonymizationApplied === 'true' && parsedSelectedColumns.length > 0) {
+        console.log('Applying anonymization to trial columns:', parsedSelectedColumns);
+        try {
+          const anonymizationResult = await PIIDetector.anonymizeData(
+            result.data, 
+            parsedSelectedColumns,
+            true
+          );
+          finalData = anonymizationResult.anonymizedData;
+          lookupTable = anonymizationResult.lookupTable;
+          console.log('Trial anonymization applied successfully');
+        } catch (anonError) {
+          console.error('Trial anonymization error:', anonError);
+          return res.status(500).json({ error: "Anonymization failed" });
+        }
+      } else if (!piiHandled || piiHandled === 'false') {
         try {
           const piiResult = await PIIDetector.detectPII(result.data, result.schema);
           console.log('Trial PII detection result:', piiResult.hasPII ? 'PII found' : 'No PII detected');
@@ -293,13 +310,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({
         id: 'trial-' + Date.now(),
         name: name || 'Trial Analysis',
-        recordCount: result.data.length,
+        recordCount: finalData.length,
         columnCount: Object.keys(result.schema).length,
         insights: basicInsights.summary || "Your data has been successfully analyzed! Sign up to unlock detailed insights and advanced features.",
         questionResponse,
         metadata: result.metadata,
         schema: result.schema,
-        isTrial: true
+        isTrial: true,
+        piiHandled: piiHandled === 'true',
+        anonymizationApplied: anonymizationApplied === 'true',
+        lookupTable
       });
 
     } catch (error) {

@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { PIIDetectionDialog } from "./PIIDetectionDialog";
+import { apiClient } from "@/lib/api";
 import { 
   Upload, 
   Cloud, 
@@ -112,11 +113,7 @@ export function MultiSourceUpload({
   const [showPIIDialog, setShowPIIDialog] = useState(false);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
-    const file = acceptedFiles[0];
-    if (file) {
-      setUploadedFile(file);
-      simulateUpload(file);
-    }
+    handleFileUpload(acceptedFiles);
   }, []);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -131,56 +128,46 @@ export function MultiSourceUpload({
     multiple: false
   });
 
-  const uploadFileToBackend = async (file: File) => {
+  const uploadFileToBackend = async (file: File, piiOptions?: {
+    piiHandled: boolean;
+    anonymizationApplied: boolean;
+    selectedColumns?: string[];
+  }) => {
     try {
       setUploadProgress(20);
-      
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('name', file.name.split('.')[0]);
-      formData.append('questions', JSON.stringify([]));
-      
-      setUploadProgress(40);
-      setUploadStatus('pii_check');
+      setUploadStatus('uploading');
 
-      const endpoint = isFreeTrialMode ? '/api/upload-trial' : '/api/projects/upload';
-      const token = localStorage.getItem('auth_token');
-      
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          ...(token && !isFreeTrialMode && { 'Authorization': `Bearer ${token}` })
-        },
-        body: formData
+      const result = await apiClient.uploadFile(file, {
+        name: file.name.split('.')[0],
+        questions: [],
+        isTrial: isFreeTrialMode,
+        ...piiOptions
       });
 
-      setUploadProgress(80);
-      
-      if (!response.ok) {
-        throw new Error(`Upload failed: ${response.status}`);
-      }
+      setUploadProgress(60);
+      setUploadStatus('pii_check');
 
-      const result = await response.json();
-      setUploadProgress(100);
-
-      console.log('Backend response:', result);
+      console.log('API Response:', result);
 
       if (result.requiresPIIDecision && result.piiResult) {
-        console.log('PII detected by backend, showing dialog');
+        console.log('PII detected - showing dialog');
         setPiiDetectionResult(result.piiResult);
         setShowPIIDialog(true);
         setTempFileId(result.tempFileId);
+        setUploadProgress(100);
       } else {
-        // No PII detected or upload complete
+        // Upload complete
+        setUploadProgress(100);
         setUploadStatus('complete');
+        
         onUploadComplete({
           sourceType: selectedSource,
           filename: file.name,
           size: file.size,
           mimeType: file.type,
-          uploadPath: result.uploadPath || `/uploads/${Date.now()}_${file.name}`,
-          piiHandled: false,
-          anonymizationApplied: false
+          uploadPath: `/uploads/${Date.now()}_${file.name}`,
+          piiHandled: piiOptions?.piiHandled || false,
+          anonymizationApplied: piiOptions?.anonymizationApplied || false
         });
       }
     } catch (error) {
@@ -210,50 +197,13 @@ export function MultiSourceUpload({
   const handlePIIDecision = async (requiresPII: boolean, anonymizeData: boolean, selectedColumns: string[]) => {
     setShowPIIDialog(false);
     
-    if (tempFileId && uploadedFile) {
+    if (uploadedFile) {
       // Re-upload with PII decision
-      try {
-        const formData = new FormData();
-        formData.append('file', uploadedFile);
-        formData.append('name', uploadedFile.name.split('.')[0]);
-        formData.append('questions', JSON.stringify([]));
-        formData.append('piiHandled', 'true');
-        formData.append('anonymizationApplied', anonymizeData.toString());
-        formData.append('selectedColumns', JSON.stringify(selectedColumns));
-        
-        const endpoint = isFreeTrialMode ? '/api/upload-trial' : '/api/projects/upload';
-        const token = localStorage.getItem('auth_token');
-        
-        const response = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            ...(token && !isFreeTrialMode && { 'Authorization': `Bearer ${token}` })
-          },
-          body: formData
-        });
-
-        if (response.ok) {
-          const result = await response.json();
-          setUploadStatus('complete');
-          onUploadComplete({
-            sourceType: selectedSource,
-            filename: uploadedFile.name,
-            size: uploadedFile.size,
-            mimeType: uploadedFile.type,
-            uploadPath: result.uploadPath || `/uploads/${Date.now()}_${uploadedFile.name}`,
-            piiHandled: true,
-            anonymizationApplied: anonymizeData
-          });
-        } else {
-          setUploadStatus('error');
-        }
-      } catch (error) {
-        console.error('PII processing error:', error);
-        setUploadStatus('error');
-      }
-    } else {
-      // Fallback for direct upload completion
-      completeUpload(uploadedFile!, requiresPII, anonymizeData, selectedColumns);
+      await uploadFileToBackend(uploadedFile, {
+        piiHandled: true,
+        anonymizationApplied: anonymizeData,
+        selectedColumns: selectedColumns
+      });
     }
   };
 
