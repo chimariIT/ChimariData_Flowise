@@ -151,11 +151,12 @@ export class PIIDetector {
       piiColumns.forEach(column => {
         const originalValue = record[column];
         if (originalValue != null && originalValue !== '') {
+          const stringValue = String(originalValue);
           // Check if we already have an anonymized version
-          if (!lookupTable[column][originalValue]) {
-            lookupTable[column][originalValue] = this.generateAnonymizedValue(column, originalValue, preserveStructure);
+          if (!lookupTable[column][stringValue]) {
+            lookupTable[column][stringValue] = this.generateAnonymizedValue(column, originalValue, preserveStructure);
           }
-          record[column] = lookupTable[column][originalValue];
+          record[column] = lookupTable[column][stringValue];
         }
       });
     });
@@ -264,8 +265,9 @@ export class PIIDetector {
     return recommendations;
   }
 
-  private static generateAnonymizedValue(columnType: string, originalValue: string, preserveStructure: boolean): string {
-    const hash = crypto.createHash('sha256').update(originalValue).digest('hex').substring(0, 8);
+  private static generateAnonymizedValue(columnType: string, originalValue: any, preserveStructure: boolean): string {
+    const stringValue = String(originalValue);
+    const hash = crypto.createHash('sha256').update(stringValue).digest('hex').substring(0, 8);
 
     if (!preserveStructure) {
       return `ANON_${hash}`;

@@ -80,7 +80,7 @@ export function MultiSourceUpload({
   serviceType = 'default',
   questions = [],
   allowedTypes = ['.csv', '.xlsx', '.xls', '.json'],
-  maxSize = 50 * 1024 * 1024,
+  maxSize = 10 * 1024 * 1024,
   isLoading = false
 }: MultiSourceUploadProps) {
   const [selectedSource, setSelectedSource] = useState<string>('computer');
