@@ -65,9 +65,9 @@ const RISK_COLORS = {
 
 export function PIIDetectionDialog({ 
   isOpen, 
+  onClose,
   piiResult, 
-  onAccept, 
-  onReject 
+  onDecision 
 }: PIIDetectionDialogProps) {
   const [requiresPII, setRequiresPII] = useState(false);
   const [anonymizeData, setAnonymizeData] = useState(true);
