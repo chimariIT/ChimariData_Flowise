@@ -64,11 +64,13 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
     const { currentStep, data } = workflowState;
     
     if (currentStep === 'scan' && data.uploadInfo && !isProcessing && !data.scanResult) {
-      handleScanComplete({});
+      const timer = setTimeout(() => handleScanComplete({}), 1000);
+      return () => clearTimeout(timer);
     }
     
     if (currentStep === 'schema' && data.scanResult && !isProcessing && !data.schemaData) {
-      handleSchemaComplete({});
+      const timer = setTimeout(() => handleSchemaComplete({}), 1000);
+      return () => clearTimeout(timer);
     }
   }, [workflowState.currentStep, workflowState.data, isProcessing]);
 

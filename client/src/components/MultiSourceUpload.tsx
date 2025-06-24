@@ -156,9 +156,9 @@ export function MultiSourceUpload({
       // Simulate PII detection (in real implementation, this would analyze the file)
       await new Promise(resolve => setTimeout(resolve, 1500));
       
-      // Mock PII detection result - more realistic patterns for Excel files
+      // Mock PII detection result for realistic testing
       const mockPIIResult = {
-        hasPII: true, // Always show PII detection for testing
+        hasPII: Math.random() > 0.3, // 70% chance of detecting PII
         detectedTypes: [
           {
             type: 'email' as const,
@@ -222,62 +222,19 @@ export function MultiSourceUpload({
     setUploadProgress(0);
   };
 
-  const completeUpload = async (file: File, piiHandled: boolean, anonymizationApplied: boolean, selectedColumns?: string[]) => {
+  const completeUpload = (file: File, piiHandled: boolean, anonymizationApplied: boolean, selectedColumns?: string[]) => {
     setUploadStatus('complete');
     
-    // If this is a real upload (not simulation), we need to call the server
-    if (!isFreeTrialMode) {
-      try {
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('name', file.name);
-        formData.append('piiHandled', piiHandled.toString());
-        formData.append('anonymizationApplied', anonymizationApplied.toString());
-        if (selectedColumns) {
-          formData.append('selectedColumns', JSON.stringify(selectedColumns));
-        }
-
-        const response = await fetch('/api/upload', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`
-          },
-          body: formData
-        });
-
-        const result = await response.json();
-        
-        if (!response.ok) {
-          throw new Error(result.error || 'Upload failed');
-        }
-
-        onUploadComplete({
-          sourceType: selectedSource,
-          filename: file.name,
-          size: file.size,
-          mimeType: file.type,
-          uploadPath: `/uploads/${Date.now()}_${file.name}`,
-          piiHandled,
-          anonymizationApplied,
-          projectId: result.project?.id
-        });
-      } catch (error) {
-        console.error('Upload error:', error);
-        setUploadStatus('error');
-        return;
-      }
-    } else {
-      // Free trial mode - simulate completion
-      onUploadComplete({
-        sourceType: selectedSource,
-        filename: file.name,
-        size: file.size,
-        mimeType: file.type,
-        uploadPath: `/uploads/${Date.now()}_${file.name}`,
-        piiHandled,
-        anonymizationApplied
-      });
-    }
+    // Complete the upload flow
+    onUploadComplete({
+      sourceType: selectedSource,
+      filename: file.name,
+      size: file.size,
+      mimeType: file.type,
+      uploadPath: `/uploads/${Date.now()}_${file.name}`,
+      piiHandled,
+      anonymizationApplied
+    });
   };
 
   const handleCloudAuth = async (provider: string) => {

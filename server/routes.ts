@@ -521,6 +521,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
+      // Check for PII if not already handled
+      let piiResult = null;
+      let finalData = processedFile.data;
+      let lookupTable = null;
+
+      if (piiHandled === 'true' && anonymizationApplied === 'true' && parsedSelectedColumns.length > 0) {
+        console.log('Applying anonymization to columns:', parsedSelectedColumns);
+        // Apply anonymization
+        try {
+          const anonymizationResult = await PIIDetector.anonymizeData(
+            processedFile.data, 
+            parsedSelectedColumns,
+            true
+          );
+          finalData = anonymizationResult.anonymizedData;
+          lookupTable = anonymizationResult.lookupTable;
+          console.log('Anonymization applied successfully');
+        } catch (anonError) {
+          console.error('Anonymization error:', anonError);
+          return res.status(500).json({ error: "Anonymization failed" });
+        }
+      } else if (!piiHandled || piiHandled === 'false') {
+        console.log('Detecting PII in uploaded data...');
+        // Detect PII in uploaded data
+        try {
+          piiResult = await PIIDetector.detectPII(processedFile.data, processedFile.schema);
+          console.log('PII detection result:', piiResult.hasPII ? 'PII found' : 'No PII detected');
+          
+          if (piiResult.hasPII) {
+            console.log('PII detected, returning for user decision');
+            // Return PII detection results for client handling
+            return res.json({
+              requiresPIIDecision: true,
+              piiResult,
+              tempFileId: req.file.filename, // Store temp file for later processing
+              name: name || req.file.originalname,
+              questions: questionsArray
+            });
+          }
+        } catch (piiError) {
+          console.error('PII detection error:', piiError);
+          // Continue without PII detection if it fails
+          console.log('Continuing without PII detection due to error');
+        }
+      }
+
       // Calculate data size in MB
       const dataSizeMB = Math.round(processedFile.metadata.fileSize / (1024 * 1024) * 100) / 100;
 
