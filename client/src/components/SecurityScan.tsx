@@ -23,10 +23,10 @@ interface ScanResult {
 }
 
 interface SecurityScanProps {
-  uploadId: number;
-  filename: string;
-  onScanComplete: (result: { clean: boolean; threats: string[] }) => void;
-  isScanning?: boolean;
+  isScanning: boolean;
+  scanResult?: any;
+  onComplete?: (result: { clean: boolean; threats: string[] }) => void;
+  serviceType?: string;
 }
 
 export function SecurityScan({ 
@@ -73,7 +73,7 @@ export function SecurityScan({
 
     setScanResult(result);
     setScanStatus('complete');
-    onScanComplete({
+    onComplete?.({
       clean: result.clean,
       threats: result.threats
     });
