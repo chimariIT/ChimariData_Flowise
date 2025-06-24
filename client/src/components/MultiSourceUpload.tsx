@@ -93,11 +93,12 @@ const UPLOAD_SOURCES: UploadSource[] = [
 ];
 
 export function MultiSourceUpload({ 
-  onUploadComplete, 
+  onComplete, 
+  serviceType = 'default',
+  questions = [],
   allowedTypes = ['.csv', '.xlsx', '.xls', '.json'],
-  maxSize = 500 * 1024 * 1024, // 500MB
-  isLoading = false,
-  isFreeTrialMode = false
+  maxSize = 50 * 1024 * 1024,
+  isLoading = false
 }: MultiSourceUploadProps) {
   const [selectedSource, setSelectedSource] = useState<string>('computer');
   const [uploadProgress, setUploadProgress] = useState(0);
