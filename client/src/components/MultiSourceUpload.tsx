@@ -131,83 +131,80 @@ export function MultiSourceUpload({
     multiple: false
   });
 
-  const simulateUpload = async (file: File) => {
+  const uploadFileToBackend = async (file: File) => {
+    try {
+      setUploadProgress(20);
+      
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('name', file.name.split('.')[0]);
+      formData.append('questions', JSON.stringify([]));
+      
+      setUploadProgress(40);
+      setUploadStatus('pii_check');
+
+      const endpoint = isFreeTrialMode ? '/api/upload-trial' : '/api/projects/upload';
+      const token = localStorage.getItem('auth_token');
+      
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          ...(token && !isFreeTrialMode && { 'Authorization': `Bearer ${token}` })
+        },
+        body: formData
+      });
+
+      setUploadProgress(80);
+      
+      if (!response.ok) {
+        throw new Error(`Upload failed: ${response.status}`);
+      }
+
+      const result = await response.json();
+      setUploadProgress(100);
+
+      console.log('Backend response:', result);
+
+      if (result.requiresPIIDecision && result.piiResult) {
+        console.log('PII detected by backend, showing dialog');
+        setPiiDetectionResult(result.piiResult);
+        setShowPIIDialog(true);
+        setTempFileId(result.tempFileId);
+      } else {
+        // No PII detected or upload complete
+        setUploadStatus('complete');
+        onUploadComplete({
+          sourceType: selectedSource,
+          filename: file.name,
+          size: file.size,
+          mimeType: file.type,
+          uploadPath: result.uploadPath || `/uploads/${Date.now()}_${file.name}`,
+          piiHandled: false,
+          anonymizationApplied: false
+        });
+      }
+    } catch (error) {
+      console.error('Upload error:', error);
+      setUploadStatus('error');
+    }
+  };
+
+  const handleFileUpload = async (files: File[]) => {
+    const file = files[0];
+    if (!file) return;
+
+    // Validate file size
+    if (maxSize && file.size > maxSize) {
+      alert(`File size exceeds ${(maxSize / (1024 * 1024)).toFixed(1)}MB limit`);
+      return;
+    }
+
+    setUploadedFile(file);
     setUploadStatus('uploading');
     setUploadProgress(0);
 
-    // Simulate upload progress
-    const uploadInterval = setInterval(() => {
-      setUploadProgress(prev => {
-        if (prev >= 100) {
-          clearInterval(uploadInterval);
-          // After upload, check for PII
-          checkForPII(file);
-          return 100;
-        }
-        return prev + 10;
-      });
-    }, 200);
-  };
-
-  const checkForPII = async (file: File) => {
-    setUploadStatus('pii_check');
-    
-    try {
-      // Simulate PII detection (in real implementation, this would analyze the file)
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      // Mock PII detection result for realistic testing
-      const mockPIIResult = {
-        hasPII: Math.random() > 0.3, // 70% chance of detecting PII
-        detectedTypes: [
-          {
-            type: 'email' as const,
-            column: 'Email_Address',
-            confidence: 0.95,
-            sampleValue: 'jo**@example.com',
-            count: 12
-          },
-          {
-            type: 'name' as const,
-            column: 'Full_Name',
-            confidence: 0.92,
-            sampleValue: 'Jo** Sm***',
-            count: 12
-          },
-          {
-            type: 'phone' as const,
-            column: 'Phone_Number',
-            confidence: 0.88,
-            sampleValue: '555-***-1234',
-            count: 10
-          },
-          {
-            type: 'ssn' as const,
-            column: 'SSN',
-            confidence: 0.99,
-            sampleValue: '***-**-6789',
-            count: 12
-          }
-        ],
-        affectedColumns: ['Email_Address', 'Full_Name', 'Phone_Number', 'SSN'],
-        riskLevel: 'high' as const,
-        recommendations: [
-          'High-risk PII detected. Strong anonymization recommended.',
-          'Social Security Numbers found. Consider removing if not essential for analysis.',
-          'Contact information detected. Hash or anonymize for privacy protection.',
-          'Personal names detected. Consider using initials or generic identifiers.'
-        ]
-      };
-
-      if (mockPIIResult.hasPII) {
-        setPiiDetectionResult(mockPIIResult);
-        setShowPIIDialog(true);
-      } else {
-        completeUpload(file, false, false);
-      }
-    } catch (error) {
-      setUploadStatus('error');
-    }
+    // Upload file to backend for real PII detection
+    await uploadFileToBackend(file);
   };
 
   const handlePIIDecision = async (requiresPII: boolean, anonymizeData: boolean, selectedColumns: string[]) => {
