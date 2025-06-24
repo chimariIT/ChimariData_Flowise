@@ -188,25 +188,7 @@ export function MultiSourceUpload({
       console.error('Upload error:', error);
       setUploadStatus('error');
     }
-  }, [isFreeTrialMode, selectedSource, onUploadComplete]);
-
-  const handleFileUpload = useCallback(async (files: File[]) => {
-    const file = files[0];
-    if (!file) return;
-
-    // Validate file size
-    if (maxSize && file.size > maxSize) {
-      alert(`File size exceeds ${(maxSize / (1024 * 1024)).toFixed(1)}MB limit`);
-      return;
-    }
-
-    setUploadedFile(file);
-    setUploadStatus('uploading');
-    setUploadProgress(0);
-
-    // Upload file to backend for real PII detection
-    await uploadFileToBackend(file);
-  }, [maxSize, uploadFileToBackend]);
+  }, [onComplete, selectedSource, serviceType, questions]);
 
   const handlePIIDecision = async (requiresPII: boolean, anonymizeData: boolean, selectedColumns: string[]) => {
     setShowPIIDialog(false);

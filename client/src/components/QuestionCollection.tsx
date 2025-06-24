@@ -71,7 +71,7 @@ const SUGGESTED_QUESTIONS = {
 
 export function QuestionCollection({ 
   serviceType, 
-  onQuestionsSubmit, 
+  onComplete, 
   isLoading = false 
 }: QuestionCollectionProps) {
   const [questions, setQuestions] = useState<Question[]>([
