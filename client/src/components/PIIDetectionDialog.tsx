@@ -290,7 +290,7 @@ export function PIIDetectionDialog({
         </div>
 
         <DialogFooter className="gap-2">
-          <Button variant="outline" onClick={onReject}>
+          <Button variant="outline" onClick={onClose}>
             Cancel Upload
           </Button>
           <Button onClick={handleAccept} className="bg-blue-600 hover:bg-blue-700">
