@@ -137,7 +137,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error('Registration error:', error);
-      res.status(400).json({ error: "Registration failed. Please try again." });
+      if (error.message?.includes('username')) {
+        res.status(400).json({ error: "Username already exists" });
+      } else {
+        res.status(400).json({ error: "Registration failed. Please check your input and try again." });
+      }
     }
   });
 
@@ -150,6 +154,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ error: "Invalid credentials" });
       }
 
+      // Create session
       const token = generateToken();
       sessions.set(token, { userId: user.id, username: user.username });
 
@@ -158,11 +163,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         user: { id: user.id, username: user.username } 
       });
     } catch (error) {
-      res.status(400).json({ error: "Invalid data" });
+      console.error('Login error:', error);
+      res.status(400).json({ error: "Login failed. Please try again." });
     }
   });
 
-  app.post("/api/logout", requireAuth, (req, res) => {
+      const token = generateToken();
+      sessions.set(token, { userId: user.id, username: user.username });
+
+      res.json({ 
+        token, 
+        user: { id: user.id, username: user.username } 
+      });
+  });
+
+  app.post("/api/auth/logout", requireAuth, (req, res) => {
     const token = req.headers.authorization?.replace('Bearer ', '');
     if (token) {
       sessions.delete(token);
