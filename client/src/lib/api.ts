@@ -39,8 +39,13 @@ export const auth = {
   logout: async (): Promise<void> => {
     const token = localStorage.getItem("token");
     if (token) {
-      await apiRequest("POST", `${API_BASE}/auth/logout`);
+      try {
+        await apiRequest("POST", `${API_BASE}/auth/logout`);
+      } catch (error) {
+        console.error("Logout error:", error);
+      }
       localStorage.removeItem("token");
+      localStorage.removeItem("user");
     }
   },
 
