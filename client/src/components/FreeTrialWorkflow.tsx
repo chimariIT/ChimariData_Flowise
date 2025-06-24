@@ -102,8 +102,9 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
 
     try {
       // Validate file size for free trial (limit to 10MB)
-      if (uploadInfo.size > 10 * 1024 * 1024) {
+      if (uploadInfo.size && uploadInfo.size > 10 * 1024 * 1024) {
         setError('Free trial is limited to files under 10MB. Please upgrade for larger files.');
+        setIsProcessing(false);
         return;
       }
 
@@ -175,6 +176,7 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
               onUploadComplete={handleUploadComplete}
               maxSize={10 * 1024 * 1024} // 10MB limit
               isLoading={isProcessing}
+              isFreeTrialMode={true}
             />
           </div>
         );

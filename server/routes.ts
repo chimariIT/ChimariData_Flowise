@@ -111,7 +111,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   };
 
   // Auth routes
-  app.post("/api/register", async (req, res) => {
+  app.post("/api/auth/register", async (req, res) => {
     try {
       const data = registerSchema.parse(req.body);
       
@@ -136,11 +136,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         user: { id: user.id, username: user.username } 
       });
     } catch (error) {
-      res.status(400).json({ error: "Invalid data" });
+      console.error('Registration error:', error);
+      res.status(400).json({ error: "Registration failed. Please try again." });
     }
   });
 
-  app.post("/api/login", async (req, res) => {
+  app.post("/api/auth/login", async (req, res) => {
     try {
       const data = loginSchema.parse(req.body);
       
