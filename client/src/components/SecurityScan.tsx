@@ -151,8 +151,8 @@ export function SecurityScan({
           <div className="flex items-center space-x-3 p-4 bg-slate-50 rounded-lg">
             <FileText className="w-6 h-6 text-slate-500" />
             <div>
-              <div className="font-medium">{filename}</div>
-              <div className="text-sm text-slate-500">Upload ID: {uploadId}</div>
+              <div className="font-medium">Uploaded File</div>
+              <div className="text-sm text-slate-500">File uploaded successfully</div>
             </div>
           </div>
 
