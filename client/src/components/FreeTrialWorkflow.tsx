@@ -178,6 +178,7 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
           <SecurityScan
             isScanning={!data.scanResult}
             scanResult={data.scanResult}
+            onComplete={handleScanComplete}
             serviceType="free_trial"
           />
         );
