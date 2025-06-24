@@ -296,6 +296,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // PII detection endpoint for already uploaded files
+  app.post("/api/projects/detect-pii", requireAuth, async (req, res) => {
+    try {
+      const { tempFileId, name, questions, requiresPII, anonymizeData, selectedColumns } = req.body;
+      
+      // Reconstruct file path from temp ID
+      const filePath = path.join('uploads', tempFileId);
+      
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: "Temporary file not found" });
+      }
+
+      // Reprocess the file
+      const result = await FileProcessor.processFile(filePath, name);
+      let finalData = result.data;
+      let lookupTable = null;
+
+      if (requiresPII && anonymizeData && selectedColumns.length > 0) {
+        // Apply anonymization
+        const anonymizationResult = await PIIDetector.anonymizeData(
+          result.data, 
+          selectedColumns,
+          true
+        );
+        finalData = anonymizationResult.anonymizedData;
+        lookupTable = anonymizationResult.lookupTable;
+      }
+
+      // Store project with processing results
+      const project = await storage.createProject({
+        name,
+        userId: req.user!.userId,
+        status: "processed",
+        schema: result.schema,
+        questions,
+        insights: lookupTable ? { anonymization_lookup: lookupTable } : {},
+        recordCount: result.recordCount
+      });
+
+      // Clean up temp file
+      fs.unlinkSync(filePath);
+
+      res.json({
+        success: true,
+        project: {
+          id: project.id,
+          name: project.name,
+          schema: project.schema,
+          questions: project.questions,
+          recordCount: project.recordCount,
+          status: project.status,
+          anonymizationApplied: !!lookupTable
+        }
+      });
+    } catch (error) {
+      console.error("PII processing error:", error);
+      res.status(500).json({ error: "PII processing failed" });
+    }
+  });
+
   app.post("/api/projects/import-from-drive", requireAuth, async (req, res) => {
     try {
       const { fileId, fileName, name, questions } = req.body;

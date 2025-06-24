@@ -156,28 +156,44 @@ export function MultiSourceUpload({
       // Simulate PII detection (in real implementation, this would analyze the file)
       await new Promise(resolve => setTimeout(resolve, 1500));
       
-      // Mock PII detection result
+      // Mock PII detection result - more realistic patterns for Excel files
       const mockPIIResult = {
-        hasPII: Math.random() > 0.6, // 40% chance of PII detection
+        hasPII: true, // Always show PII detection for testing
         detectedTypes: [
           {
             type: 'email' as const,
-            column: 'customer_email',
+            column: 'Email_Address',
             confidence: 0.95,
-            sampleValue: 'jo***@example.com',
-            count: 25
+            sampleValue: 'jo**@example.com',
+            count: 12
           },
           {
             type: 'name' as const,
-            column: 'full_name',
+            column: 'Full_Name',
+            confidence: 0.92,
+            sampleValue: 'Jo** Sm***',
+            count: 12
+          },
+          {
+            type: 'phone' as const,
+            column: 'Phone_Number',
             confidence: 0.88,
-            sampleValue: 'Jo** Do*',
-            count: 25
+            sampleValue: '555-***-1234',
+            count: 10
+          },
+          {
+            type: 'ssn' as const,
+            column: 'SSN',
+            confidence: 0.99,
+            sampleValue: '***-**-6789',
+            count: 12
           }
         ],
-        affectedColumns: ['customer_email', 'full_name'],
-        riskLevel: 'medium' as const,
+        affectedColumns: ['Email_Address', 'Full_Name', 'Phone_Number', 'SSN'],
+        riskLevel: 'high' as const,
         recommendations: [
+          'High-risk PII detected. Strong anonymization recommended.',
+          'Social Security Numbers found. Consider removing if not essential for analysis.',
           'Contact information detected. Hash or anonymize for privacy protection.',
           'Personal names detected. Consider using initials or generic identifiers.'
         ]
