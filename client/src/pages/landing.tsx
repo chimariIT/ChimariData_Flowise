@@ -81,6 +81,19 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
     setIsVisible(true);
   }, []);
 
+  // Show free trial workflow if user wants to try without signing up
+  if (showFreeTrialWorkflow) {
+    return (
+      <FreeTrialWorkflow
+        onComplete={(result) => {
+          console.log('Free trial complete:', result);
+          setShowFreeTrialWorkflow(false);
+        }}
+        onBack={() => setShowFreeTrialWorkflow(false)}
+      />
+    );
+  }
+
   const handlePreviewClick = () => {
     setShowPreview(true);
     setCurrentRecommendation(0);
