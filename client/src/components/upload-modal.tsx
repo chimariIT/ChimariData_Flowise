@@ -111,7 +111,10 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
         ];
       }
 
-      await projects.upload(selectedFile, formData.projectName, questionsArray);
+      await apiClient.uploadFile(selectedFile, {
+        name: formData.projectName,
+        questions: questionsArray
+      });
       
       onSuccess();
       
