@@ -150,6 +150,14 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
     updateWorkflowStep('upload', { uploadInfo });
   }, [updateWorkflowStep]);
 
+  const handleScanComplete = useCallback((scanData: any) => {
+    updateWorkflowStep('scan', { scanResult: scanData });
+  }, [updateWorkflowStep]);
+
+  const handleSchemaComplete = useCallback((schemaData: any) => {
+    updateWorkflowStep('schema', { schemaData });
+  }, [updateWorkflowStep]);
+
   const getCurrentStepComponent = () => {
     const { currentStep, data } = workflowState;
     console.log('Rendering step:', currentStep, 'Data:', data);

@@ -30,13 +30,13 @@ interface SecurityScanProps {
 }
 
 export function SecurityScan({ 
-  uploadId, 
-  filename, 
-  onScanComplete, 
-  isScanning = false 
+  isScanning, 
+  scanResult: initialScanResult, 
+  onComplete, 
+  serviceType = 'default' 
 }: SecurityScanProps) {
   const [scanProgress, setScanProgress] = useState(0);
-  const [scanResult, setScanResult] = useState<ScanResult | null>(null);
+  const [scanResult, setScanResult] = useState<ScanResult | null>(initialScanResult || null);
   const [scanStatus, setScanStatus] = useState<'pending' | 'scanning' | 'complete' | 'failed'>('pending');
 
   useEffect(() => {
