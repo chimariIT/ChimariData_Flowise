@@ -185,9 +185,10 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
       case 'schema':
         return (
           <SchemaAnalysis
+            uploadId={data.uploadInfo?.id || 0}
+            filename={data.uploadInfo?.filename || 'file'}
+            onComplete={handleSchemaComplete}
             isAnalyzing={!data.schemaData}
-            schemaData={data.schemaData}
-            serviceType="free_trial"
           />
         );
 
