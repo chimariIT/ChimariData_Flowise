@@ -15,9 +15,10 @@ A comprehensive data analytics platform with AI-powered natural language queryin
 Each service follows the same structured workflow:
 1. **Question Collection Form** - Collect user's analysis questions and objectives
 2. **Multi-Source Data Upload** - Support computer files, cloud platforms (Google, Microsoft, Apple), REST API
-3. **Malware Scanning** - Security scan before schema definition
-4. **Schema Analysis** - Automatic data structure detection and column summarization
-5. **Analysis Execution** - Service-specific processing and results
+3. **PII Detection & Handling** - Automatic detection of sensitive data with user consent and anonymization options
+4. **Malware Scanning** - Security scan before schema definition
+5. **Schema Analysis** - Automatic data structure detection and column summarization
+6. **Analysis Execution** - Service-specific processing and results
 
 ## Recent Changes
 - Fixed pricing comparison tables to include Free Trial tier across all service pages
@@ -27,6 +28,10 @@ Each service follows the same structured workflow:
 - Removed "Meet Our Experts" section from Expert Consultation page per user request
 - Created FreeTrialWorkflow component allowing users to access full workflow without authentication
 - Added "Try Free - No Sign-up" button to landing page for immediate access to free trial workflow
+- Implemented comprehensive PII detection system for all workflows
+- Added PIIDetector service to identify SSN, addresses, names, emails, and phone numbers
+- Created PIIDetectionDialog for user consent and anonymization options
+- Integrated anonymization with lookup table generation for data translation
 
 ## User Preferences
 - Prefers comprehensive solutions with complete workflow implementation

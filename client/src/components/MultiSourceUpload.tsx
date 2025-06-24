@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { PIIDetectionDialog } from "./PIIDetectionDialog";
 import { 
   Upload, 
   Cloud, 
@@ -37,6 +38,8 @@ interface MultiSourceUploadProps {
     size: number;
     mimeType: string;
     uploadPath: string;
+    piiHandled?: boolean;
+    anonymizationApplied?: boolean;
   }) => void;
   allowedTypes?: string[];
   maxSize?: number;
@@ -96,7 +99,7 @@ export function MultiSourceUpload({
 }: MultiSourceUploadProps) {
   const [selectedSource, setSelectedSource] = useState<string>('computer');
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'complete' | 'error'>('idle');
+  const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'pii_check' | 'complete' | 'error'>('idle');
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [apiConfig, setApiConfig] = useState({
     url: '',
@@ -105,6 +108,8 @@ export function MultiSourceUpload({
     body: ''
   });
   const [cloudAuthStatus, setCloudAuthStatus] = useState<Record<string, boolean>>({});
+  const [piiDetectionResult, setPiiDetectionResult] = useState<any>(null);
+  const [showPIIDialog, setShowPIIDialog] = useState(false);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     const file = acceptedFiles[0];
@@ -131,26 +136,88 @@ export function MultiSourceUpload({
     setUploadProgress(0);
 
     // Simulate upload progress
-    const interval = setInterval(() => {
+    const uploadInterval = setInterval(() => {
       setUploadProgress(prev => {
         if (prev >= 100) {
-          clearInterval(interval);
-          setUploadStatus('complete');
-          
-          // Call completion handler
-          onUploadComplete({
-            sourceType: selectedSource,
-            filename: file.name,
-            size: file.size,
-            mimeType: file.type,
-            uploadPath: `/uploads/${Date.now()}_${file.name}`
-          });
-          
+          clearInterval(uploadInterval);
+          // After upload, check for PII
+          checkForPII(file);
           return 100;
         }
         return prev + 10;
       });
     }, 200);
+  };
+
+  const checkForPII = async (file: File) => {
+    setUploadStatus('pii_check');
+    
+    try {
+      // Simulate PII detection (in real implementation, this would analyze the file)
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
+      // Mock PII detection result
+      const mockPIIResult = {
+        hasPII: Math.random() > 0.6, // 40% chance of PII detection
+        detectedTypes: [
+          {
+            type: 'email' as const,
+            column: 'customer_email',
+            confidence: 0.95,
+            sampleValue: 'jo***@example.com',
+            count: 25
+          },
+          {
+            type: 'name' as const,
+            column: 'full_name',
+            confidence: 0.88,
+            sampleValue: 'Jo** Do*',
+            count: 25
+          }
+        ],
+        affectedColumns: ['customer_email', 'full_name'],
+        riskLevel: 'medium' as const,
+        recommendations: [
+          'Contact information detected. Hash or anonymize for privacy protection.',
+          'Personal names detected. Consider using initials or generic identifiers.'
+        ]
+      };
+
+      if (mockPIIResult.hasPII) {
+        setPiiDetectionResult(mockPIIResult);
+        setShowPIIDialog(true);
+      } else {
+        completeUpload(file, false, false);
+      }
+    } catch (error) {
+      setUploadStatus('error');
+    }
+  };
+
+  const handlePIIDecision = (requiresPII: boolean, anonymizeData: boolean, selectedColumns: string[]) => {
+    setShowPIIDialog(false);
+    completeUpload(uploadedFile!, requiresPII, anonymizeData);
+  };
+
+  const handlePIIReject = () => {
+    setShowPIIDialog(false);
+    setUploadStatus('idle');
+    setUploadedFile(null);
+    setUploadProgress(0);
+  };
+
+  const completeUpload = (file: File, piiHandled: boolean, anonymizationApplied: boolean) => {
+    setUploadStatus('complete');
+    
+    onUploadComplete({
+      sourceType: selectedSource,
+      filename: file.name,
+      size: file.size,
+      mimeType: file.type,
+      uploadPath: `/uploads/${Date.now()}_${file.name}`,
+      piiHandled,
+      anonymizationApplied
+    });
   };
 
   const handleCloudAuth = async (provider: string) => {
