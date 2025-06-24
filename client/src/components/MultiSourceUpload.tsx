@@ -1,94 +1,77 @@
 import { useState, useCallback } from "react";
+import { useDropzone } from "react-dropzone";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { PIIDetectionDialog } from "./PIIDetectionDialog";
-import { apiClient } from "@/lib/api";
 import { 
   Upload, 
-  Cloud, 
-  Computer, 
-  Globe, 
-  CheckCircle,
-  X,
-  AlertTriangle,
-  Shield,
-  FileText,
-  Database
+  FileText, 
+  CheckCircle, 
+  AlertCircle, 
+  Shield, 
+  Globe,
+  Cloud,
+  HardDrive,
+  Database,
+  Gift
 } from "lucide-react";
-import { useDropzone } from 'react-dropzone';
-
-interface UploadSource {
-  id: string;
-  name: string;
-  icon: any;
-  description: string;
-  supported: boolean;
-  color: string;
-}
+import { apiClient } from "@/lib/api";
+import { PIIDetectionDialog } from "./PIIDetectionDialog";
 
 interface MultiSourceUploadProps {
-  onComplete: (uploadInfo: {
-    sourceType: string;
-    filename: string;
-    size: number;
-    mimeType: string;
-    uploadPath: string;
-    piiHandled?: boolean;
-    anonymizationApplied?: boolean;
-  }) => void;
-  serviceType?: string;
+  onComplete: (uploadInfo: any) => void;
+  serviceType?: 'pay_per_analysis' | 'expert_consulting' | 'automated_analysis' | 'enterprise' | 'free_trial' | 'default';
   questions?: string[];
   allowedTypes?: string[];
   maxSize?: number;
   isLoading?: boolean;
 }
 
-const UPLOAD_SOURCES: UploadSource[] = [
+const UPLOAD_SOURCES = [
   {
     id: 'computer',
-    name: 'Your Computer',
-    icon: Computer,
-    description: 'Upload CSV, Excel, or JSON files from your device',
-    supported: true,
-    color: 'bg-blue-500'
+    name: 'Computer Files',
+    description: 'Upload files from your device',
+    icon: HardDrive,
+    color: 'bg-blue-600',
+    supported: true
   },
   {
     id: 'google',
     name: 'Google Drive',
+    description: 'Import from Google Drive',
     icon: Cloud,
-    description: 'Import from Google Sheets or Drive files',
-    supported: true,
-    color: 'bg-green-500'
+    color: 'bg-green-600',
+    supported: false
   },
   {
     id: 'microsoft',
-    name: 'Microsoft OneDrive',
+    name: 'OneDrive',
+    description: 'Import from Microsoft OneDrive',
     icon: Cloud,
-    description: 'Import from Excel Online or OneDrive',
-    supported: true,
-    color: 'bg-blue-600'
+    color: 'bg-blue-500',
+    supported: false
   },
   {
     id: 'apple',
     name: 'iCloud',
+    description: 'Import from Apple iCloud',
     icon: Cloud,
-    description: 'Import from Numbers or iCloud Drive',
-    supported: true,
-    color: 'bg-gray-600'
+    color: 'bg-gray-600',
+    supported: false
   },
   {
     id: 'rest_api',
     name: 'REST API',
-    icon: Globe,
-    description: 'Connect to external APIs for real-time data',
-    supported: true,
-    color: 'bg-purple-500'
+    description: 'Connect via REST API endpoint',
+    icon: Database,
+    color: 'bg-purple-600',
+    supported: true
   }
 ];
 
@@ -114,30 +97,6 @@ export function MultiSourceUpload({
   const [piiDetectionResult, setPiiDetectionResult] = useState<any>(null);
   const [showPIIDialog, setShowPIIDialog] = useState(false);
   const [tempFileId, setTempFileId] = useState<string | null>(null);
-
-  const handleFileUpload = useCallback(async (files: File[]) => {
-    if (files.length === 0) return;
-    
-    const file = files[0];
-    setUploadedFile(file);
-    await uploadFileToBackend(file);
-  }, [uploadFileToBackend]);
-
-  const onDrop = useCallback((acceptedFiles: File[]) => {
-    handleFileUpload(acceptedFiles);
-  }, [handleFileUpload]);
-
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
-    accept: {
-      'text/csv': ['.csv'],
-      'application/vnd.ms-excel': ['.xls'],
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
-      'application/json': ['.json']
-    },
-    maxSize,
-    multiple: false
-  });
 
   const uploadFileToBackend = useCallback(async (file: File, piiOptions?: {
     piiHandled: boolean;
@@ -190,6 +149,30 @@ export function MultiSourceUpload({
     }
   }, [onComplete, selectedSource, serviceType, questions]);
 
+  const handleFileUpload = useCallback(async (files: File[]) => {
+    if (files.length === 0) return;
+    
+    const file = files[0];
+    setUploadedFile(file);
+    await uploadFileToBackend(file);
+  }, [uploadFileToBackend]);
+
+  const onDrop = useCallback((acceptedFiles: File[]) => {
+    handleFileUpload(acceptedFiles);
+  }, [handleFileUpload]);
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    accept: {
+      'text/csv': ['.csv'],
+      'application/vnd.ms-excel': ['.xls'],
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+      'application/json': ['.json']
+    },
+    maxSize,
+    multiple: false
+  });
+
   const handlePIIDecision = async (requiresPII: boolean, anonymizeData: boolean, selectedColumns: string[]) => {
     setShowPIIDialog(false);
     
@@ -203,216 +186,122 @@ export function MultiSourceUpload({
     }
   };
 
-  const handlePIIReject = () => {
-    setShowPIIDialog(false);
-    setUploadStatus('idle');
-    setUploadedFile(null);
-    setUploadProgress(0);
-  };
-
-  const completeUpload = (file: File, piiHandled: boolean, anonymizationApplied: boolean, selectedColumns?: string[]) => {
-    setUploadStatus('complete');
-    
-    // Complete the upload flow
-    onComplete({
-      sourceType: selectedSource,
-      filename: file.name,
-      size: file.size,
-      mimeType: file.type,
-      uploadPath: `/uploads/${Date.now()}_${file.name}`,
-      piiHandled,
-      anonymizationApplied
-    });
-  };
-
-  const handleCloudAuth = async (provider: string) => {
-    // In a real implementation, this would trigger OAuth flow
+  const handleCloudAuth = (provider: string) => {
     setCloudAuthStatus(prev => ({ ...prev, [provider]: true }));
+    // In a real implementation, this would trigger OAuth flow
+    alert(`${provider} authentication would be implemented here`);
   };
 
   const handleApiConnect = async () => {
-    if (!apiConfig.url) return;
-    
-    setUploadStatus('uploading');
-    
     try {
-      // In a real implementation, this would make the API call
-      setTimeout(() => {
-        setUploadStatus('complete');
-        onUploadComplete({
-          sourceType: 'rest_api',
-          filename: 'api_data.json',
-          size: 1024,
-          mimeType: 'application/json',
-          uploadPath: `/api-data/${Date.now()}_api_data.json`
-        });
-      }, 2000);
+      setUploadStatus('uploading');
+      
+      // Simulate API connection and data fetch
+      const response = await fetch(apiConfig.url, {
+        method: apiConfig.method,
+        headers: apiConfig.headers ? JSON.parse(apiConfig.headers) : {},
+        body: apiConfig.method !== 'GET' ? apiConfig.body : undefined
+      });
+      
+      if (!response.ok) {
+        throw new Error(`API request failed: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      setUploadStatus('complete');
+      
+      onComplete({
+        sourceType: 'rest_api',
+        data: data,
+        endpoint: apiConfig.url,
+        method: apiConfig.method
+      });
     } catch (error) {
+      console.error('API connection error:', error);
       setUploadStatus('error');
     }
   };
 
-  const renderComputerUpload = () => (
+  const renderCloudUpload = (providerName: string) => (
     <div className="space-y-4">
-      <div
-        {...getRootProps()}
-        className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
-          isDragActive 
-            ? 'border-blue-500 bg-blue-50' 
-            : 'border-slate-300 hover:border-slate-400'
-        }`}
+      <Alert>
+        <Cloud className="h-4 w-4" />
+        <AlertDescription>
+          {providerName} integration is coming soon. Currently in development.
+        </AlertDescription>
+      </Alert>
+      
+      <Button 
+        onClick={() => handleCloudAuth(providerName)}
+        disabled={true}
+        variant="outline"
+        className="w-full"
       >
-        <input {...getInputProps()} />
-        <Upload className="w-12 h-12 mx-auto mb-4 text-slate-400" />
-        <div className="space-y-2">
-          <p className="text-lg font-medium">
-            {isDragActive ? 'Drop your file here' : 'Drag & drop your data file'}
-          </p>
-          <p className="text-sm text-slate-500">
-            or click to browse your computer
-          </p>
-          <p className="text-xs text-slate-400">
-            Supports: {allowedTypes.join(', ')} • Max size: {Math.round(maxSize / (1024 * 1024))}MB
-          </p>
-        </div>
-      </div>
-
-      {uploadedFile && (
-        <Alert>
-          <FileText className="h-4 w-4" />
-          <AlertDescription>
-            <div className="flex items-center justify-between">
-              <div>
-                <strong>{uploadedFile.name}</strong>
-                <div className="text-sm text-slate-500">
-                  {(uploadedFile.size / (1024 * 1024)).toFixed(2)} MB
-                </div>
-              </div>
-              {uploadStatus === 'complete' && (
-                <CheckCircle className="w-5 h-5 text-green-600" />
-              )}
-            </div>
-          </AlertDescription>
-        </Alert>
-      )}
+        <Cloud className="w-4 h-4 mr-2" />
+        Connect to {providerName}
+      </Button>
     </div>
   );
 
-  const renderCloudUpload = (provider: string) => {
-    const isAuthenticated = cloudAuthStatus[provider];
-    
-    return (
-      <div className="space-y-4">
-        {!isAuthenticated ? (
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">Connect to {provider}</CardTitle>
-              <CardDescription>
-                Authenticate with your {provider} account to access your files
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button 
-                onClick={() => handleCloudAuth(provider)}
-                className="w-full"
-              >
-                <Cloud className="w-4 h-4 mr-2" />
-                Connect to {provider}
-              </Button>
-            </CardContent>
-          </Card>
-        ) : (
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg flex items-center">
-                <CheckCircle className="w-5 h-5 text-green-600 mr-2" />
-                Connected to {provider}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                <p className="text-sm text-slate-600">
-                  Select a file from your {provider} account:
-                </p>
-                <Button variant="outline" className="w-full">
-                  <Database className="w-4 h-4 mr-2" />
-                  Browse {provider} Files
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-      </div>
-    );
-  };
-
   const renderApiUpload = () => (
     <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">REST API Configuration</CardTitle>
-          <CardDescription>
-            Connect to an external API to fetch data in real-time
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div>
-            <Label htmlFor="api-url">API Endpoint URL</Label>
-            <Input
-              id="api-url"
-              placeholder="https://api.example.com/data"
-              value={apiConfig.url}
-              onChange={(e) => setApiConfig(prev => ({ ...prev, url: e.target.value }))}
-            />
-          </div>
-          
-          <div>
-            <Label htmlFor="api-method">HTTP Method</Label>
-            <select
-              id="api-method"
-              value={apiConfig.method}
-              onChange={(e) => setApiConfig(prev => ({ ...prev, method: e.target.value }))}
-              className="w-full border rounded px-3 py-2"
-            >
-              <option value="GET">GET</option>
-              <option value="POST">POST</option>
-            </select>
-          </div>
-
-          <div>
-            <Label htmlFor="api-headers">Headers (JSON format)</Label>
-            <Textarea
-              id="api-headers"
-              placeholder='{"Authorization": "Bearer your-token"}'
-              value={apiConfig.headers}
-              onChange={(e) => setApiConfig(prev => ({ ...prev, headers: e.target.value }))}
-              rows={3}
-            />
-          </div>
-
-          {apiConfig.method === 'POST' && (
-            <div>
-              <Label htmlFor="api-body">Request Body (JSON format)</Label>
-              <Textarea
-                id="api-body"
-                placeholder='{"query": "SELECT * FROM table"}'
-                value={apiConfig.body}
-                onChange={(e) => setApiConfig(prev => ({ ...prev, body: e.target.value }))}
-                rows={3}
-              />
-            </div>
-          )}
-
-          <Button 
-            onClick={handleApiConnect}
-            disabled={!apiConfig.url || uploadStatus === 'uploading'}
-            className="w-full"
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <Label htmlFor="api-url">API Endpoint URL</Label>
+          <Input
+            id="api-url"
+            placeholder="https://api.example.com/data"
+            value={apiConfig.url}
+            onChange={(e) => setApiConfig(prev => ({ ...prev, url: e.target.value }))}
+          />
+        </div>
+        <div>
+          <Label htmlFor="api-method">HTTP Method</Label>
+          <select
+            id="api-method"
+            value={apiConfig.method}
+            onChange={(e) => setApiConfig(prev => ({ ...prev, method: e.target.value }))}
+            className="w-full px-3 py-2 border border-slate-300 rounded-md"
           >
-            <Globe className="w-4 h-4 mr-2" />
-            Connect to API
-          </Button>
-        </CardContent>
-      </Card>
+            <option value="GET">GET</option>
+            <option value="POST">POST</option>
+            <option value="PUT">PUT</option>
+          </select>
+        </div>
+      </div>
+
+      <div>
+        <Label htmlFor="api-headers">Headers (JSON format)</Label>
+        <Textarea
+          id="api-headers"
+          placeholder='{"Authorization": "Bearer your-token", "Content-Type": "application/json"}'
+          value={apiConfig.headers}
+          onChange={(e) => setApiConfig(prev => ({ ...prev, headers: e.target.value }))}
+          rows={3}
+        />
+      </div>
+
+      {apiConfig.method !== 'GET' && (
+        <div>
+          <Label htmlFor="api-body">Request Body</Label>
+          <Textarea
+            id="api-body"
+            placeholder="Request body content"
+            value={apiConfig.body}
+            onChange={(e) => setApiConfig(prev => ({ ...prev, body: e.target.value }))}
+            rows={3}
+          />
+        </div>
+      )}
+
+      <Button 
+        onClick={handleApiConnect}
+        disabled={!apiConfig.url || uploadStatus === 'uploading'}
+        className="w-full"
+      >
+        <Globe className="w-4 h-4 mr-2" />
+        Connect to API
+      </Button>
     </div>
   );
 
@@ -476,7 +365,43 @@ export function MultiSourceUpload({
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {selectedSource === 'computer' && renderComputerUpload()}
+          {/* File Upload Content Based on Selected Source */}
+          {selectedSource === 'computer' && (
+            <div className="mt-6">
+              <div 
+                {...getRootProps()} 
+                className={`
+                  border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors
+                  ${isDragActive ? 'border-blue-500 bg-blue-50' : 'border-slate-300 hover:border-slate-400'}
+                  ${uploadStatus === 'uploading' ? 'pointer-events-none opacity-50' : ''}
+                `}
+              >
+                <input {...getInputProps()} />
+                <Upload className="w-12 h-12 text-slate-400 mx-auto mb-4" />
+                {isDragActive ? (
+                  <p className="text-lg font-medium text-blue-600 mb-2">Drop your file here</p>
+                ) : (
+                  <div>
+                    <p className="text-lg font-medium text-slate-900 mb-2">
+                      Drag & drop your file here, or click to browse
+                    </p>
+                    <p className="text-sm text-slate-500 mb-4">
+                      Supports CSV, Excel (.xlsx, .xls), and JSON files up to {Math.round(maxSize / (1024 * 1024))}MB
+                    </p>
+                  </div>
+                )}
+                
+                {serviceType === 'free_trial' && (
+                  <div className="mt-4 p-3 bg-blue-50 rounded-lg">
+                    <p className="text-xs text-blue-700">
+                      <Gift className="w-4 h-4 inline mr-1" />
+                      Free trial: Basic analysis with file size limit of {Math.round(maxSize / (1024 * 1024))}MB
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           {selectedSource === 'google' && renderCloudUpload('Google Drive')}
           {selectedSource === 'microsoft' && renderCloudUpload('Microsoft OneDrive')}
           {selectedSource === 'apple' && renderCloudUpload('iCloud')}
@@ -518,30 +443,35 @@ export function MultiSourceUpload({
 
             {uploadStatus === 'error' && (
               <div className="flex items-center space-x-2 text-red-600">
-                <X className="w-5 h-5" />
-                <span className="text-sm">Upload failed. Please try again.</span>
+                <AlertCircle className="w-5 h-5" />
+                <span className="text-sm font-medium">Upload failed. Please try again.</span>
               </div>
             )}
           </div>
 
           {/* Security Notice */}
-          <Alert className="mt-6">
-            <Shield className="h-4 w-4" />
-            <AlertDescription>
-              <strong>Security & Privacy:</strong> All files are scanned for malware and PII data. 
-              Sensitive information is detected and you'll be asked for consent before processing.
-            </AlertDescription>
-          </Alert>
+          {uploadStatus === 'idle' && selectedSource === 'computer' && (
+            <Alert className="mt-4">
+              <Shield className="w-4 h-4" />
+              <AlertDescription>
+                Your files are scanned for malware and checked for sensitive data (PII). 
+                {serviceType === 'free_trial' ? ' Trial uploads are automatically deleted after analysis.' : ''}
+                Sensitive information is detected and you'll be asked for consent before processing.
+              </AlertDescription>
+            </Alert>
+          )}
         </CardContent>
       </Card>
 
       {/* PII Detection Dialog */}
-      <PIIDetectionDialog
-        isOpen={showPIIDialog}
-        piiResult={piiDetectionResult}
-        onDecision={handlePIIDecision}
-        onReject={handlePIIReject}
-      />
+      {showPIIDialog && piiDetectionResult && (
+        <PIIDetectionDialog
+          isOpen={showPIIDialog}
+          onClose={() => setShowPIIDialog(false)}
+          piiResult={piiDetectionResult}
+          onDecision={handlePIIDecision}
+        />
+      )}
     </div>
   );
 }
