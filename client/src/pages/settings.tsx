@@ -10,7 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Settings, Brain, Key, Info, Crown, BarChart3, AlertTriangle, Check } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
-import { auth } from "@/lib/api";
+import { apiClient } from "@/lib/api";
 
 interface SettingsPageProps {
   onBack: () => void;

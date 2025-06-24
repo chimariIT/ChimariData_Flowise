@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { auth } from "@/lib/api";
+import { apiClient } from "@/lib/api";
 import { ChartLine, Upload, Brain, BarChart } from "lucide-react";
 
 interface AuthPageProps {
