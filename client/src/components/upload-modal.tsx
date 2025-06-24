@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { projects } from "@/lib/api";
+import { apiClient } from "@/lib/api";
 import { X, Upload, File, CheckCircle, FileSpreadsheet, AlertCircle, HardDrive } from "lucide-react";
 import GoogleDriveImport from "./google-drive-import";
 

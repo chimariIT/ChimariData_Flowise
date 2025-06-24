@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
-import { projects, auth, type Project } from "@/lib/api";
+import { apiClient } from "@/lib/api";
 import { ChartLine, Folder, FileText, Lightbulb, Plus, Search, Calendar, Database, TrendingUp, Bell, LogOut, Settings } from "lucide-react";
 import UploadModal from "@/components/upload-modal";
 
@@ -22,7 +22,10 @@ export default function Dashboard({ user, onLogout, onProjectSelect, onSettings 
 
   const { data: projectsData, isLoading, refetch } = useQuery({
     queryKey: ["/api/projects"],
-    queryFn: projects.list,
+    queryFn: async () => {
+      const result = await apiClient.getProjects();
+      return result;
+    },
   });
 
   const filteredProjects = projectsData?.projects?.filter(project =>
@@ -42,7 +45,8 @@ export default function Dashboard({ user, onLogout, onProjectSelect, onSettings 
 
   const handleLogout = async () => {
     try {
-      await auth.logout();
+      localStorage.removeItem('auth_token');
+      localStorage.removeItem('user');
       onLogout();
     } catch (error) {
       toast({
@@ -66,7 +70,7 @@ export default function Dashboard({ user, onLogout, onProjectSelect, onSettings 
     return new Date(dateString).toLocaleDateString();
   };
 
-  const getProjectStatus = (project: Project) => {
+  const getProjectStatus = (project: any) => {
     if (Object.keys(project.insights || {}).length > 0) {
       return { label: "Complete", color: "bg-emerald-100 text-emerald-700" };
     }
