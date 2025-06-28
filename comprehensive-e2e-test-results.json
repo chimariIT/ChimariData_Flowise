@@ -1,0 +1,204 @@
+{
+  "summary": {
+    "total": 29,
+    "passed": 17,
+    "failed": 10,
+    "warnings": 1,
+    "skipped": 1
+  },
+  "testExecution": {
+    "timestamp": "2025-06-28T18:00:02.924Z",
+    "duration": "Complete",
+    "environment": "Development"
+  },
+  "results": [
+    {
+      "testName": "Server Health Check",
+      "status": "PASS",
+      "message": "Server is responsive",
+      "timestamp": "2025-06-28T18:00:02.451Z"
+    },
+    {
+      "testName": "Database Connection",
+      "status": "PASS",
+      "message": "Database accessible through API",
+      "timestamp": "2025-06-28T18:00:02.457Z"
+    },
+    {
+      "testName": "User Registration",
+      "status": "FAIL",
+      "message": "Registration failed: {\"error\":\"Username already exists\"}",
+      "timestamp": "2025-06-28T18:00:02.466Z"
+    },
+    {
+      "testName": "User Login",
+      "status": "SKIP",
+      "message": "No user to test login with",
+      "timestamp": "2025-06-28T18:00:02.466Z"
+    },
+    {
+      "testName": "OAuth google",
+      "status": "FAIL",
+      "message": "Unexpected response: 200",
+      "timestamp": "2025-06-28T18:00:02.471Z"
+    },
+    {
+      "testName": "OAuth microsoft",
+      "status": "FAIL",
+      "message": "Unexpected response: 200",
+      "timestamp": "2025-06-28T18:00:02.477Z"
+    },
+    {
+      "testName": "OAuth apple",
+      "status": "FAIL",
+      "message": "Unexpected response: 200",
+      "timestamp": "2025-06-28T18:00:02.482Z"
+    },
+    {
+      "testName": "Free Trial PII Detection",
+      "status": "PASS",
+      "message": "PII successfully detected in uploaded data",
+      "timestamp": "2025-06-28T18:00:02.490Z"
+    },
+    {
+      "testName": "Free Trial Anonymization",
+      "status": "PASS",
+      "message": "PII data successfully anonymized",
+      "timestamp": "2025-06-28T18:00:02.496Z"
+    },
+    {
+      "testName": "Pay-per-Analysis Workflow",
+      "status": "FAIL",
+      "message": "Workflow error: Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON",
+      "timestamp": "2025-06-28T18:00:02.504Z"
+    },
+    {
+      "testName": "Expert Consultation Inquiry",
+      "status": "PASS",
+      "message": "Inquiry successfully submitted",
+      "timestamp": "2025-06-28T18:00:02.510Z"
+    },
+    {
+      "testName": "Automated Analysis Tiers",
+      "status": "WARN",
+      "message": "No subscription tiers found",
+      "timestamp": "2025-06-28T18:00:02.512Z"
+    },
+    {
+      "testName": "PII Detection System",
+      "status": "FAIL",
+      "message": "Detection error: Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON",
+      "timestamp": "2025-06-28T18:00:02.519Z"
+    },
+    {
+      "testName": "Security Scanning",
+      "status": "FAIL",
+      "message": "Scanning error: Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON",
+      "timestamp": "2025-06-28T18:00:02.526Z"
+    },
+    {
+      "testName": "AI Providers",
+      "status": "PASS",
+      "message": "undefined AI providers available",
+      "timestamp": "2025-06-28T18:00:02.533Z"
+    },
+    {
+      "testName": "Analysis Results Generation",
+      "status": "FAIL",
+      "message": "Results generation error: Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON",
+      "timestamp": "2025-06-28T18:00:02.538Z"
+    },
+    {
+      "testName": "Pricing System",
+      "status": "FAIL",
+      "message": "Pricing error: Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON",
+      "timestamp": "2025-06-28T18:00:02.543Z"
+    },
+    {
+      "testName": "Payment Processing",
+      "status": "PASS",
+      "message": "Payment intent created successfully",
+      "timestamp": "2025-06-28T18:00:02.863Z"
+    },
+    {
+      "testName": "Route /",
+      "status": "PASS",
+      "message": "Route accessible and returns HTML",
+      "timestamp": "2025-06-28T18:00:02.867Z"
+    },
+    {
+      "testName": "Route /pricing",
+      "status": "PASS",
+      "message": "Route accessible and returns HTML",
+      "timestamp": "2025-06-28T18:00:02.877Z"
+    },
+    {
+      "testName": "Route /demo",
+      "status": "PASS",
+      "message": "Route accessible and returns HTML",
+      "timestamp": "2025-06-28T18:00:02.883Z"
+    },
+    {
+      "testName": "Route /pay-per-analysis",
+      "status": "PASS",
+      "message": "Route accessible and returns HTML",
+      "timestamp": "2025-06-28T18:00:02.889Z"
+    },
+    {
+      "testName": "Route /expert-consulting",
+      "status": "PASS",
+      "message": "Route accessible and returns HTML",
+      "timestamp": "2025-06-28T18:00:02.893Z"
+    },
+    {
+      "testName": "Route /automated-analysis",
+      "status": "PASS",
+      "message": "Route accessible and returns HTML",
+      "timestamp": "2025-06-28T18:00:02.899Z"
+    },
+    {
+      "testName": "Component API /api/pricing/tiers",
+      "status": "PASS",
+      "message": "Endpoint available for components",
+      "timestamp": "2025-06-28T18:00:02.902Z"
+    },
+    {
+      "testName": "Component API /api/ai/providers",
+      "status": "PASS",
+      "message": "Endpoint available for components",
+      "timestamp": "2025-06-28T18:00:02.905Z"
+    },
+    {
+      "testName": "Component API /api/auth/user",
+      "status": "PASS",
+      "message": "Endpoint available for components",
+      "timestamp": "2025-06-28T18:00:02.909Z"
+    },
+    {
+      "testName": "Data Processing Pipeline",
+      "status": "FAIL",
+      "message": "Pipeline error: Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON",
+      "timestamp": "2025-06-28T18:00:02.914Z"
+    },
+    {
+      "testName": "Enterprise Inquiry",
+      "status": "PASS",
+      "message": "Enterprise inquiry system functional",
+      "timestamp": "2025-06-28T18:00:02.923Z"
+    }
+  ],
+  "recommendations": [
+    "Address failed tests before deployment",
+    "Increase test coverage and fix failing components",
+    "Critical: Fix authentication system issues",
+    "Critical: Address security and PII detection issues"
+  ],
+  "coverageAreas": {
+    "authentication": 3,
+    "workflows": 3,
+    "security": 3,
+    "ai_integration": 4,
+    "payment_system": 2,
+    "frontend_integration": 9
+  }
+}

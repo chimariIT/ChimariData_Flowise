@@ -8,6 +8,17 @@ import { mlService } from "./ml-service";
 import { FileProcessor } from "./file-processor";
 import { PIIDetector } from "./pii-detector";
 import { setupOAuthProviders } from "./oauth-auth";
+import { 
+  errorHandler, 
+  notFoundHandler, 
+  asyncHandler, 
+  validateRequest,
+  AppError,
+  ValidationError,
+  AuthenticationError,
+  NotFoundError,
+  ConflictError
+} from "./middleware/errorHandler";
 import passport from "passport";
 import session from "express-session";
 import { spawn } from "child_process";

@@ -11,6 +11,9 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+import { useAuthErrorHandler } from "@/hooks/useErrorHandler";
+import { ErrorDisplay } from "@/components/ErrorDisplay";
+import type { AppError } from "@/lib/errorHandler";
 import { 
   Mail, 
   Lock, 
@@ -49,7 +52,9 @@ export function AuthModal({ isOpen, onClose, onSuccess, defaultTab = "login" }: 
   const [activeTab, setActiveTab] = useState(defaultTab);
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [authError, setAuthError] = useState<AppError | null>(null);
   const { toast } = useToast();
+  const { handleError, handleApiError, handleNetworkError } = useAuthErrorHandler();
 
   const loginForm = useForm({
     resolver: zodResolver(loginSchema),
@@ -72,6 +77,8 @@ export function AuthModal({ isOpen, onClose, onSuccess, defaultTab = "login" }: 
 
   const handleLogin = async (data: z.infer<typeof loginSchema>) => {
     setIsLoading(true);
+    setAuthError(null);
+    
     try {
       const response = await fetch('/api/auth/login', {
         method: 'POST',
@@ -89,19 +96,12 @@ export function AuthModal({ isOpen, onClose, onSuccess, defaultTab = "login" }: 
         onSuccess();
         onClose();
       } else {
-        const error = await response.json();
-        toast({
-          title: "Login failed",
-          description: error.message || "Please check your credentials and try again.",
-          variant: "destructive",
-        });
+        const error = await handleApiError(response, 'User login');
+        setAuthError(error);
       }
-    } catch (error) {
-      toast({
-        title: "Login failed",
-        description: "Something went wrong. Please try again.",
-        variant: "destructive",
-      });
+    } catch (error: any) {
+      const appError = handleNetworkError(error, 'User login');
+      setAuthError(appError);
     } finally {
       setIsLoading(false);
     }
@@ -109,8 +109,10 @@ export function AuthModal({ isOpen, onClose, onSuccess, defaultTab = "login" }: 
 
   const handleRegister = async (data: z.infer<typeof registerSchema>) => {
     setIsLoading(true);
+    setAuthError(null);
+    
     try {
-      const response = await apiRequest('POST', '/api/auth/register', {
+      await apiRequest('POST', '/api/auth/register', {
         email: data.email,
         password: data.password,
         firstName: data.firstName,
@@ -124,11 +126,8 @@ export function AuthModal({ isOpen, onClose, onSuccess, defaultTab = "login" }: 
       onSuccess();
       onClose();
     } catch (error: any) {
-      toast({
-        title: "Registration failed",
-        description: error.message || "Something went wrong. Please try again.",
-        variant: "destructive",
-      });
+      const appError = handleError(error, 'User registration');
+      setAuthError(appError);
     } finally {
       setIsLoading(false);
     }
@@ -150,6 +149,24 @@ export function AuthModal({ isOpen, onClose, onSuccess, defaultTab = "login" }: 
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {/* Error Display */}
+          {authError && (
+            <ErrorDisplay
+              error={authError}
+              onRetry={() => {
+                setAuthError(null);
+                // Retry the last action based on active tab
+                if (activeTab === 'login') {
+                  loginForm.handleSubmit(handleLogin)();
+                } else {
+                  registerForm.handleSubmit(handleRegister)();
+                }
+              }}
+              onDismiss={() => setAuthError(null)}
+              compact={true}
+              className="mb-4"
+            />
+          )}
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="login">Login</TabsTrigger>
