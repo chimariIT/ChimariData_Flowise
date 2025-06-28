@@ -109,7 +109,7 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
 
   // Generate detailed analysis results based on questions and analysis type
   const generateDetailedAnalysisResults = (questions: string[], analysisType: string) => {
-    const baseResults = {
+    const baseResults: any = {
       analysisType,
       questionsAnalyzed: questions,
       dataQuality: {
@@ -117,9 +117,9 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
         issues: ['Minor data inconsistencies detected', 'Some missing values in optional fields'],
         strengths: ['Well-structured data format', 'Consistent data types', 'No duplicate records']
       },
-      keyInsights: [],
-      recommendations: [],
-      visualizations: [],
+      keyInsights: [] as string[],
+      recommendations: [] as string[],
+      visualizations: [] as { type: string; description: string }[],
       limitations: [
         'Free trial provides basic analysis only',
         'Advanced statistical methods require premium subscription',
