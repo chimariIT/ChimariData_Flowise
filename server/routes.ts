@@ -306,31 +306,71 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ]
       };
 
-      // Generate intelligent responses to user questions using pandas analysis
+      // Generate intelligent responses to user questions using Python pandas analysis
       let questionResponse = null;
       if (questionsArray.length > 0) {
         try {
-          // Import the pandas analysis service
-          const { PandasAnalysisService } = await import('./pandas-service');
-          
-          // Use pandas to analyze the question with the actual dataset
-          const analysisResult = await PandasAnalysisService.analyzeQuestion(req.file.path, questionsArray[0]);
-          
+          // Use python directly to analyze the question with the actual dataset
+          const { spawn } = await import('child_process');
+          const path = await import('path');
+          const pythonScript = path.resolve('server/pandas-analyzer.py');
+          const pythonProcess = spawn('python3', [
+            pythonScript,
+            req.file.path,
+            questionsArray[0]
+          ], {
+            stdio: ['pipe', 'pipe', 'pipe'],
+            timeout: 15000 // 15 second timeout
+          });
+
+          let stdout = '';
+          let stderr = '';
+
+          pythonProcess.stdout.on('data', (data) => {
+            stdout += data.toString();
+          });
+
+          pythonProcess.stderr.on('data', (data) => {
+            stderr += data.toString();
+          });
+
+          const analysisResult = await new Promise<any>((resolve, reject) => {
+            pythonProcess.on('close', (code) => {
+              if (code === 0) {
+                try {
+                  const result = JSON.parse(stdout);
+                  resolve(result);
+                } catch (parseError) {
+                  reject(new Error('Failed to parse analysis result'));
+                }
+              } else {
+                reject(new Error(`Python analysis failed with code ${code}: ${stderr}`));
+              }
+            });
+
+            pythonProcess.on('error', (error) => {
+              reject(error);
+            });
+
+            setTimeout(() => {
+              pythonProcess.kill('SIGTERM');
+              reject(new Error('Analysis timeout'));
+            }, 15000);
+          });
+
           if (analysisResult.analysis_type !== 'error') {
             questionResponse = analysisResult.answer;
             console.log('Pandas analysis successful:', analysisResult.analysis_type);
           } else {
-            // Fallback to simple analysis if pandas fails
-            console.log('Pandas analysis failed, using fallback:', analysisResult.error);
-            questionResponse = `Your question "${questionsArray[0]}" can be analyzed with your ${finalData.length}-record dataset. The data includes columns: ${Object.keys(result.schema).join(', ')}. For advanced AI-powered insights, upgrade to premium features.`;
+            throw new Error('Pandas analysis returned error');
           }
         } catch (pandasError) {
-          console.error('Pandas service error:', pandasError);
+          console.error('Pandas analysis error:', pandasError);
           // Fallback analysis
           const columns = Object.keys(result.schema);
           const question = questionsArray[0].toLowerCase();
           
-          if (question.includes('how many') && (question.includes('customer') || question.includes('record') || question.includes('row'))) {
+          if (question.includes('how many') && (question.includes('customer') || question.includes('record') || question.includes('row') || question.includes('campaign'))) {
             questionResponse = `Based on your uploaded data, you have ${finalData.length} records. Each record contains ${columns.length} fields: ${columns.join(', ')}.`;
           } else if (question.includes('where') && (question.includes('live') || question.includes('location') || question.includes('address'))) {
             const locationColumns = columns.filter(col => 
@@ -342,7 +382,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
             );
             
             if (locationColumns.length > 0) {
-              questionResponse = `Your data contains location information in these columns: ${locationColumns.join(', ')}. For detailed location analysis, upgrade to premium features.`;
+              const sampleData = result.dataSnapshot.slice(0, 50);
+              const locationData: string[] = sampleData.map((row: any) => 
+                locationColumns.map(col => row[col]).filter(Boolean).join(', ')
+              ).filter(Boolean);
+              
+              const uniqueLocations = locationData.filter((value, index, self) => self.indexOf(value) === index);
+              questionResponse = `Your data contains location information in these columns: ${locationColumns.join(', ')}. Sample locations include: ${uniqueLocations.slice(0, 5).join(', ')}${uniqueLocations.length > 5 ? ` and ${uniqueLocations.length - 5} more` : ''}.`;
             } else {
               questionResponse = `No location-specific columns found. Available columns: ${columns.join(', ')}.`;
             }
