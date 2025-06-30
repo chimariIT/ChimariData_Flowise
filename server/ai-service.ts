@@ -143,15 +143,38 @@ class PlatformProvider implements AIProvider {
     
     const genAI = new GoogleGenerativeAI(platformKey);
     
-    const systemPrompt = `You are a data analyst AI provided by ChimariData+AI. You have access to a dataset with the following schema and sample data:
+    // Use the correct field names from the actual data structure
+    const sampleData = dataContext.dataSnapshot || dataContext.sampleData || [];
+    const recordCount = sampleData.length;
+    const schema = dataContext.schema || {};
+    
+    // Create a more intelligent system prompt that can handle customer data questions
+    const systemPrompt = `You are an expert data analyst AI. You have access to a dataset with the following details:
 
-Schema: ${JSON.stringify(dataContext.schema, null, 2)}
-Sample Data (first 5 rows): ${JSON.stringify(dataContext.sampleData, null, 2)}
-Total Records: ${dataContext.recordCount}
+**Data Schema and Types:**
+${JSON.stringify(schema, null, 2)}
 
-Provide insights, analysis, and answers based on this data. Be specific and reference actual data patterns when possible. Keep responses concise and actionable.
+**Sample Data (first ${Math.min(5, sampleData.length)} rows):**
+${JSON.stringify(sampleData.slice(0, 5), null, 2)}
 
-User Question: ${prompt}`;
+**Dataset Size:** ${recordCount} total records
+
+**Analysis Instructions:**
+1. Analyze the actual data provided above to answer the user's question
+2. Look at column names and values to understand what the data represents
+3. For counting questions (e.g., "how many customers"), count the actual rows in the dataset
+4. For location questions, examine address/location columns in the data
+5. If the data structure is unclear, ask clarifying questions
+6. Provide specific, data-driven answers, not generic responses
+7. If you cannot determine the answer from the data, clearly explain what additional information is needed
+
+**User Question:** ${prompt}
+
+**Response Guidelines:**
+- Be specific and reference actual data
+- Count actual records when asked for quantities
+- Identify patterns from the real data shown
+- If the question cannot be answered from this data, explain why and suggest what data would be needed`;
 
     const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
     const result = await model.generateContent(systemPrompt);

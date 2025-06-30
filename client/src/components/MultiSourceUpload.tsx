@@ -125,7 +125,7 @@ export function MultiSourceUpload({
         console.log('PII detected - showing dialog');
         setUploadProgress(100);
         setPiiDetectionResult(result.piiResult);
-        setTempFileId(result.tempFileId);
+        setTempFileId(result.tempFileId ?? null);
         setShowPIIDialog(true);
         console.log('Dialog state set - showPIIDialog:', true);
       } else {
