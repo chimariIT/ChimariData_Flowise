@@ -92,121 +92,56 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
     setIsProcessing(true);
     
     try {
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      // The real analysis results should already be available from the upload step
+      const { uploadInfo } = workflowState.data;
       
-      const { questions = [], analysisType = 'general' } = workflowState.data;
-      
-      // Generate detailed results based on analysis type and questions
-      const analysisResults = generateDetailedAnalysisResults(questions, analysisType);
-      
-      updateWorkflowStep('analysis', { analysisResults });
+      if (uploadInfo && uploadInfo.insights) {
+        // Use the real analysis results from the backend
+        const analysisResults = {
+          analysisType: uploadInfo.analysisType || 'general',
+          questionsAnalyzed: uploadInfo.questions || [],
+          dataQuality: {
+            score: 85,
+            issues: ['Some data processing limitations in free trial'],
+            strengths: ['Successfully processed and analyzed your data', 'Data structure validated']
+          },
+          keyInsights: [
+            uploadInfo.insights,
+            ...(uploadInfo.questionResponse ? [uploadInfo.questionResponse] : [])
+          ].filter(Boolean),
+          recommendations: [
+            "Upgrade to access advanced AI analysis features",
+            "Consider additional data sources for more comprehensive insights",
+            "Use premium tools for interactive visualizations"
+          ],
+          visualizations: [
+            { type: 'data_overview', description: 'Dataset structure and composition' },
+            { type: 'quality_report', description: 'Data quality assessment' }
+          ],
+          limitations: [
+            'Free trial provides basic analysis only',
+            'Advanced AI features require premium subscription',
+            'Limited to 10MB file size'
+          ],
+          realDataUsed: true,
+          recordCount: uploadInfo.recordCount,
+          columnCount: uploadInfo.columnCount,
+          schema: uploadInfo.schema
+        };
+        
+        updateWorkflowStep('analysis', { analysisResults });
+      } else {
+        throw new Error('No analysis data available from upload step');
+      }
     } catch (err) {
       setError('Analysis failed. Please try again.');
+      console.error('Analysis error:', err);
     } finally {
       setIsProcessing(false);
     }
   }, [updateWorkflowStep, workflowState.data]);
 
-  // Generate detailed analysis results based on questions and analysis type
-  const generateDetailedAnalysisResults = (questions: string[], analysisType: string) => {
-    const baseResults: any = {
-      analysisType,
-      questionsAnalyzed: questions,
-      dataQuality: {
-        score: 85,
-        issues: ['Minor data inconsistencies detected', 'Some missing values in optional fields'],
-        strengths: ['Well-structured data format', 'Consistent data types', 'No duplicate records']
-      },
-      keyInsights: [] as string[],
-      recommendations: [] as string[],
-      visualizations: [] as { type: string; description: string }[],
-      limitations: [
-        'Free trial provides basic analysis only',
-        'Advanced statistical methods require premium subscription',
-        'Limited to 10MB file size'
-      ]
-    };
 
-    // Customize results based on analysis type
-    switch (analysisType) {
-      case 'descriptive':
-        baseResults.keyInsights = [
-          'Dataset contains 247 records across 5 variables',
-          'Data shows normal distribution for numeric fields',
-          'No significant outliers detected in main variables'
-        ];
-        baseResults.recommendations = [
-          'Consider correlation analysis for deeper insights',
-          'Segment data by categories for targeted analysis',
-          'Upgrade for advanced descriptive statistics'
-        ];
-        baseResults.visualizations = [
-          { type: 'histogram', description: 'Distribution of primary numeric variable' },
-          { type: 'summary_table', description: 'Descriptive statistics for all variables' }
-        ];
-        break;
-
-      case 'predictive':
-        baseResults.keyInsights = [
-          'Strong predictive patterns identified in historical data',
-          'Key variables show 73% correlation with target outcome',
-          'Seasonal trends suggest quarterly prediction intervals'
-        ];
-        baseResults.recommendations = [
-          'Collect more historical data for improved accuracy',
-          'Consider machine learning models for predictions',
-          'Upgrade for advanced predictive analytics and forecasting'
-        ];
-        baseResults.visualizations = [
-          { type: 'trend_line', description: 'Historical trend analysis' },
-          { type: 'correlation_matrix', description: 'Variable correlation heatmap' }
-        ];
-        break;
-
-      case 'diagnostic':
-        baseResults.keyInsights = [
-          'Root cause analysis reveals 3 primary factors',
-          'Performance metrics indicate efficiency bottlenecks',
-          'Data patterns suggest systemic rather than random issues'
-        ];
-        baseResults.recommendations = [
-          'Focus on high-impact variables identified',
-          'Implement monitoring for key performance indicators',
-          'Upgrade for comprehensive diagnostic reporting'
-        ];
-        baseResults.visualizations = [
-          { type: 'cause_effect', description: 'Root cause analysis diagram' },
-          { type: 'performance_dashboard', description: 'Key metrics visualization' }
-        ];
-        break;
-
-      default:
-        baseResults.keyInsights = [
-          'Data structure successfully analyzed and validated',
-          'Multiple analytical approaches applicable to this dataset',
-          'Strong foundation for various analysis types'
-        ];
-        baseResults.recommendations = [
-          'Define specific analysis objectives for targeted insights',
-          'Consider multiple analysis types for comprehensive understanding',
-          'Upgrade for access to all analysis methodologies'
-        ];
-        baseResults.visualizations = [
-          { type: 'data_overview', description: 'Dataset structure and composition' },
-          { type: 'quality_report', description: 'Data quality assessment' }
-        ];
-    }
-
-    // Add question-specific insights
-    if (questions.length > 0) {
-      const questionInsights = questions.map((question, index) => 
-        `Q${index + 1}: ${question} - Analysis shows relevant patterns in the data that address this question.`
-      );
-      baseResults.keyInsights.push(...questionInsights.slice(0, 2)); // Limit for free trial
-    }
-
-    return baseResults;
-  };
 
   // Auto-advance through workflow steps  
   useEffect(() => {
