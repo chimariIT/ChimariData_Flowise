@@ -352,14 +352,30 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
                 <CardTitle className="text-lg">Key Insights</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                {/* Question-Specific Response */}
+                {/* Question-Specific Responses */}
                 {data.uploadInfo?.questionResponse && (
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                     <div className="flex items-start space-x-3">
                       <BarChart3 className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
-                      <div>
-                        <h5 className="font-medium text-blue-900 mb-2">Answer to Your Question</h5>
-                        <p className="text-blue-800">{data.uploadInfo.questionResponse}</p>
+                      <div className="w-full">
+                        <h5 className="font-medium text-blue-900 mb-3">Answers to Your Questions</h5>
+                        {data.uploadInfo.questionResponse.includes(' | ') ? (
+                          // Multiple questions with answers
+                          <div className="space-y-3">
+                            {data.uploadInfo.questionResponse.split(' | ').map((qaPair: string, index: number) => {
+                              const [questionPart, answerPart] = qaPair.split(' - ');
+                              return (
+                                <div key={index} className="border-l-4 border-blue-300 pl-3 py-2">
+                                  <h6 className="font-medium text-blue-900 text-sm mb-1">{questionPart}</h6>
+                                  <p className="text-blue-800 text-sm">{answerPart}</p>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          // Single question response
+                          <p className="text-blue-800">{data.uploadInfo.questionResponse}</p>
+                        )}
                       </div>
                     </div>
                   </div>
