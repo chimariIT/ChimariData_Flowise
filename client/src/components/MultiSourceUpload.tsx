@@ -129,18 +129,30 @@ export function MultiSourceUpload({
         setShowPIIDialog(true);
         console.log('Dialog state set - showPIIDialog:', true);
       } else {
-        // Upload complete
+        // Upload complete - pass the complete analysis results
         setUploadProgress(100);
         setUploadStatus('complete');
         
         onComplete({
+          id: result.id,
+          name: result.name,
           sourceType: selectedSource,
           filename: file.name,
           size: file.size,
           mimeType: file.type,
           uploadPath: `/uploads/${Date.now()}_${file.name}`,
           piiHandled: piiOptions?.piiHandled || false,
-          anonymizationApplied: piiOptions?.anonymizationApplied || false
+          anonymizationApplied: piiOptions?.anonymizationApplied || false,
+          // Include the actual analysis results from backend
+          insights: result.insights,
+          questionResponse: result.questionResponse,
+          recordCount: result.recordCount,
+          columnCount: result.columnCount,
+          schema: result.schema,
+          metadata: result.metadata,
+          questions: questions,
+          analysisType: 'descriptive', // Default analysis type for free trial
+          isTrial: result.isTrial
         });
       }
     } catch (error) {
