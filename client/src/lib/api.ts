@@ -12,6 +12,16 @@ interface APIResponse<T = any> {
   data?: T;
   error?: string;
   message?: string;
+  // Free trial specific fields
+  id?: string;
+  name?: string;
+  insights?: string;
+  questionResponse?: string;
+  recordCount?: number;
+  columnCount?: number;
+  schema?: any;
+  metadata?: any;
+  isTrial?: boolean;
 }
 
 export class APIClient {
