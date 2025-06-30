@@ -366,34 +366,140 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         } catch (pandasError) {
           console.error('Pandas analysis error:', pandasError);
-          // Fallback analysis
+          // Enhanced fallback analysis with actual data examination
           const columns = Object.keys(result.schema);
           const question = questionsArray[0].toLowerCase();
+          const sampleData = result.dataSnapshot.slice(0, 100); // Use more data for analysis
           
-          if (question.includes('how many') && (question.includes('customer') || question.includes('record') || question.includes('row') || question.includes('campaign'))) {
-            questionResponse = `Based on your uploaded data, you have ${finalData.length} records. Each record contains ${columns.length} fields: ${columns.join(', ')}.`;
-          } else if (question.includes('where') && (question.includes('live') || question.includes('location') || question.includes('address'))) {
+          console.log('Question analysis - Question:', question);
+          console.log('Question analysis - Columns:', columns);
+          
+          // Count-related questions
+          if (question.includes('how many')) {
+            if (question.includes('campaign')) {
+              // Look specifically for campaign ID column first
+              const campaignIdCol = columns.find(col => 
+                col.toLowerCase().includes('campaign') && col.toLowerCase().includes('id')
+              );
+              
+              if (campaignIdCol) {
+                // Count unique campaign IDs from sample data
+                const uniqueCampaignIds = new Set();
+                sampleData.forEach(row => {
+                  if (row[campaignIdCol] && row[campaignIdCol] !== '') {
+                    uniqueCampaignIds.add(row[campaignIdCol]);
+                  }
+                });
+                
+                // Estimate total unique campaigns based on sample
+                const sampleRatio = sampleData.length / finalData.length;
+                const estimatedUniqueCampaigns = Math.round(uniqueCampaignIds.size / sampleRatio);
+                
+                if (sampleRatio >= 0.5) {
+                  // If we have at least 50% sample, give more confident answer
+                  questionResponse = `Based on analysis of your dataset, you have approximately ${uniqueCampaignIds.size} unique campaigns. This is derived from the ${campaignIdCol} column in your ${finalData.length} records.`;
+                } else {
+                  // Smaller sample, provide range estimate
+                  questionResponse = `Based on sample analysis, you have approximately ${estimatedUniqueCampaigns} unique campaigns (sample shows ${uniqueCampaignIds.size} in ${sampleData.length} records). Full analysis available with premium features.`;
+                }
+              } else {
+                // Look for other campaign-related columns
+                const campaignCols = columns.filter(col => 
+                  col.toLowerCase().includes('campaign') || 
+                  col.toLowerCase().includes('name')
+                );
+                
+                if (campaignCols.length > 0) {
+                  questionResponse = `Your dataset contains ${finalData.length} campaign-related records. Campaign data appears in columns: ${campaignCols.join(', ')}. For precise campaign counting, upgrade to premium analysis.`;
+                } else {
+                  questionResponse = `Your dataset contains ${finalData.length} records. No specific campaign columns detected. Available fields: ${columns.join(', ')}.`;
+                }
+              }
+            } else if (question.includes('customer') || question.includes('people') || question.includes('user')) {
+              questionResponse = `Your dataset contains ${finalData.length} customer/user records. Each record has ${columns.length} data fields: ${columns.join(', ')}.`;
+            } else if (question.includes('record') || question.includes('row') || question.includes('entry')) {
+              questionResponse = `Your dataset contains exactly ${finalData.length} records with ${columns.length} columns each.`;
+            } else {
+              questionResponse = `Your dataset contains ${finalData.length} total records. For the specific count you're asking about, the data can be analyzed through columns: ${columns.join(', ')}.`;
+            }
+          }
+          // Location-related questions  
+          else if (question.includes('where') || question.includes('location') || question.includes('live') || question.includes('address')) {
             const locationColumns = columns.filter(col => 
               col.toLowerCase().includes('city') || 
               col.toLowerCase().includes('state') || 
               col.toLowerCase().includes('country') || 
               col.toLowerCase().includes('address') ||
-              col.toLowerCase().includes('location')
+              col.toLowerCase().includes('location') ||
+              col.toLowerCase().includes('region')
             );
             
             if (locationColumns.length > 0) {
-              const sampleData = result.dataSnapshot.slice(0, 50);
-              const locationData: string[] = sampleData.map((row: any) => 
-                locationColumns.map(col => row[col]).filter(Boolean).join(', ')
-              ).filter(Boolean);
+              const locations = new Set();
+              sampleData.forEach(row => {
+                locationColumns.forEach(col => {
+                  if (row[col] && row[col] !== '') {
+                    locations.add(row[col]);
+                  }
+                });
+              });
               
-              const uniqueLocations = locationData.filter((value, index, self) => self.indexOf(value) === index);
-              questionResponse = `Your data contains location information in these columns: ${locationColumns.join(', ')}. Sample locations include: ${uniqueLocations.slice(0, 5).join(', ')}${uniqueLocations.length > 5 ? ` and ${uniqueLocations.length - 5} more` : ''}.`;
+              const locationArray = Array.from(locations).slice(0, 8);
+              questionResponse = `Your customers/records are located in: ${locationArray.join(', ')}${locations.size > 8 ? ` and ${locations.size - 8} more locations` : ''}. Location data is found in columns: ${locationColumns.join(', ')}.`;
             } else {
-              questionResponse = `No location-specific columns found. Available columns: ${columns.join(', ')}.`;
+              questionResponse = `No specific location columns found in your data. Available columns: ${columns.join(', ')}. You may need to check if location data is embedded within other fields.`;
             }
-          } else {
-            questionResponse = `Your question "${questionsArray[0]}" can be analyzed with your ${finalData.length}-record dataset. For detailed AI analysis, upgrade to premium features.`;
+          }
+          // Performance/metrics questions
+          else if (question.includes('performance') || question.includes('rate') || question.includes('roi') || question.includes('conversion')) {
+            const metricColumns = columns.filter(col => 
+              col.toLowerCase().includes('rate') || 
+              col.toLowerCase().includes('roi') || 
+              col.toLowerCase().includes('performance') ||
+              col.toLowerCase().includes('conversion') ||
+              col.toLowerCase().includes('score') ||
+              col.toLowerCase().includes('percent')
+            );
+            
+            if (metricColumns.length > 0) {
+              const metrics: any = {};
+              metricColumns.forEach(col => {
+                const values = sampleData.map(row => parseFloat(row[col])).filter(val => !isNaN(val));
+                if (values.length > 0) {
+                  metrics[col] = {
+                    avg: (values.reduce((a, b) => a + b, 0) / values.length).toFixed(2),
+                    min: Math.min(...values).toFixed(2),
+                    max: Math.max(...values).toFixed(2)
+                  };
+                }
+              });
+              
+              const metricSummary = Object.entries(metrics).map(([col, stats]: [string, any]) => 
+                `${col}: avg ${stats.avg}, range ${stats.min}-${stats.max}`
+              ).join('; ');
+              
+              questionResponse = `Performance metrics from your data: ${metricSummary}. This analysis is based on ${sampleData.length} sample records from your ${finalData.length} total records.`;
+            } else {
+              questionResponse = `No specific performance metrics columns found. Available columns: ${columns.join(', ')}. You may need to identify which columns contain your performance data.`;
+            }
+          }
+          // Top/best questions
+          else if (question.includes('top') || question.includes('best') || question.includes('highest') || question.includes('most')) {
+            const numericColumns = columns.filter(col => result.schema[col] === 'decimal' || result.schema[col] === 'integer');
+            
+            if (numericColumns.length > 0) {
+              questionResponse = `To find the top performers, your data contains these measurable columns: ${numericColumns.join(', ')}. The analysis can rank records by any of these metrics from your ${finalData.length} total records.`;
+            } else {
+              questionResponse = `No numeric columns found for ranking. Available columns: ${columns.join(', ')}. Consider which field represents the performance metric you want to rank by.`;
+            }
+          }
+          // General/other questions
+          else {
+            // Try to provide contextual insight based on data structure
+            const numericCols = columns.filter(col => result.schema[col] === 'decimal' || result.schema[col] === 'integer');
+            const textCols = columns.filter(col => result.schema[col] === 'text');
+            
+            questionResponse = `Your question "${questionsArray[0]}" relates to a dataset with ${finalData.length} records. The data contains ${numericCols.length} numeric columns (${numericCols.join(', ')}) and ${textCols.length} text columns (${textCols.join(', ')}). For detailed analysis of this specific question, upgrade to premium features.`;
           }
         }
       }
