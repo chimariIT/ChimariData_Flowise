@@ -351,15 +351,42 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
               <CardHeader>
                 <CardTitle className="text-lg">Key Insights</CardTitle>
               </CardHeader>
-              <CardContent>
-                <ul className="space-y-3">
-                  {data.analysisResults.keyInsights?.map((insight: string, index: number) => (
-                    <li key={index} className="flex items-start space-x-3 p-3 bg-blue-50 rounded-lg">
-                      <Database className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
-                      <span className="text-sm">{insight}</span>
-                    </li>
-                  ))}
-                </ul>
+              <CardContent className="space-y-4">
+                {/* Question-Specific Response */}
+                {data.uploadInfo?.questionResponse && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <div className="flex items-start space-x-3">
+                      <BarChart3 className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <h5 className="font-medium text-blue-900 mb-2">Answer to Your Question</h5>
+                        <p className="text-blue-800">{data.uploadInfo.questionResponse}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                {/* General Dataset Insights */}
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
+                  <div className="flex items-start space-x-3">
+                    <Database className="w-5 h-5 text-slate-600 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <h5 className="font-medium text-slate-900 mb-2">Dataset Overview</h5>
+                      <p className="text-slate-700">{data.uploadInfo?.insights || 'Dataset successfully processed and analyzed.'}</p>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Additional insights if any exist */}
+                {data.analysisResults.keyInsights?.filter((insight: string) => 
+                  insight !== data.uploadInfo?.insights && insight !== data.uploadInfo?.questionResponse
+                ).map((insight: string, index: number) => (
+                  <div key={index} className="bg-green-50 border border-green-200 rounded-lg p-4">
+                    <div className="flex items-start space-x-3">
+                      <CheckCircle className="w-5 h-5 text-green-600 mt-0.5 flex-shrink-0" />
+                      <span className="text-sm text-green-800">{insight}</span>
+                    </div>
+                  </div>
+                ))}
               </CardContent>
             </Card>
 
