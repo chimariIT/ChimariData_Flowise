@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
+import { fileURLToPath } from 'url';
 
 export interface PandasAnalysisResult {
   answer: string;
@@ -10,7 +11,7 @@ export interface PandasAnalysisResult {
 }
 
 export class PandasAnalysisService {
-  private static readonly PYTHON_SCRIPT = path.join(__dirname, 'pandas-analyzer.py');
+  private static readonly PYTHON_SCRIPT = 'server/pandas-analyzer.py';
   private static readonly TIMEOUT_MS = 30000; // 30 second timeout
 
   /**
