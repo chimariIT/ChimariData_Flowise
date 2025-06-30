@@ -52,8 +52,8 @@ export class FileProcessor {
       throw new Error('File is empty');
     }
     
-    if (fileSize > 50 * 1024 * 1024) { // 50MB limit
-      throw new Error('File size exceeds 50MB limit');
+    if (fileSize > 100 * 1024 * 1024) { // 100MB limit for better large dataset support
+      throw new Error('File size exceeds 100MB limit');
     }
 
     try {
