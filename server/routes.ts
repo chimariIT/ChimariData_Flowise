@@ -371,8 +371,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const question = questionsArray[0].toLowerCase();
           const sampleData = result.dataSnapshot.slice(0, 100); // Use more data for analysis
           
-          console.log('Question analysis - Question:', question);
-          console.log('Question analysis - Columns:', columns);
+
           
           // Count-related questions
           if (question.includes('how many')) {
