@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Upload, FileText, Brain, Sparkles, ArrowLeft, CheckCircle } from "lucide-react";
+import { Upload, FileText, Brain, Sparkles, ArrowLeft, CheckCircle, BarChart3 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface FreeTrialProps {
@@ -305,9 +305,30 @@ export default function FreeTrial({ onBack, onSignUp }: FreeTrialProps) {
                   
                   {/* AI Insights */}
                   <div className="space-y-4">
-                    <h4 className="font-medium text-slate-900">AI Insights</h4>
-                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                      <p className="text-blue-900">{analysisResults.insights || "Analysis completed successfully!"}</p>
+                    <h4 className="font-medium text-slate-900">Key Insights</h4>
+                    
+                    {/* Question-Specific Response */}
+                    {analysisResults.questionResponse && (
+                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <div className="flex items-start">
+                          <Brain className="w-5 h-5 text-blue-600 mr-3 mt-0.5 flex-shrink-0" />
+                          <div>
+                            <h5 className="font-medium text-blue-900 mb-2">Answer to Your Question</h5>
+                            <p className="text-blue-800">{analysisResults.questionResponse}</p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* General Insights */}
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
+                      <div className="flex items-start">
+                        <BarChart3 className="w-5 h-5 text-slate-600 mr-3 mt-0.5 flex-shrink-0" />
+                        <div>
+                          <h5 className="font-medium text-slate-900 mb-2">Dataset Overview</h5>
+                          <p className="text-slate-700">{analysisResults.insights || "Dataset successfully analyzed and validated."}</p>
+                        </div>
+                      </div>
                     </div>
                   </div>
                   
