@@ -10,6 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/lib/api";
 import { X, Upload, File, CheckCircle, FileSpreadsheet, AlertCircle, HardDrive } from "lucide-react";
 import GoogleDriveImport from "./google-drive-import";
+import { PIIDetectionDialog } from "./PIIDetectionDialog";
 
 interface UploadModalProps {
   isOpen: boolean;
@@ -30,6 +31,8 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
   const [fileType, setFileType] = useState<'csv' | 'excel' | null>(null);
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const [activeTab, setActiveTab] = useState("upload");
+  const [showPIIDialog, setShowPIIDialog] = useState(false);
+  const [tempFileInfo, setTempFileInfo] = useState<any>(null);
   const { toast } = useToast();
 
   if (!isOpen) return null;
@@ -146,6 +149,38 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
       toast({
         title: "Upload failed",
         description: error instanceof Error ? error.message : "Failed to upload file",
+        variant: "destructive"
+      });
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handlePIIDecision = async (requiresPII: boolean, anonymizeData: boolean, selectedColumns: string[]) => {
+    if (!tempFileInfo) return;
+    
+    try {
+      setIsUploading(true);
+      
+      // Re-upload with PII decision
+      const result = await apiClient.uploadFile(selectedFile!, {
+        name: tempFileInfo.name,
+        questions: tempFileInfo.questions,
+        piiHandled: true,
+        anonymizationApplied: anonymizeData,
+        selectedColumns: selectedColumns
+      });
+      
+      // Close PII dialog
+      setShowPIIDialog(false);
+      setTempFileInfo(null);
+      
+      onSuccess();
+      
+    } catch (error) {
+      toast({
+        title: "Upload failed",
+        description: error instanceof Error ? error.message : "Failed to process PII decision",
         variant: "destructive"
       });
     } finally {
@@ -293,6 +328,19 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
           </Tabs>
         </CardContent>
       </Card>
+      
+      {/* PII Detection Dialog */}
+      {showPIIDialog && tempFileInfo && (
+        <PIIDetectionDialog
+          isOpen={showPIIDialog}
+          piiResult={tempFileInfo.piiResult}
+          onDecision={handlePIIDecision}
+          onClose={() => {
+            setShowPIIDialog(false);
+            setTempFileInfo(null);
+          }}
+        />
+      )}
     </div>
   );
 }
