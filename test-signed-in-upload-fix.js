@@ -3,8 +3,8 @@
  * Verifies that upload-modal.tsx properly handles PII detection responses
  */
 
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
 
 class SignedInUploadFixTester {
   constructor() {
