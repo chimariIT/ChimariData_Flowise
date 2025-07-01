@@ -67,6 +67,9 @@ Each service follows the same structured workflow:
 - Added QuestionAnalyzer service that detects semantic mismatches (e.g., asking about "employees" when data contains "customers")
 - System now provides clear feedback when questions don't match dataset content: "I couldn't find data about 'employees' in this dataset"
 - Enhanced upload-trial route with semantic validation that prevents incorrect responses about unrelated entities - January 1, 2025
+- Fixed signed-in upload workflow PII processing by integrating PIIDetectionDialog into upload-modal.tsx component
+- Resolved authentication token inconsistency between apiClient and queryClient to fix dashboard button access
+- Completed end-to-end PII detection workflow for both free trial and signed-in user uploads - January 1, 2025
 
 ## User Preferences
 - Prefers comprehensive solutions with complete workflow implementation
