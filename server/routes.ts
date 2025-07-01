@@ -8,6 +8,7 @@ import { mlService } from "./ml-service";
 import { FileProcessor } from "./file-processor";
 import { PIIDetector } from "./pii-detector";
 import { setupOAuthProviders } from "./oauth-auth";
+import { questionAnalyzer } from "./question-analyzer";
 import { 
   errorHandler, 
   notFoundHandler, 

@@ -4,6 +4,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 
 export interface AIProvider {
   queryData(apiKey: string, prompt: string, dataContext: any): Promise<string>;
+  generateResponse(apiKey: string, prompt: string): Promise<string>;
 }
 
 class AnthropicProvider implements AIProvider {
@@ -22,6 +23,18 @@ Provide insights, analysis, and answers based on this data. Be specific and refe
       model: 'claude-3-5-sonnet-20241022',
       max_tokens: 1024,
       system: systemPrompt,
+      messages: [{ role: 'user', content: prompt }],
+    });
+
+    return response.content[0].type === 'text' ? response.content[0].text : 'Unable to process response';
+  }
+
+  async generateResponse(apiKey: string, prompt: string): Promise<string> {
+    const anthropic = new Anthropic({ apiKey });
+    
+    const response = await anthropic.messages.create({
+      model: 'claude-3-5-sonnet-20241022',
+      max_tokens: 1024,
       messages: [{ role: 'user', content: prompt }],
     });
 
