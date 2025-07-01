@@ -65,6 +65,18 @@ Provide insights, analysis, and answers based on this data. Be specific and refe
 
     return response.choices[0]?.message?.content || 'Unable to process response';
   }
+
+  async generateResponse(apiKey: string, prompt: string): Promise<string> {
+    const openai = new OpenAI({ apiKey });
+    
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: prompt }],
+    });
+
+    return response.choices[0]?.message?.content || 'Unable to generate response';
+  }
 }
 
 class GeminiProvider implements AIProvider {

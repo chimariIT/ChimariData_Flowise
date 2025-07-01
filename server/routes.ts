@@ -307,64 +307,107 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ]
       };
 
-      // Generate intelligent responses to user questions using Python pandas analysis
+      // Generate intelligent responses to user questions using semantic analysis and Python pandas
       let questionResponse = null;
       if (questionsArray.length > 0) {
         try {
-          // Use python directly to analyze the question with the actual dataset
-          const { spawn } = await import('child_process');
-          const path = await import('path');
-          const pythonScript = path.resolve('server/pandas-analyzer.py');
-          const pythonProcess = spawn('python3', [
-            pythonScript,
-            req.file.path,
-            questionsArray[0]
-          ], {
-            stdio: ['pipe', 'pipe', 'pipe'],
-            timeout: 15000 // 15 second timeout
-          });
-
-          let stdout = '';
-          let stderr = '';
-
-          pythonProcess.stdout.on('data', (data) => {
-            stdout += data.toString();
-          });
-
-          pythonProcess.stderr.on('data', (data) => {
-            stderr += data.toString();
-          });
-
-          const analysisResult = await new Promise<any>((resolve, reject) => {
-            pythonProcess.on('close', (code) => {
-              if (code === 0) {
-                try {
-                  const result = JSON.parse(stdout);
-                  resolve(result);
-                } catch (parseError) {
-                  reject(new Error('Failed to parse analysis result'));
-                }
-              } else {
-                reject(new Error(`Python analysis failed with code ${code}: ${stderr}`));
+          // Analyze each question for semantic understanding before processing
+          const questionAnalyses = await Promise.all(
+            questionsArray.map(async (question: string) => {
+              try {
+                return await questionAnalyzer.analyzeQuestion(question, result.schema, finalData.slice(0, 10));
+              } catch (error) {
+                console.error(`Question analysis failed for "${question}":`, error);
+                return null;
               }
-            });
+            })
+          );
 
-            pythonProcess.on('error', (error) => {
-              reject(error);
-            });
+          // Process each question with semantic context
+          const responses: string[] = [];
+          
+          for (let i = 0; i < questionsArray.length; i++) {
+            const question = questionsArray[i];
+            const analysis = questionAnalyses[i];
+            
+            // Check if question needs clarification
+            if (analysis?.clarificationNeeded) {
+              const suggestedReframe = analysis.dataRelevance.suggestedReframe;
+              if (suggestedReframe) {
+                responses.push(`Q${i + 1}: ${question} - ${suggestedReframe}`);
+                continue;
+              }
+            }
+            
+            // Check semantic mismatch (e.g., asking about employees but data is about customers)
+            if (analysis && !analysis.dataRelevance.hasMatchingEntities) {
+              const entity = analysis.intent.entity;
+              const availableData = Object.keys(result.schema).slice(0, 5).join(', ');
+              responses.push(`Q${i + 1}: ${question} - I couldn't find data about '${entity}' in this dataset. The data appears to contain information about: ${availableData}. Could you rephrase your question based on the available data?`);
+              continue;
+            }
+            
+            // Use Python analysis for semantically valid questions
+            try {
+              const { spawn } = await import('child_process');
+              const path = await import('path');
+              const pythonScript = path.resolve('server/pandas-analyzer.py');
+              const pythonProcess = spawn('python3', [
+                pythonScript,
+                req.file.path,
+                question
+              ], {
+                stdio: ['pipe', 'pipe', 'pipe'],
+                timeout: 15000
+              });
 
-            setTimeout(() => {
-              pythonProcess.kill('SIGTERM');
-              reject(new Error('Analysis timeout'));
-            }, 15000);
-          });
+              let stdout = '';
+              let stderr = '';
 
-          if (analysisResult.analysis_type !== 'error') {
-            questionResponse = analysisResult.answer;
-            console.log('Pandas analysis successful:', analysisResult.analysis_type);
-          } else {
-            throw new Error('Pandas analysis returned error');
+              pythonProcess.stdout.on('data', (data) => {
+                stdout += data.toString();
+              });
+
+              pythonProcess.stderr.on('data', (data) => {
+                stderr += data.toString();
+              });
+
+              const analysisResult = await new Promise<any>((resolve, reject) => {
+                pythonProcess.on('close', (code) => {
+                  if (code === 0) {
+                    try {
+                      const result = JSON.parse(stdout);
+                      resolve(result);
+                    } catch (parseError) {
+                      reject(new Error('Failed to parse analysis result'));
+                    }
+                  } else {
+                    reject(new Error(`Python analysis failed with code ${code}: ${stderr}`));
+                  }
+                });
+
+                pythonProcess.on('error', (error) => {
+                  reject(error);
+                });
+
+                setTimeout(() => {
+                  pythonProcess.kill('SIGTERM');
+                  reject(new Error('Analysis timeout'));
+                }, 15000);
+              });
+
+              if (analysisResult.analysis_type !== 'error') {
+                responses.push(`Q${i + 1}: ${question} - ${analysisResult.answer}`);
+              } else {
+                responses.push(`Q${i + 1}: ${question} - Analysis could not be completed for this question.`);
+              }
+            } catch (pythonError) {
+              console.error(`Python analysis failed for question "${question}":`, pythonError);
+              responses.push(`Q${i + 1}: ${question} - Unable to analyze this question with the current dataset.`);
+            }
           }
+          
+          questionResponse = responses.join(' | ');
         } catch (pandasError) {
           console.error('Pandas analysis error:', pandasError);
           // Enhanced fallback analysis with actual data examination for ALL questions
