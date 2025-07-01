@@ -1,4 +1,4 @@
-import { aiService } from "./ai-service";
+import Anthropic from '@anthropic-ai/sdk';
 
 export interface QuestionAnalysis {
   intent: {
@@ -86,10 +86,19 @@ Examples:
 - "Where do customers live?" → {"entity": "customers", "action": "location", "specificity": "high"}
 - "What's the performance?" → {"entity": "unknown", "action": "performance", "specificity": "low"}`;
 
-    const response = await aiService.generateResponse(prompt);
-    
     try {
-      return JSON.parse(response);
+      const anthropic = new Anthropic({ 
+        apiKey: process.env.ANTHROPIC_API_KEY || process.env.GOOGLE_AI_API_KEY || 'fallback'
+      });
+      
+      const response = await anthropic.messages.create({
+        model: 'claude-3-5-sonnet-20241022',
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: prompt }],
+      });
+
+      const responseText = response.content[0].type === 'text' ? response.content[0].text : '';
+      return JSON.parse(responseText);
     } catch {
       // Fallback parsing
       const entity = this.extractEntity(question);
@@ -141,8 +150,18 @@ Examples:
 - If asking about "location" and data has address columns: hasMatchingEntities: true, relevantColumns: ["address", "city", "state"]`;
 
     try {
-      const response = await aiService.generateResponse(prompt);
-      const analysis = JSON.parse(response);
+      const anthropic = new Anthropic({ 
+        apiKey: process.env.ANTHROPIC_API_KEY || process.env.GOOGLE_AI_API_KEY || 'fallback'
+      });
+      
+      const response = await anthropic.messages.create({
+        model: 'claude-3-5-sonnet-20241022',
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: prompt }],
+      });
+
+      const responseText = response.content[0].type === 'text' ? response.content[0].text : '';
+      const analysis = JSON.parse(responseText);
       
       return {
         hasMatchingEntities: analysis.hasMatchingEntities || false,
