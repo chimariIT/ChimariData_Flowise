@@ -1,0 +1,36 @@
+{
+  "testSuite": "Dashboard Authentication Fix Test",
+  "timestamp": "2025-07-01T19:35:33.041Z",
+  "summary": {
+    "PASS": 2,
+    "FAIL": 2,
+    "WARN": 0
+  },
+  "results": [
+    {
+      "test": "User Authentication",
+      "status": "PASS",
+      "message": "User authenticated successfully",
+      "timestamp": "2025-07-01T19:35:33.025Z"
+    },
+    {
+      "test": "Project Upload",
+      "status": "PASS",
+      "message": "Project uploaded successfully",
+      "timestamp": "2025-07-01T19:35:33.037Z"
+    },
+    {
+      "test": "AI Insights Access",
+      "status": "FAIL",
+      "message": "AI Insights error: No project ID available for testing",
+      "timestamp": "2025-07-01T19:35:33.038Z"
+    },
+    {
+      "test": "AI Chat Access",
+      "status": "FAIL",
+      "message": "AI Chat error: No project ID available for testing",
+      "timestamp": "2025-07-01T19:35:33.039Z"
+    }
+  ],
+  "authTokenUsed": "Present"
+}
