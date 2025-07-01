@@ -63,6 +63,10 @@ Each service follows the same structured workflow:
 - Enhanced backend to process each question individually with field-aware intelligence (e.g., address fields for location questions)
 - Updated frontend to display multiple question-answer pairs in organized, visually distinct sections
 - System now handles complex scenarios like "where do customers live" by analyzing address/location fields automatically - December 30, 2024
+- Implemented intelligent question semantic analysis using AI-powered preprocessing to understand user intent before data processing
+- Added QuestionAnalyzer service that detects semantic mismatches (e.g., asking about "employees" when data contains "customers")
+- System now provides clear feedback when questions don't match dataset content: "I couldn't find data about 'employees' in this dataset"
+- Enhanced upload-trial route with semantic validation that prevents incorrect responses about unrelated entities - January 1, 2025
 
 ## User Preferences
 - Prefers comprehensive solutions with complete workflow implementation
