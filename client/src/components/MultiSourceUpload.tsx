@@ -18,6 +18,7 @@ import {
   Cloud,
   HardDrive,
   Database,
+  AlertTriangle,
   Gift
 } from "lucide-react";
 import { apiClient } from "@/lib/api";
@@ -173,7 +174,7 @@ export function MultiSourceUpload({
     handleFileUpload(acceptedFiles);
   }, [handleFileUpload]);
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+  const { getRootProps, getInputProps, isDragActive, fileRejections } = useDropzone({
     onDrop,
     accept: {
       'text/csv': ['.csv'],
@@ -182,7 +183,24 @@ export function MultiSourceUpload({
       'application/json': ['.json']
     },
     maxSize,
-    multiple: false
+    multiple: false,
+    onDropRejected: (rejectedFiles) => {
+      const rejection = rejectedFiles[0];
+      if (rejection.errors.some(e => e.code === 'file-too-large')) {
+        const sizeMB = Math.round(maxSize / (1024 * 1024));
+        setUploadStatus('error');
+        onComplete({
+          error: `File size exceeds ${sizeMB}MB limit. Please choose a smaller file or upgrade to a paid plan for larger file support.`,
+          errorType: 'FILE_SIZE_EXCEEDED'
+        });
+      } else if (rejection.errors.some(e => e.code === 'file-invalid-type')) {
+        setUploadStatus('error');
+        onComplete({
+          error: 'File type not supported. Please upload CSV, Excel (.xlsx, .xls), or JSON files.',
+          errorType: 'INVALID_FILE_TYPE'
+        });
+      }
+    }
   });
 
   const handlePIIDecision = async (requiresPII: boolean, anonymizeData: boolean, selectedColumns: string[]) => {
@@ -451,6 +469,15 @@ export function MultiSourceUpload({
                   {uploadedFile.name} processed successfully
                 </span>
               </div>
+            )}
+
+            {uploadStatus === 'error' && (
+              <Alert variant="destructive" className="mt-4">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>
+                  Upload failed. Please try again with a valid file.
+                </AlertDescription>
+              </Alert>
             )}
 
             {uploadStatus === 'error' && (

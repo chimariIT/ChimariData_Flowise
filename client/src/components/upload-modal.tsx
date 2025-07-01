@@ -111,10 +111,24 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
         ];
       }
 
-      await apiClient.uploadFile(selectedFile, {
+      const result = await apiClient.uploadFile(selectedFile, {
         name: formData.projectName,
         questions: questionsArray
       });
+      
+      // Check if PII decision is required
+      if (result.requiresPIIDecision && result.piiResult) {
+        console.log('PII detected - storing temp file info');
+        // Store PII detection result and temp file info for handling
+        setTempFileInfo({
+          tempFileId: result.tempFileId,
+          name: result.name || formData.projectName,
+          questions: questionsArray,
+          piiResult: result.piiResult
+        });
+        setShowPIIDialog(true);
+        return; // Don't call onSuccess yet
+      }
       
       onSuccess();
       
