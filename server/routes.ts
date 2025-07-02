@@ -134,10 +134,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   };
 
   // Google OAuth Strategy Setup
+  const getCallbackURL = () => {
+    const domain = process.env.REPLIT_DOMAINS || 'localhost:5000';
+    if (domain.includes('replit.dev')) {
+      return `https://${domain}/api/auth/google/callback`;
+    }
+    return `http://localhost:5000/api/auth/google/callback`;
+  };
+
   passport.use(new GoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID || '',
     clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
-    callbackURL: "/api/auth/google/callback"
+    callbackURL: getCallbackURL()
   }, async (accessToken, refreshToken, profile, done) => {
     try {
       // Check if user exists with this Google ID
@@ -317,9 +325,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Google Drive integration routes
   app.get("/api/google-drive/files", requireAuth, async (req, res) => {
     try {
-      const user = await storage.getUser(req.user!.id);
+      const user = await storage.getUser(req.user!.userId);
       if (!user || !user.accessToken || !user.refreshToken) {
-        return res.status(401).json({ error: "Google Drive access not authorized. Please reconnect your Google account." });
+        return res.status(401).json({ 
+          error: "Google Drive access not authorized", 
+          message: "Please sign in with Google to access Google Drive files.",
+          redirectUrl: "/api/auth/google"
+        });
       }
 
       const { GoogleDriveService } = await import("./oauth-auth");
@@ -1900,6 +1912,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Create project
       const project = await storage.createProject({
         name,
+        serviceType: "user_upload",
         schema: processedFile.schema,
         questions: questionsArray,
         insights: {},
