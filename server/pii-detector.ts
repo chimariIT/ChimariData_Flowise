@@ -56,13 +56,23 @@ export class PIIDetector {
 
   private static readonly NAME_INDICATORS = [
     'name', 'first_name', 'last_name', 'firstname', 'lastname', 'full_name',
-    'customer_name', 'employee_name', 'contact_name', 'person_name', 'client_name'
+    'customer_name', 'employee_name', 'contact_name', 'person_name', 'client_name',
+    'author', 'reviewer', 'owner'
   ];
 
   private static readonly ADDRESS_INDICATORS = [
     'address', 'street', 'city', 'state', 'zip', 'zipcode', 'postal_code',
     'home_address', 'work_address', 'billing_address', 'shipping_address',
     'location', 'residence'
+  ];
+
+  // Exclude columns that are commonly non-PII but might have capitalized words
+  private static readonly NON_PII_INDICATORS = [
+    'country', 'province', 'region', 'state', 'city', 'district', 'area',
+    'variety', 'type', 'category', 'classification', 'genre', 'style',
+    'brand', 'model', 'product', 'item', 'title', 'subject',
+    'winery', 'vineyard', 'brewery', 'company', 'organization',
+    'designation', 'appellation', 'description', 'notes', 'comments'
   ];
 
   static async detectPII(data: any[], schema: Record<string, string>): Promise<PIIDetectionResult> {
@@ -191,37 +201,67 @@ export class PIIDetector {
   private static isNameColumn(columnName: string, columnData: any[]): boolean {
     const lowerName = columnName.toLowerCase();
     
-    // Check if column name indicates it contains names
+    // First check if this column should be excluded from name detection
+    if (this.NON_PII_INDICATORS.some(indicator => lowerName.includes(indicator))) {
+      return false;
+    }
+    
+    // Check if column name explicitly indicates it contains names
     if (this.NAME_INDICATORS.some(indicator => lowerName.includes(indicator))) {
       return true;
     }
 
-    // Analyze data patterns for name-like content
-    const sampleValues = columnData.slice(0, 10).map(val => String(val).trim());
-    const namePatterns = sampleValues.filter(val => {
-      // Check for typical name patterns (2-3 words, capitalized, no numbers)
-      return /^[A-Z][a-z]+(?: [A-Z][a-z]+){0,2}$/.test(val) && val.length > 1;
+    // For non-explicit columns, use stricter criteria for name detection
+    const sampleValues = columnData.slice(0, 20).map(val => String(val).trim());
+    
+    // Check for common non-name patterns that should be excluded
+    const hasCommonWords = sampleValues.some(val => {
+      const words = val.toLowerCase().split(/\s+/);
+      // Common geographic, product, or descriptive words that aren't names
+      const commonNonNameWords = [
+        'valley', 'mountain', 'river', 'county', 'state', 'province', 'region',
+        'wine', 'red', 'white', 'sweet', 'dry', 'blend', 'reserve', 'estate',
+        'vintage', 'barrel', 'oak', 'fruit', 'berry', 'spice', 'herb',
+        'california', 'france', 'italy', 'spain', 'australia', 'chile',
+        'cabernet', 'chardonnay', 'pinot', 'merlot', 'sauvignon', 'riesling'
+      ];
+      return words.some(word => commonNonNameWords.includes(word));
     });
+    
+    if (hasCommonWords) {
+      return false;
+    }
 
-    return namePatterns.length >= Math.min(3, sampleValues.length * 0.6);
+    // Only detect as names if column explicitly contains name indicators
+    // Remove the pattern-based detection that was causing false positives
+    return false;
   }
 
   private static isAddressColumn(columnName: string, columnData: any[]): boolean {
     const lowerName = columnName.toLowerCase();
     
-    // Check if column name indicates it contains addresses
+    // First check if this column should be excluded from address detection
+    if (this.NON_PII_INDICATORS.some(indicator => lowerName.includes(indicator))) {
+      return false;
+    }
+    
+    // Check if column name explicitly indicates it contains addresses
     if (this.ADDRESS_INDICATORS.some(indicator => lowerName.includes(indicator))) {
       return true;
     }
 
-    // Analyze data patterns for address-like content
-    const sampleValues = columnData.slice(0, 10).map(val => String(val).trim());
+    // Use stricter criteria for pattern-based address detection
+    const sampleValues = columnData.slice(0, 20).map(val => String(val).trim());
+    
+    // Only consider as address if it has clear street address patterns
     const addressPatterns = sampleValues.filter(val => {
-      // Check for typical address patterns (numbers + street names)
-      return /\d+.*(?:street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr|lane|ln|court|ct|place|pl)/i.test(val);
+      // Must have number + street type combination
+      return /^\d+\s+.*(?:street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr|lane|ln|court|ct|place|pl)\b/i.test(val) &&
+             val.length > 10; // Addresses are typically longer
     });
 
-    return addressPatterns.length >= Math.min(2, sampleValues.length * 0.4);
+    // Require a higher threshold for address detection
+    return addressPatterns.length >= Math.min(3, sampleValues.length * 0.7);
   }
 
   private static calculateRiskLevel(detectedTypes: PIIType[]): 'low' | 'medium' | 'high' {
