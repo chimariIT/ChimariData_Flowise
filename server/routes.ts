@@ -21,12 +21,15 @@ import {
   ConflictError
 } from "./middleware/errorHandler";
 import passport from "passport";
+import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import session from "express-session";
 import { spawn } from "child_process";
 import path from "path";
 import Stripe from "stripe";
 import multer from "multer";
 import fs from "fs";
+import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 
 // Extend Express Request type to include user property
 declare global {
@@ -77,12 +80,11 @@ function generateToken(): string {
 }
 
 function hashPassword(password: string): string {
-  // Simple hash for demo - in production use bcrypt
-  return Buffer.from(password).toString('base64');
+  return bcrypt.hashSync(password, 10);
 }
 
 function verifyPassword(password: string, hash: string): boolean {
-  return Buffer.from(password).toString('base64') === hash;
+  return bcrypt.compareSync(password, hash);
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -106,22 +108,87 @@ export async function registerRoutes(app: Express): Promise<Server> {
     stdio: 'inherit'
   });
 
+  interface SessionUser {
+    userId: number;
+    email: string;
+  }
+
+  const sessions = new Map<string, SessionUser>();
+
   // Auth middleware
-  const requireAuth = (req: any, res: any, next: any) => {
+  const requireAuth = async (req: any, res: any, next: any) => {
     const token = req.headers.authorization?.replace('Bearer ', '');
     const session = token ? sessions.get(token) : null;
     
     if (!session) {
       return res.status(401).json({ error: 'Authentication required' });
     }
+
+    // Get user details from storage
+    const user = await storage.getUser(session.userId);
+    if (!user) {
+      return res.status(401).json({ error: 'User not found' });
+    }
     
-    req.user = {
-      id: session.userId,
-      userId: session.userId,
-      username: session.username
-    };
+    req.user = user;
     next();
   };
+
+  // Google OAuth Strategy Setup
+  passport.use(new GoogleStrategy({
+    clientID: process.env.GOOGLE_CLIENT_ID || '',
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+    callbackURL: "/api/auth/google/callback"
+  }, async (accessToken, refreshToken, profile, done) => {
+    try {
+      // Check if user exists with this Google ID
+      let user = await storage.getUserByProviderId('google', profile.id);
+      
+      if (!user) {
+        // Check if user exists with same email
+        const email = profile.emails?.[0]?.value;
+        if (email) {
+          user = await storage.getUserByEmail(email);
+          if (user) {
+            // Update existing user with Google data
+            user = await storage.updateUserProvider(user.id, 'google', profile.id, accessToken, refreshToken);
+          } else {
+            // Create new user
+            user = await storage.createUser({
+              email: email,
+              firstName: profile.name?.givenName || '',
+              lastName: profile.name?.familyName || '',
+              provider: 'google',
+              providerId: profile.id,
+              accessToken: accessToken,
+              refreshToken: refreshToken,
+              profileImageUrl: profile.photos?.[0]?.value
+            });
+          }
+        }
+      } else {
+        // Update tokens for existing Google user
+        user = await storage.updateUserTokens(user.id, accessToken, refreshToken);
+      }
+
+      return done(null, user);
+    } catch (error) {
+      return done(error, null);
+    }
+  }));
+
+  passport.serializeUser((user: any, done) => {
+    done(null, user.id);
+  });
+
+  passport.deserializeUser(async (id: number, done) => {
+    try {
+      const user = await storage.getUser(id);
+      done(null, user);
+    } catch (error) {
+      done(error, null);
+    }
+  });
 
   // Auth routes
   app.post("/api/auth/register", async (req, res) => {
@@ -129,29 +196,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const data = registerSchema.parse(req.body);
       
       // Check if user exists
-      const existingUser = await storage.getUserByUsername(data.username);
+      const existingUser = await storage.getUserByEmail(data.email);
       if (existingUser) {
-        return res.status(400).json({ error: "Username already exists" });
+        return res.status(400).json({ error: "An account with this email already exists" });
       }
 
       // Create user
       const user = await storage.createUser({
-        username: data.username,
+        email: data.email,
+        firstName: data.firstName,
+        lastName: data.lastName,
         password: hashPassword(data.password),
+        provider: 'local'
       });
 
       // Create session
       const token = generateToken();
-      sessions.set(token, { userId: user.id, username: user.username });
+      sessions.set(token, { userId: user.id, email: user.email });
 
       res.json({ 
         token, 
-        user: { id: user.id, username: user.username } 
+        user: { 
+          id: user.id, 
+          email: user.email, 
+          firstName: user.firstName, 
+          lastName: user.lastName 
+        } 
       });
     } catch (error) {
       console.error('Registration error:', error);
-      if (error.message?.includes('username')) {
-        res.status(400).json({ error: "Username already exists" });
+      if (error.message?.includes('email')) {
+        res.status(400).json({ error: "An account with this email already exists" });
       } else {
         res.status(400).json({ error: "Registration failed. Please check your input and try again." });
       }
@@ -162,24 +237,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const data = loginSchema.parse(req.body);
       
-      const user = await storage.getUserByUsername(data.username);
-      if (!user || !verifyPassword(data.password, user.password)) {
-        return res.status(401).json({ error: "Invalid credentials" });
+      const user = await storage.getUserByEmail(data.email);
+      if (!user || !user.password || !verifyPassword(data.password, user.password)) {
+        return res.status(401).json({ error: "Invalid email or password" });
       }
 
       // Create session
       const token = generateToken();
-      sessions.set(token, { userId: user.id, username: user.username });
+      sessions.set(token, { userId: user.id, email: user.email });
 
       res.json({ 
         token, 
-        user: { id: user.id, username: user.username } 
+        user: { 
+          id: user.id, 
+          email: user.email, 
+          firstName: user.firstName, 
+          lastName: user.lastName 
+        } 
       });
     } catch (error) {
       console.error('Login error:', error);
       res.status(400).json({ error: "Login failed. Please try again." });
     }
   });
+
+  // Google OAuth routes
+  app.get('/api/auth/google', 
+    passport.authenticate('google', { scope: ['profile', 'email'] })
+  );
+
+  app.get('/api/auth/google/callback',
+    passport.authenticate('google', { failureRedirect: '/?error=oauth_failed' }),
+    async (req, res) => {
+      try {
+        const user = req.user as any;
+        
+        // Create session token
+        const token = generateToken();
+        sessions.set(token, { userId: user.id, email: user.email });
+
+        // Redirect to frontend with token
+        res.redirect(`/?token=${token}&provider=google`);
+      } catch (error) {
+        console.error('OAuth callback error:', error);
+        res.redirect('/?error=oauth_callback_failed');
+      }
+    }
+  );
 
   app.post("/api/auth/logout", requireAuth, (req, res) => {
     const token = req.headers.authorization?.replace('Bearer ', '');
