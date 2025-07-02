@@ -5,8 +5,10 @@ export interface IStorage {
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
+  getUserByProviderId(provider: string, providerId: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
   updateUserTokens(userId: number, accessToken: string, refreshToken: string): Promise<User | undefined>;
+  updateUserProvider(userId: number, provider: string, providerId: string, accessToken: string, refreshToken: string): Promise<User | undefined>;
   
   // Project methods
   createProject(project: InsertProject & { ownerId: number }): Promise<Project>;
@@ -71,9 +73,28 @@ export class MemStorage implements IStorage {
     );
   }
 
+  async getUserByProviderId(provider: string, providerId: string): Promise<User | undefined> {
+    return Array.from(this.users.values()).find(
+      (user) => user.provider === provider && user.providerId === providerId,
+    );
+  }
+
   async updateUserTokens(userId: number, accessToken: string, refreshToken: string): Promise<User | undefined> {
     const user = this.users.get(userId);
     if (user) {
+      user.accessToken = accessToken;
+      user.refreshToken = refreshToken;
+      this.users.set(userId, user);
+      return user;
+    }
+    return undefined;
+  }
+
+  async updateUserProvider(userId: number, provider: string, providerId: string, accessToken: string, refreshToken: string): Promise<User | undefined> {
+    const user = this.users.get(userId);
+    if (user) {
+      user.provider = provider;
+      user.providerId = providerId;
       user.accessToken = accessToken;
       user.refreshToken = refreshToken;
       this.users.set(userId, user);

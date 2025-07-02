@@ -12,6 +12,14 @@ interface APIResponse<T = any> {
   data?: T;
   error?: string;
   message?: string;
+  token?: string;
+  user?: {
+    id: number;
+    email: string;
+    firstName?: string;
+    lastName?: string;
+    username?: string;
+  };
   // Free trial specific fields
   id?: string;
   name?: string;
@@ -69,7 +77,7 @@ export class APIClient {
     return await response.json();
   }
 
-  async register(userData: { username: string; email: string; password: string }): Promise<APIResponse> {
+  async register(userData: { email: string; firstName: string; lastName: string; password: string }): Promise<APIResponse> {
     const response = await fetch(`${API_BASE}/api/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -87,7 +95,7 @@ export class APIClient {
     return result;
   }
 
-  async login(credentials: { username: string; password: string }): Promise<APIResponse> {
+  async login(credentials: { email: string; password: string }): Promise<APIResponse> {
     const response = await fetch(`${API_BASE}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

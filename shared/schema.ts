@@ -4,9 +4,9 @@ import { z } from "zod";
 
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
-  username: text("username").notNull().unique(),
+  username: text("username").unique(), // Optional for OAuth users
   password: text("password"),
-  email: text("email").unique(),
+  email: text("email").notNull().unique(), // Email is now required and primary identifier
   firstName: text("first_name"),
   lastName: text("last_name"),
   profileImageUrl: text("profile_image_url"),
@@ -147,13 +147,15 @@ export const insertUsageLogSchema = createInsertSchema(usageLogs).omit({
 });
 
 export const loginSchema = z.object({
-  username: z.string().min(1, "Username is required"),
+  email: z.string().email("Please enter a valid email address"),
   password: z.string().min(1, "Password is required"),
 });
 
 export const registerSchema = z.object({
-  username: z.string().min(3, "Username must be at least 3 characters"),
+  email: z.string().email("Please enter a valid email address"),
   password: z.string().min(6, "Password must be at least 6 characters"),
+  firstName: z.string().min(1, "First name is required"),
+  lastName: z.string().min(1, "Last name is required"),
 });
 
 export const aiQuerySchema = z.object({
