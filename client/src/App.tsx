@@ -23,7 +23,7 @@ import AnimatedDemo from "./components/animated-demo";
 import NotFound from "@/pages/not-found";
 
 function App() {
-  const [user, setUser] = useState<{ id: number; username: string } | null>(null);
+  const [user, setUser] = useState<{ id: number; email: string; firstName?: string; lastName?: string; username?: string } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [location, setLocation] = useLocation();
 
@@ -44,7 +44,7 @@ function App() {
     setIsLoading(false);
   }, []);
 
-  const handleLogin = (userData: { id: number; username: string }) => {
+  const handleLogin = (userData: { id: number; email: string; firstName?: string; lastName?: string; username?: string }) => {
     setUser(userData);
     localStorage.setItem("user", JSON.stringify(userData));
     setLocation("/dashboard");
@@ -53,7 +53,7 @@ function App() {
   const handleLogout = () => {
     setUser(null);
     localStorage.removeItem("user");
-    auth.logout();
+    localStorage.removeItem("auth_token");
     setLocation("/");
   };
 

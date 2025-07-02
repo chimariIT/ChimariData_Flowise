@@ -9,7 +9,7 @@ import { ChartLine, Folder, FileText, Lightbulb, Plus, Search, Calendar, Databas
 import UploadModal from "@/components/upload-modal";
 
 interface DashboardProps {
-  user: { id: number; username: string };
+  user: { id: number; email: string; firstName?: string; lastName?: string; username?: string };
   onLogout: () => void;
   onProjectSelect: (projectId: string) => void;
   onSettings: () => void;
@@ -104,10 +104,15 @@ export default function Dashboard({ user, onLogout, onProjectSelect, onSettings 
               <div className="flex items-center space-x-2">
                 <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center">
                   <span className="text-white text-sm font-medium">
-                    {user.username.substring(0, 2).toUpperCase()}
+                    {(user.firstName || user.email).substring(0, 2).toUpperCase()}
                   </span>
                 </div>
-                <span className="text-slate-700 font-medium">{user.username}</span>
+                <span className="text-slate-700 font-medium">
+                  {user.firstName && user.lastName 
+                    ? `${user.firstName} ${user.lastName}` 
+                    : user.email
+                  }
+                </span>
                 <Button variant="ghost" size="sm" onClick={handleLogout}>
                   <LogOut className="w-4 h-4" />
                 </Button>
