@@ -28,20 +28,19 @@ import path from "path";
 import Stripe from "stripe";
 import multer from "multer";
 import fs from "fs";
-import bcrypt from "bcrypt";
 import bcrypt from "bcryptjs";
 
 // Extend Express Request type to include user property
 declare global {
   namespace Express {
     interface Request {
-      user?: { id: number; userId: number; username: string };
+      user?: { id: number; email: string; firstName?: string; lastName?: string };
     }
   }
 }
 
 // Simple session storage for demo purposes
-const sessions = new Map<string, { userId: number; username: string }>();
+const sessions = new Map<string, { userId: number; email: string }>();
 
 // Configure multer for file uploads
 const upload = multer({
@@ -1863,6 +1862,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "No file uploaded" });
       }
 
+
+
       const { name, questions } = req.body;
       if (!name) {
         return res.status(400).json({ error: "Project name is required" });
@@ -1894,7 +1895,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Process the uploaded file
       const { FileProcessor } = await import("./file-processor");
-      const processedFile = await FileProcessor.processFile(req.file.path);
+      const processedFile = await FileProcessor.processFile(req.file.path, req.file.originalname, {});
 
       // Create project
       const project = await storage.createProject({
