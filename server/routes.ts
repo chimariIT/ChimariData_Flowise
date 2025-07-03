@@ -136,10 +136,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Google OAuth Strategy Setup
   const getCallbackURL = () => {
     const domain = process.env.REPLIT_DOMAINS || 'localhost:5000';
-    if (domain.includes('replit.dev')) {
-      return `https://${domain}/api/auth/google/callback`;
-    }
-    return `http://localhost:5000/api/auth/google/callback`;
+    const callbackURL = domain.includes('replit.dev') 
+      ? `https://${domain}/api/auth/google/callback`
+      : `http://localhost:5000/api/auth/google/callback`;
+    
+    console.log('OAuth Callback URL:', callbackURL);
+    console.log('REPLIT_DOMAINS:', process.env.REPLIT_DOMAINS);
+    return callbackURL;
   };
 
   passport.use(new GoogleStrategy({
@@ -269,9 +272,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Google OAuth routes
-  app.get('/api/auth/google', 
-    passport.authenticate('google', { scope: ['profile', 'email'] })
-  );
+  app.get('/api/auth/google', (req, res, next) => {
+    console.log('Initiating Google OAuth with callback URL:', getCallbackURL());
+    passport.authenticate('google', { 
+      scope: ['profile', 'email', 'https://www.googleapis.com/auth/drive.readonly']
+    })(req, res, next);
+  });
 
   app.get('/api/auth/google/callback',
     passport.authenticate('google', { failureRedirect: '/?error=oauth_failed' }),
