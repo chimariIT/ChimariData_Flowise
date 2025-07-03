@@ -28,6 +28,40 @@ function App() {
   const [location, setLocation] = useLocation();
 
   useEffect(() => {
+    // Handle OAuth callback tokens from URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const tokenFromUrl = urlParams.get('token');
+    const provider = urlParams.get('provider');
+    
+    if (tokenFromUrl && provider === 'google') {
+      // Store the token
+      localStorage.setItem('auth_token', tokenFromUrl);
+      
+      // Fetch user data with the token
+      fetch('/api/user', {
+        headers: {
+          'Authorization': `Bearer ${tokenFromUrl}`
+        }
+      })
+      .then(res => res.json())
+      .then(userData => {
+        if (userData.user) {
+          setUser(userData.user);
+          localStorage.setItem("user", JSON.stringify(userData.user));
+          // Clean URL and redirect to dashboard
+          window.history.replaceState({}, document.title, "/dashboard");
+          setLocation("/dashboard");
+        }
+      })
+      .catch(error => {
+        console.error('Error fetching user data:', error);
+        localStorage.removeItem("auth_token");
+      });
+      
+      setIsLoading(false);
+      return;
+    }
+
     // Check if user is already logged in
     const token = localStorage.getItem('auth_token');
     if (token) {
@@ -42,7 +76,7 @@ function App() {
       }
     }
     setIsLoading(false);
-  }, []);
+  }, [setLocation]);
 
   const handleLogin = (userData: { id: number; email: string; firstName?: string; lastName?: string; username?: string }) => {
     setUser(userData);
