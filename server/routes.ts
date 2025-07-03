@@ -274,26 +274,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Google OAuth routes
   app.get('/api/auth/google', (req, res, next) => {
     console.log('Initiating Google OAuth with callback URL:', getCallbackURL());
+    console.log('Google Client ID:', process.env.GOOGLE_CLIENT_ID ? 'SET' : 'NOT SET');
     passport.authenticate('google', { 
       scope: ['profile', 'email', 'https://www.googleapis.com/auth/drive.readonly']
     })(req, res, next);
   });
 
   app.get('/api/auth/google/callback',
-    passport.authenticate('google', { failureRedirect: '/?error=oauth_failed' }),
+    (req, res, next) => {
+      passport.authenticate('google', { 
+        failureRedirect: '/?error=oauth_failed&details=passport_auth_failed' 
+      })(req, res, next);
+    },
     async (req, res) => {
       try {
+        console.log('OAuth callback successful, user:', req.user);
         const user = req.user as any;
+        
+        if (!user) {
+          console.error('No user found in OAuth callback');
+          return res.redirect('/?error=no_user_data');
+        }
         
         // Create session token
         const token = generateToken();
         sessions.set(token, { userId: user.id, email: user.email });
 
+        console.log('Session created with token:', token);
         // Redirect to frontend with token
         res.redirect(`/?token=${token}&provider=google`);
       } catch (error) {
         console.error('OAuth callback error:', error);
-        res.redirect('/?error=oauth_callback_failed');
+        res.redirect('/?error=oauth_callback_failed&message=' + encodeURIComponent(error.message));
       }
     }
   );
