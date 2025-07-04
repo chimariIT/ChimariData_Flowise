@@ -151,18 +151,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     callbackURL: getCallbackURL()
   }, async (accessToken, refreshToken, profile, done) => {
     try {
+      console.log('Google OAuth Strategy - Profile received:', {
+        id: profile.id,
+        email: profile.emails?.[0]?.value,
+        name: profile.displayName,
+        provider: profile.provider
+      });
+
       // Check if user exists with this Google ID
       let user = await storage.getUserByProviderId('google', profile.id);
       
       if (!user) {
         // Check if user exists with same email
         const email = profile.emails?.[0]?.value;
+        console.log('Looking for existing user with email:', email);
         if (email) {
           user = await storage.getUserByEmail(email);
           if (user) {
+            console.log('Found existing user, updating with Google data');
             // Update existing user with Google data
             user = await storage.updateUserProvider(user.id, 'google', profile.id, accessToken, refreshToken);
           } else {
+            console.log('Creating new user with Google data');
             // Create new user
             user = await storage.createUser({
               email: email,
@@ -177,12 +187,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         }
       } else {
+        console.log('Found existing Google user, updating tokens');
         // Update tokens for existing Google user
         user = await storage.updateUserTokens(user.id, accessToken, refreshToken);
       }
 
+      console.log('Google OAuth Strategy - Final user:', user ? 'User authenticated' : 'No user');
       return done(null, user);
     } catch (error) {
+      console.error('Google OAuth Strategy error:', error);
       return done(error, null);
     }
   }));
