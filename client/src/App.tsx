@@ -174,7 +174,11 @@ function App() {
             projectId={location.split("/")[2]}
             onBack={() => setLocation("/dashboard")}
             onSettings={() => setLocation("/settings")}
-            onPayForAnalysis={() => {}}
+            onPayForAnalysis={(projectData) => {
+              // Store project data for analysis payment
+              localStorage.setItem('analysisProject', JSON.stringify(projectData));
+              setLocation("/analysis-payment");
+            }}
           />
         )}
         
@@ -187,6 +191,13 @@ function App() {
         
         {user && location === "/subscribe" && (
           <SubscribePage onBack={() => setLocation("/pricing")} />
+        )}
+        
+        {user && location === "/analysis-payment" && (
+          <AnalysisPaymentPage 
+            onBack={() => setLocation("/dashboard")}
+            onSuccess={() => setLocation("/dashboard")}
+          />
         )}
         
 
