@@ -44,18 +44,88 @@ export default function ProjectResults({ projectId, onBack, onSettings, onPayFor
     );
   }
 
-  const handleExport = () => {
-    toast({
-      title: "Export started",
-      description: "Your report will be downloaded shortly."
-    });
+  const handleExport = async () => {
+    try {
+      toast({
+        title: "Preparing export...",
+        description: "Generating your analysis report"
+      });
+      
+      // Simulate export functionality
+      setTimeout(() => {
+        const dataStr = JSON.stringify({
+          project: project.name,
+          insights: project.insights,
+          schema: project.schema,
+          recordCount: project.recordCount,
+          exportedAt: new Date().toISOString()
+        }, null, 2);
+        
+        const dataBlob = new Blob([dataStr], { type: 'application/json' });
+        const url = URL.createObjectURL(dataBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${project.name}_analysis_report.json`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        
+        toast({
+          title: "Export completed",
+          description: "Your analysis report has been downloaded."
+        });
+      }, 1500);
+    } catch (error) {
+      toast({
+        title: "Export failed",
+        description: "There was an error exporting your data.",
+        variant: "destructive"
+      });
+    }
   };
 
-  const handleShare = () => {
-    toast({
-      title: "Share link copied",
-      description: "Share link has been copied to clipboard."
-    });
+  const handleShare = async () => {
+    try {
+      const shareUrl = `${window.location.origin}/project/${projectId}`;
+      
+      if (navigator.share) {
+        await navigator.share({
+          title: `Analysis: ${project.name}`,
+          text: `Check out this data analysis for ${project.name}`,
+          url: shareUrl
+        });
+        toast({
+          title: "Shared successfully",
+          description: "Analysis has been shared."
+        });
+      } else if (navigator.clipboard) {
+        await navigator.clipboard.writeText(shareUrl);
+        toast({
+          title: "Link copied",
+          description: "Share link has been copied to clipboard."
+        });
+      } else {
+        // Fallback for older browsers
+        const textArea = document.createElement('textarea');
+        textArea.value = shareUrl;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+        
+        toast({
+          title: "Link copied",
+          description: "Share link has been copied to clipboard."
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Share failed",
+        description: "There was an error sharing the link.",
+        variant: "destructive"
+      });
+    }
   };
 
   // Sample chart data

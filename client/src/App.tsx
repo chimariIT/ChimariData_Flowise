@@ -193,12 +193,25 @@ function App() {
           <SubscribePage onBack={() => setLocation("/pricing")} />
         )}
         
-        {user && location === "/analysis-payment" && (
-          <AnalysisPaymentPage 
-            onBack={() => setLocation("/dashboard")}
-            onSuccess={() => setLocation("/dashboard")}
-          />
-        )}
+        {user && location === "/analysis-payment" && (() => {
+          const storedProject = localStorage.getItem('analysisProject');
+          const projectData = storedProject ? JSON.parse(storedProject) : null;
+          
+          if (!projectData) {
+            // Redirect back to dashboard if no project data
+            setLocation("/dashboard");
+            return null;
+          }
+          
+          return (
+            <AnalysisPaymentPage 
+              projectId={projectData.id || 'unknown'}
+              projectData={projectData}
+              onBack={() => setLocation("/dashboard")}
+              onSuccess={() => setLocation("/dashboard")}
+            />
+          );
+        })()}
         
 
       </TooltipProvider>
