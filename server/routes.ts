@@ -1541,6 +1541,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Calculate pricing for analysis
+  app.post("/api/calculate-pricing", requireAuth, async (req, res) => {
+    try {
+      const { dataSizeMB, questionsCount, analysisType, schema, recordCount } = req.body;
+      
+      if (!req.user) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+      
+      // Calculate pricing based on project data
+      const dataComplexity = PricingService.assessDataComplexity(schema, recordCount || 0);
+      const columnCount = schema ? Object.keys(schema).length : 0;
+      const featureCount = Math.max(0, columnCount - 2);
+      const questionComplexity = PricingService.assessQuestionComplexity(Array(questionsCount).fill(""));
+      const analysisArtifacts = PricingService.estimateAnalysisArtifacts(analysisType, recordCount || 0, featureCount);
+      
+      const pricing = PricingService.calculatePrice({
+        dataSizeMB: dataSizeMB || 1,
+        recordCount: recordCount || 0,
+        columnCount,
+        featureCount,
+        questionsCount: questionsCount || 0,
+        questionComplexity,
+        analysisType: analysisType as any,
+        analysisArtifacts,
+        dataComplexity
+      });
+      
+      res.json({
+        pricing,
+        dataComplexity
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: "Error calculating pricing: " + error.message });
+    }
+  });
+
   // Create payment intent for one-time analysis
   app.post("/api/create-analysis-payment", requireAuth, async (req, res) => {
     try {
