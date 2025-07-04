@@ -143,6 +143,17 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
   const calculatePricing = async () => {
     setIsCalculating(true);
     try {
+      // Check if user is authenticated
+      const token = localStorage.getItem("auth_token");
+      if (!token) {
+        toast({
+          title: "Authentication Required",
+          description: "Please sign in to calculate pricing.",
+          variant: "destructive",
+        });
+        return;
+      }
+
       const response = await apiRequest("POST", "/api/calculate-pricing", {
         dataSizeMB: projectData.dataSizeMB,
         questionsCount: projectData.questions.length,
@@ -154,11 +165,35 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
       const data = await response.json();
       setPricing(data.pricing);
       setDataComplexity(data.dataComplexity);
-    } catch (error) {
+    } catch (error: any) {
+      console.error("Pricing calculation error:", error);
+      
+      // Fallback pricing calculation if API fails
+      const basePrice = 5.00;
+      const dataSizeCharge = Math.max(0, (projectData.dataSizeMB - 10) * 0.10);
+      const complexityCharge = projectData.recordCount > 100000 ? 15.00 : projectData.recordCount > 10000 ? 8.00 : 0;
+      const questionsCharge = Math.max(0, (projectData.questions.length - 3) * 1.00);
+      const analysisTypeCharge = analysisType === 'advanced' ? 10.00 : analysisType === 'custom' ? 20.00 : 0;
+      
+      const finalPrice = basePrice + dataSizeCharge + complexityCharge + questionsCharge + analysisTypeCharge;
+      
+      setPricing({
+        finalPrice,
+        priceInCents: Math.round(finalPrice * 100),
+        breakdown: {
+          basePrice,
+          dataSizeCharge,
+          complexityCharge,
+          questionsCharge,
+          analysisTypeCharge
+        }
+      });
+      
+      setDataComplexity(projectData.recordCount > 100000 ? 'complex' : projectData.recordCount > 10000 ? 'moderate' : 'simple');
+      
       toast({
-        title: "Error",
-        description: "Failed to calculate pricing. Please try again.",
-        variant: "destructive",
+        title: "Using Estimated Pricing",
+        description: "Calculated pricing based on project data.",
       });
     } finally {
       setIsCalculating(false);
@@ -167,6 +202,17 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
 
   const createPaymentIntent = async () => {
     try {
+      // Check if user is authenticated
+      const token = localStorage.getItem("auth_token");
+      if (!token) {
+        toast({
+          title: "Authentication Required",
+          description: "Please sign in to proceed with payment.",
+          variant: "destructive",
+        });
+        return;
+      }
+
       const response = await apiRequest("POST", "/api/create-analysis-payment", {
         projectId,
         analysisType
@@ -176,10 +222,19 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
       setClientSecret(data.clientSecret);
       setPricing(data.pricing);
       setDataComplexity(data.dataComplexity);
-    } catch (error) {
+    } catch (error: any) {
+      console.error("Payment creation error:", error);
+      
+      let errorMessage = "Failed to create payment. Please try again.";
+      if (error.message?.includes("401")) {
+        errorMessage = "Authentication expired. Please sign in again.";
+      } else if (error.message?.includes("404")) {
+        errorMessage = "Project not found. Please go back and try again.";
+      }
+      
       toast({
-        title: "Error",
-        description: "Failed to create payment. Please try again.",
+        title: "Payment Error",
+        description: errorMessage,
         variant: "destructive",
       });
     }
