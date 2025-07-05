@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk';
+import { multiAIService } from './multi-ai-service';
 
 export interface QuestionAnalysis {
   intent: {
@@ -150,25 +150,32 @@ Examples:
 - If asking about "location" and data has address columns: hasMatchingEntities: true, relevantColumns: ["address", "city", "state"]`;
 
     try {
-      const anthropic = new Anthropic({ 
-        apiKey: process.env.ANTHROPIC_API_KEY || process.env.GOOGLE_AI_API_KEY || 'fallback'
-      });
-      
-      const response = await anthropic.messages.create({
-        model: 'claude-3-5-sonnet-20241022',
-        max_tokens: 1024,
-        messages: [{ role: 'user', content: prompt }],
-      });
-
-      const responseText = response.content[0].type === 'text' ? response.content[0].text : '';
-      const analysis = JSON.parse(responseText);
-      
-      return {
-        hasMatchingEntities: analysis.hasMatchingEntities || false,
-        relevantColumns: analysis.relevantColumns || [],
-        confidence: Math.max(0, Math.min(1, analysis.confidence || 0.5)),
-        suggestedReframe: analysis.suggestedReframe
+      const dataContext = {
+        schema: Object.fromEntries(columns.map(col => [col, 'unknown'])),
+        dataSnapshot: [],
+        recordCount: 0,
+        metadata: {}
       };
+      
+      const response = await multiAIService.analyzeQuestion(prompt, dataContext);
+      
+      try {
+        const analysis = JSON.parse(response);
+        return {
+          hasMatchingEntities: analysis.hasMatchingEntities || false,
+          relevantColumns: analysis.relevantColumns || [],
+          confidence: Math.max(0, Math.min(1, analysis.confidence || 0.5)),
+          suggestedReframe: analysis.suggestedReframe
+        };
+      } catch (parseError) {
+        // If response isn't JSON, try to extract relevant info
+        const relevantColumns = this.findRelevantColumns(intent, columns);
+        return {
+          hasMatchingEntities: relevantColumns.length > 0,
+          relevantColumns,
+          confidence: relevantColumns.length > 0 ? 0.7 : 0.3
+        };
+      }
     } catch (error) {
       console.error("Data relevance analysis failed:", error);
       
