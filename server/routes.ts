@@ -228,8 +228,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Google OAuth routes
   app.get('/api/auth/google', (req, res, next) => {
-    const domain = process.env.REPLIT_DOMAINS || 'localhost:5000';
-    const callbackURL = domain.includes('replit.dev') 
+    const domain = process.env.REPLIT_DOMAINS;
+    const callbackURL = domain && domain !== 'localhost:5000'
       ? `https://${domain}/api/auth/google/callback`
       : `http://localhost:5000/api/auth/google/callback`;
     console.log('Initiating Google OAuth with callback URL:', callbackURL);
