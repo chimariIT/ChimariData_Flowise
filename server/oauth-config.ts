@@ -90,6 +90,24 @@ export function setupOAuth(app: Express) {
     res.json(availableProviders);
   });
 
+  // Current domain endpoint for easy OAuth configuration
+  app.get('/api/auth/current-domain', (req, res) => {
+    const protocol = req.get('x-forwarded-proto') || (req.secure ? 'https' : 'http');
+    const host = req.get('host');
+    const baseUrl = `${protocol}://${host}`;
+    const callbackUrl = `${baseUrl}/api/auth/google/callback`;
+    
+    res.json({
+      message: "Add these to your Google Cloud Console OAuth configuration:",
+      baseUrl: baseUrl,
+      callbackUrl: callbackUrl,
+      instructions: {
+        javascriptOrigins: [baseUrl],
+        redirectUris: [callbackUrl]
+      }
+    });
+  });
+
   // Debug endpoint to show OAuth configuration
   app.get('/api/auth/debug', (req, res) => {
     const replitDomain = process.env.REPLIT_DOMAINS;
