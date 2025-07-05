@@ -29,16 +29,16 @@ export class QuestionAnalyzer {
       // Use AI to understand question intent
       const intentAnalysis = await this.analyzeQuestionIntent(question);
       
-      // Check data relevance
+      // Assess if question matches available data
       const dataRelevance = await this.assessDataRelevance(
         intentAnalysis, 
-        dataSchema, 
+        Object.keys(dataSchema), 
         dataSample
       );
       
-      // Determine processing needs
+      // Determine processing requirements
       const needsAIProcessing = this.shouldUseAIProcessing(intentAnalysis, dataRelevance);
-      const clarificationNeeded = this.needsClarification(dataRelevance);
+      const clarificationNeeded = !dataRelevance.hasMatchingEntities && dataRelevance.confidence < 0.5;
       
       return {
         intent: intentAnalysis,
@@ -48,94 +48,103 @@ export class QuestionAnalyzer {
       };
     } catch (error) {
       console.error("Question analysis failed:", error);
-      // Return safe defaults for analysis failure
+      
+      // Return basic fallback analysis
+      const fallbackIntent = this.getIntentFromKeywords(question.toLowerCase());
+      const relevantColumns = this.findRelevantColumns(fallbackIntent, Object.keys(dataSchema));
+      
       return {
-        intent: {
-          entity: "data",
-          action: "analyze",
-          specificity: "low"
-        },
+        intent: fallbackIntent,
         dataRelevance: {
-          hasMatchingEntities: false,
-          relevantColumns: [],
-          confidence: 0.3
+          hasMatchingEntities: relevantColumns.length > 0,
+          relevantColumns,
+          confidence: relevantColumns.length > 0 ? 0.7 : 0.3
         },
         needsAIProcessing: true,
-        clarificationNeeded: true
+        clarificationNeeded: relevantColumns.length === 0
       };
     }
   }
 
   /**
-   * Uses AI to understand what the user is asking about
+   * Analyzes question intent using AI or keyword fallback
    */
   private async analyzeQuestionIntent(question: string): Promise<QuestionAnalysis['intent']> {
-    const prompt = `Analyze this data question and extract key information:
-
-Question: "${question}"
+    const prompt = `Analyze this data question for intent:
+"${question}"
 
 Return JSON with:
 {
-  "entity": "what the question is about (e.g., employees, customers, products, sales, campaigns)",
-  "action": "what they want to know (e.g., count, location, performance, demographics, trends)",
-  "specificity": "high|medium|low based on how clear and specific the question is"
+  "entity": "what the question is about (e.g., employees, customers, products)",
+  "action": "what they want to know (e.g., count, location, performance)", 
+  "specificity": "high/medium/low"
 }
 
 Examples:
-- "How many employees do I have?" → {"entity": "employees", "action": "count", "specificity": "high"}
-- "Where do customers live?" → {"entity": "customers", "action": "location", "specificity": "high"}
-- "What's the performance?" → {"entity": "unknown", "action": "performance", "specificity": "low"}`;
+- "How many employees?" → {"entity": "employees", "action": "count", "specificity": "high"}
+- "Where do customers live?" → {"entity": "customers", "action": "location", "specificity": "medium"}`;
 
     try {
-      const anthropic = new Anthropic({ 
-        apiKey: process.env.ANTHROPIC_API_KEY || process.env.GOOGLE_AI_API_KEY || 'fallback'
-      });
-      
-      const response = await anthropic.messages.create({
-        model: 'claude-3-5-sonnet-20241022',
-        max_tokens: 1024,
-        messages: [{ role: 'user', content: prompt }],
-      });
-
-      const responseText = response.content[0].type === 'text' ? response.content[0].text : '';
-      return JSON.parse(responseText);
-    } catch {
-      // Fallback parsing
-      const entity = this.extractEntity(question);
-      const action = this.extractAction(question);
-      return {
-        entity,
-        action,
-        specificity: entity !== "unknown" && action !== "analyze" ? "medium" : "low"
+      const dataContext = {
+        schema: {},
+        dataSnapshot: [],
+        recordCount: 0,
+        metadata: {}
       };
+      
+      const response = await multiAIService.analyzeQuestion(prompt, dataContext);
+      
+      try {
+        const analysis = JSON.parse(response);
+        return {
+          entity: analysis.entity || "unknown",
+          action: analysis.action || "query",
+          specificity: analysis.specificity || "medium"
+        };
+      } catch (parseError) {
+        // If response isn't JSON, use fallback
+        return this.getIntentFromKeywords(question.toLowerCase());
+      }
+    } catch (error) {
+      console.error("Intent analysis failed:", error);
+      return this.getIntentFromKeywords(question.toLowerCase());
     }
   }
 
+  private getIntentFromKeywords(questionLower: string): QuestionAnalysis['intent'] {
+    let entity = "data";
+    let action = "query";
+    let specificity: "high" | "medium" | "low" = "medium";
+
+    // Simple entity detection
+    if (questionLower.includes('customer') || questionLower.includes('client')) entity = "customers";
+    else if (questionLower.includes('employee') || questionLower.includes('staff')) entity = "employees";
+    else if (questionLower.includes('product') || questionLower.includes('item')) entity = "products";
+    else if (questionLower.includes('sale') || questionLower.includes('revenue')) entity = "sales";
+
+    // Simple action detection
+    if (questionLower.includes('how many') || questionLower.includes('count')) action = "count";
+    else if (questionLower.includes('where') || questionLower.includes('location')) action = "location";
+    else if (questionLower.includes('performance') || questionLower.includes('trend')) action = "performance";
+
+    // Simple specificity assessment
+    if (questionLower.split(' ').length <= 3) specificity = "high";
+    else if (questionLower.split(' ').length > 8) specificity = "low";
+
+    return { entity, action, specificity };
+  }
+
   /**
-   * Assesses if the question matches the available data
+   * Assesses if the question is relevant to available data
    */
   private async assessDataRelevance(
     intent: QuestionAnalysis['intent'],
-    dataSchema: Record<string, string>,
+    columns: string[],
     dataSample?: any[]
   ): Promise<QuestionAnalysis['dataRelevance']> {
-    const columns = Object.keys(dataSchema);
-    const columnNames = columns.join(", ");
-    
-    // Get sample values for context
-    const sampleContext = dataSample ? 
-      `Sample data values: ${JSON.stringify(dataSample.slice(0, 3))}` : "";
-
-    const prompt = `Analyze if this question matches the available data:
-
-Question Intent:
-- Entity: ${intent.entity}
-- Action: ${intent.action}
-
-Available Data:
-- Columns: ${columnNames}
-- Schema: ${JSON.stringify(dataSchema, null, 2)}
-${sampleContext}
+    const prompt = `Question asks about "${intent.entity}" with action "${intent.action}".
+Available data columns: ${columns.join(', ')}
+Sample data: ${dataSample ? JSON.stringify(dataSample.slice(0, 3)) : 'Not available'}
 
 Return JSON with:
 {
@@ -152,8 +161,8 @@ Examples:
     try {
       const dataContext = {
         schema: Object.fromEntries(columns.map(col => [col, 'unknown'])),
-        dataSnapshot: [],
-        recordCount: 0,
+        dataSnapshot: dataSample || [],
+        recordCount: dataSample?.length || 0,
         metadata: {}
       };
       
@@ -208,74 +217,46 @@ Examples:
   }
 
   /**
-   * Determines if clarification is needed before processing
+   * Simple column matching based on keywords
    */
-  private needsClarification(dataRelevance: QuestionAnalysis['dataRelevance']): boolean {
-    return !dataRelevance.hasMatchingEntities && dataRelevance.confidence < 0.5;
-  }
-
-  /**
-   * Fallback entity extraction from question text
-   */
-  private extractEntity(question: string): string {
-    const entities = [
-      'employees', 'staff', 'workers', 'team',
-      'customers', 'clients', 'users', 'buyers',
-      'products', 'items', 'goods', 'services',
-      'sales', 'revenue', 'profit', 'income',
-      'campaigns', 'ads', 'marketing', 'promotions'
-    ];
-    
-    const lowerQuestion = question.toLowerCase();
-    for (const entity of entities) {
-      if (lowerQuestion.includes(entity)) {
-        return entity;
-      }
-    }
-    return "unknown";
-  }
-
-  /**
-   * Fallback action extraction from question text
-   */
-  private extractAction(question: string): string {
-    const lowerQuestion = question.toLowerCase();
-    
-    if (lowerQuestion.includes('how many') || lowerQuestion.includes('count')) return 'count';
-    if (lowerQuestion.includes('where') || lowerQuestion.includes('location')) return 'location';
-    if (lowerQuestion.includes('performance') || lowerQuestion.includes('metrics')) return 'performance';
-    if (lowerQuestion.includes('average') || lowerQuestion.includes('mean')) return 'average';
-    if (lowerQuestion.includes('total') || lowerQuestion.includes('sum')) return 'total';
-    
-    return 'analyze';
-  }
-
-  /**
-   * Fallback column matching logic
-   */
-  private findRelevantColumns(intent: QuestionAnalysis['intent'], columns: string[]): string[] {
+  private findRelevantColumns(
+    intent: QuestionAnalysis['intent'], 
+    columns: string[]
+  ): string[] {
+    const entity = intent.entity.toLowerCase();
+    const action = intent.action.toLowerCase();
     const relevant: string[] = [];
-    const lowerColumns = columns.map(c => c.toLowerCase());
-    
-    // Match entity to column names
-    const entityKeywords = {
-      'employees': ['employee', 'staff', 'worker', 'team'],
-      'customers': ['customer', 'client', 'user', 'buyer'],
-      'location': ['address', 'city', 'state', 'country', 'location', 'zip'],
-      'performance': ['performance', 'conversion', 'roi', 'engagement', 'score'],
-      'campaigns': ['campaign', 'ad', 'marketing', 'promotion']
-    };
 
-    const keywords = entityKeywords[intent.entity as keyof typeof entityKeywords] || [intent.entity];
-    
-    for (let i = 0; i < columns.length; i++) {
-      const column = lowerColumns[i];
-      if (keywords.some(keyword => column.includes(keyword))) {
-        relevant.push(columns[i]);
+    for (const column of columns) {
+      const columnLower = column.toLowerCase();
+      
+      // Entity matching
+      if (entity.includes('customer') && 
+          (columnLower.includes('customer') || columnLower.includes('client'))) {
+        relevant.push(column);
+      }
+      if (entity.includes('employee') && 
+          (columnLower.includes('employee') || columnLower.includes('staff'))) {
+        relevant.push(column);
+      }
+      if (entity.includes('product') && 
+          (columnLower.includes('product') || columnLower.includes('item'))) {
+        relevant.push(column);
+      }
+      
+      // Action matching
+      if (action.includes('location') && 
+          (columnLower.includes('address') || columnLower.includes('city') || 
+           columnLower.includes('state') || columnLower.includes('location'))) {
+        relevant.push(column);
+      }
+      if (action.includes('count') && 
+          (columnLower.includes('id') || columnLower.includes('count'))) {
+        relevant.push(column);
       }
     }
-    
-    return relevant;
+
+    return Array.from(new Set(relevant)); // Remove duplicates
   }
 }
 
