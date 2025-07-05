@@ -36,8 +36,8 @@ export async function setupOAuth(app: Express) {
   // Google OAuth Strategy
   if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
     const getCallbackURL = () => {
-      const domain = process.env.REPLIT_DOMAINS || 'localhost:5000';
-      if (domain.includes('replit.dev')) {
+      const domain = process.env.REPLIT_DOMAINS;
+      if (domain && domain !== 'localhost:5000') {
         return `https://${domain}/api/auth/google/callback`;
       }
       return `http://localhost:5000/api/auth/google/callback`;
