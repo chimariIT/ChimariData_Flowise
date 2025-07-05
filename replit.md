@@ -70,6 +70,9 @@ Each service follows the same structured workflow:
 - Fixed signed-in upload workflow PII processing by integrating PIIDetectionDialog into upload-modal.tsx component
 - Resolved authentication token inconsistency between apiClient and queryClient to fix dashboard button access
 - Completed end-to-end PII detection workflow for both free trial and signed-in user uploads - January 1, 2025
+- Fixed Google OAuth configuration to use correct Replit domain instead of localhost for callback URLs
+- Resolved OAuth provider setup issues by correcting import paths and function names in authentication system
+- Enhanced payment system with fallback pricing calculations and improved error handling for authentication failures - January 5, 2025
 
 ## User Preferences
 - Prefers comprehensive solutions with complete workflow implementation

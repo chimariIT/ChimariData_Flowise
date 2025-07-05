@@ -7,7 +7,7 @@ import { PricingService } from "./pricing-service";
 import { mlService } from "./ml-service";
 import { FileProcessor } from "./file-processor";
 import { PIIDetector } from "./pii-detector";
-import { setupOAuthProviders } from "./oauth-auth";
+import { setupOAuth } from "./oauth-providers";
 import { questionAnalyzer } from "./question-analyzer";
 import { 
   errorHandler, 
@@ -100,7 +100,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(passport.session());
 
   // Setup OAuth providers
-  setupOAuthProviders(app);
+  await setupOAuth(app);
 
   // Start FastAPI backend
   const fastApiProcess = spawn('python', [path.join(process.cwd(), 'server', 'fastapi-backend.py')], {
@@ -228,7 +228,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Google OAuth routes
   app.get('/api/auth/google', (req, res, next) => {
-    console.log('Initiating Google OAuth with callback URL:', getCallbackURL());
+    const domain = process.env.REPLIT_DOMAINS || 'localhost:5000';
+    const callbackURL = domain.includes('replit.dev') 
+      ? `https://${domain}/api/auth/google/callback`
+      : `http://localhost:5000/api/auth/google/callback`;
+    console.log('Initiating Google OAuth with callback URL:', callbackURL);
     console.log('Google Client ID:', process.env.GOOGLE_CLIENT_ID ? 'SET' : 'NOT SET');
     passport.authenticate('google', { 
       scope: ['profile', 'email', 'https://www.googleapis.com/auth/drive.readonly']
