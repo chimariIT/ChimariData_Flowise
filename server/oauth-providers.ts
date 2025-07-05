@@ -12,27 +12,13 @@ export interface OAuthProviderConfig {
   isEnabled: () => boolean;
 }
 
-// Helper function to get the base URL
-function getBaseUrl(): string {
-  // Use REPLIT_DOMAINS environment variable if available
-  const replitDomain = process.env.REPLIT_DOMAINS;
-  if (replitDomain) {
-    return `https://${replitDomain.split(',')[0]}`;
-  }
-  // Fallback for development
-  return process.env.NODE_ENV === 'production' ? 'https://chimaridata.com' : 'http://localhost:5000';
-}
-
 // Google OAuth Provider
-const callbackURL = `${getBaseUrl()}/api/auth/google/callback`;
-console.log('OAuth Callback URL:', callbackURL);
-
 export const googleProvider: OAuthProviderConfig = {
   name: 'google',
   strategy: new GoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID || '',
     clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
-    callbackURL: callbackURL
+    callbackURL: "/api/auth/google/callback"
   }, async (accessToken: string, refreshToken: string, profile: any, done: any) => {
     try {
       const email = profile.emails?.[0]?.value;
