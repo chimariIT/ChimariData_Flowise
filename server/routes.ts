@@ -8,6 +8,7 @@ import { mlService } from "./ml-service";
 import { FileProcessor } from "./file-processor";
 import { PIIDetector } from "./pii-detector";
 import { questionAnalyzer } from "./question-analyzer";
+import { multiAIService } from "./multi-ai-service";
 // Note: Error handling classes removed - using direct error responses
 import { setupOAuth, isAuthenticated } from "./oauth-config";
 
@@ -414,87 +415,37 @@ This link will expire in 24 hours.
             })
           );
 
-          // Process each question with semantic context
+          // Process each question with AI analysis
           const responses: string[] = [];
           
           for (let i = 0; i < questionsArray.length; i++) {
             const question = questionsArray[i];
             const analysis = questionAnalyses[i];
             
-            // Check if question needs clarification
-            if (analysis?.clarificationNeeded) {
-              const suggestedReframe = analysis.dataRelevance.suggestedReframe;
-              if (suggestedReframe) {
-                responses.push(`Q${i + 1}: ${question} - ${suggestedReframe}`);
-                continue;
-              }
-            }
-            
-            // Check semantic mismatch (e.g., asking about employees but data is about customers)
-            if (analysis && !analysis.dataRelevance.hasMatchingEntities) {
-              const entity = analysis.intent.entity;
-              const availableData = Object.keys(result.schema).slice(0, 5).join(', ');
-              responses.push(`Q${i + 1}: ${question} - I couldn't find data about '${entity}' in this dataset. The data appears to contain information about: ${availableData}. Could you rephrase your question based on the available data?`);
-              continue;
-            }
-            
-            // Use Python analysis for semantically valid questions
             try {
-              const { spawn } = await import('child_process');
-              const path = await import('path');
-              const pythonScript = path.resolve('server/pandas-analyzer.py');
-              const pythonProcess = spawn('python3', [
-                pythonScript,
-                req.file.path,
-                question
-              ], {
-                stdio: ['pipe', 'pipe', 'pipe'],
-                timeout: 15000
-              });
-
-              let stdout = '';
-              let stderr = '';
-
-              pythonProcess.stdout.on('data', (data) => {
-                stdout += data.toString();
-              });
-
-              pythonProcess.stderr.on('data', (data) => {
-                stderr += data.toString();
-              });
-
-              const analysisResult = await new Promise<any>((resolve, reject) => {
-                pythonProcess.on('close', (code) => {
-                  if (code === 0) {
-                    try {
-                      const result = JSON.parse(stdout);
-                      resolve(result);
-                    } catch (parseError) {
-                      reject(new Error('Failed to parse analysis result'));
-                    }
-                  } else {
-                    reject(new Error(`Python analysis failed with code ${code}: ${stderr}`));
-                  }
-                });
-
-                pythonProcess.on('error', (error) => {
-                  reject(error);
-                });
-
-                setTimeout(() => {
-                  pythonProcess.kill('SIGTERM');
-                  reject(new Error('Analysis timeout'));
-                }, 15000);
-              });
-
-              if (analysisResult.analysis_type !== 'error') {
-                responses.push(`Q${i + 1}: ${question} - ${analysisResult.answer}`);
+              // Use multi-AI service for question analysis
+              const dataContext = {
+                schema: result.schema,
+                dataSnapshot: finalData.slice(0, 20), // Use more data for better analysis
+                recordCount: finalData.length,
+                metadata: result.metadata
+              };
+              
+              const aiResponse = await multiAIService.analyzeQuestion(question, dataContext);
+              responses.push(`Q${i + 1}: ${question} - ${aiResponse}`);
+              
+            } catch (aiError) {
+              console.error(`AI analysis failed for question "${question}":`, aiError);
+              
+              // Fallback response based on question analysis
+              if (analysis && !analysis.dataRelevance.hasMatchingEntities) {
+                const entity = analysis.intent.entity;
+                const availableData = Object.keys(result.schema).slice(0, 5).join(', ');
+                responses.push(`Q${i + 1}: ${question} - I couldn't find data about '${entity}' in this dataset. The data appears to contain information about: ${availableData}. Could you rephrase your question based on the available data?`);
               } else {
-                responses.push(`Q${i + 1}: ${question} - Analysis could not be completed for this question.`);
+                // Basic fallback
+                responses.push(`Q${i + 1}: ${question} - Your dataset contains ${finalData.length} records with fields: ${Object.keys(result.schema).join(', ')}. For specific analysis, please provide more targeted questions about these data fields.`);
               }
-            } catch (pythonError) {
-              console.error(`Python analysis failed for question "${question}":`, pythonError);
-              responses.push(`Q${i + 1}: ${question} - Unable to analyze this question with the current dataset.`);
             }
           }
           
