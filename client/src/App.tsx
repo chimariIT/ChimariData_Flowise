@@ -50,7 +50,7 @@ function App() {
     checkAuth();
   }, [setLocation]);
 
-  const handleLogin = (userData: { id: number; email: string; firstName?: string; lastName?: string; username?: string }) => {
+  const handleLogin = (userData: { id: string; email: string; firstName?: string; lastName?: string; username?: string }) => {
     setUser(userData);
     localStorage.setItem("user", JSON.stringify(userData));
     setLocation("/dashboard");
