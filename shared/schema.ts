@@ -1,20 +1,32 @@
-import { pgTable, text, serial, integer, boolean, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, timestamp, jsonb, varchar, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
+// Session storage table for Replit Auth
+export const sessions = pgTable(
+  "sessions",
+  {
+    sid: varchar("sid").primaryKey(),
+    sess: jsonb("sess").notNull(),
+    expire: timestamp("expire").notNull(),
+  },
+  (table) => [index("IDX_session_expire").on(table.expire)],
+);
+
 export const users = pgTable("users", {
-  id: serial("id").primaryKey(),
+  id: varchar("id").primaryKey().notNull(), // Changed to varchar for Replit Auth sub claim
   username: text("username").unique(), // Optional for OAuth users
   password: text("password"),
-  email: text("email").notNull().unique(), // Email is now required and primary identifier
+  email: text("email").unique(), // Email is now required and primary identifier
   firstName: text("first_name"),
   lastName: text("last_name"),
   profileImageUrl: text("profile_image_url"),
-  provider: text("provider").default("local"), // local, google, microsoft, apple
+  provider: text("provider").default("local"), // local, google, microsoft, apple, replit
   providerId: text("provider_id"),
   accessToken: text("access_token"),
   refreshToken: text("refresh_token"),
   createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
 export const projects = pgTable("projects", {
@@ -24,7 +36,7 @@ export const projects = pgTable("projects", {
   questions: jsonb("questions").default([]),
   insights: jsonb("insights").default({}),
   createdAt: timestamp("created_at").defaultNow(),
-  ownerId: integer("owner_id").references(() => users.id),
+  ownerId: text("owner_id").references(() => users.id),
   recordCount: integer("record_count").default(0),
   status: text("status").default("active"),
   dataSnapshot: jsonb("data_snapshot"), // Store sample data for AI analysis
@@ -118,8 +130,13 @@ export const usageLogs = pgTable("usage_logs", {
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({
-  id: true,
   createdAt: true,
+  updatedAt: true,
+});
+
+export const upsertUserSchema = createInsertSchema(users).omit({
+  createdAt: true,
+  updatedAt: true,
 });
 
 export const insertProjectSchema = createInsertSchema(projects).omit({
@@ -168,6 +185,7 @@ export const subscriptionUpgradeSchema = z.object({
 });
 
 export type InsertUser = z.infer<typeof insertUserSchema>;
+export type UpsertUser = z.infer<typeof upsertUserSchema>;
 export type User = typeof users.$inferSelect;
 export type InsertProject = z.infer<typeof insertProjectSchema>;
 export type Project = typeof projects.$inferSelect;
