@@ -23,59 +23,31 @@ import AnimatedDemo from "./components/animated-demo";
 import NotFound from "@/pages/not-found";
 
 function App() {
-  const [user, setUser] = useState<{ id: number; email: string; firstName?: string; lastName?: string; username?: string } | null>(null);
+  const [user, setUser] = useState<{ id: string; email: string; firstName?: string; lastName?: string; username?: string } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [location, setLocation] = useLocation();
 
   useEffect(() => {
-    // Handle OAuth callback tokens from URL
-    const urlParams = new URLSearchParams(window.location.search);
-    const tokenFromUrl = urlParams.get('token');
-    const provider = urlParams.get('provider');
-    
-    if (tokenFromUrl && provider === 'google') {
-      // Store the token
-      localStorage.setItem('auth_token', tokenFromUrl);
-      
-      // Fetch user data with the token
-      fetch('/api/user', {
-        headers: {
-          'Authorization': `Bearer ${tokenFromUrl}`
+    // Check if user is already authenticated using Replit Auth
+    const checkAuth = async () => {
+      try {
+        const response = await fetch('/api/auth/user', {
+          credentials: 'include'
+        });
+        
+        if (response.ok) {
+          const userData = await response.json();
+          setUser(userData);
+          localStorage.setItem("user", JSON.stringify(userData));
         }
-      })
-      .then(res => res.json())
-      .then(userData => {
-        if (userData.user) {
-          setUser(userData.user);
-          localStorage.setItem("user", JSON.stringify(userData.user));
-          // Clean URL and redirect to dashboard
-          window.history.replaceState({}, document.title, "/dashboard");
-          setLocation("/dashboard");
-        }
-      })
-      .catch(error => {
-        console.error('Error fetching user data:', error);
-        localStorage.removeItem("auth_token");
-      });
-      
-      setIsLoading(false);
-      return;
-    }
-
-    // Check if user is already logged in
-    const token = localStorage.getItem('auth_token');
-    if (token) {
-      const storedUser = localStorage.getItem("user");
-      if (storedUser) {
-        try {
-          setUser(JSON.parse(storedUser));
-        } catch {
-          localStorage.removeItem("auth_token");
-          localStorage.removeItem("user");
-        }
+      } catch (error) {
+        console.error('Error checking auth:', error);
+      } finally {
+        setIsLoading(false);
       }
-    }
-    setIsLoading(false);
+    };
+
+    checkAuth();
   }, [setLocation]);
 
   const handleLogin = (userData: { id: number; email: string; firstName?: string; lastName?: string; username?: string }) => {
@@ -87,8 +59,8 @@ function App() {
   const handleLogout = () => {
     setUser(null);
     localStorage.removeItem("user");
-    localStorage.removeItem("auth_token");
-    setLocation("/");
+    // Use Replit Auth logout endpoint
+    window.location.href = "/api/logout";
   };
 
   if (isLoading) {
