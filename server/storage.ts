@@ -1,34 +1,35 @@
-import { users, projects, userSettings, usageLogs, enterpriseInquiries, type User, type InsertUser, type Project, type InsertProject, type UserSettings, type InsertUserSettings, type UsageLog, type InsertUsageLog, type EnterpriseInquiry, type InsertEnterpriseInquiry } from "@shared/schema";
+import { users, projects, userSettings, usageLogs, enterpriseInquiries, type User, type InsertUser, type UpsertUser, type Project, type InsertProject, type UserSettings, type InsertUserSettings, type UsageLog, type InsertUsageLog, type EnterpriseInquiry, type InsertEnterpriseInquiry } from "@shared/schema";
 
 export interface IStorage {
   // User methods
-  getUser(id: number): Promise<User | undefined>;
+  getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
   getUserByProviderId(provider: string, providerId: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
-  updateUserTokens(userId: number, accessToken: string, refreshToken: string): Promise<User | undefined>;
-  updateUserProvider(userId: number, provider: string, providerId: string, accessToken: string, refreshToken: string): Promise<User | undefined>;
+  upsertUser(user: UpsertUser): Promise<User>;
+  updateUserTokens(userId: string, accessToken: string, refreshToken: string): Promise<User | undefined>;
+  updateUserProvider(userId: string, provider: string, providerId: string, accessToken: string, refreshToken: string): Promise<User | undefined>;
   
   // Project methods
-  createProject(project: InsertProject & { ownerId: number }): Promise<Project>;
-  getUserProjects(userId: number): Promise<Project[]>;
-  getProject(id: string, userId: number): Promise<Project | undefined>;
-  updateProject(id: string, userId: number, updates: Partial<Project>): Promise<Project | undefined>;
+  createProject(project: InsertProject & { ownerId: string }): Promise<Project>;
+  getUserProjects(userId: string): Promise<Project[]>;
+  getProject(id: string, userId: string): Promise<Project | undefined>;
+  updateProject(id: string, userId: string, updates: Partial<Project>): Promise<Project | undefined>;
   updateProjectPaymentStatus(projectId: string, isPaid: boolean, paymentIntentId?: string): Promise<Project | undefined>;
   
   // User settings methods
-  getUserSettings(userId: number): Promise<UserSettings | undefined>;
+  getUserSettings(userId: string): Promise<UserSettings | undefined>;
   createUserSettings(settings: InsertUserSettings): Promise<UserSettings>;
-  updateUserSettings(userId: number, updates: Partial<UserSettings>): Promise<UserSettings | undefined>;
-  resetMonthlyUsage(userId: number): Promise<void>;
-  updateStripeCustomerId(userId: number, customerId: string): Promise<UserSettings | undefined>;
-  updateUserStripeInfo(userId: number, info: { customerId: string; subscriptionId: string }): Promise<UserSettings | undefined>;
+  updateUserSettings(userId: string, updates: Partial<UserSettings>): Promise<UserSettings | undefined>;
+  resetMonthlyUsage(userId: string): Promise<void>;
+  updateStripeCustomerId(userId: string, customerId: string): Promise<UserSettings | undefined>;
+  updateUserStripeInfo(userId: string, info: { customerId: string; subscriptionId: string }): Promise<UserSettings | undefined>;
   
   // Usage tracking methods
   logUsage(log: InsertUsageLog): Promise<UsageLog>;
-  getUserUsageThisMonth(userId: number): Promise<number>;
-  canUserMakeQuery(userId: number): Promise<boolean>;
+  getUserUsageThisMonth(userId: string): Promise<number>;
+  canUserMakeQuery(userId: string): Promise<boolean>;
   
   // Enterprise inquiry methods
   createEnterpriseInquiry(inquiry: InsertEnterpriseInquiry): Promise<EnterpriseInquiry>;
@@ -37,9 +38,9 @@ export interface IStorage {
 }
 
 export class MemStorage implements IStorage {
-  private users: Map<number, User>;
+  private users: Map<string, User>;
   private projects: Map<string, Project>;
-  private userSettings: Map<number, UserSettings>;
+  private userSettings: Map<string, UserSettings>;
   private usageLogs: Map<string, UsageLog>;
   private enterpriseInquiries: Map<number, EnterpriseInquiry>;
   private currentUserId: number;
@@ -57,7 +58,7 @@ export class MemStorage implements IStorage {
     this.currentInquiryId = 1;
   }
 
-  async getUser(id: number): Promise<User | undefined> {
+  async getUser(id: string): Promise<User | undefined> {
     return this.users.get(id);
   }
 
@@ -79,7 +80,7 @@ export class MemStorage implements IStorage {
     );
   }
 
-  async updateUserTokens(userId: number, accessToken: string, refreshToken: string): Promise<User | undefined> {
+  async updateUserTokens(userId: string, accessToken: string, refreshToken: string): Promise<User | undefined> {
     const user = this.users.get(userId);
     if (user) {
       user.accessToken = accessToken;
@@ -90,7 +91,7 @@ export class MemStorage implements IStorage {
     return undefined;
   }
 
-  async updateUserProvider(userId: number, provider: string, providerId: string, accessToken: string, refreshToken: string): Promise<User | undefined> {
+  async updateUserProvider(userId: string, provider: string, providerId: string, accessToken: string, refreshToken: string): Promise<User | undefined> {
     const user = this.users.get(userId);
     if (user) {
       user.provider = provider;
@@ -104,17 +105,70 @@ export class MemStorage implements IStorage {
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
-    const id = this.currentUserId++;
+    // Generate string ID for new user (for compatibility with legacy integer IDs)
+    const id = insertUser.id || this.currentUserId++.toString();
     const user: User = { 
-      ...insertUser, 
       id,
-      createdAt: new Date()
+      username: insertUser.username || null,
+      password: insertUser.password || null,
+      email: insertUser.email || null,
+      firstName: insertUser.firstName || null,
+      lastName: insertUser.lastName || null,
+      profileImageUrl: insertUser.profileImageUrl || null,
+      provider: insertUser.provider || null,
+      providerId: insertUser.providerId || null,
+      accessToken: insertUser.accessToken || null,
+      refreshToken: insertUser.refreshToken || null,
+      createdAt: new Date(),
+      updatedAt: new Date()
     };
     this.users.set(id, user);
     return user;
   }
 
-  async createProject(projectData: InsertProject & { ownerId: number }): Promise<Project> {
+  async upsertUser(userData: UpsertUser): Promise<User> {
+    const existingUser = this.users.get(userData.id);
+    if (existingUser) {
+      // Update existing user
+      const updatedUser: User = {
+        ...existingUser,
+        username: userData.username ?? existingUser.username,
+        password: userData.password ?? existingUser.password,
+        email: userData.email ?? existingUser.email,
+        firstName: userData.firstName ?? existingUser.firstName,
+        lastName: userData.lastName ?? existingUser.lastName,
+        profileImageUrl: userData.profileImageUrl ?? existingUser.profileImageUrl,
+        provider: userData.provider ?? existingUser.provider,
+        providerId: userData.providerId ?? existingUser.providerId,
+        accessToken: userData.accessToken ?? existingUser.accessToken,
+        refreshToken: userData.refreshToken ?? existingUser.refreshToken,
+        updatedAt: new Date(),
+      };
+      this.users.set(userData.id, updatedUser);
+      return updatedUser;
+    } else {
+      // Create new user
+      const newUser: User = {
+        id: userData.id,
+        username: userData.username || null,
+        password: userData.password || null,
+        email: userData.email || null,
+        firstName: userData.firstName || null,
+        lastName: userData.lastName || null,
+        profileImageUrl: userData.profileImageUrl || null,
+        provider: userData.provider || null,
+        providerId: userData.providerId || null,
+        accessToken: userData.accessToken || null,
+        refreshToken: userData.refreshToken || null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      this.users.set(userData.id, newUser);
+      return newUser;
+    }
+  }
+
+  async createProject(projectData: InsertProject & { ownerId: string }): Promise<Project> {
     const id = Math.random().toString(36).substring(2, 15);
     const project: Project = {
       id,
@@ -135,19 +189,24 @@ export class MemStorage implements IStorage {
       dataSizeMB: projectData.dataSizeMB || 0,
       complexityScore: projectData.complexityScore || 1,
       fileMetadata: projectData.fileMetadata || null,
+      serviceType: projectData.serviceType,
+      workflowStep: projectData.workflowStep || "questions",
+      dataSource: projectData.dataSource || null,
+      malwareScanStatus: projectData.malwareScanStatus || "pending",
+      columnSummaries: projectData.columnSummaries || null,
       createdAt: new Date(),
     };
     this.projects.set(id, project);
     return project;
   }
 
-  async getUserProjects(userId: number): Promise<Project[]> {
+  async getUserProjects(userId: string): Promise<Project[]> {
     return Array.from(this.projects.values()).filter(
       (project) => project.ownerId === userId,
     );
   }
 
-  async getProject(id: string, userId: number): Promise<Project | undefined> {
+  async getProject(id: string, userId: string): Promise<Project | undefined> {
     const project = this.projects.get(id);
     if (project && project.ownerId === userId) {
       return project;
@@ -155,7 +214,7 @@ export class MemStorage implements IStorage {
     return undefined;
   }
 
-  async updateProject(id: string, userId: number, updates: Partial<Project>): Promise<Project | undefined> {
+  async updateProject(id: string, userId: string, updates: Partial<Project>): Promise<Project | undefined> {
     const project = this.projects.get(id);
     if (project && project.ownerId === userId) {
       const updatedProject = { ...project, ...updates };
@@ -180,7 +239,7 @@ export class MemStorage implements IStorage {
     return undefined;
   }
 
-  async getUserSettings(userId: number): Promise<UserSettings | undefined> {
+  async getUserSettings(userId: string): Promise<UserSettings | undefined> {
     return this.userSettings.get(userId);
   }
 
@@ -205,7 +264,7 @@ export class MemStorage implements IStorage {
     return settings;
   }
 
-  async updateUserSettings(userId: number, updates: Partial<UserSettings>): Promise<UserSettings | undefined> {
+  async updateUserSettings(userId: string, updates: Partial<UserSettings>): Promise<UserSettings | undefined> {
     const settings = this.userSettings.get(userId);
     if (settings) {
       const updatedSettings = { ...settings, ...updates, updatedAt: new Date() };
@@ -215,7 +274,7 @@ export class MemStorage implements IStorage {
     return undefined;
   }
 
-  async resetMonthlyUsage(userId: number): Promise<void> {
+  async resetMonthlyUsage(userId: string): Promise<void> {
     const settings = this.userSettings.get(userId);
     if (settings) {
       const updatedSettings = { 
@@ -228,7 +287,7 @@ export class MemStorage implements IStorage {
     }
   }
 
-  async updateStripeCustomerId(userId: number, customerId: string): Promise<UserSettings | undefined> {
+  async updateStripeCustomerId(userId: string, customerId: string): Promise<UserSettings | undefined> {
     const settings = this.userSettings.get(userId);
     if (settings) {
       settings.stripeCustomerId = customerId;
@@ -238,7 +297,7 @@ export class MemStorage implements IStorage {
     return undefined;
   }
 
-  async updateUserStripeInfo(userId: number, info: { customerId: string; subscriptionId: string }): Promise<UserSettings | undefined> {
+  async updateUserStripeInfo(userId: string, info: { customerId: string; subscriptionId: string }): Promise<UserSettings | undefined> {
     const settings = this.userSettings.get(userId);
     if (settings) {
       settings.stripeCustomerId = info.customerId;
@@ -274,7 +333,7 @@ export class MemStorage implements IStorage {
     return log;
   }
 
-  async getUserUsageThisMonth(userId: number): Promise<number> {
+  async getUserUsageThisMonth(userId: string): Promise<number> {
     const settings = await this.getUserSettings(userId);
     if (!settings) return 0;
     
@@ -290,7 +349,7 @@ export class MemStorage implements IStorage {
     return settings.usageCount || 0;
   }
 
-  async canUserMakeQuery(userId: number): Promise<boolean> {
+  async canUserMakeQuery(userId: string): Promise<boolean> {
     const settings = await this.getUserSettings(userId);
     if (!settings) return false;
     
