@@ -83,6 +83,21 @@ export function setupOAuth(app: Express) {
     }));
     res.json(availableProviders);
   });
+
+  // Debug endpoint to show OAuth configuration
+  app.get('/api/auth/debug', (req, res) => {
+    const replitDomain = process.env.REPLIT_DOMAINS;
+    const baseUrl = replitDomain ? `https://${replitDomain.split(',')[0]}` : 'http://localhost:5000';
+    const callbackUrl = `${baseUrl}/api/auth/google/callback`;
+    
+    res.json({
+      baseUrl,
+      callbackUrl,
+      replitDomains: process.env.REPLIT_DOMAINS,
+      nodeEnv: process.env.NODE_ENV,
+      clientId: process.env.GOOGLE_CLIENT_ID ? 'Present' : 'Missing'
+    });
+  });
 }
 
 // Middleware to check if user is authenticated
