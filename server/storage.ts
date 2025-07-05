@@ -108,7 +108,7 @@ export class MemStorage implements IStorage {
     // Generate string ID for new user (for compatibility with legacy integer IDs)
     const id = insertUser.id || this.currentUserId++.toString();
     const user: User = { 
-      id,
+      id: id.toString(),
       username: insertUser.username || null,
       password: insertUser.password || null,
       email: insertUser.email || null,
@@ -122,7 +122,7 @@ export class MemStorage implements IStorage {
       createdAt: new Date(),
       updatedAt: new Date()
     };
-    this.users.set(id, user);
+    this.users.set(user.id, user);
     return user;
   }
 
