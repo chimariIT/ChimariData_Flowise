@@ -40,10 +40,16 @@ export function setupOAuth(app: Express) {
       console.log(`Registering OAuth provider: ${provider.name}`);
       passport.use(provider.name, provider.strategy);
 
-      // Setup auth route
-      app.get(provider.routes.auth,
-        passport.authenticate(provider.name, { scope: provider.scopes })
-      );
+      // Setup auth route with dynamic domain logging
+      app.get(provider.routes.auth, (req, res, next) => {
+        const protocol = req.get('x-forwarded-proto') || (req.secure ? 'https' : 'http');
+        const host = req.get('host');
+        const dynamicCallback = `${protocol}://${host}/api/auth/google/callback`;
+        console.log(`OAuth request from domain: ${protocol}://${host}`);
+        console.log(`Expected callback URL: ${dynamicCallback}`);
+        
+        passport.authenticate(provider.name, { scope: provider.scopes })(req, res, next);
+      });
 
       // Setup callback route
       app.get(provider.routes.callback,

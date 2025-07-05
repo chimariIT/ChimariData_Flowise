@@ -12,10 +12,36 @@ export interface OAuthProviderConfig {
   isEnabled: () => boolean;
 }
 
-// Google OAuth Provider
+// Dynamic callback URL that adapts to any Replit domain
+function getDynamicCallbackURL(req?: any): string {
+  if (req && req.get('host')) {
+    const protocol = req.get('x-forwarded-proto') || (req.secure ? 'https' : 'http');
+    return `${protocol}://${req.get('host')}/api/auth/google/callback`;
+  }
+  // Fallback - use relative URL which should work with Passport.js
+  return "/api/auth/google/callback";
+}
+
+// Google OAuth Provider with dynamic callback
+class DynamicGoogleStrategy extends GoogleStrategy {
+  constructor(options: any, verify: any) {
+    super(options, verify);
+  }
+
+  authenticate(req: any, options?: any) {
+    // Update callback URL dynamically based on the request
+    if (req && req.get('host')) {
+      const protocol = req.get('x-forwarded-proto') || (req.secure ? 'https' : 'http');
+      this._callbackURL = `${protocol}://${req.get('host')}/api/auth/google/callback`;
+      console.log('Dynamic OAuth Callback URL:', this._callbackURL);
+    }
+    return super.authenticate(req, options);
+  }
+}
+
 export const googleProvider: OAuthProviderConfig = {
   name: 'google',
-  strategy: new GoogleStrategy({
+  strategy: new DynamicGoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID || '',
     clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
     callbackURL: "/api/auth/google/callback"
