@@ -6,8 +6,10 @@ export interface IStorage {
   getUserByUsername(username: string): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
   getUserByProviderId(provider: string, providerId: string): Promise<User | undefined>;
+  getUserByVerificationToken(token: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
   upsertUser(user: UpsertUser): Promise<User>;
+  updateUser(id: string, updates: Partial<User>): Promise<User | undefined>;
   updateUserTokens(userId: string, accessToken: string, refreshToken: string): Promise<User | undefined>;
   updateUserProvider(userId: string, provider: string, providerId: string, accessToken: string, refreshToken: string): Promise<User | undefined>;
   
@@ -80,6 +82,23 @@ export class MemStorage implements IStorage {
     );
   }
 
+  async getUserByVerificationToken(token: string): Promise<User | undefined> {
+    // Mock implementation for now
+    return Array.from(this.users.values()).find(
+      (user) => (user as any).emailVerificationToken === token,
+    );
+  }
+
+  async updateUser(id: string, updates: Partial<User>): Promise<User | undefined> {
+    const user = this.users.get(id);
+    if (user) {
+      const updatedUser = { ...user, ...updates, updatedAt: new Date() };
+      this.users.set(id, updatedUser);
+      return updatedUser;
+    }
+    return undefined;
+  }
+
   async updateUserTokens(userId: string, accessToken: string, refreshToken: string): Promise<User | undefined> {
     const user = this.users.get(userId);
     if (user) {
@@ -106,9 +125,9 @@ export class MemStorage implements IStorage {
 
   async createUser(insertUser: InsertUser): Promise<User> {
     // Generate string ID for new user (for compatibility with legacy integer IDs)
-    const id = insertUser.id || this.currentUserId++.toString();
+    const id = insertUser.id || (this.currentUserId++).toString();
     const user: User = { 
-      id: id.toString(),
+      id: id,
       username: insertUser.username || null,
       password: insertUser.password || null,
       email: insertUser.email || null,
@@ -119,6 +138,9 @@ export class MemStorage implements IStorage {
       providerId: insertUser.providerId || null,
       accessToken: insertUser.accessToken || null,
       refreshToken: insertUser.refreshToken || null,
+      emailVerified: (insertUser as any).emailVerified || false,
+      emailVerificationToken: (insertUser as any).emailVerificationToken || null,
+      emailVerificationExpires: (insertUser as any).emailVerificationExpires || null,
       createdAt: new Date(),
       updatedAt: new Date()
     };

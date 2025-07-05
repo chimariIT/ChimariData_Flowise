@@ -65,6 +65,184 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Setup OAuth middleware
   setupOAuth(app);
 
+  // Email Authentication Routes
+  app.post('/api/auth/register', async (req, res) => {
+    try {
+      const { email, password, firstName, lastName } = req.body;
+      
+      // Validate input
+      if (!email || !password) {
+        return res.status(400).json({ error: "Email and password are required" });
+      }
+      
+      // Password constraints: minimum 8 characters, at least one letter, at least one capital letter
+      if (password.length < 8) {
+        return res.status(400).json({ error: "Password must be at least 8 characters" });
+      }
+      if (!/[a-zA-Z]/.test(password)) {
+        return res.status(400).json({ error: "Password must contain at least one letter" });
+      }
+      if (!/[A-Z]/.test(password)) {
+        return res.status(400).json({ error: "Password must contain at least one capital letter" });
+      }
+      
+      // Check if user already exists
+      const existingUser = await storage.getUserByEmail(email);
+      if (existingUser) {
+        return res.status(400).json({ error: "User already exists with this email" });
+      }
+      
+      // Hash password
+      const hashedPassword = await bcrypt.hash(password, 12);
+      
+      // Generate verification token
+      const crypto = await import('crypto');
+      const verificationToken = crypto.randomBytes(32).toString('hex');
+      const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+      
+      // Create user ID for email registration
+      const userId = crypto.randomBytes(16).toString('hex');
+      
+      // Create user
+      const user = await storage.createUser({
+        id: userId,
+        email,
+        password: hashedPassword,
+        firstName,
+        lastName,
+        provider: "local",
+        emailVerified: false,
+        emailVerificationToken: verificationToken,
+        emailVerificationExpires: verificationExpires
+      });
+      
+      // Send verification email (log for development)
+      const verificationUrl = `${req.protocol}://${req.get('host')}/verify-email?token=${verificationToken}`;
+      console.log(`
+===============================================
+EMAIL VERIFICATION REQUIRED
+===============================================
+To: ${email}
+Subject: Verify your ChimariData account
+
+Please click the link below to verify your email:
+${verificationUrl}
+
+This link will expire in 24 hours.
+===============================================
+      `);
+      
+      // Generate simple auth token
+      const authToken = crypto.randomBytes(32).toString('hex');
+      
+      res.status(201).json({
+        success: true,
+        message: "Account created successfully. Please check your email for verification.",
+        user: {
+          id: user.id,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          emailVerified: user.emailVerified
+        },
+        token: authToken
+      });
+      
+    } catch (error) {
+      console.error('Registration error:', error);
+      res.status(500).json({ error: "Registration failed" });
+    }
+  });
+
+  app.post('/api/auth/login', async (req, res) => {
+    try {
+      const { email, password } = req.body;
+      
+      if (!email || !password) {
+        return res.status(400).json({ error: "Email and password are required" });
+      }
+      
+      // Find user by email
+      const user = await storage.getUserByEmail(email);
+      if (!user) {
+        return res.status(401).json({ error: "Invalid email or password" });
+      }
+      
+      // Check if user is using email/password authentication
+      if (user.provider !== "local" || !user.password) {
+        return res.status(400).json({ error: "This account uses social login. Please use the sign-in button." });
+      }
+      
+      // Verify password
+      const isPasswordValid = await bcrypt.compare(password, user.password);
+      if (!isPasswordValid) {
+        return res.status(401).json({ error: "Invalid email or password" });
+      }
+      
+      // Generate simple auth token
+      const crypto = await import('crypto');
+      const authToken = crypto.randomBytes(32).toString('hex');
+      
+      res.json({
+        success: true,
+        message: "Login successful",
+        user: {
+          id: user.id,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          emailVerified: user.emailVerified
+        },
+        token: authToken
+      });
+      
+    } catch (error) {
+      console.error('Login error:', error);
+      res.status(500).json({ error: "Login failed" });
+    }
+  });
+
+  app.get('/verify-email', async (req, res) => {
+    try {
+      const { token } = req.query;
+      
+      if (!token) {
+        return res.status(400).send('Invalid verification link');
+      }
+      
+      const user = await storage.getUserByVerificationToken(token as string);
+      
+      if (!user) {
+        return res.status(400).send('Invalid or expired verification token');
+      }
+      
+      if (user.emailVerificationExpires && new Date() > user.emailVerificationExpires) {
+        return res.status(400).send('Verification token has expired');
+      }
+      
+      // Update user as verified
+      await storage.updateUser(user.id, {
+        emailVerified: true,
+        emailVerificationToken: null,
+        emailVerificationExpires: null
+      });
+      
+      res.send(`
+        <html>
+          <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+            <h1 style="color: green;">Email Verified Successfully!</h1>
+            <p>Your email has been verified. You can now close this window and continue using ChimariData.</p>
+            <a href="/" style="background: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Go to ChimariData</a>
+          </body>
+        </html>
+      `);
+      
+    } catch (error) {
+      console.error('Email verification error:', error);
+      res.status(500).send('Verification failed');
+    }
+  });
+
   // Start FastAPI backend
   const fastApiProcess = spawn('python', [path.join(process.cwd(), 'server', 'fastapi-backend.py')], {
     stdio: 'inherit'
