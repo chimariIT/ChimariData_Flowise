@@ -7,22 +7,10 @@ import { PricingService } from "./pricing-service";
 import { mlService } from "./ml-service";
 import { FileProcessor } from "./file-processor";
 import { PIIDetector } from "./pii-detector";
-import { setupOAuth } from "./oauth-providers";
 import { questionAnalyzer } from "./question-analyzer";
-import { 
-  errorHandler, 
-  notFoundHandler, 
-  asyncHandler, 
-  validateRequest,
-  AppError,
-  ValidationError,
-  AuthenticationError,
-  NotFoundError,
-  ConflictError
-} from "./middleware/errorHandler";
-import passport from "passport";
-import { Strategy as GoogleStrategy } from "passport-google-oauth20";
-import session from "express-session";
+// Note: Error handling classes removed - using direct error responses
+import { setupAuth, isAuthenticated } from "./replitAuth";
+
 import { spawn } from "child_process";
 import path from "path";
 import Stripe from "stripe";
@@ -30,17 +18,9 @@ import multer from "multer";
 import fs from "fs";
 import bcrypt from "bcryptjs";
 
-// Extend Express Request type to include user property
-declare global {
-  namespace Express {
-    interface Request {
-      user?: { id: number; email: string; firstName?: string; lastName?: string };
-    }
-  }
-}
+// Note: Express Request type is extended by Replit Auth middleware
 
-// Simple session storage for demo purposes
-const sessions = new Map<string, { userId: number; email: string }>();
+// Removed old session storage - now using Replit Auth
 
 // Configure multer for file uploads
 const upload = multer({
@@ -74,64 +54,23 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: "2024-06-20",
 } as any);
 
-function generateToken(): string {
-  return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-}
+// Remove old authentication functions - now using Replit Auth only
 
-function hashPassword(password: string): string {
-  return bcrypt.hashSync(password, 10);
-}
-
-function verifyPassword(password: string, hash: string): boolean {
-  return bcrypt.compareSync(password, hash);
+// Helper function to get user ID from Replit Auth
+function getUserId(req: any): string {
+  return req.user?.claims?.sub;
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Setup session middleware
-  app.use(session({
-    secret: process.env.SESSION_SECRET || 'your-secret-key',
-    resave: false,
-    saveUninitialized: false,
-    cookie: { secure: false } // Set to true in production with HTTPS
-  }));
-
-  // Initialize Passport
-  app.use(passport.initialize());
-  app.use(passport.session());
-
-  // Setup OAuth providers
-  await setupOAuth(app);
+  // Setup Replit Auth middleware
+  await setupAuth(app);
 
   // Start FastAPI backend
   const fastApiProcess = spawn('python', [path.join(process.cwd(), 'server', 'fastapi-backend.py')], {
     stdio: 'inherit'
   });
 
-  interface SessionUser {
-    userId: number;
-    email: string;
-  }
-
-  const sessions = new Map<string, SessionUser>();
-
-  // Auth middleware
-  const requireAuth = async (req: any, res: any, next: any) => {
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    const session = token ? sessions.get(token) : null;
-    
-    if (!session) {
-      return res.status(401).json({ error: 'Authentication required' });
-    }
-
-    // Get user details from storage
-    const user = await storage.getUser(session.userId);
-    if (!user) {
-      return res.status(401).json({ error: 'User not found' });
-    }
-    
-    req.user = user;
-    next();
-  };
+  // Removed old authentication middleware - now using Replit Auth only
 
   // OAuth callback URL logging for debugging
   const domain = process.env.REPLIT_DOMAINS || 'localhost:5000';
@@ -142,179 +81,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
   console.log('OAuth Callback URL:', callbackURL);
   console.log('REPLIT_DOMAINS:', process.env.REPLIT_DOMAINS);
 
-  passport.serializeUser((user: any, done) => {
-    done(null, user.id);
-  });
 
-  passport.deserializeUser(async (id: number, done) => {
+
+  // Replit Auth routes
+  app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
     try {
-      const user = await storage.getUser(id);
-      done(null, user);
+      const userId = req.user.claims.sub;
+      const user = await storage.getUser(userId);
+      res.json(user);
     } catch (error) {
-      done(error, null);
+      console.error("Error fetching user:", error);
+      res.status(500).json({ message: "Failed to fetch user" });
     }
   });
 
-  // Auth routes
-  app.post("/api/auth/register", async (req, res) => {
+  // Remove old authentication routes - now using Replit Auth only
+
+  // Project routes  
+  app.get("/api/projects", isAuthenticated, async (req, res) => {
     try {
-      const data = registerSchema.parse(req.body);
-      
-      // Check if user exists
-      const existingUser = await storage.getUserByEmail(data.email);
-      if (existingUser) {
-        return res.status(400).json({ error: "An account with this email already exists" });
-      }
-
-      // Create user
-      const user = await storage.createUser({
-        email: data.email,
-        firstName: data.firstName,
-        lastName: data.lastName,
-        password: hashPassword(data.password),
-        provider: 'local'
-      });
-
-      // Create session
-      const token = generateToken();
-      sessions.set(token, { userId: user.id, email: user.email });
-
-      res.json({ 
-        token, 
-        user: { 
-          id: user.id, 
-          email: user.email, 
-          firstName: user.firstName, 
-          lastName: user.lastName 
-        } 
-      });
-    } catch (error) {
-      console.error('Registration error:', error);
-      if (error.message?.includes('email')) {
-        res.status(400).json({ error: "An account with this email already exists" });
-      } else {
-        res.status(400).json({ error: "Registration failed. Please check your input and try again." });
-      }
-    }
-  });
-
-  app.post("/api/auth/login", async (req, res) => {
-    try {
-      const data = loginSchema.parse(req.body);
-      
-      const user = await storage.getUserByEmail(data.email);
-      if (!user || !user.password || !verifyPassword(data.password, user.password)) {
-        return res.status(401).json({ error: "Invalid email or password" });
-      }
-
-      // Create session
-      const token = generateToken();
-      sessions.set(token, { userId: user.id, email: user.email });
-
-      res.json({ 
-        token, 
-        user: { 
-          id: user.id, 
-          email: user.email, 
-          firstName: user.firstName, 
-          lastName: user.lastName 
-        } 
-      });
-    } catch (error) {
-      console.error('Login error:', error);
-      res.status(400).json({ error: "Login failed. Please try again." });
-    }
-  });
-
-  // Google OAuth routes
-  app.get('/api/auth/google', (req, res, next) => {
-    const domain = process.env.REPLIT_DOMAINS;
-    const callbackURL = domain && domain !== 'localhost:5000'
-      ? `https://${domain}/api/auth/google/callback`
-      : `http://localhost:5000/api/auth/google/callback`;
-    console.log('Initiating Google OAuth with callback URL:', callbackURL);
-    console.log('Google Client ID:', process.env.GOOGLE_CLIENT_ID ? 'SET' : 'NOT SET');
-    passport.authenticate('google', { 
-      scope: ['profile', 'email', 'https://www.googleapis.com/auth/drive.readonly']
-    })(req, res, next);
-  });
-
-  app.get('/api/auth/google/callback',
-    (req, res, next) => {
-      passport.authenticate('google', { 
-        failureRedirect: '/?error=oauth_failed&details=passport_auth_failed' 
-      })(req, res, next);
-    },
-    async (req, res) => {
-      try {
-        console.log('OAuth callback successful, user:', req.user);
-        const user = req.user as any;
-        
-        if (!user) {
-          console.error('No user found in OAuth callback');
-          return res.redirect('/?error=no_user_data');
-        }
-        
-        // Create session token
-        const token = generateToken();
-        sessions.set(token, { userId: user.id, email: user.email });
-
-        console.log('Session created with token:', token);
-        // Redirect to frontend with token
-        res.redirect(`/?token=${token}&provider=google`);
-      } catch (error) {
-        console.error('OAuth callback error:', error);
-        res.redirect('/?error=oauth_callback_failed&message=' + encodeURIComponent(error.message));
-      }
-    }
-  );
-
-  // Get user info endpoint for OAuth callbacks
-  app.get("/api/user", requireAuth, async (req, res) => {
-    try {
-      const sessionUser = req.user as SessionUser;
-      const user = await storage.getUser(sessionUser.userId);
-      
-      if (!user) {
-        return res.status(404).json({ error: "User not found" });
-      }
-
-      res.json({ 
-        user: { 
-          id: user.id, 
-          email: user.email, 
-          firstName: user.firstName, 
-          lastName: user.lastName,
-          username: user.username 
-        } 
-      });
-    } catch (error) {
-      console.error('Error fetching user:', error);
-      res.status(500).json({ error: "Failed to fetch user data" });
-    }
-  });
-
-  app.post("/api/auth/logout", requireAuth, (req, res) => {
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    if (token) {
-      sessions.delete(token);
-    }
-    res.json({ success: true });
-  });
-
-  // Project routes
-  app.get("/api/projects", requireAuth, async (req, res) => {
-    try {
-      const projects = await storage.getUserProjects(req.user.userId);
+      const userId = getUserId(req);
+      const projects = await storage.getUserProjects(userId);
       res.json({ projects });
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch projects" });
     }
   });
 
-  app.get("/api/projects/:id", requireAuth, async (req, res) => {
+  app.get("/api/projects/:id", isAuthenticated, async (req, res) => {
     try {
-      const project = await storage.getProject(req.params.id, req.user.userId);
+      const project = await storage.getProject(req.params.id, getUserId(req));
       if (!project) {
         return res.status(404).json({ error: "Project not found" });
       }
@@ -325,7 +121,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Google Drive integration routes
-  app.get("/api/google-drive/files", requireAuth, async (req, res) => {
+  app.get("/api/google-drive/files", isAuthenticated, async (req, res) => {
     try {
       const user = await storage.getUser(req.user!.userId);
       if (!user || !user.accessToken || !user.refreshToken) {
@@ -710,7 +506,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // PII detection endpoint for already uploaded files
-  app.post("/api/projects/detect-pii", requireAuth, async (req, res) => {
+  app.post("/api/projects/detect-pii", isAuthenticated, async (req, res) => {
     try {
       const { tempFileId, name, questions, requiresPII, anonymizeData, selectedColumns } = req.body;
       
@@ -769,7 +565,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/projects/import-from-drive", requireAuth, async (req, res) => {
+  app.post("/api/projects/import-from-drive", isAuthenticated, async (req, res) => {
     try {
       const { fileId, fileName, name, questions } = req.body;
       
@@ -887,7 +683,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // File upload route
-  app.post("/api/projects/upload", requireAuth, upload.single('file'), async (req, res) => {
+  app.post("/api/projects/upload", isAuthenticated, upload.single('file'), async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ error: "No file uploaded" });
@@ -1007,7 +803,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const pricingResult = PricingService.calculatePrice(pricingFactors);
 
       // Check for duplicate project names
-      const existingProjects = await storage.getUserProjects(req.user.userId);
+      const existingProjects = await storage.getUserProjects(getUserId(req));
       const duplicateProject = existingProjects.find(p => p.name.toLowerCase() === name.toLowerCase());
       
       if (duplicateProject) {
@@ -1035,7 +831,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         complexityScore: dataComplexity === 'simple' ? 1 : dataComplexity === 'moderate' ? 3 : 5,
         isPaid: false, // Payment required before insights
         fileMetadata: processedFile.metadata,
-        ownerId: req.user.userId
+        ownerId: getUserId(req)
       });
 
       // Clean up uploaded file
@@ -1072,13 +868,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // AI Settings routes
-  app.get("/api/settings", requireAuth, async (req, res) => {
+  app.get("/api/settings", isAuthenticated, async (req, res) => {
     try {
-      const settings = await storage.getUserSettings(req.user.userId);
+      const settings = await storage.getUserSettings(getUserId(req));
       if (!settings) {
         // Create default settings if none exist
         const newSettings = await storage.createUserSettings({
-          userId: req.user.userId,
+          userId: getUserId(req),
           aiProvider: "anthropic",
           aiApiKey: null,
         });
@@ -1090,21 +886,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/settings", requireAuth, async (req, res) => {
+  app.post("/api/settings", isAuthenticated, async (req, res) => {
     try {
       const { aiProvider, aiApiKey } = req.body;
       
-      const existingSettings = await storage.getUserSettings(req.user.userId);
+      const existingSettings = await storage.getUserSettings(getUserId(req));
       
       if (existingSettings) {
-        const updated = await storage.updateUserSettings(req.user.userId, {
+        const updated = await storage.updateUserSettings(getUserId(req), {
           aiProvider,
           aiApiKey,
         });
         res.json(updated);
       } else {
         const created = await storage.createUserSettings({
-          userId: req.user.userId,
+          userId: getUserId(req),
           aiProvider,
           aiApiKey,
         });
@@ -1124,7 +920,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Subscription management
-  app.post("/api/subscription/upgrade", requireAuth, async (req, res) => {
+  app.post("/api/subscription/upgrade", isAuthenticated, async (req, res) => {
     try {
       const { tier } = req.body;
       
@@ -1132,7 +928,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Invalid subscription tier" });
       }
 
-      const settings = await storage.getUserSettings(req.user.userId);
+      const settings = await storage.getUserSettings(getUserId(req));
       if (!settings) {
         return res.status(404).json({ error: "User settings not found" });
       }
@@ -1143,7 +939,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         enterprise: -1 // Unlimited
       };
 
-      const updated = await storage.updateUserSettings(req.user.userId, {
+      const updated = await storage.updateUserSettings(getUserId(req), {
         subscriptionTier: tier,
         usageQuota: quotaMap[tier as keyof typeof quotaMap]
       });
@@ -1158,12 +954,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // AI Query route
-  app.post("/api/ai/query", requireAuth, async (req, res) => {
+  app.post("/api/ai/query", isAuthenticated, async (req, res) => {
     try {
       const data = aiQuerySchema.parse(req.body);
       
       // Get project data first to check payment status
-      const project = await storage.getProject(data.projectId, req.user.userId);
+      const project = await storage.getProject(data.projectId, getUserId(req));
       if (!project) {
         return res.status(404).json({ error: "Project not found" });
       }
@@ -1178,11 +974,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Get user settings
-      let settings = await storage.getUserSettings(req.user.userId);
+      let settings = await storage.getUserSettings(getUserId(req));
       if (!settings) {
         // Create default settings for new users
         settings = await storage.createUserSettings({
-          userId: req.user.userId,
+          userId: getUserId(req),
           aiProvider: "platform",
           aiApiKey: null,
           subscriptionTier: "starter",
@@ -1192,9 +988,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Check usage limits only for paid projects
-      const canMakeQuery = await storage.canUserMakeQuery(req.user.userId);
+      const canMakeQuery = await storage.canUserMakeQuery(getUserId(req));
       if (!canMakeQuery) {
-        const currentUsage = await storage.getUserUsageThisMonth(req.user.userId);
+        const currentUsage = await storage.getUserUsageThisMonth(getUserId(req));
         return res.status(429).json({ 
           error: `Monthly quota exceeded (${currentUsage}/${settings.usageQuota}). Upgrade your plan for more queries.`,
           usage: currentUsage,
@@ -1226,7 +1022,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Log usage
       await storage.logUsage({
-        userId: req.user.userId,
+        userId: getUserId(req),
         projectId: data.projectId,
         action: "ai_query",
         provider: settings.aiProvider,
@@ -1234,7 +1030,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         cost: settings.aiProvider === "platform" ? "0.00" : "estimated"
       });
 
-      const currentUsage = await storage.getUserUsageThisMonth(req.user.userId);
+      const currentUsage = await storage.getUserUsageThisMonth(getUserId(req));
       
       res.json({ 
         response, 
@@ -1254,7 +1050,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Generate comprehensive data insights
-  app.post("/api/ai/insights", requireAuth, async (req, res) => {
+  app.post("/api/ai/insights", isAuthenticated, async (req, res) => {
     try {
       const { projectId } = req.body;
       
@@ -1262,7 +1058,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Project ID is required" });
       }
 
-      const project = await storage.getProject(projectId, req.user.userId);
+      const project = await storage.getProject(projectId, getUserId(req));
       if (!project) {
         return res.status(404).json({ error: "Project not found" });
       }
@@ -1276,10 +1072,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      let settings = await storage.getUserSettings(req.user.userId);
+      let settings = await storage.getUserSettings(getUserId(req));
       if (!settings) {
         settings = await storage.createUserSettings({
-          userId: req.user.userId,
+          userId: getUserId(req),
           aiProvider: "platform",
           aiApiKey: null,
           subscriptionTier: "starter",
@@ -1289,9 +1085,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Check usage limits
-      const canQuery = await storage.canUserMakeQuery(req.user.userId);
+      const canQuery = await storage.canUserMakeQuery(getUserId(req));
       if (!canQuery) {
-        const currentUsage = await storage.getUserUsageThisMonth(req.user.userId);
+        const currentUsage = await storage.getUserUsageThisMonth(getUserId(req));
         return res.status(429).json({ 
           error: `Monthly quota exceeded (${currentUsage}/${settings.usageQuota}). Upgrade your plan for more queries.`,
           usage: currentUsage,
@@ -1314,7 +1110,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Log usage
         await storage.logUsage({
-          userId: req.user.userId,
+          userId: getUserId(req),
           projectId,
           action: "comprehensive_analysis",
           provider: settings.aiProvider,
@@ -1322,7 +1118,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           cost: settings.aiProvider === "platform" ? "0.00" : "estimated"
         });
 
-        const currentUsage = await storage.getUserUsageThisMonth(req.user.userId);
+        const currentUsage = await storage.getUserUsageThisMonth(getUserId(req));
 
         res.json({ 
           insights,
@@ -1351,7 +1147,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Generate visualization suggestions
-  app.post("/api/ai/visualizations", requireAuth, async (req, res) => {
+  app.post("/api/ai/visualizations", isAuthenticated, async (req, res) => {
     try {
       const { projectId } = req.body;
       
@@ -1359,7 +1155,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Project ID is required" });
       }
 
-      const project = await storage.getProject(projectId, req.user.userId);
+      const project = await storage.getProject(projectId, getUserId(req));
       if (!project) {
         return res.status(404).json({ error: "Project not found" });
       }
@@ -1373,10 +1169,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      let settings = await storage.getUserSettings(req.user.userId);
+      let settings = await storage.getUserSettings(getUserId(req));
       if (!settings) {
         settings = await storage.createUserSettings({
-          userId: req.user.userId,
+          userId: getUserId(req),
           aiProvider: "platform",
           aiApiKey: null,
           subscriptionTier: "starter",
@@ -1400,7 +1196,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Log usage
         await storage.logUsage({
-          userId: req.user.userId,
+          userId: getUserId(req),
           projectId,
           action: "visualization_analysis",
           provider: settings.aiProvider,
@@ -1455,7 +1251,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Calculate pricing for data analysis
-  app.post("/api/calculate-pricing", requireAuth, async (req, res) => {
+  app.post("/api/calculate-pricing", isAuthenticated, async (req, res) => {
     try {
       const { dataSizeMB, questionsCount, analysisType, schema, recordCount } = req.body;
       
@@ -1488,7 +1284,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Calculate pricing for analysis
-  app.post("/api/calculate-pricing", requireAuth, async (req, res) => {
+  app.post("/api/calculate-pricing", isAuthenticated, async (req, res) => {
     try {
       const { dataSizeMB, questionsCount, analysisType, schema, recordCount } = req.body;
       
@@ -1525,7 +1321,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Create payment intent for one-time analysis
-  app.post("/api/create-analysis-payment", requireAuth, async (req, res) => {
+  app.post("/api/create-analysis-payment", isAuthenticated, async (req, res) => {
     try {
       const { projectId, analysisType = 'standard' } = req.body;
       
@@ -1533,7 +1329,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ error: 'Authentication required' });
       }
       
-      const project = await storage.getProject(projectId, req.user.userId);
+      const project = await storage.getProject(projectId, getUserId(req));
       if (!project) {
         return res.status(404).json({ error: 'Project not found' });
       }
@@ -1564,14 +1360,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         currency: "usd",
         metadata: {
           projectId,
-          userId: req.user.userId.toString(),
+          userId: getUserId(req).toString(),
           analysisType,
           dataComplexity
         }
       });
       
       // Update project with payment info
-      await storage.updateProject(projectId, req.user.userId, {
+      await storage.updateProject(projectId, getUserId(req), {
         paymentType: 'one_time',
         paymentAmount: pricing.priceInCents,
         stripePaymentIntentId: paymentIntent.id,
@@ -1590,26 +1386,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Create or retrieve subscription
-  app.post('/api/subscription', async (req, res) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      return res.status(401).json({ error: "Authorization required" });
-    }
-
-    const token = authHeader.substring(7);
-    const session = sessions.get(token);
-    if (!session) {
-      return res.status(401).json({ error: "Invalid session" });
-    }
+  app.post('/api/subscription', isAuthenticated, async (req, res) => {
 
     try {
       const { planType, paymentMethodId } = req.body;
       
       // Get user settings to check for existing customer
-      let settings = await storage.getUserSettings(session.userId);
+      const userId = getUserId(req);
+      let settings = await storage.getUserSettings(userId);
       if (!settings) {
         settings = await storage.createUserSettings({
-          userId: session.userId,
+          userId: userId,
           aiProvider: "gemini",
           subscriptionTier: "starter",
           usageQuota: 50,
@@ -1623,14 +1410,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!customerId) {
         const customer = await stripe.customers.create({
           metadata: {
-            userId: session.userId.toString(),
-            username: session.username
+            userId: getUserId(req).toString(),
+            username: "Unknown"
           }
         });
         customerId = customer.id;
         
         // Update user settings with customer ID
-        await storage.updateUserSettings(session.userId, {
+        await storage.updateUserSettings(getUserId(req), {
           stripeCustomerId: customerId
         });
       }
@@ -1678,7 +1465,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       // Update user settings with subscription info
-      await storage.updateUserSettings(session.userId, {
+      await storage.updateUserSettings(getUserId(req), {
         stripeSubscriptionId: subscription.id,
         subscriptionTier: newTier,
         usageQuota: newQuota
@@ -1700,20 +1487,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get subscription status
-  app.get('/api/subscription/status', async (req, res) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      return res.status(401).json({ error: "Authorization required" });
-    }
-
-    const token = authHeader.substring(7);
-    const session = sessions.get(token);
-    if (!session) {
-      return res.status(401).json({ error: "Invalid session" });
-    }
+  app.get('/api/subscription/status', isAuthenticated, async (req, res) => {
 
     try {
-      const settings = await storage.getUserSettings(session.userId);
+      const settings = await storage.getUserSettings(getUserId(req));
       if (!settings?.stripeSubscriptionId) {
         return res.json({ 
           hasSubscription: false,
@@ -1744,20 +1521,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Cancel subscription
-  app.post('/api/subscription/cancel', async (req, res) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      return res.status(401).json({ error: "Authorization required" });
-    }
-
-    const token = authHeader.substring(7);
-    const session = sessions.get(token);
-    if (!session) {
-      return res.status(401).json({ error: "Invalid session" });
-    }
+  app.post('/api/subscription/cancel', isAuthenticated, async (req, res) => {
 
     try {
-      const settings = await storage.getUserSettings(session.userId);
+      const settings = await storage.getUserSettings(getUserId(req));
       if (!settings?.stripeSubscriptionId) {
         return res.status(404).json({ error: "No active subscription found" });
       }
@@ -1783,7 +1550,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ML Analysis endpoints
-  app.get("/api/ml/analysis-types", requireAuth, (req, res) => {
+  app.get("/api/ml/analysis-types", isAuthenticated, (req, res) => {
     try {
       const analysisTypes = mlService.getAnalysisTypes();
       res.json(analysisTypes);
@@ -1793,7 +1560,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/ml/recommend-analysis/:projectId", requireAuth, async (req: any, res) => {
+  app.post("/api/ml/recommend-analysis/:projectId", isAuthenticated, async (req: any, res) => {
     try {
       const { projectId } = req.params;
       const userId = req.user!.id;
@@ -1811,7 +1578,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/ml/validate-request", requireAuth, async (req: any, res) => {
+  app.post("/api/ml/validate-request", isAuthenticated, async (req: any, res) => {
     try {
       const { projectId, analysisType, targetColumn, features } = req.body;
       const userId = req.user!.id;
@@ -1833,7 +1600,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/ml/run-analysis", requireAuth, async (req: any, res) => {
+  app.post("/api/ml/run-analysis", isAuthenticated, async (req: any, res) => {
     try {
       const { projectId, analysisType, targetColumn, features, parameters } = req.body;
       const userId = req.user!.id;
@@ -1907,7 +1674,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // File upload endpoint with authentication
-  app.post("/api/upload", requireAuth, upload.single('file'), async (req, res) => {
+  app.post("/api/upload", isAuthenticated, upload.single('file'), async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ error: "No file uploaded" });
@@ -1921,7 +1688,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Check for duplicate project names
-      const existingProjects = await storage.getUserProjects(req.user.userId);
+      const existingProjects = await storage.getUserProjects(getUserId(req));
       const duplicateProject = existingProjects.find(p => p.name.toLowerCase() === name.toLowerCase());
       
       if (duplicateProject) {
@@ -1959,7 +1726,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         status: "active",
         dataSnapshot: processedFile.dataSnapshot,
         fileMetadata: processedFile.metadata,
-        ownerId: req.user.userId
+        ownerId: getUserId(req)
       });
 
       // Clean up uploaded file
@@ -2054,28 +1821,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/pricing/validate', async (req, res) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      return res.status(401).json({ error: "Authorization required" });
-    }
-
-    const token = authHeader.substring(7);
-    const session = sessions.get(token);
-    if (!session) {
-      return res.status(401).json({ error: "Invalid session" });
-    }
+  app.post('/api/pricing/validate', isAuthenticated, async (req, res) => {
 
     try {
       const { dataSizeMB, recordCount } = req.body;
       
       let userTier: 'free' | 'professional' | 'enterprise' = 'free';
-      const settings = await storage.getUserSettings(session.userId);
+      const settings = await storage.getUserSettings(getUserId(req));
       if (settings?.subscriptionTier) {
         userTier = settings.subscriptionTier as 'free' | 'professional' | 'enterprise';
       }
 
-      const currentMonthAnalyses = await storage.getUserUsageThisMonth(session.userId);
+      const currentMonthAnalyses = await storage.getUserUsageThisMonth(getUserId(req));
 
       const validation = PricingService.validateUserLimits(userTier, {
         dataSizeMB: Number(dataSizeMB),
