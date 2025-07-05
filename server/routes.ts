@@ -9,7 +9,7 @@ import { FileProcessor } from "./file-processor";
 import { PIIDetector } from "./pii-detector";
 import { questionAnalyzer } from "./question-analyzer";
 // Note: Error handling classes removed - using direct error responses
-import { setupAuth, isAuthenticated } from "./replitAuth";
+import { setupOAuth, isAuthenticated } from "./oauth-config";
 
 import { spawn } from "child_process";
 import path from "path";
@@ -58,12 +58,12 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
 
 // Helper function to get user ID from Replit Auth
 function getUserId(req: any): string {
-  return req.user?.claims?.sub;
+  return req.user?.id;
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Setup Replit Auth middleware
-  await setupAuth(app);
+  // Setup OAuth middleware
+  setupOAuth(app);
 
   // Start FastAPI backend
   const fastApiProcess = spawn('python', [path.join(process.cwd(), 'server', 'fastapi-backend.py')], {
