@@ -133,72 +133,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     next();
   };
 
-  // Google OAuth Strategy Setup
-  const getCallbackURL = () => {
-    const domain = process.env.REPLIT_DOMAINS || 'localhost:5000';
-    const callbackURL = domain.includes('replit.dev') 
-      ? `https://${domain}/api/auth/google/callback`
-      : `http://localhost:5000/api/auth/google/callback`;
-    
-    console.log('OAuth Callback URL:', callbackURL);
-    console.log('REPLIT_DOMAINS:', process.env.REPLIT_DOMAINS);
-    return callbackURL;
-  };
-
-  passport.use(new GoogleStrategy({
-    clientID: process.env.GOOGLE_CLIENT_ID || '',
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
-    callbackURL: getCallbackURL()
-  }, async (accessToken, refreshToken, profile, done) => {
-    try {
-      console.log('Google OAuth Strategy - Profile received:', {
-        id: profile.id,
-        email: profile.emails?.[0]?.value,
-        name: profile.displayName,
-        provider: profile.provider
-      });
-
-      // Check if user exists with this Google ID
-      let user = await storage.getUserByProviderId('google', profile.id);
-      
-      if (!user) {
-        // Check if user exists with same email
-        const email = profile.emails?.[0]?.value;
-        console.log('Looking for existing user with email:', email);
-        if (email) {
-          user = await storage.getUserByEmail(email);
-          if (user) {
-            console.log('Found existing user, updating with Google data');
-            // Update existing user with Google data
-            user = await storage.updateUserProvider(user.id, 'google', profile.id, accessToken, refreshToken);
-          } else {
-            console.log('Creating new user with Google data');
-            // Create new user
-            user = await storage.createUser({
-              email: email,
-              firstName: profile.name?.givenName || '',
-              lastName: profile.name?.familyName || '',
-              provider: 'google',
-              providerId: profile.id,
-              accessToken: accessToken,
-              refreshToken: refreshToken,
-              profileImageUrl: profile.photos?.[0]?.value
-            });
-          }
-        }
-      } else {
-        console.log('Found existing Google user, updating tokens');
-        // Update tokens for existing Google user
-        user = await storage.updateUserTokens(user.id, accessToken, refreshToken);
-      }
-
-      console.log('Google OAuth Strategy - Final user:', user ? 'User authenticated' : 'No user');
-      return done(null, user);
-    } catch (error) {
-      console.error('Google OAuth Strategy error:', error);
-      return done(error, null);
-    }
-  }));
+  // OAuth callback URL logging for debugging
+  const domain = process.env.REPLIT_DOMAINS || 'localhost:5000';
+  const callbackURL = domain.includes('replit.dev') 
+    ? `https://${domain}/api/auth/google/callback`
+    : `http://localhost:5000/api/auth/google/callback`;
+  
+  console.log('OAuth Callback URL:', callbackURL);
+  console.log('REPLIT_DOMAINS:', process.env.REPLIT_DOMAINS);
 
   passport.serializeUser((user: any, done) => {
     done(null, user.id);
