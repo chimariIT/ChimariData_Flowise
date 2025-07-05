@@ -25,6 +25,9 @@ export const users = pgTable("users", {
   providerId: text("provider_id"),
   accessToken: text("access_token"),
   refreshToken: text("refresh_token"),
+  emailVerified: boolean("email_verified").default(false),
+  emailVerificationToken: text("email_verification_token"),
+  emailVerificationExpires: timestamp("email_verification_expires"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -170,7 +173,10 @@ export const loginSchema = z.object({
 
 export const registerSchema = z.object({
   email: z.string().email("Please enter a valid email address"),
-  password: z.string().min(6, "Password must be at least 6 characters"),
+  password: z.string()
+    .min(8, "Password must be at least 8 characters")
+    .regex(/[a-zA-Z]/, "Password must contain at least one letter")
+    .regex(/[A-Z]/, "Password must contain at least one capital letter"),
   firstName: z.string().optional(),
   lastName: z.string().optional(),
 });
