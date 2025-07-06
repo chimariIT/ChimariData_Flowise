@@ -111,7 +111,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "No file uploaded" });
       }
 
-      const { name, questions } = req.body;
+      const { name, description, questions } = req.body;
       if (!name) {
         return res.status(400).json({ error: "Project name is required" });
       }
@@ -145,13 +145,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Create project in storage
       const project = await storage.createProject({
         name,
+        description: description || "",
         serviceType: "file_upload",
         ownerId: getUserId(req),
         status: "processed",
         schema: processedFile.schema,
         questions: questionsArray,
         insights: {},
-        recordCount: processedFile.recordCount || 0
+        recordCount: processedFile.recordCount || 0,
+        dataSizeMB: Math.round(req.file.size / (1024 * 1024)) || 1
       });
 
       // Clean up uploaded file
@@ -1504,7 +1506,90 @@ This link will expire in 24 hours.
       // Check if project analysis has been paid for
       if (!project.isPaid) {
         return res.status(402).json({ 
-          error: "Payment required for insights. Please complete payment to access AI analysis.",
+          error: "Payment required for chart suggestions. Please complete payment to access AI visualization features.",
+          needsPayment: true,
+          projectId: projectId
+        });
+      }
+
+      // Generate visualization suggestions based on data schema
+      const suggestions = [];
+      const schema = project.schema || {};
+      const columns = Object.keys(schema);
+
+      // Basic chart suggestions based on data types
+      if (columns.length >= 2) {
+        const numericColumns = columns.filter(col => schema[col] === 'number');
+        const categoricalColumns = columns.filter(col => schema[col] === 'string');
+        const dateColumns = columns.filter(col => schema[col] === 'date');
+
+        if (numericColumns.length >= 2) {
+          suggestions.push({
+            type: 'scatter',
+            title: 'Scatter Plot Analysis',
+            description: `Compare ${numericColumns[0]} vs ${numericColumns[1]} to identify correlations`,
+            columns: [numericColumns[0], numericColumns[1]],
+            config: { xAxis: numericColumns[0], yAxis: numericColumns[1] }
+          });
+        }
+
+        if (categoricalColumns.length >= 1 && numericColumns.length >= 1) {
+          suggestions.push({
+            type: 'bar',
+            title: 'Bar Chart Analysis',
+            description: `Compare ${numericColumns[0]} across different ${categoricalColumns[0]} categories`,
+            columns: [categoricalColumns[0], numericColumns[0]],
+            config: { category: categoricalColumns[0], value: numericColumns[0] }
+          });
+        }
+
+        if (dateColumns.length >= 1 && numericColumns.length >= 1) {
+          suggestions.push({
+            type: 'line',
+            title: 'Time Series Analysis',
+            description: `Track ${numericColumns[0]} trends over ${dateColumns[0]}`,
+            columns: [dateColumns[0], numericColumns[0]],
+            config: { xAxis: dateColumns[0], yAxis: numericColumns[0] }
+          });
+        }
+
+        if (categoricalColumns.length >= 1) {
+          suggestions.push({
+            type: 'pie',
+            title: 'Distribution Analysis',
+            description: `Show distribution of ${categoricalColumns[0]} categories`,
+            columns: [categoricalColumns[0]],
+            config: { category: categoricalColumns[0] }
+          });
+        }
+      }
+
+      res.json({ suggestions });
+
+    } catch (error) {
+      console.error('Visualization suggestions error:', error);
+      res.status(500).json({ error: "Failed to generate visualization suggestions" });
+    }
+  });
+
+  // Fix the incomplete visualizations endpoint
+  app.post("/api/ai/visualizations-fix", unifiedAuth, async (req, res) => {
+    try {
+      const { projectId } = req.body;
+      
+      if (!projectId) {
+        return res.status(400).json({ error: "Project ID is required" });
+      }
+
+      const project = await storage.getProject(projectId, getUserId(req));
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+
+      // Check if project analysis has been paid for
+      if (!project.isPaid) {
+        return res.status(402).json({ 
+          error: "Payment required for chart suggestions. Please complete payment to access AI visualization features.",
           needsPayment: true,
           projectId
         });
