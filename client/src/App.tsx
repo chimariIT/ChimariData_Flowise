@@ -20,6 +20,8 @@ import FreeTrial from "./pages/free-trial";
 import EnterpriseContact from "./pages/enterprise-contact";
 import ComingSoon from "./pages/coming-soon";
 import AnimatedDemo from "./components/animated-demo";
+import VisualizationPage from "./pages/visualization-page";
+import AskQuestionPage from "./pages/ask-question-page";
 import NotFound from "@/pages/not-found";
 
 function App() {
@@ -138,6 +140,8 @@ function App() {
             onLogout={handleLogout}
             onProjectSelect={(id) => setLocation(`/project/${id}`)}
             onSettings={() => setLocation("/settings")}
+            onVisualizationPage={() => setLocation("/visualizations")}
+            onAskQuestionPage={() => setLocation("/ask-questions")}
           />
         )}
         
@@ -184,6 +188,28 @@ function App() {
             />
           );
         })()}
+        
+        {user && location === "/visualizations" && (
+          <VisualizationPage 
+            onBack={() => setLocation("/dashboard")}
+            onPaymentRequired={(projectId, visualizationType) => {
+              // Store visualization request for payment
+              localStorage.setItem('visualizationRequest', JSON.stringify({ projectId, visualizationType }));
+              setLocation("/analysis-payment");
+            }}
+          />
+        )}
+        
+        {user && location === "/ask-questions" && (
+          <AskQuestionPage 
+            onBack={() => setLocation("/dashboard")}
+            onPaymentRequired={(projectId, questions) => {
+              // Store question analysis request for payment
+              localStorage.setItem('questionRequest', JSON.stringify({ projectId, questions }));
+              setLocation("/analysis-payment");
+            }}
+          />
+        )}
         
 
       </TooltipProvider>

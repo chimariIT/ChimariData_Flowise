@@ -2219,6 +2219,61 @@ This link will expire in 24 hours.
     }
   });
 
+  // Export project data in various formats
+  app.post("/api/export", unifiedAuth, async (req, res) => {
+    try {
+      const { projectId, format = 'excel' } = req.body;
+      
+      if (!projectId) {
+        return res.status(400).json({ error: "Project ID is required" });
+      }
+
+      const project = await storage.getProject(projectId, getUserId(req));
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+
+      // Generate export file based on format
+      const timestamp = new Date().toISOString().slice(0, 10);
+      const filename = `${project.name}_analysis_${timestamp}.${format}`;
+      
+      // For now, create a simple text-based export
+      // In production, you'd want to use libraries like xlsx, jspdf, etc.
+      let content: string;
+      let mimeType: string;
+      
+      if (format === 'csv') {
+        // Generate CSV format
+        const schema = project.schema || {};
+        const headers = Object.keys(schema).join(',');
+        content = `Project Analysis Report\n\nProject: ${project.name}\nDate: ${new Date().toISOString()}\nRecords: ${project.recordCount || 0}\n\nSchema:\n${headers}\n\nInsights:\n${Object.entries(project.insights || {}).map(([q, a]) => `"${q}","${a}"`).join('\n')}`;
+        mimeType = 'text/csv';
+      } else if (format === 'pdf') {
+        // Generate text-based PDF content (would use jspdf in production)
+        content = `Project Analysis Report\n\nProject: ${project.name}\nDate: ${new Date().toISOString()}\nRecords: ${project.recordCount || 0}\n\nInsights:\n${Object.entries(project.insights || {}).map(([q, a]) => `Q: ${q}\nA: ${a}\n`).join('\n')}`;
+        mimeType = 'text/plain';
+      } else {
+        // Excel format (would use xlsx library in production)
+        content = `Project Analysis Report\n\nProject: ${project.name}\nDate: ${new Date().toISOString()}\nRecords: ${project.recordCount || 0}\n\nSchema:\n${Object.entries(project.schema || {}).map(([k, v]) => `${k}: ${v}`).join('\n')}\n\nInsights:\n${Object.entries(project.insights || {}).map(([q, a]) => `Q: ${q}\nA: ${a}\n`).join('\n')}`;
+        mimeType = 'text/plain';
+      }
+
+      // Set headers for file download
+      res.setHeader('Content-Type', mimeType);
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Length', Buffer.byteLength(content));
+
+      res.send(content);
+
+    } catch (error: any) {
+      console.error("Export error:", error);
+      res.status(500).json({ 
+        error: "Failed to export project",
+        message: error.message 
+      });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

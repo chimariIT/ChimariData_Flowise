@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api";
-import { ArrowLeft, Download, Share, Database, Lightbulb, BarChart3, PieChart, Calendar, CheckCircle, Settings, CreditCard, Zap, Brain, MessageSquare, Eye } from "lucide-react";
+import { ArrowLeft, Download, Share, Database, Lightbulb, BarChart3, PieChart, Calendar, CheckCircle, Settings, CreditCard, Zap, Brain, MessageSquare, Eye, FileSpreadsheet, FileText, ChevronDown } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart as RechartsPieChart, Cell, Pie } from "recharts";
 import AIChat from "@/components/ai-chat";
 import AIInsightsPanel from "@/components/ai-insights-panel";
@@ -44,42 +45,36 @@ export default function ProjectResults({ projectId, onBack, onSettings, onPayFor
     );
   }
 
-  const handleExport = async () => {
+  const handleExport = async (format: 'excel' | 'pdf' | 'csv' = 'excel') => {
     try {
       toast({
         title: "Preparing export...",
-        description: "Generating your analysis report"
+        description: `Generating your analysis report in ${format.toUpperCase()} format`
       });
       
-      // Simulate export functionality
-      setTimeout(() => {
-        const dataStr = JSON.stringify({
-          project: project.name,
-          insights: project.insights,
-          schema: project.schema,
-          recordCount: project.recordCount,
-          exportedAt: new Date().toISOString()
-        }, null, 2);
-        
-        const dataBlob = new Blob([dataStr], { type: 'application/json' });
-        const url = URL.createObjectURL(dataBlob);
+      // Call backend to generate export
+      const response = await apiClient.exportProject(projectId, format);
+      
+      if (response.success) {
+        // Create download link
         const link = document.createElement('a');
-        link.href = url;
-        link.download = `${project.name}_analysis_report.json`;
+        link.href = response.downloadUrl;
+        link.download = response.filename;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-        URL.revokeObjectURL(url);
         
         toast({
           title: "Export completed",
-          description: "Your analysis report has been downloaded."
+          description: `Your analysis report has been downloaded as ${format.toUpperCase()}.`
         });
-      }, 1500);
-    } catch (error) {
+      } else {
+        throw new Error(response.message || 'Export failed');
+      }
+    } catch (error: any) {
       toast({
         title: "Export failed",
-        description: "There was an error exporting your data.",
+        description: error.message || "There was an error exporting your data.",
         variant: "destructive"
       });
     }
@@ -180,10 +175,29 @@ export default function ProjectResults({ projectId, onBack, onSettings, onPayFor
                 <Settings className="w-4 h-4 mr-2" />
                 AI Settings
               </Button>
-              <Button variant="outline" onClick={handleExport}>
-                <Download className="w-4 h-4 mr-2" />
-                Export
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline">
+                    <Download className="w-4 h-4 mr-2" />
+                    Export
+                    <ChevronDown className="w-4 h-4 ml-2" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => handleExport('excel')}>
+                    <FileSpreadsheet className="w-4 h-4 mr-2" />
+                    Export to Excel
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleExport('csv')}>
+                    <FileSpreadsheet className="w-4 h-4 mr-2" />
+                    Export to CSV
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleExport('pdf')}>
+                    <FileText className="w-4 h-4 mr-2" />
+                    Export to PDF
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <Button onClick={handleShare}>
                 <Share className="w-4 h-4 mr-2" />
                 Share
@@ -299,7 +313,10 @@ export default function ProjectResults({ projectId, onBack, onSettings, onPayFor
 
           {/* AI Insights Tab */}
           <TabsContent value="insights">
-            <AIInsightsPanel projectId={projectId} />
+            <AIInsightsPanel 
+              projectId={projectId} 
+              onPaymentRequired={onPayForAnalysis}
+            />
           </TabsContent>
 
           {/* AI Chat Tab */}

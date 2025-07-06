@@ -20,6 +20,7 @@ import {
 
 interface AIInsightsPanelProps {
   projectId: string;
+  onPaymentRequired?: (projectId: string, analysisType: string) => void;
 }
 
 interface DataInsights {
@@ -42,7 +43,7 @@ interface VisualizationSuggestion {
   config: any;
 }
 
-export default function AIInsightsPanel({ projectId }: AIInsightsPanelProps) {
+export default function AIInsightsPanel({ projectId, onPaymentRequired }: AIInsightsPanelProps) {
   const [insights, setInsights] = useState<DataInsights | null>(null);
   const [visualizations, setVisualizations] = useState<VisualizationSuggestion[]>([]);
   const { toast } = useToast();
@@ -62,12 +63,16 @@ export default function AIInsightsPanel({ projectId }: AIInsightsPanelProps) {
     onError: (error: any) => {
       const errorMsg = error.message || "Failed to generate insights";
       
-      if (errorMsg.includes("Payment required")) {
-        toast({
-          title: "Payment Required",
-          description: "Complete payment to access AI insights",
-          variant: "destructive",
-        });
+      if (errorMsg.includes("Payment required") || errorMsg.includes("402")) {
+        if (onPaymentRequired) {
+          onPaymentRequired(projectId, "insights");
+        } else {
+          toast({
+            title: "Payment Required",
+            description: "Complete payment to access AI insights",
+            variant: "destructive",
+          });
+        }
       } else if (errorMsg.includes("quota exceeded")) {
         toast({
           title: "Usage Limit Reached",
@@ -98,11 +103,24 @@ export default function AIInsightsPanel({ projectId }: AIInsightsPanelProps) {
     },
     onError: (error: any) => {
       const errorMsg = error.message || "Failed to generate visualizations";
-      toast({
-        title: "Visualization Failed",
-        description: errorMsg,
-        variant: "destructive",
-      });
+      
+      if (errorMsg.includes("Payment required") || errorMsg.includes("402")) {
+        if (onPaymentRequired) {
+          onPaymentRequired(projectId, "visualizations");
+        } else {
+          toast({
+            title: "Payment Required",
+            description: "Complete payment to access chart suggestions",
+            variant: "destructive",
+          });
+        }
+      } else {
+        toast({
+          title: "Visualization Failed",
+          description: errorMsg,
+          variant: "destructive",
+        });
+      }
     }
   });
 

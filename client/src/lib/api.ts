@@ -136,6 +136,40 @@ export class APIClient {
 
     return await response.json();
   }
+
+  async exportProject(projectId: string, format: 'excel' | 'pdf' | 'csv'): Promise<{
+    success: boolean;
+    downloadUrl?: string;
+    filename?: string;
+    message?: string;
+  }> {
+    const response = await fetch(`${API_BASE}/api/export`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...this.getAuthHeaders()
+      },
+      body: JSON.stringify({ projectId, format })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Export failed: ${response.status}`);
+    }
+
+    // For direct file download, create blob URL
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const contentDisposition = response.headers.get('Content-Disposition');
+    const filename = contentDisposition 
+      ? contentDisposition.split('filename=')[1]?.replace(/"/g, '') 
+      : `export_${Date.now()}.${format}`;
+
+    return {
+      success: true,
+      downloadUrl: url,
+      filename
+    };
+  }
 }
 
 export const apiClient = new APIClient();
