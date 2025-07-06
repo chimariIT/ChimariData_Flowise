@@ -22,6 +22,7 @@ import ComingSoon from "./pages/coming-soon";
 import AnimatedDemo from "./components/animated-demo";
 import VisualizationPage from "./pages/visualization-page";
 import AskQuestionPage from "./pages/ask-question-page";
+import SchemaEditorPage from "./pages/schema-editor-page";
 import NotFound from "@/pages/not-found";
 
 function App() {
@@ -149,7 +150,11 @@ function App() {
           />
         )}
         
-        {user && location.startsWith("/project/") && (
+        {user && location.startsWith("/project/") && location.includes("/schema") && (
+          <SchemaEditorPage />
+        )}
+        
+        {user && location.startsWith("/project/") && !location.includes("/schema") && (
           <ProjectResults 
             projectId={location.split("/")[2]}
             onBack={() => setLocation("/dashboard")}
@@ -158,6 +163,9 @@ function App() {
               // Store project data for analysis payment
               localStorage.setItem('analysisProject', JSON.stringify(projectData));
               setLocation("/analysis-payment");
+            }}
+            onSchemaEdit={(projectId) => {
+              setLocation(`/project/${projectId}/schema`);
             }}
           />
         )}
