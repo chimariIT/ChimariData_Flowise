@@ -327,7 +327,17 @@ export default function ProjectResults({ projectId, onBack, onSettings, onPayFor
           <TabsContent value="insights">
             <AIInsightsPanel 
               projectId={projectId} 
-              onPaymentRequired={onPayForAnalysis}
+              onPaymentRequired={(projectId, type) => {
+                if (onPayForAnalysis) {
+                  onPayForAnalysis({
+                    name: project.name,
+                    recordCount: project.recordCount || 0,
+                    dataSizeMB: Math.max(1, Math.round((project.recordCount || 0) * 0.001)),
+                    schema: project.schema || {},
+                    questions: Array.isArray(project.questions) ? project.questions : []
+                  });
+                }
+              }}
             />
           </TabsContent>
 
