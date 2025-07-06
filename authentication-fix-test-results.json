@@ -1,0 +1,52 @@
+{
+  "timestamp": "2025-07-06T00:57:08.193Z",
+  "summary": {
+    "total": 7,
+    "passed": 2,
+    "failed": 1,
+    "skipped": 4,
+    "info": 0
+  },
+  "results": [
+    {
+      "testName": "Server Health",
+      "status": "PASS",
+      "message": "Express server responding correctly"
+    },
+    {
+      "testName": "User Registration",
+      "status": "PASS",
+      "message": "User registration successful"
+    },
+    {
+      "testName": "User Login",
+      "status": "FAIL",
+      "message": "Login failed or no token returned"
+    },
+    {
+      "testName": "Protected Endpoints",
+      "status": "SKIP",
+      "message": "No auth token available"
+    },
+    {
+      "testName": "File Upload",
+      "status": "SKIP",
+      "message": "No auth token available"
+    },
+    {
+      "testName": "Payment Flow",
+      "status": "SKIP",
+      "message": "No auth token available"
+    },
+    {
+      "testName": "AI Analysis",
+      "status": "SKIP",
+      "message": "No auth token available"
+    }
+  ],
+  "authToken": "Missing",
+  "conclusions": [
+    "Some endpoints still have authentication issues",
+    "May need additional isAuthenticated → unifiedAuth replacements"
+  ]
+}
