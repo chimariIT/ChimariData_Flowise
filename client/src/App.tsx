@@ -41,9 +41,13 @@ function App() {
           const userData = await response.json();
           setUser(userData);
           localStorage.setItem("user", JSON.stringify(userData));
+        } else if (response.status === 401) {
+          // 401 means not logged in - this is expected for unauthenticated users
+          setUser(null);
         }
       } catch (error) {
         console.error('Error checking auth:', error);
+        setUser(null);
       } finally {
         setIsLoading(false);
       }
