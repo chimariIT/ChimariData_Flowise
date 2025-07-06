@@ -393,24 +393,42 @@ This link will expire in 24 hours.
 
 
   // Unified Auth user route - handles both OAuth and token-based auth
-  app.get('/api/auth/user', unifiedAuth, async (req: any, res) => {
+  // This endpoint should be accessible without authentication to check login status
+  app.get('/api/auth/user', async (req: any, res) => {
     try {
       let userId;
       
-      // Handle OAuth user (from Replit)
-      if (req.user && req.user.claims && req.user.claims.sub) {
-        userId = req.user.claims.sub;
+      // First check if already authenticated via OAuth/passport session
+      if (req.isAuthenticated && req.isAuthenticated()) {
+        // Handle OAuth user (from Replit)
+        if (req.user && req.user.claims && req.user.claims.sub) {
+          userId = req.user.claims.sub;
+        }
+        // Handle token-based user (from our email registration)
+        else if (req.user && req.user.id) {
+          userId = req.user.id;
+        }
       }
-      // Handle token-based user (from our email registration)
-      else if (req.user && req.user.id) {
-        userId = req.user.id;
+      
+      // Check for Authorization header with Bearer token (email-based auth)
+      const authHeader = req.headers.authorization;
+      if (!userId && authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.substring(7);
+        
+        // Check if token exists in our token store
+        const tokenUserId = tokenStore.get(token);
+        if (tokenUserId) {
+          // Verify user still exists
+          const user = await storage.getUser(tokenUserId);
+          if (user) {
+            userId = tokenUserId;
+          }
+        }
       }
-      // Handle direct userId (from unifiedAuth)
-      else if (req.userId) {
-        userId = req.userId;
-      }
-      else {
-        return res.status(401).json({ error: "User authentication data not found" });
+      
+      if (!userId) {
+        // Return 401 for unauthenticated requests - this is expected behavior
+        return res.status(401).json({ error: "Authentication required" });
       }
       
       const user = await storage.getUser(userId);
