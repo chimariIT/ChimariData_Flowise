@@ -61,7 +61,7 @@ export class APIClient {
       formData.append('selectedColumns', JSON.stringify(options.selectedColumns));
     }
 
-    const endpoint = options.isTrial ? '/api/upload-trial' : '/api/projects/upload';
+    const endpoint = options.isTrial ? '/api/upload-trial' : '/api/upload-auth';
     const headers = options.isTrial ? {} : this.getAuthHeaders();
 
     const response = await fetch(`${API_BASE}${endpoint}`, {

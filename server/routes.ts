@@ -26,6 +26,43 @@ function getUserId(req: any): string {
   return (req.user as any)?.claims?.sub || (req.user as any)?.id;
 }
 
+// Simple token store - in production, use Redis or database
+const tokenStore = new Map<string, string>();
+
+// Unified authentication middleware that handles both email-based and OAuth sessions
+async function unifiedAuth(req: any, res: any, next: any) {
+  // First check if already authenticated via OAuth/passport session
+  if (req.isAuthenticated && req.isAuthenticated()) {
+    return next();
+  }
+  
+  // Check for Authorization header with Bearer token (email-based auth)
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7);
+    
+    try {
+      // Check if token exists in our token store
+      const userId = tokenStore.get(token);
+      
+      if (userId) {
+        // Verify user still exists
+        const user = await storage.getUser(userId);
+        if (user) {
+          // Set user on request object to match OAuth format
+          req.user = { id: user.id };
+          return next();
+        }
+      }
+    } catch (error) {
+      console.error('Token validation error:', error);
+    }
+  }
+  
+  // If neither authentication method worked, return 401
+  res.status(401).json({ error: 'Authentication required' });
+}
+
 // Removed old session storage - now using Replit Auth
 
 // Configure multer for file uploads
@@ -63,6 +100,91 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
 // Remove old authentication functions - now using Replit Auth only
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Register auth routes first (before OAuth setup to avoid conflicts)
+  
+  // File upload endpoint with custom authentication (before OAuth middleware)
+  app.post("/api/upload-auth", unifiedAuth, upload.single('file'), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "No file uploaded" });
+      }
+
+      const { name, questions } = req.body;
+      if (!name) {
+        return res.status(400).json({ error: "Project name is required" });
+      }
+
+      // Parse questions if provided
+      let questionsArray: string[] = [];
+      try {
+        if (questions) {
+          questionsArray = JSON.parse(questions);
+        }
+      } catch (e) {
+        return res.status(400).json({ error: "Invalid questions format" });
+      }
+
+      // Process the uploaded file with comprehensive file processor
+      const filePath = req.file.path;
+      let processedFile;
+      
+      try {
+        processedFile = await FileProcessor.processFile(
+          filePath, 
+          req.file.originalname
+        );
+      } catch (error: any) {
+        return res.status(400).json({ 
+          error: `File processing failed: ${error.message}`,
+          details: "Ensure your file is a valid CSV or Excel file with proper data structure."
+        });
+      }
+
+      // Create project in storage
+      const project = await storage.createProject({
+        name,
+        serviceType: "file_upload",
+        ownerId: getUserId(req),
+        status: "processed",
+        schema: processedFile.schema,
+        questions: questionsArray,
+        insights: {},
+        recordCount: processedFile.recordCount || 0
+      });
+
+      // Clean up uploaded file
+      fs.unlinkSync(filePath);
+
+      res.json({
+        success: true,
+        project: {
+          id: project.id,
+          name: project.name,
+          recordCount: project.recordCount,
+          status: project.status,
+          createdAt: project.createdAt
+        }
+      });
+
+    } catch (error: any) {
+      console.error("Upload error:", error);
+      
+      // Clean up file if it exists
+      if (req.file?.path) {
+        try {
+          fs.unlinkSync(req.file.path);
+        } catch (e) {
+          console.error("Failed to cleanup file:", e);
+        }
+      }
+      
+      res.status(500).json({ 
+        error: "Upload failed", 
+        message: error.message 
+      });
+    }
+  });
+
   // Setup OAuth middleware
   setupOAuth(app);
 
@@ -183,6 +305,9 @@ This link will expire in 24 hours.
       // Generate simple auth token
       const crypto = await import('crypto');
       const authToken = crypto.randomBytes(32).toString('hex');
+      
+      // Store token in our simple token store
+      tokenStore.set(authToken, user.id);
       
       res.json({
         success: true,
@@ -1040,7 +1165,7 @@ This link will expire in 24 hours.
   });
 
   // AI Settings routes
-  app.get("/api/settings", isAuthenticated, async (req, res) => {
+  app.get("/api/settings", unifiedAuth, async (req, res) => {
     try {
       const settings = await storage.getUserSettings(getUserId(req));
       if (!settings) {
@@ -1058,7 +1183,7 @@ This link will expire in 24 hours.
     }
   });
 
-  app.post("/api/settings", isAuthenticated, async (req, res) => {
+  app.post("/api/settings", unifiedAuth, async (req, res) => {
     try {
       const { aiProvider, aiApiKey } = req.body;
       
@@ -1846,7 +1971,7 @@ This link will expire in 24 hours.
   });
 
   // File upload endpoint with authentication
-  app.post("/api/upload", isAuthenticated, upload.single('file'), async (req, res) => {
+  app.post("/api/upload", unifiedAuth, upload.single('file'), async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ error: "No file uploaded" });
