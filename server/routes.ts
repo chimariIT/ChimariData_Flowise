@@ -21,6 +21,11 @@ import bcrypt from "bcryptjs";
 
 // Note: Express Request type is extended by Replit Auth middleware
 
+// Helper function to get user ID from Replit Auth or standard auth
+function getUserId(req: any): string {
+  return (req.user as any)?.claims?.sub || (req.user as any)?.id;
+}
+
 // Removed old session storage - now using Replit Auth
 
 // Configure multer for file uploads
@@ -56,11 +61,6 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
 } as any);
 
 // Remove old authentication functions - now using Replit Auth only
-
-// Helper function to get user ID from Replit Auth
-function getUserId(req: any): string {
-  return req.user?.id;
-}
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup OAuth middleware
@@ -302,7 +302,7 @@ This link will expire in 24 hours.
   // Google Drive integration routes
   app.get("/api/google-drive/files", isAuthenticated, async (req, res) => {
     try {
-      const user = await storage.getUser(req.user!.id);
+      const user = await storage.getUser(getUserId(req));
       if (!user || !user.accessToken || !user.refreshToken) {
         return res.status(401).json({ 
           error: "Google Drive access not authorized", 
@@ -325,7 +325,7 @@ This link will expire in 24 hours.
   // AI Settings routes
   app.get("/api/ai-settings", isAuthenticated, async (req, res) => {
     try {
-      const user = await storage.getUser(req.user!.id);
+      const user = await storage.getUser(getUserId(req));
       if (!user) {
         return res.status(404).json({ error: "User not found" });
       }
@@ -345,7 +345,7 @@ This link will expire in 24 hours.
   app.post("/api/ai-settings", isAuthenticated, async (req, res) => {
     try {
       const { geminiApiKey, anthropicApiKey, openaiApiKey, useChimariDataKeys } = req.body;
-      const userId = req.user!.id;
+      const userId = getUserId(req);
       
       const user = await storage.getUser(userId);
       if (user) {
@@ -708,7 +708,7 @@ This link will expire in 24 hours.
       const project = await storage.createProject({
         name,
         serviceType: "file_upload",
-        ownerId: req.user!.id,
+        ownerId: getUserId(req),
         status: "processed",
         schema: result.schema,
         questions,
@@ -745,7 +745,7 @@ This link will expire in 24 hours.
         return res.status(400).json({ error: "Missing required fields: fileId, fileName, and project name" });
       }
 
-      const user = await storage.getUser(req.user!.id);
+      const user = await storage.getUser(getUserId(req));
       if (!user || !user.accessToken || !user.refreshToken) {
         return res.status(401).json({ error: "Google Drive access not authorized. Please reconnect your Google account." });
       }
@@ -803,7 +803,7 @@ This link will expire in 24 hours.
       const pricingResult = PricingService.calculatePrice(pricingFactors);
 
       // Check for duplicate project names
-      const existingProjects = await storage.getUserProjects(req.user!.id);
+      const existingProjects = await storage.getUserProjects(getUserId(req));
       const duplicateProject = existingProjects.find(p => p.name.toLowerCase() === name.toLowerCase());
       
       if (duplicateProject) {
@@ -831,7 +831,7 @@ This link will expire in 24 hours.
         fileSize: fs.statSync(tempPath).size,
         uploadedAt: new Date(),
         estimatedPrice: pricingResult.finalPrice,
-        ownerId: req.user!.id
+        ownerId: getUserId(req)
       });
 
       // Clean up temp file after project creation
@@ -1735,7 +1735,7 @@ This link will expire in 24 hours.
   app.post("/api/ml/recommend-analysis/:projectId", isAuthenticated, async (req: any, res) => {
     try {
       const { projectId } = req.params;
-      const userId = req.user!.id;
+      const userId = getUserId(req);
       
       const project = await storage.getProject(projectId, userId);
       if (!project) {
@@ -1753,7 +1753,7 @@ This link will expire in 24 hours.
   app.post("/api/ml/validate-request", isAuthenticated, async (req: any, res) => {
     try {
       const { projectId, analysisType, targetColumn, features } = req.body;
-      const userId = req.user!.id;
+      const userId = getUserId(req);
       
       const project = await storage.getProject(projectId, userId);
       if (!project) {
@@ -1775,7 +1775,7 @@ This link will expire in 24 hours.
   app.post("/api/ml/run-analysis", isAuthenticated, async (req: any, res) => {
     try {
       const { projectId, analysisType, targetColumn, features, parameters } = req.body;
-      const userId = req.user!.id;
+      const userId = getUserId(req);
       
       const project = await storage.getProject(projectId, userId);
       if (!project) {
