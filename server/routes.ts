@@ -302,7 +302,7 @@ This link will expire in 24 hours.
   // Google Drive integration routes
   app.get("/api/google-drive/files", isAuthenticated, async (req, res) => {
     try {
-      const user = await storage.getUser(req.user!.userId);
+      const user = await storage.getUser(req.user!.id);
       if (!user || !user.accessToken || !user.refreshToken) {
         return res.status(401).json({ 
           error: "Google Drive access not authorized", 
@@ -319,6 +319,47 @@ This link will expire in 24 hours.
     } catch (error: any) {
       console.error("Google Drive files error:", error);
       res.status(500).json({ error: "Failed to fetch Google Drive files", message: error.message });
+    }
+  });
+
+  // AI Settings routes
+  app.get("/api/ai-settings", isAuthenticated, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.user!.id);
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      res.json({
+        geminiApiKey: user.customGeminiKey ? "••••••••" : "",
+        anthropicApiKey: user.customAnthropicKey ? "••••••••" : "",
+        openaiApiKey: user.customOpenaiKey ? "••••••••" : "",
+        useChimariDataKeys: !user.useCustomAiKeys
+      });
+    } catch (error: any) {
+      console.error("AI settings fetch error:", error);
+      res.status(500).json({ error: "Failed to fetch AI settings" });
+    }
+  });
+
+  app.post("/api/ai-settings", isAuthenticated, async (req, res) => {
+    try {
+      const { geminiApiKey, anthropicApiKey, openaiApiKey, useChimariDataKeys } = req.body;
+      const userId = req.user!.id;
+      
+      const user = await storage.getUser(userId);
+      if (user) {
+        user.customGeminiKey = useChimariDataKeys ? null : geminiApiKey;
+        user.customAnthropicKey = useChimariDataKeys ? null : anthropicApiKey;
+        user.customOpenaiKey = useChimariDataKeys ? null : openaiApiKey;
+        user.useCustomAiKeys = !useChimariDataKeys;
+        user.updatedAt = new Date();
+      }
+
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("AI settings update error:", error);
+      res.status(500).json({ error: "Failed to update AI settings" });
     }
   });
 
@@ -665,12 +706,13 @@ This link will expire in 24 hours.
       // Store project with processing results
       const project = await storage.createProject({
         name,
-        userId: req.user!.userId,
+        serviceType: "file_upload",
+        ownerId: req.user!.id,
         status: "processed",
         schema: result.schema,
         questions,
         insights: lookupTable ? { anonymization_lookup: lookupTable } : {},
-        recordCount: result.recordCount
+        recordCount: result.recordCount || 0
       });
 
       // Clean up temp file
