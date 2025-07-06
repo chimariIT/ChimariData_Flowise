@@ -19,6 +19,8 @@ export async function apiRequest(
     headers["Content-Type"] = "application/json";
   }
   
+  // Only add Authorization header if we have a token (for email-based auth)
+  // Session-based auth (OAuth) relies on cookies with credentials: "include"
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
@@ -27,7 +29,7 @@ export async function apiRequest(
     method,
     headers,
     body: data ? JSON.stringify(data) : undefined,
-    credentials: "include",
+    credentials: "include", // This ensures session cookies are sent for OAuth authentication
   });
 
   await throwIfResNotOk(res);

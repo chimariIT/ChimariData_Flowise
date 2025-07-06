@@ -73,6 +73,16 @@ export default function AIInsightsPanel({ projectId, onPaymentRequired }: AIInsi
             variant: "destructive",
           });
         }
+      } else if (errorMsg.includes("401") || errorMsg.includes("Authentication required")) {
+        // User is not logged in - redirect to auth
+        toast({
+          title: "Login Required",
+          description: "Please log in to access AI insights",
+          variant: "destructive",
+        });
+        setTimeout(() => {
+          window.location.href = "/auth";
+        }, 1500);
       } else if (errorMsg.includes("quota exceeded")) {
         toast({
           title: "Usage Limit Reached",
@@ -114,6 +124,16 @@ export default function AIInsightsPanel({ projectId, onPaymentRequired }: AIInsi
             variant: "destructive",
           });
         }
+      } else if (errorMsg.includes("401") || errorMsg.includes("Authentication required")) {
+        // User is not logged in - redirect to auth
+        toast({
+          title: "Login Required",
+          description: "Please log in to access chart suggestions",
+          variant: "destructive",
+        });
+        setTimeout(() => {
+          window.location.href = "/auth";
+        }, 1500);
       } else {
         toast({
           title: "Visualization Failed",
