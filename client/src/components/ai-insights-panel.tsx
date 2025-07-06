@@ -50,10 +50,17 @@ export default function AIInsightsPanel({ projectId, onPaymentRequired }: AIInsi
 
   const insightsMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/ai/insights", { projectId });
-      return res.json();
+      console.log("Making AI insights request for project:", projectId);
+      try {
+        const res = await apiRequest("POST", "/api/ai/insights", { projectId });
+        return res.json();
+      } catch (error) {
+        console.error("API request failed:", error);
+        throw error;
+      }
     },
     onSuccess: (data) => {
+      console.log("AI insights success:", data);
       setInsights(data.insights);
       toast({
         title: "Insights Generated",
@@ -61,9 +68,19 @@ export default function AIInsightsPanel({ projectId, onPaymentRequired }: AIInsi
       });
     },
     onError: (error: any) => {
+      console.error("AI insights error:", error);
       const errorMsg = error.message || "Failed to generate insights";
+      console.log("Error message:", errorMsg);
+      
+      // Always show a toast for debugging
+      toast({
+        title: "Debug Error",
+        description: `Error: ${errorMsg}`,
+        variant: "destructive",
+      });
       
       if (errorMsg.includes("Payment required") || errorMsg.includes("402")) {
+        console.log("Payment required error detected");
         if (onPaymentRequired) {
           onPaymentRequired(projectId, "insights");
         } else {
@@ -74,6 +91,7 @@ export default function AIInsightsPanel({ projectId, onPaymentRequired }: AIInsi
           });
         }
       } else if (errorMsg.includes("401") || errorMsg.includes("Authentication required")) {
+        console.log("Authentication error detected, redirecting to auth");
         // User is not logged in - redirect to auth
         toast({
           title: "Login Required",
@@ -168,7 +186,10 @@ export default function AIInsightsPanel({ projectId, onPaymentRequired }: AIInsi
       {/* Action Buttons */}
       <div className="flex gap-4">
         <Button 
-          onClick={() => insightsMutation.mutate()}
+          onClick={() => {
+            console.log("Generate Insights button clicked");
+            insightsMutation.mutate();
+          }}
           disabled={insightsMutation.isPending}
           className="flex items-center gap-2"
         >
