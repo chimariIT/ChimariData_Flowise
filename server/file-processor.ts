@@ -6,7 +6,8 @@ import * as csv from 'csv-parser';
 
 export interface FileProcessingResult {
   data: any[];
-  schema: Record<string, string>;
+  recordCount: number;
+  schema: Record<string, any>;
   metadata: {
     filename: string;
     fileSize: number;
@@ -137,6 +138,7 @@ export class FileProcessor {
 
     return {
       data: processedData,
+      recordCount: processedData.length, // Add explicit record count property
       schema,
       metadata: {
         filename: originalName,
@@ -191,6 +193,7 @@ export class FileProcessor {
 
     return {
       data: processedData,
+      recordCount: processedData.length, // Add explicit record count property
       schema,
       metadata: {
         filename: originalName,
@@ -322,12 +325,12 @@ export class FileProcessor {
   }
 
   /**
-   * Generate schema by analyzing data types
+   * Generate schema by analyzing data types and including sample values
    */
-  private static generateSchema(data: any[]): Record<string, string> {
+  private static generateSchema(data: any[]): Record<string, any> {
     if (data.length === 0) return {};
 
-    const schema: Record<string, string> = {};
+    const schema: Record<string, any> = {};
     const sampleSize = Math.min(100, data.length);
     const sample = data.slice(0, sampleSize);
 
@@ -335,9 +338,18 @@ export class FileProcessor {
       const values = sample.map(row => row[key]).filter(val => val !== null && val !== undefined && val !== '');
       
       if (values.length === 0) {
-        schema[key] = 'text';
+        schema[key] = {
+          type: 'text',
+          description: '',
+          sampleValues: [],
+          nullable: true
+        };
         return;
       }
+
+      // Get sample values for schema definition
+      const uniqueValues = [...new Set(values)];
+      const sampleValues = uniqueValues.slice(0, 5).map(v => String(v));
 
       // Analyze data types
       const numberCount = values.filter(val => !isNaN(Number(val)) && val !== '').length;
@@ -346,15 +358,22 @@ export class FileProcessor {
 
       const total = values.length;
       
+      let detectedType = 'text';
       if (numberCount / total > 0.8) {
-        schema[key] = this.hasDecimals(values) ? 'decimal' : 'integer';
+        detectedType = this.hasDecimals(values) ? 'decimal' : 'integer';
       } else if (dateCount / total > 0.6) {
-        schema[key] = 'date';
+        detectedType = 'date';
       } else if (booleanCount / total > 0.8) {
-        schema[key] = 'boolean';
-      } else {
-        schema[key] = 'text';
+        detectedType = 'boolean';
       }
+
+      schema[key] = {
+        type: detectedType,
+        description: '',
+        sampleValues: sampleValues,
+        nullable: values.length < sample.length,
+        unique: uniqueValues.length === values.length
+      };
     });
 
     return schema;

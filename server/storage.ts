@@ -19,6 +19,7 @@ export interface IStorage {
   getProject(id: string, userId: string): Promise<Project | undefined>;
   updateProject(id: string, userId: string, updates: Partial<Project>): Promise<Project | undefined>;
   updateProjectPaymentStatus(projectId: string, isPaid: boolean, paymentIntentId?: string): Promise<Project | undefined>;
+  updateProjectSchema(projectId: string, schema: Record<string, any>): Promise<Project | undefined>;
   
   // User settings methods
   getUserSettings(userId: string): Promise<UserSettings | undefined>;
@@ -266,6 +267,16 @@ export class MemStorage implements IStorage {
         paymentStatus: isPaid ? "paid" : "pending",
         stripePaymentIntentId: paymentIntentId || project.stripePaymentIntentId
       };
+      this.projects.set(projectId, updatedProject);
+      return updatedProject;
+    }
+    return undefined;
+  }
+
+  async updateProjectSchema(projectId: string, schema: Record<string, any>): Promise<Project | undefined> {
+    const project = this.projects.get(projectId);
+    if (project) {
+      const updatedProject = { ...project, schema };
       this.projects.set(projectId, updatedProject);
       return updatedProject;
     }

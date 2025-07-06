@@ -16,9 +16,10 @@ interface ProjectResultsProps {
   onBack: () => void;
   onSettings: () => void;
   onPayForAnalysis?: (projectData: any) => void;
+  onSchemaEdit?: (projectId: string) => void;
 }
 
-export default function ProjectResults({ projectId, onBack, onSettings, onPayForAnalysis }: ProjectResultsProps) {
+export default function ProjectResults({ projectId, onBack, onSettings, onPayForAnalysis, onSchemaEdit }: ProjectResultsProps) {
   const { toast } = useToast();
 
   const { data: project, isLoading } = useQuery({
@@ -202,6 +203,17 @@ export default function ProjectResults({ projectId, onBack, onSettings, onPayFor
                 <Share className="w-4 h-4 mr-2" />
                 Share
               </Button>
+              
+              {onSchemaEdit && (
+                <Button
+                  variant="outline"
+                  onClick={() => onSchemaEdit(projectId)}
+                  className="bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200"
+                >
+                  <Database className="w-4 h-4 mr-2" />
+                  Data Schema
+                </Button>
+              )}
             </div>
           </div>
         </div>

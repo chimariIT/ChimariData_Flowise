@@ -1262,6 +1262,72 @@ This link will expire in 24 hours.
     });
   });
 
+  // Schema Editor Routes
+  app.post("/api/generate-field-descriptions", unifiedAuth, async (req, res) => {
+    try {
+      const { projectId, fields } = req.body;
+
+      if (!projectId || !fields) {
+        return res.status(400).json({ error: "Project ID and fields are required" });
+      }
+
+      // Generate AI descriptions for fields
+      const descriptions: Record<string, string> = {};
+      
+      for (const field of fields) {
+        try {
+          const prompt = `Generate a brief, professional description for a data field named "${field.name}" with type "${field.type}". ${
+            field.sampleValues && field.sampleValues.length > 0 
+              ? `Sample values: ${field.sampleValues.join(', ')}.` 
+              : ''
+          } Provide only the description, no additional text.`;
+
+          const response = await aiService.query(prompt, [], "gemini");
+          descriptions[field.name] = response.response || `${field.name} data field`;
+        } catch (error) {
+          console.error(`Failed to generate description for ${field.name}:`, error);
+          descriptions[field.name] = `${field.name} data field`;
+        }
+      }
+
+      res.json(descriptions);
+    } catch (error: any) {
+      console.error("Error generating field descriptions:", error);
+      res.status(500).json({ error: "Failed to generate field descriptions" });
+    }
+  });
+
+  app.put("/api/projects/:id/schema", unifiedAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { fields } = req.body;
+
+      if (!fields) {
+        return res.status(400).json({ error: "Fields are required" });
+      }
+
+      // Convert fields array back to schema object
+      const updatedSchema: Record<string, any> = {};
+      fields.forEach((field: any) => {
+        updatedSchema[field.name] = {
+          type: field.type,
+          description: field.description,
+          nullable: field.nullable,
+          unique: field.unique,
+          sampleValues: field.sampleValues
+        };
+      });
+
+      // Update project schema in storage
+      await storage.updateProjectSchema(id, updatedSchema);
+
+      res.json({ success: true, schema: updatedSchema });
+    } catch (error: any) {
+      console.error("Error updating schema:", error);
+      res.status(500).json({ error: "Failed to update schema" });
+    }
+  });
+
   // Subscription management
   app.post("/api/subscription/upgrade", unifiedAuth, async (req, res) => {
     try {
