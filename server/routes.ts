@@ -388,7 +388,7 @@ This link will expire in 24 hours.
 
 
   // Replit Auth routes
-  app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
+  app.get('/api/auth/user', unifiedAuth, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const user = await storage.getUser(userId);
@@ -402,7 +402,7 @@ This link will expire in 24 hours.
   // Remove old authentication routes - now using Replit Auth only
 
   // Project routes  
-  app.get("/api/projects", isAuthenticated, async (req, res) => {
+  app.get("/api/projects", unifiedAuth, async (req, res) => {
     try {
       const userId = getUserId(req);
       const projects = await storage.getUserProjects(userId);
@@ -412,7 +412,7 @@ This link will expire in 24 hours.
     }
   });
 
-  app.get("/api/projects/:id", isAuthenticated, async (req, res) => {
+  app.get("/api/projects/:id", unifiedAuth, async (req, res) => {
     try {
       const project = await storage.getProject(req.params.id, getUserId(req));
       if (!project) {
@@ -425,7 +425,7 @@ This link will expire in 24 hours.
   });
 
   // Google Drive integration routes
-  app.get("/api/google-drive/files", isAuthenticated, async (req, res) => {
+  app.get("/api/google-drive/files", unifiedAuth, async (req, res) => {
     try {
       const user = await storage.getUser(getUserId(req));
       if (!user || !user.accessToken || !user.refreshToken) {
@@ -448,7 +448,7 @@ This link will expire in 24 hours.
   });
 
   // AI Settings routes
-  app.get("/api/ai-settings", isAuthenticated, async (req, res) => {
+  app.get("/api/ai-settings", unifiedAuth, async (req, res) => {
     try {
       const user = await storage.getUser(getUserId(req));
       if (!user) {
@@ -467,7 +467,7 @@ This link will expire in 24 hours.
     }
   });
 
-  app.post("/api/ai-settings", isAuthenticated, async (req, res) => {
+  app.post("/api/ai-settings", unifiedAuth, async (req, res) => {
     try {
       const { geminiApiKey, anthropicApiKey, openaiApiKey, useChimariDataKeys } = req.body;
       const userId = getUserId(req);
@@ -802,7 +802,7 @@ This link will expire in 24 hours.
   });
 
   // PII detection endpoint for already uploaded files
-  app.post("/api/projects/detect-pii", isAuthenticated, async (req, res) => {
+  app.post("/api/projects/detect-pii", unifiedAuth, async (req, res) => {
     try {
       const { tempFileId, name, questions, requiresPII, anonymizeData, selectedColumns } = req.body;
       
@@ -862,7 +862,7 @@ This link will expire in 24 hours.
     }
   });
 
-  app.post("/api/projects/import-from-drive", isAuthenticated, async (req, res) => {
+  app.post("/api/projects/import-from-drive", unifiedAuth, async (req, res) => {
     try {
       const { fileId, fileName, name, questions } = req.body;
       
@@ -980,7 +980,7 @@ This link will expire in 24 hours.
   });
 
   // File upload route
-  app.post("/api/projects/upload", isAuthenticated, upload.single('file'), async (req, res) => {
+  app.post("/api/projects/upload", unifiedAuth, upload.single('file'), async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ error: "No file uploaded" });
@@ -1217,7 +1217,7 @@ This link will expire in 24 hours.
   });
 
   // Subscription management
-  app.post("/api/subscription/upgrade", isAuthenticated, async (req, res) => {
+  app.post("/api/subscription/upgrade", unifiedAuth, async (req, res) => {
     try {
       const { tier } = req.body;
       
@@ -1251,7 +1251,7 @@ This link will expire in 24 hours.
   });
 
   // AI Query route
-  app.post("/api/ai/query", isAuthenticated, async (req, res) => {
+  app.post("/api/ai/query", unifiedAuth, async (req, res) => {
     try {
       const data = aiQuerySchema.parse(req.body);
       
@@ -1347,7 +1347,7 @@ This link will expire in 24 hours.
   });
 
   // Generate comprehensive data insights
-  app.post("/api/ai/insights", isAuthenticated, async (req, res) => {
+  app.post("/api/ai/insights", unifiedAuth, async (req, res) => {
     try {
       const { projectId } = req.body;
       
@@ -1444,7 +1444,7 @@ This link will expire in 24 hours.
   });
 
   // Generate visualization suggestions
-  app.post("/api/ai/visualizations", isAuthenticated, async (req, res) => {
+  app.post("/api/ai/visualizations", unifiedAuth, async (req, res) => {
     try {
       const { projectId } = req.body;
       
@@ -1548,7 +1548,7 @@ This link will expire in 24 hours.
   });
 
   // Calculate pricing for data analysis
-  app.post("/api/calculate-pricing", isAuthenticated, async (req, res) => {
+  app.post("/api/calculate-pricing", unifiedAuth, async (req, res) => {
     try {
       const { dataSizeMB, questionsCount, analysisType, schema, recordCount } = req.body;
       
@@ -1580,45 +1580,10 @@ This link will expire in 24 hours.
     }
   });
 
-  // Calculate pricing for analysis
-  app.post("/api/calculate-pricing", isAuthenticated, async (req, res) => {
-    try {
-      const { dataSizeMB, questionsCount, analysisType, schema, recordCount } = req.body;
-      
-      if (!req.user) {
-        return res.status(401).json({ error: 'Authentication required' });
-      }
-      
-      // Calculate pricing based on project data
-      const dataComplexity = PricingService.assessDataComplexity(schema, recordCount || 0);
-      const columnCount = schema ? Object.keys(schema).length : 0;
-      const featureCount = Math.max(0, columnCount - 2);
-      const questionComplexity = PricingService.assessQuestionComplexity(Array(questionsCount).fill(""));
-      const analysisArtifacts = PricingService.estimateAnalysisArtifacts(analysisType, recordCount || 0, featureCount);
-      
-      const pricing = PricingService.calculatePrice({
-        dataSizeMB: dataSizeMB || 1,
-        recordCount: recordCount || 0,
-        columnCount,
-        featureCount,
-        questionsCount: questionsCount || 0,
-        questionComplexity,
-        analysisType: analysisType as any,
-        analysisArtifacts,
-        dataComplexity
-      });
-      
-      res.json({
-        pricing,
-        dataComplexity
-      });
-    } catch (error: any) {
-      res.status(500).json({ message: "Error calculating pricing: " + error.message });
-    }
-  });
+
 
   // Create payment intent for one-time analysis
-  app.post("/api/create-analysis-payment", isAuthenticated, async (req, res) => {
+  app.post("/api/create-analysis-payment", unifiedAuth, async (req, res) => {
     try {
       const { projectId, analysisType = 'standard' } = req.body;
       
@@ -1683,7 +1648,7 @@ This link will expire in 24 hours.
   });
 
   // Create or retrieve subscription
-  app.post('/api/subscription', isAuthenticated, async (req, res) => {
+  app.post('/api/subscription', unifiedAuth, async (req, res) => {
 
     try {
       const { planType, paymentMethodId } = req.body;
@@ -1784,7 +1749,7 @@ This link will expire in 24 hours.
   });
 
   // Get subscription status
-  app.get('/api/subscription/status', isAuthenticated, async (req, res) => {
+  app.get('/api/subscription/status', unifiedAuth, async (req, res) => {
 
     try {
       const settings = await storage.getUserSettings(getUserId(req));
@@ -1818,7 +1783,7 @@ This link will expire in 24 hours.
   });
 
   // Cancel subscription
-  app.post('/api/subscription/cancel', isAuthenticated, async (req, res) => {
+  app.post('/api/subscription/cancel', unifiedAuth, async (req, res) => {
 
     try {
       const settings = await storage.getUserSettings(getUserId(req));
@@ -1847,7 +1812,7 @@ This link will expire in 24 hours.
   });
 
   // ML Analysis endpoints
-  app.get("/api/ml/analysis-types", isAuthenticated, (req, res) => {
+  app.get("/api/ml/analysis-types", unifiedAuth, (req, res) => {
     try {
       const analysisTypes = mlService.getAnalysisTypes();
       res.json(analysisTypes);
@@ -1857,7 +1822,7 @@ This link will expire in 24 hours.
     }
   });
 
-  app.post("/api/ml/recommend-analysis/:projectId", isAuthenticated, async (req: any, res) => {
+  app.post("/api/ml/recommend-analysis/:projectId", unifiedAuth, async (req: any, res) => {
     try {
       const { projectId } = req.params;
       const userId = getUserId(req);
@@ -1875,7 +1840,7 @@ This link will expire in 24 hours.
     }
   });
 
-  app.post("/api/ml/validate-request", isAuthenticated, async (req: any, res) => {
+  app.post("/api/ml/validate-request", unifiedAuth, async (req: any, res) => {
     try {
       const { projectId, analysisType, targetColumn, features } = req.body;
       const userId = getUserId(req);
@@ -1897,7 +1862,7 @@ This link will expire in 24 hours.
     }
   });
 
-  app.post("/api/ml/run-analysis", isAuthenticated, async (req: any, res) => {
+  app.post("/api/ml/run-analysis", unifiedAuth, async (req: any, res) => {
     try {
       const { projectId, analysisType, targetColumn, features, parameters } = req.body;
       const userId = getUserId(req);
@@ -2118,7 +2083,7 @@ This link will expire in 24 hours.
     }
   });
 
-  app.post('/api/pricing/validate', isAuthenticated, async (req, res) => {
+  app.post('/api/pricing/validate', unifiedAuth, async (req, res) => {
 
     try {
       const { dataSizeMB, recordCount } = req.body;
