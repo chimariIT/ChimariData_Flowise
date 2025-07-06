@@ -416,12 +416,25 @@ export default function ProjectResults({ projectId, onBack, onSettings, onPayFor
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3 text-sm">
-                    {Object.entries(project.schema || {}).map(([field, type]) => (
-                      <div key={field} className="flex justify-between items-center py-2 border-b border-slate-100">
-                        <span className="font-medium text-slate-700">{field}</span>
-                        <span className="text-slate-500 bg-slate-100 px-2 py-1 rounded">{String(type)}</span>
-                      </div>
-                    ))}
+                    {Object.entries(project.schema || {}).map(([field, fieldInfo]) => {
+                      // Handle both old string format and new object format
+                      const typeValue = typeof fieldInfo === 'object' ? fieldInfo.type : fieldInfo;
+                      const description = typeof fieldInfo === 'object' ? fieldInfo.description : '';
+                      
+                      return (
+                        <div key={field} className="flex justify-between items-center py-2 border-b border-slate-100">
+                          <div className="flex-1">
+                            <span className="font-medium text-slate-700">{field}</span>
+                            {description && (
+                              <p className="text-xs text-slate-500 mt-1">{description}</p>
+                            )}
+                          </div>
+                          <span className="text-slate-500 bg-slate-100 px-2 py-1 rounded text-xs">
+                            {String(typeValue)}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
                 </CardContent>
               </Card>

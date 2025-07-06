@@ -56,25 +56,49 @@ const AnalysisPaymentForm = ({ projectId, onSuccess }: { projectId: string; anal
 
     setIsProcessing(true);
 
-    const { error } = await stripe.confirmPayment({
-      elements,
-      confirmParams: {
-        return_url: window.location.origin,
-      },
-    });
+    try {
+      // Check authentication before processing payment
+      const authCheck = await fetch('/api/auth/user', {
+        credentials: 'include'
+      });
+      
+      if (!authCheck.ok) {
+        toast({
+          title: "Authentication Error",
+          description: "Please sign in again to complete payment.",
+          variant: "destructive",
+        });
+        setIsProcessing(false);
+        window.location.href = '/auth';
+        return;
+      }
 
-    if (error) {
+      const { error } = await stripe.confirmPayment({
+        elements,
+        confirmParams: {
+          return_url: window.location.origin + "/dashboard",
+        },
+      });
+
+      if (error) {
+        toast({
+          title: "Payment Failed",
+          description: error.message,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Payment Successful",
+          description: "Your analysis is being processed!",
+        });
+        onSuccess();
+      }
+    } catch (error) {
       toast({
-        title: "Payment Failed",
-        description: error.message,
+        title: "Payment Error",
+        description: "An error occurred during payment processing.",
         variant: "destructive",
       });
-    } else {
-      toast({
-        title: "Payment Successful",
-        description: "Your analysis is being processed!",
-      });
-      onSuccess();
     }
 
     setIsProcessing(false);
@@ -143,14 +167,19 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
   const calculatePricing = async () => {
     setIsCalculating(true);
     try {
-      // Check if user is authenticated
-      const token = localStorage.getItem("auth_token");
-      if (!token) {
+      // Check if user is authenticated via session
+      const authCheck = await fetch('/api/auth/user', {
+        credentials: 'include'
+      });
+      
+      if (!authCheck.ok) {
         toast({
           title: "Authentication Required",
           description: "Please sign in to calculate pricing.",
           variant: "destructive",
         });
+        // Redirect to auth page
+        window.location.href = '/auth';
         return;
       }
 

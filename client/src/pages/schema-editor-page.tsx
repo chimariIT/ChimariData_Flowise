@@ -51,14 +51,19 @@ export default function SchemaEditorPage() {
     );
   }
 
-  const schemaFields = project.schema ? Object.entries(project.schema).map(([name, info]: [string, any]) => ({
-    name,
-    type: info.type || 'text',
-    description: info.description || '',
-    nullable: info.nullable,
-    unique: info.unique,
-    sampleValues: info.sampleValues || []
-  })) : [];
+  const schemaFields = project.schema ? Object.entries(project.schema).map(([name, info]: [string, any]) => {
+    // Handle both old string format and new object format
+    const fieldInfo = typeof info === 'object' ? info : { type: info, description: '' };
+    
+    return {
+      name,
+      type: fieldInfo.type || 'text',
+      description: fieldInfo.description || '',
+      nullable: fieldInfo.nullable || false,
+      unique: fieldInfo.unique || false,
+      sampleValues: fieldInfo.sampleValues || []
+    };
+  }) : [];
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
