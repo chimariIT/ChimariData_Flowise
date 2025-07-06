@@ -3,6 +3,7 @@ import { useRoute } from 'wouter';
 import { useLocation } from 'wouter';
 import { SchemaEditor } from '@/components/schema-editor';
 import { useQuery } from '@tanstack/react-query';
+import { apiClient } from "@/lib/api";
 import { Loader2 } from 'lucide-react';
 
 export default function SchemaEditorPage() {
@@ -10,10 +11,16 @@ export default function SchemaEditorPage() {
   const [, setLocation] = useLocation();
   const projectId = params?.id;
 
-  const { data: project, isLoading } = useQuery({
-    queryKey: [`/api/projects/${projectId}`],
+  const { data: projects, isLoading } = useQuery({
+    queryKey: ["/api/projects"],
+    queryFn: async () => {
+      const result = await apiClient.getProjects();
+      return result;
+    },
     enabled: !!projectId,
   });
+
+  const project = projects?.projects?.find((p: any) => p.id === projectId);
 
   const handleSave = (updatedSchema: any) => {
     // Navigate back to project results after saving
