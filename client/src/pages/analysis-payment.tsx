@@ -167,21 +167,8 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
   const calculatePricing = async () => {
     setIsCalculating(true);
     try {
-      // Check if user is authenticated via session
-      const authCheck = await fetch('/api/auth/user', {
-        credentials: 'include'
-      });
-      
-      if (!authCheck.ok) {
-        toast({
-          title: "Authentication Required",
-          description: "Please sign in to calculate pricing.",
-          variant: "destructive",
-        });
-        // Redirect to auth page
-        window.location.href = '/auth';
-        return;
-      }
+      // Calculate pricing without authentication check
+      // Authentication will be checked during payment processing
 
       const response = await apiRequest("POST", "/api/calculate-pricing", {
         dataSizeMB: projectData.dataSizeMB,
@@ -231,14 +218,19 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
 
   const createPaymentIntent = async () => {
     try {
-      // Check if user is authenticated
-      const token = localStorage.getItem("auth_token");
-      if (!token) {
+      // Check if user is authenticated via session
+      const authCheck = await fetch('/api/auth/user', {
+        credentials: 'include'
+      });
+      
+      if (!authCheck.ok) {
         toast({
           title: "Authentication Required",
           description: "Please sign in to proceed with payment.",
           variant: "destructive",
         });
+        // Redirect to auth page
+        window.location.href = '/auth';
         return;
       }
 
