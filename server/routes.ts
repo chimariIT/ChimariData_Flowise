@@ -472,7 +472,8 @@ This link will expire in 24 hours.
                 metadata: result.metadata
               };
               
-              const aiResponse = await multiAIService.analyzeQuestion(question, dataContext);
+              const aiResult = await multiAIService.analyzeWithFallback(question, dataContext);
+              const aiResponse = aiResult.result;
               responses.push(`Q${i + 1}: ${question} - ${aiResponse}`);
               
             } catch (aiError) {
