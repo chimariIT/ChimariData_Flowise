@@ -48,9 +48,11 @@ async function unifiedAuth(req: any, res: any, next: any) {
       if (userId) {
         // Verify user still exists
         const user = await storage.getUser(userId);
+        
         if (user) {
           // Set user on request object to match OAuth format
           req.user = { id: user.id };
+          req.userId = user.id; // Also set direct userId for compatibility
           return next();
         }
       }
@@ -258,6 +260,9 @@ This link will expire in 24 hours.
       // Generate simple auth token
       const authToken = crypto.randomBytes(32).toString('hex');
       
+      // Store token in our simple token store
+      tokenStore.set(authToken, user.id);
+      
       res.status(201).json({
         success: true,
         message: "Account created successfully. Please check your email for verification.",
@@ -387,11 +392,32 @@ This link will expire in 24 hours.
 
 
 
-  // Replit Auth routes
+  // Unified Auth user route - handles both OAuth and token-based auth
   app.get('/api/auth/user', unifiedAuth, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      let userId;
+      
+      // Handle OAuth user (from Replit)
+      if (req.user && req.user.claims && req.user.claims.sub) {
+        userId = req.user.claims.sub;
+      }
+      // Handle token-based user (from our email registration)
+      else if (req.user && req.user.id) {
+        userId = req.user.id;
+      }
+      // Handle direct userId (from unifiedAuth)
+      else if (req.userId) {
+        userId = req.userId;
+      }
+      else {
+        return res.status(401).json({ error: "User authentication data not found" });
+      }
+      
       const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      
       res.json(user);
     } catch (error) {
       console.error("Error fetching user:", error);

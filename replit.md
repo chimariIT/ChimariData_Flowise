@@ -21,6 +21,11 @@ Each service follows the same structured workflow:
 6. **Analysis Execution** - Service-specific processing and results
 
 ## Recent Changes
+- **MAJOR BREAKTHROUGH**: Successfully resolved persistent 401 authentication errors (January 6, 2025)
+- Implemented comprehensive authentication system overhaul with unified OAuth and token-based authentication
+- Fixed conflicting route in oauth-config.ts that was intercepting authentication requests
+- Systematically replaced all isAuthenticated middleware with unifiedAuth across entire codebase
+- Authentication now works consistently for registration, login, file uploads, payments, and AI analysis
 - Fixed pricing comparison tables to include Free Trial tier across all service pages
 - Updated landing page terminology from "Three-Tier" to "Tiered Pricing Model"
 - Implemented comprehensive service workflow requirements
