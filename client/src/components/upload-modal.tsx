@@ -23,6 +23,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [formData, setFormData] = useState({
     projectName: "",
+    description: "",
     questions: "",
     selectedSheet: "",
     headerRow: "0",
@@ -116,6 +117,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
 
       const result = await apiClient.uploadFile(selectedFile, {
         name: formData.projectName,
+        description: formData.description,
         questions: questionsArray
       });
       
@@ -139,6 +141,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
       setSelectedFile(null);
       setFormData({
         projectName: "",
+        description: "",
         questions: "",
         selectedSheet: "",
         headerRow: "0",
@@ -165,6 +168,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
       // Re-upload with PII decision
       const result = await apiClient.uploadFile(selectedFile!, {
         name: tempFileInfo.name,
+        description: formData.description,
         questions: tempFileInfo.questions,
         piiHandled: true,
         anonymizationApplied: anonymizeData,
@@ -283,6 +287,19 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
                   </div>
                 )}
               </div>
+            </div>
+
+            {/* Dataset Description */}
+            <div>
+              <Label htmlFor="description">Dataset Description (Optional)</Label>
+              <Textarea
+                id="description"
+                name="description"
+                placeholder="Briefly describe your dataset and what it contains.&#10;&#10;Examples:&#10;• Customer transaction records from e-commerce platform&#10;• Marketing campaign performance data from Q4 2024&#10;• Employee survey responses about workplace satisfaction"
+                rows={3}
+                value={formData.description || ""}
+                onChange={handleInputChange}
+              />
             </div>
 
             {/* Business Questions */}

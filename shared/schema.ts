@@ -14,7 +14,7 @@ export const sessions = pgTable(
 );
 
 export const users = pgTable("users", {
-  id: varchar("id").primaryKey().notNull(), // Changed to varchar for Replit Auth sub claim
+  id: serial("id").primaryKey(), // Using serial for integer auto-increment
   username: text("username").unique(), // Optional for OAuth users
   password: text("password"),
   email: text("email").unique(), // Email is now required and primary identifier
@@ -40,11 +40,12 @@ export const users = pgTable("users", {
 export const projects = pgTable("projects", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
+  description: text("description").default(""),
   schema: jsonb("schema"),
   questions: jsonb("questions").default([]),
   insights: jsonb("insights").default({}),
   createdAt: timestamp("created_at").defaultNow(),
-  ownerId: text("owner_id").references(() => users.id),
+  ownerId: integer("owner_id"),
   recordCount: integer("record_count").default(0),
   status: text("status").default("active"),
   dataSnapshot: jsonb("data_snapshot"), // Store sample data for AI analysis

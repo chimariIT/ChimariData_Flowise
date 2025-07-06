@@ -72,12 +72,7 @@ export default function AIInsightsPanel({ projectId, onPaymentRequired }: AIInsi
       const errorMsg = error.message || "Failed to generate insights";
       console.log("Error message:", errorMsg);
       
-      // Always show a toast for debugging
-      toast({
-        title: "Debug Error",
-        description: `Error: ${errorMsg}`,
-        variant: "destructive",
-      });
+
       
       if (errorMsg.includes("Payment required") || errorMsg.includes("402")) {
         console.log("Payment required error detected");

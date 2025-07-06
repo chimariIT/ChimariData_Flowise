@@ -40,6 +40,7 @@ export class APIClient {
 
   async uploadFile(file: File, options: {
     name?: string;
+    description?: string;
     questions?: string[];
     isTrial?: boolean;
     piiHandled?: boolean;
@@ -49,6 +50,7 @@ export class APIClient {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('name', options.name || file.name.split('.')[0]);
+    formData.append('description', options.description || '');
     formData.append('questions', JSON.stringify(options.questions || []));
     
     if (options.piiHandled !== undefined) {
