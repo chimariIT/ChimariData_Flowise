@@ -28,6 +28,11 @@ export const users = pgTable("users", {
   emailVerified: boolean("email_verified").default(false),
   emailVerificationToken: text("email_verification_token"),
   emailVerificationExpires: timestamp("email_verification_expires"),
+  // AI Settings
+  customGeminiKey: text("custom_gemini_key"),
+  customAnthropicKey: text("custom_anthropic_key"),
+  customOpenaiKey: text("custom_openai_key"),
+  useCustomAiKeys: boolean("use_custom_ai_keys").default(false),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

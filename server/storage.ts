@@ -141,6 +141,10 @@ export class MemStorage implements IStorage {
       emailVerified: (insertUser as any).emailVerified || false,
       emailVerificationToken: (insertUser as any).emailVerificationToken || null,
       emailVerificationExpires: (insertUser as any).emailVerificationExpires || null,
+      customGeminiKey: null,
+      customAnthropicKey: null,
+      customOpenaiKey: null,
+      useCustomAiKeys: false,
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -182,6 +186,13 @@ export class MemStorage implements IStorage {
         providerId: userData.providerId || null,
         accessToken: userData.accessToken || null,
         refreshToken: userData.refreshToken || null,
+        emailVerified: false,
+        emailVerificationToken: null,
+        emailVerificationExpires: null,
+        customGeminiKey: null,
+        customAnthropicKey: null,
+        customOpenaiKey: null,
+        useCustomAiKeys: false,
         createdAt: new Date(),
         updatedAt: new Date(),
       };
