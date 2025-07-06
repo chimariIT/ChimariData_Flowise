@@ -13,9 +13,11 @@ interface DashboardProps {
   onLogout: () => void;
   onProjectSelect: (projectId: string) => void;
   onSettings: () => void;
+  onVisualizationPage?: () => void;
+  onAskQuestionPage?: () => void;
 }
 
-export default function Dashboard({ user, onLogout, onProjectSelect, onSettings }: DashboardProps) {
+export default function Dashboard({ user, onLogout, onProjectSelect, onSettings, onVisualizationPage, onAskQuestionPage }: DashboardProps) {
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const { toast } = useToast();
@@ -208,14 +210,22 @@ export default function Dashboard({ user, onLogout, onProjectSelect, onSettings 
                   </div>
                 </Button>
                 
-                <Button variant="outline" className="w-full justify-between">
+                <Button 
+                  variant="outline" 
+                  className="w-full justify-between"
+                  onClick={onVisualizationPage}
+                >
                   <div className="flex items-center space-x-3">
                     <ChartLine className="w-4 h-4" />
                     <span>Create Visualization</span>
                   </div>
                 </Button>
                 
-                <Button variant="outline" className="w-full justify-between">
+                <Button 
+                  variant="outline" 
+                  className="w-full justify-between"
+                  onClick={onAskQuestionPage}
+                >
                   <div className="flex items-center space-x-3">
                     <Lightbulb className="w-4 h-4" />
                     <span>Ask Business Question</span>
