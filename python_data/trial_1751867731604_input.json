@@ -1,0 +1,1 @@
+{"preview":[{"name":"John","age":30,"salary":75000},{"name":"Jane","age":25,"salary":65000}],"schema":{"name":{"type":"text","nullable":false,"sampleValues":["John","Jane"]},"age":{"type":"number","nullable":false,"sampleValues":["30","25"]},"salary":{"type":"number","nullable":false,"sampleValues":["75000","65000"]}},"recordCount":2}
