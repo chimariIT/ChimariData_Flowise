@@ -1,124 +1,25 @@
-/**
- * Centralized API functions for all backend communications
- */
-
-const API_BASE = '';
-
-interface APIResponse<T = any> {
-  success?: boolean;
-  requiresPIIDecision?: boolean;
-  piiResult?: any;
-  tempFileId?: string;
-  data?: T;
-  error?: string;
-  message?: string;
-  token?: string;
-  user?: {
-    id: number;
-    email: string;
-    firstName?: string;
-    lastName?: string;
-    username?: string;
-  };
-  // Free trial specific fields
-  id?: string;
-  name?: string;
-  insights?: string;
-  questionResponse?: string;
-  recordCount?: number;
-  columnCount?: number;
-  schema?: any;
-  metadata?: any;
-  isTrial?: boolean;
-}
+const API_BASE = window.location.origin;
 
 export class APIClient {
-  private getAuthHeaders(): Record<string, string> {
-    const token = localStorage.getItem('auth_token');
-    return token ? { 'Authorization': `Bearer ${token}` } : {};
-  }
-
-  async uploadFile(file: File, options: {
-    name?: string;
-    description?: string;
-    questions?: string[];
-    isTrial?: boolean;
-    piiHandled?: boolean;
-    anonymizationApplied?: boolean;
-    selectedColumns?: string[];
-  } = {}): Promise<APIResponse> {
+  async uploadFile(file: File): Promise<any> {
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('name', options.name || file.name.split('.')[0]);
-    formData.append('description', options.description || '');
-    formData.append('questions', JSON.stringify(options.questions || []));
-    
-    if (options.piiHandled !== undefined) {
-      formData.append('piiHandled', options.piiHandled.toString());
-    }
-    if (options.anonymizationApplied !== undefined) {
-      formData.append('anonymizationApplied', options.anonymizationApplied.toString());
-    }
-    if (options.selectedColumns) {
-      formData.append('selectedColumns', JSON.stringify(options.selectedColumns));
-    }
 
-    const endpoint = options.isTrial ? '/api/upload-trial' : '/api/upload-auth';
-    const headers = options.isTrial ? {} : this.getAuthHeaders();
-
-    const response = await fetch(`${API_BASE}${endpoint}`, {
+    const response = await fetch(`${API_BASE}/api/upload`, {
       method: 'POST',
-      headers,
-      body: formData
+      body: formData,
     });
 
     if (!response.ok) {
-      throw new Error(`Upload failed: ${response.status} ${response.statusText}`);
+      const error = await response.json();
+      throw new Error(error.error || `Upload failed: ${response.status}`);
     }
 
     return await response.json();
   }
 
-  async register(userData: { email: string; firstName: string; lastName: string; password: string }): Promise<APIResponse> {
-    const response = await fetch(`${API_BASE}/api/auth/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(userData)
-    });
-
-    if (!response.ok) {
-      throw new Error(`Registration failed: ${response.status}`);
-    }
-
-    const result = await response.json();
-    if (result.token) {
-      localStorage.setItem('auth_token', result.token);
-    }
-    return result;
-  }
-
-  async login(credentials: { email: string; password: string }): Promise<APIResponse> {
-    const response = await fetch(`${API_BASE}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(credentials)
-    });
-
-    if (!response.ok) {
-      throw new Error(`Login failed: ${response.status}`);
-    }
-
-    const result = await response.json();
-    if (result.token) {
-      localStorage.setItem('auth_token', result.token);
-    }
-    return result;
-  }
-
-  async getProjects(): Promise<APIResponse> {
-    const response = await fetch(`${API_BASE}/api/projects`, {
-      headers: this.getAuthHeaders()
-    });
+  async getProjects(): Promise<any> {
+    const response = await fetch(`${API_BASE}/api/projects`);
 
     if (!response.ok) {
       throw new Error(`Failed to fetch projects: ${response.status}`);
@@ -127,50 +28,26 @@ export class APIClient {
     return await response.json();
   }
 
-  async getUser(): Promise<APIResponse> {
-    const response = await fetch(`${API_BASE}/api/auth/user`, {
-      headers: this.getAuthHeaders()
-    });
+  async getProject(id: string): Promise<any> {
+    const response = await fetch(`${API_BASE}/api/projects/${id}`);
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch user: ${response.status}`);
+      throw new Error(`Failed to fetch project: ${response.status}`);
     }
 
     return await response.json();
   }
 
-  async exportProject(projectId: string, format: 'excel' | 'pdf' | 'csv'): Promise<{
-    success: boolean;
-    downloadUrl?: string;
-    filename?: string;
-    message?: string;
-  }> {
-    const response = await fetch(`${API_BASE}/api/export`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...this.getAuthHeaders()
-      },
-      body: JSON.stringify({ projectId, format })
+  async deleteProject(id: string): Promise<any> {
+    const response = await fetch(`${API_BASE}/api/projects/${id}`, {
+      method: 'DELETE',
     });
 
     if (!response.ok) {
-      throw new Error(`Export failed: ${response.status}`);
+      throw new Error(`Failed to delete project: ${response.status}`);
     }
 
-    // For direct file download, create blob URL
-    const blob = await response.blob();
-    const url = window.URL.createObjectURL(blob);
-    const contentDisposition = response.headers.get('Content-Disposition');
-    const filename = contentDisposition 
-      ? contentDisposition.split('filename=')[1]?.replace(/"/g, '') 
-      : `export_${Date.now()}.${format}`;
-
-    return {
-      success: true,
-      downloadUrl: url,
-      filename
-    };
+    return await response.json();
   }
 }
 
