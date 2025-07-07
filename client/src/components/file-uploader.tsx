@@ -3,20 +3,28 @@ import { useDropzone } from "react-dropzone";
 import { Upload, File, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { Textarea } from "@/components/ui/textarea";
 
 interface FileUploaderProps {
-  onFileUpload: (file: File) => Promise<void>;
+  onFileUpload: (file: File, description?: string) => Promise<void>;
   isUploading: boolean;
+  maxSize?: number;
 }
 
-export default function FileUploader({ onFileUpload, isUploading }: FileUploaderProps) {
+export default function FileUploader({ onFileUpload, isUploading, maxSize = 50 * 1024 * 1024 }: FileUploaderProps) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [description, setDescription] = useState("");
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length > 0) {
-      setSelectedFile(acceptedFiles[0]);
+      const file = acceptedFiles[0];
+      if (file.size > maxSize) {
+        // Handle oversized file
+        return;
+      }
+      setSelectedFile(file);
     }
-  }, []);
+  }, [maxSize]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -33,8 +41,9 @@ export default function FileUploader({ onFileUpload, isUploading }: FileUploader
 
   const handleUpload = async () => {
     if (selectedFile) {
-      await onFileUpload(selectedFile);
+      await onFileUpload(selectedFile, description);
       setSelectedFile(null);
+      setDescription("");
     }
   };
 
@@ -71,7 +80,7 @@ export default function FileUploader({ onFileUpload, isUploading }: FileUploader
                 Drag & drop a file here, or click to select
               </p>
               <p className="text-sm text-gray-500">
-                Supports Excel, CSV, JSON, and text files (max 50MB)
+                Supports Excel, CSV, JSON, and text files (max {Math.round(maxSize / (1024 * 1024))}MB)
               </p>
             </div>
           )}
@@ -96,6 +105,19 @@ export default function FileUploader({ onFileUpload, isUploading }: FileUploader
             >
               <X className="w-4 h-4" />
             </Button>
+          </div>
+
+          <div className="mb-4">
+            <label className="text-sm font-medium text-gray-700 mb-2 block">
+              Project Description (Optional)
+            </label>
+            <Textarea
+              placeholder="Describe your data and what you want to achieve..."
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              disabled={isUploading}
+              className="min-h-[80px]"
+            />
           </div>
 
           {isUploading && (
