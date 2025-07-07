@@ -1,17 +1,22 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { Upload, FileText, Database, Trash2, Eye } from "lucide-react";
+import { Upload, FileText, Database, Trash2, Eye, Zap, TrendingUp, BarChart3, Brain } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/lib/api";
 import FileUploader from "@/components/file-uploader";
+import FreeTrialUploader from "@/components/free-trial-uploader";
+import PricingDisplay from "@/components/pricing-display";
 
 export default function HomePage() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [isUploading, setIsUploading] = useState(false);
+  const [activeTab, setActiveTab] = useState("trial");
 
   const { data: projectsData, isLoading, refetch } = useQuery({
     queryKey: ["/api/projects"],
@@ -20,12 +25,19 @@ export default function HomePage() {
     },
   });
 
+  const { data: pricingData } = useQuery({
+    queryKey: ["/api/pricing"],
+    queryFn: async () => {
+      return await apiClient.getPricing();
+    },
+  });
+
   const projects = projectsData?.projects || [];
 
-  const handleFileUpload = async (file: File) => {
+  const handleFileUpload = async (file: File, description?: string) => {
     setIsUploading(true);
     try {
-      const result = await apiClient.uploadFile(file);
+      const result = await apiClient.uploadFile(file, description);
       
       if (result.success) {
         toast({
@@ -33,6 +45,7 @@ export default function HomePage() {
           description: `Processed ${result.project.recordCount} records from ${file.name}`,
         });
         refetch();
+        setLocation(`/project/${result.projectId}`);
       }
     } catch (error) {
       toast({
@@ -85,29 +98,118 @@ export default function HomePage() {
       {/* Header */}
       <div className="text-center mb-8">
         <h1 className="text-4xl font-bold text-gray-900 mb-4">ChimariData</h1>
-        <p className="text-xl text-gray-600 mb-8">
-          Upload and process your data files - Excel, CSV, JSON, and more
+        <p className="text-xl text-gray-600 mb-2">
+          Progressive Data Analytics Platform
+        </p>
+        <p className="text-gray-500 mb-8">
+          Four progressive paths: Transformation • Analysis • Visualization • AI Insights
         </p>
       </div>
 
-      {/* Upload Section */}
-      <Card className="mb-8">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Upload className="w-5 h-5" />
-            Upload Data File
-          </CardTitle>
-          <CardDescription>
-            Supported formats: Excel (.xlsx, .xls), CSV, JSON, and text files
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <FileUploader
-            onFileUpload={handleFileUpload}
-            isUploading={isUploading}
-          />
+      {/* Feature Overview */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+        <Card className="text-center">
+          <CardContent className="pt-6">
+            <TrendingUp className="w-8 h-8 mx-auto mb-2 text-blue-600" />
+            <h3 className="font-semibold text-sm">Transformation</h3>
+            <p className="text-xs text-gray-500 mt-1">Clean & reshape data</p>
+            <Badge variant="outline" className="mt-2">$15</Badge>
+          </CardContent>
+        </Card>
+        
+        <Card className="text-center">
+          <CardContent className="pt-6">
+            <BarChart3 className="w-8 h-8 mx-auto mb-2 text-green-600" />
+            <h3 className="font-semibold text-sm">Analysis</h3>
+            <p className="text-xs text-gray-500 mt-1">Statistical insights</p>
+            <Badge variant="outline" className="mt-2">$25</Badge>
+          </CardContent>
+        </Card>
+        
+        <Card className="text-center">
+          <CardContent className="pt-6">
+            <Database className="w-8 h-8 mx-auto mb-2 text-purple-600" />
+            <h3 className="font-semibold text-sm">Visualization</h3>
+            <p className="text-xs text-gray-500 mt-1">Charts & graphs</p>
+            <Badge variant="outline" className="mt-2">$20</Badge>
+          </CardContent>
+        </Card>
+        
+        <Card className="text-center">
+          <CardContent className="pt-6">
+            <Brain className="w-8 h-8 mx-auto mb-2 text-orange-600" />
+            <h3 className="font-semibold text-sm">AI Insights</h3>
+            <p className="text-xs text-gray-500 mt-1">Intelligent analysis</p>
+            <Badge variant="outline" className="mt-2">$35</Badge>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Progressive Discount Info */}
+      <Card className="mb-8 bg-gradient-to-r from-blue-50 to-purple-50">
+        <CardContent className="pt-6">
+          <div className="text-center">
+            <h3 className="font-semibold text-gray-900 mb-2">Progressive Discounts</h3>
+            <div className="flex justify-center space-x-6 text-sm">
+              <span>2 features: <strong>15% off</strong></span>
+              <span>3 features: <strong>25% off</strong></span>
+              <span>4 features: <strong>35% off</strong></span>
+            </div>
+          </div>
         </CardContent>
       </Card>
+
+      {/* Upload Tabs */}
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-8">
+        <TabsList className="grid w-full grid-cols-2">
+          <TabsTrigger value="trial" className="flex items-center gap-2">
+            <Zap className="w-4 h-4" />
+            Free Trial (10MB)
+          </TabsTrigger>
+          <TabsTrigger value="paid" className="flex items-center gap-2">
+            <Upload className="w-4 h-4" />
+            Full Features
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="trial">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Zap className="w-5 h-5 text-green-600" />
+                Free Trial
+              </CardTitle>
+              <CardDescription>
+                Upload up to 10MB and get instant schema detection, descriptive analysis, and basic visualizations - no signup required!
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <FreeTrialUploader />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="paid">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Upload className="w-5 h-5" />
+                Full Platform Access
+              </CardTitle>
+              <CardDescription>
+                Upload larger files and choose your data journey with progressive pricing
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <FileUploader
+                onFileUpload={handleFileUpload}
+                isUploading={isUploading}
+                maxSize={100 * 1024 * 1024} // 100MB for paid
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
 
       {/* Projects List */}
       <Card>

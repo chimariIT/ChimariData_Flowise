@@ -1,35 +1,49 @@
-# ChimariData.com - Simple Data Upload & Processing Platform
+# ChimariData.com - Progressive Data Analytics Platform
 
 ## Project Overview
-A clean, focused data processing platform that allows users to upload files in multiple formats (Excel, CSV, JSON, etc.) and process their data effectively.
+A streamlined data processing platform with four progressive paid paths: 1) Data Transformation, 2) Data Analysis, 3) Data Visualizations, and 4) AI Insights. Includes a free trial allowing 10MB uploads with descriptive analysis and visualizations without signup. Implements progressive pricing with discounts for using multiple features.
 
-## Core Features
-1. **Multi-Format File Upload** - Support for Excel, CSV, JSON, and other common data formats
-2. **Data Schema Detection** - Automatically analyze and display data structure
-3. **Data Preview** - Show sample data with column information
-4. **Basic Processing** - Simple data analysis and insights
+## Four Progressive Paths
+1. **Data Transformation** - Clean, filter, and reshape data using Python (polars/pandas)
+2. **Data Analysis** - Statistical analysis using Python stats libraries
+3. **Data Visualizations** - Charts and graphs using matplotlib/plotly
+4. **AI Insights** - Intelligent interpretation using Chimaridata AI stack
 
-## Simplified Architecture
-- **Frontend**: React with TypeScript, simple file upload interface
-- **Backend**: Express.js with file processing capabilities
-- **Storage**: In-memory storage for simplicity
-- **File Processing**: Support for multiple data formats with schema detection
+## Free Trial Features
+- 10MB upload limit, no signup required
+- Data schema detection and preview
+- Basic descriptive analysis
+- Simple visualizations
 
-## Recent Changes
-- **PROJECT RESTART**: Simplified from complex multi-service platform to focused data upload system (January 7, 2025)
-- Removed authentication complexity, payment flows, and multiple service tiers
-- Focus on core functionality: file upload, data processing, and schema detection
-- Target support for Excel, CSV, JSON, and other common data formats
+## AI Hierarchy (Chimaridata Stack)
+- **Primary**: Gemini API
+- **Fallback**: OpenAI → Anthropic → Ollama
+- **Option**: Users can configure custom API keys
 
-## User Preferences
-- Values simplicity and core functionality over complex features
-- Wants to avoid circular technical issues and authentication complexity
-- Prioritizes reliable data upload and processing capabilities
-- Focuses on supporting multiple data formats (Excel, CSV, JSON, etc.)
-- Prefers straightforward, working solutions over feature-rich but buggy systems
+## Pricing Structure
+- Progressive pricing model with discounts for multiple features
+- Integration with Chimaridata Stripe accounts
+- Set pricing tiers for each of the four paths
 
 ## Technical Architecture
-- Frontend: React with TypeScript, simple and clean interface
-- Backend: Express.js with TypeScript, in-memory storage
-- File Processing: Multi-format support (Excel, CSV, JSON) with schema detection
-- No authentication complexity initially - focus on core data processing
+- **Frontend**: React with TypeScript, comprehensive data workflow interface
+- **Backend**: Express.js with Python integration for data processing
+- **Storage**: In-memory storage with project management
+- **Data Processing**: Python libraries (polars, pandas, matplotlib, stats)
+- **AI Integration**: Multi-provider AI system with intelligent fallback
+- **Payment**: Stripe integration with progressive pricing
+
+## Recent Changes
+- **SIMPLIFIED WORKFLOW RESTART**: Focused four-path progressive system (January 7, 2025)
+- Implemented data transformation, analysis, visualization, and AI insights paths
+- Added free trial with 10MB limit and no authentication requirement
+- Created comprehensive Python-based data processing pipeline
+- Integrated multi-provider AI system with Chimaridata fallback hierarchy
+
+## User Preferences
+- Wants four distinct progressive paths with set pricing
+- Values Python-based data processing over complex authentication
+- Prioritizes reliable data upload and multi-format support
+- Prefers progressive pricing with discounts for multiple features
+- Focuses on practical data insights and visualizations
+- Wants Chimaridata AI integration with fallback options
