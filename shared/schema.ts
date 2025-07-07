@@ -24,6 +24,10 @@ export const dataProjectSchema = z.object({
   visualizations: z.array(z.any()).optional(),
   aiInsights: z.any().optional(),
   purchasedFeatures: z.array(z.enum(["transformation", "analysis", "visualization", "ai_insights"])).optional(),
+  isPaid: z.boolean().default(false),
+  selectedFeatures: z.array(z.string()).optional(),
+  paymentIntentId: z.string().optional(),
+  upgradedAt: z.date().optional(),
 });
 
 export type DataProject = z.infer<typeof dataProjectSchema>;

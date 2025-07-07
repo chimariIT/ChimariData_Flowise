@@ -36,17 +36,90 @@ def create_dataframe(data: Dict[str, Any]) -> pd.DataFrame:
         raise ValueError("Invalid data format")
 
 def descriptive_analysis(df: pd.DataFrame) -> Dict[str, Any]:
-    """Perform descriptive statistical analysis"""
+    """Perform comprehensive descriptive and multivariate statistical analysis"""
+    
+    # Identify column types
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+    
     results = {
         'basic_info': {
             'shape': df.shape,
             'columns': list(df.columns),
             'dtypes': df.dtypes.to_dict(),
             'missing_values': df.isnull().sum().to_dict(),
-            'memory_usage': df.memory_usage(deep=True).sum()
+            'memory_usage': df.memory_usage(deep=True).sum(),
+            'numeric_columns': numeric_cols,
+            'categorical_columns': categorical_cols
         },
         'numerical_summary': {},
-        'categorical_summary': {}
+        'categorical_summary': {},
+        'multivariate_analysis': {},
+        'correlation_analysis': {},
+        'group_analysis': {}
+    }
+    
+    # Enhanced Numerical Analysis
+    if len(numeric_cols) > 0:
+        results['numerical_summary'] = {
+            'count': df[numeric_cols].count().to_dict(),
+            'mean': df[numeric_cols].mean().to_dict(),
+            'std': df[numeric_cols].std().to_dict(),
+            'min': df[numeric_cols].min().to_dict(),
+            'max': df[numeric_cols].max().to_dict(),
+            'median': df[numeric_cols].median().to_dict(),
+            'skewness': df[numeric_cols].skew().to_dict(),
+            'kurtosis': df[numeric_cols].kurtosis().to_dict(),
+            'quartiles': {
+                'q25': df[numeric_cols].quantile(0.25).to_dict(),
+                'q75': df[numeric_cols].quantile(0.75).to_dict()
+            }
+        }
+    
+    # Enhanced Categorical Analysis
+    if len(categorical_cols) > 0:
+        cat_summary = {}
+        for col in categorical_cols:
+            cat_summary[col] = {
+                'unique_count': df[col].nunique(),
+                'top_values': df[col].value_counts().head().to_dict(),
+                'missing_count': df[col].isnull().sum(),
+                'mode': df[col].mode().iloc[0] if not df[col].mode().empty else None,
+                'entropy': calculate_entropy(df[col])
+            }
+        results['categorical_summary'] = cat_summary
+    
+    # Multivariate Analysis - Correlation Matrix
+    if len(numeric_cols) > 1:
+        correlation_matrix = df[numeric_cols].corr()
+        results['correlation_analysis'] = {
+            'correlation_matrix': correlation_matrix.to_dict(),
+            'strong_correlations': find_strong_correlations(correlation_matrix),
+            'correlation_insights': generate_correlation_insights(correlation_matrix)
+        }
+    
+    # Group Analysis by Categorical Variables
+    if len(categorical_cols) > 0 and len(numeric_cols) > 0:
+        group_analysis = {}
+        for cat_col in categorical_cols[:2]:  # Limit to first 2 categorical for performance
+            if df[cat_col].nunique() <= 10:  # Only analyze if reasonable number of groups
+                group_stats = {}
+                for num_col in numeric_cols:
+                    grouped = df.groupby(cat_col)[num_col]
+                    group_stats[num_col] = {
+                        'mean_by_group': grouped.mean().to_dict(),
+                        'std_by_group': grouped.std().to_dict(),
+                        'count_by_group': grouped.count().to_dict(),
+                        'anova_p_value': perform_anova(df, cat_col, num_col)
+                    }
+                group_analysis[cat_col] = group_stats
+        results['group_analysis'] = group_analysis
+    
+    # Variable Selection Recommendations
+    results['multivariate_analysis'] = {
+        'recommended_pairs': recommend_variable_pairs(df, numeric_cols, categorical_cols),
+        'outlier_detection': detect_outliers(df, numeric_cols),
+        'feature_importance': calculate_feature_importance(df, numeric_cols, categorical_cols)
     }
     
     # Numerical columns analysis
@@ -251,6 +324,121 @@ def generate_insights(df: pd.DataFrame, descriptive_results: Dict[str, Any]) -> 
             insights.append(f"High variance detected in: {', '.join(high_variance_cols[:3])}")
     
     return insights
+
+def calculate_entropy(series: pd.Series) -> float:
+    """Calculate entropy for categorical variable"""
+    try:
+        value_counts = series.value_counts()
+        probabilities = value_counts / len(series)
+        entropy = -sum(probabilities * np.log2(probabilities + 1e-9))
+        return float(entropy)
+    except:
+        return 0.0
+
+def find_strong_correlations(corr_matrix: pd.DataFrame, threshold: float = 0.7) -> List[Dict]:
+    """Find pairs of variables with strong correlations"""
+    strong_corr = []
+    for i in range(len(corr_matrix.columns)):
+        for j in range(i+1, len(corr_matrix.columns)):
+            corr_val = corr_matrix.iloc[i, j]
+            if abs(corr_val) >= threshold:
+                strong_corr.append({
+                    'var1': corr_matrix.columns[i],
+                    'var2': corr_matrix.columns[j],
+                    'correlation': float(corr_val),
+                    'strength': 'very strong' if abs(corr_val) >= 0.9 else 'strong'
+                })
+    return strong_corr
+
+def generate_correlation_insights(corr_matrix: pd.DataFrame) -> List[str]:
+    """Generate insights from correlation matrix"""
+    insights = []
+    strong_correlations = find_strong_correlations(corr_matrix)
+    
+    if strong_correlations:
+        insights.append(f"Found {len(strong_correlations)} strong correlations")
+        for corr in strong_correlations[:3]:  # Top 3
+            insights.append(f"{corr['var1']} and {corr['var2']}: {corr['correlation']:.2f}")
+    else:
+        insights.append("No strong correlations detected between numerical variables")
+    
+    return insights
+
+def perform_anova(df: pd.DataFrame, categorical_col: str, numeric_col: str) -> float:
+    """Perform ANOVA test between categorical and numeric variables"""
+    try:
+        from scipy.stats import f_oneway
+        groups = [group[numeric_col].dropna() for name, group in df.groupby(categorical_col)]
+        if len(groups) > 1 and all(len(g) > 0 for g in groups):
+            f_stat, p_value = f_oneway(*groups)
+            return float(p_value)
+    except:
+        pass
+    return 1.0  # No significant difference
+
+def recommend_variable_pairs(df: pd.DataFrame, numeric_cols: List[str], categorical_cols: List[str]) -> List[Dict]:
+    """Recommend interesting variable pairs for analysis"""
+    recommendations = []
+    
+    # Numeric pairs with high correlation
+    if len(numeric_cols) > 1:
+        corr_matrix = df[numeric_cols].corr()
+        strong_corrs = find_strong_correlations(corr_matrix, threshold=0.5)
+        for corr in strong_corrs[:3]:
+            recommendations.append({
+                'type': 'correlation',
+                'variables': [corr['var1'], corr['var2']],
+                'reason': f"Strong correlation ({corr['correlation']:.2f})",
+                'analysis_type': 'scatter_plot'
+            })
+    
+    # Categorical-numeric pairs with potential differences
+    for cat_col in categorical_cols[:2]:
+        if df[cat_col].nunique() <= 10:  # Reasonable number of categories
+            for num_col in numeric_cols[:3]:
+                p_value = perform_anova(df, cat_col, num_col)
+                if p_value < 0.05:
+                    recommendations.append({
+                        'type': 'group_difference',
+                        'variables': [cat_col, num_col],
+                        'reason': f"Significant group differences (p={p_value:.3f})",
+                        'analysis_type': 'box_plot'
+                    })
+    
+    return recommendations
+
+def detect_outliers(df: pd.DataFrame, numeric_cols: List[str]) -> Dict[str, List]:
+    """Detect outliers using IQR method"""
+    outliers = {}
+    for col in numeric_cols:
+        Q1 = df[col].quantile(0.25)
+        Q3 = df[col].quantile(0.75)
+        IQR = Q3 - Q1
+        lower_bound = Q1 - 1.5 * IQR
+        upper_bound = Q3 + 1.5 * IQR
+        
+        outlier_indices = df[(df[col] < lower_bound) | (df[col] > upper_bound)].index.tolist()
+        outliers[col] = {
+            'count': len(outlier_indices),
+            'percentage': len(outlier_indices) / len(df) * 100,
+            'bounds': {'lower': float(lower_bound), 'upper': float(upper_bound)}
+        }
+    
+    return outliers
+
+def calculate_feature_importance(df: pd.DataFrame, numeric_cols: List[str], categorical_cols: List[str]) -> Dict[str, float]:
+    """Calculate basic feature importance metrics"""
+    importance = {}
+    
+    # For numeric variables, use variance as importance measure
+    for col in numeric_cols:
+        importance[col] = float(df[col].var() / (df[col].mean() + 1e-9))
+    
+    # For categorical variables, use entropy
+    for col in categorical_cols:
+        importance[col] = calculate_entropy(df[col])
+    
+    return importance
 
 def assess_data_quality(df: pd.DataFrame) -> Dict[str, Any]:
     """Assess data quality metrics"""

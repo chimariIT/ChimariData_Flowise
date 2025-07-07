@@ -28,14 +28,17 @@ const upload = multer({
     const allowedTypes = [
       'application/json',
       'text/csv',
+      'application/csv',
       'application/vnd.ms-excel',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'text/plain'
+      'text/plain',
+      'application/octet-stream' // For files without proper mimetype
     ];
     
     const allowedExtensions = ['.json', '.csv', '.xlsx', '.xls', '.txt'];
     const hasValidExtension = allowedExtensions.some(ext => file.originalname.toLowerCase().endsWith(ext));
     
+    // Allow if mimetype matches OR if extension is valid
     if (allowedTypes.includes(file.mimetype) || hasValidExtension) {
       cb(null, true);
     } else {
@@ -387,6 +390,125 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching AI status:", error);
       res.status(500).json({ error: "Failed to fetch AI status" });
+    }
+  });
+
+  // Trial upgrade endpoint
+  app.post("/api/upgrade-trial", async (req, res) => {
+    try {
+      const { projectId, selectedFeatures, paymentIntentId } = req.body;
+      
+      if (!projectId || !selectedFeatures || !paymentIntentId) {
+        return res.status(400).json({ error: 'Missing required fields' });
+      }
+
+      // Verify payment intent
+      const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+      
+      if (paymentIntent.status !== 'succeeded') {
+        return res.status(400).json({ error: 'Payment not completed' });
+      }
+
+      // Update project with paid features
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+
+      const updatedProject = await storage.updateProject(projectId, {
+        isPaid: true,
+        selectedFeatures,
+        paymentIntentId,
+        upgradedAt: new Date()
+      });
+
+      res.json({
+        success: true,
+        project: updatedProject,
+        features: selectedFeatures
+      });
+    } catch (error) {
+      console.error('Trial upgrade error:', error);
+      res.status(500).json({ error: 'Failed to upgrade trial' });
+    }
+  });
+
+  // Process full analysis with paid features
+  app.post("/api/process-full-analysis", upload.single('file'), async (req, res) => {
+    try {
+      const { features, paymentIntentId } = req.body;
+      
+      if (!req.file) {
+        return res.status(400).json({ error: 'No file uploaded' });
+      }
+
+      if (!features || !paymentIntentId) {
+        return res.status(400).json({ error: 'Features and payment verification required' });
+      }
+
+      // Verify payment
+      const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+      if (paymentIntent.status !== 'succeeded') {
+        return res.status(400).json({ error: 'Payment not verified' });
+      }
+
+      const selectedFeatures = JSON.parse(features);
+
+      // Process file with smart header detection
+      const processedData = await FileProcessor.processFile(
+        req.file.buffer,
+        req.file.originalname,
+        req.file.mimetype
+      );
+
+      // Create project
+      const project = await storage.createProject({
+        name: req.file.originalname.replace(/\.[^/.]+$/, ""),
+        fileName: req.file.originalname,
+        fileSize: req.file.size,
+        schema: processedData.schema,
+        recordCount: processedData.recordCount,
+        isPaid: true,
+        selectedFeatures,
+        paymentIntentId
+      });
+
+      // Process with Python based on selected features - enhanced multivariate analysis
+      const config = {
+        include_transformation: selectedFeatures.includes('transformation'),
+        include_analysis: selectedFeatures.includes('analysis'),
+        include_visualizations: selectedFeatures.includes('visualization'),
+        include_ai_insights: selectedFeatures.includes('ai_insights'),
+        include_multivariate: true,
+        include_group_analysis: true,
+        is_paid: true
+      };
+
+      const analysisResults = await PythonProcessor.processData(
+        processedData,
+        config,
+        project.id
+      );
+
+      // Update project with results
+      await storage.updateProject(project.id, {
+        processed: true,
+        analysisResults
+      });
+
+      res.json({
+        success: true,
+        projectId: project.id,
+        results: analysisResults,
+        features: selectedFeatures
+      });
+
+    } catch (error) {
+      console.error('Full analysis processing error:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message || 'Failed to process full analysis'
+      });
     }
   });
 

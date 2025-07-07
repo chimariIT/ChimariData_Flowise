@@ -1,18 +1,22 @@
 import { useState, useCallback } from "react";
 import { useDropzone } from "react-dropzone";
-import { Upload, File, X, Check, BarChart3, Database } from "lucide-react";
+import { Upload, File, X, Check, BarChart3, Database, Crown, CreditCard, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/lib/api";
+import { UpgradeModal } from "./upgrade-modal";
 
 export default function FreeTrialUploader() {
   const { toast } = useToast();
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [results, setResults] = useState<any>(null);
+  const [showUpgrade, setShowUpgrade] = useState(false);
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length > 0) {
@@ -248,20 +252,14 @@ export default function FreeTrialUploader() {
         {renderSchema(results.schema)}
         {renderAnalysis(results.descriptiveAnalysis)}
         {renderVisualizations(results.basicVisualizations)}
+        {renderUpgradePrompt()}
 
-        <Card className="bg-blue-50 border-blue-200">
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <h3 className="font-semibold text-blue-900 mb-2">Want More?</h3>
-              <p className="text-blue-700 text-sm mb-4">
-                Upgrade to access data transformation, advanced analysis, custom visualizations, and AI insights
-              </p>
-              <Button className="bg-blue-600 hover:bg-blue-700">
-                View Full Platform
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+        <UpgradeModal 
+          isOpen={showUpgrade}
+          onClose={() => setShowUpgrade(false)}
+          projectId={currentProjectId}
+          trialResults={results}
+        />
       </div>
     );
   }

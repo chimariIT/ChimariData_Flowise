@@ -79,10 +79,13 @@ export class FileProcessor {
     const lines = text.trim().split('\n');
     if (lines.length < 2) return [];
     
-    const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
+    // Smart header detection - find the row with field names
+    const headerRowIndex = this.detectHeaderRow(lines);
+    const headers = lines[headerRowIndex].split(',').map(h => h.trim().replace(/"/g, ''));
     const data: any[] = [];
     
-    for (let i = 1; i < lines.length; i++) {
+    // Start from the row after headers
+    for (let i = headerRowIndex + 1; i < lines.length; i++) {
       const values = lines[i].split(',').map(v => v.trim().replace(/"/g, ''));
       const row: any = {};
       
@@ -97,6 +100,36 @@ export class FileProcessor {
     }
     
     return data;
+  }
+
+  private static detectHeaderRow(lines: string[]): number {
+    // Strategy: Find row where values look like field names (strings) 
+    // and subsequent rows contain mixed data types
+    for (let i = 0; i < Math.min(5, lines.length - 1); i++) {
+      const currentRow = lines[i].split(',').map(v => v.trim().replace(/"/g, ''));
+      const nextRow = lines[i + 1].split(',').map(v => v.trim().replace(/"/g, ''));
+      
+      // Check if current row looks like headers
+      const currentHasNumbers = currentRow.some(val => !isNaN(parseFloat(val)) && val !== '');
+      const nextHasNumbers = nextRow.some(val => !isNaN(parseFloat(val)) && val !== '');
+      
+      // If current row has no numbers but next row has numbers, current is likely header
+      if (!currentHasNumbers && nextHasNumbers) {
+        return i;
+      }
+      
+      // Check for descriptive names vs data values
+      const currentHasDescriptiveNames = currentRow.some(val => 
+        val.length > 3 && /^[a-zA-Z_][a-zA-Z0-9_\s]*$/.test(val)
+      );
+      
+      if (currentHasDescriptiveNames && nextHasNumbers) {
+        return i;
+      }
+    }
+    
+    // Default to first row if no clear pattern found
+    return 0;
   }
 
   private static processExcel(buffer: Buffer): any[] {
@@ -117,9 +150,10 @@ export class FileProcessor {
       throw new Error('Excel file must have at least a header row and one data row');
     }
     
-    // Convert to objects with headers
-    const headers = data[0] as string[];
-    const rows = data.slice(1) as any[][];
+    // Smart header detection for Excel
+    const headerRowIndex = this.detectExcelHeaderRow(data);
+    const headers = data[headerRowIndex] as string[];
+    const rows = data.slice(headerRowIndex + 1) as any[][];
     
     return rows.map(row => {
       const obj: any = {};
@@ -128,6 +162,31 @@ export class FileProcessor {
       });
       return obj;
     });
+  }
+
+  private static detectExcelHeaderRow(data: any[][]): number {
+    // Similar logic for Excel data
+    for (let i = 0; i < Math.min(5, data.length - 1); i++) {
+      const currentRow = data[i] || [];
+      const nextRow = data[i + 1] || [];
+      
+      const currentHasNumbers = currentRow.some(val => typeof val === 'number');
+      const nextHasNumbers = nextRow.some(val => typeof val === 'number');
+      
+      if (!currentHasNumbers && nextHasNumbers) {
+        return i;
+      }
+      
+      const currentHasDescriptiveNames = currentRow.some(val => 
+        typeof val === 'string' && val.length > 3 && /^[a-zA-Z_][a-zA-Z0-9_\s]*$/.test(val)
+      );
+      
+      if (currentHasDescriptiveNames && nextHasNumbers) {
+        return i;
+      }
+    }
+    
+    return 0;
   }
 
   private static processText(buffer: Buffer): any[] {
