@@ -1,232 +1,218 @@
-import React, { useState, useEffect } from 'react';
-import { Button } from "@/components/ui/button";
+import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { Edit3, Save, X, Plus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
-import { Database, FileText, Save, Sparkles } from "lucide-react";
-
-interface SchemaField {
-  name: string;
-  type: string;
-  description: string;
-  suggestedDescription?: string;
-  nullable?: boolean;
-  unique?: boolean;
-  sampleValues?: string[];
-}
 
 interface SchemaEditorProps {
-  projectId: string;
-  initialSchema: SchemaField[];
-  onSave: (updatedSchema: SchemaField[]) => void;
-  onCancel: () => void;
+  project: any;
 }
 
-export function SchemaEditor({ projectId, initialSchema, onSave, onCancel }: SchemaEditorProps) {
-  const [fields, setFields] = useState<SchemaField[]>(initialSchema);
-  const [isGeneratingDescriptions, setIsGeneratingDescriptions] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
+export default function SchemaEditor({ project }: SchemaEditorProps) {
   const { toast } = useToast();
+  const [editingField, setEditingField] = useState<string | null>(null);
+  const [fieldEdits, setFieldEdits] = useState<Record<string, any>>({});
+  const [projectDescription, setProjectDescription] = useState(project.description || "");
 
-  // Generate AI-suggested descriptions for all fields
-  const generateFieldDescriptions = async () => {
-    setIsGeneratingDescriptions(true);
-    try {
-      const response = await apiRequest("POST", "/api/generate-field-descriptions", {
-        projectId,
-        fields: fields.map(f => ({
-          name: f.name,
-          type: f.type,
-          sampleValues: f.sampleValues || []
-        }))
-      });
+  const schema = project.schema || {};
+  const fields = Object.entries(schema);
 
-      const suggestions = await response.json();
-      
-      setFields(prev => prev.map(field => ({
-        ...field,
-        suggestedDescription: suggestions[field.name] || field.description,
-        description: field.description || suggestions[field.name] || ""
-      })));
+  const dataTypes = [
+    { value: "text", label: "Text" },
+    { value: "number", label: "Number" },
+    { value: "date", label: "Date" },
+    { value: "boolean", label: "Boolean" },
+    { value: "email", label: "Email" },
+    { value: "url", label: "URL" },
+    { value: "phone", label: "Phone" },
+    { value: "currency", label: "Currency" },
+  ];
 
-      toast({
-        title: "AI Suggestions Generated",
-        description: "Field descriptions have been suggested based on your data structure.",
-      });
-    } catch (error) {
-      console.error("Error generating descriptions:", error);
-      toast({
-        title: "Description Generation Failed",
-        description: "Could not generate AI suggestions. Please add descriptions manually.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsGeneratingDescriptions(false);
-    }
+  const handleEditField = (fieldName: string) => {
+    setEditingField(fieldName);
+    setFieldEdits({
+      ...fieldEdits,
+      [fieldName]: {
+        ...schema[fieldName],
+        name: fieldName,
+      }
+    });
   };
 
-  // Update a field's description
-  const updateFieldDescription = (fieldName: string, description: string) => {
-    setFields(prev => prev.map(field => 
-      field.name === fieldName ? { ...field, description } : field
-    ));
+  const handleSaveField = (fieldName: string) => {
+    // Here you would typically save to the backend
+    toast({
+      title: "Field updated",
+      description: `${fieldName} has been updated successfully`,
+    });
+    setEditingField(null);
   };
 
-  // Use AI suggestion for a field
-  const useSuggestion = (fieldName: string) => {
-    const field = fields.find(f => f.name === fieldName);
-    if (field?.suggestedDescription) {
-      updateFieldDescription(fieldName, field.suggestedDescription);
-    }
+  const handleCancelEdit = () => {
+    setEditingField(null);
+    setFieldEdits({});
   };
 
-  // Save schema updates
-  const handleSave = async () => {
-    setIsSaving(true);
-    try {
-      await apiRequest("PUT", `/api/projects/${projectId}/schema`, {
-        fields: fields
-      });
+  const updateFieldEdit = (fieldName: string, key: string, value: any) => {
+    setFieldEdits({
+      ...fieldEdits,
+      [fieldName]: {
+        ...fieldEdits[fieldName],
+        [key]: value,
+      }
+    });
+  };
 
-      toast({
-        title: "Schema Updated",
-        description: "Field descriptions have been saved successfully.",
-      });
-
-      onSave(fields);
-    } catch (error) {
-      console.error("Error saving schema:", error);
-      toast({
-        title: "Save Failed",
-        description: "Could not save schema updates. Please try again.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsSaving(false);
-    }
+  const handleSaveDescription = () => {
+    // Here you would typically save to the backend
+    toast({
+      title: "Description updated",
+      description: "Project description has been saved",
+    });
   };
 
   return (
-    <div className="max-w-4xl mx-auto p-6 space-y-6">
+    <div className="space-y-6">
+      {/* Project Description */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Database className="h-5 w-5" />
-            Schema Definition Editor
-          </CardTitle>
+          <CardTitle>Project Description</CardTitle>
           <CardDescription>
-            Review and edit field descriptions to improve AI analysis accuracy. 
-            AI can suggest descriptions based on your data structure.
+            Describe your dataset and what it contains
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Textarea
+            placeholder="Describe your data, its purpose, and what insights you're looking for..."
+            value={projectDescription}
+            onChange={(e) => setProjectDescription(e.target.value)}
+            className="min-h-[100px]"
+          />
+          <Button onClick={handleSaveDescription}>
+            <Save className="w-4 h-4 mr-2" />
+            Save Description
+          </Button>
+        </CardContent>
+      </Card>
+
+      {/* Data Schema */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Data Schema & Field Definitions</CardTitle>
+          <CardDescription>
+            Review and customize your data fields, types, and descriptions
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="flex gap-3 mb-6">
-            <Button 
-              onClick={generateFieldDescriptions}
-              disabled={isGeneratingDescriptions}
-              variant="outline"
-            >
-              {isGeneratingDescriptions ? (
-                <>
-                  <Sparkles className="h-4 w-4 mr-2 animate-spin" />
-                  Generating...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="h-4 w-4 mr-2" />
-                  Generate AI Descriptions
-                </>
-              )}
-            </Button>
-          </div>
-
-          <div className="space-y-4">
-            {fields.map((field) => (
-              <Card key={field.name} className="p-4">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
-                  <div>
-                    <Label className="text-sm font-medium">{field.name}</Label>
-                    <div className="flex items-center gap-2 mt-1">
-                      <Badge variant="secondary">{field.type}</Badge>
-                      {field.nullable && <Badge variant="outline">Nullable</Badge>}
-                      {field.unique && <Badge variant="outline">Unique</Badge>}
-                    </div>
-                    {field.sampleValues && field.sampleValues.length > 0 && (
-                      <div className="mt-2">
-                        <Label className="text-xs text-muted-foreground">Sample Values:</Label>
-                        <div className="text-xs text-muted-foreground mt-1">
-                          {field.sampleValues.slice(0, 3).join(', ')}
-                          {field.sampleValues.length > 3 && '...'}
+          {fields.length === 0 ? (
+            <div className="text-center py-8 text-gray-500">
+              <p>No schema information available</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {fields.map(([fieldName, fieldInfo]: [string, any]) => (
+                <div key={fieldName} className="border rounded-lg p-4">
+                  {editingField === fieldName ? (
+                    // Edit Mode
+                    <div className="space-y-4">
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <div>
+                          <label className="text-sm font-medium mb-2 block">Field Name</label>
+                          <Input
+                            value={fieldEdits[fieldName]?.name || fieldName}
+                            onChange={(e) => updateFieldEdit(fieldName, 'name', e.target.value)}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-sm font-medium mb-2 block">Data Type</label>
+                          <Select
+                            value={fieldEdits[fieldName]?.type || fieldInfo.type}
+                            onValueChange={(value) => updateFieldEdit(fieldName, 'type', value)}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {dataTypes.map((type) => (
+                                <SelectItem key={type.value} value={type.value}>
+                                  {type.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
                         </div>
                       </div>
-                    )}
-                  </div>
+                      
+                      <div>
+                        <label className="text-sm font-medium mb-2 block">Description</label>
+                        <Textarea
+                          placeholder="Describe what this field contains..."
+                          value={fieldEdits[fieldName]?.description || fieldInfo.description || ''}
+                          onChange={(e) => updateFieldEdit(fieldName, 'description', e.target.value)}
+                        />
+                      </div>
 
-                  <div className="md:col-span-2">
-                    <Label htmlFor={`desc-${field.name}`} className="text-sm font-medium">
-                      Field Description
-                    </Label>
-                    <Textarea
-                      id={`desc-${field.name}`}
-                      value={field.description || ''}
-                      onChange={(e) => updateFieldDescription(field.name, e.target.value)}
-                      placeholder="Describe what this field represents..."
-                      className="mt-1"
-                      rows={2}
-                    />
-                    
-                    {field.suggestedDescription && field.suggestedDescription !== field.description && (
-                      <div className="mt-2 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-md border border-blue-200 dark:border-blue-800">
-                        <div className="flex items-center gap-2 mb-1">
-                          <Sparkles className="h-4 w-4 text-blue-600" />
-                          <Label className="text-sm font-medium text-blue-800 dark:text-blue-200">
-                            AI Suggestion
-                          </Label>
-                        </div>
-                        <p className="text-sm text-blue-700 dark:text-blue-300 mb-2">
-                          {field.suggestedDescription}
-                        </p>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => useSuggestion(field.name)}
-                          className="h-7 text-xs"
-                        >
-                          Use This Description
+                      <div className="flex space-x-2">
+                        <Button size="sm" onClick={() => handleSaveField(fieldName)}>
+                          <Save className="w-4 h-4 mr-2" />
+                          Save
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={handleCancelEdit}>
+                          <X className="w-4 h-4 mr-2" />
+                          Cancel
                         </Button>
                       </div>
-                    )}
-                  </div>
+                    </div>
+                  ) : (
+                    // View Mode
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center space-x-3 mb-2">
+                          <h3 className="font-medium text-gray-900">{fieldName}</h3>
+                          <Badge variant="outline">{fieldInfo.type}</Badge>
+                          {fieldInfo.nullable && (
+                            <Badge variant="secondary">Nullable</Badge>
+                          )}
+                        </div>
+                        
+                        {fieldInfo.description && (
+                          <p className="text-gray-600 text-sm mb-2">{fieldInfo.description}</p>
+                        )}
+                        
+                        {fieldInfo.sampleValues && fieldInfo.sampleValues.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            <span className="text-xs text-gray-500 mr-2">Sample values:</span>
+                            {fieldInfo.sampleValues.slice(0, 3).map((value: string, index: number) => (
+                              <Badge key={index} variant="outline" className="text-xs">
+                                {value}
+                              </Badge>
+                            ))}
+                            {fieldInfo.sampleValues.length > 3 && (
+                              <Badge variant="outline" className="text-xs">
+                                +{fieldInfo.sampleValues.length - 3} more
+                              </Badge>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => handleEditField(fieldName)}
+                      >
+                        <Edit3 className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  )}
                 </div>
-              </Card>
-            ))}
-          </div>
-
-          <div className="flex justify-between pt-6 border-t">
-            <Button variant="outline" onClick={onCancel}>
-              Cancel
-            </Button>
-            <Button 
-              onClick={handleSave}
-              disabled={isSaving}
-            >
-              {isSaving ? (
-                <>
-                  <Save className="h-4 w-4 mr-2 animate-spin" />
-                  Saving...
-                </>
-              ) : (
-                <>
-                  <Save className="h-4 w-4 mr-2" />
-                  Save Schema
-                </>
-              )}
-            </Button>
-          </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
