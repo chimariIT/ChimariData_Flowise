@@ -58,13 +58,30 @@ const AnalysisPaymentForm = ({ projectId, onSuccess }: { projectId: string; anal
 
     try {
       // Check authentication before processing payment
+      const token = localStorage.getItem('auth_token');
+      if (!token) {
+        toast({
+          title: "Authentication Error",
+          description: "Please sign in again to complete payment.",
+          variant: "destructive",
+        });
+        setIsProcessing(false);
+        window.location.href = '/auth';
+        return;
+      }
+      
+      // Verify token is still valid
       const authCheck = await fetch('/api/auth/user', {
-        credentials: 'include'
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
       });
       
       if (!authCheck.ok) {
+        // Token expired, clear it and redirect
+        localStorage.removeItem('auth_token');
         toast({
-          title: "Authentication Error",
+          title: "Session Expired",
           description: "Please sign in again to complete payment.",
           variant: "destructive",
         });
@@ -218,18 +235,34 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
 
   const createPaymentIntent = async () => {
     try {
-      // Check if user is authenticated via session
-      const authCheck = await fetch('/api/auth/user', {
-        credentials: 'include'
-      });
-      
-      if (!authCheck.ok) {
+      // Check if user is authenticated via token
+      const token = localStorage.getItem('auth_token');
+      if (!token) {
         toast({
           title: "Authentication Required",
           description: "Please sign in to proceed with payment.",
           variant: "destructive",
         });
         // Redirect to auth page
+        window.location.href = '/auth';
+        return;
+      }
+      
+      // Verify token is still valid
+      const authCheck = await fetch('/api/auth/user', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (!authCheck.ok) {
+        // Token expired, clear it and redirect
+        localStorage.removeItem('auth_token');
+        toast({
+          title: "Session Expired",
+          description: "Please sign in again to proceed with payment.",
+          variant: "destructive",
+        });
         window.location.href = '/auth';
         return;
       }
