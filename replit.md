@@ -34,11 +34,13 @@ A streamlined data processing platform with four progressive paid paths: 1) Data
 - **Payment**: Stripe integration with progressive pricing
 
 ## Recent Changes
-- **SIMPLIFIED WORKFLOW RESTART**: Focused four-path progressive system (January 7, 2025)
-- Implemented data transformation, analysis, visualization, and AI insights paths
-- Added free trial with 10MB limit and no authentication requirement
-- Created comprehensive Python-based data processing pipeline
-- Integrated multi-provider AI system with Chimaridata fallback hierarchy
+- **ENHANCED DATA PROCESSING SYSTEM**: Major improvements to data handling and analysis (January 7, 2025)
+- **Smart Header Detection**: Automatically detects header rows in datasets with title rows or metadata
+- **Multivariate Analysis**: Enhanced Python analyzer with correlation analysis, group statistics, and variable recommendations
+- **Payment Processing Integration**: Stripe payment system with upgrade modal for free trial users
+- **Progressive Pricing**: Discounts for multiple features (15% for 2, 25% for 3, 35% for all 4)
+- Implemented comprehensive file processing with intelligent data parsing
+- Added scipy dependency for advanced statistical analysis capabilities
 
 ## User Preferences
 - Wants four distinct progressive paths with set pricing

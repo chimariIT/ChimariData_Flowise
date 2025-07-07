@@ -1,6 +1,3 @@
-name,age,salary,department,email
-John Doe,30,75000,Engineering,john@example.com
-Jane Smith,25,65000,Marketing,jane@example.com
-Bob Johnson,35,85000,Engineering,bob@example.com
-Alice Brown,28,70000,Design,alice@example.com
-Charlie Wilson,32,80000,Engineering,charlie@example.com
+Campaign Name,Impressions,Clicks,Conversions,Spend
+Summer Sale,15000,750,45,1200
+Fall Promo,12000,600,30,950
