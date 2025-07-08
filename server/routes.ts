@@ -12,6 +12,11 @@ import {
   fileUploadResponseSchema,
   featureRequestSchema 
 } from "@shared/schema";
+import { PIIAnalyzer } from './pii-analyzer';
+import { GoogleDriveService } from './google-drive-service';
+import { DataTransformer } from './data-transformer';
+import { AdvancedAnalyzer } from './advanced-analyzer';
+import { MCPAIService } from './mcp-ai-service';
 
 // Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
@@ -48,8 +53,10 @@ const upload = multer({
 });
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Initialize MCP AI Service
+  MCPAIService.initializeMCPServer().catch(console.error);
   
-  // Free trial upload endpoint
+  // Enhanced trial upload endpoint with PII analysis
   app.post("/api/trial-upload", upload.single('file'), async (req, res) => {
     try {
       if (!req.file) {
@@ -79,6 +86,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         file.mimetype
       );
 
+      // Perform PII analysis
+      const piiAnalysis = await PIIAnalyzer.analyzePII(processedData.preview || [], processedData.schema || {});
+
       // Run Python trial analysis
       const trialResults = await PythonProcessor.processTrial(
         `trial_${Date.now()}`,
@@ -102,7 +112,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         trialResults: {
           schema: processedData.schema,
           descriptiveAnalysis: trialResults.data,
-          basicVisualizations: trialResults.visualizations || []
+          basicVisualizations: trialResults.visualizations || [],
+          piiAnalysis: piiAnalysis
         }
       });
 
@@ -112,6 +123,275 @@ export async function registerRoutes(app: Express): Promise<Server> {
         success: false, 
         error: error.message || "Failed to process trial file" 
       });
+    }
+  });
+
+  // Google Drive integration endpoints
+  app.get("/api/google-drive/auth-url", (req, res) => {
+    try {
+      const authUrl = GoogleDriveService.getAuthUrl();
+      res.json({ authUrl });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/google-drive/callback", async (req, res) => {
+    try {
+      const { code } = req.body;
+      const tokens = await GoogleDriveService.getTokenFromCode(code);
+      res.json({ tokens });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/google-drive/files", async (req, res) => {
+    try {
+      const { accessToken, refreshToken, query } = req.body;
+      const driveService = new GoogleDriveService();
+      await driveService.initializeWithToken(accessToken, refreshToken);
+      
+      const files = await driveService.listFiles(query);
+      res.json({ files });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/google-drive/download", async (req, res) => {
+    try {
+      const { accessToken, refreshToken, fileId } = req.body;
+      const driveService = new GoogleDriveService();
+      await driveService.initializeWithToken(accessToken, refreshToken);
+      
+      const fileBuffer = await driveService.downloadFile(fileId);
+      const metadata = await driveService.getFileMetadata(fileId);
+      
+      // Process the downloaded file
+      const processedData = await FileProcessor.processFile(
+        fileBuffer,
+        metadata.name,
+        metadata.mimeType
+      );
+
+      // Perform PII analysis
+      const piiAnalysis = await PIIAnalyzer.analyzePII(processedData.preview || [], processedData.schema || {});
+
+      res.json({
+        success: true,
+        data: processedData,
+        piiAnalysis,
+        metadata
+      });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // PII consent endpoint
+  app.post("/api/pii-consent", async (req, res) => {
+    try {
+      const { projectId, consent, detectedPII } = req.body;
+      
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+
+      const updatedProject = await storage.updateProject(projectId, {
+        piiAnalysis: {
+          detectedPII,
+          userConsent: consent,
+          consentTimestamp: new Date()
+        }
+      });
+
+      res.json({ success: true, project: updatedProject });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Unique identifier selection endpoint
+  app.post("/api/unique-identifiers", async (req, res) => {
+    try {
+      const { projectId, identifiers } = req.body;
+      
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+
+      const updatedProject = await storage.updateProject(projectId, {
+        uniqueIdentifiers: identifiers
+      });
+
+      res.json({ success: true, project: updatedProject });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Data transformation endpoints
+  app.post("/api/data-join", async (req, res) => {
+    try {
+      const { config } = req.body;
+      const result = await DataTransformer.joinData(config);
+      res.json({ success: true, result });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/outlier-detection", async (req, res) => {
+    try {
+      const { projectId, config } = req.body;
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+
+      // Get project data (you would implement this based on your data storage)
+      const projectData = []; // placeholder - implement actual data retrieval
+      const result = await DataTransformer.detectOutliers(projectData, config);
+      
+      // Update project with outlier analysis
+      await storage.updateProject(projectId, {
+        outlierAnalysis: {
+          method: config.method,
+          threshold: config.threshold,
+          outliers: result.outliers
+        }
+      });
+
+      res.json({ success: true, result });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/missing-data-analysis", async (req, res) => {
+    try {
+      const { projectId, config } = req.body;
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+
+      const projectData = []; // placeholder - implement actual data retrieval
+      const result = await DataTransformer.analyzeMissingData(projectData, config);
+      
+      // Update project with missing data analysis
+      await storage.updateProject(projectId, {
+        missingDataAnalysis: {
+          patterns: result.patterns,
+          recommendations: result.recommendations
+        }
+      });
+
+      res.json({ success: true, result });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/normality-test", async (req, res) => {
+    try {
+      const { projectId, config } = req.body;
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+
+      const projectData = []; // placeholder - implement actual data retrieval
+      const result = await DataTransformer.testNormality(projectData, config);
+      
+      // Update project with normality test results
+      await storage.updateProject(projectId, {
+        normalityTests: result.tests
+      });
+
+      res.json({ success: true, result });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Advanced analysis endpoints
+  app.post("/api/step-by-step-analysis", async (req, res) => {
+    try {
+      const { projectId, config } = req.body;
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+
+      const projectData = []; // placeholder - implement actual data retrieval
+      const result = await AdvancedAnalyzer.performStepByStepAnalysis(projectData, config);
+      
+      // Update project with step-by-step analysis
+      await storage.updateProject(projectId, {
+        stepByStepAnalysis: {
+          question: config.question,
+          targetVariable: config.targetVariable,
+          multivariateVariables: config.multivariateVariables,
+          analysisType: config.analysisType,
+          results: result
+        }
+      });
+
+      res.json({ success: true, result });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // AI role and actions endpoints
+  app.get("/api/ai-roles", (req, res) => {
+    try {
+      const roles = MCPAIService.getAvailableRoles();
+      res.json({ roles });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/mcp-resources", (req, res) => {
+    try {
+      const resources = MCPAIService.getAllResources();
+      res.json({ resources });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/ai-request", async (req, res) => {
+    try {
+      const { projectId, role, actions, context } = req.body;
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+
+      const projectData = []; // placeholder - implement actual data retrieval
+      const result = await MCPAIService.processAIRequest({
+        role,
+        actions,
+        data: projectData,
+        context
+      });
+
+      // Update project with AI results
+      await storage.updateProject(projectId, {
+        aiRole: role.name,
+        aiActions: actions.map(a => a.type),
+        aiInsights: result
+      });
+
+      res.json({ success: true, result });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
     }
   });
 
