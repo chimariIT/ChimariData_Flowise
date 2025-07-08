@@ -347,6 +347,95 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Main project upload endpoint with PII detection
+  app.post("/api/projects/upload", upload.single('file'), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "No file uploaded" 
+        });
+      }
+
+      const { name, description, questions, selectedSheet, headerRow, encoding } = req.body;
+      
+      if (!name || !name.trim()) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Project name is required" 
+        });
+      }
+
+      console.log(`Processing file: ${req.file.originalname} (${req.file.size} bytes)`);
+
+      // Process the uploaded file
+      const processedData = await FileProcessor.processFile(
+        req.file.buffer,
+        req.file.originalname,
+        req.file.mimetype,
+        {
+          selectedSheet,
+          headerRow: headerRow ? parseInt(headerRow) : 0,
+          encoding
+        }
+      );
+
+      console.log('File processed successfully, rows:', processedData.recordCount);
+
+      // Perform PII analysis
+      console.log('Starting PII analysis...');
+      const piiAnalysis = await PIIAnalyzer.analyzePII(processedData.preview || [], processedData.schema || {});
+      console.log('PII analysis completed');
+
+      // Parse questions if provided
+      let parsedQuestions = [];
+      if (questions) {
+        try {
+          parsedQuestions = typeof questions === 'string' ? JSON.parse(questions) : questions;
+        } catch (e) {
+          // If JSON parsing fails, treat as plain text and split by newlines
+          parsedQuestions = questions.split('\n').filter(q => q.trim());
+        }
+      }
+
+      // Create project
+      const project = await storage.createProject({
+        name: name.trim(),
+        description: description || '',
+        questions: parsedQuestions,
+        fileName: req.file.originalname,
+        fileSize: req.file.size,
+        mimeType: req.file.mimetype,
+        uploadedAt: new Date(),
+        processed: true,
+        schema: processedData.schema,
+        recordCount: processedData.recordCount,
+        isTrial: false,
+        purchasedFeatures: [],
+        piiAnalysis: piiAnalysis
+      });
+
+      console.log(`Project created successfully: ${project.id}`);
+
+      res.json({
+        success: true,
+        projectId: project.id,
+        project: {
+          ...project,
+          preview: processedData.preview
+        },
+        piiAnalysis
+      });
+
+    } catch (error) {
+      console.error("File upload error:", error);
+      res.status(500).json({ 
+        success: false, 
+        error: error.message || "Failed to process file" 
+      });
+    }
+  });
+
   // AI role and actions endpoints
   app.get("/api/ai-roles", (req, res) => {
     try {
