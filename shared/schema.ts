@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-// Data project schema with progressive features
+// Data project schema with advanced capabilities
 export const dataProjectSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -15,14 +15,61 @@ export const dataProjectSchema = z.object({
     nullable: z.boolean().optional(),
     sampleValues: z.array(z.string()).optional(),
     description: z.string().optional(),
+    isPII: z.boolean().optional(),
+    isUniqueIdentifier: z.boolean().optional(),
   })).optional(),
   recordCount: z.number().optional(),
   processed: z.boolean().default(false),
-  // Progressive features
-  transformations: z.array(z.any()).optional(),
+  // Advanced upload capabilities
+  piiAnalysis: z.object({
+    detectedPII: z.array(z.string()).optional(),
+    userConsent: z.boolean().optional(),
+    consentTimestamp: z.date().optional(),
+  }).optional(),
+  uniqueIdentifiers: z.array(z.string()).optional(),
+  dataSource: z.enum(["upload", "google_drive", "api"]).default("upload"),
+  sourceMetadata: z.record(z.any()).optional(),
+  // Data transformation capabilities
+  transformations: z.array(z.object({
+    type: z.enum(["join", "outlier_detection", "missing_data", "normality_test"]),
+    config: z.any(),
+    result: z.any().optional(),
+  })).optional(),
+  joinedFiles: z.array(z.string()).optional(),
+  outlierAnalysis: z.object({
+    method: z.string(),
+    threshold: z.number(),
+    outliers: z.array(z.any()).optional(),
+  }).optional(),
+  missingDataAnalysis: z.object({
+    patterns: z.record(z.any()),
+    recommendations: z.array(z.string()),
+  }).optional(),
+  normalityTests: z.record(z.object({
+    test: z.string(),
+    statistic: z.number(),
+    pValue: z.number(),
+    isNormal: z.boolean(),
+  })).optional(),
+  // Advanced analysis capabilities
   analysisResults: z.any().optional(),
+  stepByStepAnalysis: z.object({
+    question: z.string(),
+    targetVariable: z.string(),
+    multivariateVariables: z.array(z.string()),
+    analysisType: z.enum(["anova", "ancova", "manova", "mancova", "regression", "machine_learning"]),
+    results: z.any().optional(),
+  }).optional(),
+  // AI capabilities
   visualizations: z.array(z.any()).optional(),
   aiInsights: z.any().optional(),
+  aiRole: z.string().optional(),
+  aiActions: z.array(z.string()).optional(),
+  mcpResources: z.array(z.object({
+    type: z.string(),
+    name: z.string(),
+    config: z.any(),
+  })).optional(),
   purchasedFeatures: z.array(z.enum(["transformation", "analysis", "visualization", "ai_insights"])).optional(),
   isPaid: z.boolean().default(false),
   selectedFeatures: z.array(z.string()).optional(),
