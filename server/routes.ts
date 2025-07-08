@@ -357,7 +357,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      const { name, description, questions, selectedSheet, headerRow, encoding } = req.body;
+      const { name, description, questions, selectedSheet, headerRow, encoding, piiHandled, anonymizationApplied, selectedColumns } = req.body;
+      
+      console.log('Request body values:', { name, piiHandled, anonymizationApplied });
       
       if (!name || !name.trim()) {
         return res.status(400).json({ 
@@ -382,11 +384,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       console.log('File processed successfully, rows:', processedData.recordCount);
 
-      // Perform PII analysis
-      console.log('Starting PII analysis...');
-      const piiAnalysis = await PIIAnalyzer.analyzePII(processedData.preview || [], processedData.schema || {});
-      console.log('PII analysis completed');
-
       // Parse questions if provided
       let parsedQuestions = [];
       if (questions) {
@@ -396,6 +393,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // If JSON parsing fails, treat as plain text and split by newlines
           parsedQuestions = questions.split('\n').filter(q => q.trim());
         }
+      }
+
+      // Perform PII analysis
+      console.log('Starting PII analysis...');
+      const piiAnalysis = await PIIAnalyzer.analyzePII(processedData.preview || [], processedData.schema || {});
+      console.log('PII analysis completed:', piiAnalysis.detectedPII);
+      
+      // If PII detected and not handled, return for user consent
+      if (piiAnalysis.detectedPII.length > 0 && !(piiHandled === "true" || piiHandled === true)) {
+        console.log('PII detected, requesting user consent');
+        return res.json({
+          success: false,
+          requiresPIIDecision: true,
+          piiResult: piiAnalysis,
+          tempFileId: `temp_${Date.now()}`,
+          name: name.trim(),
+          questions: parsedQuestions,
+          message: 'PII detected - user consent required'
+        });
       }
 
       // Create project

@@ -41,11 +41,11 @@ export default function AdvancedAnalysisModal({
   if (!isOpen) return null;
 
   const availableVariables = schema ? Object.keys(schema) : [];
-  const numericVariables = availableVariables.filter(var => 
-    schema[var]?.type === 'number' || schema[var]?.type === 'integer'
+  const numericVariables = availableVariables.filter(variable => 
+    schema[variable]?.type === 'number' || schema[variable]?.type === 'integer'
   );
-  const categoricalVariables = availableVariables.filter(var => 
-    schema[var]?.type === 'string' || schema[var]?.type === 'boolean'
+  const categoricalVariables = availableVariables.filter(variable => 
+    schema[variable]?.type === 'string' || schema[variable]?.type === 'boolean'
   );
 
   const analysisTypes = [
