@@ -4,9 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3, PieChart, TrendingUp, Calculator, Play, Download, Brain, Zap } from "lucide-react";
+import { BarChart3, PieChart, TrendingUp, Calculator, Play, Download, Brain, Zap, Shield } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import AdvancedAnalysisModal from "./advanced-analysis-modal";
+import AnonymizationToolkit from "./AnonymizationToolkit";
 
 interface DataAnalysisProps {
   project: any;
@@ -19,6 +20,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [results, setResults] = useState<any>(null);
   const [showAdvancedModal, setShowAdvancedModal] = useState(false);
+  const [showAnonymizationToolkit, setShowAnonymizationToolkit] = useState(false);
 
   const schema = project.schema || {};
   const numericFields = Object.entries(schema)
@@ -338,13 +340,25 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
       {/* Analysis Type Selection */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <BarChart3 className="w-5 h-5" />
-            Choose Analysis Type
-          </CardTitle>
-          <CardDescription>
-            Select the type of analysis you want to perform on your data
-          </CardDescription>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <BarChart3 className="w-5 h-5" />
+                Choose Analysis Type
+              </CardTitle>
+              <CardDescription>
+                Select the type of analysis you want to perform on your data
+              </CardDescription>
+            </div>
+            <Button
+              variant="outline"
+              onClick={() => setShowAnonymizationToolkit(true)}
+              className="flex items-center space-x-2"
+            >
+              <Shield className="h-4 w-4" />
+              <span>Anonymization Toolkit</span>
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           <div className="grid gap-4 md:grid-cols-2">
@@ -424,6 +438,16 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
         isOpen={showAdvancedModal}
         onClose={() => setShowAdvancedModal(false)}
         projectId={project.id}
+        schema={project.schema}
+      />
+
+      {/* Anonymization Toolkit */}
+      <AnonymizationToolkit
+        isOpen={showAnonymizationToolkit}
+        onClose={() => setShowAnonymizationToolkit(false)}
+        projectId={project.id}
+        data={project.data || []}
+        piiColumns={project.piiColumns || []}
         schema={project.schema}
       />
     </div>

@@ -4,7 +4,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { AlertTriangle, Shield, Eye, EyeOff, X } from "lucide-react";
+import { AlertTriangle, Shield, Eye, EyeOff, X, Settings } from "lucide-react";
+import AnonymizationToolkit from './AnonymizationToolkit';
 
 interface PIIDetectionDialogProps {
   isOpen: boolean;
@@ -26,6 +27,7 @@ export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult }: P
   const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
   const [anonymizeData, setAnonymizeData] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+  const [showAnonymizationToolkit, setShowAnonymizationToolkit] = useState(false);
 
   if (!isOpen) return null;
 
@@ -206,12 +208,29 @@ export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult }: P
             <Button variant="outline" onClick={handleCancel}>
               Cancel Upload
             </Button>
+            <Button
+              variant="outline"
+              onClick={() => setShowAnonymizationToolkit(true)}
+            >
+              <Settings className="h-4 w-4 mr-2" />
+              Advanced Anonymization
+            </Button>
             <Button onClick={handleProceed}>
               Proceed with Analysis
             </Button>
           </div>
         </CardContent>
       </Card>
+
+      {/* Advanced Anonymization Toolkit */}
+      <AnonymizationToolkit
+        isOpen={showAnonymizationToolkit}
+        onClose={() => setShowAnonymizationToolkit(false)}
+        projectId=""
+        data={[]}
+        piiColumns={piiResult.detectedPII.map(pii => pii.column)}
+        schema={{}}
+      />
     </div>
   );
 }
