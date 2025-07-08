@@ -1,16 +1,45 @@
 const API_BASE = window.location.origin;
 
 export class APIClient {
-  async uploadFile(file: File, description?: string): Promise<any> {
+  async uploadFile(file: File, options: {
+    name?: string;
+    description?: string;
+    questions?: string[];
+    isTrial?: boolean;
+    piiHandled?: boolean;
+    anonymizationApplied?: boolean;
+    selectedColumns?: string[];
+  }): Promise<any> {
     const formData = new FormData();
     formData.append('file', file);
-    if (description) {
-      formData.append('description', description);
+    
+    if (options.name) {
+      formData.append('name', options.name);
+    }
+    if (options.description) {
+      formData.append('description', options.description);
+    }
+    if (options.questions) {
+      formData.append('questions', JSON.stringify(options.questions));
+    }
+    if (options.isTrial) {
+      formData.append('isTrial', 'true');
+    }
+    if (options.piiHandled) {
+      formData.append('piiHandled', 'true');
+    }
+    if (options.anonymizationApplied) {
+      formData.append('anonymizationApplied', 'true');
+    }
+    if (options.selectedColumns) {
+      formData.append('selectedColumns', JSON.stringify(options.selectedColumns));
     }
 
-    const response = await fetch(`${API_BASE}/api/upload`, {
+    const endpoint = options.isTrial ? '/api/trial-upload' : '/api/projects/upload';
+    const response = await fetch(`${API_BASE}${endpoint}`, {
       method: 'POST',
       body: formData,
+      credentials: 'include', // Include session cookies for authentication
     });
 
     if (!response.ok) {
@@ -100,7 +129,10 @@ export class APIClient {
   }
 
   async getProjects(): Promise<any> {
-    const response = await fetch(`${API_BASE}/api/projects`);
+    const response = await fetch(`${API_BASE}/api/projects`, {
+      method: 'GET',
+      credentials: 'include',
+    });
 
     if (!response.ok) {
       throw new Error(`Failed to fetch projects: ${response.status}`);
@@ -110,7 +142,10 @@ export class APIClient {
   }
 
   async getProject(id: string): Promise<any> {
-    const response = await fetch(`${API_BASE}/api/projects/${id}`);
+    const response = await fetch(`${API_BASE}/api/projects/${id}`, {
+      method: 'GET',
+      credentials: 'include',
+    });
 
     if (!response.ok) {
       throw new Error(`Failed to fetch project: ${response.status}`);
@@ -122,6 +157,7 @@ export class APIClient {
   async deleteProject(id: string): Promise<any> {
     const response = await fetch(`${API_BASE}/api/projects/${id}`, {
       method: 'DELETE',
+      credentials: 'include',
     });
 
     if (!response.ok) {
