@@ -4,8 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3, PieChart, TrendingUp, Calculator, Play, Download } from "lucide-react";
+import { BarChart3, PieChart, TrendingUp, Calculator, Play, Download, Brain, Zap } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import AdvancedAnalysisModal from "./advanced-analysis-modal";
 
 interface DataAnalysisProps {
   project: any;
@@ -17,6 +18,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
   const [analysisConfig, setAnalysisConfig] = useState<any>({});
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [results, setResults] = useState<any>(null);
+  const [showAdvancedModal, setShowAdvancedModal] = useState(false);
 
   const schema = project.schema || {};
   const numericFields = Object.entries(schema)
@@ -47,6 +49,13 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
       description: "Relationships between variables",
       icon: TrendingUp,
       fields: "numeric"
+    },
+    {
+      value: "advanced",
+      label: "Advanced Analysis",
+      description: "ANOVA, ANCOVA, MANOVA, Regression, ML",
+      icon: Brain,
+      fields: "advanced"
     },
     {
       value: "categorical",
@@ -198,6 +207,25 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+          </div>
+        );
+
+      case "advanced":
+        return (
+          <div className="space-y-4">
+            <div className="p-4 bg-blue-50 rounded-lg">
+              <h4 className="font-medium text-blue-900 mb-2">Advanced Statistical Analysis</h4>
+              <p className="text-sm text-blue-800 mb-4">
+                Access professional statistical methods including ANOVA, ANCOVA, MANOVA, MANCOVA, Regression, and Machine Learning algorithms.
+              </p>
+              <Button 
+                onClick={() => setShowAdvancedModal(true)}
+                className="w-full"
+              >
+                <Brain className="w-4 h-4 mr-2" />
+                Open Advanced Analysis
+              </Button>
             </div>
           </div>
         );
@@ -390,6 +418,14 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
           </CardContent>
         </Card>
       )}
+
+      {/* Advanced Analysis Modal */}
+      <AdvancedAnalysisModal
+        isOpen={showAdvancedModal}
+        onClose={() => setShowAdvancedModal(false)}
+        projectId={project.id}
+        schema={project.schema}
+      />
     </div>
   );
 }
