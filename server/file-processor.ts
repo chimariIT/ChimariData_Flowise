@@ -15,9 +15,15 @@ export class FileProcessor {
   static async processFile(
     buffer: Buffer,
     fileName: string,
-    mimeType: string
+    mimeType: string,
+    options?: {
+      selectedSheet?: string;
+      headerRow?: number;
+      encoding?: string;
+    }
   ): Promise<ProcessedData> {
     try {
+      console.log('Processing file:', fileName, 'mimeType:', mimeType);
       let data: any[] = [];
       
       // Process based on file type
@@ -133,8 +139,10 @@ export class FileProcessor {
   }
 
   private static processExcel(buffer: Buffer): any[] {
+    console.log('Processing Excel file...');
     const workbook = XLSX.read(buffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
+    console.log('Sheet names:', workbook.SheetNames);
     
     if (!sheetName) {
       throw new Error('No sheets found in Excel file');
@@ -146,6 +154,7 @@ export class FileProcessor {
       defval: null 
     });
     
+    console.log('Raw data length:', data.length);
     if (data.length < 2) {
       throw new Error('Excel file must have at least a header row and one data row');
     }
@@ -154,6 +163,9 @@ export class FileProcessor {
     const headerRowIndex = this.detectExcelHeaderRow(data);
     const headers = data[headerRowIndex] as string[];
     const rows = data.slice(headerRowIndex + 1) as any[][];
+    
+    console.log('Headers:', headers);
+    console.log('Data rows:', rows.length);
     
     return rows.map(row => {
       const obj: any = {};
