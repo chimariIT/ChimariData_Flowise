@@ -1,78 +1,33 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
-import { 
-  Dialog, 
-  DialogContent, 
-  DialogDescription, 
-  DialogFooter, 
-  DialogHeader, 
-  DialogTitle 
-} from "@/components/ui/dialog";
-import { 
-  Shield, 
-  AlertTriangle, 
-  Eye, 
-  EyeOff, 
-  FileKey, 
-  Database,
-  CheckCircle,
-  XCircle
-} from "lucide-react";
-
-interface PIIType {
-  type: 'ssn' | 'email' | 'phone' | 'address' | 'name' | 'credit_card' | 'ip_address' | 'date_of_birth';
-  column: string;
-  confidence: number;
-  sampleValue?: string;
-  count: number;
-}
-
-interface PIIDetectionResult {
-  hasPII: boolean;
-  detectedTypes: PIIType[];
-  affectedColumns: string[];
-  riskLevel: 'low' | 'medium' | 'high';
-  recommendations: string[];
-}
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { AlertTriangle, Shield, Eye, EyeOff, X } from "lucide-react";
 
 interface PIIDetectionDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  piiResult: PIIDetectionResult;
   onDecision: (requiresPII: boolean, anonymizeData: boolean, selectedColumns: string[]) => void;
+  piiResult: {
+    detectedPII: Array<{
+      column: string;
+      types: string[];
+      confidence: number;
+      examples: string[];
+    }>;
+    riskLevel: string;
+    recommendations: string[];
+  };
 }
 
-const PII_TYPE_LABELS = {
-  ssn: 'Social Security Number',
-  email: 'Email Address',
-  phone: 'Phone Number',
-  address: 'Address',
-  name: 'Personal Name',
-  credit_card: 'Credit Card Number',
-  ip_address: 'IP Address',
-  date_of_birth: 'Date of Birth'
-};
+export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult }: PIIDetectionDialogProps) {
+  const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
+  const [anonymizeData, setAnonymizeData] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
 
-const RISK_COLORS = {
-  low: 'text-yellow-600 bg-yellow-50 border-yellow-200',
-  medium: 'text-orange-600 bg-orange-50 border-orange-200',
-  high: 'text-red-600 bg-red-50 border-red-200'
-};
-
-export function PIIDetectionDialog({ 
-  isOpen, 
-  onClose,
-  piiResult, 
-  onDecision 
-}: PIIDetectionDialogProps) {
-  const [requiresPII, setRequiresPII] = useState(false);
-  const [anonymizeData, setAnonymizeData] = useState(true);
-  const [selectedColumns, setSelectedColumns] = useState<string[]>(piiResult.affectedColumns);
-  const [showSamples, setShowSamples] = useState(false);
+  if (!isOpen) return null;
 
   const handleColumnToggle = (column: string) => {
     setSelectedColumns(prev => 
@@ -82,222 +37,181 @@ export function PIIDetectionDialog({
     );
   };
 
-  const handleAccept = () => {
-    onDecision(requiresPII, anonymizeData, selectedColumns);
+  const handleProceed = () => {
+    onDecision(true, anonymizeData, selectedColumns);
   };
 
-  const getRiskIcon = () => {
-    switch (piiResult.riskLevel) {
-      case 'high':
-        return <XCircle className="w-5 h-5" />;
-      case 'medium':
-        return <AlertTriangle className="w-5 h-5" />;
-      default:
-        return <Shield className="w-5 h-5" />;
+  const handleCancel = () => {
+    onDecision(false, false, []);
+  };
+
+  const getRiskColor = (risk: string) => {
+    switch (risk.toLowerCase()) {
+      case 'high': return 'bg-red-100 text-red-800';
+      case 'medium': return 'bg-yellow-100 text-yellow-800';
+      case 'low': return 'bg-green-100 text-green-800';
+      default: return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  const getPIITypeColor = (type: string) => {
+    switch (type.toLowerCase()) {
+      case 'email': return 'bg-blue-100 text-blue-800';
+      case 'phone': return 'bg-purple-100 text-purple-800';
+      case 'ssn': return 'bg-red-100 text-red-800';
+      case 'credit_card': return 'bg-red-100 text-red-800';
+      case 'name': return 'bg-green-100 text-green-800';
+      case 'address': return 'bg-yellow-100 text-yellow-800';
+      default: return 'bg-gray-100 text-gray-800';
     }
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={() => {}}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="flex items-center space-x-2">
-            <Shield className="w-6 h-6 text-blue-600" />
-            <span>PII Data Detection</span>
-          </DialogTitle>
-          <DialogDescription>
-            We've detected personally identifiable information (PII) in your dataset. 
-            Please review and decide how to proceed.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-6">
-          {/* Risk Level Alert */}
-          <Alert className={RISK_COLORS[piiResult.riskLevel]}>
-            <div className="flex items-center space-x-2">
-              {getRiskIcon()}
+    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+      <Card className="w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <AlertTriangle className="w-6 h-6 text-yellow-600" />
               <div>
-                <strong className="capitalize">{piiResult.riskLevel} Risk Level</strong>
-                <div className="text-sm mt-1">
-                  {piiResult.detectedTypes.length} type(s) of PII detected across {piiResult.affectedColumns.length} column(s)
-                </div>
+                <CardTitle className="text-xl">Personal Information Detected</CardTitle>
+                <CardDescription>
+                  We found potentially sensitive information in your dataset
+                </CardDescription>
               </div>
             </div>
-          </Alert>
+            <Button variant="ghost" size="sm" onClick={onClose}>
+              <X className="w-4 h-4" />
+            </Button>
+          </div>
+        </CardHeader>
+        
+        <CardContent className="space-y-6">
+          {/* Risk Level */}
+          <div className="flex items-center gap-2">
+            <span className="font-medium">Risk Level:</span>
+            <Badge className={getRiskColor(piiResult.riskLevel)}>
+              {piiResult.riskLevel.toUpperCase()}
+            </Badge>
+          </div>
 
-          {/* Detected PII Types */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">Detected PII Types</CardTitle>
-              <CardDescription>
-                Review the types of sensitive data found in your dataset
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid md:grid-cols-2 gap-4">
-                {piiResult.detectedTypes.map((pii, index) => (
-                  <div key={index} className="p-3 border rounded-lg">
-                    <div className="flex items-center justify-between mb-2">
-                      <Badge variant="outline" className="text-xs">
-                        {PII_TYPE_LABELS[pii.type]}
+          {/* Detected PII Summary */}
+          <div>
+            <h3 className="font-semibold mb-3">Detected Personal Information</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {piiResult.detectedPII.map((pii, index) => (
+                <Card key={index} className="border-l-4 border-l-yellow-500">
+                  <CardContent className="p-4">
+                    <div className="flex items-start justify-between mb-2">
+                      <h4 className="font-medium">{pii.column}</h4>
+                      <Badge variant="outline">
+                        {(pii.confidence * 100).toFixed(0)}% confident
                       </Badge>
-                      <span className="text-xs text-slate-500">
-                        {Math.round(pii.confidence * 100)}% confidence
-                      </span>
                     </div>
-                    <div className="text-sm space-y-1">
-                      <div><strong>Column:</strong> {pii.column}</div>
-                      <div><strong>Count:</strong> {pii.count} records</div>
-                      {pii.sampleValue && (
-                        <div className="flex items-center space-x-2">
-                          <strong>Sample:</strong>
-                          <code className="text-xs bg-slate-100 px-1 rounded">
-                            {showSamples ? pii.sampleValue : '***hidden***'}
-                          </code>
+                    
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap gap-1">
+                        {pii.types.map((type, typeIndex) => (
+                          <Badge key={typeIndex} className={getPIITypeColor(type)}>
+                            {type.replace('_', ' ')}
+                          </Badge>
+                        ))}
+                      </div>
+                      
+                      {showDetails && pii.examples.length > 0 && (
+                        <div className="mt-2 p-2 bg-gray-50 rounded text-sm">
+                          <p className="font-medium text-gray-700 mb-1">Examples:</p>
+                          <ul className="list-disc pl-4 text-gray-600">
+                            {pii.examples.slice(0, 3).map((example, exampleIndex) => (
+                              <li key={exampleIndex} className="truncate">
+                                {example}
+                              </li>
+                            ))}
+                          </ul>
                         </div>
                       )}
                     </div>
-                  </div>
-                ))}
-              </div>
-              
-              <div className="mt-4 flex items-center space-x-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setShowSamples(!showSamples)}
-                  className="text-xs"
-                >
-                  {showSamples ? <EyeOff className="w-3 h-3 mr-1" /> : <Eye className="w-3 h-3 mr-1" />}
-                  {showSamples ? 'Hide' : 'Show'} Sample Values
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Data Usage Question */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">Analysis Requirements</CardTitle>
-              <CardDescription>
-                Do you need this PII data for your analysis?
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                <div className="flex items-center space-x-3">
-                  <Checkbox
-                    id="requires-pii"
-                    checked={requiresPII}
-                    onCheckedChange={(checked) => setRequiresPII(!!checked)}
-                  />
-                  <label htmlFor="requires-pii" className="text-sm font-medium">
-                    Yes, this PII data is required for my analysis
-                  </label>
-                </div>
-
-                {requiresPII && (
-                  <Alert className="border-blue-200 bg-blue-50">
-                    <Database className="h-4 w-4 text-blue-600" />
-                    <AlertDescription>
-                      <strong className="text-blue-800">Data Protection Policy</strong>
-                      <div className="text-sm mt-1 text-blue-700">
-                        ChimariData cannot store PII data. We can anonymize your data and provide 
-                        a lookup table to translate results back to original values.
-                      </div>
-                    </AlertDescription>
-                  </Alert>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Anonymization Options */}
-          {requiresPII && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg">Anonymization Options</CardTitle>
-                <CardDescription>
-                  Select which columns to anonymize and how to process them
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  <div className="flex items-center space-x-3">
-                    <Checkbox
-                      id="anonymize-data"
-                      checked={anonymizeData}
-                      onCheckedChange={(checked) => setAnonymizeData(!!checked)}
-                    />
-                    <label htmlFor="anonymize-data" className="text-sm font-medium">
-                      Anonymize PII data and provide lookup table
-                    </label>
-                  </div>
-
-                  {anonymizeData && (
-                    <div className="space-y-3">
-                      <h4 className="text-sm font-medium">Select columns to anonymize:</h4>
-                      <div className="grid md:grid-cols-2 gap-2">
-                        {piiResult.affectedColumns.map((column) => (
-                          <div key={column} className="flex items-center space-x-2">
-                            <Checkbox
-                              id={`column-${column}`}
-                              checked={selectedColumns.includes(column)}
-                              onCheckedChange={() => handleColumnToggle(column)}
-                            />
-                            <label htmlFor={`column-${column}`} className="text-sm">
-                              {column}
-                            </label>
-                          </div>
-                        ))}
-                      </div>
-
-                      <Alert className="border-green-200 bg-green-50">
-                        <FileKey className="h-4 w-4 text-green-600" />
-                        <AlertDescription>
-                          <strong className="text-green-800">Anonymization Process</strong>
-                          <div className="text-sm mt-1 text-green-700 space-y-1">
-                            <div>• Original PII values will be replaced with anonymized identifiers</div>
-                            <div>• A secure lookup table will be provided for result translation</div>
-                            <div>• Data structure and relationships will be preserved</div>
-                            <div>• Analysis accuracy will not be compromised</div>
-                          </div>
-                        </AlertDescription>
-                      </Alert>
-                    </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          )}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+            
+            <Button 
+              variant="outline" 
+              size="sm" 
+              className="mt-3"
+              onClick={() => setShowDetails(!showDetails)}
+            >
+              {showDetails ? <EyeOff className="w-4 h-4 mr-2" /> : <Eye className="w-4 h-4 mr-2" />}
+              {showDetails ? 'Hide' : 'Show'} Details
+            </Button>
+          </div>
 
           {/* Recommendations */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">Security Recommendations</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ul className="space-y-2 text-sm">
+          {piiResult.recommendations.length > 0 && (
+            <div>
+              <h3 className="font-semibold mb-2">Recommendations</h3>
+              <ul className="space-y-1 text-sm text-gray-600">
                 {piiResult.recommendations.map((rec, index) => (
-                  <li key={index} className="flex items-start space-x-2">
-                    <CheckCircle className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
-                    <span>{rec}</span>
+                  <li key={index} className="flex items-start gap-2">
+                    <Shield className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
+                    {rec}
                   </li>
                 ))}
               </ul>
-            </CardContent>
-          </Card>
-        </div>
+            </div>
+          )}
 
-        <DialogFooter className="gap-2">
-          <Button variant="outline" onClick={onClose}>
-            Cancel Upload
-          </Button>
-          <Button onClick={handleAccept} className="bg-blue-600 hover:bg-blue-700">
-            {requiresPII ? (anonymizeData ? 'Proceed with Anonymization' : 'Proceed with PII') : 'Proceed without PII'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          {/* Column Selection */}
+          <div>
+            <h3 className="font-semibold mb-3">Select Columns to Include</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              Choose which columns containing PII you want to include in your analysis:
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {piiResult.detectedPII.map((pii, index) => (
+                <div key={index} className="flex items-center space-x-2">
+                  <Checkbox
+                    id={`pii-${index}`}
+                    checked={selectedColumns.includes(pii.column)}
+                    onCheckedChange={() => handleColumnToggle(pii.column)}
+                  />
+                  <Label htmlFor={`pii-${index}`} className="text-sm">
+                    {pii.column}
+                  </Label>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Anonymization Option */}
+          <div className="p-4 bg-blue-50 rounded-lg">
+            <div className="flex items-center space-x-2 mb-2">
+              <Checkbox
+                id="anonymize"
+                checked={anonymizeData}
+                onCheckedChange={setAnonymizeData}
+              />
+              <Label htmlFor="anonymize" className="font-medium">
+                Anonymize sensitive data
+              </Label>
+            </div>
+            <p className="text-sm text-gray-600 ml-6">
+              Apply anonymization techniques to mask sensitive information while preserving data utility for analysis.
+            </p>
+          </div>
+
+          {/* Actions */}
+          <div className="flex justify-end gap-3 pt-4 border-t">
+            <Button variant="outline" onClick={handleCancel}>
+              Cancel Upload
+            </Button>
+            <Button onClick={handleProceed}>
+              Proceed with Analysis
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
   );
 }

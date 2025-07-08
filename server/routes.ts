@@ -417,6 +417,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         file.mimetype
       );
 
+      // Perform PII analysis
+      const piiAnalysis = await PIIAnalyzer.analyzePII(processedData.preview || [], processedData.schema || {});
+
+      // Check if PII consent is required
+      if (piiAnalysis.detectedPII && piiAnalysis.detectedPII.length > 0) {
+        // Store temporary file info for PII consent
+        const tempFileId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        
+        // Return PII detection result - don't create project yet
+        return res.json({
+          success: false,
+          requiresPIIDecision: true,
+          tempFileId,
+          piiResult: piiAnalysis,
+          name: file.originalname.replace(/\.[^/.]+$/, ""),
+          fileInfo: {
+            originalname: file.originalname,
+            size: file.size,
+            mimetype: file.mimetype
+          }
+        });
+      }
+
       // Create project in storage
       const project = await storage.createProject({
         name: file.originalname.replace(/\.[^/.]+$/, ""),
@@ -427,7 +450,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         schema: processedData.schema,
         recordCount: processedData.recordCount,
         isTrial: false,
-        purchasedFeatures: []
+        purchasedFeatures: [],
+        piiAnalysis: piiAnalysis
       });
 
       // Mark as processed
