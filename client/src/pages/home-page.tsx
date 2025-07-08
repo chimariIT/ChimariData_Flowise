@@ -37,12 +37,20 @@ export default function HomePage() {
   const handleFileUpload = async (file: File, description?: string) => {
     setIsUploading(true);
     try {
-      const result = await apiClient.uploadFile(file, description);
+      const result = await apiClient.uploadFile(file, {
+        name: file.name.replace(/\.[^/.]+$/, ""), // Remove file extension
+        description: description || '',
+        questions: [
+          "What are the key trends in this data?",
+          "What insights can you provide about this dataset?",
+          "What are the most important patterns or correlations?"
+        ]
+      });
       
       if (result.success) {
         toast({
           title: "File uploaded successfully!",
-          description: `Processed ${result.project.recordCount} records from ${file.name}`,
+          description: `Processed ${result.recordCount || 0} records from ${file.name}`,
         });
         refetch();
         setLocation(`/project/${result.projectId}`);
