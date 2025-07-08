@@ -5,8 +5,9 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api";
-import { ChartLine, Folder, FileText, Lightbulb, Plus, Search, Calendar, Database, TrendingUp, Bell, LogOut, Settings } from "lucide-react";
+import { ChartLine, Folder, FileText, Lightbulb, Plus, Search, Calendar, Database, TrendingUp, Bell, LogOut, Settings, BarChart3, Target, Zap, Calculator, Brain, HardDrive } from "lucide-react";
 import UploadModal from "@/components/upload-modal";
+import AdvancedAnalysisModal from "@/components/advanced-analysis-modal";
 
 interface DashboardProps {
   user: { id: number; email: string; firstName?: string; lastName?: string; username?: string };
@@ -19,6 +20,8 @@ interface DashboardProps {
 
 export default function Dashboard({ user, onLogout, onProjectSelect, onSettings, onVisualizationPage, onAskQuestionPage }: DashboardProps) {
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [isAdvancedAnalysisOpen, setIsAdvancedAnalysisOpen] = useState(false);
+  const [selectedProjectForAnalysis, setSelectedProjectForAnalysis] = useState<any>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const { toast } = useToast();
 
@@ -231,6 +234,28 @@ export default function Dashboard({ user, onLogout, onProjectSelect, onSettings,
                     <span>Ask Business Question</span>
                   </div>
                 </Button>
+
+                <Button 
+                  variant="outline" 
+                  className="w-full justify-between"
+                  onClick={() => {
+                    if (filteredProjects.length === 0) {
+                      toast({
+                        title: "No Projects",
+                        description: "Please upload a project first to use advanced analysis",
+                        variant: "destructive"
+                      });
+                      return;
+                    }
+                    setSelectedProjectForAnalysis(filteredProjects[0]);
+                    setIsAdvancedAnalysisOpen(true);
+                  }}
+                >
+                  <div className="flex items-center space-x-3">
+                    <BarChart3 className="w-4 h-4" />
+                    <span>Advanced Analysis</span>
+                  </div>
+                </Button>
               </CardContent>
             </Card>
           </div>
@@ -309,6 +334,19 @@ export default function Dashboard({ user, onLogout, onProjectSelect, onSettings,
         onClose={() => setIsUploadModalOpen(false)}
         onSuccess={handleUploadSuccess}
       />
+
+      {/* Advanced Analysis Modal */}
+      {isAdvancedAnalysisOpen && selectedProjectForAnalysis && (
+        <AdvancedAnalysisModal
+          isOpen={isAdvancedAnalysisOpen}
+          onClose={() => {
+            setIsAdvancedAnalysisOpen(false);
+            setSelectedProjectForAnalysis(null);
+          }}
+          projectId={selectedProjectForAnalysis.id}
+          schema={selectedProjectForAnalysis.schema}
+        />
+      )}
     </div>
   );
 }
