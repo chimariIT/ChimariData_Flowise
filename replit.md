@@ -47,6 +47,13 @@ A streamlined data processing platform with four progressive paid paths: 1) Data
   - Added comprehensive Advanced Analysis modal with ANOVA, ANCOVA, MANOVA, MANCOVA, Regression, ML capabilities
   - Implemented Google Drive import functionality
   - Created PII consent dialog with anonymization options
+  - **NEW: Interactive Data Anonymization Toolkit** - Comprehensive anonymization system with 8 different techniques:
+    * Masking: Partial and full masking with asterisks
+    * Substitution: Fake data generation and random character replacement
+    * Encryption: AES-256 encryption (reversible) and SHA-256 hashing
+    * Generalization: Date and numeric range generalization
+    * Real-time preview with sample data transformation
+    * Integrated into both PII detection workflow and data analysis interface
 
 ## User Preferences
 - Wants four distinct progressive paths with set pricing

@@ -17,6 +17,7 @@ import { GoogleDriveService } from './google-drive-service';
 import { DataTransformer } from './data-transformer';
 import { AdvancedAnalyzer } from './advanced-analyzer';
 import { MCPAIService } from './mcp-ai-service';
+import { AnonymizationEngine } from './anonymization-engine';
 
 // Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
@@ -918,6 +919,78 @@ export async function registerRoutes(app: Express): Promise<Server> {
         success: false,
         error: error.message || 'Failed to process full analysis'
       });
+    }
+  });
+
+  // Anonymization API routes
+  app.get('/api/anonymization/techniques', (req, res) => {
+    try {
+      const techniques = AnonymizationEngine.getTechniques();
+      res.json({ techniques });
+    } catch (error) {
+      console.error('Error getting techniques:', error);
+      res.status(500).json({ error: 'Failed to get techniques' });
+    }
+  });
+
+  app.post('/api/anonymization/preview', async (req, res) => {
+    try {
+      const { projectId, columnMappings, sampleSize } = req.body;
+      
+      if (!projectId || !columnMappings) {
+        return res.status(400).json({ error: 'Missing required parameters' });
+      }
+
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+
+      const data = project.data || [];
+      const preview = AnonymizationEngine.previewAnonymization(data, columnMappings, sampleSize);
+      
+      res.json(preview);
+    } catch (error) {
+      console.error('Error generating preview:', error);
+      res.status(500).json({ error: 'Failed to generate preview' });
+    }
+  });
+
+  app.post('/api/anonymization/apply', async (req, res) => {
+    try {
+      const { projectId, columnMappings } = req.body;
+      
+      if (!projectId || !columnMappings) {
+        return res.status(400).json({ error: 'Missing required parameters' });
+      }
+
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+
+      const data = project.data || [];
+      const anonymizedData = AnonymizationEngine.anonymizeDataset(data, columnMappings);
+      
+      // Update project with anonymized data
+      await storage.updateProject(projectId, {
+        data: anonymizedData,
+        metadata: {
+          ...project.metadata,
+          anonymized: true,
+          anonymizationDate: new Date().toISOString(),
+          anonymizationTechniques: columnMappings
+        }
+      });
+
+      res.json({ 
+        success: true, 
+        message: 'Data anonymized successfully',
+        recordsProcessed: anonymizedData.length
+      });
+    } catch (error) {
+      console.error('Error applying anonymization:', error);
+      res.status(500).json({ error: 'Failed to apply anonymization' });
     }
   });
 
