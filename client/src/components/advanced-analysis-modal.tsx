@@ -45,8 +45,25 @@ export default function AdvancedAnalysisModal({
     schema[variable]?.type === 'number' || schema[variable]?.type === 'integer'
   );
   const categoricalVariables = availableVariables.filter(variable => 
-    schema[variable]?.type === 'string' || schema[variable]?.type === 'boolean'
+    schema[variable]?.type === 'text' || schema[variable]?.type === 'string' || schema[variable]?.type === 'boolean'
   );
+  
+  // For factor variables, include both categorical and numeric variables
+  // (numeric variables can be treated as factors in some analyses)
+  const factorVariables = availableVariables.filter(variable => 
+    schema[variable]?.type === 'text' || 
+    schema[variable]?.type === 'string' || 
+    schema[variable]?.type === 'boolean' || 
+    schema[variable]?.type === 'number' || 
+    schema[variable]?.type === 'integer'
+  );
+  
+  // Debug logging
+  console.log('Advanced Analysis Modal - Schema:', schema);
+  console.log('Available variables:', availableVariables);
+  console.log('Numeric variables:', numericVariables);
+  console.log('Categorical variables:', categoricalVariables);
+  console.log('Factor variables:', factorVariables);
 
   const analysisTypes = [
     {
@@ -283,7 +300,7 @@ export default function AdvancedAnalysisModal({
                 <div>
                   <Label>Factor Variables (Independent Variables)</Label>
                   <div className="grid grid-cols-2 gap-2 mt-2 max-h-32 overflow-y-auto">
-                    {categoricalVariables.map(variable => (
+                    {factorVariables.map(variable => (
                       <div key={variable} className="flex items-center space-x-2">
                         <Checkbox
                           id={`factor-${variable}`}
@@ -291,11 +308,16 @@ export default function AdvancedAnalysisModal({
                           onCheckedChange={() => handleVariableSelection(variable, 'multivariate')}
                         />
                         <Label htmlFor={`factor-${variable}`} className="text-sm">
-                          {variable}
+                          {variable} ({schema[variable]?.type})
                         </Label>
                       </div>
                     ))}
                   </div>
+                  {factorVariables.length === 0 && (
+                    <p className="text-sm text-gray-500 mt-2">
+                      No variables available for factor analysis. Please ensure your dataset contains categorical or grouping variables.
+                    </p>
+                  )}
                 </div>
               )}
 
