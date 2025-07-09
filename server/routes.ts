@@ -90,7 +90,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Perform PII analysis
       const piiAnalysis = await PIIAnalyzer.analyzePII(processedData.preview || [], processedData.schema || {});
 
-      // Run Python trial analysis
+      // Check if PII decision is required
+      if (piiAnalysis.detectedPII && piiAnalysis.detectedPII.length > 0) {
+        // Store temporary file info for PII decision
+        const tempFileId = `trial_temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        
+        // Return PII detection result - don't run analysis yet
+        return res.json({
+          success: true,
+          requiresPIIDecision: true,
+          tempFileId,
+          piiResult: piiAnalysis,
+          sampleData: processedData.preview,
+          fileInfo: {
+            originalname: file.originalname,
+            size: file.size,
+            mimetype: file.mimetype
+          }
+        });
+      }
+
+      // Run Python trial analysis if no PII detected
       const trialResults = await PythonProcessor.processTrial(
         `trial_${Date.now()}`,
         {
@@ -249,27 +269,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       if (decision === 'exclude') {
         // Remove PII columns from data
-        // This is a simplified approach - in production, you'd want more sophisticated handling
         finalData = processedData.data.map(row => {
           const cleanRow = { ...row };
-          piiAnalysis.detectedPII.forEach(piiType => {
-            if (piiAnalysis.columnAnalysis[piiType]) {
-              delete cleanRow[piiType];
-            }
+          piiAnalysis.detectedPII.forEach(piiColumn => {
+            delete cleanRow[piiColumn];
           });
           return cleanRow;
         });
+        
+        // Update schema to remove PII columns
+        const updatedSchema = { ...processedData.schema };
+        piiAnalysis.detectedPII.forEach(piiColumn => {
+          delete updatedSchema[piiColumn];
+        });
+        processedData.schema = updatedSchema;
+        
       } else if (decision === 'anonymize') {
         // Apply anonymization to PII columns
         finalData = processedData.data.map(row => {
           const anonymizedRow = { ...row };
-          piiAnalysis.detectedPII.forEach(piiType => {
-            if (piiAnalysis.columnAnalysis[piiType] && anonymizedRow[piiType]) {
-              anonymizedRow[piiType] = '***ANONYMIZED***';
+          piiAnalysis.detectedPII.forEach(piiColumn => {
+            if (anonymizedRow[piiColumn]) {
+              // Generate appropriate anonymized value based on column type
+              const columnType = piiAnalysis.columnAnalysis[piiColumn]?.type;
+              if (columnType === 'email') {
+                anonymizedRow[piiColumn] = `user${Math.random().toString(36).substr(2, 6)}@example.com`;
+              } else if (columnType === 'phone') {
+                anonymizedRow[piiColumn] = `***-***-${Math.random().toString().substr(2, 4)}`;
+              } else if (columnType === 'name') {
+                anonymizedRow[piiColumn] = `Person${Math.random().toString(36).substr(2, 3)}`;
+              } else {
+                anonymizedRow[piiColumn] = '***ANONYMIZED***';
+              }
             }
           });
           return anonymizedRow;
         });
+      } else if (decision === 'include') {
+        // Show warning but proceed with original data
+        console.log('Warning: User chose to include PII data in analysis');
       }
 
       // Create project with processed data
@@ -310,6 +348,101 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ 
         success: false, 
         error: error.message || "Failed to process PII decision" 
+      });
+    }
+  });
+
+  // Trial PII decision endpoint
+  app.post("/api/trial-pii-decision", upload.single('file'), async (req, res) => {
+    try {
+      const { tempFileId, decision } = req.body;
+      
+      if (!req.file) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "No file uploaded" 
+        });
+      }
+
+      // Process the uploaded file
+      const processedData = await FileProcessor.processFile(
+        req.file.buffer,
+        req.file.originalname,
+        req.file.mimetype
+      );
+
+      // Apply PII handling based on decision
+      let finalData = processedData.data;
+      const piiAnalysis = await PIIAnalyzer.analyzePII(processedData.preview || [], processedData.schema || {});
+      
+      if (decision === 'exclude') {
+        // Remove PII columns from data
+        finalData = processedData.data.map(row => {
+          const cleanRow = { ...row };
+          piiAnalysis.detectedPII.forEach(piiColumn => {
+            delete cleanRow[piiColumn];
+          });
+          return cleanRow;
+        });
+        
+        // Update schema to remove PII columns
+        const updatedSchema = { ...processedData.schema };
+        piiAnalysis.detectedPII.forEach(piiColumn => {
+          delete updatedSchema[piiColumn];
+        });
+        processedData.schema = updatedSchema;
+        
+      } else if (decision === 'anonymize') {
+        // Apply anonymization to PII columns
+        finalData = processedData.data.map(row => {
+          const anonymizedRow = { ...row };
+          piiAnalysis.detectedPII.forEach(piiColumn => {
+            if (anonymizedRow[piiColumn]) {
+              // Generate appropriate anonymized value based on column type
+              const columnType = piiAnalysis.columnAnalysis[piiColumn]?.type;
+              if (columnType === 'email') {
+                anonymizedRow[piiColumn] = `user${Math.random().toString(36).substr(2, 6)}@example.com`;
+              } else if (columnType === 'phone') {
+                anonymizedRow[piiColumn] = `***-***-${Math.random().toString().substr(2, 4)}`;
+              } else if (columnType === 'name') {
+                anonymizedRow[piiColumn] = `Person${Math.random().toString(36).substr(2, 3)}`;
+              } else {
+                anonymizedRow[piiColumn] = '***ANONYMIZED***';
+              }
+            }
+          });
+          return anonymizedRow;
+        });
+      } else if (decision === 'include') {
+        // Show warning but proceed with original data
+        console.log('Warning: User chose to include PII data in trial analysis');
+      }
+
+      // Generate trial results with processed data
+      const trialResults = await TrialAnalyzer.generateTrialResults({
+        data: finalData,
+        schema: processedData.schema,
+        fileName: req.file.originalname,
+        recordCount: finalData.length,
+        piiDecision: decision
+      });
+
+      res.json({
+        success: true,
+        trialResults,
+        piiDecision: decision,
+        piiAnalysis: {
+          ...piiAnalysis,
+          userDecision: decision,
+          decisionTimestamp: new Date()
+        }
+      });
+
+    } catch (error) {
+      console.error("Trial PII decision processing error:", error);
+      res.status(500).json({ 
+        success: false, 
+        error: error.message || "Failed to process trial PII decision" 
       });
     }
   });

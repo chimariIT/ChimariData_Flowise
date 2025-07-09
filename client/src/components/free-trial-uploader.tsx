@@ -9,6 +9,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/lib/api";
 import { UpgradeModal } from "./upgrade-modal";
+import { PIIInterimDialog } from "./PIIInterimDialog";
 
 export default function FreeTrialUploader() {
   const { toast } = useToast();
@@ -17,6 +18,8 @@ export default function FreeTrialUploader() {
   const [results, setResults] = useState<any>(null);
   const [showUpgrade, setShowUpgrade] = useState(false);
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
+  const [showPIIDialog, setShowPIIDialog] = useState(false);
+  const [piiDialogData, setPIIDialogData] = useState<any>(null);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length > 0) {
@@ -54,17 +57,76 @@ export default function FreeTrialUploader() {
     try {
       const result = await apiClient.uploadTrialFile(selectedFile);
       
-      if (result.success && result.trialResults) {
-        setResults(result.trialResults);
-        toast({
-          title: "Trial analysis complete!",
-          description: "Your data has been processed successfully",
-        });
+      if (result.success) {
+        // Check for PII detection
+        if (result.requiresPIIDecision) {
+          setPIIDialogData({
+            file: selectedFile,
+            result: result,
+            isTrial: true
+          });
+          setShowPIIDialog(true);
+          return;
+        }
+        
+        if (result.trialResults) {
+          setResults(result.trialResults);
+          toast({
+            title: "Trial analysis complete!",
+            description: "Your data has been processed successfully",
+          });
+        }
       }
     } catch (error) {
       toast({
         title: "Processing failed",
         description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handlePIIDecision = async (decision: 'include' | 'exclude' | 'anonymize') => {
+    if (!piiDialogData) return;
+    
+    try {
+      setIsProcessing(true);
+      
+      // For trial uploads, use the trial PII decision endpoint
+      const formData = new FormData();
+      formData.append('file', piiDialogData.file);
+      formData.append('tempFileId', piiDialogData.result.tempFileId);
+      formData.append('decision', decision);
+
+      const response = await fetch('/api/trial-pii-decision', {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      
+      if (result.success && result.trialResults) {
+        setShowPIIDialog(false);
+        setPIIDialogData(null);
+        setResults(result.trialResults);
+        
+        toast({
+          title: "Trial analysis complete!",
+          description: `Processed with ${decision} PII decision`,
+        });
+      } else {
+        throw new Error(result.error || 'Processing failed');
+      }
+    } catch (error) {
+      toast({
+        title: "Processing failed",
+        description: error instanceof Error ? error.message : "Failed to process PII decision",
         variant: "destructive",
       });
     } finally {
@@ -333,6 +395,21 @@ export default function FreeTrialUploader() {
             {isProcessing ? "Processing..." : "Get Free Analysis"}
           </Button>
         </div>
+      )}
+      
+      {/* PII Detection Dialog */}
+      {showPIIDialog && piiDialogData && (
+        <PIIInterimDialog
+          isOpen={showPIIDialog}
+          piiData={piiDialogData.result.piiResult}
+          sampleData={piiDialogData.result.sampleData}
+          onProceed={handlePIIDecision}
+          onClose={() => {
+            setShowPIIDialog(false);
+            setPIIDialogData(null);
+            setIsProcessing(false);
+          }}
+        />
       )}
     </div>
   );
