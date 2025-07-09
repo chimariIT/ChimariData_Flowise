@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 
 export interface ProcessedData {
+  data: any[]; // Full dataset
   preview: any[];
   schema: Record<string, {
     type: string;
@@ -53,6 +54,7 @@ export class FileProcessor {
       const preview = data.slice(0, 100); // First 100 rows for preview
       
       return {
+        data, // Full dataset
         preview,
         schema,
         recordCount: data.length

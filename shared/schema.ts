@@ -19,6 +19,7 @@ export const dataProjectSchema = z.object({
     isUniqueIdentifier: z.boolean().optional(),
   })).optional(),
   recordCount: z.number().optional(),
+  data: z.array(z.record(z.any())).optional(), // Store actual data rows
   processed: z.boolean().default(false),
   // Advanced upload capabilities
   piiAnalysis: z.object({

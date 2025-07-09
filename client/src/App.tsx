@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import HomePage from "@/pages/home-page";
 import ProjectPage from "@/pages/project-page";
+import DescriptiveStatsPage from "@/pages/descriptive-stats-page";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -22,6 +23,9 @@ export default function App() {
           <Route path="/" component={HomePage} />
           <Route path="/project/:id">
             {(params) => <ProjectPage projectId={params.id} />}
+          </Route>
+          <Route path="/stats/:id">
+            {(params) => <DescriptiveStatsPage />}
           </Route>
           <Route>
             <div className="flex items-center justify-center min-h-screen">
