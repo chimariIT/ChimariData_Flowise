@@ -138,7 +138,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       });
 
-    } catch (error) {
+    } catch (error: any) {
       console.error("Trial upload error:", error);
       res.status(500).json({ 
         success: false, 
@@ -152,7 +152,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const authUrl = GoogleDriveService.getAuthUrl();
       res.json({ authUrl });
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   });
@@ -162,7 +162,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { code } = req.body;
       const tokens = await GoogleDriveService.getTokenFromCode(code);
       res.json({ tokens });
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   });
@@ -175,7 +175,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const files = await driveService.listFiles(query);
       res.json({ files });
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   });
@@ -205,7 +205,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         piiAnalysis,
         metadata
       });
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   });
@@ -229,7 +229,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       res.json({ success: true, project: updatedProject });
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   });
@@ -364,7 +364,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       });
 
-    } catch (error) {
+    } catch (error: any) {
       console.error("PII decision processing error:", error);
       res.status(500).json({ 
         success: false, 
@@ -492,7 +492,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       });
 
-    } catch (error) {
+    } catch (error: any) {
       console.error("Trial PII decision processing error:", error);
       res.status(500).json({ 
         success: false, 
@@ -516,7 +516,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       res.json({ success: true, project: updatedProject });
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   });
@@ -527,7 +527,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { config } = req.body;
       const result = await DataTransformer.joinData(config);
       res.json({ success: true, result });
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   });
@@ -554,7 +554,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       res.json({ success: true, result });
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   });
@@ -579,7 +579,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       res.json({ success: true, result });
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   });
@@ -601,7 +601,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       res.json({ success: true, result });
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   });
@@ -630,7 +630,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       res.json({ success: true, result });
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   });
@@ -733,7 +733,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         piiAnalysis
       });
 
-    } catch (error) {
+    } catch (error: any) {
       console.error("File upload error:", error);
       res.status(500).json({ 
         success: false, 
@@ -747,7 +747,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const roles = MCPAIService.getAvailableRoles();
       res.json({ roles });
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   });
@@ -756,7 +756,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const resources = MCPAIService.getAllResources();
       res.json({ resources });
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   });
@@ -785,7 +785,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       res.json({ success: true, result });
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   });
@@ -864,7 +864,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       });
 
-    } catch (error) {
+    } catch (error: any) {
       console.error("File upload error:", error);
       res.status(500).json({ 
         success: false, 
@@ -885,7 +885,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         discounts,
         freeTrialLimits
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching pricing:", error);
       res.status(500).json({ error: "Failed to fetch pricing information" });
     }
@@ -910,7 +910,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const pricing = PricingService.calculatePrice(features);
       res.json(pricing);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error calculating price:", error);
       res.status(500).json({ error: "Failed to calculate price" });
     }
@@ -938,7 +938,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         amount: pricing.total,
         breakdown: pricing
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating payment intent:", error);
       res.status(500).json({ error: "Failed to create payment intent" });
     }
@@ -1034,7 +1034,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         results
       });
 
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error processing features:", error);
       res.status(500).json({ error: "Failed to process features" });
     }
@@ -1045,7 +1045,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const projects = await storage.getAllProjects();
       res.json({ projects });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching projects:", error);
       res.status(500).json({ error: "Failed to fetch projects" });
     }
@@ -1059,7 +1059,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Project not found" });
       }
       res.json(project);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching project:", error);
       res.status(500).json({ error: "Failed to fetch project" });
     }
@@ -1073,7 +1073,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Project not found" });
       }
       res.json({ success: true });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error deleting project:", error);
       res.status(500).json({ error: "Failed to delete project" });
     }
@@ -1087,7 +1087,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         available: providers,
         primary: providers[0] || 'none'
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching AI status:", error);
       res.status(500).json({ error: "Failed to fetch AI status" });
     }
@@ -1127,7 +1127,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         project: updatedProject,
         features: selectedFeatures
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Trial upgrade error:', error);
       res.status(500).json({ error: 'Failed to upgrade trial' });
     }
@@ -1203,7 +1203,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         features: selectedFeatures
       });
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('Full analysis processing error:', error);
       res.status(500).json({
         success: false,
@@ -1217,7 +1217,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const techniques = AnonymizationEngine.getTechniques();
       res.json({ techniques });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error getting techniques:', error);
       res.status(500).json({ error: 'Failed to get techniques' });
     }
@@ -1240,7 +1240,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const preview = AnonymizationEngine.previewAnonymization(data, columnMappings, sampleSize);
       
       res.json(preview);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error generating preview:', error);
       res.status(500).json({ error: 'Failed to generate preview' });
     }
@@ -1278,7 +1278,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: 'Data anonymized successfully',
         recordsProcessed: anonymizedData.length
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error applying anonymization:', error);
       res.status(500).json({ error: 'Failed to apply anonymization' });
     }
