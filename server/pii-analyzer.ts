@@ -152,4 +152,119 @@ export class PIIAnalyzer {
     // For now, we'll return true to allow processing
     return true;
   }
+
+  static async applyAdvancedAnonymization(data: any[], config: any): Promise<{data: any[], lookupTable?: any}> {
+    const { uniqueIdentifier, fieldsToAnonymize, anonymizationMethods, requiresLookupFile } = config;
+    
+    let lookupTable: any = null;
+    if (requiresLookupFile) {
+      lookupTable = {};
+    }
+    
+    const anonymizedData = data.map(row => {
+      const anonymizedRow = { ...row };
+      
+      fieldsToAnonymize.forEach((field: string) => {
+        const method = anonymizationMethods[field];
+        const originalValue = row[field];
+        
+        if (originalValue && method) {
+          let anonymizedValue;
+          
+          switch (method) {
+            case 'mask':
+              anonymizedValue = this.maskValue(originalValue);
+              break;
+            case 'substitute':
+              anonymizedValue = this.substituteValue(originalValue, field);
+              break;
+            case 'encrypt':
+              anonymizedValue = this.encryptValue(originalValue);
+              break;
+            case 'hash':
+              anonymizedValue = this.hashValue(originalValue);
+              break;
+            case 'generalize':
+              anonymizedValue = this.generalizeValue(originalValue, field);
+              break;
+            default:
+              anonymizedValue = '***ANONYMIZED***';
+          }
+          
+          anonymizedRow[field] = anonymizedValue;
+          
+          // Store in lookup table if required
+          if (requiresLookupFile && uniqueIdentifier && row[uniqueIdentifier]) {
+            if (!lookupTable[row[uniqueIdentifier]]) {
+              lookupTable[row[uniqueIdentifier]] = {};
+            }
+            lookupTable[row[uniqueIdentifier]][field] = {
+              original: originalValue,
+              anonymized: anonymizedValue
+            };
+          }
+        }
+      });
+      
+      return anonymizedRow;
+    });
+    
+    return {
+      data: anonymizedData,
+      lookupTable: requiresLookupFile ? lookupTable : null
+    };
+  }
+
+  private static maskValue(value: string): string {
+    if (typeof value !== 'string') return '***';
+    if (value.length <= 3) return '***';
+    return value.substring(0, 2) + '*'.repeat(value.length - 2);
+  }
+
+  private static substituteValue(value: any, field: string): string {
+    if (field.toLowerCase().includes('name')) {
+      return `Person${Math.random().toString(36).substr(2, 3)}`;
+    }
+    if (field.toLowerCase().includes('email')) {
+      return `user${Math.random().toString(36).substr(2, 6)}@example.com`;
+    }
+    if (field.toLowerCase().includes('phone')) {
+      return `***-***-${Math.random().toString().substr(2, 4)}`;
+    }
+    return `SubstituteValue${Math.random().toString(36).substr(2, 4)}`;
+  }
+
+  private static encryptValue(value: string): string {
+    // Simple encryption simulation - in production, use proper encryption
+    const encoded = Buffer.from(value).toString('base64');
+    return `ENC_${encoded}`;
+  }
+
+  private static hashValue(value: string): string {
+    // Simple hash simulation - in production, use proper hashing
+    let hash = 0;
+    for (let i = 0; i < value.length; i++) {
+      const char = value.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    return `HASH_${Math.abs(hash).toString(36)}`;
+  }
+
+  private static generalizeValue(value: any, field: string): string {
+    if (field.toLowerCase().includes('date')) {
+      const date = new Date(value);
+      if (!isNaN(date.getTime())) {
+        return `${date.getFullYear()}-Q${Math.ceil((date.getMonth() + 1) / 3)}`;
+      }
+    }
+    if (typeof value === 'number') {
+      // Generalize numbers to ranges
+      if (value < 100) return '0-99';
+      if (value < 1000) return '100-999';
+      if (value < 10000) return '1000-9999';
+      return '10000+';
+    }
+    return 'GENERALIZED';
+  }
 }

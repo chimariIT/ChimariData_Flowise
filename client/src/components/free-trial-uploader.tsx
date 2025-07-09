@@ -88,7 +88,7 @@ export default function FreeTrialUploader() {
     }
   };
 
-  const handlePIIDecision = async (decision: 'include' | 'exclude' | 'anonymize') => {
+  const handlePIIDecision = async (decision: 'include' | 'exclude' | 'anonymize', anonymizationConfig?: any) => {
     if (!piiDialogData) return;
     
     try {
@@ -99,6 +99,11 @@ export default function FreeTrialUploader() {
       formData.append('file', piiDialogData.file);
       formData.append('tempFileId', piiDialogData.result.tempFileId);
       formData.append('decision', decision);
+      
+      // Add anonymization config if provided
+      if (anonymizationConfig) {
+        formData.append('anonymizationConfig', JSON.stringify(anonymizationConfig));
+      }
 
       const response = await fetch('/api/trial-pii-decision', {
         method: 'POST',
