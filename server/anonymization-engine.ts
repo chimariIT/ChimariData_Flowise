@@ -1,5 +1,5 @@
 import { faker } from '@faker-js/faker';
-import crypto from 'crypto';
+import * as crypto from 'crypto';
 
 export interface AnonymizationTechnique {
   id: string;
@@ -244,7 +244,7 @@ export class AnonymizationEngine {
     const algorithm = 'aes-256-cbc';
     const keyBuffer = crypto.scryptSync(key, 'salt', 32);
     const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipher(algorithm, keyBuffer);
+    const cipher = crypto.createCipheriv(algorithm, keyBuffer, iv);
     
     let encrypted = cipher.update(value, 'utf8', 'hex');
     encrypted += cipher.final('hex');
@@ -253,6 +253,18 @@ export class AnonymizationEngine {
       value: encrypted,
       iv: iv.toString('hex')
     };
+  }
+
+  private static decryptAES(encryptedValue: string, key: string, ivHex: string): string {
+    const algorithm = 'aes-256-cbc';
+    const keyBuffer = crypto.scryptSync(key, 'salt', 32);
+    const iv = Buffer.from(ivHex, 'hex');
+    const decipher = crypto.createDecipheriv(algorithm, keyBuffer, iv);
+    
+    let decrypted = decipher.update(encryptedValue, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    
+    return decrypted;
   }
 
   private static hashSHA256(value: string): string {
