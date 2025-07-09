@@ -214,6 +214,106 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // PII decision endpoint to continue after user choice
+  app.post("/api/pii-decision", upload.single('file'), async (req, res) => {
+    try {
+      const { name, description, questions, tempFileId, decision } = req.body;
+      
+      if (!req.file) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "No file uploaded" 
+        });
+      }
+
+      // Process the uploaded file
+      const processedData = await FileProcessor.processFile(
+        req.file.buffer,
+        req.file.originalname,
+        req.file.mimetype
+      );
+
+      // Parse questions
+      let parsedQuestions = [];
+      if (questions) {
+        try {
+          parsedQuestions = typeof questions === 'string' ? JSON.parse(questions) : questions;
+        } catch (e) {
+          parsedQuestions = questions.split('\n').filter(q => q.trim());
+        }
+      }
+
+      // Apply PII handling based on decision
+      let finalData = processedData.data;
+      const piiAnalysis = await PIIAnalyzer.analyzePII(processedData.preview || [], processedData.schema || {});
+      
+      if (decision === 'exclude') {
+        // Remove PII columns from data
+        // This is a simplified approach - in production, you'd want more sophisticated handling
+        finalData = processedData.data.map(row => {
+          const cleanRow = { ...row };
+          piiAnalysis.detectedPII.forEach(piiType => {
+            if (piiAnalysis.columnAnalysis[piiType]) {
+              delete cleanRow[piiType];
+            }
+          });
+          return cleanRow;
+        });
+      } else if (decision === 'anonymize') {
+        // Apply anonymization to PII columns
+        finalData = processedData.data.map(row => {
+          const anonymizedRow = { ...row };
+          piiAnalysis.detectedPII.forEach(piiType => {
+            if (piiAnalysis.columnAnalysis[piiType] && anonymizedRow[piiType]) {
+              anonymizedRow[piiType] = '***ANONYMIZED***';
+            }
+          });
+          return anonymizedRow;
+        });
+      }
+
+      // Create project with processed data
+      const project = await storage.createProject({
+        name: name.trim(),
+        description: description || '',
+        questions: parsedQuestions,
+        fileName: req.file.originalname,
+        fileSize: req.file.size,
+        mimeType: req.file.mimetype,
+        uploadedAt: new Date(),
+        processed: true,
+        schema: processedData.schema,
+        recordCount: processedData.recordCount,
+        data: finalData,
+        isTrial: false,
+        purchasedFeatures: [],
+        piiAnalysis: {
+          ...piiAnalysis,
+          userDecision: decision,
+          decisionTimestamp: new Date()
+        }
+      });
+
+      console.log(`Project created successfully with PII decision: ${project.id}`);
+
+      res.json({
+        success: true,
+        projectId: project.id,
+        project: {
+          ...project,
+          preview: finalData.slice(0, 10)
+        }
+      });
+
+    } catch (error) {
+      console.error("PII decision processing error:", error);
+      res.status(500).json({ 
+        success: false, 
+        error: error.message || "Failed to process PII decision" 
+      });
+    }
+  });
+
   // Unique identifier selection endpoint
   app.post("/api/unique-identifiers", async (req, res) => {
     try {
@@ -405,12 +505,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (piiAnalysis.detectedPII.length > 0 && !(piiHandled === "true" || piiHandled === true)) {
         console.log('PII detected, requesting user consent');
         return res.json({
-          success: false,
+          success: true,
           requiresPIIDecision: true,
           piiResult: piiAnalysis,
           tempFileId: `temp_${Date.now()}`,
           name: name.trim(),
           questions: parsedQuestions,
+          sampleData: processedData.preview,
           message: 'PII detected - user consent required'
         });
       }
