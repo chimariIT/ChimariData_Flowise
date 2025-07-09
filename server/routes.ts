@@ -328,7 +328,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Project not found" });
       }
 
-      const projectData = []; // placeholder - implement actual data retrieval
+      const projectData = project.data || []; // Get actual project data
       const result = await AdvancedAnalyzer.performStepByStepAnalysis(projectData, config);
       
       // Update project with step-by-step analysis
@@ -415,7 +415,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      // Create project
+      // Create project with actual data
       const project = await storage.createProject({
         name: name.trim(),
         description: description || '',
@@ -427,6 +427,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         processed: true,
         schema: processedData.schema,
         recordCount: processedData.recordCount,
+        data: processedData.data, // Store actual data rows
         isTrial: false,
         purchasedFeatures: [],
         piiAnalysis: piiAnalysis

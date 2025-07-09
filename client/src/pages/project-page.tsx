@@ -88,6 +88,14 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
               </div>
             </div>
             <div className="flex items-center space-x-2">
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => setLocation(`/stats/${projectId}`)}
+              >
+                <BarChart3 className="w-4 h-4 mr-2" />
+                View Statistics
+              </Button>
               <Badge variant={project.processed ? "default" : "secondary"}>
                 {project.processed ? "Processed" : "Processing"}
               </Badge>
