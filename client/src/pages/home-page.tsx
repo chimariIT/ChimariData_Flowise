@@ -48,6 +48,17 @@ export default function HomePage() {
       });
       
       if (result.success) {
+        // Check if PII decision is required
+        if (result.requiresPIIDecision) {
+          toast({
+            title: "PII Data Detected",
+            description: "Please review the detected personally identifiable information.",
+            variant: "destructive",
+          });
+          // Don't navigate - user needs to handle PII decision first
+          return;
+        }
+        
         toast({
           title: "File uploaded successfully!",
           description: `Processed ${result.recordCount || 0} records from ${file.name}`,

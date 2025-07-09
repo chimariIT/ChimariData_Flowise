@@ -23,14 +23,10 @@ interface PIIInterimDialogProps {
 
 export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProceed }: PIIInterimDialogProps) {
   const [showSampleValues, setShowSampleValues] = useState(false);
-  const [requiresPII, setRequiresPII] = useState(false);
+  const [selectedDecision, setSelectedDecision] = useState<'include' | 'exclude' | 'anonymize'>('exclude');
 
-  const handleProceed = () => {
-    if (requiresPII) {
-      onProceed('include');
-    } else {
-      onProceed('exclude');
-    }
+  const handleProceed = (decision: 'include' | 'exclude' | 'anonymize') => {
+    onProceed(decision);
     onClose();
   };
 
@@ -141,23 +137,71 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
             </Button>
           </div>
 
-          {/* Analysis Requirements */}
+          {/* Decision Options */}
           <div>
-            <h3 className="font-semibold text-lg mb-3">Analysis Requirements</h3>
-            <p className="text-gray-600 mb-4">Do you need this PII data for your analysis?</p>
+            <h3 className="font-semibold text-lg mb-3">Choose How to Handle PII Data</h3>
+            <p className="text-gray-600 mb-4">Select how you want to proceed with the detected PII data:</p>
             
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="requiresPII"
-                checked={requiresPII}
-                onCheckedChange={(checked) => setRequiresPII(checked as boolean)}
-              />
-              <label
-                htmlFor="requiresPII"
-                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
-              >
-                Yes, this PII data is required for my analysis
-              </label>
+            <div className="space-y-3">
+              <div className="flex items-start space-x-3 p-3 border rounded-lg hover:bg-gray-50">
+                <input
+                  type="radio"
+                  id="exclude"
+                  name="piiDecision"
+                  value="exclude"
+                  checked={selectedDecision === 'exclude'}
+                  onChange={() => setSelectedDecision('exclude')}
+                  className="mt-1"
+                />
+                <div>
+                  <label htmlFor="exclude" className="font-medium text-gray-900">
+                    Exclude PII Data (Recommended)
+                  </label>
+                  <p className="text-sm text-gray-600">
+                    Remove all PII columns from the dataset before analysis. This is the safest option for privacy compliance.
+                  </p>
+                </div>
+              </div>
+              
+              <div className="flex items-start space-x-3 p-3 border rounded-lg hover:bg-gray-50">
+                <input
+                  type="radio"
+                  id="anonymize"
+                  name="piiDecision"
+                  value="anonymize"
+                  checked={selectedDecision === 'anonymize'}
+                  onChange={() => setSelectedDecision('anonymize')}
+                  className="mt-1"
+                />
+                <div>
+                  <label htmlFor="anonymize" className="font-medium text-gray-900">
+                    Anonymize PII Data
+                  </label>
+                  <p className="text-sm text-gray-600">
+                    Replace PII with anonymized values while preserving data structure for analysis.
+                  </p>
+                </div>
+              </div>
+              
+              <div className="flex items-start space-x-3 p-3 border rounded-lg hover:bg-gray-50">
+                <input
+                  type="radio"
+                  id="include"
+                  name="piiDecision"
+                  value="include"
+                  checked={selectedDecision === 'include'}
+                  onChange={() => setSelectedDecision('include')}
+                  className="mt-1"
+                />
+                <div>
+                  <label htmlFor="include" className="font-medium text-gray-900">
+                    Include PII Data (Not Recommended)
+                  </label>
+                  <p className="text-sm text-gray-600">
+                    Keep all PII data in the dataset. Only choose this if PII is essential for your analysis.
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -194,10 +238,12 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
               Cancel Upload
             </Button>
             <Button 
-              onClick={handleProceed} 
+              onClick={() => handleProceed(selectedDecision)} 
               className="bg-blue-600 hover:bg-blue-700 text-white"
             >
-              Proceed without PII
+              {selectedDecision === 'include' ? 'Proceed with PII' : 
+               selectedDecision === 'anonymize' ? 'Proceed with Anonymization' : 
+               'Proceed without PII'}
             </Button>
           </div>
         </div>
