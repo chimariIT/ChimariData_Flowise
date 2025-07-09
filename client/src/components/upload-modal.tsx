@@ -124,7 +124,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
       
       // Check if PII decision is required
       if (result.requiresPIIDecision && result.piiResult) {
-        console.log('PII detected - storing temp file info');
+        console.log('PII detected - storing temp file info', result);
         // Store PII detection result and temp file info for handling
         setTempFileInfo({
           tempFileId: result.tempFileId,
@@ -132,9 +132,11 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
           description: formData.description,
           questions: questionsArray,
           piiResult: result.piiResult,
+          sampleData: result.sampleData,
           file: selectedFile
         });
         setShowPIIDialog(true);
+        console.log('PII dialog should be shown now', { showPIIDialog: true });
         return; // Don't call onSuccess yet
       }
       
@@ -372,6 +374,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
         <PIIInterimDialog
           isOpen={showPIIDialog}
           piiData={tempFileInfo.piiResult}
+          sampleData={tempFileInfo.sampleData}
           onProceed={(decision) => {
             handlePIIDecision(decision);
           }}
