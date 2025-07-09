@@ -164,7 +164,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
     }
   };
 
-  const handlePIIDecision = async (decision: 'include' | 'exclude' | 'anonymize') => {
+  const handlePIIDecision = async (decision: 'include' | 'exclude' | 'anonymize', anonymizationConfig?: any) => {
     if (!tempFileInfo) return;
     
     try {
@@ -177,6 +177,11 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
       formDataObj.append('questions', JSON.stringify(tempFileInfo.questions));
       formDataObj.append('tempFileId', tempFileInfo.tempFileId);
       formDataObj.append('decision', decision);
+      
+      // Add anonymization config if provided
+      if (anonymizationConfig) {
+        formDataObj.append('anonymizationConfig', JSON.stringify(anonymizationConfig));
+      }
       
       // Re-append the file
       if (tempFileInfo.file) {

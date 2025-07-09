@@ -3,7 +3,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { AlertTriangle, Shield, Eye, EyeOff, CheckCircle, X } from 'lucide-react';
+import { AlertTriangle, Shield, Eye, EyeOff, CheckCircle, X, Settings } from 'lucide-react';
+import { AdvancedAnonymizationDialog } from './AdvancedAnonymizationDialog';
 
 interface PIIInterimDialogProps {
   isOpen: boolean;
@@ -18,15 +19,29 @@ interface PIIInterimDialogProps {
     recommendations: string[];
   };
   sampleData?: Record<string, any>[];
-  onProceed: (decision: 'include' | 'exclude' | 'anonymize') => void;
+  onProceed: (decision: 'include' | 'exclude' | 'anonymize', anonymizationConfig?: any) => void;
 }
 
 export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProceed }: PIIInterimDialogProps) {
   const [showSampleValues, setShowSampleValues] = useState(false);
   const [selectedDecision, setSelectedDecision] = useState<'include' | 'exclude' | 'anonymize'>('exclude');
+  const [showAdvancedAnonymization, setShowAdvancedAnonymization] = useState(false);
+  
+  // Get all column names from sample data
+  const allColumns = sampleData && sampleData.length > 0 ? Object.keys(sampleData[0]) : [];
 
   const handleProceed = (decision: 'include' | 'exclude' | 'anonymize') => {
-    onProceed(decision);
+    if (decision === 'anonymize') {
+      setShowAdvancedAnonymization(true);
+    } else {
+      onProceed(decision);
+      onClose();
+    }
+  };
+
+  const handleAdvancedAnonymization = (anonymizationConfig: any) => {
+    onProceed('anonymize', anonymizationConfig);
+    setShowAdvancedAnonymization(false);
     onClose();
   };
 
@@ -180,6 +195,10 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
                   <p className="text-sm text-gray-600">
                     Replace PII with anonymized values while preserving data structure for analysis.
                   </p>
+                  <div className="mt-2 flex items-center gap-2">
+                    <Settings className="w-4 h-4 text-blue-600" />
+                    <span className="text-sm text-blue-600">Advanced anonymization options available</span>
+                  </div>
                 </div>
               </div>
               
@@ -248,6 +267,16 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
           </div>
         </div>
       </DialogContent>
+      
+      {/* Advanced Anonymization Dialog */}
+      <AdvancedAnonymizationDialog
+        isOpen={showAdvancedAnonymization}
+        onClose={() => setShowAdvancedAnonymization(false)}
+        piiData={piiData}
+        sampleData={sampleData}
+        allColumns={allColumns}
+        onProceed={handleAdvancedAnonymization}
+      />
     </Dialog>
   );
 }

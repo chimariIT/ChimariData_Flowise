@@ -1,0 +1,77 @@
+{
+  "summary": {
+    "total": 11,
+    "passed": 10,
+    "failed": 1
+  },
+  "results": [
+    {
+      "test": "PII Detection Flow",
+      "status": "PASSED",
+      "message": "PII detection correctly triggered",
+      "timestamp": "2025-07-09T19:34:23.257Z"
+    },
+    {
+      "test": "PII Field Detection",
+      "status": "PASSED",
+      "message": "Detected PII fields: name, email, phone, age",
+      "timestamp": "2025-07-09T19:34:23.259Z"
+    },
+    {
+      "test": "Advanced Anonymization Config",
+      "status": "PASSED",
+      "message": "Advanced configuration processed successfully",
+      "timestamp": "2025-07-09T19:34:23.272Z"
+    },
+    {
+      "test": "Project Creation with Anonymization",
+      "status": "PASSED",
+      "message": "Project created: project_1",
+      "timestamp": "2025-07-09T19:34:23.272Z"
+    },
+    {
+      "test": "Trial Advanced Anonymization",
+      "status": "FAILED",
+      "message": "Error: Failed to process trial analysis with PII decision",
+      "timestamp": "2025-07-09T19:34:27.637Z"
+    },
+    {
+      "test": "Full Upload Advanced Anonymization",
+      "status": "PASSED",
+      "message": "Full upload anonymization processed successfully",
+      "timestamp": "2025-07-09T19:34:27.645Z"
+    },
+    {
+      "test": "Anonymization Method: substitute",
+      "status": "PASSED",
+      "message": "substitute method processed",
+      "timestamp": "2025-07-09T19:34:27.645Z"
+    },
+    {
+      "test": "Anonymization Method: encrypt",
+      "status": "PASSED",
+      "message": "encrypt method processed",
+      "timestamp": "2025-07-09T19:34:27.645Z"
+    },
+    {
+      "test": "Anonymization Method: hash",
+      "status": "PASSED",
+      "message": "hash method processed",
+      "timestamp": "2025-07-09T19:34:27.645Z"
+    },
+    {
+      "test": "Lookup Table Generation",
+      "status": "PASSED",
+      "message": "Lookup table processing initiated",
+      "timestamp": "2025-07-09T19:34:27.652Z"
+    },
+    {
+      "test": "Lookup Table Configuration",
+      "status": "PASSED",
+      "message": "Lookup table configuration processed successfully",
+      "timestamp": "2025-07-09T19:34:27.653Z"
+    }
+  ],
+  "timestamp": "2025-07-09T19:34:27.654Z",
+  "testType": "Advanced Anonymization Workflow"
+}
