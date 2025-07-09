@@ -11,6 +11,7 @@ import { apiClient } from "@/lib/api";
 import { X, Upload, File, CheckCircle, FileSpreadsheet, AlertCircle, HardDrive } from "lucide-react";
 import GoogleDriveImport from "./google-drive-import";
 import { PIIDetectionDialog } from "./PIIDetectionDialog";
+import { PIIInterimDialog } from "./PIIInterimDialog";
 
 interface UploadModalProps {
   isOpen: boolean;
@@ -128,8 +129,10 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
         setTempFileInfo({
           tempFileId: result.tempFileId,
           name: result.name || formData.projectName,
+          description: formData.description,
           questions: questionsArray,
-          piiResult: result.piiResult
+          piiResult: result.piiResult,
+          file: selectedFile
         });
         setShowPIIDialog(true);
         return; // Don't call onSuccess yet
@@ -159,27 +162,45 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
     }
   };
 
-  const handlePIIDecision = async (requiresPII: boolean, anonymizeData: boolean, selectedColumns: string[]) => {
+  const handlePIIDecision = async (decision: 'include' | 'exclude' | 'anonymize') => {
     if (!tempFileInfo) return;
     
     try {
       setIsUploading(true);
       
-      // Re-upload with PII decision
-      const result = await apiClient.uploadFile(selectedFile!, {
-        name: tempFileInfo.name,
-        description: formData.description,
-        questions: tempFileInfo.questions,
-        piiHandled: true,
-        anonymizationApplied: anonymizeData,
-        selectedColumns: selectedColumns
+      // Create form data for the PII decision endpoint
+      const formDataObj = new FormData();
+      formDataObj.append('name', tempFileInfo.name);
+      formDataObj.append('description', tempFileInfo.description);
+      formDataObj.append('questions', JSON.stringify(tempFileInfo.questions));
+      formDataObj.append('tempFileId', tempFileInfo.tempFileId);
+      formDataObj.append('decision', decision);
+      
+      // Re-append the file
+      if (tempFileInfo.file) {
+        formDataObj.append('file', tempFileInfo.file);
+      }
+
+      const response = await fetch('/api/pii-decision', {
+        method: 'POST',
+        body: formDataObj
       });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
       
-      // Close PII dialog
-      setShowPIIDialog(false);
-      setTempFileInfo(null);
-      
-      onSuccess();
+      if (result.success) {
+        // Close PII dialog
+        setShowPIIDialog(false);
+        setTempFileInfo(null);
+        
+        onSuccess();
+      } else {
+        throw new Error(result.error || 'Upload failed');
+      }
       
     } catch (error) {
       toast({
@@ -348,10 +369,12 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
       
       {/* PII Detection Dialog */}
       {showPIIDialog && tempFileInfo && (
-        <PIIDetectionDialog
+        <PIIInterimDialog
           isOpen={showPIIDialog}
-          piiResult={tempFileInfo.piiResult}
-          onDecision={handlePIIDecision}
+          piiData={tempFileInfo.piiResult}
+          onProceed={(decision) => {
+            handlePIIDecision(decision);
+          }}
           onClose={() => {
             setShowPIIDialog(false);
             setTempFileInfo(null);
