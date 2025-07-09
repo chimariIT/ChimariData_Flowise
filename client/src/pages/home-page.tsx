@@ -11,12 +11,15 @@ import { apiClient } from "@/lib/api";
 import FileUploader from "@/components/file-uploader";
 import FreeTrialUploader from "@/components/free-trial-uploader";
 import PricingDisplay from "@/components/pricing-display";
+import { PIIInterimDialog } from "@/components/PIIInterimDialog";
 
 export default function HomePage() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [isUploading, setIsUploading] = useState(false);
   const [activeTab, setActiveTab] = useState("trial");
+  const [showPIIDialog, setShowPIIDialog] = useState(false);
+  const [piiDialogData, setPIIDialogData] = useState<any>(null);
 
   const { data: projectsData, isLoading, refetch } = useQuery({
     queryKey: ["/api/projects"],
@@ -50,12 +53,12 @@ export default function HomePage() {
       if (result.success) {
         // Check if PII decision is required
         if (result.requiresPIIDecision) {
-          toast({
-            title: "PII Data Detected",
-            description: "Please review the detected personally identifiable information.",
-            variant: "destructive",
+          setPIIDialogData({
+            file,
+            result,
+            description
           });
-          // Don't navigate - user needs to handle PII decision first
+          setShowPIIDialog(true);
           return;
         }
         
@@ -70,6 +73,60 @@ export default function HomePage() {
       toast({
         title: "Upload failed",
         description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handlePIIDecision = async (decision: 'include' | 'exclude' | 'anonymize') => {
+    if (!piiDialogData) return;
+    
+    try {
+      setIsUploading(true);
+      
+      // Create form data for the PII decision endpoint
+      const formData = new FormData();
+      formData.append('file', piiDialogData.file);
+      formData.append('name', piiDialogData.file.name.replace(/\.[^/.]+$/, ""));
+      formData.append('description', piiDialogData.description || '');
+      formData.append('questions', JSON.stringify([
+        "What are the key trends in this data?",
+        "What insights can you provide about this dataset?",
+        "What are the most important patterns or correlations?"
+      ]));
+      formData.append('tempFileId', piiDialogData.result.tempFileId);
+      formData.append('decision', decision);
+
+      const response = await fetch('/api/pii-decision', {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      
+      if (result.success) {
+        setShowPIIDialog(false);
+        setPIIDialogData(null);
+        
+        toast({
+          title: "File uploaded successfully!",
+          description: `Processed with ${decision} PII decision`,
+        });
+        refetch();
+        setLocation(`/project/${result.projectId}`);
+      } else {
+        throw new Error(result.error || 'Upload failed');
+      }
+    } catch (error) {
+      toast({
+        title: "Upload failed",
+        description: error instanceof Error ? error.message : "Failed to process PII decision",
         variant: "destructive",
       });
     } finally {
@@ -299,6 +356,21 @@ export default function HomePage() {
           )}
         </CardContent>
       </Card>
+      
+      {/* PII Detection Dialog */}
+      {showPIIDialog && piiDialogData && (
+        <PIIInterimDialog
+          isOpen={showPIIDialog}
+          piiData={piiDialogData.result.piiResult}
+          sampleData={piiDialogData.result.sampleData}
+          onProceed={handlePIIDecision}
+          onClose={() => {
+            setShowPIIDialog(false);
+            setPIIDialogData(null);
+            setIsUploading(false);
+          }}
+        />
+      )}
     </div>
   );
 }
