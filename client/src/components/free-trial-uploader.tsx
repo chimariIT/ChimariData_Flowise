@@ -410,7 +410,9 @@ export default function FreeTrialUploader() {
           isOpen={showPIIDialog}
           piiData={piiDialogData.result.piiResult}
           sampleData={piiDialogData.result.sampleData}
-          onProceed={handlePIIDecision}
+          onProceed={(decision, anonymizationConfig) => {
+            handlePIIDecision(decision, anonymizationConfig);
+          }}
           onClose={() => {
             setShowPIIDialog(false);
             setPIIDialogData(null);
