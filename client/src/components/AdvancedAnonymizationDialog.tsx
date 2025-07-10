@@ -105,8 +105,8 @@ export function AdvancedAnonymizationDialog({
   };
 
   const handleProceed = () => {
+    // Don't close immediately - pass config to parent for verification step
     onProceed(config);
-    onClose();
   };
 
   const getSampleValue = (column: string) => {
@@ -411,7 +411,7 @@ export function AdvancedAnonymizationDialog({
               className="bg-blue-600 hover:bg-blue-700 text-white"
             >
               <Shield className="w-4 h-4 mr-2" />
-              Apply Anonymization
+              Preview Anonymization
             </Button>
           </div>
         </div>
