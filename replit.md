@@ -60,6 +60,13 @@ A streamlined data processing platform with four progressive paid paths: 1) Data
     * Added trial-specific PII decision endpoint
     * Implemented three-option PII handling: include (with warning), exclude (remove columns), anonymize (smart replacement)
     * Added comprehensive PII data processing for both paid and trial uploads
+  - **CRITICAL SECURITY & WORKFLOW FIXES (January 10, 2025)**:
+    * Fixed cryptographic vulnerability by replacing deprecated createCipher with secure createCipheriv
+    * Resolved PII workflow divergence between trial and full upload paths
+    * Fixed Python processing JSON output issue (NaN values breaking trial analysis)
+    * Unified upload workflows while maintaining 10MB trial limit and payment requirements
+    * Added improved error handling and temporary data storage for trial PII decisions
+    * All PII decision paths (include, exclude, anonymize) now working correctly for both trial and full uploads
 
 ## User Preferences
 - Wants four distinct progressive paths with set pricing

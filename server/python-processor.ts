@@ -104,9 +104,12 @@ export class PythonProcessor {
         if (code === 0) {
           resolve({ success: true });
         } else {
+          console.error(`Python script failed with code ${code}`);
+          console.error(`STDOUT: ${stdout}`);
+          console.error(`STDERR: ${stderr}`);
           resolve({ 
             success: false, 
-            error: stderr || `Python script exited with code ${code}` 
+            error: stderr || stdout || `Python script exited with code ${code}` 
           });
         }
       });

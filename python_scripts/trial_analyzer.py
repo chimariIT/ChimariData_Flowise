@@ -23,8 +23,19 @@ def load_data(file_path: str) -> Dict[str, Any]:
 
 def save_results(file_path: str, results: Dict[str, Any]) -> None:
     """Save results to JSON file"""
+    def convert_nan_to_null(obj):
+        if isinstance(obj, dict):
+            return {k: convert_nan_to_null(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [convert_nan_to_null(v) for v in obj]
+        elif isinstance(obj, float) and np.isnan(obj):
+            return None
+        else:
+            return obj
+    
+    cleaned_results = convert_nan_to_null(results)
     with open(file_path, 'w') as f:
-        json.dump(results, f, indent=2, default=str)
+        json.dump(cleaned_results, f, indent=2, default=str)
 
 def create_dataframe(data: Dict[str, Any]) -> pd.DataFrame:
     """Convert input data to pandas DataFrame"""
