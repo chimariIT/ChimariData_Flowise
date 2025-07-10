@@ -346,7 +346,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.log('Warning: User chose to include PII data in analysis');
         }
         
-        // Update schema to reflect anonymized data
+        // Update schema to reflect processed data
         let updatedSchema = { ...processedData.schema };
         if (decision === 'anonymize' && finalData.length > 0) {
           // Update sample values in schema to show anonymized data
@@ -358,6 +358,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
               };
             }
           });
+        } else if (decision === 'exclude') {
+          // Remove PII columns from schema for excluded data
+          const updatedSchemaExclude = { ...processedData.schema };
+          piiAnalysis.detectedPII.forEach(piiColumn => {
+            delete updatedSchemaExclude[piiColumn];
+          });
+          updatedSchema = updatedSchemaExclude;
         }
 
         // Create project with processed data
@@ -482,7 +489,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log('Warning: User chose to include PII data in analysis');
       }
 
-      // Update schema to reflect anonymized data
+      // Update schema to reflect processed data
       let updatedSchema = { ...processedData.schema };
       if (decision === 'anonymize' && finalData.length > 0) {
         // Update sample values in schema to show anonymized data
@@ -494,6 +501,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
             };
           }
         });
+      } else if (decision === 'exclude') {
+        // Remove PII columns from schema for excluded data
+        const updatedSchemaExclude = { ...processedData.schema };
+        piiAnalysis.detectedPII.forEach(piiColumn => {
+          delete updatedSchemaExclude[piiColumn];
+        });
+        updatedSchema = updatedSchemaExclude;
       }
 
       // Create project with processed data
@@ -633,7 +647,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log('Warning: User chose to include PII data in trial analysis');
       }
 
-      // Update schema to reflect anonymized data
+      // Update schema to reflect processed data
       let updatedSchema = { ...processedData.schema };
       if (decision === 'anonymize' && finalData.length > 0) {
         // Update sample values in schema to show anonymized data
@@ -645,6 +659,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
             };
           }
         });
+      } else if (decision === 'exclude') {
+        // Remove PII columns from schema for excluded data
+        const updatedSchemaExclude = { ...processedData.schema };
+        piiAnalysis.detectedPII.forEach(piiColumn => {
+          delete updatedSchemaExclude[piiColumn];
+        });
+        updatedSchema = updatedSchemaExclude;
       }
 
       // Generate trial results with processed data
