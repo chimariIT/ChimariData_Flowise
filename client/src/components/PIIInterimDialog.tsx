@@ -53,7 +53,7 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
     // Proceed with the anonymization after verification
     onProceed('anonymize', anonymizationConfig);
     setShowVerification(false);
-    // onClose(); // Let parent handle closing after backend processing
+    onClose(); // Close the dialog after confirming verification
   };
 
   const handleVerificationBack = () => {

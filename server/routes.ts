@@ -402,7 +402,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({
         success: true,
         projectId: project.id,
-        schema: processedData.schema,
+        schema: updatedSchema, // Use the updated schema after PII processing
         project: {
           ...project,
           preview: finalData.slice(0, 10)
