@@ -256,34 +256,149 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // PII decision endpoint to continue after user choice
-  app.post("/api/pii-decision", upload.single('file'), async (req, res) => {
+  // PII decision endpoint - unified for both JSON and FormData
+  app.post("/api/pii-decision", (req, res, next) => {
+    // Apply upload middleware only for FormData requests
+    if (req.get('Content-Type')?.includes('application/json')) {
+      // Skip file upload middleware for JSON requests
+      next();
+    } else {
+      // Apply upload middleware for FormData requests
+      upload.single('file')(req, res, next);
+    }
+  }, async (req, res) => {
     try {
-      const { name, description, questions, tempFileId, decision, anonymizationConfig } = req.body;
+      console.log("PII Decision Request - Content-Type:", req.get('Content-Type'));
+      console.log("PII Decision Request - Body:", req.body);
+      console.log("PII Decision Request - File:", req.file);
       
-      if (!req.file) {
-        return res.status(400).json({ 
-          success: false, 
-          error: "No file uploaded" 
-        });
-      }
-
-      // Process the uploaded file
-      const processedData = await FileProcessor.processFile(
-        req.file.buffer,
-        req.file.originalname,
-        req.file.mimetype
-      );
-
-      // Parse questions
-      let parsedQuestions = [];
-      if (questions) {
-        try {
-          parsedQuestions = typeof questions === 'string' ? JSON.parse(questions) : questions;
-        } catch (e) {
-          parsedQuestions = questions.split('\n').filter(q => q.trim());
+      // Handle both JSON and FormData formats
+      let isJsonRequest = req.get('Content-Type')?.includes('application/json');
+      console.log("Is JSON request:", isJsonRequest);
+      
+      if (isJsonRequest) {
+        // JSON request (unified approach) - use temporary file data
+        const { tempFileId, decision, anonymizationConfig, projectData } = req.body;
+        
+        if (!tempFileId || !tempTrialData.has(tempFileId)) {
+          return res.status(400).json({
+            success: false,
+            error: "Temporary file data not found. Please upload the file again."
+          });
         }
-      }
+        
+        console.log("Using temporary file data from JSON request");
+        const tempData = tempTrialData.get(tempFileId);
+        const { processedData, piiAnalysis, fileInfo } = tempData;
+        
+        // Apply PII handling based on decision (same logic as trial)
+        let finalData = processedData.data;
+        
+        if (decision === 'exclude') {
+          // Remove PII columns from data
+          finalData = processedData.data.map(row => {
+            const cleanRow = { ...row };
+            piiAnalysis.detectedPII.forEach(piiColumn => {
+              delete cleanRow[piiColumn];
+            });
+            return cleanRow;
+          });
+          
+          // Update schema to remove PII columns
+          const updatedSchema = { ...processedData.schema };
+          piiAnalysis.detectedPII.forEach(piiColumn => {
+            delete updatedSchema[piiColumn];
+          });
+          processedData.schema = updatedSchema;
+          
+        } else if (decision === 'anonymize') {
+          let anonConfig = anonymizationConfig;
+          
+          if (anonConfig && anonConfig.fieldsToAnonymize) {
+            const anonymizationResult = await PIIAnalyzer.applyAdvancedAnonymization(
+              processedData.data,
+              anonConfig
+            );
+            finalData = anonymizationResult.data;
+          } else {
+            // Apply basic anonymization to PII columns
+            finalData = processedData.data.map(row => {
+              const anonymizedRow = { ...row };
+              piiAnalysis.detectedPII.forEach(piiColumn => {
+                if (anonymizedRow[piiColumn]) {
+                  const columnType = piiAnalysis.columnAnalysis[piiColumn]?.type;
+                  if (columnType === 'email') {
+                    anonymizedRow[piiColumn] = `user${Math.random().toString(36).substr(2, 6)}@example.com`;
+                  } else if (columnType === 'phone') {
+                    anonymizedRow[piiColumn] = `555-${Math.floor(Math.random() * 900) + 100}-${Math.floor(Math.random() * 9000) + 1000}`;
+                  } else if (columnType === 'ssn') {
+                    anonymizedRow[piiColumn] = `XXX-XX-${Math.floor(Math.random() * 9000) + 1000}`;
+                  } else {
+                    anonymizedRow[piiColumn] = `***ANONYMIZED***`;
+                  }
+                }
+              });
+              return anonymizedRow;
+            });
+          }
+        } else if (decision === 'include') {
+          // Show warning but proceed with original data
+          console.log('Warning: User chose to include PII data in analysis');
+        }
+        
+        // Create project with processed data
+        const projectMetadata = projectData || {};
+        const projectId = await storage.createProject({
+          name: projectMetadata.name || "Uploaded Data",
+          description: projectMetadata.description || "",
+          questions: projectMetadata.questions || [],
+          fileInfo: fileInfo,
+          data: finalData,
+          schema: processedData.schema,
+          piiAnalysis: {
+            ...piiAnalysis,
+            userDecision: decision,
+            decisionTimestamp: new Date()
+          },
+          createdAt: new Date(),
+          updatedAt: new Date()
+        });
+        
+        // Clean up temporary data
+        tempTrialData.delete(tempFileId);
+        
+        return res.json({
+          success: true,
+          projectId: projectId,
+          message: "Project created successfully with PII decision applied"
+        });
+      } else {
+        // FormData request (legacy approach)
+        const { name, description, questions, tempFileId, decision, anonymizationConfig } = req.body;
+        
+        if (!req.file) {
+          return res.status(400).json({ 
+            success: false, 
+            error: "No file uploaded" 
+          });
+        }
+
+        // Process the uploaded file
+        const processedData = await FileProcessor.processFile(
+          req.file.buffer,
+          req.file.originalname,
+          req.file.mimetype
+        );
+
+        // Parse questions
+        let parsedQuestions = [];
+        if (questions) {
+          try {
+            parsedQuestions = typeof questions === 'string' ? JSON.parse(questions) : questions;
+          } catch (e) {
+            parsedQuestions = questions.split('\n').filter(q => q.trim());
+          }
+        }
 
       // Apply PII handling based on decision
       let finalData = processedData.data;
@@ -386,7 +501,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           preview: finalData.slice(0, 10)
         }
       });
-
+      }
     } catch (error: any) {
       console.error("PII decision processing error:", error);
       res.status(500).json({ 
@@ -727,11 +842,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // If PII detected and not handled, return for user consent
       if (piiAnalysis.detectedPII.length > 0 && !(piiHandled === "true" || piiHandled === true)) {
         console.log('PII detected, requesting user consent');
+        
+        // Store temporary file info for PII decision (unified approach)
+        const tempFileId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        
+        // Store processed data temporarily
+        tempTrialData.set(tempFileId, {
+          processedData,
+          piiAnalysis,
+          fileInfo: {
+            originalname: req.file.originalname,
+            size: req.file.size,
+            mimetype: req.file.mimetype
+          }
+        });
+
+        // Clean up old temp data (older than 1 hour)
+        const oneHourAgo = Date.now() - 60 * 60 * 1000;
+        for (const [key, value] of tempTrialData.entries()) {
+          if (key.includes('temp_') && parseInt(key.split('_')[1]) < oneHourAgo) {
+            tempTrialData.delete(key);
+          }
+        }
+        
         return res.json({
           success: true,
           requiresPIIDecision: true,
           piiResult: piiAnalysis,
-          tempFileId: `temp_${Date.now()}`,
+          tempFileId,
           name: name.trim(),
           questions: parsedQuestions,
           sampleData: processedData.preview,

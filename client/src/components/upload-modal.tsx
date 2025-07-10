@@ -170,27 +170,25 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
     try {
       setIsUploading(true);
       
-      // Create form data for the PII decision endpoint
-      const formDataObj = new FormData();
-      formDataObj.append('name', tempFileInfo.name);
-      formDataObj.append('description', tempFileInfo.description);
-      formDataObj.append('questions', JSON.stringify(tempFileInfo.questions));
-      formDataObj.append('tempFileId', tempFileInfo.tempFileId);
-      formDataObj.append('decision', decision);
-      
-      // Add anonymization config if provided
-      if (anonymizationConfig) {
-        formDataObj.append('anonymizationConfig', JSON.stringify(anonymizationConfig));
-      }
-      
-      // Re-append the file
-      if (tempFileInfo.file) {
-        formDataObj.append('file', tempFileInfo.file);
-      }
+      // Use the unified JSON approach like the free trial uploader
+      const requestData = {
+        tempFileId: tempFileInfo.tempFileId,
+        decision: decision,
+        anonymizationConfig: anonymizationConfig,
+        // Include project metadata for full uploads
+        projectData: {
+          name: tempFileInfo.name,
+          description: tempFileInfo.description,
+          questions: tempFileInfo.questions
+        }
+      };
 
       const response = await fetch('/api/pii-decision', {
         method: 'POST',
-        body: formDataObj
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(requestData)
       });
 
       if (!response.ok) {
