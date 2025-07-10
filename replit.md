@@ -74,6 +74,8 @@ A streamlined data processing platform with four progressive paid paths: 1) Data
       - Fixed full feature not implementing anonymization configurations
       - Updated schema to show anonymized sample values instead of original PII data
       - Both trial and full workflows now properly display anonymized data in frontend
+      - Fixed schema update logic to properly handle all three PII decision types: include, exclude, anonymize
+      - Implemented proper anonymization configuration processing for both basic and advanced anonymization methods
 
 ## User Preferences
 - Wants four distinct progressive paths with set pricing
