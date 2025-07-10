@@ -18,6 +18,7 @@ import { DataTransformer } from './data-transformer';
 import { AdvancedAnalyzer } from './advanced-analyzer';
 import { MCPAIService } from './mcp-ai-service';
 import { AnonymizationEngine } from './anonymization-engine';
+import { UnifiedPIIProcessor } from './unified-pii-processor';
 
 // Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
@@ -291,81 +292,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const tempData = tempTrialData.get(tempFileId);
         const { processedData, piiAnalysis, fileInfo } = tempData;
         
-        // Apply PII handling based on decision (same logic as trial)
-        let finalData = processedData.data;
+        // Apply PII handling using unified processor
+        const piiProcessingResult = await UnifiedPIIProcessor.processPIIData({
+          decision,
+          anonymizationConfig,
+          piiAnalysis,
+          originalData: processedData.data,
+          originalSchema: processedData.schema
+        });
         
-        if (decision === 'exclude') {
-          // Remove PII columns from data
-          finalData = processedData.data.map(row => {
-            const cleanRow = { ...row };
-            piiAnalysis.detectedPII.forEach(piiColumn => {
-              delete cleanRow[piiColumn];
-            });
-            return cleanRow;
-          });
-          
-          // Update schema to remove PII columns
-          const updatedSchema = { ...processedData.schema };
-          piiAnalysis.detectedPII.forEach(piiColumn => {
-            delete updatedSchema[piiColumn];
-          });
-          processedData.schema = updatedSchema;
-          
-        } else if (decision === 'anonymize') {
-          let anonConfig = anonymizationConfig;
-          
-          if (anonConfig && anonConfig.fieldsToAnonymize) {
-            const anonymizationResult = await PIIAnalyzer.applyAdvancedAnonymization(
-              processedData.data,
-              anonConfig
-            );
-            finalData = anonymizationResult.data;
-          } else {
-            // Apply basic anonymization to PII columns
-            finalData = processedData.data.map(row => {
-              const anonymizedRow = { ...row };
-              piiAnalysis.detectedPII.forEach(piiColumn => {
-                if (anonymizedRow[piiColumn]) {
-                  const columnType = piiAnalysis.columnAnalysis[piiColumn]?.type;
-                  if (columnType === 'email') {
-                    anonymizedRow[piiColumn] = `user${Math.random().toString(36).substr(2, 6)}@example.com`;
-                  } else if (columnType === 'phone') {
-                    anonymizedRow[piiColumn] = `555-${Math.floor(Math.random() * 900) + 100}-${Math.floor(Math.random() * 9000) + 1000}`;
-                  } else if (columnType === 'ssn') {
-                    anonymizedRow[piiColumn] = `XXX-XX-${Math.floor(Math.random() * 9000) + 1000}`;
-                  } else {
-                    anonymizedRow[piiColumn] = `***ANONYMIZED***`;
-                  }
-                }
-              });
-              return anonymizedRow;
-            });
-          }
-        } else if (decision === 'include') {
-          // Show warning but proceed with original data
-          console.log('Warning: User chose to include PII data in analysis');
-        }
+        const finalData = piiProcessingResult.finalData;
+        processedData.schema = piiProcessingResult.updatedSchema;
         
-        // Update schema to reflect processed data
-        let updatedSchema = { ...processedData.schema };
-        if (decision === 'anonymize' && finalData.length > 0) {
-          // Update sample values in schema to show anonymized data
-          Object.keys(updatedSchema).forEach(columnName => {
-            if (finalData[0][columnName] !== undefined) {
-              updatedSchema[columnName] = {
-                ...updatedSchema[columnName],
-                sampleValues: finalData.slice(0, 3).map(row => row[columnName]).filter(val => val !== undefined)
-              };
-            }
-          });
-        } else if (decision === 'exclude') {
-          // Remove PII columns from schema for excluded data
-          const updatedSchemaExclude = { ...processedData.schema };
-          piiAnalysis.detectedPII.forEach(piiColumn => {
-            delete updatedSchemaExclude[piiColumn];
-          });
-          updatedSchema = updatedSchemaExclude;
-        }
+        console.log(UnifiedPIIProcessor.generateProcessingSummary(piiProcessingResult));
 
         // Create project with processed data
         const projectMetadata = projectData || {};
@@ -375,7 +314,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           questions: projectMetadata.questions || [],
           fileInfo: fileInfo,
           data: finalData,
-          schema: updatedSchema,
+          schema: processedData.schema,
           piiAnalysis: {
             ...piiAnalysis,
             userDecision: decision,
@@ -421,94 +360,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         }
 
-      // Apply PII handling based on decision
-      let finalData = processedData.data;
+      // Apply PII handling using unified processor
       const piiAnalysis = await PIIAnalyzer.analyzePII(processedData.preview || [], processedData.schema || {});
-      let lookupTable = null;
+      const piiProcessingResult = await UnifiedPIIProcessor.processPIIData({
+        decision,
+        anonymizationConfig,
+        piiAnalysis,
+        originalData: processedData.data,
+        originalSchema: processedData.schema
+      });
       
-      if (decision === 'exclude') {
-        // Remove PII columns from data
-        finalData = processedData.data.map(row => {
-          const cleanRow = { ...row };
-          piiAnalysis.detectedPII.forEach(piiColumn => {
-            delete cleanRow[piiColumn];
-          });
-          return cleanRow;
-        });
-        
-        // Update schema to remove PII columns
-        const updatedSchema = { ...processedData.schema };
-        piiAnalysis.detectedPII.forEach(piiColumn => {
-          delete updatedSchema[piiColumn];
-        });
-        processedData.schema = updatedSchema;
-        
-      } else if (decision === 'anonymize') {
-        // Parse advanced anonymization config if provided
-        let anonConfig = null;
-        if (anonymizationConfig) {
-          try {
-            anonConfig = typeof anonymizationConfig === 'string' ? JSON.parse(anonymizationConfig) : anonymizationConfig;
-          } catch (e) {
-            console.error('Failed to parse anonymization config:', e);
-          }
-        }
-
-        // Apply advanced anonymization if config is provided
-        if (anonConfig && anonConfig.fieldsToAnonymize) {
-          const anonymizationResult = await PIIAnalyzer.applyAdvancedAnonymization(
-            processedData.data,
-            anonConfig
-          );
-          finalData = anonymizationResult.data;
-          lookupTable = anonymizationResult.lookupTable;
-        } else {
-          // Apply basic anonymization to all PII columns
-          finalData = processedData.data.map(row => {
-            const anonymizedRow = { ...row };
-            piiAnalysis.detectedPII.forEach(piiColumn => {
-              if (anonymizedRow[piiColumn]) {
-                // Generate appropriate anonymized value based on column type
-                const columnType = piiAnalysis.columnAnalysis[piiColumn]?.type;
-                if (columnType === 'email') {
-                  anonymizedRow[piiColumn] = `user${Math.random().toString(36).substr(2, 6)}@example.com`;
-                } else if (columnType === 'phone') {
-                  anonymizedRow[piiColumn] = `***-***-${Math.random().toString().substr(2, 4)}`;
-                } else if (columnType === 'name') {
-                  anonymizedRow[piiColumn] = `Person${Math.random().toString(36).substr(2, 3)}`;
-                } else {
-                  anonymizedRow[piiColumn] = '***ANONYMIZED***';
-                }
-              }
-            });
-            return anonymizedRow;
-          });
-        }
-      } else if (decision === 'include') {
-        // Show warning but proceed with original data
-        console.log('Warning: User chose to include PII data in analysis');
-      }
-
-      // Update schema to reflect processed data
-      let updatedSchema = { ...processedData.schema };
-      if (decision === 'anonymize' && finalData.length > 0) {
-        // Update sample values in schema to show anonymized data
-        Object.keys(updatedSchema).forEach(columnName => {
-          if (finalData[0][columnName] !== undefined) {
-            updatedSchema[columnName] = {
-              ...updatedSchema[columnName],
-              sampleValues: finalData.slice(0, 3).map(row => row[columnName]).filter(val => val !== undefined)
-            };
-          }
-        });
-      } else if (decision === 'exclude') {
-        // Remove PII columns from schema for excluded data
-        const updatedSchemaExclude = { ...processedData.schema };
-        piiAnalysis.detectedPII.forEach(piiColumn => {
-          delete updatedSchemaExclude[piiColumn];
-        });
-        updatedSchema = updatedSchemaExclude;
-      }
+      const finalData = piiProcessingResult.finalData;
+      const updatedSchema = piiProcessingResult.updatedSchema;
+      
+      console.log(UnifiedPIIProcessor.generateProcessingSummary(piiProcessingResult));
 
       // Create project with processed data
       const project = await storage.createProject({
@@ -582,91 +447,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { processedData, piiAnalysis, fileInfo } = tempData;
 
-      // Apply PII handling based on decision
-      let finalData = processedData.data;
+      // Apply PII handling using unified processor
+      const piiProcessingResult = await UnifiedPIIProcessor.processPIIData({
+        decision,
+        anonymizationConfig,
+        piiAnalysis,
+        originalData: processedData.data,
+        originalSchema: processedData.schema
+      });
       
-      if (decision === 'exclude') {
-        // Remove PII columns from data
-        finalData = processedData.data.map(row => {
-          const cleanRow = { ...row };
-          piiAnalysis.detectedPII.forEach(piiColumn => {
-            delete cleanRow[piiColumn];
-          });
-          return cleanRow;
-        });
-        
-        // Update schema to remove PII columns
-        const updatedSchema = { ...processedData.schema };
-        piiAnalysis.detectedPII.forEach(piiColumn => {
-          delete updatedSchema[piiColumn];
-        });
-        processedData.schema = updatedSchema;
-        
-      } else if (decision === 'anonymize') {
-        // Parse advanced anonymization config if provided
-        let anonConfig = null;
-        if (anonymizationConfig) {
-          try {
-            anonConfig = typeof anonymizationConfig === 'string' ? JSON.parse(anonymizationConfig) : anonymizationConfig;
-          } catch (e) {
-            console.error('Failed to parse anonymization config:', e);
-          }
-        }
-
-        // Apply advanced anonymization if config is provided
-        if (anonConfig && anonConfig.fieldsToAnonymize) {
-          const anonymizationResult = await PIIAnalyzer.applyAdvancedAnonymization(
-            processedData.data,
-            anonConfig
-          );
-          finalData = anonymizationResult.data;
-        } else {
-          // Apply basic anonymization to PII columns
-          finalData = processedData.data.map(row => {
-            const anonymizedRow = { ...row };
-            piiAnalysis.detectedPII.forEach(piiColumn => {
-              if (anonymizedRow[piiColumn]) {
-                // Generate appropriate anonymized value based on column type
-                const columnType = piiAnalysis.columnAnalysis[piiColumn]?.type;
-                if (columnType === 'email') {
-                  anonymizedRow[piiColumn] = `user${Math.random().toString(36).substr(2, 6)}@example.com`;
-                } else if (columnType === 'phone') {
-                  anonymizedRow[piiColumn] = `***-***-${Math.random().toString().substr(2, 4)}`;
-                } else if (columnType === 'name') {
-                  anonymizedRow[piiColumn] = `Person${Math.random().toString(36).substr(2, 3)}`;
-                } else {
-                  anonymizedRow[piiColumn] = '***ANONYMIZED***';
-                }
-              }
-            });
-            return anonymizedRow;
-          });
-        }
-      } else if (decision === 'include') {
-        // Show warning but proceed with original data
-        console.log('Warning: User chose to include PII data in trial analysis');
-      }
-
-      // Update schema to reflect processed data
-      let updatedSchema = { ...processedData.schema };
-      if (decision === 'anonymize' && finalData.length > 0) {
-        // Update sample values in schema to show anonymized data
-        Object.keys(updatedSchema).forEach(columnName => {
-          if (finalData[0][columnName] !== undefined) {
-            updatedSchema[columnName] = {
-              ...updatedSchema[columnName],
-              sampleValues: finalData.slice(0, 3).map(row => row[columnName]).filter(val => val !== undefined)
-            };
-          }
-        });
-      } else if (decision === 'exclude') {
-        // Remove PII columns from schema for excluded data
-        const updatedSchemaExclude = { ...processedData.schema };
-        piiAnalysis.detectedPII.forEach(piiColumn => {
-          delete updatedSchemaExclude[piiColumn];
-        });
-        updatedSchema = updatedSchemaExclude;
-      }
+      const finalData = piiProcessingResult.finalData;
+      const updatedSchema = piiProcessingResult.updatedSchema;
+      
+      console.log(UnifiedPIIProcessor.generateProcessingSummary(piiProcessingResult));
 
       // Generate trial results with processed data
       const trialResults = await PythonProcessor.processTrial(
