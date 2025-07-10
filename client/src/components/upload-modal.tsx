@@ -188,7 +188,9 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(requestData)
+        body: JSON.stringify(requestData),
+        // Add timeout for long-running anonymization operations
+        signal: AbortSignal.timeout(30000) // 30 second timeout
       });
 
       if (!response.ok) {
