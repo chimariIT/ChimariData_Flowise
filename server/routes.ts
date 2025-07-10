@@ -57,6 +57,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Initialize MCP AI Service
   MCPAIService.initializeMCPServer().catch(console.error);
   
+  // Temporary storage for trial file data
+  const tempTrialData = new Map();
+
   // Enhanced trial upload endpoint with PII analysis
   app.post("/api/trial-upload", upload.single('file'), async (req, res) => {
     try {
@@ -94,6 +97,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (piiAnalysis.detectedPII && piiAnalysis.detectedPII.length > 0) {
         // Store temporary file info for PII decision
         const tempFileId = `trial_temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        
+        // Store processed data temporarily
+        tempTrialData.set(tempFileId, {
+          processedData,
+          piiAnalysis,
+          fileInfo: {
+            originalname: file.originalname,
+            size: file.size,
+            mimetype: file.mimetype
+          }
+        });
+
+        // Clean up old temp data (older than 1 hour)
+        const oneHourAgo = Date.now() - 60 * 60 * 1000;
+        for (const [key, value] of tempTrialData.entries()) {
+          if (key.includes('trial_temp_') && parseInt(key.split('_')[2]) < oneHourAgo) {
+            tempTrialData.delete(key);
+          }
+        }
         
         // Return PII detection result - don't run analysis yet
         return res.json({
@@ -375,27 +397,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Trial PII decision endpoint
-  app.post("/api/trial-pii-decision", upload.single('file'), async (req, res) => {
+  app.post("/api/trial-pii-decision", async (req, res) => {
     try {
       const { tempFileId, decision, anonymizationConfig } = req.body;
       
-      if (!req.file) {
+      console.log("Request body values:", {
+        tempFileId: tempFileId,
+        decision: decision,
+        anonymizationConfig: anonymizationConfig
+      });
+      
+      if (!decision) {
         return res.status(400).json({ 
           success: false, 
-          error: "No file uploaded" 
+          error: "PII decision is required" 
         });
       }
 
-      // Process the uploaded file
-      const processedData = await FileProcessor.processFile(
-        req.file.buffer,
-        req.file.originalname,
-        req.file.mimetype
-      );
+      // Get temporary data from storage
+      const tempData = tempTrialData.get(tempFileId);
+      if (!tempData) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Temporary file data not found. Please upload the file again." 
+        });
+      }
+
+      const { processedData, piiAnalysis, fileInfo } = tempData;
 
       // Apply PII handling based on decision
       let finalData = processedData.data;
-      const piiAnalysis = await PIIAnalyzer.analyzePII(processedData.preview || [], processedData.schema || {});
       
       if (decision === 'exclude') {
         // Remove PII columns from data
@@ -471,12 +502,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
 
       if (!trialResults.success) {
+        console.error("Trial processing failed:", trialResults.error);
         return res.status(500).json({
           success: false,
-          error: "Failed to process trial analysis with PII decision"
+          error: `Failed to process trial analysis with PII decision: ${trialResults.error || 'Unknown error'}`
         });
       }
 
+      // Clean up temporary data only after successful processing
+      tempTrialData.delete(tempFileId);
+      
       res.json({
         success: true,
         trialResults: {

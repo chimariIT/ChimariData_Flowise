@@ -94,20 +94,19 @@ export default function FreeTrialUploader() {
     try {
       setIsProcessing(true);
       
-      // For trial uploads, use the trial PII decision endpoint
-      const formData = new FormData();
-      formData.append('file', piiDialogData.file);
-      formData.append('tempFileId', piiDialogData.result.tempFileId);
-      formData.append('decision', decision);
-      
-      // Add anonymization config if provided
-      if (anonymizationConfig) {
-        formData.append('anonymizationConfig', JSON.stringify(anonymizationConfig));
-      }
+      // For trial uploads, send JSON data since file is stored temporarily on server
+      const requestData = {
+        tempFileId: piiDialogData.result.tempFileId,
+        decision: decision,
+        anonymizationConfig: anonymizationConfig
+      };
 
       const response = await fetch('/api/trial-pii-decision', {
         method: 'POST',
-        body: formData
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(requestData)
       });
 
       if (!response.ok) {
