@@ -10,7 +10,6 @@ import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/lib/api";
 import { X, Upload, File, CheckCircle, FileSpreadsheet, AlertCircle, HardDrive } from "lucide-react";
 import GoogleDriveImport from "./google-drive-import";
-import { PIIDetectionDialog } from "./PIIDetectionDialog";
 import { PIIInterimDialog } from "./PIIInterimDialog";
 
 interface UploadModalProps {
@@ -380,8 +379,8 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
           isOpen={showPIIDialog}
           piiData={tempFileInfo.piiResult}
           sampleData={tempFileInfo.sampleData}
-          onProceed={(decision) => {
-            handlePIIDecision(decision);
+          onProceed={(decision, anonymizationConfig) => {
+            handlePIIDecision(decision, anonymizationConfig);
           }}
           onClose={() => {
             setShowPIIDialog(false);
