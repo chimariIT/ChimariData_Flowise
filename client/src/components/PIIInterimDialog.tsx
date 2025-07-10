@@ -40,9 +40,11 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
   };
 
   const handleAdvancedAnonymization = (anonymizationConfig: any) => {
+    // Don't close the dialog immediately - let the parent handle the closing
+    // after the backend processing is complete
     onProceed('anonymize', anonymizationConfig);
     setShowAdvancedAnonymization(false);
-    onClose();
+    // onClose(); // Removed - let parent handle closing
   };
 
   const handleCancel = () => {
