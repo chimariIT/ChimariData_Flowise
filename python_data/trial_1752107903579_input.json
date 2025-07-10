@@ -1,0 +1,1 @@
+{"preview":[{"Name":"John","Age":30,"Salary":50000},{"Name":"Jane","Age":25,"Salary":45000}],"schema":{"Name":{"type":"text","nullable":false,"sampleValues":["John","Jane"]},"Age":{"type":"number","nullable":false,"sampleValues":["30","25"]},"Salary":{"type":"number","nullable":false,"sampleValues":["50000","45000"]}},"recordCount":2,"piiDecision":"include"}
