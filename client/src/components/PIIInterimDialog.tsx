@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { AlertTriangle, Shield, Eye, EyeOff, CheckCircle, X, Settings } from 'lucide-react';
 import { AdvancedAnonymizationDialog } from './AdvancedAnonymizationDialog';
+import { AnonymizationVerificationDialog } from './AnonymizationVerificationDialog';
 
 interface PIIInterimDialogProps {
   isOpen: boolean;
@@ -26,6 +27,8 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
   const [showSampleValues, setShowSampleValues] = useState(false);
   const [selectedDecision, setSelectedDecision] = useState<'include' | 'exclude' | 'anonymize'>('exclude');
   const [showAdvancedAnonymization, setShowAdvancedAnonymization] = useState(false);
+  const [showVerification, setShowVerification] = useState(false);
+  const [anonymizationConfig, setAnonymizationConfig] = useState<any>(null);
   
   // Get all column names from sample data
   const allColumns = sampleData && sampleData.length > 0 ? Object.keys(sampleData[0]) : [];
@@ -39,12 +42,24 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
     }
   };
 
-  const handleAdvancedAnonymization = (anonymizationConfig: any) => {
-    // Don't close the dialog immediately - let the parent handle the closing
-    // after the backend processing is complete
-    onProceed('anonymize', anonymizationConfig);
+  const handleAdvancedAnonymization = (config: any) => {
+    // Store config and show verification dialog
+    setAnonymizationConfig(config);
     setShowAdvancedAnonymization(false);
-    // onClose(); // Removed - let parent handle closing
+    setShowVerification(true);
+  };
+
+  const handleVerificationConfirm = () => {
+    // Proceed with the anonymization after verification
+    onProceed('anonymize', anonymizationConfig);
+    setShowVerification(false);
+    // onClose(); // Let parent handle closing after backend processing
+  };
+
+  const handleVerificationBack = () => {
+    // Go back to advanced anonymization configuration
+    setShowVerification(false);
+    setShowAdvancedAnonymization(true);
   };
 
   const handleCancel = () => {
@@ -278,6 +293,22 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
         sampleData={sampleData}
         allColumns={allColumns}
         onProceed={handleAdvancedAnonymization}
+      />
+      
+      {/* Anonymization Verification Dialog */}
+      <AnonymizationVerificationDialog
+        isOpen={showVerification}
+        onClose={() => setShowVerification(false)}
+        onConfirm={handleVerificationConfirm}
+        onBack={handleVerificationBack}
+        config={anonymizationConfig || {
+          uniqueIdentifier: '',
+          fieldsToAnonymize: [],
+          anonymizationMethods: {},
+          requiresLookupFile: false
+        }}
+        originalData={sampleData}
+        schema={piiData.columnAnalysis}
       />
     </Dialog>
   );
