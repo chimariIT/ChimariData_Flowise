@@ -346,6 +346,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.log('Warning: User chose to include PII data in analysis');
         }
         
+        // Update schema to reflect anonymized data
+        let updatedSchema = { ...processedData.schema };
+        if (decision === 'anonymize' && finalData.length > 0) {
+          // Update sample values in schema to show anonymized data
+          Object.keys(updatedSchema).forEach(columnName => {
+            if (finalData[0][columnName] !== undefined) {
+              updatedSchema[columnName] = {
+                ...updatedSchema[columnName],
+                sampleValues: finalData.slice(0, 3).map(row => row[columnName]).filter(val => val !== undefined)
+              };
+            }
+          });
+        }
+
         // Create project with processed data
         const projectMetadata = projectData || {};
         const projectId = await storage.createProject({
@@ -354,7 +368,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           questions: projectMetadata.questions || [],
           fileInfo: fileInfo,
           data: finalData,
-          schema: processedData.schema,
+          schema: updatedSchema,
           piiAnalysis: {
             ...piiAnalysis,
             userDecision: decision,
@@ -468,6 +482,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log('Warning: User chose to include PII data in analysis');
       }
 
+      // Update schema to reflect anonymized data
+      let updatedSchema = { ...processedData.schema };
+      if (decision === 'anonymize' && finalData.length > 0) {
+        // Update sample values in schema to show anonymized data
+        Object.keys(updatedSchema).forEach(columnName => {
+          if (finalData[0][columnName] !== undefined) {
+            updatedSchema[columnName] = {
+              ...updatedSchema[columnName],
+              sampleValues: finalData.slice(0, 3).map(row => row[columnName]).filter(val => val !== undefined)
+            };
+          }
+        });
+      }
+
       // Create project with processed data
       const project = await storage.createProject({
         name: name.trim(),
@@ -478,7 +506,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         mimeType: req.file.mimetype,
         uploadedAt: new Date(),
         processed: true,
-        schema: processedData.schema,
+        schema: updatedSchema,
         recordCount: processedData.recordCount,
         data: finalData,
         isTrial: false,
@@ -605,12 +633,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log('Warning: User chose to include PII data in trial analysis');
       }
 
+      // Update schema to reflect anonymized data
+      let updatedSchema = { ...processedData.schema };
+      if (decision === 'anonymize' && finalData.length > 0) {
+        // Update sample values in schema to show anonymized data
+        Object.keys(updatedSchema).forEach(columnName => {
+          if (finalData[0][columnName] !== undefined) {
+            updatedSchema[columnName] = {
+              ...updatedSchema[columnName],
+              sampleValues: finalData.slice(0, 3).map(row => row[columnName]).filter(val => val !== undefined)
+            };
+          }
+        });
+      }
+
       // Generate trial results with processed data
       const trialResults = await PythonProcessor.processTrial(
         `trial_${Date.now()}`,
         {
           preview: finalData.slice(0, 100), // Use first 100 rows as preview
-          schema: processedData.schema,
+          schema: updatedSchema,
           recordCount: finalData.length,
           piiDecision: decision
         }
@@ -630,7 +672,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({
         success: true,
         trialResults: {
-          schema: processedData.schema,
+          schema: updatedSchema,
           descriptiveAnalysis: trialResults.data,
           basicVisualizations: trialResults.visualizations || [],
           piiAnalysis: {
