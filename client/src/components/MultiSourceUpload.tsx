@@ -22,7 +22,7 @@ import {
   Gift
 } from "lucide-react";
 import { apiClient } from "@/lib/api";
-import { PIIDetectionDialog } from "./PIIDetectionDialog";
+import { PIIInterimDialog } from "./PIIInterimDialog";
 
 interface MultiSourceUploadProps {
   onComplete: (uploadInfo: any) => void;
@@ -203,15 +203,77 @@ export function MultiSourceUpload({
     }
   });
 
-  const handlePIIDecision = async (requiresPII: boolean, anonymizeData: boolean, selectedColumns: string[]) => {
-    setShowPIIDialog(false);
+  const handlePIIDecision = async (decision: 'include' | 'exclude' | 'anonymize', anonymizationConfig?: any) => {
+    if (!uploadedFile || !tempFileId) return;
     
-    if (uploadedFile) {
-      // Re-upload with PII decision
-      await uploadFileToBackend(uploadedFile, {
-        piiHandled: true,
-        anonymizationApplied: anonymizeData,
-        selectedColumns: selectedColumns
+    try {
+      setShowPIIDialog(false);
+      
+      // Use the unified JSON approach like other components
+      const requestData = {
+        tempFileId: tempFileId,
+        decision: decision,
+        anonymizationConfig: anonymizationConfig,
+        // Include project metadata for full uploads
+        projectData: {
+          name: uploadedFile.name.split('.')[0],
+          description: `Uploaded via ${selectedSource}`,
+          questions: questions
+        }
+      };
+
+      const response = await fetch(serviceType === 'free_trial' ? '/api/trial-pii-decision' : '/api/pii-decision', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(requestData),
+        // Add timeout for long-running anonymization operations
+        signal: AbortSignal.timeout(30000) // 30 second timeout
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      
+      if (result.success) {
+        setUploadStatus('complete');
+        
+        // Call onComplete with the processed results
+        onComplete({
+          id: result.projectId?.id || result.projectId,
+          name: result.projectId?.name || uploadedFile.name.split('.')[0],
+          sourceType: selectedSource,
+          filename: uploadedFile.name,
+          size: uploadedFile.size,
+          mimeType: uploadedFile.type,
+          uploadPath: `/uploads/${Date.now()}_${uploadedFile.name}`,
+          piiHandled: true,
+          anonymizationApplied: decision === 'anonymize',
+          // Include the actual analysis results from backend
+          insights: result.insights || result.trialResults?.insights,
+          questionResponse: result.questionResponse || result.trialResults?.questionResponse,
+          recordCount: result.recordCount || result.trialResults?.recordCount,
+          columnCount: result.columnCount || result.trialResults?.columnCount,
+          schema: result.schema || result.trialResults?.schema,
+          metadata: result.metadata || result.trialResults?.metadata,
+          questions: questions,
+          analysisType: 'descriptive',
+          isTrial: serviceType === 'free_trial',
+          trialResults: result.trialResults
+        });
+      } else {
+        throw new Error(result.error || 'PII decision processing failed');
+      }
+      
+    } catch (error) {
+      console.error('PII decision error:', error);
+      setUploadStatus('error');
+      onComplete({
+        error: error instanceof Error ? error.message : 'Failed to process PII decision',
+        errorType: 'PII_DECISION_FAILED'
       });
     }
   };
@@ -504,11 +566,12 @@ export function MultiSourceUpload({
 
       {/* PII Detection Dialog */}
       {showPIIDialog && piiDetectionResult && (
-        <PIIDetectionDialog
+        <PIIInterimDialog
           isOpen={showPIIDialog}
           onClose={() => setShowPIIDialog(false)}
-          piiResult={piiDetectionResult}
-          onDecision={handlePIIDecision}
+          piiData={piiDetectionResult}
+          sampleData={uploadedFile ? [] : undefined}
+          onProceed={handlePIIDecision}
         />
       )}
     </div>
