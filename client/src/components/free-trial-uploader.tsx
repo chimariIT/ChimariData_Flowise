@@ -10,9 +10,11 @@ import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/lib/api";
 import { UpgradeModal } from "./upgrade-modal";
 import { FreeTrialPIIDialog } from "./FreeTrialPIIDialog";
+import { useLocation } from 'wouter';
 
 export default function FreeTrialUploader() {
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [results, setResults] = useState<any>(null);
@@ -140,8 +142,23 @@ export default function FreeTrialUploader() {
   };
 
   const handleSignUp = () => {
+    // Close the dialog and navigate to sign up
+    setShowPIIDialog(false);
+    setPIIDialogData(null);
+    setIsProcessing(false);
     // Navigate to sign up page
-    window.location.href = '/auth/register';
+    setLocation('/auth/register');
+  };
+
+  const handleCancelUpload = () => {
+    // Close the dialog and reset everything
+    setShowPIIDialog(false);
+    setPIIDialogData(null);
+    setSelectedFile(null);
+    setResults(null);
+    setIsProcessing(false);
+    // Navigate back to home page
+    setLocation('/');
   };
 
   const removeFile = () => {
@@ -414,11 +431,7 @@ export default function FreeTrialUploader() {
           piiData={piiDialogData.result.piiResult}
           onProceedWithPII={handleProceedWithPII}
           onSignUp={handleSignUp}
-          onClose={() => {
-            setShowPIIDialog(false);
-            setPIIDialogData(null);
-            setIsProcessing(false);
-          }}
+          onClose={handleCancelUpload}
         />
       )}
     </div>
