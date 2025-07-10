@@ -9,7 +9,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/lib/api";
 import { UpgradeModal } from "./upgrade-modal";
-import { PIIInterimDialog } from "./PIIInterimDialog";
+import { FreeTrialPIIDialog } from "./FreeTrialPIIDialog";
 
 export default function FreeTrialUploader() {
   const { toast } = useToast();
@@ -88,17 +88,16 @@ export default function FreeTrialUploader() {
     }
   };
 
-  const handlePIIDecision = async (decision: 'include' | 'exclude' | 'anonymize', anonymizationConfig?: any) => {
+  const handleProceedWithPII = async () => {
     if (!piiDialogData) return;
     
     try {
       setIsProcessing(true);
       
-      // For trial uploads, send JSON data since file is stored temporarily on server
+      // For trial uploads, proceed with PII data included
       const requestData = {
         tempFileId: piiDialogData.result.tempFileId,
-        decision: decision,
-        anonymizationConfig: anonymizationConfig
+        decision: 'include' // Simple: include PII data in analysis
       };
 
       const response = await fetch('/api/trial-pii-decision', {
@@ -107,7 +106,6 @@ export default function FreeTrialUploader() {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(requestData),
-        // Add timeout for long-running anonymization operations
         signal: AbortSignal.timeout(30000) // 30 second timeout
       });
 
@@ -125,7 +123,7 @@ export default function FreeTrialUploader() {
         
         toast({
           title: "Trial analysis complete!",
-          description: `Processed with ${decision} PII decision`,
+          description: "Analysis completed with PII data included",
         });
       } else {
         throw new Error(result.error || 'Processing failed');
@@ -133,12 +131,17 @@ export default function FreeTrialUploader() {
     } catch (error) {
       toast({
         title: "Processing failed",
-        description: error instanceof Error ? error.message : "Failed to process PII decision",
+        description: error instanceof Error ? error.message : "Failed to process trial analysis",
         variant: "destructive",
       });
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const handleSignUp = () => {
+    // Navigate to sign up page
+    window.location.href = '/auth/register';
   };
 
   const removeFile = () => {
@@ -404,15 +407,13 @@ export default function FreeTrialUploader() {
         </div>
       )}
       
-      {/* PII Detection Dialog */}
+      {/* Free Trial PII Warning Dialog */}
       {showPIIDialog && piiDialogData && (
-        <PIIInterimDialog
+        <FreeTrialPIIDialog
           isOpen={showPIIDialog}
           piiData={piiDialogData.result.piiResult}
-          sampleData={piiDialogData.result.sampleData}
-          onProceed={(decision, anonymizationConfig) => {
-            handlePIIDecision(decision, anonymizationConfig);
-          }}
+          onProceedWithPII={handleProceedWithPII}
+          onSignUp={handleSignUp}
           onClose={() => {
             setShowPIIDialog(false);
             setPIIDialogData(null);

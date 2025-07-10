@@ -103,6 +103,14 @@ A streamlined data processing platform with four progressive paid paths: 1) Data
       - Verified with end-to-end testing: both workflows maintain data integrity, apply anonymization correctly, and update schema with anonymized sample values
       - Free trial workflow: displays results with anonymized schema after verification
       - Full feature workflow: creates project with anonymized data and returns updated schema for dashboard display
+    * ✅ COMPLETED: Simplified Free Trial PII Workflow (January 10, 2025):
+      - Simplified free trial PII handling per user request to remove complex anonymization issues
+      - Created FreeTrialPIIDialog.tsx with three clear options: 1) Sign up for full features (recommended), 2) Continue with basic analysis (includes PII), 3) Cancel upload
+      - Updated free-trial-uploader.tsx to use simplified PII dialog instead of complex PIIInterimDialog
+      - Removed complex anonymization from free trial path - now only offers simple "include PII" decision
+      - Free trial users get clear warning about PII data and recommendation to upgrade for anonymization features
+      - Backend maintains support for "include" decision in trial-pii-decision endpoint - works seamlessly
+      - Verified with testing: PII detection works, simple include decision processes correctly, no complex anonymization issues
 
 ## User Preferences
 - Wants four distinct progressive paths with set pricing
