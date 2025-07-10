@@ -116,6 +116,7 @@ export default function FreeTrialUploader() {
       const result = await response.json();
       
       if (result.success && result.trialResults) {
+        // Close the PII dialog and clear dialog data
         setShowPIIDialog(false);
         setPIIDialogData(null);
         setResults(result.trialResults);
