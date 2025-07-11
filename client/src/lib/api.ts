@@ -223,8 +223,12 @@ export class APIClient {
   }
 
   async getCurrentUser(): Promise<any> {
+    const token = localStorage.getItem('authToken');
     const response = await fetch(`${API_BASE}/api/auth/user`, {
       method: 'GET',
+      headers: {
+        'Authorization': token ? `Bearer ${token}` : '',
+      },
       credentials: 'include',
     });
 

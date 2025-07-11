@@ -1343,12 +1343,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Email and password are required" });
       }
       
-      // Password constraints: minimum 8 characters, at least one letter, at least one capital letter
+      // Password constraints: minimum 8 characters, at least one number, at least one capital letter
       if (password.length < 8) {
         return res.status(400).json({ error: "Password must be at least 8 characters" });
       }
-      if (!/[a-zA-Z]/.test(password)) {
-        return res.status(400).json({ error: "Password must contain at least one letter" });
+      if (!/[0-9]/.test(password)) {
+        return res.status(400).json({ error: "Password must contain at least one number" });
       }
       if (!/[A-Z]/.test(password)) {
         return res.status(400).json({ error: "Password must contain at least one capital letter" });
@@ -1577,6 +1577,44 @@ This link will expire in 24 hours.
     } catch (error) {
       console.error('Email verification error:', error);
       res.status(500).json({ error: "Email verification failed" });
+    }
+  });
+
+  // Google OAuth Routes
+  app.get('/api/auth/google', (req, res) => {
+    // For now, redirect to a simple OAuth implementation
+    // In production, this would use passport-google-oauth20
+    const googleClientId = process.env.GOOGLE_CLIENT_ID;
+    if (!googleClientId) {
+      return res.status(500).json({ error: "Google OAuth not configured" });
+    }
+    
+    const redirectUri = `${req.protocol}://${req.get('host')}/api/auth/google/callback`;
+    const scope = 'openid email profile';
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${googleClientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scope)}&response_type=code`;
+    
+    res.redirect(authUrl);
+  });
+
+  app.get('/api/auth/google/callback', async (req, res) => {
+    try {
+      const { code, error } = req.query;
+      
+      if (error) {
+        return res.redirect('/?error=oauth_error');
+      }
+      
+      if (!code) {
+        return res.redirect('/?error=no_code');
+      }
+      
+      // For now, redirect to success page
+      // In production, this would exchange the code for tokens and create/login user
+      res.redirect('/?oauth=success');
+      
+    } catch (error) {
+      console.error('OAuth callback error:', error);
+      res.redirect('/?error=oauth_callback_error');
     }
   });
 

@@ -13,11 +13,16 @@ import FreeTrialUploader from "@/components/free-trial-uploader";
 import PricingDisplay from "@/components/pricing-display";
 import { PIIInterimDialog } from "@/components/PIIInterimDialog";
 
-export default function HomePage() {
+interface HomePageProps {
+  user?: any;
+  onLogout?: () => void;
+}
+
+export default function HomePage({ user, onLogout }: HomePageProps) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [isUploading, setIsUploading] = useState(false);
-  const [activeTab, setActiveTab] = useState("trial");
+  const [activeTab, setActiveTab] = useState(user ? "upload" : "trial");
   const [showPIIDialog, setShowPIIDialog] = useState(false);
   const [piiDialogData, setPIIDialogData] = useState<any>(null);
 
@@ -176,6 +181,35 @@ export default function HomePage() {
 
   return (
     <div className="container mx-auto px-4 py-8 max-w-6xl">
+      {/* User Header */}
+      {user && (
+        <div className="flex justify-between items-center mb-6 p-4 bg-white rounded-lg shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-primary/10 rounded-full flex items-center justify-center">
+              <span className="text-primary font-medium">
+                {user.firstName?.[0] || user.email?.[0] || 'U'}
+              </span>
+            </div>
+            <div>
+              <p className="font-medium text-gray-900">
+                Welcome, {user.firstName || user.email}!
+              </p>
+              <p className="text-sm text-gray-500">
+                Full platform access enabled
+              </p>
+            </div>
+          </div>
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={onLogout}
+            className="text-gray-600 hover:text-gray-900"
+          >
+            Logout
+          </Button>
+        </div>
+      )}
+      
       {/* Header */}
       <div className="text-center mb-8">
         <h1 className="text-4xl font-bold text-gray-900 mb-4">ChimariData</h1>
@@ -242,51 +276,78 @@ export default function HomePage() {
 
       {/* Upload Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-8">
-        <TabsList className="grid w-full grid-cols-2">
-          <TabsTrigger value="trial" className="flex items-center gap-2">
-            <Zap className="w-4 h-4" />
-            Free Trial (10MB)
-          </TabsTrigger>
-          <TabsTrigger value="paid" className="flex items-center gap-2">
+        <TabsList className={`grid w-full ${user ? 'grid-cols-1' : 'grid-cols-2'}`}>
+          {!user && (
+            <TabsTrigger value="trial" className="flex items-center gap-2">
+              <Zap className="w-4 h-4" />
+              Free Trial (10MB)
+            </TabsTrigger>
+          )}
+          <TabsTrigger value={user ? "upload" : "paid"} className="flex items-center gap-2">
             <Upload className="w-4 h-4" />
-            Full Features
+            {user ? "Upload Data" : "Full Features"}
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="trial">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Zap className="w-5 h-5 text-green-600" />
-                Free Trial
-              </CardTitle>
-              <CardDescription>
-                Upload up to 10MB and get instant schema detection, descriptive analysis, and basic visualizations - no signup required!
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <FreeTrialUploader />
-            </CardContent>
-          </Card>
-        </TabsContent>
+        {!user && (
+          <TabsContent value="trial">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Zap className="w-5 h-5 text-green-600" />
+                  Free Trial
+                </CardTitle>
+                <CardDescription>
+                  Upload up to 10MB and get instant schema detection, descriptive analysis, and basic visualizations - no signup required!
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <FreeTrialUploader />
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
 
-        <TabsContent value="paid">
+        <TabsContent value={user ? "upload" : "paid"}>
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Upload className="w-5 h-5" />
-                Full Platform Access
+                {user ? "Upload Your Data" : "Full Platform Access"}
               </CardTitle>
               <CardDescription>
-                Upload larger files and choose your data journey with progressive pricing
+                {user 
+                  ? "Upload files and access all platform features with your account"
+                  : "Upload larger files and choose your data journey with progressive pricing"
+                }
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <FileUploader
-                onFileUpload={handleFileUpload}
-                isUploading={isUploading}
-                maxSize={100 * 1024 * 1024} // 100MB for paid
-              />
+              {user ? (
+                <FileUploader
+                  onFileUpload={handleFileUpload}
+                  isUploading={isUploading}
+                  maxSize={100 * 1024 * 1024} // 100MB for authenticated users
+                />
+              ) : (
+                <div className="text-center py-8">
+                  <p className="text-gray-600 mb-4">
+                    Sign in to access full platform features
+                  </p>
+                  <Button 
+                    onClick={() => setLocation('/auth/login')}
+                    className="mr-2"
+                  >
+                    Sign In
+                  </Button>
+                  <Button 
+                    variant="outline"
+                    onClick={() => setLocation('/auth/register')}
+                  >
+                    Create Account
+                  </Button>
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
