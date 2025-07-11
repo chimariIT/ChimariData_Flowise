@@ -33,11 +33,18 @@ export interface IStorage {
   getUserByVerificationToken(token: string): Promise<User | undefined>;
   updateUser(id: string, updates: Partial<User>): Promise<User | undefined>;
   deleteUser(id: string): Promise<boolean>;
+  
+  // Guided analysis storage
+  storeGuidedAnalysisOrder(id: string, order: any): Promise<void>;
+  getGuidedAnalysisOrder(id: string): Promise<any>;
+  updateGuidedAnalysisOrder(id: string, updates: any): Promise<void>;
+  listGuidedAnalysisOrders(userId?: string): Promise<any[]>;
 }
 
 export class MemStorage implements IStorage {
   private projects: Map<string, DataProject> = new Map();
   private users: Map<string, User> = new Map();
+  private guidedAnalysisOrders: Map<string, any> = new Map();
   private nextId = 1;
 
   async createProject(projectData: InsertDataProject): Promise<DataProject> {
@@ -113,6 +120,30 @@ export class MemStorage implements IStorage {
 
   async deleteUser(id: string): Promise<boolean> {
     return this.users.delete(id);
+  }
+
+  // Guided analysis operations
+  async storeGuidedAnalysisOrder(id: string, order: any): Promise<void> {
+    this.guidedAnalysisOrders.set(id, order);
+  }
+
+  async getGuidedAnalysisOrder(id: string): Promise<any> {
+    return this.guidedAnalysisOrders.get(id);
+  }
+
+  async updateGuidedAnalysisOrder(id: string, updates: any): Promise<void> {
+    const existing = this.guidedAnalysisOrders.get(id);
+    if (existing) {
+      this.guidedAnalysisOrders.set(id, { ...existing, ...updates });
+    }
+  }
+
+  async listGuidedAnalysisOrders(userId?: string): Promise<any[]> {
+    const orders = Array.from(this.guidedAnalysisOrders.values());
+    if (userId) {
+      return orders.filter(order => order.userId === userId);
+    }
+    return orders;
   }
 }
 

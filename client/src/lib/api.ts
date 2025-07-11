@@ -128,6 +128,24 @@ export class APIClient {
     return await response.json();
   }
 
+  async createGuidedAnalysisPayment(analysisConfig: any, pricing: any): Promise<any> {
+    const response = await fetch(`${API_BASE}/api/create-guided-analysis-payment`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ analysisConfig, pricing }),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to create guided analysis payment');
+    }
+
+    return await response.json();
+  }
+
   async getProjects(): Promise<any> {
     const response = await fetch(`${API_BASE}/api/projects`, {
       method: 'GET',

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { ArrowLeft, Database, FileText, Settings, BarChart3, Brain, Wrench } from "lucide-react";
+import { ArrowLeft, Database, FileText, Settings, BarChart3, Brain, Wrench, Target } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -11,6 +11,7 @@ import SchemaEditor from "@/components/schema-editor";
 import DataTransformation from "@/components/data-transformation";
 import DataAnalysis from "@/components/data-analysis";
 import AIInsights from "@/components/ai-insights";
+import GuidedAnalysisWizard from "@/components/GuidedAnalysisWizard";
 
 interface ProjectPageProps {
   projectId: string;
@@ -19,6 +20,7 @@ interface ProjectPageProps {
 export default function ProjectPage({ projectId }: ProjectPageProps) {
   const [, setLocation] = useLocation();
   const [activeTab, setActiveTab] = useState("overview");
+  const [showGuidedAnalysis, setShowGuidedAnalysis] = useState(false);
 
   const { data: project, isLoading, error } = useQuery({
     queryKey: ["/api/projects", projectId],
@@ -206,7 +208,19 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="grid gap-4 md:grid-cols-3">
+                <div className="grid gap-4 md:grid-cols-4">
+                  <Button
+                    variant="outline"
+                    className="h-24 flex-col space-y-2"
+                    onClick={() => setShowGuidedAnalysis(true)}
+                  >
+                    <Target className="w-8 h-8" />
+                    <div className="text-center">
+                      <div className="font-medium">Guided Analysis</div>
+                      <div className="text-xs text-gray-500">Step-by-step business insights</div>
+                    </div>
+                  </Button>
+                  
                   <Button
                     variant="outline"
                     className="h-24 flex-col space-y-2"
@@ -264,6 +278,23 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
           </TabsContent>
         </Tabs>
       </div>
+      
+      {/* Guided Analysis Modal */}
+      {showGuidedAnalysis && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg max-w-6xl w-full max-h-[90vh] overflow-hidden">
+            <GuidedAnalysisWizard
+              projectId={projectId}
+              schema={project.schema}
+              onComplete={(analysisConfig) => {
+                console.log('Analysis completed:', analysisConfig);
+                setShowGuidedAnalysis(false);
+              }}
+              onClose={() => setShowGuidedAnalysis(false)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -6,6 +6,7 @@ import HomePage from "@/pages/home-page";
 import ProjectPage from "@/pages/project-page";
 import DescriptiveStatsPage from "@/pages/descriptive-stats-page";
 import AuthPage from "@/pages/auth";
+import GuidedAnalysisCheckout from "@/pages/checkout";
 import { apiClient } from "@/lib/api";
 import "./index.css";
 
@@ -89,6 +90,12 @@ export default function App() {
           </Route>
           <Route path="/stats/:id">
             {(params) => <DescriptiveStatsPage />}
+          </Route>
+          <Route path="/checkout">
+            {() => <GuidedAnalysisCheckout />}
+          </Route>
+          <Route path="/dashboard">
+            {() => user ? <ProjectPage projectId="dashboard" /> : <AuthPage onLogin={handleLogin} />}
           </Route>
           <Route>
             <div className="flex items-center justify-center min-h-screen">
