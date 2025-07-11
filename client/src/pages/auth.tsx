@@ -192,7 +192,7 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
                   />
                   {!isLogin && (
                     <p className="text-xs text-muted-foreground mt-1">
-                      Password must be at least 8 characters with one letter and one capital letter
+                      Password must be at least 8 characters with at least one number and one capital letter
                     </p>
                   )}
                 </div>
