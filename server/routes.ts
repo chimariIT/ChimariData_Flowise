@@ -975,6 +975,59 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Create guided analysis payment intent
+  app.post("/api/create-guided-analysis-payment", async (req, res) => {
+    try {
+      const { analysisConfig, pricing } = req.body;
+      
+      if (!analysisConfig || !pricing) {
+        return res.status(400).json({ error: 'Analysis configuration and pricing are required' });
+      }
+
+      if (!req.user) {
+        return res.status(401).json({ error: 'Authentication required for guided analysis' });
+      }
+
+      const amount = Math.round(pricing.total * 100); // Convert to cents
+
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount,
+        currency: 'usd',
+        metadata: {
+          type: 'guided_analysis',
+          analysisType: analysisConfig.analysisType,
+          projectId: analysisConfig.projectId,
+          userId: req.user.id,
+          variableCount: analysisConfig.selectedVariables.length.toString(),
+          deliverablesCount: analysisConfig.deliverables.length.toString(),
+          timeline: analysisConfig.timeline
+        }
+      });
+
+      // Store analysis configuration for post-payment processing
+      const analysisId = `analysis_${Date.now()}_${req.user.id}`;
+      await storage.storeGuidedAnalysisOrder(analysisId, {
+        userId: req.user.id,
+        config: analysisConfig,
+        pricing: pricing,
+        paymentIntentId: paymentIntent.id,
+        status: 'pending_payment',
+        createdAt: new Date().toISOString()
+      });
+
+      res.json({ 
+        clientSecret: paymentIntent.client_secret,
+        analysisId: analysisId,
+        amount: pricing.total,
+        configuration: analysisConfig,
+        pricing: pricing
+      });
+    } catch (error: any) {
+      console.error('Guided analysis payment creation error:', error);
+      res.status(500).json({ error: 'Failed to create guided analysis payment' });
+    }
+  });
+
   // Process feature request after payment
   app.post("/api/process-features", async (req, res) => {
     try {
