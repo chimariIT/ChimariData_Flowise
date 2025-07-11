@@ -190,6 +190,11 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
                     onChange={handleInputChange}
                     required
                   />
+                  {!isLogin && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Password must be at least 8 characters with one letter and one capital letter
+                    </p>
+                  )}
                 </div>
 
                 {!isLogin && (

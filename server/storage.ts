@@ -1,5 +1,23 @@
 import { DataProject, InsertDataProject } from "@shared/schema";
 
+// User interface for authentication
+interface User {
+  id: string;
+  email: string;
+  password?: string;
+  firstName?: string;
+  lastName?: string;
+  provider: string;
+  emailVerified?: boolean;
+  emailVerificationToken?: string;
+  emailVerificationExpires?: Date;
+  providerId?: string;
+  profileImageUrl?: string;
+  username?: string;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
 export interface IStorage {
   // Project operations
   createProject(project: InsertDataProject): Promise<DataProject>;
@@ -7,10 +25,19 @@ export interface IStorage {
   getAllProjects(): Promise<DataProject[]>;
   updateProject(id: string, updates: Partial<DataProject>): Promise<DataProject | undefined>;
   deleteProject(id: string): Promise<boolean>;
+  
+  // User operations
+  createUser(user: Omit<User, 'createdAt' | 'updatedAt'>): Promise<User>;
+  getUser(id: string): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
+  getUserByVerificationToken(token: string): Promise<User | undefined>;
+  updateUser(id: string, updates: Partial<User>): Promise<User | undefined>;
+  deleteUser(id: string): Promise<boolean>;
 }
 
 export class MemStorage implements IStorage {
   private projects: Map<string, DataProject> = new Map();
+  private users: Map<string, User> = new Map();
   private nextId = 1;
 
   async createProject(projectData: InsertDataProject): Promise<DataProject> {
@@ -47,6 +74,45 @@ export class MemStorage implements IStorage {
 
   async deleteProject(id: string): Promise<boolean> {
     return this.projects.delete(id);
+  }
+
+  // User operations
+  async createUser(userData: Omit<User, 'createdAt' | 'updatedAt'>): Promise<User> {
+    const user: User = {
+      ...userData,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    
+    this.users.set(user.id, user);
+    return user;
+  }
+
+  async getUser(id: string): Promise<User | undefined> {
+    return this.users.get(id);
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    return Array.from(this.users.values()).find(user => user.email === email);
+  }
+
+  async getUserByVerificationToken(token: string): Promise<User | undefined> {
+    return Array.from(this.users.values()).find(user => user.emailVerificationToken === token);
+  }
+
+  async updateUser(id: string, updates: Partial<User>): Promise<User | undefined> {
+    const existing = this.users.get(id);
+    if (!existing) {
+      return undefined;
+    }
+
+    const updated = { ...existing, ...updates, updatedAt: new Date() };
+    this.users.set(id, updated);
+    return updated;
+  }
+
+  async deleteUser(id: string): Promise<boolean> {
+    return this.users.delete(id);
   }
 }
 

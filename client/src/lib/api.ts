@@ -166,6 +166,86 @@ export class APIClient {
 
     return await response.json();
   }
+
+  // Authentication methods
+  async login(credentials: { email: string; password: string }): Promise<any> {
+    const response = await fetch(`${API_BASE}/api/auth/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(credentials),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Login failed: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async register(userData: {
+    email: string;
+    firstName: string;
+    lastName: string;
+    password: string;
+  }): Promise<any> {
+    const response = await fetch(`${API_BASE}/api/auth/register`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(userData),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Registration failed: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async logout(): Promise<any> {
+    const response = await fetch(`${API_BASE}/api/auth/logout`, {
+      method: 'POST',
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Logout failed: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async getCurrentUser(): Promise<any> {
+    const response = await fetch(`${API_BASE}/api/auth/user`, {
+      method: 'GET',
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to get current user: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async getOAuthProviders(): Promise<any> {
+    const response = await fetch(`${API_BASE}/api/auth/providers`, {
+      method: 'GET',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to get OAuth providers: ${response.status}`);
+    }
+
+    return await response.json();
+  }
 }
 
 export const apiClient = new APIClient();
