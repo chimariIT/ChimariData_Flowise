@@ -36,10 +36,10 @@ const CheckoutForm: React.FC<{ checkoutData: CheckoutData }> = ({ checkoutData }
     setIsProcessing(true);
 
     try {
-      const { error } = await stripe.confirmPayment({
+      const { error, paymentIntent } = await stripe.confirmPayment({
         elements,
         confirmParams: {
-          return_url: `${window.location.origin}/dashboard?analysis_complete=true`,
+          return_url: `${window.location.origin}/checkout-success?analysis_id=${checkoutData.analysisId}`,
         },
       });
 
@@ -49,14 +49,44 @@ const CheckoutForm: React.FC<{ checkoutData: CheckoutData }> = ({ checkoutData }
           description: error.message,
           variant: "destructive",
         });
-      } else {
-        // Payment succeeded - clear stored data and redirect
-        localStorage.removeItem('guidedAnalysisCheckout');
-        toast({
-          title: "Payment Successful",
-          description: "Your guided analysis has been started!",
-        });
-        setLocation('/dashboard');
+      } else if (paymentIntent && paymentIntent.status === 'succeeded') {
+        // Payment succeeded - execute guided analysis
+        try {
+          const response = await fetch('/api/execute-guided-analysis', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              analysisId: checkoutData.analysisId,
+              paymentIntentId: paymentIntent.id
+            })
+          });
+
+          if (response.ok) {
+            const result = await response.json();
+            localStorage.removeItem('guidedAnalysisCheckout');
+            toast({
+              title: "Payment Successful",
+              description: "Your guided analysis has been started and will be processed shortly!",
+            });
+            setLocation(`/guided-analysis-results/${checkoutData.analysisId}`);
+          } else {
+            const error = await response.json();
+            toast({
+              title: "Analysis Start Failed",
+              description: error.error || "Payment succeeded but analysis failed to start. Please contact support.",
+              variant: "destructive",
+            });
+          }
+        } catch (analysisError) {
+          console.error('Analysis execution error:', analysisError);
+          toast({
+            title: "Analysis Start Failed",
+            description: "Payment succeeded but analysis failed to start. Please contact support.",
+            variant: "destructive",
+          });
+        }
       }
     } catch (error) {
       toast({

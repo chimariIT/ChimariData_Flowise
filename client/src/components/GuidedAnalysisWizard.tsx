@@ -256,13 +256,7 @@ const VARIABLE_PRICING = {
   additionalVariablePrice: 2 // Per additional variable
 };
 
-const TIMELINE_MULTIPLIERS = {
-  'urgent': 2.0,     // 100% premium for urgent delivery
-  'this_week': 1.5,  // 50% premium
-  'next_week': 1.2,  // 20% premium
-  'this_month': 1.0, // Standard price
-  'flexible': 0.9    // 10% discount
-};
+// Timeline multipliers removed - pricing now based on analysis complexity and data size only
 
 export default function GuidedAnalysisWizard({ 
   projectId, 
@@ -280,7 +274,7 @@ export default function GuidedAnalysisWizard({
     analysisType: '',
     specificQuestions: [] as string[],
     expectedOutcome: '',
-    timeline: 'this_month',
+    // timeline field removed
     stakeholders: '',
     selectedScenario: null as BusinessScenario | null,
     customScenario: false,
@@ -293,7 +287,6 @@ export default function GuidedAnalysisWizard({
     analysisBasePrice: 0,
     variablePrice: 0,
     deliverablesPrice: 0,
-    timelineMultiplier: 1.0,
     subtotal: 0,
     total: 0
   });
@@ -315,7 +308,7 @@ export default function GuidedAnalysisWizard({
   // Calculate pricing whenever analysis config changes
   useEffect(() => {
     calculatePricing();
-  }, [analysisConfig.analysisType, analysisConfig.selectedVariables, analysisConfig.deliverables, analysisConfig.timeline]);
+  }, [analysisConfig.analysisType, analysisConfig.selectedVariables, analysisConfig.deliverables]);
 
   const calculatePricing = () => {
     if (!analysisConfig.analysisType) {
@@ -323,7 +316,6 @@ export default function GuidedAnalysisWizard({
         analysisBasePrice: 0,
         variablePrice: 0,
         deliverablesPrice: 0,
-        timelineMultiplier: 1.0,
         subtotal: 0,
         total: 0
       });
@@ -344,17 +336,13 @@ export default function GuidedAnalysisWizard({
       return total + (deliverable ? deliverable.price : 0);
     }, 0);
 
-    // Timeline multiplier
-    const timelineMultiplier = TIMELINE_MULTIPLIERS[analysisConfig.timeline] || 1.0;
-
     const subtotal = analysisBasePrice + variablePrice + deliverablesPrice;
-    const total = Math.round(subtotal * timelineMultiplier);
+    const total = Math.round(subtotal);
 
     setPricing({
       analysisBasePrice,
       variablePrice,
       deliverablesPrice,
-      timelineMultiplier,
       subtotal,
       total
     });
@@ -403,7 +391,7 @@ export default function GuidedAnalysisWizard({
       questions: analysisConfig.specificQuestions,
       hypotheses: analysisConfig.hypotheses,
       deliverables: analysisConfig.deliverables,
-      timeline: analysisConfig.timeline,
+      // timeline field removed
       pricing: pricing
     };
     
@@ -1024,32 +1012,14 @@ export default function GuidedAnalysisWizard({
                 </CardContent>
               </Card>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="timeline">Timeline</Label>
-                  <Select value={analysisConfig.timeline} onValueChange={(value) => setAnalysisConfig(prev => ({ ...prev, timeline: value }))}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="When do you need results?" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="urgent">Urgent (within 24 hours)</SelectItem>
-                      <SelectItem value="this_week">This week</SelectItem>
-                      <SelectItem value="next_week">Next week</SelectItem>
-                      <SelectItem value="this_month">This month</SelectItem>
-                      <SelectItem value="flexible">Flexible</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div>
-                  <Label htmlFor="stakeholders">Key Stakeholders</Label>
-                  <Input
-                    id="stakeholders"
-                    value={analysisConfig.stakeholders}
-                    onChange={(e) => setAnalysisConfig(prev => ({ ...prev, stakeholders: e.target.value }))}
-                    placeholder="e.g., VP of HR, Department Heads"
-                  />
-                </div>
+              <div>
+                <Label htmlFor="stakeholders">Key Stakeholders</Label>
+                <Input
+                  id="stakeholders"
+                  value={analysisConfig.stakeholders}
+                  onChange={(e) => setAnalysisConfig(prev => ({ ...prev, stakeholders: e.target.value }))}
+                  placeholder="e.g., VP of HR, Department Heads"
+                />
               </div>
             </div>
           </div>
@@ -1113,7 +1083,7 @@ export default function GuidedAnalysisWizard({
                   </div>
                   <div>
                     <Label className="text-sm font-medium">Timeline</Label>
-                    <p className="text-sm text-gray-600">{analysisConfig.timeline.replace('_', ' ')}</p>
+                    <p className="text-sm text-gray-600">Standard delivery - based on analysis complexity</p>
                   </div>
                 </CardContent>
               </Card>
@@ -1153,12 +1123,7 @@ export default function GuidedAnalysisWizard({
                     <span className="text-sm font-medium">${pricing.subtotal}</span>
                   </div>
                   
-                  {pricing.timelineMultiplier !== 1.0 && (
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm">Timeline Adjustment ({pricing.timelineMultiplier > 1 ? '+' : ''}{Math.round((pricing.timelineMultiplier - 1) * 100)}%)</span>
-                      <span className="text-sm font-medium">${pricing.total - pricing.subtotal}</span>
-                    </div>
-                  )}
+
                   
                   <Separator />
                   
