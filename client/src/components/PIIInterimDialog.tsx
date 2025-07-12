@@ -29,15 +29,32 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
   const [showAdvancedAnonymization, setShowAdvancedAnonymization] = useState(false);
   const [showVerification, setShowVerification] = useState(false);
   const [anonymizationConfig, setAnonymizationConfig] = useState<any>(null);
+  const [overriddenColumns, setOverriddenColumns] = useState<string[]>([]);
   
   // Get all column names from sample data
   const allColumns = sampleData && sampleData.length > 0 ? Object.keys(sampleData[0]) : [];
+  
+  // Handle column override
+  const handleColumnOverride = (columnName: string) => {
+    setOverriddenColumns(prev => 
+      prev.includes(columnName) 
+        ? prev.filter(col => col !== columnName)
+        : [...prev, columnName]
+    );
+  };
+  
+  // Filter out overridden columns from detected PII
+  const filteredPIIColumns = piiData.detectedPII.filter(col => !overriddenColumns.includes(col));
+  const activeColumnAnalysis = Object.fromEntries(
+    Object.entries(piiData.columnAnalysis).filter(([col, _]) => !overriddenColumns.includes(col))
+  );
 
   const handleProceed = (decision: 'include' | 'exclude' | 'anonymize') => {
     if (decision === 'anonymize') {
       setShowAdvancedAnonymization(true);
     } else {
-      onProceed(decision);
+      // Pass overridden columns as part of the decision
+      onProceed(decision, { overriddenColumns });
       onClose();
     }
   };
@@ -50,8 +67,8 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
   };
 
   const handleVerificationConfirm = () => {
-    // Proceed with the anonymization after verification
-    onProceed('anonymize', anonymizationConfig);
+    // Proceed with the anonymization after verification, including overridden columns
+    onProceed('anonymize', { ...anonymizationConfig, overriddenColumns });
     setShowVerification(false);
     onClose(); // Close the dialog after confirming verification
   };
@@ -111,13 +128,33 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
           </p>
 
           {/* High Risk Warning */}
-          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+          <div className={`border rounded-lg p-4 ${
+            filteredPIIColumns.length > 0 
+              ? 'bg-red-50 border-red-200' 
+              : 'bg-green-50 border-green-200'
+          }`}>
             <div className="flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5 text-red-600" />
+              <AlertTriangle className={`w-5 h-5 ${
+                filteredPIIColumns.length > 0 ? 'text-red-600' : 'text-green-600'
+              }`} />
               <div>
-                <h3 className="font-semibold text-red-800">High Risk Level</h3>
-                <p className="text-red-700">
-                  {piiData.detectedPII.length} type(s) of PII detected across {piiData.detectedPII.length} column(s)
+                <h3 className={`font-semibold ${
+                  filteredPIIColumns.length > 0 ? 'text-red-800' : 'text-green-800'
+                }`}>
+                  {filteredPIIColumns.length > 0 ? 'High Risk Level' : 'Low Risk Level'}
+                </h3>
+                <p className={
+                  filteredPIIColumns.length > 0 ? 'text-red-700' : 'text-green-700'
+                }>
+                  {filteredPIIColumns.length > 0 
+                    ? `${filteredPIIColumns.length} type(s) of PII detected across ${filteredPIIColumns.length} column(s)`
+                    : 'All detected PII has been marked as "Not PII" or resolved'
+                  }
+                  {overriddenColumns.length > 0 && (
+                    <span className="block text-sm mt-1">
+                      ({overriddenColumns.length} column(s) marked as "Not PII")
+                    </span>
+                  )}
                 </p>
               </div>
             </div>
@@ -129,7 +166,7 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
             <p className="text-gray-600 mb-4">Review the types of sensitive data found in your dataset</p>
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {Object.entries(piiData.columnAnalysis).map(([column, analysis]) => (
+              {Object.entries(activeColumnAnalysis).map(([column, analysis]) => (
                 <div key={column} className="border rounded-lg p-4 bg-gray-50">
                   <div className="flex justify-between items-start mb-3">
                     <h4 className="font-medium text-gray-900">{getPIITypeLabel(analysis.type)}</h4>
@@ -154,6 +191,15 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
                 </div>
               ))}
             </div>
+            
+            {/* Show if all PII has been overridden */}
+            {Object.keys(activeColumnAnalysis).length === 0 && overriddenColumns.length > 0 && (
+              <div className="text-center py-8 text-gray-500">
+                <CheckCircle className="w-12 h-12 mx-auto mb-2 text-green-500" />
+                <p>All detected PII has been marked as "Not PII"</p>
+                <p className="text-sm">Your data can now be processed safely</p>
+              </div>
+            )}
           </div>
 
           {/* Show Sample Values Toggle */}
@@ -167,6 +213,50 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
               {showSampleValues ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               Show Sample Values
             </Button>
+          </div>
+
+          {/* PII Override Section */}
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Settings className="w-5 h-5 text-blue-600" />
+              <h3 className="font-semibold text-blue-800">False Positive Detection?</h3>
+            </div>
+            <p className="text-blue-700 mb-4">
+              If any fields are incorrectly identified as PII (like product names, campaign IDs, or other business identifiers), 
+              you can mark them as "Not PII" below.
+            </p>
+            
+            <div className="space-y-2">
+              <h4 className="font-medium text-blue-800">Override PII Detection:</h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {piiData.detectedPII.map((column) => (
+                  <div key={column} className="flex items-center space-x-2">
+                    <Checkbox
+                      id={`override-${column}`}
+                      checked={overriddenColumns.includes(column)}
+                      onCheckedChange={() => handleColumnOverride(column)}
+                    />
+                    <label 
+                      htmlFor={`override-${column}`} 
+                      className="text-sm font-medium text-blue-700"
+                    >
+                      {column} is NOT PII
+                    </label>
+                  </div>
+                ))}
+              </div>
+              
+              {overriddenColumns.length > 0 && (
+                <div className="mt-3 p-3 bg-white rounded border border-blue-200">
+                  <p className="text-sm font-medium text-blue-800">
+                    Columns marked as "Not PII": {overriddenColumns.join(', ')}
+                  </p>
+                  <p className="text-sm text-blue-600 mt-1">
+                    These columns will be treated as regular business data and won't trigger PII warnings.
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Decision Options */}

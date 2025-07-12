@@ -299,7 +299,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           anonymizationConfig,
           piiAnalysis,
           originalData: processedData.data,
-          originalSchema: processedData.schema
+          originalSchema: processedData.schema,
+          overriddenColumns: anonymizationConfig?.overriddenColumns || []
         });
         
         const finalData = piiProcessingResult.finalData;
@@ -368,7 +369,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         anonymizationConfig,
         piiAnalysis,
         originalData: processedData.data,
-        originalSchema: processedData.schema
+        originalSchema: processedData.schema,
+        overriddenColumns: anonymizationConfig?.overriddenColumns || []
       });
       
       const finalData = piiProcessingResult.finalData;
@@ -422,7 +424,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Trial PII decision endpoint
   app.post("/api/trial-pii-decision", async (req, res) => {
     try {
-      const { tempFileId, decision, anonymizationConfig } = req.body;
+      const { tempFileId, decision, anonymizationConfig = {} } = req.body;
       
       console.log("Request body values:", {
         tempFileId: tempFileId,
@@ -454,7 +456,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         anonymizationConfig,
         piiAnalysis,
         originalData: processedData.data,
-        originalSchema: processedData.schema
+        originalSchema: processedData.schema,
+        overriddenColumns: anonymizationConfig?.overriddenColumns || []
       });
       
       const finalData = piiProcessingResult.finalData;
