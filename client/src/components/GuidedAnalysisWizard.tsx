@@ -130,7 +130,6 @@ const ANALYSIS_TYPES = {
     name: 'Descriptive Analysis',
     description: 'What happened? Summary statistics and data exploration',
     icon: <BarChart3 className="w-4 h-4" />,
-    timeframe: '1-2 hours',
     complexity: 'Basic',
     basePrice: 25,
     features: ['transformation', 'analysis']
@@ -139,7 +138,6 @@ const ANALYSIS_TYPES = {
     name: 'Comparative Analysis',
     description: 'How do groups compare? Statistical testing and comparisons',
     icon: <Target className="w-4 h-4" />,
-    timeframe: '2-4 hours',
     complexity: 'Intermediate',
     basePrice: 40,
     features: ['transformation', 'analysis', 'visualization']
@@ -148,7 +146,6 @@ const ANALYSIS_TYPES = {
     name: 'Predictive Analysis',
     description: 'What will happen? Forecasting and trend analysis',
     icon: <TrendingUp className="w-4 h-4" />,
-    timeframe: '4-6 hours',
     complexity: 'Advanced',
     basePrice: 70,
     features: ['transformation', 'analysis', 'visualization', 'ai_insights']
@@ -157,7 +154,6 @@ const ANALYSIS_TYPES = {
     name: 'Diagnostic Analysis',
     description: 'Why did it happen? Root cause and relationship analysis',
     icon: <HelpCircle className="w-4 h-4" />,
-    timeframe: '3-5 hours',
     complexity: 'Advanced',
     basePrice: 60,
     features: ['transformation', 'analysis', 'visualization', 'ai_insights']
@@ -557,7 +553,6 @@ export default function GuidedAnalysisWizard({
                   <CardContent>
                     <div className="flex justify-between items-center">
                       <Badge variant="outline">{analysis.complexity}</Badge>
-                      <span className="text-sm text-gray-500">{analysis.timeframe}</span>
                     </div>
                   </CardContent>
                 </Card>
