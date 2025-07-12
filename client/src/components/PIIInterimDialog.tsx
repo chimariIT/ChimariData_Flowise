@@ -254,6 +254,12 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
                   <p className="text-sm text-blue-600 mt-1">
                     These columns will be treated as regular business data and won't trigger PII warnings.
                   </p>
+                  <div className="mt-2 flex items-center gap-2">
+                    <CheckCircle className="w-4 h-4 text-green-600" />
+                    <span className="text-sm text-green-600 font-medium">
+                      Ready to submit - Your overrides will be applied when you proceed
+                    </span>
+                  </div>
                 </div>
               )}
             </div>
@@ -262,7 +268,14 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
           {/* Decision Options */}
           <div>
             <h3 className="font-semibold text-lg mb-3">Choose How to Handle PII Data</h3>
-            <p className="text-gray-600 mb-4">Select how you want to proceed with the detected PII data:</p>
+            <p className="text-gray-600 mb-4">
+              Select how you want to proceed with the detected PII data:
+              {overriddenColumns.length > 0 && (
+                <span className="block mt-2 text-sm text-blue-600 font-medium">
+                  ✓ {overriddenColumns.length} column(s) marked as "Not PII" will be preserved as regular business data
+                </span>
+              )}
+            </p>
             
             <div className="space-y-3">
               <div className="flex items-start space-x-3 p-3 border rounded-lg hover:bg-gray-50">
@@ -367,9 +380,15 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
               onClick={() => handleProceed(selectedDecision)} 
               className="bg-blue-600 hover:bg-blue-700 text-white"
             >
-              {selectedDecision === 'include' ? 'Proceed with PII' : 
-               selectedDecision === 'anonymize' ? 'Proceed with Anonymization' : 
-               'Proceed without PII'}
+              {overriddenColumns.length > 0 ? (
+                selectedDecision === 'include' ? 'Apply Overrides & Proceed with PII' : 
+                selectedDecision === 'anonymize' ? 'Apply Overrides & Proceed with Anonymization' : 
+                'Apply Overrides & Proceed without PII'
+              ) : (
+                selectedDecision === 'include' ? 'Proceed with PII' : 
+                selectedDecision === 'anonymize' ? 'Proceed with Anonymization' : 
+                'Proceed without PII'
+              )}
             </Button>
           </div>
         </div>
