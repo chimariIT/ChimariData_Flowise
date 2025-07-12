@@ -6,6 +6,7 @@ export interface PIIProcessingConfig {
   piiAnalysis: any;
   originalData: any[];
   originalSchema: any;
+  overriddenColumns?: string[];
 }
 
 export interface PIIProcessingResult {
@@ -31,7 +32,7 @@ export class UnifiedPIIProcessor {
    * Ensures consistent handling across trial and full feature workflows
    */
   static async processPIIData(config: PIIProcessingConfig): Promise<PIIProcessingResult> {
-    const { decision, anonymizationConfig, piiAnalysis, originalData, originalSchema } = config;
+    const { decision, anonymizationConfig, piiAnalysis, originalData, originalSchema, overriddenColumns = [] } = config;
     
     let finalData = [...originalData];
     let updatedSchema = { ...originalSchema };
@@ -42,26 +43,31 @@ export class UnifiedPIIProcessor {
     const originalColumnCount = Object.keys(originalSchema).length;
     const originalRecordCount = originalData.length;
     
+    // Filter out overridden columns from PII analysis
+    const effectivePIIColumns = piiAnalysis.detectedPII.filter(col => !overriddenColumns.includes(col));
+    
     console.log(`Processing PII data with decision: ${decision}`, {
       originalColumns: originalColumnCount,
       originalRecords: originalRecordCount,
-      detectedPII: piiAnalysis.detectedPII
+      detectedPII: piiAnalysis.detectedPII,
+      overriddenColumns: overriddenColumns,
+      effectivePIIColumns: effectivePIIColumns
     });
     
     switch (decision) {
       case 'exclude':
-        // Remove PII columns from both data and schema
+        // Remove only effective PII columns (not overridden ones) from both data and schema
         finalData = originalData.map(row => {
           const cleanRow = { ...row };
-          piiAnalysis.detectedPII.forEach(piiColumn => {
+          effectivePIIColumns.forEach(piiColumn => {
             delete cleanRow[piiColumn];
           });
           return cleanRow;
         });
         
-        // Update schema to remove PII columns
+        // Update schema to remove only effective PII columns
         const excludeSchema = { ...originalSchema };
-        piiAnalysis.detectedPII.forEach(piiColumn => {
+        effectivePIIColumns.forEach(piiColumn => {
           delete excludeSchema[piiColumn];
           columnsRemoved.push(piiColumn);
         });
@@ -85,20 +91,29 @@ export class UnifiedPIIProcessor {
         
         // Apply advanced anonymization if config is provided
         if (anonConfig && anonConfig.fieldsToAnonymize) {
+          // Filter out overridden columns from anonymization
+          const fieldsToAnonymize = anonConfig.fieldsToAnonymize.filter(field => !overriddenColumns.includes(field));
+          
+          // Update config to only anonymize non-overridden fields
+          const filteredConfig = {
+            ...anonConfig,
+            fieldsToAnonymize: fieldsToAnonymize
+          };
+          
           const anonymizationResult = await PIIAnalyzer.applyAdvancedAnonymization(
             originalData,
-            anonConfig
+            filteredConfig
           );
           finalData = anonymizationResult.data;
           lookupTable = anonymizationResult.lookupTable;
-          columnsAnonymized = anonConfig.fieldsToAnonymize;
+          columnsAnonymized = fieldsToAnonymize;
           
           console.log(`Applied advanced anonymization to ${columnsAnonymized.length} columns:`, columnsAnonymized);
         } else {
-          // Apply basic anonymization to PII columns
+          // Apply basic anonymization to effective PII columns (not overridden ones)
           finalData = originalData.map(row => {
             const anonymizedRow = { ...row };
-            piiAnalysis.detectedPII.forEach(piiColumn => {
+            effectivePIIColumns.forEach(piiColumn => {
               if (anonymizedRow[piiColumn]) {
                 const columnType = piiAnalysis.columnAnalysis[piiColumn]?.type;
                 anonymizedRow[piiColumn] = this.generateBasicAnonymizedValue(
@@ -109,7 +124,7 @@ export class UnifiedPIIProcessor {
             });
             return anonymizedRow;
           });
-          columnsAnonymized = [...piiAnalysis.detectedPII];
+          columnsAnonymized = [...effectivePIIColumns];
           
           console.log(`Applied basic anonymization to ${columnsAnonymized.length} columns:`, columnsAnonymized);
         }

@@ -664,23 +664,21 @@ export default function GuidedAnalysisWizard({
                     variant="outline" 
                     size="sm"
                     onClick={() => {
-                      // Auto-select the first recommended analysis that matches our types
-                      const recommendedType = analysisConfig.selectedScenario.recommendedAnalysis.find(rec => 
-                        rec.toLowerCase().includes('descriptive') ? 'descriptive' :
-                        rec.toLowerCase().includes('comparative') || rec.toLowerCase().includes('anova') ? 'comparative' :
-                        rec.toLowerCase().includes('predictive') || rec.toLowerCase().includes('forecasting') ? 'predictive' :
-                        rec.toLowerCase().includes('diagnostic') || rec.toLowerCase().includes('regression') ? 'diagnostic' :
-                        null
-                      );
+                      // Map recommended analysis to analysis types
+                      const recommendation = analysisConfig.selectedScenario.recommendedAnalysis[0];
+                      let analysisType = '';
                       
-                      if (recommendedType) {
-                        const typeKey = recommendedType.toLowerCase().includes('descriptive') ? 'descriptive' :
-                                       recommendedType.toLowerCase().includes('comparative') || recommendedType.toLowerCase().includes('anova') ? 'comparative' :
-                                       recommendedType.toLowerCase().includes('predictive') || recommendedType.toLowerCase().includes('forecasting') ? 'predictive' :
-                                       'diagnostic';
-                        
-                        setAnalysisConfig(prev => ({ ...prev, analysisType: typeKey }));
+                      if (recommendation.toLowerCase().includes('roi') || recommendation.toLowerCase().includes('financial')) {
+                        analysisType = 'diagnostic';
+                      } else if (recommendation.toLowerCase().includes('a/b') || recommendation.toLowerCase().includes('testing')) {
+                        analysisType = 'comparative';
+                      } else if (recommendation.toLowerCase().includes('attribution') || recommendation.toLowerCase().includes('predictive')) {
+                        analysisType = 'predictive';
+                      } else {
+                        analysisType = 'descriptive'; // Default fallback
                       }
+                      
+                      setAnalysisConfig(prev => ({ ...prev, analysisType }));
                     }}
                     className="text-green-700 border-green-300 hover:bg-green-100"
                   >
