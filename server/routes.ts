@@ -293,23 +293,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const tempData = tempTrialData.get(tempFileId);
         const { processedData, piiAnalysis, fileInfo } = tempData;
         
-        // Apply PII handling using unified processor
-        const piiProcessingResult = await UnifiedPIIProcessor.processPIIData({
-          decision,
-          anonymizationConfig,
-          piiAnalysis,
-          originalData: processedData.data,
-          originalSchema: processedData.schema,
-          overriddenColumns: anonymizationConfig?.overriddenColumns || []
-        });
+        let finalData, updatedSchema;
         
-        const finalData = piiProcessingResult.finalData;
-        processedData.schema = piiProcessingResult.updatedSchema;
+        // Check if PII should be bypassed entirely
+        if (anonymizationConfig?.bypassPII && anonymizationConfig?.overriddenColumns?.length > 0) {
+          // All PII was false positive - proceed without PII processing
+          finalData = processedData.data;
+          updatedSchema = processedData.schema;
+          console.log("Bypassing PII processing - all columns marked as Not PII");
+        } else {
+          // Apply PII handling using unified processor
+          const piiProcessingResult = await UnifiedPIIProcessor.processPIIData({
+            decision,
+            anonymizationConfig,
+            piiAnalysis,
+            originalData: processedData.data,
+            originalSchema: processedData.schema,
+            overriddenColumns: anonymizationConfig?.overriddenColumns || []
+          });
+          
+          finalData = piiProcessingResult.finalData;
+          updatedSchema = piiProcessingResult.updatedSchema;
+          console.log(UnifiedPIIProcessor.generateProcessingSummary(piiProcessingResult));
+        }
         
-        console.log(UnifiedPIIProcessor.generateProcessingSummary(piiProcessingResult));
-
+        processedData.schema = updatedSchema;
+        
         // Create project with processed data
         const projectMetadata = projectData || {};
+        const actualDecision = anonymizationConfig?.bypassPII ? 'bypassed' : decision;
         const projectId = await storage.createProject({
           name: projectMetadata.name || "Uploaded Data",
           description: projectMetadata.description || "",
@@ -319,7 +331,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           schema: processedData.schema,
           piiAnalysis: {
             ...piiAnalysis,
-            userDecision: decision,
+            userDecision: actualDecision,
+            overriddenColumns: anonymizationConfig?.overriddenColumns || [],
             decisionTimestamp: new Date()
           },
           createdAt: new Date(),
@@ -449,6 +462,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { processedData, piiAnalysis, fileInfo } = tempData;
+
+      // Check if PII should be bypassed entirely
+      if (anonymizationConfig?.bypassPII && anonymizationConfig?.overriddenColumns?.length > 0) {
+        // All PII was false positive - proceed without PII processing
+        const finalData = processedData.data;
+        const updatedSchema = processedData.schema;
+        
+        // Generate trial results with original data
+        const trialResults = await PythonProcessor.processTrial(
+          `trial_${Date.now()}`,
+          {
+            preview: finalData.slice(0, 100), // Use first 100 rows as preview
+            schema: updatedSchema,
+            recordCount: finalData.length,
+            piiDecision: 'bypassed'
+          }
+        );
+
+        if (!trialResults.success) {
+          console.error("Trial processing failed:", trialResults.error);
+          return res.status(500).json({
+            success: false,
+            error: `Failed to process trial analysis: ${trialResults.error || 'Unknown error'}`
+          });
+        }
+
+        // Clean up temporary data
+        tempTrialData.delete(tempFileId);
+        
+        return res.json({
+          success: true,
+          trialResults: {
+            schema: updatedSchema,
+            descriptiveAnalysis: trialResults.data,
+            basicVisualizations: trialResults.visualizations || [],
+            piiAnalysis: {
+              ...piiAnalysis,
+              userDecision: 'bypassed',
+              overriddenColumns: anonymizationConfig.overriddenColumns,
+              decisionTimestamp: new Date()
+            },
+            piiDecision: 'bypassed',
+            recordCount: finalData.length
+          }
+        });
+      }
 
       // Apply PII handling using unified processor
       const piiProcessingResult = await UnifiedPIIProcessor.processPIIData({

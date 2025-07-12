@@ -50,6 +50,14 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
   );
 
   const handleProceed = (decision: 'include' | 'exclude' | 'anonymize') => {
+    // If all PII columns have been marked as "Not PII", bypass PII handling entirely
+    if (filteredPIIColumns.length === 0 && overriddenColumns.length > 0) {
+      // All PII was false positive - proceed with normal upload
+      onProceed('include', { overriddenColumns, bypassPII: true });
+      onClose();
+      return;
+    }
+    
     if (decision === 'anonymize') {
       setShowAdvancedAnonymization(true);
     } else {
