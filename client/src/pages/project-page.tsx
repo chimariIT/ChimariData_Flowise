@@ -108,27 +108,76 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
 
       {/* Content */}
       <div className="container mx-auto px-4 py-8 max-w-6xl">
+        {/* Data Journey Options - Moved to top */}
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle>Choose Your Data Journey</CardTitle>
+            <CardDescription>
+              Select what you'd like to do with your data
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-4 md:grid-cols-4">
+              <Button
+                variant="outline"
+                className="h-24 flex-col space-y-2"
+                onClick={() => setShowGuidedAnalysis(true)}
+              >
+                <Target className="w-8 h-8" />
+                <div className="text-center">
+                  <div className="font-medium">Guided Analysis</div>
+                  <div className="text-xs text-gray-500">Step-by-step business insights</div>
+                </div>
+              </Button>
+              
+              <Button
+                variant="outline"
+                className="h-24 flex-col space-y-2"
+                onClick={() => setActiveTab("transform")}
+              >
+                <Wrench className="w-8 h-8" />
+                <div className="text-center">
+                  <div className="font-medium">Data Transformation</div>
+                  <div className="text-xs text-gray-500">Clean, filter, and reshape your data</div>
+                </div>
+              </Button>
+              
+              <Button
+                variant="outline"
+                className="h-24 flex-col space-y-2"
+                onClick={() => setActiveTab("analysis")}
+              >
+                <BarChart3 className="w-8 h-8" />
+                <div className="text-center">
+                  <div className="font-medium">Data Analysis</div>
+                  <div className="text-xs text-gray-500">Statistical analysis and visualizations</div>
+                </div>
+              </Button>
+              
+              <Button
+                variant="outline"
+                className="h-24 flex-col space-y-2"
+                onClick={() => setActiveTab("insights")}
+              >
+                <Brain className="w-8 h-8" />
+                <div className="text-center">
+                  <div className="font-medium">AI Insights</div>
+                  <div className="text-xs text-gray-500">Intelligent data interpretation</div>
+                </div>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-5">
+          <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="overview" className="flex items-center gap-2">
               <Database className="w-4 h-4" />
-              Overview
+              Project Overview
             </TabsTrigger>
             <TabsTrigger value="schema" className="flex items-center gap-2">
               <Settings className="w-4 h-4" />
               Schema
-            </TabsTrigger>
-            <TabsTrigger value="transform" className="flex items-center gap-2">
-              <Wrench className="w-4 h-4" />
-              Transform
-            </TabsTrigger>
-            <TabsTrigger value="analysis" className="flex items-center gap-2">
-              <BarChart3 className="w-4 h-4" />
-              Analysis
-            </TabsTrigger>
-            <TabsTrigger value="insights" className="flex items-center gap-2">
-              <Brain className="w-4 h-4" />
-              AI Insights
             </TabsTrigger>
           </TabsList>
 
@@ -198,67 +247,6 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
                 </CardContent>
               </Card>
             </div>
-
-            {/* Data Journey Options */}
-            <Card className="mt-6">
-              <CardHeader>
-                <CardTitle>Choose Your Data Journey</CardTitle>
-                <CardDescription>
-                  Select what you'd like to do with your data
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-4 md:grid-cols-4">
-                  <Button
-                    variant="outline"
-                    className="h-24 flex-col space-y-2"
-                    onClick={() => setShowGuidedAnalysis(true)}
-                  >
-                    <Target className="w-8 h-8" />
-                    <div className="text-center">
-                      <div className="font-medium">Guided Analysis</div>
-                      <div className="text-xs text-gray-500">Step-by-step business insights</div>
-                    </div>
-                  </Button>
-                  
-                  <Button
-                    variant="outline"
-                    className="h-24 flex-col space-y-2"
-                    onClick={() => setActiveTab("transform")}
-                  >
-                    <Wrench className="w-8 h-8" />
-                    <div className="text-center">
-                      <div className="font-medium">Data Transformation</div>
-                      <div className="text-xs text-gray-500">Clean, filter, and reshape your data</div>
-                    </div>
-                  </Button>
-                  
-                  <Button
-                    variant="outline"
-                    className="h-24 flex-col space-y-2"
-                    onClick={() => setActiveTab("analysis")}
-                  >
-                    <BarChart3 className="w-8 h-8" />
-                    <div className="text-center">
-                      <div className="font-medium">Data Analysis</div>
-                      <div className="text-xs text-gray-500">Statistical analysis and visualizations</div>
-                    </div>
-                  </Button>
-                  
-                  <Button
-                    variant="outline"
-                    className="h-24 flex-col space-y-2"
-                    onClick={() => setActiveTab("insights")}
-                  >
-                    <Brain className="w-8 h-8" />
-                    <div className="text-center">
-                      <div className="font-medium">AI Insights</div>
-                      <div className="text-xs text-gray-500">Intelligent data interpretation</div>
-                    </div>
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
           </TabsContent>
 
           <TabsContent value="schema" className="mt-6">
