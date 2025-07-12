@@ -160,6 +160,88 @@ const ANALYSIS_TYPES = {
   }
 };
 
+// Question templates based on scenario + analysis type combinations
+const QUESTION_TEMPLATES = {
+  'hr_engagement': {
+    'descriptive': [
+      'What is the overall employee engagement score?',
+      'How are engagement scores distributed across departments?',
+      'What are the most and least engaged teams?',
+      'What percentage of employees are highly engaged vs. disengaged?'
+    ],
+    'comparative': [
+      'Do engagement scores differ significantly between departments?',
+      'Are there differences in engagement between managers?',
+      'How do engagement scores vary by employee tenure?',
+      'Which departments have the highest vs. lowest engagement?'
+    ],
+    'predictive': [
+      'Which employees are at risk of leaving based on engagement scores?',
+      'What factors predict high employee engagement?',
+      'How will engagement trends change over the next quarter?',
+      'Which teams are likely to improve or decline in engagement?'
+    ],
+    'diagnostic': [
+      'What factors are driving low engagement in specific departments?',
+      'Why do certain managers have higher engagement scores?',
+      'What is the relationship between engagement and performance?',
+      'What specific issues are causing disengagement?'
+    ]
+  },
+  'sales_performance': {
+    'descriptive': [
+      'What are our total sales by product and region?',
+      'Which products are top performers?',
+      'What are the sales trends over time?',
+      'How are sales distributed across our sales team?'
+    ],
+    'comparative': [
+      'Which regions are outperforming others?',
+      'How do different products compare in profitability?',
+      'Are there seasonal differences in sales performance?',
+      'Which sales representatives are top performers?'
+    ],
+    'predictive': [
+      'What will next quarter\'s sales look like?',
+      'Which products will be our top sellers next year?',
+      'How will seasonal trends affect future sales?',
+      'Which customers are likely to make large purchases?'
+    ],
+    'diagnostic': [
+      'Why are certain products underperforming?',
+      'What factors drive regional sales differences?',
+      'Why do some sales reps consistently outperform others?',
+      'What causes seasonal sales variations?'
+    ]
+  },
+  'financial_performance': {
+    'descriptive': [
+      'What are our key financial metrics and trends?',
+      'How is revenue distributed across business units?',
+      'What are our main cost drivers?',
+      'How has profitability changed over time?'
+    ],
+    'comparative': [
+      'Which business units are most profitable?',
+      'How do our costs compare to industry benchmarks?',
+      'Which revenue streams are growing vs. declining?',
+      'How do seasonal patterns affect different business areas?'
+    ],
+    'predictive': [
+      'What will our revenue look like next quarter?',
+      'Which business units will drive future growth?',
+      'How will cost changes affect profitability?',
+      'What are our projected cash flow needs?'
+    ],
+    'diagnostic': [
+      'What factors are driving cost increases?',
+      'Why are certain business units underperforming?',
+      'What causes revenue volatility?',
+      'Which investments provide the best ROI?'
+    ]
+  }
+};
+
 const DELIVERABLE_PRICING = {
   'executive_summary': { name: 'Executive Summary', price: 15 },
   'detailed_report': { name: 'Detailed Report', price: 25 },
@@ -571,13 +653,40 @@ export default function GuidedAnalysisWizard({
                   <p className="text-green-700 mb-2">
                     Based on your selected scenario, we recommend:
                   </p>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-2 mb-3">
                     {analysisConfig.selectedScenario.recommendedAnalysis.map((rec) => (
                       <Badge key={rec} variant="default" className="bg-green-600">
                         {rec}
                       </Badge>
                     ))}
                   </div>
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    onClick={() => {
+                      // Auto-select the first recommended analysis that matches our types
+                      const recommendedType = analysisConfig.selectedScenario.recommendedAnalysis.find(rec => 
+                        rec.toLowerCase().includes('descriptive') ? 'descriptive' :
+                        rec.toLowerCase().includes('comparative') || rec.toLowerCase().includes('anova') ? 'comparative' :
+                        rec.toLowerCase().includes('predictive') || rec.toLowerCase().includes('forecasting') ? 'predictive' :
+                        rec.toLowerCase().includes('diagnostic') || rec.toLowerCase().includes('regression') ? 'diagnostic' :
+                        null
+                      );
+                      
+                      if (recommendedType) {
+                        const typeKey = recommendedType.toLowerCase().includes('descriptive') ? 'descriptive' :
+                                       recommendedType.toLowerCase().includes('comparative') || recommendedType.toLowerCase().includes('anova') ? 'comparative' :
+                                       recommendedType.toLowerCase().includes('predictive') || recommendedType.toLowerCase().includes('forecasting') ? 'predictive' :
+                                       'diagnostic';
+                        
+                        setAnalysisConfig(prev => ({ ...prev, analysisType: typeKey }));
+                      }
+                    }}
+                    className="text-green-700 border-green-300 hover:bg-green-100"
+                  >
+                    <Target className="w-4 h-4 mr-2" />
+                    Use Template
+                  </Button>
                 </CardContent>
               </Card>
             )}
@@ -708,6 +817,65 @@ export default function GuidedAnalysisWizard({
             </div>
 
             <div className="space-y-4">
+              {/* Template Questions */}
+              {analysisConfig.selectedScenario && analysisConfig.analysisType && 
+               QUESTION_TEMPLATES[analysisConfig.selectedScenario.id] && 
+               QUESTION_TEMPLATES[analysisConfig.selectedScenario.id][analysisConfig.analysisType] && (
+                <Card className="bg-green-50 border-green-200">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-green-800">
+                      <Target className="w-5 h-5" />
+                      Suggested Questions Template
+                    </CardTitle>
+                    <CardDescription>
+                      Based on your scenario and analysis type, here are relevant questions
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-1 gap-2">
+                        {QUESTION_TEMPLATES[analysisConfig.selectedScenario.id][analysisConfig.analysisType].map((question, index) => (
+                          <div key={index} className="flex items-center justify-between p-2 bg-white rounded border">
+                            <span className="text-sm text-gray-700">{question}</span>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                if (!analysisConfig.specificQuestions.includes(question)) {
+                                  setAnalysisConfig(prev => ({
+                                    ...prev,
+                                    specificQuestions: [...prev.specificQuestions, question]
+                                  }));
+                                }
+                              }}
+                              disabled={analysisConfig.specificQuestions.includes(question)}
+                            >
+                              {analysisConfig.specificQuestions.includes(question) ? 'Added' : 'Add'}
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          const templateQuestions = QUESTION_TEMPLATES[analysisConfig.selectedScenario.id][analysisConfig.analysisType];
+                          const newQuestions = templateQuestions.filter(q => !analysisConfig.specificQuestions.includes(q));
+                          setAnalysisConfig(prev => ({
+                            ...prev,
+                            specificQuestions: [...prev.specificQuestions, ...newQuestions]
+                          }));
+                        }}
+                        className="w-full text-green-700 border-green-300 hover:bg-green-100"
+                      >
+                        <Target className="w-4 h-4 mr-2" />
+                        Add All Template Questions
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+              
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
@@ -1153,7 +1321,6 @@ export default function GuidedAnalysisWizard({
                   (currentStep === 2 && !analysisConfig.businessQuestion) ||
                   (currentStep === 3 && !analysisConfig.analysisType) ||
                   (currentStep === 4 && analysisConfig.selectedVariables.length === 0) ||
-                  (currentStep === 5 && analysisConfig.specificQuestions.length === 0) ||
                   (currentStep === 6 && analysisConfig.deliverables.length === 0)
                 }
               >
