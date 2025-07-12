@@ -146,6 +146,37 @@ export class APIClient {
     return await response.json();
   }
 
+  async executeGuidedAnalysis(analysisId: string, paymentIntentId?: string): Promise<any> {
+    const response = await fetch(`${API_BASE}/api/execute-guided-analysis`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ analysisId, paymentIntentId }),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to execute guided analysis');
+    }
+
+    return await response.json();
+  }
+
+  async getGuidedAnalysisResults(analysisId: string): Promise<any> {
+    const response = await fetch(`${API_BASE}/api/guided-analysis/${analysisId}`, {
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to get guided analysis results');
+    }
+
+    return await response.json();
+  }
+
   async getProjects(): Promise<any> {
     const response = await fetch(`${API_BASE}/api/projects`, {
       method: 'GET',

@@ -7,6 +7,7 @@ import ProjectPage from "@/pages/project-page";
 import DescriptiveStatsPage from "@/pages/descriptive-stats-page";
 import AuthPage from "@/pages/auth";
 import GuidedAnalysisCheckout from "@/pages/checkout";
+import GuidedAnalysisResults from "@/pages/guided-analysis-results";
 import { apiClient } from "@/lib/api";
 import "./index.css";
 
@@ -93,6 +94,9 @@ export default function App() {
           </Route>
           <Route path="/checkout">
             {() => <GuidedAnalysisCheckout />}
+          </Route>
+          <Route path="/guided-analysis-results/:analysisId">
+            {(params) => user ? <GuidedAnalysisResults /> : <AuthPage onLogin={handleLogin} />}
           </Route>
           <Route path="/dashboard">
             {() => user ? <ProjectPage projectId="dashboard" /> : <AuthPage onLogin={handleLogin} />}

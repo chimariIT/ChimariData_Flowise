@@ -1003,7 +1003,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           userId: req.user.id,
           variableCount: analysisConfig.selectedVariables.length.toString(),
           deliverablesCount: analysisConfig.deliverables.length.toString(),
-          timeline: analysisConfig.timeline
+          // timeline field removed
         }
       });
 
@@ -1028,6 +1028,193 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error('Guided analysis payment creation error:', error);
       res.status(500).json({ error: 'Failed to create guided analysis payment' });
+    }
+  });
+
+  // Execute guided analysis after payment
+  app.post("/api/execute-guided-analysis", async (req, res) => {
+    try {
+      const { analysisId, paymentIntentId } = req.body;
+      
+      if (!analysisId) {
+        return res.status(400).json({ error: 'Analysis ID is required' });
+      }
+
+      if (!req.user) {
+        return res.status(401).json({ error: 'Authentication required for guided analysis' });
+      }
+
+      // Get the analysis order
+      const analysisOrder = await storage.getGuidedAnalysisOrder(analysisId);
+      if (!analysisOrder) {
+        return res.status(404).json({ error: 'Analysis order not found' });
+      }
+
+      // Verify payment if provided
+      if (paymentIntentId) {
+        const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+        if (paymentIntent.status !== 'succeeded') {
+          return res.status(400).json({ error: "Payment not completed" });
+        }
+      }
+
+      // Get the project
+      const project = await storage.getProject(analysisOrder.config.projectId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+
+      // Update analysis order status
+      await storage.updateGuidedAnalysisOrder(analysisId, {
+        status: 'processing',
+        startedAt: new Date().toISOString()
+      });
+
+      // Execute the analysis based on the configuration
+      const analysisConfig = analysisOrder.config;
+      const results: any = {};
+
+      try {
+        // Execute the specific analysis type
+        switch (analysisConfig.analysisType) {
+          case 'anova':
+            results.analysis = await PythonProcessor.runAnova(
+              analysisConfig.projectId,
+              {
+                dependentVariable: analysisConfig.selectedVariables[0],
+                independentVariables: analysisConfig.selectedVariables.slice(1),
+                significanceLevel: 0.05
+              }
+            );
+            break;
+
+          case 'ancova':
+            results.analysis = await PythonProcessor.runAncova(
+              analysisConfig.projectId,
+              {
+                dependentVariable: analysisConfig.selectedVariables[0],
+                independentVariables: analysisConfig.selectedVariables.slice(1),
+                covariates: analysisConfig.selectedVariables.slice(2),
+                significanceLevel: 0.05
+              }
+            );
+            break;
+
+          case 'regression':
+            results.analysis = await PythonProcessor.runRegression(
+              analysisConfig.projectId,
+              {
+                dependentVariable: analysisConfig.selectedVariables[0],
+                independentVariables: analysisConfig.selectedVariables.slice(1),
+                analysisType: 'multiple_regression'
+              }
+            );
+            break;
+
+          case 'machine_learning':
+            results.analysis = await PythonProcessor.runMLAnalysis(
+              analysisConfig.projectId,
+              {
+                targetVariable: analysisConfig.selectedVariables[0],
+                features: analysisConfig.selectedVariables.slice(1),
+                mlType: 'prediction',
+                algorithms: ['random_forest', 'gradient_boosting', 'linear_regression']
+              }
+            );
+            break;
+
+          default:
+            // Default comprehensive analysis
+            results.analysis = await PythonProcessor.analyzeData(
+              analysisConfig.projectId,
+              { schema: project.schema, recordCount: project.recordCount },
+              'comprehensive',
+              { variables: analysisConfig.selectedVariables }
+            );
+            break;
+        }
+
+        // Generate AI insights
+        results.insights = await chimaridataAI.generateInsights(
+          {
+            schema: project.schema,
+            recordCount: project.recordCount,
+            fileName: project.fileName,
+            analysisResults: results.analysis
+          },
+          'guided_analysis'
+        );
+
+        // Update analysis order with results
+        await storage.updateGuidedAnalysisOrder(analysisId, {
+          status: 'completed',
+          completedAt: new Date().toISOString(),
+          results: results
+        });
+
+        res.json({
+          success: true,
+          analysisId: analysisId,
+          status: 'completed',
+          results: results
+        });
+
+      } catch (analysisError) {
+        console.error('Analysis execution error:', analysisError);
+        
+        // Update analysis order with error
+        await storage.updateGuidedAnalysisOrder(analysisId, {
+          status: 'failed',
+          error: analysisError.message,
+          failedAt: new Date().toISOString()
+        });
+
+        res.status(500).json({
+          error: 'Analysis execution failed',
+          details: analysisError.message
+        });
+      }
+
+    } catch (error: any) {
+      console.error('Guided analysis execution error:', error);
+      res.status(500).json({ error: 'Failed to execute guided analysis' });
+    }
+  });
+
+  // Get guided analysis results
+  app.get("/api/guided-analysis/:analysisId", async (req, res) => {
+    try {
+      const { analysisId } = req.params;
+      
+      if (!req.user) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+
+      const analysisOrder = await storage.getGuidedAnalysisOrder(analysisId);
+      if (!analysisOrder) {
+        return res.status(404).json({ error: 'Analysis not found' });
+      }
+
+      // Verify ownership
+      if (analysisOrder.userId !== req.user.id) {
+        return res.status(403).json({ error: 'Access denied' });
+      }
+
+      res.json({
+        analysisId,
+        status: analysisOrder.status,
+        config: analysisOrder.config,
+        pricing: analysisOrder.pricing,
+        results: analysisOrder.results || null,
+        createdAt: analysisOrder.createdAt,
+        startedAt: analysisOrder.startedAt,
+        completedAt: analysisOrder.completedAt,
+        error: analysisOrder.error
+      });
+
+    } catch (error: any) {
+      console.error('Get guided analysis error:', error);
+      res.status(500).json({ error: 'Failed to get guided analysis' });
     }
   });
 
