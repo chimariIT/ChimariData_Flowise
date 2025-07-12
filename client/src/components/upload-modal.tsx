@@ -203,7 +203,20 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
         setShowPIIDialog(false);
         setTempFileInfo(null);
         
-        onSuccess();
+        // Navigate to the created project instead of just closing
+        if (result.projectId) {
+          // Show success toast and navigate to project page
+          toast({
+            title: "Upload successful!",
+            description: `Project created with PII decision: ${decision}`,
+          });
+          // Close modal before navigation
+          onClose();
+          // Use the project ID to navigate to the project page
+          window.location.href = `/project/${result.projectId}`;
+        } else {
+          onSuccess();
+        }
       } else {
         throw new Error(result.error || 'Upload failed');
       }
