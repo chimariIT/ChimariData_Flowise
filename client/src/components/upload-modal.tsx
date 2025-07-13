@@ -198,6 +198,8 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
 
       const result = await response.json();
       
+      console.log("PII decision result:", result);
+      
       if (result.success) {
         // Close PII dialog
         setShowPIIDialog(false);
@@ -205,6 +207,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
         
         // Navigate to the created project instead of just closing
         if (result.projectId) {
+          console.log("Navigating to project:", result.projectId);
           // Show success toast and navigate to project page
           toast({
             title: "Upload successful!",
@@ -215,6 +218,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
           // Use the project ID to navigate to the project page
           window.location.href = `/project/${result.projectId}`;
         } else {
+          console.log("No project ID returned, calling onSuccess. Result:", result);
           onSuccess();
         }
       } else {
