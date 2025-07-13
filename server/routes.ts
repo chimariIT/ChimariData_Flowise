@@ -342,6 +342,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Clean up temporary data
         tempTrialData.delete(tempFileId);
         
+        console.log("Returning project ID:", projectId);
+        
         return res.json({
           success: true,
           projectId: projectId,
