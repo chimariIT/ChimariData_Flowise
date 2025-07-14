@@ -1,0 +1,40 @@
+{
+  "success": true,
+  "data": {
+    "analysis_type": "Machine Learning",
+    "task_type": "regression",
+    "algorithm": "random_forest",
+    "target_variable": "ROI",
+    "feature_variables": [
+      "Campaign_Type",
+      "Duration",
+      "Conversion_Rate",
+      "Target_Audience",
+      "Acquisition_Cost"
+    ],
+    "metrics": {
+      "mse": 0.00012113999999999878,
+      "r2_score": 0.9242875000000008
+    },
+    "feature_importance": {
+      "Campaign_Type": 0.08664607504813192,
+      "Duration": 0.27553235955572364,
+      "Conversion_Rate": 0.4099232990268529,
+      "Target_Audience": 0.14979981782771945,
+      "Acquisition_Cost": 0.07809844854157198
+    },
+    "cross_validation_scores": [
+      -0.16640399999999866,
+      0.7776599999999997,
+      0.5570486111111126,
+      0.9332777777777777,
+      0.9308790123456793
+    ],
+    "cv_mean": 0.6064922802469142,
+    "cv_std": 0.410152956366477,
+    "sample_size": 10,
+    "test_size": 0.2,
+    "interpretation": "ML analysis completed using random_forest with 5 features"
+  },
+  "visualizations": []
+}

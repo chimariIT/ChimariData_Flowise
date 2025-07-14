@@ -689,12 +689,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/step-by-step-analysis", async (req, res) => {
     try {
       const { projectId, config } = req.body;
+      console.log('Step-by-step analysis request:', { projectId, config });
+      
       const project = await storage.getProject(projectId);
+      console.log('Project found:', project ? 'Yes' : 'No');
+      
       if (!project) {
+        console.log('Available projects:', await storage.getAllProjects());
         return res.status(404).json({ error: "Project not found" });
       }
 
       const projectData = project.data || []; // Get actual project data
+      console.log('Project data length:', projectData.length);
+      
       const result = await AdvancedAnalyzer.performStepByStepAnalysis(projectData, config);
       
       // Update project with step-by-step analysis
@@ -710,6 +717,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({ success: true, result });
     } catch (error: any) {
+      console.error('Step-by-step analysis error:', error);
       res.status(500).json({ error: error.message });
     }
   });

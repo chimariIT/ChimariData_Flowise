@@ -8,7 +8,7 @@ import { Separator } from "@/components/ui/separator";
 import { ArrowLeft, TrendingUp, BarChart3, Brain } from "lucide-react";
 import { Link } from "wouter";
 import { DescriptiveStats } from "@/components/descriptive-stats";
-// import { AdvancedAnalysisModal } from "@/components/advanced-analysis-modal";
+import AdvancedAnalysisModal from "@/components/advanced-analysis-modal";
 import { DataProject } from "@shared/schema";
 
 export default function DescriptiveStatsPage() {
@@ -142,7 +142,13 @@ export default function DescriptiveStatsPage() {
       {/* Descriptive Statistics */}
       <DescriptiveStats project={project} analysisResult={analysisResult} />
       
-      {/* Advanced Analysis Modal - To be implemented */}
+      {/* Advanced Analysis Modal */}
+      <AdvancedAnalysisModal
+        isOpen={isAnalysisModalOpen}
+        onClose={() => setIsAnalysisModalOpen(false)}
+        projectId={id || ''}
+        schema={project.schema || {}}
+      />
     </div>
   );
 }
