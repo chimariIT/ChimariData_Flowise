@@ -1047,16 +1047,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Create guided analysis payment intent
-  app.post("/api/create-guided-analysis-payment", async (req, res) => {
+  app.post("/api/create-guided-analysis-payment", unifiedAuth, async (req, res) => {
     try {
       const { analysisConfig, pricing } = req.body;
       
       if (!analysisConfig || !pricing) {
         return res.status(400).json({ error: 'Analysis configuration and pricing are required' });
-      }
-
-      if (!req.user) {
-        return res.status(401).json({ error: 'Authentication required for guided analysis' });
       }
 
       const amount = Math.round(pricing.total * 100); // Convert to cents
@@ -1629,6 +1625,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Authentication routes
   // Simple token store for session management
   const tokenStore = new Map<string, string>();
+
+  // Unified authentication middleware that handles both OAuth and token-based auth
+  async function unifiedAuth(req: any, res: any, next: any) {
+    // First check if already authenticated via OAuth/passport session
+    if (req.isAuthenticated && req.isAuthenticated()) {
+      return next();
+    }
+    
+    // Check for Authorization header with Bearer token (email-based auth)
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.substring(7);
+      
+      try {
+        // Check if token exists in our token store
+        const userId = tokenStore.get(token);
+        
+        if (userId) {
+          // Verify user still exists
+          const user = await storage.getUser(userId);
+          
+          if (user) {
+            // Set user on request object to match OAuth format
+            req.user = { id: user.id };
+            req.userId = user.id; // Also set direct userId for compatibility
+            return next();
+          }
+        }
+      } catch (error) {
+        console.error('Token validation error:', error);
+      }
+    }
+    
+    // If neither authentication method worked, return 401
+    res.status(401).json({ error: 'Authentication required' });
+  }
 
   // OAuth providers endpoint
   app.get('/api/auth/providers', (req, res) => {

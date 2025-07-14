@@ -129,17 +129,25 @@ export class APIClient {
   }
 
   async createGuidedAnalysisPayment(analysisConfig: any, pricing: any): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     const response = await fetch(`${API_BASE}/api/create-guided-analysis-payment`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({ analysisConfig, pricing }),
       credentials: 'include',
     });
 
     if (!response.ok) {
       const error = await response.json();
+      console.log('Guided analysis payment failed:', error);
       throw new Error(error.error || 'Failed to create guided analysis payment');
     }
 

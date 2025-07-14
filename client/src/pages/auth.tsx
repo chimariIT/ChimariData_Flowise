@@ -43,6 +43,10 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
           });
 
       if (result.user) {
+        // Store auth token in localStorage
+        if (result.token) {
+          localStorage.setItem('auth_token', result.token);
+        }
         onLogin(result.user);
       }
       
