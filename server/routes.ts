@@ -1096,16 +1096,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Execute guided analysis after payment
-  app.post("/api/execute-guided-analysis", async (req, res) => {
+  app.post("/api/execute-guided-analysis", unifiedAuth, async (req, res) => {
     try {
       const { analysisId, paymentIntentId } = req.body;
       
       if (!analysisId) {
         return res.status(400).json({ error: 'Analysis ID is required' });
-      }
-
-      if (!req.user) {
-        return res.status(401).json({ error: 'Authentication required for guided analysis' });
       }
 
       // Get the analysis order
@@ -1142,6 +1138,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Execute the specific analysis type
         switch (analysisConfig.analysisType) {
           case 'anova':
+          case 'ANOVA':
             results.analysis = await PythonProcessor.runAnova(
               analysisConfig.projectId,
               {
@@ -1153,6 +1150,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             break;
 
           case 'ancova':
+          case 'ANCOVA':
             results.analysis = await PythonProcessor.runAncova(
               analysisConfig.projectId,
               {
@@ -1165,6 +1163,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             break;
 
           case 'regression':
+          case 'multiple_regression':
             results.analysis = await PythonProcessor.runRegression(
               analysisConfig.projectId,
               {
@@ -1176,13 +1175,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
             break;
 
           case 'machine_learning':
+          case 'feature_importance':
+          case 'ml_prediction':
             results.analysis = await PythonProcessor.runMLAnalysis(
               analysisConfig.projectId,
               {
-                targetVariable: analysisConfig.selectedVariables[0],
-                features: analysisConfig.selectedVariables.slice(1),
-                mlType: 'prediction',
-                algorithms: ['random_forest', 'gradient_boosting', 'linear_regression']
+                targetVariable: analysisConfig.targetVariable || analysisConfig.selectedVariables[0],
+                features: analysisConfig.featureVariables || analysisConfig.selectedVariables.slice(1),
+                mlType: analysisConfig.mlType || 'prediction',
+                algorithm: analysisConfig.algorithm || 'random_forest',
+                testSize: analysisConfig.testSize || 0.2,
+                crossValidation: analysisConfig.crossValidation || 5,
+                evaluationMetrics: analysisConfig.evaluationMetrics || ['accuracy', 'precision', 'recall', 'f1_score']
               }
             );
             break;
