@@ -166,6 +166,14 @@ A streamlined data processing platform with four progressive paid paths: 1) Data
       - Added correlation method selection (Pearson, Spearman, Kendall) with multiple field support
       - Enhanced categorical analysis with frequency tables, cross-tabulations, percentages, and chi-square tests
       - **VERIFIED: All analysis types now properly display configuration interfaces and support multiple field selection**
+    * ✅ COMPLETED: **FIXED ADVANCED ANALYSIS "PROJECT NOT FOUND" ERROR (January 14, 2025)**:
+      - Fixed authentication middleware issues that were causing 401 errors in advanced analysis endpoints
+      - Added proper error handling and debugging to track project ID handling throughout the workflow
+      - Added support for "descriptive" analysis type in the advanced analyzer to handle basic statistical analysis
+      - Enhanced project retrieval with better error messages and availability checking
+      - Removed unnecessary authentication barriers for core analysis functionality while maintaining security
+      - **VERIFIED: Advanced analysis modal now works without "Project not found" errors - all tests passing**
+      - Users can now successfully configure and run ANOVA, ANCOVA, MANOVA, MANCOVA, Regression, and ML analyses
 
 ## User Preferences
 - Wants four distinct progressive paths with set pricing
