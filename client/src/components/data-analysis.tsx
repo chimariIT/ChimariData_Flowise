@@ -119,10 +119,37 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
             max: (Math.random() * 200).toFixed(2)
           }))
         };
+      case "distribution":
+        return {
+          distributions: (analysisConfig.fields || [...numericFields, ...categoricalFields]).map(field => ({
+            field,
+            type: numericFields.includes(field) ? 'numeric' : 'categorical',
+            histogram: numericFields.includes(field) ? 
+              Array.from({ length: 10 }, (_, i) => ({
+                bin: `${i * 10}-${(i + 1) * 10}`,
+                count: Math.floor(Math.random() * 100)
+              })) :
+              Array.from({ length: 5 }, (_, i) => ({
+                category: `Category ${i + 1}`,
+                count: Math.floor(Math.random() * 100)
+              })),
+            statistics: numericFields.includes(field) ? {
+              mean: (Math.random() * 100).toFixed(2),
+              median: (Math.random() * 100).toFixed(2),
+              mode: (Math.random() * 100).toFixed(2),
+              std: (Math.random() * 20).toFixed(2),
+              skewness: ((Math.random() - 0.5) * 4).toFixed(2),
+              kurtosis: ((Math.random() - 0.5) * 4).toFixed(2)
+            } : {
+              mode: `Category ${Math.floor(Math.random() * 5) + 1}`,
+              uniqueValues: Math.floor(Math.random() * 10) + 2
+            }
+          }))
+        };
       case "correlation":
         return {
-          correlations: numericFields.map((field1, i) => 
-            numericFields.slice(i + 1).map(field2 => ({
+          correlations: (analysisConfig.fields || numericFields).map((field1, i) => 
+            (analysisConfig.fields || numericFields).slice(i + 1).map(field2 => ({
               field1,
               field2,
               correlation: ((Math.random() - 0.5) * 2).toFixed(3)
@@ -154,22 +181,197 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
           <div className="space-y-4">
             <div>
               <label className="text-sm font-medium mb-2 block">Select Numeric Fields</label>
-              <Select
-                value={analysisConfig.fields?.join(',') || ''}
-                onValueChange={(value) => setAnalysisConfig({
-                  ...analysisConfig,
-                  fields: value ? value.split(',') : []
-                })}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Choose fields to analyze" />
-                </SelectTrigger>
-                <SelectContent>
-                  {numericFields.map(field => (
-                    <SelectItem key={field} value={field}>{field}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-2 max-h-40 overflow-y-auto border rounded-lg p-3">
+                {numericFields.map(field => (
+                  <div key={field} className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      id={`desc-${field}`}
+                      checked={analysisConfig.fields?.includes(field) || false}
+                      onChange={(e) => {
+                        const currentFields = analysisConfig.fields || [];
+                        const newFields = e.target.checked 
+                          ? [...currentFields, field]
+                          : currentFields.filter(f => f !== field);
+                        setAnalysisConfig({
+                          ...analysisConfig,
+                          fields: newFields
+                        });
+                      }}
+                      className="rounded border-gray-300"
+                    />
+                    <label htmlFor={`desc-${field}`} className="text-sm">
+                      {field}
+                    </label>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-2 flex gap-2">
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={() => setAnalysisConfig({
+                    ...analysisConfig,
+                    fields: numericFields
+                  })}
+                >
+                  Select All
+                </Button>
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={() => setAnalysisConfig({
+                    ...analysisConfig,
+                    fields: []
+                  })}
+                >
+                  Clear All
+                </Button>
+              </div>
+            </div>
+          </div>
+        );
+
+      case "distribution":
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium mb-2 block">Select Fields for Distribution Analysis</label>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-2 max-h-40 overflow-y-auto border rounded-lg p-3">
+                {[...numericFields, ...categoricalFields].map(field => (
+                  <div key={field} className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      id={`dist-${field}`}
+                      checked={analysisConfig.fields?.includes(field) || false}
+                      onChange={(e) => {
+                        const currentFields = analysisConfig.fields || [];
+                        const newFields = e.target.checked 
+                          ? [...currentFields, field]
+                          : currentFields.filter(f => f !== field);
+                        setAnalysisConfig({
+                          ...analysisConfig,
+                          fields: newFields
+                        });
+                      }}
+                      className="rounded border-gray-300"
+                    />
+                    <label htmlFor={`dist-${field}`} className="text-sm">
+                      {field}
+                      <Badge variant="outline" className="ml-1 text-xs">
+                        {numericFields.includes(field) ? 'numeric' : 'categorical'}
+                      </Badge>
+                    </label>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-2 flex gap-2">
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={() => setAnalysisConfig({
+                    ...analysisConfig,
+                    fields: [...numericFields, ...categoricalFields]
+                  })}
+                >
+                  Select All
+                </Button>
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={() => setAnalysisConfig({
+                    ...analysisConfig,
+                    fields: []
+                  })}
+                >
+                  Clear All
+                </Button>
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={() => setAnalysisConfig({
+                    ...analysisConfig,
+                    fields: numericFields
+                  })}
+                >
+                  Numeric Only
+                </Button>
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={() => setAnalysisConfig({
+                    ...analysisConfig,
+                    fields: categoricalFields
+                  })}
+                >
+                  Categorical Only
+                </Button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Distribution Analysis Options</label>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="show-histograms"
+                    checked={analysisConfig.showHistograms !== false}
+                    onChange={(e) => setAnalysisConfig({
+                      ...analysisConfig,
+                      showHistograms: e.target.checked
+                    })}
+                    className="rounded border-gray-300"
+                  />
+                  <label htmlFor="show-histograms" className="text-sm">
+                    Show histograms
+                  </label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="show-frequencies"
+                    checked={analysisConfig.showFrequencies !== false}
+                    onChange={(e) => setAnalysisConfig({
+                      ...analysisConfig,
+                      showFrequencies: e.target.checked
+                    })}
+                    className="rounded border-gray-300"
+                  />
+                  <label htmlFor="show-frequencies" className="text-sm">
+                    Show frequency tables
+                  </label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="show-percentiles"
+                    checked={analysisConfig.showPercentiles !== false}
+                    onChange={(e) => setAnalysisConfig({
+                      ...analysisConfig,
+                      showPercentiles: e.target.checked
+                    })}
+                    className="rounded border-gray-300"
+                  />
+                  <label htmlFor="show-percentiles" className="text-sm">
+                    Show percentiles
+                  </label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="detect-outliers"
+                    checked={analysisConfig.detectOutliers !== false}
+                    onChange={(e) => setAnalysisConfig({
+                      ...analysisConfig,
+                      detectOutliers: e.target.checked
+                    })}
+                    className="rounded border-gray-300"
+                  />
+                  <label htmlFor="detect-outliers" className="text-sm">
+                    Detect outliers
+                  </label>
+                </div>
+              </div>
             </div>
           </div>
         );
@@ -177,13 +379,74 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
       case "correlation":
         return (
           <div className="space-y-4">
-            <p className="text-sm text-gray-600">
-              Correlation analysis will be performed on all numeric fields
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {numericFields.map(field => (
-                <Badge key={field} variant="outline">{field}</Badge>
-              ))}
+            <div>
+              <label className="text-sm font-medium mb-2 block">Select Numeric Fields for Correlation</label>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-2 max-h-40 overflow-y-auto border rounded-lg p-3">
+                {numericFields.map(field => (
+                  <div key={field} className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      id={`corr-${field}`}
+                      checked={analysisConfig.fields?.includes(field) || false}
+                      onChange={(e) => {
+                        const currentFields = analysisConfig.fields || [];
+                        const newFields = e.target.checked 
+                          ? [...currentFields, field]
+                          : currentFields.filter(f => f !== field);
+                        setAnalysisConfig({
+                          ...analysisConfig,
+                          fields: newFields
+                        });
+                      }}
+                      className="rounded border-gray-300"
+                    />
+                    <label htmlFor={`corr-${field}`} className="text-sm">
+                      {field}
+                    </label>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-2 flex gap-2">
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={() => setAnalysisConfig({
+                    ...analysisConfig,
+                    fields: numericFields
+                  })}
+                >
+                  Select All
+                </Button>
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={() => setAnalysisConfig({
+                    ...analysisConfig,
+                    fields: []
+                  })}
+                >
+                  Clear All
+                </Button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Correlation Method</label>
+              <Select
+                value={analysisConfig.method || 'pearson'}
+                onValueChange={(value) => setAnalysisConfig({
+                  ...analysisConfig,
+                  method: value
+                })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select correlation method" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pearson">Pearson</SelectItem>
+                  <SelectItem value="spearman">Spearman</SelectItem>
+                  <SelectItem value="kendall">Kendall</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
         );
@@ -193,22 +456,118 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
           <div className="space-y-4">
             <div>
               <label className="text-sm font-medium mb-2 block">Select Categorical Fields</label>
-              <Select
-                value={analysisConfig.fields?.join(',') || ''}
-                onValueChange={(value) => setAnalysisConfig({
-                  ...analysisConfig,
-                  fields: value ? value.split(',') : []
-                })}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Choose fields to analyze" />
-                </SelectTrigger>
-                <SelectContent>
-                  {categoricalFields.map(field => (
-                    <SelectItem key={field} value={field}>{field}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-2 max-h-40 overflow-y-auto border rounded-lg p-3">
+                {categoricalFields.map(field => (
+                  <div key={field} className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      id={`cat-${field}`}
+                      checked={analysisConfig.fields?.includes(field) || false}
+                      onChange={(e) => {
+                        const currentFields = analysisConfig.fields || [];
+                        const newFields = e.target.checked 
+                          ? [...currentFields, field]
+                          : currentFields.filter(f => f !== field);
+                        setAnalysisConfig({
+                          ...analysisConfig,
+                          fields: newFields
+                        });
+                      }}
+                      className="rounded border-gray-300"
+                    />
+                    <label htmlFor={`cat-${field}`} className="text-sm">
+                      {field}
+                    </label>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-2 flex gap-2">
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={() => setAnalysisConfig({
+                    ...analysisConfig,
+                    fields: categoricalFields
+                  })}
+                >
+                  Select All
+                </Button>
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={() => setAnalysisConfig({
+                    ...analysisConfig,
+                    fields: []
+                  })}
+                >
+                  Clear All
+                </Button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Analysis Options</label>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="show-frequencies"
+                    checked={analysisConfig.showFrequencies !== false}
+                    onChange={(e) => setAnalysisConfig({
+                      ...analysisConfig,
+                      showFrequencies: e.target.checked
+                    })}
+                    className="rounded border-gray-300"
+                  />
+                  <label htmlFor="show-frequencies" className="text-sm">
+                    Show frequency tables
+                  </label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="show-crosstabs"
+                    checked={analysisConfig.showCrosstabs !== false}
+                    onChange={(e) => setAnalysisConfig({
+                      ...analysisConfig,
+                      showCrosstabs: e.target.checked
+                    })}
+                    className="rounded border-gray-300"
+                  />
+                  <label htmlFor="show-crosstabs" className="text-sm">
+                    Show cross-tabulations
+                  </label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="show-percentages"
+                    checked={analysisConfig.showPercentages !== false}
+                    onChange={(e) => setAnalysisConfig({
+                      ...analysisConfig,
+                      showPercentages: e.target.checked
+                    })}
+                    className="rounded border-gray-300"
+                  />
+                  <label htmlFor="show-percentages" className="text-sm">
+                    Show percentages
+                  </label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="chi-square-test"
+                    checked={analysisConfig.chiSquareTest !== false}
+                    onChange={(e) => setAnalysisConfig({
+                      ...analysisConfig,
+                      chiSquareTest: e.target.checked
+                    })}
+                    className="rounded border-gray-300"
+                  />
+                  <label htmlFor="chi-square-test" className="text-sm">
+                    Chi-square test
+                  </label>
+                </div>
+              </div>
             </div>
           </div>
         );
@@ -287,6 +646,98 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                     <span className="font-medium ml-2">{stat.max}</span>
                   </div>
                 </div>
+              </div>
+            ))}
+          </div>
+        );
+
+      case "distribution":
+        return (
+          <div className="space-y-6">
+            {results.data.distributions.map((dist: any) => (
+              <div key={dist.field} className="border rounded-lg p-4">
+                <div className="flex items-center justify-between mb-4">
+                  <h4 className="font-medium">{dist.field}</h4>
+                  <Badge variant="outline">{dist.type}</Badge>
+                </div>
+                
+                {dist.type === 'numeric' && (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+                      <div>
+                        <span className="text-gray-600">Mean:</span>
+                        <span className="font-medium ml-2">{dist.statistics.mean}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">Median:</span>
+                        <span className="font-medium ml-2">{dist.statistics.median}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">Std Dev:</span>
+                        <span className="font-medium ml-2">{dist.statistics.std}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">Skewness:</span>
+                        <span className="font-medium ml-2">{dist.statistics.skewness}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">Kurtosis:</span>
+                        <span className="font-medium ml-2">{dist.statistics.kurtosis}</span>
+                      </div>
+                    </div>
+                    
+                    <div>
+                      <h5 className="font-medium mb-2">Distribution Histogram</h5>
+                      <div className="grid grid-cols-5 gap-2">
+                        {dist.histogram.map((bin: any, i: number) => (
+                          <div key={i} className="text-center">
+                            <div 
+                              className="bg-blue-500 mb-1 rounded-t" 
+                              style={{height: `${Math.max(bin.count / 10, 5)}px`}}
+                            ></div>
+                            <div className="text-xs text-gray-600">{bin.bin}</div>
+                            <div className="text-xs font-medium">{bin.count}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                {dist.type === 'categorical' && (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <span className="text-gray-600">Mode:</span>
+                        <span className="font-medium ml-2">{dist.statistics.mode}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">Unique Values:</span>
+                        <span className="font-medium ml-2">{dist.statistics.uniqueValues}</span>
+                      </div>
+                    </div>
+                    
+                    <div>
+                      <h5 className="font-medium mb-2">Frequency Distribution</h5>
+                      <div className="space-y-2">
+                        {dist.histogram.map((cat: any, i: number) => (
+                          <div key={i} className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                            <span className="text-sm">{cat.category}</span>
+                            <div className="flex items-center space-x-2">
+                              <div className="w-20 bg-gray-200 rounded-full h-2">
+                                <div 
+                                  className="bg-blue-500 h-2 rounded-full"
+                                  style={{width: `${(cat.count / 100) * 100}%`}}
+                                ></div>
+                              </div>
+                              <span className="text-sm font-medium">{cat.count}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>
