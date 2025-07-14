@@ -409,6 +409,31 @@ export default function GuidedAnalysisWizard({
       return;
     }
 
+    // Check authentication before proceeding with payment
+    try {
+      const authResponse = await fetch('/api/auth/user', {
+        credentials: 'include'
+      });
+      if (!authResponse.ok) {
+        toast({
+          title: "Authentication Required",
+          description: "Please log in to proceed with guided analysis payment.",
+          variant: "destructive"
+        });
+        window.location.href = '/login?redirect=/dashboard';
+        return;
+      }
+    } catch (authError) {
+      console.error('Authentication check failed:', authError);
+      toast({
+        title: "Authentication Error",
+        description: "Please log in to continue.",
+        variant: "destructive"
+      });
+      window.location.href = '/login?redirect=/dashboard';
+      return;
+    }
+
     setIsProcessingPayment(true);
     try {
       // Create guided analysis payment intent
@@ -432,13 +457,25 @@ export default function GuidedAnalysisWizard({
         // Navigate to checkout page
         window.location.href = `/checkout?type=guided_analysis&amount=${pricing.total}`;
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Payment initialization failed:', error);
-      toast({
-        title: "Payment Error",
-        description: "Failed to initialize payment. Please try again.",
-        variant: "destructive"
-      });
+      
+      // Check if this is an authentication error
+      if (error.message?.includes('Authentication required') || error.message?.includes('401')) {
+        toast({
+          title: "Authentication Required",
+          description: "Please log in to proceed with guided analysis payment.",
+          variant: "destructive"
+        });
+        // Redirect to login
+        window.location.href = '/login?redirect=/dashboard';
+      } else {
+        toast({
+          title: "Payment Error",
+          description: error.message || "Failed to initialize payment. Please try again.",
+          variant: "destructive"
+        });
+      }
     } finally {
       setIsProcessingPayment(false);
     }
