@@ -148,6 +148,15 @@ A streamlined data processing platform with four progressive paid paths: 1) Data
       - **VERIFIED: Upload → PII Decision → Project Creation → Navigation flow working correctly**
       - Projects are now successfully created and accessible after PII consent workflow
       - Fixed the root cause of "Project Not Found" page appearing after successful file uploads
+    * ✅ COMPLETED: **ENHANCED CONFIGURABILITY & MULTIPLE VARIABLE SUPPORT (January 14, 2025)**:
+      - Implemented dynamic ML algorithm parameter configuration that adapts based on selected algorithm
+      - Added algorithm-specific parameter controls for Random Forest, Gradient Boosting, SVM, Neural Networks, and Regression
+      - Created comprehensive descriptive statistics configuration panel with variable selection controls
+      - Added multiple dependent variable selection for MANOVA and MANCOVA in advanced analytics
+      - Enhanced backend to support multiple target variables and pass dynamic ML parameters to Python scripts
+      - Updated descriptive stats component with collapsible configuration options for distribution analysis, categorical analysis, and correlation methods
+      - Added variable filtering controls (All, Numeric Only, Categorical Only) for focused analysis
+      - **VERIFIED: Users can now configure analysis parameters specific to their chosen algorithm and select multiple variables for comprehensive statistical analysis**
 
 ## User Preferences
 - Wants four distinct progressive paths with set pricing

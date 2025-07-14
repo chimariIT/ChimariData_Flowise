@@ -4,7 +4,22 @@ import { join } from 'path';
 
 export class AdvancedAnalyzer {
   static async performStepByStepAnalysis(data: any[], config: any) {
-    const { analysisType, targetVariable, multivariateVariables, features, covariates, question, alpha, postHoc, assumptions } = config;
+    const { 
+      analysisType, 
+      targetVariable, 
+      targetVariables, 
+      multivariateVariables, 
+      features, 
+      covariates, 
+      question, 
+      alpha, 
+      postHoc, 
+      assumptions,
+      mlParams,
+      mlAlgorithm,
+      testSize,
+      crossValidation
+    } = config;
     
     console.log(`Starting ${analysisType} analysis with ${data.length} records`);
     
@@ -41,15 +56,21 @@ export class AdvancedAnalyzer {
         analysisResult = await this.performANCOVA(data, targetVariable, effectiveVariables, covariates, { alpha, postHoc, assumptions });
         break;
       case 'manova':
-        analysisResult = await this.performMANOVA(data, effectiveVariables, { alpha, assumptions });
+        const manovaTargets = targetVariables && targetVariables.length > 0 ? targetVariables : [targetVariable];
+        analysisResult = await this.performMANOVA(data, manovaTargets, effectiveVariables, { alpha, assumptions });
         break;
       case 'mancova':
-        analysisResult = await this.performMANCOVA(data, effectiveVariables, covariates, { alpha, assumptions });
+        const mancovaTargets = targetVariables && targetVariables.length > 0 ? targetVariables : [targetVariable];
+        analysisResult = await this.performMANCOVA(data, mancovaTargets, effectiveVariables, covariates, { alpha, assumptions });
         break;
       case 'regression':
         analysisResult = await this.performRegression(data, targetVariable, effectiveVariables, { alpha });
         break;
       case 'machine_learning':
+      case 'feature_importance':
+      case 'classification':
+      case 'regression_ml':
+      case 'clustering':
         analysisResult = await this.performMLAnalysis(data, targetVariable, effectiveVariables, config);
         break;
       default:
@@ -175,23 +196,25 @@ export class AdvancedAnalyzer {
     };
   }
   
-  private static async performMANOVA(data: any[], dependentVariables: string[], options: any) {
+  private static async performMANOVA(data: any[], dependentVariables: string[], factorVariables: string[], options: any) {
     return {
       analysisType: 'MANOVA',
       dependentVariables,
+      factorVariables,
       results: {
-        interpretation: `MANOVA analysis completed for variables ${dependentVariables.join(', ')}`
+        interpretation: `MANOVA analysis completed for dependent variables ${dependentVariables.join(', ')} with factors ${factorVariables.join(', ')}`
       }
     };
   }
   
-  private static async performMANCOVA(data: any[], dependentVariables: string[], covariates: string[], options: any) {
+  private static async performMANCOVA(data: any[], dependentVariables: string[], factorVariables: string[], covariates: string[], options: any) {
     return {
       analysisType: 'MANCOVA',
       dependentVariables,
+      factorVariables,
       covariates,
       results: {
-        interpretation: `MANCOVA analysis completed with covariates ${covariates.join(', ')}`
+        interpretation: `MANCOVA analysis completed for dependent variables ${dependentVariables.join(', ')} with factors ${factorVariables.join(', ')} and covariates ${covariates.join(', ')}`
       }
     };
   }
@@ -235,17 +258,20 @@ export class AdvancedAnalyzer {
       const csvFile = join(pythonDataDir, `${tempId}.csv`);
       writeFileSync(csvFile, csvData);
       
-      // Create input and config files
+      // Create input and config files with dynamic ML parameters
       writeFileSync(inputFile, JSON.stringify({ projectId: tempId }));
-      writeFileSync(configFile, JSON.stringify({
+      const analysisConfig = {
         analysisType: 'machine_learning',
         targetVariable,
         features: featureVariables,
         algorithm: mlAlgorithm,
         testSize: parseFloat(testSize),
         crossValidation: parseInt(crossValidation),
-        metrics: metrics.length > 0 ? metrics : ['accuracy', 'f1_score']
-      }));
+        metrics: metrics.length > 0 ? metrics : ['accuracy', 'f1_score'],
+        mlParams: config.mlParams || {}
+      };
+      
+      writeFileSync(configFile, JSON.stringify(analysisConfig));
       
       // Run Python analysis
       const pythonProcess = spawn('python3', [

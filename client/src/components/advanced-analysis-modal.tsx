@@ -28,6 +28,7 @@ export default function AdvancedAnalysisModal({
   const [analysisConfig, setAnalysisConfig] = useState({
     question: "",
     targetVariable: "",
+    targetVariables: [] as string[], // Multiple dependent variables for MANOVA/MANCOVA
     multivariateVariables: [] as string[],
     alpha: "0.05",
     postHoc: "tukey",
@@ -39,6 +40,41 @@ export default function AdvancedAnalysisModal({
     testSize: "0.2",
     crossValidation: "5",
     metrics: [] as string[],
+    // Dynamic ML parameters based on algorithm
+    mlParams: {
+      // Random Forest
+      n_estimators: "100",
+      max_depth: "auto",
+      min_samples_split: "2",
+      min_samples_leaf: "1",
+      // Gradient Boosting
+      learning_rate: "0.1",
+      n_estimators_gb: "100",
+      max_depth_gb: "3",
+      // SVM
+      C: "1.0",
+      kernel: "rbf",
+      gamma: "scale",
+      // Neural Network
+      hidden_layer_sizes: "100,50",
+      activation: "relu",
+      solver: "adam",
+      alpha_nn: "0.0001",
+      // Linear/Logistic Regression
+      regularization: "none",
+      C_reg: "1.0",
+      penalty: "l2"
+    },
+    // Descriptive stats configuration
+    descriptiveStatsConfig: {
+      selectedVariables: [] as string[],
+      includeDistribution: true,
+      includeCategoricalAnalysis: true,
+      includeCorrelation: true,
+      includeMissingData: true,
+      includeOutliers: true,
+      distributionTests: [] as string[] // normality, skewness, kurtosis tests
+    },
     // Agentic specific configs
     agenticRole: "",
     businessContext: "",
@@ -206,7 +242,7 @@ export default function AdvancedAnalysisModal({
 
   const selectedAnalysisType = analysisTypes[analysisPath]?.find(t => t.id === analysisType);
 
-  const handleVariableSelection = (variable: string, type: 'multivariate' | 'covariates') => {
+  const handleVariableSelection = (variable: string, type: 'multivariate' | 'covariates' | 'targets' | 'descriptive') => {
     if (type === 'multivariate') {
       setAnalysisConfig(prev => ({
         ...prev,
@@ -214,12 +250,29 @@ export default function AdvancedAnalysisModal({
           ? prev.multivariateVariables.filter(v => v !== variable)
           : [...prev.multivariateVariables, variable]
       }));
-    } else {
+    } else if (type === 'covariates') {
       setAnalysisConfig(prev => ({
         ...prev,
         covariates: prev.covariates.includes(variable)
           ? prev.covariates.filter(v => v !== variable)
           : [...prev.covariates, variable]
+      }));
+    } else if (type === 'targets') {
+      setAnalysisConfig(prev => ({
+        ...prev,
+        targetVariables: prev.targetVariables.includes(variable)
+          ? prev.targetVariables.filter(v => v !== variable)
+          : [...prev.targetVariables, variable]
+      }));
+    } else if (type === 'descriptive') {
+      setAnalysisConfig(prev => ({
+        ...prev,
+        descriptiveStatsConfig: {
+          ...prev.descriptiveStatsConfig,
+          selectedVariables: prev.descriptiveStatsConfig.selectedVariables.includes(variable)
+            ? prev.descriptiveStatsConfig.selectedVariables.filter(v => v !== variable)
+            : [...prev.descriptiveStatsConfig.selectedVariables, variable]
+        }
       }));
     }
   };
@@ -234,10 +287,19 @@ export default function AdvancedAnalysisModal({
       return;
     }
 
-    if (selectedAnalysisType?.requiresTarget && !analysisConfig.targetVariable) {
+    if (selectedAnalysisType?.requiresTarget && !selectedAnalysisType.multipleTargets && !analysisConfig.targetVariable) {
       toast({
         title: "Error",
         description: "Please select a target variable for this analysis",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    if (selectedAnalysisType?.multipleTargets && analysisConfig.targetVariables.length === 0) {
+      toast({
+        title: "Error",
+        description: `Please select at least one dependent variable for ${selectedAnalysisType.name}`,
         variant: "destructive"
       });
       return;
@@ -416,8 +478,8 @@ export default function AdvancedAnalysisModal({
           {/* Path-Specific Configuration */}
           {selectedAnalysisType && analysisPath === 'statistical' && (
             <div className="space-y-4">
-              {/* Target Variable */}
-              {selectedAnalysisType.requiresTarget && (
+              {/* Target Variable (Single) */}
+              {selectedAnalysisType.requiresTarget && !selectedAnalysisType.multipleTargets && (
                 <div>
                   <Label>Target Variable (Dependent Variable)</Label>
                   <Select 
@@ -435,6 +497,38 @@ export default function AdvancedAnalysisModal({
                       ))}
                     </SelectContent>
                   </Select>
+                </div>
+              )}
+
+              {/* Multiple Target Variables (MANOVA/MANCOVA) */}
+              {selectedAnalysisType.multipleTargets && (
+                <div>
+                  <Label>Dependent Variables (Multiple targets for {selectedAnalysisType.name})</Label>
+                  <div className="grid grid-cols-2 gap-2 mt-2 max-h-32 overflow-y-auto border rounded-lg p-2">
+                    {numericVariables.map(variable => (
+                      <div key={variable} className="flex items-center space-x-2">
+                        <Checkbox
+                          id={`target-${variable}`}
+                          checked={analysisConfig.targetVariables.includes(variable)}
+                          onCheckedChange={() => handleVariableSelection(variable, 'targets')}
+                        />
+                        <Label htmlFor={`target-${variable}`} className="text-sm">
+                          {variable} ({schema[variable]?.type})
+                        </Label>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Select multiple numeric variables to analyze simultaneously
+                  </p>
+                  {analysisConfig.targetVariables.length > 0 && (
+                    <div className="mt-2">
+                      <span className="text-sm font-medium">Selected: </span>
+                      <span className="text-sm text-blue-600">
+                        {analysisConfig.targetVariables.join(', ')}
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -645,6 +739,398 @@ export default function AdvancedAnalysisModal({
                       <SelectItem value="3">3-fold</SelectItem>
                     </SelectContent>
                   </Select>
+                </div>
+              </div>
+
+              {/* Dynamic Algorithm-Specific Parameters */}
+              <div className="border rounded-lg p-4">
+                <Label className="text-base font-medium">Algorithm Parameters</Label>
+                <div className="mt-3 grid grid-cols-2 gap-4">
+                  
+                  {/* Random Forest Parameters */}
+                  {analysisConfig.mlAlgorithm === 'random_forest' && (
+                    <>
+                      <div>
+                        <Label>Number of Estimators</Label>
+                        <Select 
+                          value={analysisConfig.mlParams.n_estimators} 
+                          onValueChange={(value) => setAnalysisConfig(prev => ({ 
+                            ...prev, 
+                            mlParams: { ...prev.mlParams, n_estimators: value } 
+                          }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="50">50</SelectItem>
+                            <SelectItem value="100">100 (Default)</SelectItem>
+                            <SelectItem value="200">200</SelectItem>
+                            <SelectItem value="500">500</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      
+                      <div>
+                        <Label>Max Depth</Label>
+                        <Select 
+                          value={analysisConfig.mlParams.max_depth} 
+                          onValueChange={(value) => setAnalysisConfig(prev => ({ 
+                            ...prev, 
+                            mlParams: { ...prev.mlParams, max_depth: value } 
+                          }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="auto">Auto (Default)</SelectItem>
+                            <SelectItem value="3">3</SelectItem>
+                            <SelectItem value="5">5</SelectItem>
+                            <SelectItem value="10">10</SelectItem>
+                            <SelectItem value="20">20</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      
+                      <div>
+                        <Label>Min Samples Split</Label>
+                        <Select 
+                          value={analysisConfig.mlParams.min_samples_split} 
+                          onValueChange={(value) => setAnalysisConfig(prev => ({ 
+                            ...prev, 
+                            mlParams: { ...prev.mlParams, min_samples_split: value } 
+                          }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="2">2 (Default)</SelectItem>
+                            <SelectItem value="5">5</SelectItem>
+                            <SelectItem value="10">10</SelectItem>
+                            <SelectItem value="20">20</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      
+                      <div>
+                        <Label>Min Samples Leaf</Label>
+                        <Select 
+                          value={analysisConfig.mlParams.min_samples_leaf} 
+                          onValueChange={(value) => setAnalysisConfig(prev => ({ 
+                            ...prev, 
+                            mlParams: { ...prev.mlParams, min_samples_leaf: value } 
+                          }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="1">1 (Default)</SelectItem>
+                            <SelectItem value="2">2</SelectItem>
+                            <SelectItem value="5">5</SelectItem>
+                            <SelectItem value="10">10</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Gradient Boosting Parameters */}
+                  {analysisConfig.mlAlgorithm === 'gradient_boosting' && (
+                    <>
+                      <div>
+                        <Label>Learning Rate</Label>
+                        <Select 
+                          value={analysisConfig.mlParams.learning_rate} 
+                          onValueChange={(value) => setAnalysisConfig(prev => ({ 
+                            ...prev, 
+                            mlParams: { ...prev.mlParams, learning_rate: value } 
+                          }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="0.01">0.01</SelectItem>
+                            <SelectItem value="0.1">0.1 (Default)</SelectItem>
+                            <SelectItem value="0.2">0.2</SelectItem>
+                            <SelectItem value="0.3">0.3</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      
+                      <div>
+                        <Label>Number of Estimators</Label>
+                        <Select 
+                          value={analysisConfig.mlParams.n_estimators_gb} 
+                          onValueChange={(value) => setAnalysisConfig(prev => ({ 
+                            ...prev, 
+                            mlParams: { ...prev.mlParams, n_estimators_gb: value } 
+                          }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="50">50</SelectItem>
+                            <SelectItem value="100">100 (Default)</SelectItem>
+                            <SelectItem value="200">200</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      
+                      <div>
+                        <Label>Max Depth</Label>
+                        <Select 
+                          value={analysisConfig.mlParams.max_depth_gb} 
+                          onValueChange={(value) => setAnalysisConfig(prev => ({ 
+                            ...prev, 
+                            mlParams: { ...prev.mlParams, max_depth_gb: value } 
+                          }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="3">3 (Default)</SelectItem>
+                            <SelectItem value="5">5</SelectItem>
+                            <SelectItem value="7">7</SelectItem>
+                            <SelectItem value="10">10</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </>
+                  )}
+
+                  {/* SVM Parameters */}
+                  {analysisConfig.mlAlgorithm === 'svm' && (
+                    <>
+                      <div>
+                        <Label>C (Regularization)</Label>
+                        <Select 
+                          value={analysisConfig.mlParams.C} 
+                          onValueChange={(value) => setAnalysisConfig(prev => ({ 
+                            ...prev, 
+                            mlParams: { ...prev.mlParams, C: value } 
+                          }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="0.1">0.1</SelectItem>
+                            <SelectItem value="1.0">1.0 (Default)</SelectItem>
+                            <SelectItem value="10">10</SelectItem>
+                            <SelectItem value="100">100</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      
+                      <div>
+                        <Label>Kernel</Label>
+                        <Select 
+                          value={analysisConfig.mlParams.kernel} 
+                          onValueChange={(value) => setAnalysisConfig(prev => ({ 
+                            ...prev, 
+                            mlParams: { ...prev.mlParams, kernel: value } 
+                          }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="linear">Linear</SelectItem>
+                            <SelectItem value="rbf">RBF (Default)</SelectItem>
+                            <SelectItem value="poly">Polynomial</SelectItem>
+                            <SelectItem value="sigmoid">Sigmoid</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      
+                      <div>
+                        <Label>Gamma</Label>
+                        <Select 
+                          value={analysisConfig.mlParams.gamma} 
+                          onValueChange={(value) => setAnalysisConfig(prev => ({ 
+                            ...prev, 
+                            mlParams: { ...prev.mlParams, gamma: value } 
+                          }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="scale">Scale (Default)</SelectItem>
+                            <SelectItem value="auto">Auto</SelectItem>
+                            <SelectItem value="0.001">0.001</SelectItem>
+                            <SelectItem value="0.01">0.01</SelectItem>
+                            <SelectItem value="0.1">0.1</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Neural Network Parameters */}
+                  {analysisConfig.mlAlgorithm === 'neural_network' && (
+                    <>
+                      <div>
+                        <Label>Hidden Layer Sizes</Label>
+                        <Select 
+                          value={analysisConfig.mlParams.hidden_layer_sizes} 
+                          onValueChange={(value) => setAnalysisConfig(prev => ({ 
+                            ...prev, 
+                            mlParams: { ...prev.mlParams, hidden_layer_sizes: value } 
+                          }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="100">100</SelectItem>
+                            <SelectItem value="100,50">100,50 (Default)</SelectItem>
+                            <SelectItem value="100,100">100,100</SelectItem>
+                            <SelectItem value="200,100,50">200,100,50</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      
+                      <div>
+                        <Label>Activation Function</Label>
+                        <Select 
+                          value={analysisConfig.mlParams.activation} 
+                          onValueChange={(value) => setAnalysisConfig(prev => ({ 
+                            ...prev, 
+                            mlParams: { ...prev.mlParams, activation: value } 
+                          }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="relu">ReLU (Default)</SelectItem>
+                            <SelectItem value="tanh">Tanh</SelectItem>
+                            <SelectItem value="logistic">Logistic</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      
+                      <div>
+                        <Label>Solver</Label>
+                        <Select 
+                          value={analysisConfig.mlParams.solver} 
+                          onValueChange={(value) => setAnalysisConfig(prev => ({ 
+                            ...prev, 
+                            mlParams: { ...prev.mlParams, solver: value } 
+                          }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="adam">Adam (Default)</SelectItem>
+                            <SelectItem value="lbfgs">L-BFGS</SelectItem>
+                            <SelectItem value="sgd">SGD</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      
+                      <div>
+                        <Label>Alpha (L2 regularization)</Label>
+                        <Select 
+                          value={analysisConfig.mlParams.alpha_nn} 
+                          onValueChange={(value) => setAnalysisConfig(prev => ({ 
+                            ...prev, 
+                            mlParams: { ...prev.mlParams, alpha_nn: value } 
+                          }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="0.0001">0.0001 (Default)</SelectItem>
+                            <SelectItem value="0.001">0.001</SelectItem>
+                            <SelectItem value="0.01">0.01</SelectItem>
+                            <SelectItem value="0.1">0.1</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Linear/Logistic Regression Parameters */}
+                  {(analysisConfig.mlAlgorithm === 'linear_regression' || analysisConfig.mlAlgorithm === 'logistic_regression') && (
+                    <>
+                      <div>
+                        <Label>Regularization</Label>
+                        <Select 
+                          value={analysisConfig.mlParams.regularization} 
+                          onValueChange={(value) => setAnalysisConfig(prev => ({ 
+                            ...prev, 
+                            mlParams: { ...prev.mlParams, regularization: value } 
+                          }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">None (Default)</SelectItem>
+                            <SelectItem value="l1">L1 (Lasso)</SelectItem>
+                            <SelectItem value="l2">L2 (Ridge)</SelectItem>
+                            <SelectItem value="elasticnet">Elastic Net</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      
+                      {analysisConfig.mlParams.regularization !== 'none' && (
+                        <div>
+                          <Label>Regularization Strength</Label>
+                          <Select 
+                            value={analysisConfig.mlParams.C_reg} 
+                            onValueChange={(value) => setAnalysisConfig(prev => ({ 
+                              ...prev, 
+                              mlParams: { ...prev.mlParams, C_reg: value } 
+                            }))}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="0.1">0.1</SelectItem>
+                              <SelectItem value="1.0">1.0 (Default)</SelectItem>
+                              <SelectItem value="10">10</SelectItem>
+                              <SelectItem value="100">100</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
+                      
+                      {analysisConfig.mlAlgorithm === 'logistic_regression' && (
+                        <div>
+                          <Label>Penalty</Label>
+                          <Select 
+                            value={analysisConfig.mlParams.penalty} 
+                            onValueChange={(value) => setAnalysisConfig(prev => ({ 
+                              ...prev, 
+                              mlParams: { ...prev.mlParams, penalty: value } 
+                            }))}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="l2">L2 (Default)</SelectItem>
+                              <SelectItem value="l1">L1</SelectItem>
+                              <SelectItem value="elasticnet">Elastic Net</SelectItem>
+                              <SelectItem value="none">None</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
               </div>
 
