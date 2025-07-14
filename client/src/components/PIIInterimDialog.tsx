@@ -30,6 +30,7 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
   const [showVerification, setShowVerification] = useState(false);
   const [anonymizationConfig, setAnonymizationConfig] = useState<any>(null);
   const [overriddenColumns, setOverriddenColumns] = useState<string[]>([]);
+  const [isProcessing, setIsProcessing] = useState(false);
   
   // Get all column names from sample data
   const allColumns = sampleData && sampleData.length > 0 ? Object.keys(sampleData[0]) : [];
@@ -55,22 +56,26 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
     console.log("overriddenColumns.length:", overriddenColumns.length);
     console.log("overriddenColumns:", overriddenColumns);
     
+    // Set processing state to show progress indicator
+    setIsProcessing(true);
+    
     // If all PII columns have been marked as "Not PII", bypass PII handling entirely
     if (filteredPIIColumns.length === 0 && overriddenColumns.length > 0) {
       console.log("Triggering PII bypass logic");
       // All PII was false positive - proceed with normal upload
       onProceed('include', { overriddenColumns, bypassPII: true });
-      onClose();
+      // Don't close immediately - let the parent handle closing after upload completes
       return;
     }
     
     console.log("Normal PII processing path");
     if (decision === 'anonymize') {
+      setIsProcessing(false); // Reset processing state for anonymization dialog
       setShowAdvancedAnonymization(true);
     } else {
       // Pass overridden columns as part of the decision
       onProceed(decision, { overriddenColumns });
-      onClose();
+      // Don't close immediately - let the parent handle closing after upload completes
     }
   };
 
@@ -82,10 +87,12 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
   };
 
   const handleVerificationConfirm = () => {
+    // Set processing state before proceeding
+    setIsProcessing(true);
     // Proceed with the anonymization after verification, including overridden columns
     onProceed('anonymize', { ...anonymizationConfig, overriddenColumns });
     setShowVerification(false);
-    onClose(); // Close the dialog after confirming verification
+    // Don't close immediately - let the parent handle closing after upload completes
   };
 
   const handleVerificationBack = () => {
@@ -123,19 +130,30 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+    <Dialog open={isOpen} onOpenChange={isProcessing ? undefined : onClose}>
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto relative">
         <DialogHeader>
           <div className="flex items-center justify-between">
             <DialogTitle className="flex items-center gap-2">
               <Shield className="w-5 h-5 text-blue-600" />
-              PII Data Detection
+              {isProcessing ? "Processing Upload..." : "PII Data Detection"}
             </DialogTitle>
-            <Button variant="ghost" size="sm" onClick={onClose}>
+            <Button variant="ghost" size="sm" onClick={onClose} disabled={isProcessing}>
               <X className="w-4 h-4" />
             </Button>
           </div>
         </DialogHeader>
+        
+        {/* Progress indicator overlay */}
+        {isProcessing && (
+          <div className="absolute inset-0 bg-white bg-opacity-95 flex items-center justify-center z-50 rounded-lg">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
+              <p className="text-gray-700 font-medium">Processing your data...</p>
+              <p className="text-sm text-gray-500 mt-2">Please wait while we apply your privacy settings</p>
+            </div>
+          </div>
+        )}
         
         <div className="space-y-6">
           <p className="text-gray-600">
@@ -305,8 +323,16 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
                 <Button 
                   onClick={() => handleProceed('include')} 
                   className="bg-green-600 hover:bg-green-700 text-white w-full"
+                  disabled={isProcessing}
                 >
-                  Proceed with Business Data (No PII Processing Needed)
+                  {isProcessing ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                      Processing Upload...
+                    </>
+                  ) : (
+                    "Proceed with Business Data (No PII Processing Needed)"
+                  )}
                 </Button>
               </div>
             )}
@@ -323,6 +349,7 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
                       checked={selectedDecision === 'exclude'}
                       onChange={() => setSelectedDecision('exclude')}
                       className="mt-1"
+                      disabled={isProcessing}
                     />
                     <div>
                       <label htmlFor="exclude" className="font-medium text-gray-900">
@@ -411,21 +438,29 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
 
           {/* Action Buttons */}
           <div className="flex justify-end gap-3 pt-6 border-t">
-            <Button variant="outline" onClick={handleCancel}>
+            <Button variant="outline" onClick={handleCancel} disabled={isProcessing}>
               Cancel Upload
             </Button>
             <Button 
               onClick={() => handleProceed(selectedDecision)} 
               className="bg-blue-600 hover:bg-blue-700 text-white"
+              disabled={isProcessing}
             >
-              {overriddenColumns.length > 0 ? (
-                selectedDecision === 'include' ? 'Apply Overrides & Proceed with PII' : 
-                selectedDecision === 'anonymize' ? 'Apply Overrides & Proceed with Anonymization' : 
-                'Apply Overrides & Proceed without PII'
+              {isProcessing ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                  Processing...
+                </>
               ) : (
-                selectedDecision === 'include' ? 'Proceed with PII' : 
-                selectedDecision === 'anonymize' ? 'Proceed with Anonymization' : 
-                'Proceed without PII'
+                overriddenColumns.length > 0 ? (
+                  selectedDecision === 'include' ? 'Apply Overrides & Proceed with PII' : 
+                  selectedDecision === 'anonymize' ? 'Apply Overrides & Proceed with Anonymization' : 
+                  'Apply Overrides & Proceed without PII'
+                ) : (
+                  selectedDecision === 'include' ? 'Proceed with PII' : 
+                  selectedDecision === 'anonymize' ? 'Proceed with Anonymization' : 
+                  'Proceed without PII'
+                )
               )}
             </Button>
           </div>

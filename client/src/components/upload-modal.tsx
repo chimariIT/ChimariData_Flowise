@@ -213,10 +213,14 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
             title: "Upload successful!",
             description: `Project created with PII decision: ${decision}`,
           });
-          // Close modal before navigation
-          onClose();
-          // Use the project ID to navigate to the project page
-          window.location.href = `/project/${result.projectId}`;
+          
+          // Add a small delay to ensure the toast is visible before navigation
+          setTimeout(() => {
+            // Close modal before navigation
+            onClose();
+            // Use the project ID to navigate to the project page
+            window.location.href = `/project/${result.projectId}`;
+          }, 1000);
         } else {
           console.log("No project ID returned, calling onSuccess. Result:", result);
           onSuccess();
