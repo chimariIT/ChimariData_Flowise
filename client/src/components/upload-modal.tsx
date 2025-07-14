@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -19,6 +20,7 @@ interface UploadModalProps {
 }
 
 export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalProps) {
+  const [, setLocation] = useLocation();
   const [isUploading, setIsUploading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [formData, setFormData] = useState({
@@ -218,8 +220,8 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
           setTimeout(() => {
             // Close modal before navigation
             onClose();
-            // Use the project ID to navigate to the project page
-            window.location.href = `/project/${result.projectId}`;
+            // Use React Router to navigate to the project page
+            setLocation(`/project/${result.projectId}`);
           }, 1000);
         } else {
           console.log("No project ID returned, calling onSuccess. Result:", result);
