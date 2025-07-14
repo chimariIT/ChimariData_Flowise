@@ -1,10 +1,10 @@
 import { spawn } from 'child_process';
-import { writeFileSync, readFileSync } from 'fs';
+import { writeFileSync, readFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 
 export class AdvancedAnalyzer {
   static async performStepByStepAnalysis(data: any[], config: any) {
-    const { analysisType, targetVariable, multivariateVariables, covariates, question, alpha, postHoc, assumptions } = config;
+    const { analysisType, targetVariable, multivariateVariables, features, covariates, question, alpha, postHoc, assumptions } = config;
     
     console.log(`Starting ${analysisType} analysis with ${data.length} records`);
     
@@ -19,35 +19,38 @@ export class AdvancedAnalyzer {
       throw new Error(`Target variable '${targetVariable}' not found in data`);
     }
     
-    const missingFactors = (multivariateVariables || []).filter(v => !availableColumns.includes(v));
+    // For ML analysis, use 'features' if available, otherwise use 'multivariateVariables'
+    const variablesToCheck = features || multivariateVariables || [];
+    const missingFactors = variablesToCheck.filter(v => !availableColumns.includes(v));
     if (missingFactors.length > 0) {
       throw new Error(`Factor variables not found: ${missingFactors.join(', ')}`);
     }
     
     // Generate descriptive statistics first
-    const descriptiveStats = this.generateDescriptiveStats(data, targetVariable, multivariateVariables);
+    const effectiveVariables = features || multivariateVariables || [];
+    const descriptiveStats = this.generateDescriptiveStats(data, targetVariable, effectiveVariables);
     
     // Perform specific analysis based on type
     let analysisResult;
     
     switch (analysisType) {
       case 'anova':
-        analysisResult = await this.performANOVA(data, targetVariable, multivariateVariables, { alpha, postHoc, assumptions });
+        analysisResult = await this.performANOVA(data, targetVariable, effectiveVariables, { alpha, postHoc, assumptions });
         break;
       case 'ancova':
-        analysisResult = await this.performANCOVA(data, targetVariable, multivariateVariables, covariates, { alpha, postHoc, assumptions });
+        analysisResult = await this.performANCOVA(data, targetVariable, effectiveVariables, covariates, { alpha, postHoc, assumptions });
         break;
       case 'manova':
-        analysisResult = await this.performMANOVA(data, multivariateVariables, { alpha, assumptions });
+        analysisResult = await this.performMANOVA(data, effectiveVariables, { alpha, assumptions });
         break;
       case 'mancova':
-        analysisResult = await this.performMANCOVA(data, multivariateVariables, covariates, { alpha, assumptions });
+        analysisResult = await this.performMANCOVA(data, effectiveVariables, covariates, { alpha, assumptions });
         break;
       case 'regression':
-        analysisResult = await this.performRegression(data, targetVariable, multivariateVariables, { alpha });
+        analysisResult = await this.performRegression(data, targetVariable, effectiveVariables, { alpha });
         break;
       case 'machine_learning':
-        analysisResult = await this.performMLAnalysis(data, targetVariable, multivariateVariables, { alpha });
+        analysisResult = await this.performMLAnalysis(data, targetVariable, effectiveVariables, config);
         break;
       default:
         throw new Error(`Unsupported analysis type: ${analysisType}`);
@@ -57,7 +60,7 @@ export class AdvancedAnalyzer {
       question,
       analysisType,
       targetVariable,
-      multivariateVariables,
+      multivariateVariables: effectiveVariables,
       covariates,
       descriptiveStats,
       analysisResult,
@@ -204,15 +207,120 @@ export class AdvancedAnalyzer {
     };
   }
   
-  private static async performMLAnalysis(data: any[], targetVariable: string, featureVariables: string[], options: any) {
-    return {
-      analysisType: 'Machine Learning',
-      targetVariable,
-      featureVariables,
-      results: {
-        interpretation: `Machine Learning analysis completed for ${targetVariable} with features ${featureVariables.join(', ')}`
-      }
-    };
+  private static async performMLAnalysis(data: any[], targetVariable: string, featureVariables: string[], config: any) {
+    const { mlAlgorithm = 'random_forest', testSize = '0.2', crossValidation = '5', metrics = [] } = config;
+    
+    console.log('ML Analysis - featureVariables:', featureVariables);
+    console.log('ML Analysis - config:', config);
+    
+    // Ensure featureVariables is defined
+    if (!featureVariables || !Array.isArray(featureVariables) || featureVariables.length === 0) {
+      throw new Error('Feature variables are required for ML analysis');
+    }
+    
+    try {
+      // Create temporary files for Python analysis
+      const tempId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      
+      // Ensure python_data directory exists
+      const pythonDataDir = join(process.cwd(), 'python_data');
+      mkdirSync(pythonDataDir, { recursive: true });
+      
+      const inputFile = join(pythonDataDir, `${tempId}_input.json`);
+      const configFile = join(pythonDataDir, `${tempId}_config.json`);
+      const outputFile = join(pythonDataDir, `${tempId}_output.json`);
+      
+      // Save data to CSV for Python processing
+      const csvData = this.convertToCSV(data);
+      const csvFile = join(pythonDataDir, `${tempId}.csv`);
+      writeFileSync(csvFile, csvData);
+      
+      // Create input and config files
+      writeFileSync(inputFile, JSON.stringify({ projectId: tempId }));
+      writeFileSync(configFile, JSON.stringify({
+        analysisType: 'machine_learning',
+        targetVariable,
+        features: featureVariables,
+        algorithm: mlAlgorithm,
+        testSize: parseFloat(testSize),
+        crossValidation: parseInt(crossValidation),
+        metrics: metrics.length > 0 ? metrics : ['accuracy', 'f1_score']
+      }));
+      
+      // Run Python analysis
+      const pythonProcess = spawn('python3', [
+        'data_analyzer.py',
+        inputFile,
+        configFile,
+        outputFile
+      ], {
+        cwd: join(process.cwd(), 'python_scripts'),
+        stdio: 'pipe'
+      });
+      
+      return new Promise((resolve, reject) => {
+        let stdout = '';
+        let stderr = '';
+        
+        pythonProcess.stdout.on('data', (data) => {
+          stdout += data.toString();
+        });
+        
+        pythonProcess.stderr.on('data', (data) => {
+          stderr += data.toString();
+        });
+        
+        pythonProcess.on('close', (code) => {
+          try {
+            if (code === 0) {
+              const result = JSON.parse(readFileSync(outputFile, 'utf8'));
+              resolve({
+                analysisType: 'Machine Learning',
+                targetVariable,
+                featureVariables,
+                algorithm: mlAlgorithm,
+                results: result.success ? result.data : { error: result.error }
+              });
+            } else {
+              reject(new Error(`Python analysis failed with code ${code}: ${stderr}`));
+            }
+          } catch (error) {
+            reject(new Error(`Failed to parse Python analysis results: ${error.message}`));
+          }
+        });
+      });
+      
+    } catch (error) {
+      return {
+        analysisType: 'Machine Learning',
+        targetVariable,
+        featureVariables,
+        results: {
+          error: `ML analysis failed: ${error.message}`
+        }
+      };
+    }
+  }
+  
+  private static convertToCSV(data: any[]): string {
+    if (!data || data.length === 0) return '';
+    
+    const headers = Object.keys(data[0]);
+    const csvRows = [headers.join(',')];
+    
+    for (const row of data) {
+      const values = headers.map(header => {
+        const value = row[header];
+        if (value === null || value === undefined) return '';
+        if (typeof value === 'string' && value.includes(',')) {
+          return `"${value.replace(/"/g, '""')}"`;
+        }
+        return value;
+      });
+      csvRows.push(values.join(','));
+    }
+    
+    return csvRows.join('\n');
   }
   
   private static groupDataByFactors(data: any[], factorVariables: string[]) {
