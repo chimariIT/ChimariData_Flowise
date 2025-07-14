@@ -49,6 +49,13 @@ export class AdvancedAnalyzer {
     let analysisResult;
     
     switch (analysisType) {
+      case 'descriptive':
+        analysisResult = {
+          status: 'completed',
+          message: 'Descriptive analysis completed successfully',
+          descriptiveOnly: true
+        };
+        break;
       case 'anova':
         analysisResult = await this.performANOVA(data, targetVariable, effectiveVariables, { alpha, postHoc, assumptions });
         break;

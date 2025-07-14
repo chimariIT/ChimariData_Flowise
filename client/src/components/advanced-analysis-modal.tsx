@@ -318,6 +318,9 @@ export default function AdvancedAnalysisModal({
     setResults(null);
 
     try {
+      console.log("Starting advanced analysis with project ID:", projectId);
+      console.log("Analysis config:", analysisConfig);
+      
       const response = await fetch("/api/step-by-step-analysis", {
         method: "POST",
         headers: {
@@ -334,6 +337,7 @@ export default function AdvancedAnalysisModal({
       });
 
       const result = await response.json();
+      console.log("API Response:", result);
 
       if (result.success) {
         setResults(result.result);
@@ -345,6 +349,7 @@ export default function AdvancedAnalysisModal({
         throw new Error(result.error || "Analysis failed");
       }
     } catch (error) {
+      console.error("Advanced analysis error:", error);
       toast({
         title: "Analysis Failed",
         description: error instanceof Error ? error.message : "Failed to run analysis",

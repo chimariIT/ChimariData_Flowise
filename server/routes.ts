@@ -55,6 +55,14 @@ const upload = multer({
   }
 });
 
+// Authentication middleware
+const ensureAuthenticated = (req: any, res: any, next: any) => {
+  if (req.isAuthenticated && req.isAuthenticated()) {
+    return next();
+  }
+  res.status(401).json({ error: "Authentication required" });
+};
+
 export async function registerRoutes(app: Express): Promise<Server> {
   // Initialize MCP AI Service
   MCPAIService.initializeMCPServer().catch(console.error);
@@ -691,12 +699,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { projectId, config } = req.body;
       console.log('Step-by-step analysis request:', { projectId, config });
+      console.log('Authenticated user:', req.user?.username || 'No user');
+      
+      // Debug: Show all available projects
+      const allProjects = await storage.getAllProjects();
+      console.log('All available projects:', allProjects.map(p => ({ id: p.id, name: p.name })));
       
       const project = await storage.getProject(projectId);
       console.log('Project found:', project ? 'Yes' : 'No');
       
       if (!project) {
-        console.log('Available projects:', await storage.getAllProjects());
+        console.log('Project not found. Available projects:', allProjects.map(p => ({ id: p.id, name: p.name })));
         return res.status(404).json({ error: "Project not found" });
       }
 
@@ -1405,10 +1418,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get specific project
   app.get("/api/projects/:id", async (req, res) => {
     try {
-      const project = await storage.getProject(req.params.id);
+      const projectId = req.params.id;
+      console.log(`Fetching project: ${projectId} for user: ${req.user?.username}`);
+      
+      const project = await storage.getProject(projectId);
       if (!project) {
+        // Debug: Show all available projects
+        const allProjects = await storage.getAllProjects();
+        console.log(`Project ${projectId} not found. Available projects:`, allProjects.map(p => ({ id: p.id, name: p.name })));
         return res.status(404).json({ error: "Project not found" });
       }
+      
+      console.log(`Project ${projectId} found successfully`);
       res.json(project);
     } catch (error: any) {
       console.error("Error fetching project:", error);
