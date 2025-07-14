@@ -329,7 +329,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Create project with processed data
         const projectMetadata = projectData || {};
         const actualDecision = anonymizationConfig?.bypassPII ? 'bypassed' : decision;
-        const projectId = await storage.createProject({
+        const project = await storage.createProject({
           name: projectMetadata.name || "Uploaded Data",
           description: projectMetadata.description || "",
           questions: projectMetadata.questions || [],
@@ -349,11 +349,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Clean up temporary data
         tempTrialData.delete(tempFileId);
         
-        console.log("Returning project ID:", projectId);
+        console.log("Returning project ID:", project.id);
         
         return res.json({
           success: true,
-          projectId: projectId,
+          projectId: project.id,
+          project: project,
           message: "Project created successfully with PII decision applied"
         });
       } else {
