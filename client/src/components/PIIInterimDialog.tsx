@@ -131,7 +131,7 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
 
   return (
     <Dialog open={isOpen} onOpenChange={isProcessing ? undefined : onClose}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto relative">
+      <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto fixed top-[8vh] left-[50%] translate-x-[-50%] translate-y-0">
         <DialogHeader>
           <div className="flex items-center justify-between">
             <DialogTitle className="flex items-center gap-2">
