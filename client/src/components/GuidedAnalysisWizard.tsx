@@ -280,7 +280,8 @@ export default function GuidedAnalysisWizard({
     customScenario: false,
     selectedVariables: [] as string[],
     hypotheses: [] as string[],
-    deliverables: [] as string[]
+    deliverables: [] as string[],
+    templateApplied: false
   });
 
   const [pricing, setPricing] = useState({
@@ -666,7 +667,21 @@ export default function GuidedAnalysisWizard({
                         analysisType = 'descriptive'; // Default fallback
                       }
                       
-                      setAnalysisConfig(prev => ({ ...prev, analysisType }));
+                      // Apply template configuration including questions and variables
+                      const templateQuestions = analysisConfig.selectedScenario.businessQuestion ? 
+                        [analysisConfig.selectedScenario.businessQuestion] : [];
+                      
+                      setAnalysisConfig(prev => ({ 
+                        ...prev, 
+                        analysisType,
+                        templateApplied: true,
+                        specificQuestions: [...prev.specificQuestions, ...templateQuestions.filter(q => !prev.specificQuestions.includes(q))]
+                      }));
+                      
+                      // Auto-advance to next step after template is applied
+                      setTimeout(() => {
+                        setCurrentStep(4); // Move to variable selection
+                      }, 500);
                     }}
                     className="text-green-700 border-green-300 hover:bg-green-100"
                   >
