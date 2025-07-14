@@ -50,14 +50,21 @@ export function PIIInterimDialog({ isOpen, onClose, piiData, sampleData, onProce
   );
 
   const handleProceed = (decision: 'include' | 'exclude' | 'anonymize') => {
+    console.log("handleProceed called with decision:", decision);
+    console.log("filteredPIIColumns.length:", filteredPIIColumns.length);
+    console.log("overriddenColumns.length:", overriddenColumns.length);
+    console.log("overriddenColumns:", overriddenColumns);
+    
     // If all PII columns have been marked as "Not PII", bypass PII handling entirely
     if (filteredPIIColumns.length === 0 && overriddenColumns.length > 0) {
+      console.log("Triggering PII bypass logic");
       // All PII was false positive - proceed with normal upload
       onProceed('include', { overriddenColumns, bypassPII: true });
       onClose();
       return;
     }
     
+    console.log("Normal PII processing path");
     if (decision === 'anonymize') {
       setShowAdvancedAnonymization(true);
     } else {

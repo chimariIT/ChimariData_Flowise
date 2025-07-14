@@ -282,6 +282,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // JSON request (unified approach) - use temporary file data
         const { tempFileId, decision, anonymizationConfig, projectData } = req.body;
         
+        console.log("PII Decision Request Data:", {
+          tempFileId,
+          decision,
+          anonymizationConfig,
+          projectData
+        });
+        
         if (!tempFileId || !tempTrialData.has(tempFileId)) {
           return res.status(400).json({
             success: false,
