@@ -178,4 +178,56 @@ export class PythonProcessor {
       config: { chartTypes, ...config }
     });
   }
+
+  // ANOVA Analysis
+  static async runAnova(projectId: string, config: any): Promise<PythonProcessorResult> {
+    return this.processData({
+      projectId,
+      operation: 'analyze',
+      data: { projectId },
+      config: { 
+        analysisType: 'anova',
+        ...config 
+      }
+    });
+  }
+
+  // ANCOVA Analysis
+  static async runAncova(projectId: string, config: any): Promise<PythonProcessorResult> {
+    return this.processData({
+      projectId,
+      operation: 'analyze',
+      data: { projectId },
+      config: { 
+        analysisType: 'ancova',
+        ...config 
+      }
+    });
+  }
+
+  // Regression Analysis
+  static async runRegression(projectId: string, config: any): Promise<PythonProcessorResult> {
+    return this.processData({
+      projectId,
+      operation: 'analyze',
+      data: { projectId },
+      config: { 
+        analysisType: 'regression',
+        ...config 
+      }
+    });
+  }
+
+  // Machine Learning Analysis
+  static async runMLAnalysis(projectId: string, config: any): Promise<PythonProcessorResult> {
+    return this.processData({
+      projectId,
+      operation: 'analyze',
+      data: { projectId },
+      config: { 
+        analysisType: 'machine_learning',
+        ...config 
+      }
+    });
+  }
 }
