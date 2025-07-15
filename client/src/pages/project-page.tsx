@@ -45,7 +45,13 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
           <h2 className="text-2xl font-bold text-gray-900 mb-2">Project Not Found</h2>
-          <p className="text-gray-600 mb-4">The requested project could not be found.</p>
+          <p className="text-gray-600 mb-4">
+            The requested project could not be found. This may happen if the server was restarted 
+            and your project data was lost from memory.
+          </p>
+          <p className="text-sm text-gray-500 mb-4">
+            Please re-upload your data file to continue working with your analysis.
+          </p>
           <Button onClick={() => setLocation("/")}>
             <ArrowLeft className="w-4 h-4 mr-2" />
             Back to Home
