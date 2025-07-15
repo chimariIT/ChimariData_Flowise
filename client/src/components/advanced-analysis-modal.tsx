@@ -321,11 +321,19 @@ export default function AdvancedAnalysisModal({
       console.log("Starting advanced analysis with project ID:", projectId);
       console.log("Analysis config:", analysisConfig);
       
+      // Add authentication headers
+      const token = localStorage.getItem('auth_token');
+      const headers: any = {
+        "Content-Type": "application/json",
+      };
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       const response = await fetch("/api/step-by-step-analysis", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers,
         body: JSON.stringify({
           projectId,
           config: {

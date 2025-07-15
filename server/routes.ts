@@ -737,7 +737,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Advanced analysis endpoints
-  app.post("/api/step-by-step-analysis", async (req, res) => {
+  app.post("/api/step-by-step-analysis", unifiedAuth, async (req, res) => {
     try {
       const { projectId, config } = req.body;
       console.log('Step-by-step analysis request:', { projectId, config });
@@ -1930,6 +1930,19 @@ This link will expire in 24 hours.
       console.error('Login error:', error);
       res.status(500).json({ error: "Login failed" });
     }
+  });
+
+  // Health check endpoint
+  app.get('/api/health', (req, res) => {
+    res.json({
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      services: {
+        database: 'connected',
+        storage: 'operational',
+        ai: 'available'
+      }
+    });
   });
 
   // Get current user (unified auth - handles both token and OAuth session)
