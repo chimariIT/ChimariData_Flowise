@@ -1,150 +1,131 @@
 {
+  "timestamp": "2025-07-15T22:37:47.642Z",
   "summary": {
-    "total": 23,
-    "passed": 18,
-    "failed": 2,
-    "skipped": 3,
-    "successRate": 90,
-    "timestamp": "2025-06-12T21:05:51.528Z"
+    "passed": 23,
+    "failed": 0,
+    "skipped": 0
   },
-  "results": [
+  "details": [
     {
-      "test": "Server Connection",
+      "testName": "User Registration",
       "status": "PASS",
-      "message": "Health endpoint responding",
-      "timestamp": "2025-06-12T21:05:51.434Z"
+      "message": "User registered successfully"
     },
     {
-      "test": "Pricing API - Tier Count",
+      "testName": "User Login",
       "status": "PASS",
-      "message": "6 pricing tiers configured",
-      "timestamp": "2025-06-12T21:05:51.439Z"
+      "message": "Login successful"
     },
     {
-      "test": "Pricing API - Free Trial Tier",
+      "testName": "Authenticated Access",
       "status": "PASS",
-      "message": "Free Trial tier configured correctly",
-      "timestamp": "2025-06-12T21:05:51.439Z"
+      "message": "Authenticated requests working"
     },
     {
-      "test": "Pricing API - Starter Tier",
+      "testName": "File Upload",
       "status": "PASS",
-      "message": "Starter tier ($5) configured correctly",
-      "timestamp": "2025-06-12T21:05:51.439Z"
+      "message": "File uploaded: temp_1752619065660_r1k5udt1t"
     },
     {
-      "test": "Pricing API - Basic Tier",
+      "testName": "PII Detection",
       "status": "PASS",
-      "message": "Basic tier ($15) configured correctly",
-      "timestamp": "2025-06-12T21:05:51.439Z"
+      "message": "PII detection integrated in upload process"
     },
     {
-      "test": "Pricing API - Professional Tier",
+      "testName": "PII Decision Workflow",
       "status": "PASS",
-      "message": "Professional tier ($20) configured correctly",
-      "timestamp": "2025-06-12T21:05:51.439Z"
+      "message": "Project created: UhWiFcKwy4BpSxTvll8bg"
     },
     {
-      "test": "Pricing API - Premium Tier",
+      "testName": "Project Creation",
       "status": "PASS",
-      "message": "Premium tier ($50) configured correctly",
-      "timestamp": "2025-06-12T21:05:51.439Z"
+      "message": "Project accessible: Regression Test Project"
     },
     {
-      "test": "Pricing API - Enterprise Tier",
+      "testName": "Advanced Analysis",
       "status": "PASS",
-      "message": "Enterprise tier (contact us) configured correctly",
-      "timestamp": "2025-06-12T21:05:51.439Z"
+      "message": "Statistical analysis completed"
     },
     {
-      "test": "Free Trial Endpoint",
+      "testName": "Descriptive Stats",
       "status": "PASS",
-      "message": "Trial endpoint exists and responds to requests",
-      "timestamp": "2025-06-12T21:05:51.445Z"
+      "message": "Descriptive statistics generated"
     },
     {
-      "test": "User Registration",
-      "status": "FAIL",
-      "message": "Registration error: Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON",
-      "timestamp": "2025-06-12T21:05:51.472Z"
-    },
-    {
-      "test": "User Login",
-      "status": "FAIL",
-      "message": "Login error: Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON",
-      "timestamp": "2025-06-12T21:05:51.478Z"
-    },
-    {
-      "test": "Landing Page Load",
+      "testName": "ML Analysis",
       "status": "PASS",
-      "message": "Landing page loads successfully",
-      "timestamp": "2025-06-12T21:05:51.485Z"
+      "message": "Machine learning analysis completed"
     },
     {
-      "test": "React App Serving",
+      "testName": "Data Visualization",
       "status": "PASS",
-      "message": "React application properly served",
-      "timestamp": "2025-06-12T21:05:51.485Z"
+      "message": "Project data available for visualization"
     },
     {
-      "test": "Pricing Page Access",
+      "testName": "Pricing System",
       "status": "PASS",
-      "message": "Pricing page accessible",
-      "timestamp": "2025-06-12T21:05:51.490Z"
+      "message": "Pricing data loaded"
     },
     {
-      "test": "Free Trial Page Access",
+      "testName": "Payment Integration",
       "status": "PASS",
-      "message": "Free trial page accessible",
-      "timestamp": "2025-06-12T21:05:51.496Z"
+      "message": "Payment intent created"
     },
     {
-      "test": "Demo Page Access",
+      "testName": "Enterprise Features",
       "status": "PASS",
-      "message": "Demo page accessible",
-      "timestamp": "2025-06-12T21:05:51.502Z"
+      "message": "Enterprise inquiry submitted"
     },
     {
-      "test": "Authenticated File Upload",
-      "status": "SKIP",
-      "message": "No auth token available",
-      "timestamp": "2025-06-12T21:05:51.502Z"
-    },
-    {
-      "test": "Project Creation",
-      "status": "SKIP",
-      "message": "No auth token available",
-      "timestamp": "2025-06-12T21:05:51.503Z"
-    },
-    {
-      "test": "AI Providers API",
+      "testName": "Frontend Routing",
       "status": "PASS",
-      "message": "AI providers endpoint accessible, found 0 providers",
-      "timestamp": "2025-06-12T21:05:51.506Z"
+      "message": "All routes accessible"
     },
     {
-      "test": "Footer Link - Pricing Page",
+      "testName": "Page Access",
       "status": "PASS",
-      "message": "Pricing Page accessible",
-      "timestamp": "2025-06-12T21:05:51.510Z"
+      "message": "Protected pages accessible"
     },
     {
-      "test": "Footer Link - Demo Page",
+      "testName": "Component Integration",
       "status": "PASS",
-      "message": "Demo Page accessible",
-      "timestamp": "2025-06-12T21:05:51.516Z"
+      "message": "Components integrated"
     },
     {
-      "test": "Footer Link - Auth Page",
+      "testName": "Database Persistence",
       "status": "PASS",
-      "message": "Auth Page accessible",
-      "timestamp": "2025-06-12T21:05:51.523Z"
+      "message": "1 projects persisted"
     },
     {
-      "test": "Logout Functionality",
-      "status": "SKIP",
-      "message": "No auth token to test logout",
-      "timestamp": "2025-06-12T21:05:51.523Z"
+      "testName": "Hybrid Storage",
+      "status": "PASS",
+      "message": "Fast response: 3ms"
+    },
+    {
+      "testName": "User Data Isolation",
+      "status": "PASS",
+      "message": "User sees 1 projects (isolated)"
+    },
+    {
+      "testName": "Security Features",
+      "status": "PASS",
+      "message": "Unauthorized access properly blocked"
+    },
+    {
+      "testName": "PII Compliance",
+      "status": "PASS",
+      "message": "PII compliance verified in decision workflow"
+    },
+    {
+      "testName": "Data Anonymization",
+      "status": "PASS",
+      "message": "PII handling: include"
     }
-  ]
+  ],
+  "systemStatus": {
+    "authentication": true,
+    "fileUpload": true,
+    "projectCreation": true,
+    "overallHealth": "Healthy"
+  }
 }
