@@ -29,14 +29,14 @@ export default function App() {
   useEffect(() => {
     const checkAuthStatus = async () => {
       try {
-        const token = localStorage.getItem('authToken');
+        const token = localStorage.getItem('auth_token'); // Fixed: use same key as AuthModal
         if (token) {
           const userData = await apiClient.getCurrentUser();
           setUser(userData.user);
         }
       } catch (error) {
         // Clear invalid token
-        localStorage.removeItem('authToken');
+        localStorage.removeItem('auth_token'); // Fixed: use same key as AuthModal
         console.log('No valid authentication found');
       } finally {
         setAuthLoading(false);
@@ -50,14 +50,14 @@ export default function App() {
     setUser(userData);
     // Store token if provided
     if (userData.token) {
-      localStorage.setItem('authToken', userData.token);
+      localStorage.setItem('auth_token', userData.token); // Fixed: use same key as AuthModal
     }
     setLocation('/'); // Redirect to home after login
   };
 
   const handleLogout = () => {
     setUser(null);
-    localStorage.removeItem('authToken');
+    localStorage.removeItem('auth_token'); // Fixed: use same key as AuthModal
     setLocation('/');
   };
 
