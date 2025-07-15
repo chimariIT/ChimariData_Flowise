@@ -101,8 +101,13 @@ export function AuthModal({ isOpen, onClose, onSuccess, defaultTab = "login" }: 
           title: "Welcome back!",
           description: "You've successfully logged in.",
         });
+        
+        // Trigger authentication state refresh
         onSuccess();
         onClose();
+        
+        // Force a page refresh to ensure auth state is updated
+        window.location.reload();
       } else {
         const error = await handleApiError(response, 'User login');
         setAuthError(error);
@@ -146,8 +151,13 @@ export function AuthModal({ isOpen, onClose, onSuccess, defaultTab = "login" }: 
           title: "Account created!",
           description: "Welcome to ChimariData. You're now logged in.",
         });
+        
+        // Trigger authentication state refresh
         onSuccess();
         onClose();
+        
+        // Force a page refresh to ensure auth state is updated
+        window.location.reload();
       } else {
         const errorData = await response.json();
         throw new Error(errorData.error || 'Registration failed');
