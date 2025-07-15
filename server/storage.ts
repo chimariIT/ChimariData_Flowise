@@ -1,21 +1,82 @@
-import { DataProject, InsertDataProject } from "@shared/schema";
+import { DataProject, InsertDataProject, User, Project, InsertProject, EnterpriseInquiry, InsertEnterpriseInquiry, GuidedAnalysisOrder, InsertGuidedAnalysisOrder } from "@shared/schema";
+import { users, projects, enterpriseInquiries, guidedAnalysisOrders } from "@shared/schema";
+import { db } from "./db";
+import { eq } from "drizzle-orm";
+import { nanoid } from "nanoid";
 
-// User interface for authentication
-interface User {
-  id: string;
-  email: string;
-  password?: string;
-  firstName?: string;
-  lastName?: string;
-  provider: string;
-  emailVerified?: boolean;
-  emailVerificationToken?: string;
-  emailVerificationExpires?: Date;
-  providerId?: string;
-  profileImageUrl?: string;
-  username?: string;
-  createdAt?: Date;
-  updatedAt?: Date;
+// Convert between DataProject and Project types
+function projectToDataProject(project: Project): DataProject {
+  return {
+    id: project.id,
+    name: project.name,
+    fileName: project.fileName,
+    fileSize: project.fileSize,
+    fileType: project.fileType,
+    uploadedAt: project.uploadedAt || new Date(),
+    description: project.description || undefined,
+    isTrial: project.isTrial || false,
+    schema: project.schema as any || undefined,
+    recordCount: project.recordCount || undefined,
+    data: project.data as any || undefined,
+    processed: project.processed || false,
+    piiAnalysis: project.piiAnalysis as any || undefined,
+    uniqueIdentifiers: project.uniqueIdentifiers as any || undefined,
+    dataSource: (project.dataSource as any) || "upload",
+    sourceMetadata: project.sourceMetadata as any || undefined,
+    transformations: project.transformations as any || undefined,
+    joinedFiles: project.joinedFiles as any || undefined,
+    outlierAnalysis: project.outlierAnalysis as any || undefined,
+    missingDataAnalysis: project.missingDataAnalysis as any || undefined,
+    normalityTests: project.normalityTests as any || undefined,
+    analysisResults: project.analysisResults || undefined,
+    stepByStepAnalysis: project.stepByStepAnalysis as any || undefined,
+    visualizations: project.visualizations as any || undefined,
+    aiInsights: project.aiInsights || undefined,
+    aiRole: project.aiRole || undefined,
+    aiActions: project.aiActions as any || undefined,
+    mcpResources: project.mcpResources as any || undefined,
+    purchasedFeatures: project.purchasedFeatures as any || undefined,
+    isPaid: project.isPaid || false,
+    selectedFeatures: project.selectedFeatures as any || undefined,
+    paymentIntentId: project.paymentIntentId || undefined,
+    upgradedAt: project.upgradedAt || undefined,
+  };
+}
+
+function dataProjectToInsertProject(dataProject: InsertDataProject): Omit<InsertProject, 'id'> {
+  return {
+    name: dataProject.name,
+    fileName: dataProject.fileName,
+    fileSize: dataProject.fileSize,
+    fileType: dataProject.fileType,
+    description: dataProject.description || null,
+    isTrial: dataProject.isTrial || false,
+    schema: dataProject.schema || null,
+    recordCount: dataProject.recordCount || null,
+    data: dataProject.data || null,
+    piiAnalysis: dataProject.piiAnalysis || null,
+    uniqueIdentifiers: dataProject.uniqueIdentifiers || null,
+    dataSource: dataProject.dataSource || "upload",
+    sourceMetadata: dataProject.sourceMetadata || null,
+    transformations: dataProject.transformations || null,
+    joinedFiles: dataProject.joinedFiles || null,
+    outlierAnalysis: dataProject.outlierAnalysis || null,
+    missingDataAnalysis: dataProject.missingDataAnalysis || null,
+    normalityTests: dataProject.normalityTests || null,
+    analysisResults: dataProject.analysisResults || null,
+    stepByStepAnalysis: dataProject.stepByStepAnalysis || null,
+    visualizations: dataProject.visualizations || null,
+    aiInsights: dataProject.aiInsights || null,
+    aiRole: dataProject.aiRole || null,
+    aiActions: dataProject.aiActions || null,
+    mcpResources: dataProject.mcpResources || null,
+    purchasedFeatures: dataProject.purchasedFeatures || null,
+    isPaid: dataProject.isPaid || false,
+    selectedFeatures: dataProject.selectedFeatures || null,
+    paymentIntentId: dataProject.paymentIntentId || null,
+    upgradedAt: dataProject.upgradedAt || null,
+    userId: null,
+  };
 }
 
 export interface IStorage {
@@ -147,4 +208,188 @@ export class MemStorage implements IStorage {
   }
 }
 
-export const storage = new MemStorage();
+export class DatabaseStorage implements IStorage {
+  // Project operations
+  async createProject(projectData: InsertDataProject): Promise<DataProject> {
+    const insertData = dataProjectToInsertProject(projectData);
+    
+    const [project] = await db
+      .insert(projects)
+      .values({
+        ...insertData,
+        id: nanoid(),
+      })
+      .returning();
+    
+    return projectToDataProject(project);
+  }
+
+  async getProject(id: string): Promise<DataProject | undefined> {
+    const [project] = await db
+      .select()
+      .from(projects)
+      .where(eq(projects.id, id));
+    
+    return project ? projectToDataProject(project) : undefined;
+  }
+
+  async getAllProjects(): Promise<DataProject[]> {
+    const allProjects = await db.select().from(projects);
+    return allProjects.map(projectToDataProject);
+  }
+
+  async updateProject(id: string, updates: Partial<DataProject>): Promise<DataProject | undefined> {
+    const [project] = await db
+      .update(projects)
+      .set(updates as any)
+      .where(eq(projects.id, id))
+      .returning();
+    
+    return project ? projectToDataProject(project) : undefined;
+  }
+
+  async deleteProject(id: string): Promise<boolean> {
+    const result = await db
+      .delete(projects)
+      .where(eq(projects.id, id));
+    
+    return (result.rowCount || 0) > 0;
+  }
+
+  // User operations
+  async createUser(userData: Omit<User, 'createdAt' | 'updatedAt'>): Promise<User> {
+    const [user] = await db
+      .insert(users)
+      .values({
+        ...userData,
+        id: userData.id || nanoid(),
+      })
+      .returning();
+    
+    return user;
+  }
+
+  async getUser(id: string): Promise<User | undefined> {
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, id));
+    
+    return user || undefined;
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, email));
+    
+    return user || undefined;
+  }
+
+  async getUserByVerificationToken(token: string): Promise<User | undefined> {
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.emailVerificationToken, token));
+    
+    return user || undefined;
+  }
+
+  async updateUser(id: string, updates: Partial<User>): Promise<User | undefined> {
+    const [user] = await db
+      .update(users)
+      .set({
+        ...updates,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, id))
+      .returning();
+    
+    return user || undefined;
+  }
+
+  async deleteUser(id: string): Promise<boolean> {
+    const result = await db
+      .delete(users)
+      .where(eq(users.id, id));
+    
+    return (result.rowCount || 0) > 0;
+  }
+
+  // Guided analysis storage
+  async storeGuidedAnalysisOrder(id: string, order: any): Promise<void> {
+    await db
+      .insert(guidedAnalysisOrders)
+      .values({
+        id,
+        ...order,
+      })
+      .onConflictDoUpdate({
+        target: guidedAnalysisOrders.id,
+        set: {
+          ...order,
+          updatedAt: new Date(),
+        },
+      });
+  }
+
+  async getGuidedAnalysisOrder(id: string): Promise<any> {
+    const [order] = await db
+      .select()
+      .from(guidedAnalysisOrders)
+      .where(eq(guidedAnalysisOrders.id, id));
+    
+    return order;
+  }
+
+  async updateGuidedAnalysisOrder(id: string, updates: any): Promise<void> {
+    await db
+      .update(guidedAnalysisOrders)
+      .set({
+        ...updates,
+        updatedAt: new Date(),
+      })
+      .where(eq(guidedAnalysisOrders.id, id));
+  }
+
+  async listGuidedAnalysisOrders(userId?: string): Promise<any[]> {
+    if (userId) {
+      return await db
+        .select()
+        .from(guidedAnalysisOrders)
+        .where(eq(guidedAnalysisOrders.userId, userId));
+    }
+    
+    return await db.select().from(guidedAnalysisOrders);
+  }
+
+  // Enterprise inquiries operations
+  async createEnterpriseInquiry(inquiryData: InsertEnterpriseInquiry): Promise<EnterpriseInquiry> {
+    const [inquiry] = await db
+      .insert(enterpriseInquiries)
+      .values({
+        ...inquiryData,
+        id: nanoid(),
+      })
+      .returning();
+    
+    return inquiry;
+  }
+
+  async getEnterpriseInquiry(id: string): Promise<EnterpriseInquiry | undefined> {
+    const [inquiry] = await db
+      .select()
+      .from(enterpriseInquiries)
+      .where(eq(enterpriseInquiries.id, id));
+    
+    return inquiry || undefined;
+  }
+
+  async listEnterpriseInquiries(): Promise<EnterpriseInquiry[]> {
+    return await db.select().from(enterpriseInquiries);
+  }
+}
+
+// Use DatabaseStorage instead of MemStorage
+export const storage = new DatabaseStorage();

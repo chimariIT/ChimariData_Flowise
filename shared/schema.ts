@@ -1,4 +1,15 @@
 import { z } from "zod";
+import {
+  pgTable,
+  text,
+  varchar,
+  timestamp,
+  boolean,
+  integer,
+  jsonb,
+  index,
+} from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
 
 // Data project schema with advanced capabilities
 export const dataProjectSchema = z.object({
@@ -144,3 +155,133 @@ export const aiConfigSchema = z.object({
 });
 
 export type AIConfig = z.infer<typeof aiConfigSchema>;
+
+// Database Tables
+// Session storage table (required for Replit Auth)
+export const sessions = pgTable(
+  "sessions",
+  {
+    sid: varchar("sid").primaryKey(),
+    sess: jsonb("sess").notNull(),
+    expire: timestamp("expire").notNull(),
+  },
+  (table) => [index("IDX_session_expire").on(table.expire)],
+);
+
+// User storage table (required for Replit Auth)
+export const users = pgTable("users", {
+  id: varchar("id").primaryKey().notNull(),
+  email: varchar("email").unique(),
+  firstName: varchar("first_name"),
+  lastName: varchar("last_name"),
+  profileImageUrl: varchar("profile_image_url"),
+  username: varchar("username"),
+  provider: varchar("provider").default("replit"),
+  emailVerified: boolean("email_verified").default(false),
+  emailVerificationToken: varchar("email_verification_token"),
+  emailVerificationExpires: timestamp("email_verification_expires"),
+  providerId: varchar("provider_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Main projects table for persistent storage
+export const projects = pgTable("projects", {
+  id: varchar("id").primaryKey().notNull(),
+  name: varchar("name").notNull(),
+  fileName: varchar("file_name").notNull(),
+  fileSize: integer("file_size").notNull(),
+  fileType: varchar("file_type").notNull(),
+  uploadedAt: timestamp("uploaded_at").defaultNow(),
+  description: text("description"),
+  isTrial: boolean("is_trial").default(false),
+  schema: jsonb("schema"), // JSON schema of the data
+  recordCount: integer("record_count"),
+  data: jsonb("data"), // Store actual data rows as JSON
+  processed: boolean("processed").default(false),
+  // PII Analysis
+  piiAnalysis: jsonb("pii_analysis"),
+  uniqueIdentifiers: jsonb("unique_identifiers"),
+  dataSource: varchar("data_source").default("upload"),
+  sourceMetadata: jsonb("source_metadata"),
+  // Data transformation capabilities
+  transformations: jsonb("transformations"),
+  joinedFiles: jsonb("joined_files"),
+  outlierAnalysis: jsonb("outlier_analysis"),
+  missingDataAnalysis: jsonb("missing_data_analysis"),
+  normalityTests: jsonb("normality_tests"),
+  // Advanced analysis capabilities
+  analysisResults: jsonb("analysis_results"),
+  stepByStepAnalysis: jsonb("step_by_step_analysis"),
+  // AI capabilities
+  visualizations: jsonb("visualizations"),
+  aiInsights: jsonb("ai_insights"),
+  aiRole: varchar("ai_role"),
+  aiActions: jsonb("ai_actions"),
+  mcpResources: jsonb("mcp_resources"),
+  purchasedFeatures: jsonb("purchased_features"),
+  isPaid: boolean("is_paid").default(false),
+  selectedFeatures: jsonb("selected_features"),
+  paymentIntentId: varchar("payment_intent_id"),
+  upgradedAt: timestamp("upgraded_at"),
+  // Foreign key to users if needed
+  userId: varchar("user_id"),
+});
+
+// Enterprise inquiries table
+export const enterpriseInquiries = pgTable("enterprise_inquiries", {
+  id: varchar("id").primaryKey().notNull(),
+  companyName: varchar("company_name").notNull(),
+  contactEmail: varchar("contact_email").notNull(),
+  contactName: varchar("contact_name").notNull(),
+  phone: varchar("phone"),
+  message: text("message"),
+  submittedAt: timestamp("submitted_at").defaultNow(),
+  status: varchar("status").default("pending"),
+});
+
+// Guided analysis orders table
+export const guidedAnalysisOrders = pgTable("guided_analysis_orders", {
+  id: varchar("id").primaryKey().notNull(),
+  userId: varchar("user_id"),
+  projectId: varchar("project_id"),
+  analysisConfig: jsonb("analysis_config"),
+  orderData: jsonb("order_data"),
+  status: varchar("status").default("pending"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Drizzle insert schemas
+export const insertProjectSchema = createInsertSchema(projects).omit({
+  id: true,
+  uploadedAt: true,
+  processed: true,
+});
+
+export const insertUserSchema = createInsertSchema(users).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertEnterpriseInquirySchema = createInsertSchema(enterpriseInquiries).omit({
+  id: true,
+  submittedAt: true,
+});
+
+export const insertGuidedAnalysisOrderSchema = createInsertSchema(guidedAnalysisOrders).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+// Types for database operations
+export type User = typeof users.$inferSelect;
+export type UpsertUser = typeof users.$inferInsert;
+export type Project = typeof projects.$inferSelect;
+export type InsertProject = typeof insertProjectSchema._type;
+export type EnterpriseInquiry = typeof enterpriseInquiries.$inferSelect;
+export type InsertEnterpriseInquiry = typeof insertEnterpriseInquirySchema._type;
+export type GuidedAnalysisOrder = typeof guidedAnalysisOrders.$inferSelect;
+export type InsertGuidedAnalysisOrder = typeof insertGuidedAnalysisOrderSchema._type;
