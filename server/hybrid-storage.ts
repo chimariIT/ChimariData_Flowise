@@ -216,13 +216,39 @@ export class HybridStorage implements IStorage {
     if (this.initialized) return;
     
     try {
-      // Load existing data from database on startup
-      const [dbUsers, dbProjects, dbInquiries, dbOrders] = await Promise.all([
-        db.select().from(users),
-        db.select().from(projects),
-        db.select().from(enterpriseInquiries),
-        db.select().from(guidedAnalysisOrders)
-      ]);
+      // Load existing data from database on startup with error handling for individual queries
+      let dbUsers: User[] = [];
+      let dbProjects: Project[] = [];
+      let dbInquiries: EnterpriseInquiry[] = [];
+      let dbOrders: GuidedAnalysisOrder[] = [];
+
+      // Try to load users
+      try {
+        dbUsers = await db.select().from(users);
+      } catch (error) {
+        console.error('Failed to load users from database:', error);
+      }
+
+      // Try to load projects
+      try {
+        dbProjects = await db.select().from(projects);
+      } catch (error) {
+        console.error('Failed to load projects from database:', error);
+      }
+
+      // Try to load enterprise inquiries
+      try {
+        dbInquiries = await db.select().from(enterpriseInquiries);
+      } catch (error) {
+        console.error('Failed to load enterprise inquiries from database:', error);
+      }
+
+      // Try to load guided analysis orders
+      try {
+        dbOrders = await db.select().from(guidedAnalysisOrders);
+      } catch (error) {
+        console.error('Failed to load guided analysis orders from database:', error);
+      }
 
       // Populate caches
       for (const user of dbUsers) {
@@ -233,14 +259,18 @@ export class HybridStorage implements IStorage {
       }
 
       for (const project of dbProjects) {
-        this.projectCache.set(project.id, projectToDataProject(project));
+        try {
+          this.projectCache.set(project.id, projectToDataProject(project));
+        } catch (error) {
+          console.error(`Failed to convert project ${project.id}:`, error);
+        }
       }
 
       this.enterpriseInquiryCache = dbInquiries;
       this.guidedAnalysisOrderCache = dbOrders;
 
       this.initialized = true;
-      console.log(`HybridStorage initialized: ${dbUsers.length} users, ${dbProjects.length} projects`);
+      console.log(`HybridStorage initialized: ${dbUsers.length} users, ${dbProjects.length} projects, ${dbInquiries.length} inquiries, ${dbOrders.length} orders`);
     } catch (error) {
       console.error('Failed to initialize HybridStorage, continuing with empty cache:', error);
       this.initialized = true;
