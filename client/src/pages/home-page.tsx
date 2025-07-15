@@ -109,8 +109,17 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
         formData.append('anonymizationConfig', JSON.stringify(anonymizationConfig));
       }
 
+      // Add authentication headers
+      const token = localStorage.getItem('auth_token');
+      const headers: any = {};
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       const response = await fetch('/api/pii-decision', {
         method: 'POST',
+        headers,
         body: formData
       });
 
