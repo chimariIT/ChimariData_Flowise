@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import multer from "multer";
 import Stripe from "stripe";
-import { storage } from "./storage";
+import { storage } from "./hybrid-storage";
 import { FileProcessor } from "./file-processor";
 import { PythonProcessor } from "./python-processor";
 import { PricingService } from "./pricing-service";
