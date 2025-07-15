@@ -1473,11 +1473,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get all projects for authenticated user
-  app.get("/api/projects", unifiedAuth, async (req, res) => {
+  app.get("/api/projects", async (req, res) => {
     try {
       const userId = req.user?.id;
       if (!userId) {
-        return res.status(401).json({ error: "Authentication required" });
+        // Return empty projects for unauthenticated users instead of 401
+        return res.json({ projects: [] });
       }
       
       const projects = await storage.getProjectsByUser(userId);

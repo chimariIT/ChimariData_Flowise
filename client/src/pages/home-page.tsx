@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { Upload, FileText, Database, Trash2, Eye, Zap, TrendingUp, BarChart3, Brain } from "lucide-react";
+import { Upload, FileText, Database, Trash2, Eye, Zap, TrendingUp, BarChart3, Brain, Target } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -316,7 +316,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
 
       {/* Upload Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-8">
-        <TabsList className={`grid w-full ${user ? 'grid-cols-5' : 'grid-cols-6'}`}>
+        <TabsList className={`grid w-full ${user ? 'grid-cols-6' : 'grid-cols-7'}`}>
           {!user && (
             <TabsTrigger value="trial" className="flex items-center gap-2">
               <Zap className="w-4 h-4" />
@@ -326,6 +326,10 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
           <TabsTrigger value={user ? "upload" : "paid"} className="flex items-center gap-2">
             <Upload className="w-4 h-4" />
             {user ? "Upload Data" : "Full Features"}
+          </TabsTrigger>
+          <TabsTrigger value="guided" className="flex items-center gap-2">
+            <Brain className="w-4 h-4" />
+            Guided Analysis
           </TabsTrigger>
           <TabsTrigger value="transformation" className="flex items-center gap-2">
             <TrendingUp className="w-4 h-4" />
@@ -404,6 +408,68 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
                   </Button>
                 </div>
               )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Guided Analysis Workflow */}
+        <TabsContent value="guided">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Brain className="w-5 h-5 text-indigo-600" />
+                Guided Business Analysis
+              </CardTitle>
+              <CardDescription>
+                Step-by-step guided analysis with business context questions and AI-powered insights
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="p-4 border rounded-lg">
+                    <h3 className="font-medium mb-2">Free Trial</h3>
+                    <p className="text-sm text-gray-600 mb-3">Basic guided analysis with simple questions</p>
+                    <FreeTrialUploader />
+                  </div>
+                  <div className="p-4 border rounded-lg">
+                    <h3 className="font-medium mb-2">Full Features</h3>
+                    <p className="text-sm text-gray-600 mb-3">Advanced guided analysis with business context and custom questions</p>
+                    {user ? (
+                      <FileUploader
+                        onFileUpload={handleFileUpload}
+                        isUploading={isUploading}
+                        maxSize={100 * 1024 * 1024}
+                      />
+                    ) : (
+                      <div className="text-center">
+                        <Button onClick={() => setLocation('/auth/login')}>Sign In</Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                
+                <div className="mt-6 p-4 bg-blue-50 rounded-lg">
+                  <h3 className="font-medium mb-2 text-blue-900">How Guided Analysis Works</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                    <div className="text-center">
+                      <div className="w-8 h-8 bg-blue-500 text-white rounded-full flex items-center justify-center mx-auto mb-2">1</div>
+                      <p className="font-medium">Upload Data</p>
+                      <p className="text-gray-600">Upload your dataset and provide business context</p>
+                    </div>
+                    <div className="text-center">
+                      <div className="w-8 h-8 bg-blue-500 text-white rounded-full flex items-center justify-center mx-auto mb-2">2</div>
+                      <p className="font-medium">Ask Questions</p>
+                      <p className="text-gray-600">Ask specific business questions in plain English</p>
+                    </div>
+                    <div className="text-center">
+                      <div className="w-8 h-8 bg-blue-500 text-white rounded-full flex items-center justify-center mx-auto mb-2">3</div>
+                      <p className="font-medium">Get Insights</p>
+                      <p className="text-gray-600">Receive actionable insights and recommendations</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
