@@ -8,6 +8,7 @@ import { nanoid } from "nanoid";
 function projectToDataProject(project: Project): DataProject {
   return {
     id: project.id,
+    userId: project.userId || '',
     name: project.name,
     fileName: project.fileName,
     fileSize: project.fileSize,
@@ -45,6 +46,7 @@ function projectToDataProject(project: Project): DataProject {
 
 function dataProjectToInsertProject(dataProject: InsertDataProject): Omit<InsertProject, 'id'> {
   return {
+    userId: dataProject.userId,
     name: dataProject.name,
     fileName: dataProject.fileName,
     fileSize: dataProject.fileSize,
