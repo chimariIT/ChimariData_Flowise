@@ -1,4 +1,4 @@
-Campaign_ID,Engagement_Score,Language,Name,Email
-CAMP_001,85,English,John Smith,john@example.com
-CAMP_002,92,Spanish,Jane Doe,jane@example.com
-CAMP_003,78,French,Bob Johnson,bob@example.com
+name,email,phone,age,salary
+John Doe,john@example.com,555-1234,30,50000
+Jane Smith,jane@example.com,555-5678,25,45000
+Bob Johnson,bob@example.com,555-9012,35,55000

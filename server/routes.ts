@@ -304,7 +304,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         }
         
-        console.log("Using temporary file data from JSON request");
         const tempData = tempTrialData.get(tempFileId);
         const { processedData, piiAnalysis, fileInfo } = tempData;
         
@@ -337,13 +336,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Create project with processed data
         const projectMetadata = projectData || {};
         const actualDecision = anonymizationConfig?.bypassPII ? 'bypassed' : decision;
-        const project = await storage.createProject({
+        
+        // Validate fileInfo exists and has required fields
+        if (!fileInfo || !fileInfo.originalname || !fileInfo.size || !fileInfo.mimetype) {
+          console.error("FileInfo validation failed:", fileInfo);
+          return res.status(500).json({
+            success: false,
+            error: "File information is missing or invalid"
+          });
+        }
+        
+        const newProjectData = {
           name: projectMetadata.name || "Uploaded Data",
           description: projectMetadata.description || "",
           questions: projectMetadata.questions || [],
-          fileInfo: fileInfo,
+          fileName: fileInfo.originalname,
+          fileSize: fileInfo.size,
+          fileType: fileInfo.mimetype,
           data: finalData,
           schema: processedData.schema,
+          recordCount: finalData.length,
           piiAnalysis: {
             ...piiAnalysis,
             userDecision: actualDecision,
@@ -352,7 +364,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           },
           createdAt: new Date(),
           updatedAt: new Date()
-        });
+        };
+        
+
+        
+        const project = await storage.createProject(newProjectData);
         
         // Clean up temporary data
         tempTrialData.delete(tempFileId);
@@ -948,6 +964,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (piiAnalysis.detectedPII && piiAnalysis.detectedPII.length > 0) {
         // Store temporary file info for PII consent
         const tempFileId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        
+        // Store processed data temporarily
+        tempTrialData.set(tempFileId, {
+          processedData,
+          piiAnalysis,
+          fileInfo: {
+            originalname: file.originalname,
+            size: file.size,
+            mimetype: file.mimetype
+          }
+        });
+
+        // Clean up old temp data (older than 1 hour)
+        const oneHourAgo = Date.now() - 60 * 60 * 1000;
+        for (const [key, value] of tempTrialData.entries()) {
+          if (key.includes('temp_') && parseInt(key.split('_')[1]) < oneHourAgo) {
+            tempTrialData.delete(key);
+          }
+        }
         
         // Return PII detection result - don't create project yet
         return res.json({
