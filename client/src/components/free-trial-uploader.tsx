@@ -102,11 +102,19 @@ export default function FreeTrialUploader() {
         decision: 'include' // Simple: include PII data in analysis
       };
 
+      // Add authentication headers
+      const token = localStorage.getItem('auth_token');
+      const headers: any = {
+        'Content-Type': 'application/json'
+      };
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       const response = await fetch('/api/trial-pii-decision', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers,
         body: JSON.stringify(requestData),
         signal: AbortSignal.timeout(30000) // 30 second timeout
       });

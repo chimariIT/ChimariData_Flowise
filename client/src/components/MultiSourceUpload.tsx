@@ -222,11 +222,19 @@ export function MultiSourceUpload({
         }
       };
 
+      // Add authentication headers
+      const token = localStorage.getItem('auth_token');
+      const headers: any = {
+        'Content-Type': 'application/json'
+      };
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       const response = await fetch(serviceType === 'free_trial' ? '/api/trial-pii-decision' : '/api/pii-decision', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers,
         body: JSON.stringify(requestData),
         // Add timeout for long-running anonymization operations
         signal: AbortSignal.timeout(30000) // 30 second timeout
