@@ -35,9 +35,19 @@ export class APIClient {
       formData.append('selectedColumns', JSON.stringify(options.selectedColumns));
     }
 
-    const endpoint = options.isTrial ? '/api/trial-upload' : '/api/projects/upload';
+    const endpoint = options.isTrial ? '/api/trial-upload' : '/api/upload';
+    
+    // Add authentication headers
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
     const response = await fetch(`${API_BASE}${endpoint}`, {
       method: 'POST',
+      headers,
       body: formData,
       credentials: 'include', // Include session cookies for authentication
     });
@@ -54,9 +64,19 @@ export class APIClient {
     const formData = new FormData();
     formData.append('file', file);
 
+    // Add authentication headers for consistency
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     const response = await fetch(`${API_BASE}/api/trial-upload`, {
       method: 'POST',
+      headers,
       body: formData,
+      credentials: 'include',
     });
 
     if (!response.ok) {
@@ -186,8 +206,16 @@ export class APIClient {
   }
 
   async getProjects(): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     const response = await fetch(`${API_BASE}/api/projects`, {
       method: 'GET',
+      headers,
       credentials: 'include',
     });
 
@@ -199,8 +227,16 @@ export class APIClient {
   }
 
   async getProject(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     const response = await fetch(`${API_BASE}/api/projects/${id}`, {
       method: 'GET',
+      headers,
       credentials: 'include',
     });
 
@@ -212,8 +248,16 @@ export class APIClient {
   }
 
   async deleteProject(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     const response = await fetch(`${API_BASE}/api/projects/${id}`, {
       method: 'DELETE',
+      headers,
       credentials: 'include',
     });
 
@@ -280,7 +324,7 @@ export class APIClient {
   }
 
   async getCurrentUser(): Promise<any> {
-    const token = localStorage.getItem('authToken');
+    const token = localStorage.getItem('auth_token');
     const response = await fetch(`${API_BASE}/api/auth/user`, {
       method: 'GET',
       headers: {
