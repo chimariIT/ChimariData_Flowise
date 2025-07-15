@@ -93,6 +93,7 @@ export interface IStorage {
   getProject(id: string): Promise<DataProject | undefined>;
   getProjects(): Promise<DataProject[]>;
   getAllProjects(): Promise<DataProject[]>;
+  getProjectsByUser(userId: string): Promise<DataProject[]>;
   createProject(project: InsertDataProject): Promise<DataProject>;
   updateProject(id: string, project: Partial<InsertDataProject>): Promise<DataProject>;
   deleteProject(id: string): Promise<void>;
@@ -382,6 +383,11 @@ export class HybridStorage implements IStorage {
   async getAllProjects(): Promise<DataProject[]> {
     await this.init();
     return Array.from(this.projectCache.values());
+  }
+
+  async getProjectsByUser(userId: string): Promise<DataProject[]> {
+    await this.init();
+    return Array.from(this.projectCache.values()).filter(project => project.userId === userId);
   }
 
   async createProject(project: InsertDataProject): Promise<DataProject> {

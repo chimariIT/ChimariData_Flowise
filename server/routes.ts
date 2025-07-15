@@ -347,6 +347,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         
         const newProjectData = {
+          userId: req.user?.id || 'anonymous',
           name: projectMetadata.name || "Uploaded Data",
           description: projectMetadata.description || "",
           questions: projectMetadata.questions || [],
@@ -427,6 +428,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Create project with processed data
       const project = await storage.createProject({
+        userId: req.user?.id || 'anonymous',
         name: name.trim(),
         description: description || '',
         questions: parsedQuestions,
@@ -850,6 +852,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Create project with actual data
       const project = await storage.createProject({
+        userId: req.user?.id || 'anonymous',
         name: name.trim(),
         description: description || '',
         questions: parsedQuestions,
@@ -1002,6 +1005,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Create project in storage
       const project = await storage.createProject({
+        userId: req.user?.id || 'anonymous',
         name: file.originalname.replace(/\.[^/.]+$/, ""),
         fileName: file.originalname,
         fileSize: file.size,
@@ -1444,10 +1448,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get all projects
-  app.get("/api/projects", async (req, res) => {
+  // Get all projects for authenticated user
+  app.get("/api/projects", unifiedAuth, async (req, res) => {
     try {
-      const projects = await storage.getAllProjects();
+      const userId = req.user?.id;
+      if (!userId) {
+        return res.status(401).json({ error: "Authentication required" });
+      }
+      
+      const projects = await storage.getProjectsByUser(userId);
       res.json({ projects });
     } catch (error: any) {
       console.error("Error fetching projects:", error);
@@ -1455,18 +1464,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get specific project
-  app.get("/api/projects/:id", async (req, res) => {
+  // Get specific project for authenticated user
+  app.get("/api/projects/:id", unifiedAuth, async (req, res) => {
     try {
       const projectId = req.params.id;
-      console.log(`Fetching project: ${projectId} for user: ${req.user?.username}`);
+      const userId = req.user?.id;
+      
+      if (!userId) {
+        return res.status(401).json({ error: "Authentication required" });
+      }
+      
+      console.log(`Fetching project: ${projectId} for user: ${userId}`);
       
       const project = await storage.getProject(projectId);
       if (!project) {
-        // Debug: Show all available projects
-        const allProjects = await storage.getAllProjects();
-        console.log(`Project ${projectId} not found. Available projects:`, allProjects.map(p => ({ id: p.id, name: p.name })));
+        console.log(`Project ${projectId} not found`);
         return res.status(404).json({ error: "Project not found" });
+      }
+      
+      // Check if project belongs to user
+      if (project.userId !== userId) {
+        console.log(`Project ${projectId} does not belong to user ${userId}`);
+        return res.status(403).json({ error: "Access denied" });
       }
       
       console.log(`Project ${projectId} found successfully`);
@@ -1575,6 +1594,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Create project
       const project = await storage.createProject({
+        userId: req.user?.id || 'anonymous',
         name: req.file.originalname.replace(/\.[^/.]+$/, ""),
         fileName: req.file.originalname,
         fileSize: req.file.size,

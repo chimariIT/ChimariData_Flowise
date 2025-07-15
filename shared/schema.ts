@@ -14,6 +14,7 @@ import { createInsertSchema } from "drizzle-zod";
 // Data project schema with advanced capabilities
 export const dataProjectSchema = z.object({
   id: z.string(),
+  userId: z.string(),
   name: z.string(),
   fileName: z.string(),
   fileSize: z.number(),
