@@ -1,0 +1,7 @@
+{
+  "success": true,
+  "data": {
+    "error": "Machine learning analysis failed: Cannot have number of splits n_splits=5 greater than the number of samples: n_samples=3."
+  },
+  "visualizations": []
+}

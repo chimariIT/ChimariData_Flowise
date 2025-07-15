@@ -1,0 +1,103 @@
+{
+  "timestamp": "2025-07-15T23:02:56.140Z",
+  "summary": {
+    "total": 17,
+    "passed": 16,
+    "failed": 1,
+    "skipped": 0,
+    "successRate": "94.1%"
+  },
+  "analysisTypesCovered": {
+    "statistical": 5,
+    "machine_learning": 4,
+    "agentic": 4
+  },
+  "detailedResults": [
+    {
+      "testName": "anova (statistical)",
+      "status": "PASS",
+      "message": "Analysis completed successfully"
+    },
+    {
+      "testName": "ancova (statistical)",
+      "status": "PASS",
+      "message": "Analysis completed successfully"
+    },
+    {
+      "testName": "manova (statistical)",
+      "status": "PASS",
+      "message": "Analysis completed successfully"
+    },
+    {
+      "testName": "mancova (statistical)",
+      "status": "PASS",
+      "message": "Analysis completed successfully"
+    },
+    {
+      "testName": "regression (statistical)",
+      "status": "PASS",
+      "message": "Analysis completed successfully"
+    },
+    {
+      "testName": "classification (machine_learning)",
+      "status": "PASS",
+      "message": "Analysis completed successfully"
+    },
+    {
+      "testName": "regression_ml (machine_learning)",
+      "status": "PASS",
+      "message": "Analysis completed successfully"
+    },
+    {
+      "testName": "clustering (machine_learning)",
+      "status": "PASS",
+      "message": "Analysis completed successfully"
+    },
+    {
+      "testName": "feature_importance (machine_learning)",
+      "status": "PASS",
+      "message": "Analysis completed successfully"
+    },
+    {
+      "testName": "business_insights (agentic)",
+      "status": "PASS",
+      "message": "Analysis completed successfully"
+    },
+    {
+      "testName": "comparative_analysis (agentic)",
+      "status": "PASS",
+      "message": "Analysis completed successfully"
+    },
+    {
+      "testName": "predictive_insights (agentic)",
+      "status": "PASS",
+      "message": "Analysis completed successfully"
+    },
+    {
+      "testName": "root_cause_analysis (agentic)",
+      "status": "PASS",
+      "message": "Analysis completed successfully"
+    },
+    {
+      "testName": "Unsupported: invalid_analysis",
+      "status": "PASS",
+      "message": "Correctly rejected unsupported type"
+    },
+    {
+      "testName": "Unsupported: nonexistent_type",
+      "status": "PASS",
+      "message": "Correctly rejected unsupported type"
+    },
+    {
+      "testName": "Unsupported: random_analysis",
+      "status": "PASS",
+      "message": "Correctly rejected unsupported type"
+    },
+    {
+      "testName": "Missing Config Handling",
+      "status": "FAIL",
+      "message": "Should have rejected missing configuration"
+    }
+  ],
+  "recommendations": []
+}
