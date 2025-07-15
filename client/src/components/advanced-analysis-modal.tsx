@@ -350,11 +350,22 @@ export default function AdvancedAnalysisModal({
       }
     } catch (error) {
       console.error("Advanced analysis error:", error);
-      toast({
-        title: "Analysis Failed",
-        description: error instanceof Error ? error.message : "Failed to run analysis",
-        variant: "destructive"
-      });
+      const errorMessage = error instanceof Error ? error.message : "Failed to run analysis";
+      
+      // Check if it's a project not found error
+      if (errorMessage.includes("Project not found")) {
+        toast({
+          title: "Project Not Found",
+          description: "Your project data has been lost (server restart). Please re-upload your data file to continue with analysis.",
+          variant: "destructive"
+        });
+      } else {
+        toast({
+          title: "Analysis Failed",
+          description: errorMessage,
+          variant: "destructive"
+        });
+      }
     } finally {
       setIsRunning(false);
     }

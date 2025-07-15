@@ -710,7 +710,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       if (!project) {
         console.log('Project not found. Available projects:', allProjects.map(p => ({ id: p.id, name: p.name })));
-        return res.status(404).json({ error: "Project not found" });
+        return res.status(404).json({ 
+          error: "Project not found", 
+          message: "Project data may have been lost due to server restart. Please re-upload your data file.",
+          availableProjects: allProjects.length,
+          requestedId: projectId
+        });
       }
 
       const projectData = project.data || []; // Get actual project data

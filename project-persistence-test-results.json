@@ -1,0 +1,22 @@
+{
+  "summary": {
+    "total": 2,
+    "passed": 1,
+    "failed": 1
+  },
+  "results": [
+    {
+      "test": "Project Creation",
+      "status": "FAIL",
+      "message": "No file uploaded",
+      "timestamp": "2025-07-15T15:05:29.129Z"
+    },
+    {
+      "test": "Non-existent Project Handling",
+      "status": "PASS",
+      "message": "Correct 404 response with detailed error",
+      "timestamp": "2025-07-15T15:05:29.140Z"
+    }
+  ],
+  "timestamp": "2025-07-15T15:05:29.140Z"
+}
