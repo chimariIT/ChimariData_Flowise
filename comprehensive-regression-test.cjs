@@ -64,6 +64,7 @@ class ComprehensiveRegressionTester {
       await this.testSecurityFeatures();
       await this.testPIICompliance();
       await this.testDataAnonymization();
+    await this.testBusinessInsightsAnalysis();
       
       await this.generateFinalReport();
       
@@ -701,6 +702,48 @@ class ComprehensiveRegressionTester {
       }
     } catch (error) {
       this.addResult('Data Anonymization', 'FAIL', `Request failed: ${error.message}`);
+    }
+  }
+
+  async testBusinessInsightsAnalysis() {
+    console.log('\n24. Testing Business Insights Analysis...');
+    
+    if (!this.authToken || !this.projectId) {
+      this.addResult('Business Insights Analysis', 'SKIP', 'Prerequisites not met');
+      return;
+    }
+
+    try {
+      const response = await fetch(`${this.baseUrl}/api/step-by-step-analysis`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.authToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          projectId: this.projectId,
+          config: {
+            analysisType: 'business_insights',
+            analysisPath: 'agentic',
+            businessContext: 'Which variables have the highest influence on ROI?',
+            analysisRole: 'Business Consultant',
+            targetVariable: 'salary',
+            multivariateVariables: ['age', 'name'],
+            reportFormat: 'executive_summary',
+            stepByStepBreakdown: true
+          }
+        })
+      });
+
+      const result = await response.json();
+      
+      if (response.status === 200 && result.success) {
+        this.addResult('Business Insights Analysis', 'PASS', 'Business insights analysis completed successfully');
+      } else {
+        this.addResult('Business Insights Analysis', 'FAIL', `Business insights failed: ${result.error}`);
+      }
+    } catch (error) {
+      this.addResult('Business Insights Analysis', 'FAIL', `Request failed: ${error.message}`);
     }
   }
 

@@ -1,7 +1,7 @@
 {
-  "timestamp": "2025-07-15T22:37:47.642Z",
+  "timestamp": "2025-07-15T22:58:39.730Z",
   "summary": {
-    "passed": 23,
+    "passed": 24,
     "failed": 0,
     "skipped": 0
   },
@@ -24,7 +24,7 @@
     {
       "testName": "File Upload",
       "status": "PASS",
-      "message": "File uploaded: temp_1752619065660_r1k5udt1t"
+      "message": "File uploaded: temp_1752620317656_qvrhdhlea"
     },
     {
       "testName": "PII Detection",
@@ -34,7 +34,7 @@
     {
       "testName": "PII Decision Workflow",
       "status": "PASS",
-      "message": "Project created: UhWiFcKwy4BpSxTvll8bg"
+      "message": "Project created: 8mu0I5jO7noSVCtiSZj4I"
     },
     {
       "testName": "Project Creation",
@@ -99,7 +99,7 @@
     {
       "testName": "Hybrid Storage",
       "status": "PASS",
-      "message": "Fast response: 3ms"
+      "message": "Fast response: 1ms"
     },
     {
       "testName": "User Data Isolation",
@@ -120,6 +120,11 @@
       "testName": "Data Anonymization",
       "status": "PASS",
       "message": "PII handling: include"
+    },
+    {
+      "testName": "Business Insights Analysis",
+      "status": "PASS",
+      "message": "Business insights analysis completed successfully"
     }
   ],
   "systemStatus": {
