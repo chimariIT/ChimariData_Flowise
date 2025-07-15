@@ -55,17 +55,41 @@ const upload = multer({
   }
 });
 
-// Authentication middleware
-const ensureAuthenticated = (req: any, res: any, next: any) => {
-  if (req.isAuthenticated && req.isAuthenticated()) {
-    return next();
-  }
-  res.status(401).json({ error: "Authentication required" });
-};
-
 export async function registerRoutes(app: Express): Promise<Server> {
   // Initialize MCP AI Service
   MCPAIService.initializeMCPServer().catch(console.error);
+  
+  // Token store for authentication
+  const tokenStore = new Map<string, string>();
+  
+  // Authentication middleware
+  const ensureAuthenticated = async (req: any, res: any, next: any) => {
+    try {
+      // First try OAuth session authentication
+      if (req.isAuthenticated && req.isAuthenticated()) {
+        return next();
+      }
+      
+      // Then try token authentication
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.substring(7);
+        const userId = tokenStore.get(token);
+        if (userId) {
+          const user = await storage.getUser(userId);
+          if (user) {
+            req.user = user;
+            return next();
+          }
+        }
+      }
+      
+      res.status(401).json({ error: "Authentication required" });
+    } catch (error) {
+      console.error('Authentication error:', error);
+      res.status(401).json({ error: "Authentication required" });
+    }
+  };
   
   // Temporary storage for trial file data
   const tempTrialData = new Map();
@@ -267,7 +291,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // PII decision endpoint - unified for both JSON and FormData
-  app.post("/api/pii-decision", (req, res, next) => {
+  app.post("/api/pii-decision", ensureAuthenticated, (req, res, next) => {
     // Apply upload middleware only for FormData requests
     if (req.get('Content-Type')?.includes('application/json')) {
       // Skip file upload middleware for JSON requests
@@ -471,7 +495,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Trial PII decision endpoint
-  app.post("/api/trial-pii-decision", async (req, res) => {
+  app.post("/api/trial-pii-decision", ensureAuthenticated, async (req, res) => {
     try {
       const { tempFileId, decision, anonymizationConfig = {} } = req.body;
       
@@ -760,7 +784,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Main project upload endpoint with PII detection
-  app.post("/api/projects/upload", upload.single('file'), async (req, res) => {
+  app.post("/api/projects/upload", ensureAuthenticated, upload.single('file'), async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ 
@@ -939,7 +963,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Paid project upload endpoint
-  app.post("/api/upload", upload.single('file'), async (req, res) => {
+  app.post("/api/upload", ensureAuthenticated, upload.single('file'), async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ 
@@ -1717,8 +1741,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Authentication routes
-  // Simple token store for session management
-  const tokenStore = new Map<string, string>();
+
 
   // Unified authentication middleware that handles both OAuth and token-based auth
   async function unifiedAuth(req: any, res: any, next: any) {
@@ -1805,14 +1828,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const verificationToken = crypto.randomBytes(32).toString('hex');
       const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
       
-      // Create user ID for email registration
-      const userId = crypto.randomBytes(16).toString('hex');
-      
       // Create user
       const user = await storage.createUser({
-        id: userId,
         email,
-        password: hashedPassword,
+        hashedPassword,
         firstName,
         lastName,
         provider: "local",

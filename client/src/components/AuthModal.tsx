@@ -89,6 +89,14 @@ export function AuthModal({ isOpen, onClose, onSuccess, defaultTab = "login" }: 
       });
 
       if (response.ok) {
+        const result = await response.json();
+        
+        // Store the authentication token
+        if (result.token) {
+          localStorage.setItem('auth_token', result.token);
+          console.log('Authentication token stored successfully');
+        }
+        
         toast({
           title: "Welcome back!",
           description: "You've successfully logged in.",
@@ -112,19 +120,38 @@ export function AuthModal({ isOpen, onClose, onSuccess, defaultTab = "login" }: 
     setAuthError(null);
     
     try {
-      await apiRequest('POST', '/api/auth/register', {
-        email: data.email,
-        password: data.password,
-        firstName: data.firstName,
-        lastName: data.lastName,
+      const response = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: data.email,
+          password: data.password,
+          firstName: data.firstName,
+          lastName: data.lastName,
+        }),
       });
 
-      toast({
-        title: "Account created!",
-        description: "Welcome to ChimariData. You're now logged in.",
-      });
-      onSuccess();
-      onClose();
+      if (response.ok) {
+        const result = await response.json();
+        
+        // Store the authentication token
+        if (result.token) {
+          localStorage.setItem('auth_token', result.token);
+          console.log('Authentication token stored successfully');
+        }
+        
+        toast({
+          title: "Account created!",
+          description: "Welcome to ChimariData. You're now logged in.",
+        });
+        onSuccess();
+        onClose();
+      } else {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Registration failed');
+      }
     } catch (error: any) {
       const appError = handleError(error, 'User registration');
       setAuthError(appError);

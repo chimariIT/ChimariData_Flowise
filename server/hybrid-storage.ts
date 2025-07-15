@@ -85,7 +85,7 @@ export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
   upsertUser(user: { id: string; email: string; firstName?: string; lastName?: string; profileImageUrl?: string }): Promise<User>;
   getUserByEmail(email: string): Promise<User | undefined>;
-  createUser(user: { email: string; hashedPassword: string; firstName?: string; lastName?: string }): Promise<User>;
+  createUser(user: { email: string; hashedPassword: string; firstName?: string; lastName?: string; provider?: string; emailVerified?: boolean; emailVerificationToken?: string; emailVerificationExpires?: Date }): Promise<User>;
   validateUserCredentials(email: string, password: string): Promise<User | null>;
   updateUserPassword(userId: string, hashedPassword: string): Promise<void>;
   
@@ -183,7 +183,7 @@ class WriteBackCache {
         await db.insert(users).values(data);
         break;
       case 'update-user-password':
-        await db.update(users).set({ hashedPassword: data.hashedPassword }).where(eq(users.id, data.userId));
+        await db.update(users).set({ password: data.hashedPassword }).where(eq(users.id, data.userId));
         break;
       case 'create-project':
         await db.insert(projects).values(data);
@@ -294,7 +294,7 @@ export class HybridStorage implements IStorage {
       firstName: user.firstName || null,
       lastName: user.lastName || null,
       profileImageUrl: user.profileImageUrl || null,
-      hashedPassword: null,
+      password: null,
       createdAt: this.userCache.get(user.id)?.createdAt || now,
       updatedAt: now,
     };
@@ -316,7 +316,7 @@ export class HybridStorage implements IStorage {
     return this.usersByEmail.get(email);
   }
 
-  async createUser(user: { email: string; hashedPassword: string; firstName?: string; lastName?: string }): Promise<User> {
+  async createUser(user: { email: string; hashedPassword: string; firstName?: string; lastName?: string; provider?: string; emailVerified?: boolean; emailVerificationToken?: string; emailVerificationExpires?: Date }): Promise<User> {
     await this.init();
     
     const now = new Date();
@@ -326,7 +326,11 @@ export class HybridStorage implements IStorage {
       firstName: user.firstName || null,
       lastName: user.lastName || null,
       profileImageUrl: null,
-      hashedPassword: user.hashedPassword,
+      password: user.hashedPassword,
+      provider: user.provider || "local",
+      emailVerified: user.emailVerified || false,
+      emailVerificationToken: user.emailVerificationToken || null,
+      emailVerificationExpires: user.emailVerificationExpires || null,
       createdAt: now,
       updatedAt: now,
     };
@@ -345,10 +349,10 @@ export class HybridStorage implements IStorage {
     await this.init();
     
     const user = this.usersByEmail.get(email);
-    if (!user || !user.hashedPassword) return null;
+    if (!user || !user.password) return null;
     
     const bcrypt = await import('bcrypt');
-    const isValid = await bcrypt.compare(password, user.hashedPassword);
+    const isValid = await bcrypt.compare(password, user.password);
     return isValid ? user : null;
   }
 
@@ -359,7 +363,7 @@ export class HybridStorage implements IStorage {
     if (!user) return;
 
     // Update cache immediately
-    const updatedUser = { ...user, hashedPassword, updatedAt: new Date() };
+    const updatedUser = { ...user, password: hashedPassword, updatedAt: new Date() };
     this.userCache.set(userId, updatedUser);
     if (user.email) {
       this.usersByEmail.set(user.email, updatedUser);
