@@ -1,6 +1,6 @@
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
-import { storage } from "./storage";
+import { storage } from "./hybrid-storage";
 import { registerSchema, loginSchema } from "@shared/schema";
 import { z } from "zod";
 
