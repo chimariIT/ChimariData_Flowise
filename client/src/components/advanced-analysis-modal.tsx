@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
-import { X, TrendingUp, BarChart3, Zap, Target, Brain, Calculator } from "lucide-react";
+import { X, TrendingUp, BarChart3, Zap, Target, Brain, Calculator, Download, FileText } from "lucide-react";
 
 interface AdvancedAnalysisModalProps {
   isOpen: boolean;
@@ -275,6 +275,135 @@ export default function AdvancedAnalysisModal({
         }
       }));
     }
+  };
+
+  const handleExportToPDF = () => {
+    if (!results) return;
+    
+    const analysisData = {
+      analysisType: results.analysisType,
+      question: analysisConfig.question,
+      targetVariable: results.targetVariable,
+      variables: results.variables,
+      results: results.results
+    };
+    
+    // Create a printable version
+    const printWindow = window.open('', '', 'height=600,width=800');
+    const printContent = `
+      <html>
+        <head>
+          <title>Analysis Results - ${results.analysisType}</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            .header { border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 20px; }
+            .section { margin-bottom: 20px; }
+            .metric { display: inline-block; margin: 10px; padding: 10px; background: #f5f5f5; border-radius: 5px; }
+            ul { padding-left: 20px; }
+            .no-print { display: none; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h1>Analysis Results</h1>
+            <p><strong>Analysis Type:</strong> ${results.analysisType}</p>
+            <p><strong>Question:</strong> ${analysisConfig.question}</p>
+            <p><strong>Target Variable:</strong> ${results.targetVariable}</p>
+            <p><strong>Generated:</strong> ${new Date().toLocaleDateString()}</p>
+          </div>
+          
+          <div class="section">
+            <h2>Summary</h2>
+            <p>${results.results?.summary || 'Analysis completed successfully'}</p>
+          </div>
+          
+          ${results.results?.dataOverview ? `
+          <div class="section">
+            <h2>Data Overview</h2>
+            <div class="metric">Records: ${results.results.dataOverview.totalRecords}</div>
+            <div class="metric">Variables: ${results.results.dataOverview.variables}</div>
+            ${results.results.dataOverview.algorithm ? `<div class="metric">Algorithm: ${results.results.dataOverview.algorithm}</div>` : ''}
+          </div>
+          ` : ''}
+          
+          ${results.results?.keyFindings ? `
+          <div class="section">
+            <h2>Key Findings</h2>
+            <ul>
+              ${results.results.keyFindings.map((finding: string) => `<li>${finding}</li>`).join('')}
+            </ul>
+          </div>
+          ` : ''}
+          
+          ${results.results?.recommendations ? `
+          <div class="section">
+            <h2>Recommendations</h2>
+            <ul>
+              ${results.results.recommendations.map((rec: string) => `<li>${rec}</li>`).join('')}
+            </ul>
+          </div>
+          ` : ''}
+        </body>
+      </html>
+    `;
+    
+    printWindow?.document.write(printContent);
+    printWindow?.document.close();
+    printWindow?.print();
+  };
+
+  const handleSaveToGoogleDocs = () => {
+    if (!results) return;
+    
+    const analysisText = `
+ANALYSIS RESULTS
+================
+
+Analysis Type: ${results.analysisType}
+Question: ${analysisConfig.question}
+Target Variable: ${results.targetVariable}
+Generated: ${new Date().toLocaleDateString()}
+
+SUMMARY
+-------
+${results.results?.summary || 'Analysis completed successfully'}
+
+${results.results?.dataOverview ? `
+DATA OVERVIEW
+-------------
+Records: ${results.results.dataOverview.totalRecords}
+Variables: ${results.results.dataOverview.variables}
+${results.results.dataOverview.algorithm ? `Algorithm: ${results.results.dataOverview.algorithm}` : ''}
+` : ''}
+
+${results.results?.keyFindings ? `
+KEY FINDINGS
+------------
+${results.results.keyFindings.map((finding: string, index: number) => `${index + 1}. ${finding}`).join('\n')}
+` : ''}
+
+${results.results?.recommendations ? `
+RECOMMENDATIONS
+---------------
+${results.results.recommendations.map((rec: string, index: number) => `${index + 1}. ${rec}`).join('\n')}
+` : ''}
+    `;
+    
+    // Create a downloadable text file
+    const blob = new Blob([analysisText], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `analysis-results-${results.analysisType.toLowerCase().replace(/\s+/g, '-')}-${new Date().toISOString().split('T')[0]}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    toast({
+      title: "Analysis Results Downloaded",
+      description: "Text file downloaded. You can copy the content to Google Docs.",
+    });
   };
 
   const handleRunAnalysis = async () => {
@@ -1271,25 +1400,161 @@ export default function AdvancedAnalysisModal({
 
           {/* Results Display */}
           {results && (
-            <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-              <h3 className="font-semibold mb-2">Analysis Results</h3>
-              <div className="space-y-2">
-                <p><strong>Analysis Type:</strong> {results.analysis_type}</p>
-                <p><strong>Question:</strong> {results.question}</p>
-                <p><strong>Target Variable:</strong> {results.target_variable}</p>
-                <p><strong>Interpretation:</strong> {results.interpretation}</p>
-                
-                {results.recommendations && (
-                  <div>
-                    <strong>Recommendations:</strong>
-                    <ul className="list-disc ml-4 mt-1">
-                      {results.recommendations.map((rec: string, index: number) => (
-                        <li key={index}>{rec}</li>
+            <div className="mt-6 space-y-6">
+              {/* Analysis Header */}
+              <div className="flex justify-between items-center">
+                <div>
+                  <h3 className="font-semibold text-lg">Analysis Results</h3>
+                  <p className="text-sm text-gray-600">{results.analysisType} - {results.targetVariable}</p>
+                </div>
+                <div className="flex gap-2">
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    onClick={() => handleExportToPDF()}
+                  >
+                    <Download className="w-4 h-4 mr-2" />
+                    Export PDF
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    onClick={() => handleSaveToGoogleDocs()}
+                  >
+                    <FileText className="w-4 h-4 mr-2" />
+                    Save to Google Docs
+                  </Button>
+                </div>
+              </div>
+
+              {/* Analysis Results Content */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Summary Card */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-lg">Summary</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-3">
+                      <div>
+                        <p className="text-sm font-medium text-gray-600">Analysis Type</p>
+                        <p className="text-sm">{results.analysisType}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-gray-600">Question</p>
+                        <p className="text-sm">{analysisConfig.question}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-gray-600">Target Variable</p>
+                        <p className="text-sm">{results.targetVariable}</p>
+                      </div>
+                      {results.variables && (
+                        <div>
+                          <p className="text-sm font-medium text-gray-600">Variables Analyzed</p>
+                          <p className="text-sm">{results.variables.join(', ')}</p>
+                        </div>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Key Findings Card */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-lg">Key Findings</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {results.results?.keyFindings && (
+                      <ul className="space-y-2">
+                        {results.results.keyFindings.map((finding: string, index: number) => (
+                          <li key={index} className="flex items-start gap-2">
+                            <div className="w-2 h-2 bg-blue-500 rounded-full mt-2 flex-shrink-0"></div>
+                            <span className="text-sm">{finding}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Detailed Results */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Detailed Results</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    {results.results?.summary && (
+                      <div>
+                        <h4 className="font-medium mb-2">Analysis Summary</h4>
+                        <p className="text-sm text-gray-700">{results.results.summary}</p>
+                      </div>
+                    )}
+
+                    {results.results?.dataOverview && (
+                      <div>
+                        <h4 className="font-medium mb-2">Data Overview</h4>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                          <div className="bg-gray-50 p-3 rounded">
+                            <p className="font-medium">Records</p>
+                            <p className="text-lg">{results.results.dataOverview.totalRecords}</p>
+                          </div>
+                          <div className="bg-gray-50 p-3 rounded">
+                            <p className="font-medium">Variables</p>
+                            <p className="text-lg">{results.results.dataOverview.variables}</p>
+                          </div>
+                          {results.results.dataOverview.algorithm && (
+                            <div className="bg-gray-50 p-3 rounded">
+                              <p className="font-medium">Algorithm</p>
+                              <p className="text-lg">{results.results.dataOverview.algorithm}</p>
+                            </div>
+                          )}
+                          {results.results.dataOverview.accuracy && (
+                            <div className="bg-gray-50 p-3 rounded">
+                              <p className="font-medium">Accuracy</p>
+                              <p className="text-lg">{results.results.dataOverview.accuracy}%</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {results.results?.metrics && (
+                      <div>
+                        <h4 className="font-medium mb-2">Performance Metrics</h4>
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+                          {Object.entries(results.results.metrics).map(([key, value]) => (
+                            <div key={key} className="bg-gray-50 p-3 rounded">
+                              <p className="font-medium capitalize">{key.replace(/_/g, ' ')}</p>
+                              <p className="text-lg">{value}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Recommendations */}
+              {results.results?.recommendations && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-lg">Recommendations</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <ul className="space-y-2">
+                      {results.results.recommendations.map((rec: string, index: number) => (
+                        <li key={index} className="flex items-start gap-2">
+                          <div className="w-2 h-2 bg-green-500 rounded-full mt-2 flex-shrink-0"></div>
+                          <span className="text-sm">{rec}</span>
+                        </li>
                       ))}
                     </ul>
-                  </div>
-                )}
-              </div>
+                  </CardContent>
+                </Card>
+              )}
             </div>
           )}
 

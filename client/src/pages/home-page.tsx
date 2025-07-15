@@ -219,52 +219,83 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
         </div>
       )}
       
-      {/* Header */}
-      <div className="text-center mb-8">
-        <h1 className="text-4xl font-bold text-gray-900 mb-4">ChimariData</h1>
-        <p className="text-xl text-gray-600 mb-2">
-          Progressive Data Analytics Platform
+      {/* Hero Section */}
+      <div className="text-center mb-12">
+        <div className="inline-block bg-blue-50 px-4 py-2 rounded-full mb-6">
+          <span className="text-sm font-medium text-blue-700">🤖 AI-Powered Data Analytics</span>
+        </div>
+        <h1 className="text-5xl font-bold text-gray-900 mb-6">
+          You don't have to be a <span className="text-blue-600">data expert</span> to have cutting edge insights
+        </h1>
+        <p className="text-xl text-gray-600 mb-8 max-w-3xl mx-auto">
+          Upload your data and ask questions in plain English. Our AI transforms complex 
+          datasets into actionable insights instantly—no technical skills required.
         </p>
-        <p className="text-gray-500 mb-8">
-          Four progressive paths: Transformation • Analysis • Visualization • AI Insights
-        </p>
+        <div className="flex justify-center gap-4">
+          <Button 
+            size="lg" 
+            className="bg-green-600 hover:bg-green-700 text-white"
+            onClick={() => setActiveTab('trial')}
+          >
+            🚀 Try Free - No Sign-up
+          </Button>
+          <Button 
+            size="lg" 
+            variant="outline"
+            onClick={() => setLocation('/auth/register')}
+          >
+            Sign Up for Full Access
+          </Button>
+        </div>
       </div>
 
       {/* Feature Overview */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-        <Card className="text-center">
+        <Card className="text-center hover:shadow-lg transition-shadow cursor-pointer" onClick={() => setActiveTab('transformation')}>
           <CardContent className="pt-6">
             <TrendingUp className="w-8 h-8 mx-auto mb-2 text-blue-600" />
             <h3 className="font-semibold text-sm">Transformation</h3>
             <p className="text-xs text-gray-500 mt-1">Clean & reshape data</p>
-            <Badge variant="outline" className="mt-2">$15</Badge>
+            <div className="mt-2 flex justify-center gap-1">
+              <Badge variant="secondary" className="text-xs">Free Trial</Badge>
+              <Badge variant="outline" className="text-xs">Full</Badge>
+            </div>
           </CardContent>
         </Card>
         
-        <Card className="text-center">
+        <Card className="text-center hover:shadow-lg transition-shadow cursor-pointer" onClick={() => setActiveTab('analysis')}>
           <CardContent className="pt-6">
             <BarChart3 className="w-8 h-8 mx-auto mb-2 text-green-600" />
             <h3 className="font-semibold text-sm">Analysis</h3>
             <p className="text-xs text-gray-500 mt-1">Statistical insights</p>
-            <Badge variant="outline" className="mt-2">$25</Badge>
+            <div className="mt-2 flex justify-center gap-1">
+              <Badge variant="secondary" className="text-xs">Free Trial</Badge>
+              <Badge variant="outline" className="text-xs">Full</Badge>
+            </div>
           </CardContent>
         </Card>
         
-        <Card className="text-center">
+        <Card className="text-center hover:shadow-lg transition-shadow cursor-pointer" onClick={() => setActiveTab('visualization')}>
           <CardContent className="pt-6">
             <Database className="w-8 h-8 mx-auto mb-2 text-purple-600" />
             <h3 className="font-semibold text-sm">Visualization</h3>
             <p className="text-xs text-gray-500 mt-1">Charts & graphs</p>
-            <Badge variant="outline" className="mt-2">$20</Badge>
+            <div className="mt-2 flex justify-center gap-1">
+              <Badge variant="secondary" className="text-xs">Free Trial</Badge>
+              <Badge variant="outline" className="text-xs">Full</Badge>
+            </div>
           </CardContent>
         </Card>
         
-        <Card className="text-center">
+        <Card className="text-center hover:shadow-lg transition-shadow cursor-pointer" onClick={() => setActiveTab('insights')}>
           <CardContent className="pt-6">
             <Brain className="w-8 h-8 mx-auto mb-2 text-orange-600" />
             <h3 className="font-semibold text-sm">AI Insights</h3>
             <p className="text-xs text-gray-500 mt-1">Intelligent analysis</p>
-            <Badge variant="outline" className="mt-2">$35</Badge>
+            <div className="mt-2 flex justify-center gap-1">
+              <Badge variant="secondary" className="text-xs">Free Trial</Badge>
+              <Badge variant="outline" className="text-xs">Full</Badge>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -285,7 +316,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
 
       {/* Upload Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-8">
-        <TabsList className={`grid w-full ${user ? 'grid-cols-1' : 'grid-cols-2'}`}>
+        <TabsList className={`grid w-full ${user ? 'grid-cols-5' : 'grid-cols-6'}`}>
           {!user && (
             <TabsTrigger value="trial" className="flex items-center gap-2">
               <Zap className="w-4 h-4" />
@@ -295,6 +326,22 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
           <TabsTrigger value={user ? "upload" : "paid"} className="flex items-center gap-2">
             <Upload className="w-4 h-4" />
             {user ? "Upload Data" : "Full Features"}
+          </TabsTrigger>
+          <TabsTrigger value="transformation" className="flex items-center gap-2">
+            <TrendingUp className="w-4 h-4" />
+            Transformation
+          </TabsTrigger>
+          <TabsTrigger value="analysis" className="flex items-center gap-2">
+            <BarChart3 className="w-4 h-4" />
+            Analysis
+          </TabsTrigger>
+          <TabsTrigger value="visualization" className="flex items-center gap-2">
+            <Database className="w-4 h-4" />
+            Visualization
+          </TabsTrigger>
+          <TabsTrigger value="insights" className="flex items-center gap-2">
+            <Brain className="w-4 h-4" />
+            AI Insights
           </TabsTrigger>
         </TabsList>
 
@@ -357,6 +404,170 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
                   </Button>
                 </div>
               )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Transformation Workflow */}
+        <TabsContent value="transformation">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <TrendingUp className="w-5 h-5 text-blue-600" />
+                Data Transformation
+              </CardTitle>
+              <CardDescription>
+                Clean, filter, and reshape your data using advanced Python libraries
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="p-4 border rounded-lg">
+                    <h3 className="font-medium mb-2">Free Trial</h3>
+                    <p className="text-sm text-gray-600 mb-3">Basic data cleaning & reshaping (10MB limit)</p>
+                    <FreeTrialUploader />
+                  </div>
+                  <div className="p-4 border rounded-lg">
+                    <h3 className="font-medium mb-2">Full Features</h3>
+                    <p className="text-sm text-gray-600 mb-3">Advanced transformations, joins, & large files</p>
+                    {user ? (
+                      <FileUploader
+                        onFileUpload={handleFileUpload}
+                        isUploading={isUploading}
+                        maxSize={100 * 1024 * 1024}
+                      />
+                    ) : (
+                      <div className="text-center">
+                        <Button onClick={() => setLocation('/auth/login')}>Sign In</Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Analysis Workflow */}
+        <TabsContent value="analysis">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <BarChart3 className="w-5 h-5 text-green-600" />
+                Statistical Analysis
+              </CardTitle>
+              <CardDescription>
+                ANOVA, regression, machine learning, and advanced statistical testing
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="p-4 border rounded-lg">
+                    <h3 className="font-medium mb-2">Free Trial</h3>
+                    <p className="text-sm text-gray-600 mb-3">Basic descriptive statistics & correlations</p>
+                    <FreeTrialUploader />
+                  </div>
+                  <div className="p-4 border rounded-lg">
+                    <h3 className="font-medium mb-2">Full Features</h3>
+                    <p className="text-sm text-gray-600 mb-3">ANOVA, ANCOVA, MANOVA, ML algorithms</p>
+                    {user ? (
+                      <FileUploader
+                        onFileUpload={handleFileUpload}
+                        isUploading={isUploading}
+                        maxSize={100 * 1024 * 1024}
+                      />
+                    ) : (
+                      <div className="text-center">
+                        <Button onClick={() => setLocation('/auth/login')}>Sign In</Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Visualization Workflow */}
+        <TabsContent value="visualization">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Database className="w-5 h-5 text-purple-600" />
+                Data Visualization
+              </CardTitle>
+              <CardDescription>
+                Create interactive charts, graphs, and attribute interaction plots
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="p-4 border rounded-lg">
+                    <h3 className="font-medium mb-2">Free Trial</h3>
+                    <p className="text-sm text-gray-600 mb-3">Basic charts & simple visualizations</p>
+                    <FreeTrialUploader />
+                  </div>
+                  <div className="p-4 border rounded-lg">
+                    <h3 className="font-medium mb-2">Full Features</h3>
+                    <p className="text-sm text-gray-600 mb-3">Interactive plots, attribute interactions, custom charts</p>
+                    {user ? (
+                      <FileUploader
+                        onFileUpload={handleFileUpload}
+                        isUploading={isUploading}
+                        maxSize={100 * 1024 * 1024}
+                      />
+                    ) : (
+                      <div className="text-center">
+                        <Button onClick={() => setLocation('/auth/login')}>Sign In</Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* AI Insights Workflow */}
+        <TabsContent value="insights">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Brain className="w-5 h-5 text-orange-600" />
+                AI-Powered Insights
+              </CardTitle>
+              <CardDescription>
+                Intelligent analysis, business recommendations, and automated insights
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="p-4 border rounded-lg">
+                    <h3 className="font-medium mb-2">Free Trial</h3>
+                    <p className="text-sm text-gray-600 mb-3">Basic AI insights & summaries</p>
+                    <FreeTrialUploader />
+                  </div>
+                  <div className="p-4 border rounded-lg">
+                    <h3 className="font-medium mb-2">Full Features</h3>
+                    <p className="text-sm text-gray-600 mb-3">Advanced AI analysis, business insights, predictive modeling</p>
+                    {user ? (
+                      <FileUploader
+                        onFileUpload={handleFileUpload}
+                        isUploading={isUploading}
+                        maxSize={100 * 1024 * 1024}
+                      />
+                    ) : (
+                      <div className="text-center">
+                        <Button onClick={() => setLocation('/auth/login')}>Sign In</Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
