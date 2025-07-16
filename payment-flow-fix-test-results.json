@@ -1,0 +1,29 @@
+{
+  "summary": {
+    "total": 3,
+    "passed": 2,
+    "failed": 1,
+    "successRate": 67
+  },
+  "results": [
+    {
+      "test": "Trial Upload & PII Flow",
+      "status": "FAIL",
+      "message": "Upload failed: undefined",
+      "timestamp": "2025-07-16T03:09:30.758Z"
+    },
+    {
+      "test": "Payment Completion Endpoint",
+      "status": "PASS",
+      "message": "Correctly validates payment intents",
+      "timestamp": "2025-07-16T03:09:30.881Z"
+    },
+    {
+      "test": "Upgrade Modal Flow",
+      "status": "PASS",
+      "message": "Payment intent creation working, completion endpoint ready",
+      "timestamp": "2025-07-16T03:09:31.183Z"
+    }
+  ],
+  "timestamp": "2025-07-16T03:09:31.184Z"
+}

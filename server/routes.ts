@@ -494,8 +494,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Trial PII decision endpoint
-  app.post("/api/trial-pii-decision", ensureAuthenticated, async (req, res) => {
+  // Trial PII decision endpoint - No authentication required for free trial
+  app.post("/api/trial-pii-decision", async (req, res) => {
     try {
       const { tempFileId, decision, anonymizationConfig = {} } = req.body;
       
@@ -1133,6 +1133,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("Error creating payment intent:", error);
       res.status(500).json({ error: "Failed to create payment intent" });
+    }
+  });
+
+  // Handle payment completion and project creation
+  app.post("/api/complete-payment", async (req, res) => {
+    try {
+      const { paymentIntentId } = req.body;
+      
+      if (!paymentIntentId) {
+        return res.status(400).json({ error: "Payment Intent ID is required" });
+      }
+
+      // Verify payment
+      const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+      if (paymentIntent.status !== 'succeeded') {
+        return res.status(400).json({ error: "Payment not completed" });
+      }
+
+      const { projectId, features } = paymentIntent.metadata;
+      const selectedFeatures = JSON.parse(features);
+
+      // Check if project exists (for upgrade flow)
+      let project = await storage.getProject(projectId);
+      
+      if (project) {
+        // Update existing project with paid features
+        const updatedProject = await storage.updateProject(projectId, {
+          isPaid: true,
+          selectedFeatures,
+          paymentIntentId,
+          upgradedAt: new Date()
+        });
+        
+        res.json({
+          success: true,
+          projectId: project.id,
+          project: updatedProject,
+          features: selectedFeatures
+        });
+      } else {
+        // Project doesn't exist - this shouldn't happen in upgrade flow
+        console.error(`Project ${projectId} not found for payment completion`);
+        res.status(404).json({ 
+          error: "Project not found", 
+          message: "The project may have been deleted or the payment is invalid" 
+        });
+      }
+    } catch (error: any) {
+      console.error("Error completing payment:", error);
+      res.status(500).json({ error: "Failed to complete payment" });
     }
   });
 
