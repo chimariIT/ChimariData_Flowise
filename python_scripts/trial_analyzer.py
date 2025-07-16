@@ -47,7 +47,7 @@ def create_dataframe(data: Dict[str, Any]) -> pd.DataFrame:
         raise ValueError("Invalid data format")
 
 def descriptive_analysis(df: pd.DataFrame) -> Dict[str, Any]:
-    """Perform comprehensive descriptive and multivariate statistical analysis"""
+    """Perform BASIC descriptive analysis for free trial - limited to essential stats only"""
     
     # Identify column types
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
@@ -59,18 +59,14 @@ def descriptive_analysis(df: pd.DataFrame) -> Dict[str, Any]:
             'columns': list(df.columns),
             'dtypes': df.dtypes.to_dict(),
             'missing_values': df.isnull().sum().to_dict(),
-            'memory_usage': df.memory_usage(deep=True).sum(),
             'numeric_columns': numeric_cols,
             'categorical_columns': categorical_cols
         },
         'numerical_summary': {},
-        'categorical_summary': {},
-        'multivariate_analysis': {},
-        'correlation_analysis': {},
-        'group_analysis': {}
+        'categorical_summary': {}
     }
     
-    # Enhanced Numerical Analysis
+    # BASIC Numerical Analysis - Only essential stats
     if len(numeric_cols) > 0:
         results['numerical_summary'] = {
             'count': df[numeric_cols].count().to_dict(),
@@ -78,87 +74,19 @@ def descriptive_analysis(df: pd.DataFrame) -> Dict[str, Any]:
             'std': df[numeric_cols].std().to_dict(),
             'min': df[numeric_cols].min().to_dict(),
             'max': df[numeric_cols].max().to_dict(),
-            'median': df[numeric_cols].median().to_dict(),
-            'skewness': df[numeric_cols].skew().to_dict(),
-            'kurtosis': df[numeric_cols].kurtosis().to_dict(),
-            'quartiles': {
-                'q25': df[numeric_cols].quantile(0.25).to_dict(),
-                'q75': df[numeric_cols].quantile(0.75).to_dict()
-            }
+            'median': df[numeric_cols].median().to_dict()
         }
     
-    # Enhanced Categorical Analysis
+    # BASIC Categorical Analysis - Only essential stats
     if len(categorical_cols) > 0:
         cat_summary = {}
         for col in categorical_cols:
             cat_summary[col] = {
                 'unique_count': df[col].nunique(),
-                'top_values': df[col].value_counts().head().to_dict(),
-                'missing_count': df[col].isnull().sum(),
-                'mode': df[col].mode().iloc[0] if not df[col].mode().empty else None,
-                'entropy': calculate_entropy(df[col])
+                'top_values': df[col].value_counts().head(3).to_dict(),  # Only top 3
+                'missing_count': df[col].isnull().sum()
             }
         results['categorical_summary'] = cat_summary
-    
-    # Multivariate Analysis - Correlation Matrix
-    if len(numeric_cols) > 1:
-        correlation_matrix = df[numeric_cols].corr()
-        results['correlation_analysis'] = {
-            'correlation_matrix': correlation_matrix.to_dict(),
-            'strong_correlations': find_strong_correlations(correlation_matrix),
-            'correlation_insights': generate_correlation_insights(correlation_matrix)
-        }
-    
-    # Group Analysis by Categorical Variables
-    if len(categorical_cols) > 0 and len(numeric_cols) > 0:
-        group_analysis = {}
-        for cat_col in categorical_cols[:2]:  # Limit to first 2 categorical for performance
-            if df[cat_col].nunique() <= 10:  # Only analyze if reasonable number of groups
-                group_stats = {}
-                for num_col in numeric_cols:
-                    grouped = df.groupby(cat_col)[num_col]
-                    group_stats[num_col] = {
-                        'mean_by_group': grouped.mean().to_dict(),
-                        'std_by_group': grouped.std().to_dict(),
-                        'count_by_group': grouped.count().to_dict(),
-                        'anova_p_value': perform_anova(df, cat_col, num_col)
-                    }
-                group_analysis[cat_col] = group_stats
-        results['group_analysis'] = group_analysis
-    
-    # Variable Selection Recommendations
-    results['multivariate_analysis'] = {
-        'recommended_pairs': recommend_variable_pairs(df, numeric_cols, categorical_cols),
-        'outlier_detection': detect_outliers(df, numeric_cols),
-        'feature_importance': calculate_feature_importance(df, numeric_cols, categorical_cols)
-    }
-    
-    # Numerical columns analysis
-    numerical_cols = df.select_dtypes(include=[np.number]).columns
-    if len(numerical_cols) > 0:
-        results['numerical_summary'] = df[numerical_cols].describe().to_dict()
-        
-        # Add additional statistics
-        for col in numerical_cols:
-            if col not in results['numerical_summary']:
-                results['numerical_summary'][col] = {}
-            
-            results['numerical_summary'][col].update({
-                'skewness': float(df[col].skew()) if not df[col].empty else 0,
-                'kurtosis': float(df[col].kurtosis()) if not df[col].empty else 0,
-                'variance': float(df[col].var()) if not df[col].empty else 0
-            })
-    
-    # Categorical columns analysis
-    categorical_cols = df.select_dtypes(include=['object', 'category']).columns
-    if len(categorical_cols) > 0:
-        for col in categorical_cols[:5]:  # Limit to first 5 categorical columns
-            value_counts = df[col].value_counts().head(10)
-            results['categorical_summary'][col] = {
-                'unique_count': int(df[col].nunique()),
-                'top_values': value_counts.to_dict(),
-                'most_frequent': str(df[col].mode().iloc[0]) if not df[col].mode().empty else None
-            }
     
     return results
 
@@ -182,28 +110,19 @@ def create_visualization(df: pd.DataFrame, viz_type: str, column: str = None) ->
         elif viz_type == 'distribution_overview':
             numerical_cols = df.select_dtypes(include=[np.number]).columns
             if len(numerical_cols) > 0:
-                # Create subplot for multiple distributions
-                n_cols = min(3, len(numerical_cols))
-                n_rows = (len(numerical_cols) + n_cols - 1) // n_cols
-                
-                fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 5*n_rows))
-                if n_rows == 1 and n_cols == 1:
-                    axes = [axes]
-                elif n_rows == 1:
-                    axes = axes
-                else:
-                    axes = axes.flatten()
-                
-                for i, col in enumerate(numerical_cols[:6]):  # Limit to 6 distributions
-                    ax = axes[i] if len(numerical_cols) > 1 else axes[0]
-                    df[col].hist(bins=20, ax=ax, alpha=0.7)
+                # Create simple histogram for FIRST numeric column only
+                col = numerical_cols[0]
+                col_data = df[col].dropna()
+                if len(col_data) > 0:
+                    col_data.hist(bins=20, ax=ax, alpha=0.7, color='skyblue')
                     ax.set_title(f'Distribution of {col}')
                     ax.set_xlabel(col)
                     ax.set_ylabel('Frequency')
-                
-                # Hide empty subplots
-                for i in range(len(numerical_cols), len(axes)):
-                    axes[i].set_visible(False)
+                    ax.grid(True, alpha=0.3)
+                else:
+                    ax.text(0.5, 0.5, 'No data available for distribution', 
+                           ha='center', va='center', transform=ax.transAxes)
+                    ax.set_title('Distribution Analysis Not Available')
             else:
                 ax.text(0.5, 0.5, 'No numerical columns for distribution analysis', 
                        ha='center', va='center', transform=ax.transAxes)
@@ -213,12 +132,14 @@ def create_visualization(df: pd.DataFrame, viz_type: str, column: str = None) ->
             categorical_cols = df.select_dtypes(include=['object', 'category']).columns
             if len(categorical_cols) > 0:
                 col = categorical_cols[0]  # Use first categorical column
-                top_values = df[col].value_counts().head(10)
-                top_values.plot(kind='bar', ax=ax)
+                top_values = df[col].value_counts().head(5)  # Only top 5 for simplicity
+                bars = ax.bar(range(len(top_values)), top_values.values, color='lightcoral', alpha=0.7)
                 ax.set_title(f'Top Values in {col}')
                 ax.set_xlabel(col)
                 ax.set_ylabel('Count')
-                plt.xticks(rotation=45)
+                ax.set_xticks(range(len(top_values)))
+                ax.set_xticklabels(top_values.index, rotation=45, ha='right')
+                ax.grid(True, alpha=0.3)
             else:
                 ax.text(0.5, 0.5, 'No categorical columns for count analysis', 
                        ha='center', va='center', transform=ax.transAxes)
@@ -266,10 +187,11 @@ def analyze_trial_data(input_file: str, config_file: str, output_file: str) -> N
         # Perform descriptive analysis
         descriptive_results = descriptive_analysis(df)
         
-        # Create basic visualizations
+        # Create basic visualizations - LIMITED to 2 charts for free trial
         visualizations = []
         
-        viz_types = ['correlation_heatmap', 'distribution_overview', 'categorical_counts']
+        # Only create 2 basic visualizations for free trial
+        viz_types = ['distribution_overview', 'categorical_counts']
         for viz_type in viz_types:
             try:
                 viz_base64 = create_visualization(df, viz_type)
