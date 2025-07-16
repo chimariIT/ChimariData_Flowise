@@ -73,7 +73,7 @@ function CheckoutForm({ selectedFeatures, projectId, onSuccess }: {
     setIsProcessing(true);
 
     try {
-      const { error } = await stripe.confirmPayment({
+      const { error, paymentIntent } = await stripe.confirmPayment({
         elements,
         confirmParams: {
           return_url: window.location.origin,
@@ -87,12 +87,38 @@ function CheckoutForm({ selectedFeatures, projectId, onSuccess }: {
           description: error.message,
           variant: "destructive",
         });
-      } else {
-        toast({
-          title: "Payment Successful",
-          description: "Your features have been unlocked!",
-        });
-        onSuccess();
+      } else if (paymentIntent && paymentIntent.status === 'succeeded') {
+        // Complete the payment on the server side
+        try {
+          const completeResponse = await fetch('/api/complete-payment', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              paymentIntentId: paymentIntent.id
+            })
+          });
+
+          if (completeResponse.ok) {
+            toast({
+              title: "Payment Successful",
+              description: "Your features have been unlocked!",
+            });
+            onSuccess();
+          } else {
+            const errorData = await completeResponse.json();
+            toast({
+              title: "Payment Processing Error",
+              description: errorData.error || "Failed to complete payment processing",
+              variant: "destructive",
+            });
+          }
+        } catch (completeError) {
+          toast({
+            title: "Payment Processing Error",
+            description: "Payment succeeded but failed to unlock features. Please contact support.",
+            variant: "destructive",
+          });
+        }
       }
     } catch (err) {
       toast({
