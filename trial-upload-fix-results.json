@@ -1,0 +1,28 @@
+{
+  "summary": {
+    "passed": 1,
+    "failed": 2,
+    "total": 3
+  },
+  "results": [
+    {
+      "test": "Trial Upload",
+      "status": "FAILED",
+      "message": "require is not defined",
+      "timestamp": "2025-07-16T04:22:02.832Z"
+    },
+    {
+      "test": "Trial PII Decision",
+      "status": "FAILED",
+      "message": "fetch failed",
+      "timestamp": "2025-07-16T04:22:02.898Z"
+    },
+    {
+      "test": "Trial Analyzer Simplified",
+      "status": "PASSED",
+      "message": "Analyzer correctly limited to basic features",
+      "timestamp": "2025-07-16T04:22:02.899Z"
+    }
+  ],
+  "timestamp": "2025-07-16T04:22:02.901Z"
+}
