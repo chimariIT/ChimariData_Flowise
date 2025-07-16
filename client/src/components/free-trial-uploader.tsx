@@ -120,18 +120,27 @@ export default function FreeTrialUploader() {
       };
 
       console.log('📡 Sending PII decision request:', requestData);
+      
+      // Use a more robust timeout and error handling
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 45000); // 45 second timeout
+      
       const response = await fetch('/api/trial-pii-decision', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(requestData),
-        signal: AbortSignal.timeout(30000) // 30 second timeout
+        signal: controller.signal
       });
 
+      clearTimeout(timeoutId);
       console.log('📡 PII decision response status:', response.status);
+      
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errorText = await response.text();
+        console.error('❌ Response error:', errorText);
+        throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
       }
 
       const result = await response.json();
@@ -156,11 +165,21 @@ export default function FreeTrialUploader() {
       }
     } catch (error) {
       console.error('🚨 PII decision error:', error);
-      toast({
-        title: "Processing failed",
-        description: error instanceof Error ? error.message : "Failed to process trial analysis",
-        variant: "destructive",
-      });
+      
+      // Handle timeout errors specifically
+      if (error.name === 'AbortError') {
+        toast({
+          title: "Processing timeout",
+          description: "The analysis is taking longer than expected. Please try again.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Processing failed",
+          description: error instanceof Error ? error.message : "Failed to process trial analysis",
+          variant: "destructive",
+        });
+      }
     } finally {
       setIsProcessing(false);
       console.log('🔄 PII processing state reset');
