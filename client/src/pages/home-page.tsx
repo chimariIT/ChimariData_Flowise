@@ -239,13 +239,15 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
           >
             🚀 Try Free - No Sign-up
           </Button>
-          <Button 
-            size="lg" 
-            variant="outline"
-            onClick={() => setLocation('/auth/register')}
-          >
-            Sign Up for Full Access
-          </Button>
+          {!user && (
+            <Button 
+              size="lg" 
+              variant="outline"
+              onClick={() => setLocation('/auth/register')}
+            >
+              Sign Up for Full Access
+            </Button>
+          )}
         </div>
       </div>
 
@@ -279,7 +281,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
           <CardContent className="pt-6">
             <Database className="w-8 h-8 mx-auto mb-2 text-purple-600" />
             <h3 className="font-semibold text-sm">Visualization</h3>
-            <p className="text-xs text-gray-500 mt-1">Charts & graphs</p>
+            <p className="text-xs text-gray-500 mt-1">Analytics to Visualisation</p>
             <div className="mt-2 flex justify-center gap-1">
               <Badge variant="secondary" className="text-xs">Free Trial</Badge>
               <Badge variant="outline" className="text-xs">Full</Badge>
@@ -565,20 +567,52 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
                 Data Visualization
               </CardTitle>
               <CardDescription>
-                Create interactive charts, graphs, and attribute interaction plots
+                Analytics to Visualisation - Create interactive charts, graphs, and multivariate relationship plots
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="space-y-4">
+              <div className="space-y-6">
+                {/* Visualization Types */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="p-4 border rounded-lg bg-blue-50">
+                    <h4 className="font-medium mb-2 text-blue-900">Univariate Analysis</h4>
+                    <p className="text-sm text-gray-600 mb-2">Single variable visualizations</p>
+                    <ul className="text-xs text-gray-500 space-y-1">
+                      <li>• Histograms & distributions</li>
+                      <li>• Box plots & outlier detection</li>
+                      <li>• Frequency charts</li>
+                    </ul>
+                  </div>
+                  <div className="p-4 border rounded-lg bg-green-50">
+                    <h4 className="font-medium mb-2 text-green-900">Bivariate Analysis</h4>
+                    <p className="text-sm text-gray-600 mb-2">Two variable relationships</p>
+                    <ul className="text-xs text-gray-500 space-y-1">
+                      <li>• Scatter plots & correlations</li>
+                      <li>• Categorical vs numerical</li>
+                      <li>• Time series trends</li>
+                    </ul>
+                  </div>
+                  <div className="p-4 border rounded-lg bg-purple-50">
+                    <h4 className="font-medium mb-2 text-purple-900">Multivariate Analysis</h4>
+                    <p className="text-sm text-gray-600 mb-2">Multiple variable interactions</p>
+                    <ul className="text-xs text-gray-500 space-y-1">
+                      <li>• Grouped categorical analysis</li>
+                      <li>• Multi-dimensional scatter plots</li>
+                      <li>• Heatmaps & correlation matrices</li>
+                    </ul>
+                  </div>
+                </div>
+                
+                {/* Upload Options */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="p-4 border rounded-lg">
                     <h3 className="font-medium mb-2">Free Trial</h3>
-                    <p className="text-sm text-gray-600 mb-3">Basic charts & simple visualizations</p>
+                    <p className="text-sm text-gray-600 mb-3">Basic charts & simple visualizations (univariate & bivariate)</p>
                     <FreeTrialUploader />
                   </div>
                   <div className="p-4 border rounded-lg">
                     <h3 className="font-medium mb-2">Full Features</h3>
-                    <p className="text-sm text-gray-600 mb-3">Interactive plots, attribute interactions, custom charts</p>
+                    <p className="text-sm text-gray-600 mb-3">Interactive plots, multivariate analysis, custom charts with categorical grouping</p>
                     {user ? (
                       <FileUploader
                         onFileUpload={handleFileUpload}

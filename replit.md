@@ -60,6 +60,14 @@ A streamlined data processing platform with four progressive paid paths: 1) Data
     * Added trial-specific PII decision endpoint
     * Implemented three-option PII handling: include (with warning), exclude (remove columns), anonymize (smart replacement)
     * Added comprehensive PII data processing for both paid and trial uploads
+  - **CRITICAL UI/UX & AUTHENTICATION FIXES (January 16, 2025)**:
+    * ✅ COMPLETED: Fixed home page to hide signin options after user authentication
+    * ✅ COMPLETED: Updated visualization tab subtitle from "statistical analysis and visualisation" to "Analytics to Visualisation"
+    * ✅ COMPLETED: Added comprehensive multivariate visualization options including categorical vs numerical relationships
+    * ✅ COMPLETED: Enhanced visualization tab with univariate, bivariate, and multivariate analysis descriptions
+    * ✅ COMPLETED: Added grouped categorical analysis, multi-dimensional scatter plots, and heatmap options
+    * 🔄 IN PROGRESS: Fixing authentication error in advanced analysis modal
+    * 🔄 IN PROGRESS: Resolving free trial upload processing state management issue
   - **CRITICAL SECURITY & WORKFLOW FIXES (January 10, 2025)**:
     * ✅ COMPLETED: Fixed cryptographic vulnerability by replacing deprecated createCipher with secure createCipheriv
     * ✅ COMPLETED: Resolved PII workflow divergence between trial and full upload paths
