@@ -222,14 +222,14 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
       {/* Hero Section */}
       <div className="text-center mb-12">
         <div className="inline-block bg-blue-50 px-4 py-2 rounded-full mb-6">
-          <span className="text-sm font-medium text-blue-700">🤖 AI-Powered Data Analytics</span>
+          <span className="text-sm font-medium text-blue-700">📊 Progressive Insights Generation</span>
         </div>
         <h1 className="text-5xl font-bold text-gray-900 mb-6">
           You don't have to be a <span className="text-blue-600">data expert</span> to have cutting edge insights
         </h1>
         <p className="text-xl text-gray-600 mb-8 max-w-3xl mx-auto">
-          Upload your data and ask questions in plain English. Our AI transforms complex 
-          datasets into actionable insights instantly—no technical skills required.
+          Combining the power of traditional analytics and AI workflows. Upload your data and ask questions in plain English. 
+          Our progressive system transforms complex datasets into actionable insights—no technical skills required.
         </p>
         <div className="flex justify-center gap-4">
           <Button 
