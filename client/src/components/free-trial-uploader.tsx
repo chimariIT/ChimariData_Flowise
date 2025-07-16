@@ -123,6 +123,9 @@ export default function FreeTrialUploader() {
         setPIIDialogData(null);
         setResults(result.trialResults);
         
+        // Ensure the component stays on the page to show results
+        console.log('Trial results received:', result.trialResults);
+        
         toast({
           title: "Trial analysis complete!",
           description: "Analysis completed with PII data included",
