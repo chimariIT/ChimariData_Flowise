@@ -526,20 +526,52 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
                 Statistical Analysis
               </CardTitle>
               <CardDescription>
-                ANOVA, regression, machine learning, and advanced statistical testing
+                Analytics to Visualisation - ANOVA, regression, machine learning, and advanced statistical testing
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="space-y-4">
+              <div className="space-y-6">
+                {/* Analysis Types */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="p-4 border rounded-lg bg-blue-50">
+                    <h4 className="font-medium mb-2 text-blue-900">Univariate Analysis</h4>
+                    <p className="text-sm text-gray-600 mb-2">Single variable analysis</p>
+                    <ul className="text-xs text-gray-500 space-y-1">
+                      <li>• Descriptive statistics</li>
+                      <li>• Distribution analysis</li>
+                      <li>• Normality testing</li>
+                    </ul>
+                  </div>
+                  <div className="p-4 border rounded-lg bg-green-50">
+                    <h4 className="font-medium mb-2 text-green-900">Bivariate Analysis</h4>
+                    <p className="text-sm text-gray-600 mb-2">Two variable relationships</p>
+                    <ul className="text-xs text-gray-500 space-y-1">
+                      <li>• Correlation analysis</li>
+                      <li>• Regression modeling</li>
+                      <li>• Categorical associations</li>
+                    </ul>
+                  </div>
+                  <div className="p-4 border rounded-lg bg-purple-50">
+                    <h4 className="font-medium mb-2 text-purple-900">Multivariate Analysis</h4>
+                    <p className="text-sm text-gray-600 mb-2">Multiple variable interactions</p>
+                    <ul className="text-xs text-gray-500 space-y-1">
+                      <li>• ANOVA, ANCOVA, MANOVA</li>
+                      <li>• Machine learning algorithms</li>
+                      <li>• Multiple regression analysis</li>
+                    </ul>
+                  </div>
+                </div>
+                
+                {/* Upload Options */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="p-4 border rounded-lg">
                     <h3 className="font-medium mb-2">Free Trial</h3>
-                    <p className="text-sm text-gray-600 mb-3">Basic descriptive statistics & correlations</p>
+                    <p className="text-sm text-gray-600 mb-3">Basic descriptive statistics & correlations (univariate & bivariate)</p>
                     <FreeTrialUploader />
                   </div>
                   <div className="p-4 border rounded-lg">
                     <h3 className="font-medium mb-2">Full Features</h3>
-                    <p className="text-sm text-gray-600 mb-3">ANOVA, ANCOVA, MANOVA, ML algorithms</p>
+                    <p className="text-sm text-gray-600 mb-3">ANOVA, ANCOVA, MANOVA, ML algorithms with multivariate analysis</p>
                     {user ? (
                       <FileUploader
                         onFileUpload={handleFileUpload}

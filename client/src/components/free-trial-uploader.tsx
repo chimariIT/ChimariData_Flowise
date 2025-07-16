@@ -123,7 +123,7 @@ export default function FreeTrialUploader() {
       
       // Use a more robust timeout and error handling
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 45000); // 45 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout for Python processing
       
       const response = await fetch('/api/trial-pii-decision', {
         method: 'POST',
@@ -144,7 +144,11 @@ export default function FreeTrialUploader() {
       }
 
       const result = await response.json();
-      console.log('📥 PII decision result:', result);
+      console.log('📥 PII decision result received:', {
+        success: result.success,
+        hasTrialResults: !!result.trialResults,
+        trialResultsKeys: result.trialResults ? Object.keys(result.trialResults) : []
+      });
       
       if (result.success && result.trialResults) {
         console.log('✅ PII decision successful, setting results');
