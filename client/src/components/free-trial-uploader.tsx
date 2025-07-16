@@ -70,6 +70,7 @@ export default function FreeTrialUploader() {
             isTrial: true
           });
           setShowPIIDialog(true);
+          setIsProcessing(false); // Reset processing state when showing PII dialog
           return;
         }
         
@@ -97,6 +98,7 @@ export default function FreeTrialUploader() {
     
     try {
       setIsProcessing(true);
+      setShowPIIDialog(false); // Close dialog immediately when processing starts
       
       // For trial uploads, proceed with PII data included
       const requestData = {
@@ -120,8 +122,7 @@ export default function FreeTrialUploader() {
       const result = await response.json();
       
       if (result.success && result.trialResults) {
-        // Close the PII dialog and clear dialog data
-        setShowPIIDialog(false);
+        // Clear dialog data and set results
         setPIIDialogData(null);
         setResults(result.trialResults);
         
