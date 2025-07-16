@@ -60,8 +60,10 @@ export default function FreeTrialUploader() {
       const result = await apiClient.uploadTrialFile(selectedFile);
       
       if (result.success) {
+        console.log('Upload result:', result);
         // Check for PII detection
         if (result.requiresPIIDecision) {
+          console.log('PII decision required, showing dialog');
           setPIIDialogData({
             file: selectedFile,
             result: result,
@@ -329,6 +331,7 @@ export default function FreeTrialUploader() {
   };
 
   if (results) {
+    console.log('Rendering results:', results);
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between">
