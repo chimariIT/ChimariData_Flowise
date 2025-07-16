@@ -55,15 +55,19 @@ export default function FreeTrialUploader() {
   const handleTrialUpload = async () => {
     if (!selectedFile) return;
 
+    console.log('🚀 Starting trial upload for file:', selectedFile.name);
     setIsProcessing(true);
     try {
+      console.log('📡 Calling uploadTrialFile...');
       const result = await apiClient.uploadTrialFile(selectedFile);
+      console.log('📥 Upload result received:', result);
       
       if (result.success) {
-        console.log('Upload result:', result);
+        console.log('✅ Upload successful');
         // Check for PII detection
         if (result.requiresPIIDecision) {
-          console.log('PII decision required, showing dialog');
+          console.log('🔍 PII decision required, showing dialog');
+          console.log('📋 PII data:', result.piiResult);
           setPIIDialogData({
             file: selectedFile,
             result: result,
@@ -71,18 +75,24 @@ export default function FreeTrialUploader() {
           });
           setShowPIIDialog(true);
           setIsProcessing(false); // Reset processing state when showing PII dialog
+          console.log('🎭 PII dialog shown, processing state reset');
           return;
         }
         
         if (result.trialResults) {
+          console.log('📊 Setting trial results:', result.trialResults);
           setResults(result.trialResults);
           toast({
             title: "Trial analysis complete!",
             description: "Your data has been processed successfully",
           });
         }
+      } else {
+        console.error('❌ Upload failed:', result.error);
+        throw new Error(result.error || 'Upload failed');
       }
     } catch (error) {
+      console.error('🚨 Upload error:', error);
       toast({
         title: "Processing failed",
         description: error.message,
@@ -90,6 +100,7 @@ export default function FreeTrialUploader() {
       });
     } finally {
       setIsProcessing(false);
+      console.log('🔄 Processing state reset in finally block');
     }
   };
 
@@ -97,8 +108,10 @@ export default function FreeTrialUploader() {
     if (!piiDialogData) return;
     
     try {
+      console.log('🔐 Starting PII decision processing');
       setIsProcessing(true);
       setShowPIIDialog(false); // Close dialog immediately when processing starts
+      console.log('🎭 PII dialog closed, processing started');
       
       // For trial uploads, proceed with PII data included
       const requestData = {
@@ -106,6 +119,7 @@ export default function FreeTrialUploader() {
         decision: 'include' // Simple: include PII data in analysis
       };
 
+      console.log('📡 Sending PII decision request:', requestData);
       const response = await fetch('/api/trial-pii-decision', {
         method: 'POST',
         headers: {
@@ -115,28 +129,33 @@ export default function FreeTrialUploader() {
         signal: AbortSignal.timeout(30000) // 30 second timeout
       });
 
+      console.log('📡 PII decision response status:', response.status);
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
       const result = await response.json();
+      console.log('📥 PII decision result:', result);
       
       if (result.success && result.trialResults) {
+        console.log('✅ PII decision successful, setting results');
         // Clear dialog data and set results
         setPIIDialogData(null);
         setResults(result.trialResults);
         
         // Ensure the component stays on the page to show results
-        console.log('Trial results received:', result.trialResults);
+        console.log('📊 Trial results set:', result.trialResults);
         
         toast({
           title: "Trial analysis complete!",
           description: "Analysis completed with PII data included",
         });
       } else {
+        console.error('❌ PII decision failed:', result.error);
         throw new Error(result.error || 'Processing failed');
       }
     } catch (error) {
+      console.error('🚨 PII decision error:', error);
       toast({
         title: "Processing failed",
         description: error instanceof Error ? error.message : "Failed to process trial analysis",
@@ -144,6 +163,7 @@ export default function FreeTrialUploader() {
       });
     } finally {
       setIsProcessing(false);
+      console.log('🔄 PII processing state reset');
     }
   };
 
