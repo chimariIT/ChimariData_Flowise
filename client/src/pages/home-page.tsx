@@ -313,19 +313,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
         </Card>
       </div>
 
-      {/* Progressive Discount Info */}
-      <Card className="mb-8 bg-gradient-to-r from-blue-50 to-purple-50">
-        <CardContent className="pt-6">
-          <div className="text-center">
-            <h3 className="font-semibold text-gray-900 mb-2">Progressive Discounts</h3>
-            <div className="flex justify-center space-x-6 text-sm">
-              <span>2 features: <strong>15% off</strong></span>
-              <span>3 features: <strong>25% off</strong></span>
-              <span>4 features: <strong>35% off</strong></span>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+
 
       {/* Upload Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-8">
@@ -443,7 +431,12 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
                   <div className="p-4 border rounded-lg">
                     <h3 className="font-medium mb-2">Free Trial</h3>
                     <p className="text-sm text-gray-600 mb-3">Basic guided analysis with simple questions</p>
-                    <FreeTrialUploader />
+                    <div className="text-center py-4">
+                      <p className="text-sm text-gray-600 mb-2">Use the Free Trial tab above for no-signup analysis</p>
+                      <Button variant="outline" onClick={() => setActiveTab('trial')}>
+                        Go to Free Trial
+                      </Button>
+                    </div>
                   </div>
                   <div className="p-4 border rounded-lg">
                     <h3 className="font-medium mb-2">Full Features</h3>
@@ -505,7 +498,12 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
                   <div className="p-4 border rounded-lg">
                     <h3 className="font-medium mb-2">Free Trial</h3>
                     <p className="text-sm text-gray-600 mb-3">Basic data cleaning & reshaping (10MB limit)</p>
-                    <FreeTrialUploader />
+                    <div className="text-center py-4">
+                      <p className="text-sm text-gray-600 mb-2">Use the Free Trial tab above for no-signup analysis</p>
+                      <Button variant="outline" onClick={() => setActiveTab('trial')}>
+                        Go to Free Trial
+                      </Button>
+                    </div>
                   </div>
                   <div className="p-4 border rounded-lg">
                     <h3 className="font-medium mb-2">Full Features</h3>
@@ -578,7 +576,12 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
                   <div className="p-4 border rounded-lg">
                     <h3 className="font-medium mb-2">Free Trial</h3>
                     <p className="text-sm text-gray-600 mb-3">Basic descriptive statistics & correlations (univariate & bivariate)</p>
-                    <FreeTrialUploader />
+                    <div className="text-center py-4">
+                      <p className="text-sm text-gray-600 mb-2">Use the Free Trial tab above for no-signup analysis</p>
+                      <Button variant="outline" onClick={() => setActiveTab('trial')}>
+                        Go to Free Trial
+                      </Button>
+                    </div>
                   </div>
                   <div className="p-4 border rounded-lg">
                     <h3 className="font-medium mb-2">Full Features</h3>
@@ -651,7 +654,12 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
                   <div className="p-4 border rounded-lg">
                     <h3 className="font-medium mb-2">Free Trial</h3>
                     <p className="text-sm text-gray-600 mb-3">Basic charts & simple visualizations (univariate & bivariate)</p>
-                    <FreeTrialUploader />
+                    <div className="text-center py-4">
+                      <p className="text-sm text-gray-600 mb-2">Use the Free Trial tab above for no-signup analysis</p>
+                      <Button variant="outline" onClick={() => setActiveTab('trial')}>
+                        Go to Free Trial
+                      </Button>
+                    </div>
                   </div>
                   <div className="p-4 border rounded-lg">
                     <h3 className="font-medium mb-2">Full Features</h3>
@@ -692,7 +700,12 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
                   <div className="p-4 border rounded-lg">
                     <h3 className="font-medium mb-2">Free Trial</h3>
                     <p className="text-sm text-gray-600 mb-3">Basic AI insights & summaries</p>
-                    <FreeTrialUploader />
+                    <div className="text-center py-4">
+                      <p className="text-sm text-gray-600 mb-2">Use the Free Trial tab above for no-signup analysis</p>
+                      <Button variant="outline" onClick={() => setActiveTab('trial')}>
+                        Go to Free Trial
+                      </Button>
+                    </div>
                   </div>
                   <div className="p-4 border rounded-lg">
                     <h3 className="font-medium mb-2">Full Features</h3>
