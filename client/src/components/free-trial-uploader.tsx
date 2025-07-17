@@ -165,6 +165,7 @@ export default function FreeTrialUploader() {
         });
       } else {
         console.error('❌ PII decision failed:', result.error);
+        console.error('❌ Full result object:', result);
         throw new Error(result.error || 'Processing failed');
       }
     } catch (error) {
