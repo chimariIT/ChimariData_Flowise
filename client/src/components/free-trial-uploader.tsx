@@ -1,6 +1,6 @@
 import { useState, useCallback } from "react";
 import { useDropzone } from "react-dropzone";
-import { Upload, File, X, Check, BarChart3, Database, Crown, CreditCard, Zap } from "lucide-react";
+import { Upload, File, X, Check, BarChart3, Database, Crown, CreditCard, Zap, CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";

@@ -45,6 +45,7 @@ function projectToDataProject(project: Project): DataProject {
 
 function dataProjectToInsertProject(dataProject: InsertDataProject): Omit<InsertProject, 'id'> {
   return {
+    userId: dataProject.userId || '',
     name: dataProject.name,
     fileName: dataProject.fileName,
     fileSize: dataProject.fileSize,
@@ -75,7 +76,6 @@ function dataProjectToInsertProject(dataProject: InsertDataProject): Omit<Insert
     selectedFeatures: dataProject.selectedFeatures || null,
     paymentIntentId: dataProject.paymentIntentId || null,
     upgradedAt: dataProject.upgradedAt || null,
-    userId: null,
   };
 }
 
