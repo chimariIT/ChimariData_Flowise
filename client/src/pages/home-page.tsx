@@ -232,13 +232,15 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
           Our progressive system transforms complex datasets into actionable insights—no technical skills required.
         </p>
         <div className="flex justify-center gap-4">
-          <Button 
-            size="lg" 
-            className="bg-green-600 hover:bg-green-700 text-white"
-            onClick={() => setActiveTab('trial')}
-          >
-            🚀 Try Free - No Sign-up
-          </Button>
+          {!user && (
+            <Button 
+              size="lg" 
+              className="bg-green-600 hover:bg-green-700 text-white"
+              onClick={() => setActiveTab('trial')}
+            >
+              🚀 Try Free - No Sign-up
+            </Button>
+          )}
           {!user && (
             <Button 
               size="lg" 
@@ -246,6 +248,15 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
               onClick={() => setLocation('/auth/register')}
             >
               Sign Up for Full Access
+            </Button>
+          )}
+          {user && (
+            <Button 
+              size="lg" 
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+              onClick={() => setActiveTab('upload')}
+            >
+              🚀 Upload Your Data
             </Button>
           )}
         </div>
