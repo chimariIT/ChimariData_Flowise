@@ -152,12 +152,18 @@ export default function FreeTrialUploader() {
       
       if (result.success && result.trialResults) {
         console.log('✅ PII decision successful, setting results');
+        console.log('📊 Trial results received:', {
+          schema: result.trialResults.schema ? Object.keys(result.trialResults.schema) : 'missing',
+          analysis: result.trialResults.descriptiveAnalysis ? Object.keys(result.trialResults.descriptiveAnalysis) : 'missing',
+          visualizations: result.trialResults.basicVisualizations ? result.trialResults.basicVisualizations.length : 0
+        });
+        
         // Clear dialog data and set results
         setPIIDialogData(null);
         setResults(result.trialResults);
         
         // Ensure the component stays on the page to show results
-        console.log('📊 Trial results set:', result.trialResults);
+        console.log('📊 Trial results set successfully');
         
         toast({
           title: "Trial analysis complete!",
@@ -207,8 +213,8 @@ export default function FreeTrialUploader() {
     setSelectedFile(null);
     setResults(null);
     setIsProcessing(false);
-    // Navigate back to home page
-    setLocation('/');
+    // Don't navigate away - just reset to initial state
+    console.log('🔄 Upload cancelled, reset to initial state');
   };
 
   const removeFile = () => {
@@ -376,7 +382,15 @@ export default function FreeTrialUploader() {
   };
 
   if (results) {
-    console.log('Rendering results:', results);
+    console.log('🎨 Rendering results page with:', {
+      hasSchema: !!results.schema,
+      hasAnalysis: !!results.descriptiveAnalysis,
+      hasVisualizations: !!results.basicVisualizations,
+      schemaKeys: results.schema ? Object.keys(results.schema) : [],
+      analysisKeys: results.descriptiveAnalysis ? Object.keys(results.descriptiveAnalysis) : [],
+      visualizationCount: results.basicVisualizations ? results.basicVisualizations.length : 0
+    });
+    
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between">
