@@ -19,6 +19,8 @@ import { AdvancedAnalyzer } from './advanced-analyzer';
 import { MCPAIService } from './mcp-ai-service';
 import { AnonymizationEngine } from './anonymization-engine';
 import { UnifiedPIIProcessor } from './unified-pii-processor';
+import { EmailService } from './email-service';
+import { SUBSCRIPTION_TIERS, getTierLimits, canUserUpload, canUserRequestAIInsight } from '@shared/subscription-tiers';
 import bcrypt from 'bcrypt';
 
 // Initialize Stripe
@@ -1885,9 +1887,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         emailVerificationExpires: verificationExpires
       });
       
-      // Send verification email (log for development)
+      // Send verification email using SendGrid
       const verificationUrl = `${req.protocol}://${req.get('host')}/verify-email?token=${verificationToken}`;
-      console.log(`
+      const emailSent = await EmailService.sendVerificationEmail({
+        to: email,
+        firstName: firstName || 'User',
+        verificationUrl
+      });
+      
+      if (!emailSent) {
+        console.log(`⚠️  Email service failed, logging verification URL for development:
 ===============================================
 EMAIL VERIFICATION REQUIRED
 ===============================================
@@ -1899,7 +1908,8 @@ ${verificationUrl}
 
 This link will expire in 24 hours.
 ===============================================
-      `);
+        `);
+      }
       
       // Generate simple auth token
       const authToken = crypto.randomBytes(32).toString('hex');
