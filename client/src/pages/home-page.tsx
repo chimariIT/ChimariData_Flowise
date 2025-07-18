@@ -9,7 +9,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/lib/api";
 import FileUploader from "@/components/file-uploader";
-import FreeTrialUploader from "@/components/free-trial-uploader";
+import AuthModal from "@/components/auth-modal";
+import SubscriptionTierDisplay from "@/components/subscription-tier-display";
 import PricingDisplay from "@/components/pricing-display";
 import { PIIInterimDialog } from "@/components/PIIInterimDialog";
 
@@ -22,7 +23,9 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [isUploading, setIsUploading] = useState(false);
-  const [activeTab, setActiveTab] = useState(user ? "upload" : "trial");
+  const [activeTab, setActiveTab] = useState(user ? "upload" : "auth");
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authModalTab, setAuthModalTab] = useState<'login' | 'register'>('register');
   const [showPIIDialog, setShowPIIDialog] = useState(false);
   const [piiDialogData, setPIIDialogData] = useState<any>(null);
 
@@ -236,7 +239,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
             <Button 
               size="lg" 
               className="bg-green-600 hover:bg-green-700 text-white"
-              onClick={() => setActiveTab('trial')}
+              onClick={() => setActiveTab('auth')}
             >
               🚀 Try Free - No Sign-up
             </Button>
@@ -319,9 +322,9 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
       <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-8">
         <TabsList className={`grid w-full ${user ? 'grid-cols-6' : 'grid-cols-7'}`}>
           {!user && (
-            <TabsTrigger value="trial" className="flex items-center gap-2">
+            <TabsTrigger value="auth" className="flex items-center gap-2">
               <Zap className="w-4 h-4" />
-              Free Trial (10MB)
+              Get Started
             </TabsTrigger>
           )}
           <TabsTrigger value={user ? "upload" : "paid"} className="flex items-center gap-2">
@@ -351,19 +354,114 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
         </TabsList>
 
         {!user && (
-          <TabsContent value="trial">
+          <TabsContent value="auth">
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Zap className="w-5 h-5 text-green-600" />
-                  Free Trial
+                  Choose Your Plan
                 </CardTitle>
                 <CardDescription>
-                  Upload up to 10MB and get instant schema detection, descriptive analysis, and basic visualizations - no signup required!
+                  Start with our tiered subscription model - progressive data analytics with professional email verification
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <FreeTrialUploader />
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                  {/* Trial Plan */}
+                  <Card className="border-2 border-blue-200 bg-blue-50">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-lg flex items-center justify-between">
+                        Trial
+                        <Badge variant="outline">$5/month</Badge>
+                      </CardTitle>
+                      <CardDescription>Perfect for testing</CardDescription>
+                    </CardHeader>
+                    <CardContent className="text-sm space-y-2">
+                      <div>• 1 file (10MB)</div>
+                      <div>• Schema + basic stats</div>
+                      <div>• 1 AI insight</div>
+                      <div>• PII detection</div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Starter Plan */}
+                  <Card className="border-2 border-green-200 bg-green-50">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-lg flex items-center justify-between">
+                        Starter
+                        <Badge variant="outline">$10/month</Badge>
+                      </CardTitle>
+                      <CardDescription>For small teams</CardDescription>
+                    </CardHeader>
+                    <CardContent className="text-sm space-y-2">
+                      <div>• 2 files (50MB each)</div>
+                      <div>• Data transformation</div>
+                      <div>• Statistical analysis</div>
+                      <div>• 3 AI insights</div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Professional Plan */}
+                  <Card className="border-2 border-purple-200 bg-purple-50">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-lg flex items-center justify-between">
+                        Professional
+                        <Badge variant="outline">$20/month</Badge>
+                      </CardTitle>
+                      <CardDescription>Growing businesses</CardDescription>
+                    </CardHeader>
+                    <CardContent className="text-sm space-y-2">
+                      <div>• 5 files (100MB each)</div>
+                      <div>• Advanced insights</div>
+                      <div>• Export options</div>
+                      <div>• 5 AI insights</div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Enterprise Plan */}
+                  <Card className="border-2 border-yellow-200 bg-yellow-50">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-lg flex items-center justify-between">
+                        Enterprise
+                        <Badge variant="outline">$50/month</Badge>
+                      </CardTitle>
+                      <CardDescription>Full access</CardDescription>
+                    </CardHeader>
+                    <CardContent className="text-sm space-y-2">
+                      <div>• Unlimited files</div>
+                      <div>• API access</div>
+                      <div>• Priority support</div>
+                      <div>• Unlimited insights</div>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-4 justify-center">
+                  <Button 
+                    onClick={() => {
+                      setAuthModalTab('register');
+                      setShowAuthModal(true);
+                    }}
+                    className="flex-1 max-w-xs"
+                  >
+                    Create Account
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    onClick={() => {
+                      setAuthModalTab('login');
+                      setShowAuthModal(true);
+                    }}
+                    className="flex-1 max-w-xs"
+                  >
+                    Sign In
+                  </Button>
+                </div>
+
+                <div className="mt-4 text-center text-sm text-gray-600">
+                  <p>All plans include email verification from registration@chimaridata.com</p>
+                  <p>Start with any tier and upgrade anytime</p>
+                </div>
               </CardContent>
             </Card>
           </TabsContent>
@@ -429,12 +527,12 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
               <div className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="p-4 border rounded-lg">
-                    <h3 className="font-medium mb-2">Free Trial</h3>
+                    <h3 className="font-medium mb-2">Trial Plan ($5)</h3>
                     <p className="text-sm text-gray-600 mb-3">Basic guided analysis with simple questions</p>
                     <div className="text-center py-4">
-                      <p className="text-sm text-gray-600 mb-2">Use the Free Trial tab above for no-signup analysis</p>
-                      <Button variant="outline" onClick={() => setActiveTab('trial')}>
-                        Go to Free Trial
+                      <p className="text-sm text-gray-600 mb-2">Sign up to start with our Trial plan</p>
+                      <Button variant="outline" onClick={() => setActiveTab('auth')}>
+                        Choose Plan
                       </Button>
                     </div>
                   </div>
@@ -496,12 +594,12 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
               <div className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="p-4 border rounded-lg">
-                    <h3 className="font-medium mb-2">Free Trial</h3>
+                    <h3 className="font-medium mb-2">Trial Plan ($5)</h3>
                     <p className="text-sm text-gray-600 mb-3">Basic data cleaning & reshaping (10MB limit)</p>
                     <div className="text-center py-4">
-                      <p className="text-sm text-gray-600 mb-2">Use the Free Trial tab above for no-signup analysis</p>
-                      <Button variant="outline" onClick={() => setActiveTab('trial')}>
-                        Go to Free Trial
+                      <p className="text-sm text-gray-600 mb-2">Sign up to start with our Trial plan</p>
+                      <Button variant="outline" onClick={() => setActiveTab('auth')}>
+                        Choose Plan
                       </Button>
                     </div>
                   </div>
@@ -574,12 +672,12 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
                 {/* Upload Options */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="p-4 border rounded-lg">
-                    <h3 className="font-medium mb-2">Free Trial</h3>
+                    <h3 className="font-medium mb-2">Trial Plan ($5)</h3>
                     <p className="text-sm text-gray-600 mb-3">Basic descriptive statistics & correlations (univariate & bivariate)</p>
                     <div className="text-center py-4">
-                      <p className="text-sm text-gray-600 mb-2">Use the Free Trial tab above for no-signup analysis</p>
-                      <Button variant="outline" onClick={() => setActiveTab('trial')}>
-                        Go to Free Trial
+                      <p className="text-sm text-gray-600 mb-2">Sign up to start with our Trial plan</p>
+                      <Button variant="outline" onClick={() => setActiveTab('auth')}>
+                        Choose Plan
                       </Button>
                     </div>
                   </div>
@@ -652,12 +750,12 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
                 {/* Upload Options */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="p-4 border rounded-lg">
-                    <h3 className="font-medium mb-2">Free Trial</h3>
+                    <h3 className="font-medium mb-2">Trial Plan ($5)</h3>
                     <p className="text-sm text-gray-600 mb-3">Basic charts & simple visualizations (univariate & bivariate)</p>
                     <div className="text-center py-4">
-                      <p className="text-sm text-gray-600 mb-2">Use the Free Trial tab above for no-signup analysis</p>
-                      <Button variant="outline" onClick={() => setActiveTab('trial')}>
-                        Go to Free Trial
+                      <p className="text-sm text-gray-600 mb-2">Sign up to start with our Trial plan</p>
+                      <Button variant="outline" onClick={() => setActiveTab('auth')}>
+                        Choose Plan
                       </Button>
                     </div>
                   </div>
@@ -698,12 +796,12 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
               <div className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="p-4 border rounded-lg">
-                    <h3 className="font-medium mb-2">Free Trial</h3>
+                    <h3 className="font-medium mb-2">Trial Plan ($5)</h3>
                     <p className="text-sm text-gray-600 mb-3">Basic AI insights & summaries</p>
                     <div className="text-center py-4">
-                      <p className="text-sm text-gray-600 mb-2">Use the Free Trial tab above for no-signup analysis</p>
-                      <Button variant="outline" onClick={() => setActiveTab('trial')}>
-                        Go to Free Trial
+                      <p className="text-sm text-gray-600 mb-2">Sign up to start with our Trial plan</p>
+                      <Button variant="outline" onClick={() => setActiveTab('auth')}>
+                        Choose Plan
                       </Button>
                     </div>
                   </div>
@@ -799,6 +897,20 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
         </CardContent>
       </Card>
       
+      {/* Authentication Modal */}
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+        onSuccess={(userData) => {
+          toast({
+            title: "Welcome!",
+            description: "Account setup complete. You can now choose a subscription plan.",
+          });
+          window.location.reload(); // Refresh to update auth state
+        }}
+        initialTab={authModalTab}
+      />
+
       {/* PII Detection Dialog */}
       {showPIIDialog && piiDialogData && (
         <PIIInterimDialog

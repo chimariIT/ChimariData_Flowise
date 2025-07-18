@@ -169,20 +169,39 @@ export const sessions = pgTable(
   (table) => [index("IDX_session_expire").on(table.expire)],
 );
 
-// User storage table (required for Replit Auth)
+// User storage table with tiered subscription support
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().notNull(),
-  email: varchar("email").unique(),
+  email: varchar("email").unique().notNull(),
+  hashedPassword: varchar("hashed_password"), // For email/password auth
   firstName: varchar("first_name"),
   lastName: varchar("last_name"),
   profileImageUrl: varchar("profile_image_url"),
-  username: varchar("username"),
-  password: text("password"), // Add password field
-  provider: varchar("provider").default("replit"),
+  provider: varchar("provider").notNull().default("email"), // "email", "google", "github"
+  providerId: varchar("provider_id"), // OAuth provider user ID
+  
+  // Email verification
   emailVerified: boolean("email_verified").default(false),
   emailVerificationToken: varchar("email_verification_token"),
   emailVerificationExpires: timestamp("email_verification_expires"),
-  providerId: varchar("provider_id"),
+  
+  // Password reset
+  passwordResetToken: varchar("password_reset_token"),
+  passwordResetExpires: timestamp("password_reset_expires"),
+  
+  // Subscription and payment tiers
+  subscriptionTier: varchar("subscription_tier").default("none"), // "none", "trial", "starter", "professional", "enterprise"
+  subscriptionStatus: varchar("subscription_status").default("inactive"), // "active", "inactive", "cancelled", "past_due"
+  stripeCustomerId: varchar("stripe_customer_id"),
+  stripeSubscriptionId: varchar("stripe_subscription_id"),
+  subscriptionExpiresAt: timestamp("subscription_expires_at"),
+  
+  // Usage tracking for tier limits
+  monthlyUploads: integer("monthly_uploads").default(0),
+  monthlyDataVolume: integer("monthly_data_volume").default(0), // in MB
+  monthlyAIInsights: integer("monthly_ai_insights").default(0),
+  usageResetAt: timestamp("usage_reset_at").defaultNow(),
+  
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
