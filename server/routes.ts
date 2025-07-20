@@ -1888,7 +1888,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       
       // Send verification email using SendGrid
-      const verificationUrl = `${req.protocol}://${req.get('host')}/verify-email?token=${verificationToken}`;
+      // Use the proper Replit app domain for verification
+      const baseUrl = process.env.REPLIT_DOMAINS ? 
+        `https://${process.env.REPLIT_DOMAINS.split(',')[0]}` : 
+        `${req.protocol}://${req.get('host')}`;
+      const verificationUrl = `${baseUrl}/verify-email?token=${verificationToken}`;
       const emailSent = await EmailService.sendVerificationEmail({
         to: email,
         firstName: firstName || 'User',
@@ -1933,6 +1937,46 @@ This link will expire in 24 hours.
     } catch (error) {
       console.error('Registration error:', error);
       res.status(500).json({ error: "Registration failed" });
+    }
+  });
+
+  // Email verification route
+  app.get('/verify-email', async (req, res) => {
+    try {
+      const { token } = req.query;
+      
+      if (!token) {
+        return res.redirect('/?error=missing_token');
+      }
+      
+      // Find user with this verification token
+      const users = await storage.getAllUsers?.() || [];
+      const user = users.find(u => u.emailVerificationToken === token);
+      
+      if (!user) {
+        return res.redirect('/?error=invalid_token');
+      }
+      
+      // Check if token is expired
+      if (user.emailVerificationExpires && new Date() > user.emailVerificationExpires) {
+        return res.redirect('/?error=expired_token');
+      }
+      
+      // Update user as verified
+      if (storage.updateUser) {
+        await storage.updateUser(user.id, {
+          emailVerified: true,
+          emailVerificationToken: null,
+          emailVerificationExpires: null
+        });
+      }
+      
+      // Redirect to home page with success message
+      res.redirect('/?verified=true');
+      
+    } catch (error) {
+      console.error('Email verification error:', error);
+      res.redirect('/?error=verification_failed');
     }
   });
 
