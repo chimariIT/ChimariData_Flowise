@@ -83,12 +83,12 @@ export default function AuthModal({ isOpen, onClose, onSuccess, initialTab = 'lo
           description: "Please check your email for verification instructions.",
         });
 
-        // Store token and user data
-        if (response.token) {
-          localStorage.setItem('auth_token', response.token);
+        // Store token and user data  
+        if ((response as any).token) {
+          localStorage.setItem('auth_token', (response as any).token);
         }
         
-        onSuccess(response.user);
+        onSuccess((response as any).user);
         onClose();
       } else {
         const response = await apiRequest('POST', '/api/auth/login', {
@@ -102,11 +102,11 @@ export default function AuthModal({ isOpen, onClose, onSuccess, initialTab = 'lo
         });
 
         // Store token and user data
-        if (response.token) {
-          localStorage.setItem('auth_token', response.token);
+        if ((response as any).token) {
+          localStorage.setItem('auth_token', (response as any).token);
         }
 
-        onSuccess(response.user);
+        onSuccess((response as any).user);
         onClose();
       }
     } catch (error: any) {
@@ -328,7 +328,7 @@ export default function AuthModal({ isOpen, onClose, onSuccess, initialTab = 'lo
               </form>
 
               <div className="text-center text-sm text-gray-600">
-                <p>By creating an account, you agree to receive verification emails from registration@chimaridata.com</p>
+                <p>By creating an account, you agree to receive verification emails from verification@chimaridata.com</p>
               </div>
             </TabsContent>
           </Tabs>

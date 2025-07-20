@@ -34,6 +34,15 @@ A streamlined data processing platform with four progressive paid paths: 1) Data
 - **Payment**: Stripe integration with progressive pricing
 
 ## Recent Changes
+- **AUTHENTICATION CONSOLIDATION (January 20, 2025)**: Successfully merged dual authentication paths into single registration-first system
+  - Updated hero messaging to "BYOD → Transform → Visualize → Analyze → Talk to your Data in natural language"
+  - Removed "Try Free No Signup" button and routed Create Account/Signin to unified workflow  
+  - Changed email verification domain from registration@chimaridata.com to verification@chimaridata.com
+  - Replaced all "Free Trial" references with "Trial" throughout the interface
+  - Fixed LSP errors and consolidated authentication components
+  - Updated subscription tiers to four-tier pricing: $5 trial (1 file, 10MB, 1 AI insight), $10 starter (2 files, 50MB, 3 AI insights), $20 professional (5 files, 100MB, 5 AI insights), $50 enterprise (unlimited access)
+  - Maintained SendGrid email service infrastructure and database schema
+  - Consolidated authentication flow to single registration-first system with OAuth alternative support
 - **ADVANCED ANALYTICS CAPABILITIES**: Comprehensive upgrade to enterprise-level data analytics (January 8, 2025)
 - **PII Analysis & Consent System**: Automated detection of personally identifiable information with user consent workflow - IMPLEMENTED
 - **Multi-Source Data Integration**: Google Drive and API integration for seamless data access - IMPLEMENTED

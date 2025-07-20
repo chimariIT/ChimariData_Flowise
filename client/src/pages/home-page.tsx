@@ -11,7 +11,7 @@ import { apiClient } from "@/lib/api";
 import FileUploader from "@/components/file-uploader";
 import AuthModal from "@/components/auth-modal";
 import SubscriptionTierDisplay from "@/components/subscription-tier-display";
-import PricingDisplay from "@/components/pricing-display";
+
 import { PIIInterimDialog } from "@/components/PIIInterimDialog";
 
 interface HomePageProps {
@@ -145,7 +145,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
       } else {
         throw new Error(result.error || 'Upload failed');
       }
-    } catch (error) {
+    } catch (error: any) {
       toast({
         title: "Upload failed",
         description: error instanceof Error ? error.message : "Failed to process PII decision",
@@ -164,7 +164,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
         description: `${projectName} has been deleted`,
       });
       refetch();
-    } catch (error) {
+    } catch (error: any) {
       toast({
         title: "Delete failed",
         description: error.message,
@@ -231,17 +231,16 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
           You don't have to be a <span className="text-blue-600">data expert</span> to have cutting edge insights
         </h1>
         <p className="text-xl text-gray-600 mb-8 max-w-3xl mx-auto">
-          Combining the power of traditional analytics and AI workflows. Upload your data and ask questions in plain English. 
-          Our progressive system transforms complex datasets into actionable insights—no technical skills required.
+          Combining the power of traditional, advanced and AI powered Analytics. Bring your Own Data (BYOD) → Transform → Visualize → Analyze → Talk to your Data in natural language.
         </p>
         <div className="flex justify-center gap-4">
           {!user && (
             <Button 
               size="lg" 
               className="bg-green-600 hover:bg-green-700 text-white"
-              onClick={() => setActiveTab('auth')}
+              onClick={() => setLocation('/auth/register')}
             >
-              🚀 Try Free - No Sign-up
+              🚀 Get Started
             </Button>
           )}
           {!user && (
@@ -273,7 +272,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
             <h3 className="font-semibold text-sm">Transformation</h3>
             <p className="text-xs text-gray-500 mt-1">Clean & reshape data</p>
             <div className="mt-2 flex justify-center gap-1">
-              <Badge variant="secondary" className="text-xs">Free Trial</Badge>
+              <Badge variant="secondary" className="text-xs">Trial</Badge>
               <Badge variant="outline" className="text-xs">Full</Badge>
             </div>
           </CardContent>
@@ -285,7 +284,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
             <h3 className="font-semibold text-sm">Analysis</h3>
             <p className="text-xs text-gray-500 mt-1">Statistical insights</p>
             <div className="mt-2 flex justify-center gap-1">
-              <Badge variant="secondary" className="text-xs">Free Trial</Badge>
+              <Badge variant="secondary" className="text-xs">Trial</Badge>
               <Badge variant="outline" className="text-xs">Full</Badge>
             </div>
           </CardContent>
@@ -297,7 +296,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
             <h3 className="font-semibold text-sm">Visualization</h3>
             <p className="text-xs text-gray-500 mt-1">Analytics to Visualisation</p>
             <div className="mt-2 flex justify-center gap-1">
-              <Badge variant="secondary" className="text-xs">Free Trial</Badge>
+              <Badge variant="secondary" className="text-xs">Trial</Badge>
               <Badge variant="outline" className="text-xs">Full</Badge>
             </div>
           </CardContent>
@@ -309,7 +308,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
             <h3 className="font-semibold text-sm">AI Insights</h3>
             <p className="text-xs text-gray-500 mt-1">Intelligent analysis</p>
             <div className="mt-2 flex justify-center gap-1">
-              <Badge variant="secondary" className="text-xs">Free Trial</Badge>
+              <Badge variant="secondary" className="text-xs">Trial</Badge>
               <Badge variant="outline" className="text-xs">Full</Badge>
             </div>
           </CardContent>
@@ -438,20 +437,14 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
 
                 <div className="flex flex-col sm:flex-row gap-4 justify-center">
                   <Button 
-                    onClick={() => {
-                      setAuthModalTab('register');
-                      setShowAuthModal(true);
-                    }}
+                    onClick={() => setLocation('/auth/register')}
                     className="flex-1 max-w-xs"
                   >
                     Create Account
                   </Button>
                   <Button 
                     variant="outline" 
-                    onClick={() => {
-                      setAuthModalTab('login');
-                      setShowAuthModal(true);
-                    }}
+                    onClick={() => setLocation('/auth/login')}
                     className="flex-1 max-w-xs"
                   >
                     Sign In

@@ -20,7 +20,7 @@ export interface PasswordResetParams {
 }
 
 export class EmailService {
-  private static FROM_EMAIL = 'registration@chimaridata.com';
+  private static FROM_EMAIL = 'verification@chimaridata.com';
   private static FROM_NAME = 'ChimariData';
 
   static async sendVerificationEmail(params: EmailVerificationParams): Promise<boolean> {
