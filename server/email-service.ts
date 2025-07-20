@@ -35,7 +35,20 @@ export class EmailService {
         },
         subject: 'Verify your ChimariData account',
         html: this.getVerificationEmailTemplate(firstName || 'User', verificationUrl),
-        text: this.getVerificationEmailText(firstName || 'User', verificationUrl)
+        text: this.getVerificationEmailText(firstName || 'User', verificationUrl),
+        // Disable click tracking to prevent SendGrid from modifying URLs
+        trackingSettings: {
+          clickTracking: {
+            enable: false,
+            enableText: false
+          },
+          openTracking: {
+            enable: false
+          },
+          subscriptionTracking: {
+            enable: false
+          }
+        }
       };
 
       await mailService.send(msg);
@@ -59,7 +72,20 @@ export class EmailService {
         },
         subject: 'Reset your ChimariData password',
         html: this.getPasswordResetEmailTemplate(firstName || 'User', resetUrl),
-        text: this.getPasswordResetEmailText(firstName || 'User', resetUrl)
+        text: this.getPasswordResetEmailText(firstName || 'User', resetUrl),
+        // Disable click tracking to prevent SendGrid from modifying URLs
+        trackingSettings: {
+          clickTracking: {
+            enable: false,
+            enableText: false
+          },
+          openTracking: {
+            enable: false
+          },
+          subscriptionTracking: {
+            enable: false
+          }
+        }
       };
 
       await mailService.send(msg);
@@ -111,6 +137,8 @@ export class EmailService {
                 <li><strong>$50 Enterprise:</strong> Full access to all features</li>
             </ul>
             
+            <p><strong>Important:</strong> If you see SSL certificate errors, copy and paste the verification link directly into your browser address bar. Do not use URL redirects from email clients.</p>
+            
             <p>If you didn't create this account, you can safely ignore this email.</p>
             
             <p>This verification link will expire in 24 hours.</p>
@@ -119,7 +147,9 @@ export class EmailService {
         </div>
         <div class="footer">
             <p>© 2025 ChimariData. All rights reserved.</p>
-            <p>If the button doesn't work, copy and paste this link: ${verificationUrl}</p>
+            <p><strong>Verification URL:</strong></p>
+            <p style="word-break: break-all; background: #f0f0f0; padding: 15px; border-radius: 4px; font-family: monospace; border-left: 4px solid #667eea;">${verificationUrl}</p>
+            <p style="font-size: 12px; color: #666;">Copy this URL directly into your browser if the button doesn't work or shows SSL errors.</p>
         </div>
     </div>
 </body>
