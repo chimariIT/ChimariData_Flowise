@@ -1888,11 +1888,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       
       // Send verification email using SendGrid
-      // Use the proper Replit app domain for verification
-      const baseUrl = process.env.REPLIT_DOMAINS ? 
-        `https://${process.env.REPLIT_DOMAINS.split(',')[0]}` : 
+      // Use the proper Replit app domain for verification - avoid SendGrid URL tracking
+      const replitDomain = process.env.REPLIT_DOMAINS?.split(',')[0];
+      const baseUrl = replitDomain ? 
+        `https://${replitDomain}` : 
         `${req.protocol}://${req.get('host')}`;
       const verificationUrl = `${baseUrl}/verify-email?token=${verificationToken}`;
+      
+      console.log(`🔗 Generated verification URL: ${verificationUrl}`);
       const emailSent = await EmailService.sendVerificationEmail({
         to: email,
         firstName: firstName || 'User',
@@ -1917,6 +1920,14 @@ This link will expire in 24 hours.
         console.log(`✅ Verification email sent to ${email}`);
         console.log(`🔗 Verification URL: ${verificationUrl}`);
       }
+      
+      console.log(`📧 EMAIL VERIFICATION DETAILS:
+      ===============================================
+      Email: ${email}
+      Domain: ${replitDomain || 'localhost'}
+      Verification URL: ${verificationUrl}
+      Token: ${verificationToken.substring(0, 8)}...
+      ===============================================`);
       
       // Generate simple auth token
       const authToken = crypto.randomBytes(32).toString('hex');
@@ -1955,13 +1966,38 @@ This link will expire in 24 hours.
       }
       
       // Find user with this verification token
+      console.log(`🔍 Looking up user with verification token: ${token}`);
+      
       const user = await storage.getUserByVerificationToken(token as string);
       console.log(`🔍 User lookup result: ${user ? `Found user ${user.email}` : 'No user found'}`);
       
       if (!user) {
         console.log('❌ Invalid verification token - no matching user found');
+        console.log('🔄 This might be due to server restart clearing in-memory data');
         return res.redirect('/?error=invalid_token');
       }
+      
+      // Additional logging for debugging
+      console.log(`✅ User found: ${user.email}, verified: ${user.emailVerified}`);
+      console.log(`🕐 Token expires: ${user.emailVerificationExpires}`);
+      
+      // Check if token is expired
+      if (user.emailVerificationExpires && new Date() > user.emailVerificationExpires) {
+        console.log('❌ Verification token expired');
+        return res.redirect('/?error=expired_token');
+      }
+      
+      // Update user as verified
+      const updatedUser = await storage.updateUser(user.id, {
+        emailVerified: true,
+        emailVerificationToken: null,
+        emailVerificationExpires: null
+      });
+      
+      console.log(`✅ Email verification successful for ${user.email}`);
+      
+      // Redirect to home page with success message
+      res.redirect('/?verified=true');
       
       // Check if token is expired
       if (user.emailVerificationExpires && new Date() > user.emailVerificationExpires) {
