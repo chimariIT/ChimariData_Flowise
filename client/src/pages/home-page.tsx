@@ -77,7 +77,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
         refetch();
         setLocation(`/project/${result.projectId}`);
       }
-    } catch (error) {
+    } catch (error: any) {
       toast({
         title: "Upload failed",
         description: error.message,
@@ -524,7 +524,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
                     <p className="text-sm text-gray-600 mb-3">Basic guided analysis with simple questions</p>
                     <div className="text-center py-4">
                       <p className="text-sm text-gray-600 mb-2">Sign up to start with our Trial plan</p>
-                      <Button variant="outline" onClick={() => setActiveTab('auth')}>
+                      <Button variant="outline" onClick={() => setLocation('/auth/register')}>
                         Choose Plan
                       </Button>
                     </div>
@@ -591,7 +591,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
                     <p className="text-sm text-gray-600 mb-3">Basic data cleaning & reshaping (10MB limit)</p>
                     <div className="text-center py-4">
                       <p className="text-sm text-gray-600 mb-2">Sign up to start with our Trial plan</p>
-                      <Button variant="outline" onClick={() => setActiveTab('auth')}>
+                      <Button variant="outline" onClick={() => setLocation('/auth/register')}>
                         Choose Plan
                       </Button>
                     </div>
@@ -669,7 +669,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
                     <p className="text-sm text-gray-600 mb-3">Basic descriptive statistics & correlations (univariate & bivariate)</p>
                     <div className="text-center py-4">
                       <p className="text-sm text-gray-600 mb-2">Sign up to start with our Trial plan</p>
-                      <Button variant="outline" onClick={() => setActiveTab('auth')}>
+                      <Button variant="outline" onClick={() => setLocation('/auth/register')}>
                         Choose Plan
                       </Button>
                     </div>
@@ -747,7 +747,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
                     <p className="text-sm text-gray-600 mb-3">Basic charts & simple visualizations (univariate & bivariate)</p>
                     <div className="text-center py-4">
                       <p className="text-sm text-gray-600 mb-2">Sign up to start with our Trial plan</p>
-                      <Button variant="outline" onClick={() => setActiveTab('auth')}>
+                      <Button variant="outline" onClick={() => setLocation('/auth/register')}>
                         Choose Plan
                       </Button>
                     </div>
@@ -793,7 +793,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
                     <p className="text-sm text-gray-600 mb-3">Basic AI insights & summaries</p>
                     <div className="text-center py-4">
                       <p className="text-sm text-gray-600 mb-2">Sign up to start with our Trial plan</p>
-                      <Button variant="outline" onClick={() => setActiveTab('auth')}>
+                      <Button variant="outline" onClick={() => setLocation('/auth/register')}>
                         Choose Plan
                       </Button>
                     </div>
