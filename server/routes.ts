@@ -1913,6 +1913,9 @@ ${verificationUrl}
 This link will expire in 24 hours.
 ===============================================
         `);
+      } else {
+        console.log(`✅ Verification email sent to ${email}`);
+        console.log(`🔗 Verification URL: ${verificationUrl}`);
       }
       
       // Generate simple auth token
@@ -1944,38 +1947,42 @@ This link will expire in 24 hours.
   app.get('/verify-email', async (req, res) => {
     try {
       const { token } = req.query;
+      console.log(`🔍 Email verification attempt with token: ${token?.toString()?.substring(0, 8)}...`);
       
       if (!token) {
+        console.log('❌ No verification token provided');
         return res.redirect('/?error=missing_token');
       }
       
       // Find user with this verification token
-      const users = await storage.getAllUsers?.() || [];
-      const user = users.find(u => u.emailVerificationToken === token);
+      const user = await storage.getUserByVerificationToken(token as string);
+      console.log(`🔍 User lookup result: ${user ? `Found user ${user.email}` : 'No user found'}`);
       
       if (!user) {
+        console.log('❌ Invalid verification token - no matching user found');
         return res.redirect('/?error=invalid_token');
       }
       
       // Check if token is expired
       if (user.emailVerificationExpires && new Date() > user.emailVerificationExpires) {
+        console.log('❌ Verification token expired');
         return res.redirect('/?error=expired_token');
       }
       
       // Update user as verified
-      if (storage.updateUser) {
-        await storage.updateUser(user.id, {
-          emailVerified: true,
-          emailVerificationToken: null,
-          emailVerificationExpires: null
-        });
-      }
+      const updatedUser = await storage.updateUser(user.id, {
+        emailVerified: true,
+        emailVerificationToken: null,
+        emailVerificationExpires: null
+      });
+      
+      console.log(`✅ Email verification successful for ${user.email}`);
       
       // Redirect to home page with success message
       res.redirect('/?verified=true');
       
     } catch (error) {
-      console.error('Email verification error:', error);
+      console.error('❌ Email verification error:', error);
       res.redirect('/?error=verification_failed');
     }
   });

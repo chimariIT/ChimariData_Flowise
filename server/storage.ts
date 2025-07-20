@@ -77,7 +77,6 @@ function dataProjectToInsertProject(dataProject: InsertDataProject): Omit<Insert
     selectedFeatures: dataProject.selectedFeatures || null,
     paymentIntentId: dataProject.paymentIntentId || null,
     upgradedAt: dataProject.upgradedAt || null,
-    userId: null,
   };
 }
 
@@ -96,6 +95,7 @@ export interface IStorage {
   getUserByVerificationToken(token: string): Promise<User | undefined>;
   updateUser(id: string, updates: Partial<User>): Promise<User | undefined>;
   deleteUser(id: string): Promise<boolean>;
+  getAllUsers(): Promise<User[]>;
   
   // Guided analysis storage
   storeGuidedAnalysisOrder(id: string, order: any): Promise<void>;
@@ -183,6 +183,10 @@ export class MemStorage implements IStorage {
 
   async deleteUser(id: string): Promise<boolean> {
     return this.users.delete(id);
+  }
+
+  async getAllUsers(): Promise<User[]> {
+    return Array.from(this.users.values());
   }
 
   // Guided analysis operations
@@ -317,6 +321,14 @@ export class DatabaseStorage implements IStorage {
       .where(eq(users.id, id));
     
     return (result.rowCount || 0) > 0;
+  }
+
+  async getAllUsers(): Promise<User[]> {
+    const allUsers = await db
+      .select()
+      .from(users);
+    
+    return allUsers;
   }
 
   // Guided analysis storage
