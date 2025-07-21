@@ -21,8 +21,10 @@ import { AnonymizationEngine } from './anonymization-engine';
 import { UnifiedPIIProcessor } from './unified-pii-processor';
 import { EmailService } from './email-service';
 import { PythonVisualizationService } from './python-visualization';
+import { PDFExportService } from './pdf-export';
 import { SUBSCRIPTION_TIERS, getTierLimits, canUserUpload, canUserRequestAIInsight } from '@shared/subscription-tiers';
 import bcrypt from 'bcrypt';
+import fs from 'fs/promises';
 
 // Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
@@ -2226,6 +2228,66 @@ This link will expire in 24 hours.
     } catch (error: any) {
       console.error('Visualization creation error:', error);
       res.status(500).json({ error: error.message || "Failed to create visualization" });
+    }
+  });
+
+  // Export analysis to PDF
+  app.post("/api/projects/:id/export-pdf", ensureAuthenticated, async (req, res) => {
+    try {
+      const projectId = req.params.id;
+      const userId = (req.user as any)?.id;
+      
+      if (!userId) {
+        return res.status(401).json({ error: "Authentication required" });
+      }
+
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+
+      // Verify project ownership
+      if (project.userId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const exportId = `${projectId}_${Date.now()}`;
+      
+      const exportData = {
+        projectName: project.name || 'Untitled Project',
+        projectDescription: project.description || '',
+        analysisResults: project.analysisResults || {},
+        visualizations: project.visualizations || [],
+        schema: project.schema || {},
+        recordCount: project.recordCount || 0,
+        createdAt: new Date()
+      };
+
+      const result = await PDFExportService.exportToPDF(exportData, exportId);
+
+      if (!result.success) {
+        return res.status(500).json({ error: result.error });
+      }
+
+      // Send PDF file
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="analysis_report_${project.name || 'project'}.pdf"`);
+      
+      const fileBuffer = await fs.readFile(result.filePath!);
+      res.send(fileBuffer);
+
+      // Cleanup the temporary file after sending
+      setTimeout(async () => {
+        try {
+          await fs.unlink(result.filePath!);
+        } catch (error) {
+          console.error('Failed to cleanup PDF file:', error);
+        }
+      }, 5000);
+
+    } catch (error: any) {
+      console.error('PDF export error:', error);
+      res.status(500).json({ error: error.message || "Failed to export PDF" });
     }
   });
 
