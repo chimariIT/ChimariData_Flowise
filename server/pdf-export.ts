@@ -21,6 +21,15 @@ export interface PDFExportResult {
 export class PDFExportService {
   private static tempDir = path.join(process.cwd(), 'temp', 'exports');
 
+  static async ensurePythonDir() {
+    const pythonDir = path.join(process.cwd(), 'python');
+    try {
+      await fs.mkdir(pythonDir, { recursive: true });
+    } catch (error) {
+      console.error('Failed to create python directory:', error);
+    }
+  }
+
   static async ensureTempDir() {
     try {
       await fs.mkdir(this.tempDir, { recursive: true });
@@ -31,6 +40,7 @@ export class PDFExportService {
 
   static async exportToPDF(data: ExportData, exportId: string): Promise<PDFExportResult> {
     await this.ensureTempDir();
+    await this.ensurePythonDir();
     
     const scriptPath = path.join(process.cwd(), 'python', 'pdf_generator.py');
     const dataPath = path.join(this.tempDir, `export_data_${exportId}.json`);
