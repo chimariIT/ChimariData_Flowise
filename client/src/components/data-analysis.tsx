@@ -151,8 +151,8 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
         };
       case "correlation":
         return {
-          correlations: (analysisConfig.fields || numericFields).map((field1, i) => 
-            (analysisConfig.fields || numericFields).slice(i + 1).map(field2 => ({
+          correlations: (analysisConfig.fields || numericFields).map((field1: string, i: number) => 
+            (analysisConfig.fields || numericFields).slice(i + 1).map((field2: string) => ({
               field1,
               field2,
               correlation: ((Math.random() - 0.5) * 2).toFixed(3)
@@ -965,7 +965,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
           <CardContent className="space-y-4">
             {renderAnalysisConfig()}
             
-            <div className="flex space-x-2 pt-4">
+            <div className="flex flex-wrap gap-2 pt-4">
               <Button
                 onClick={executeAnalysis}
                 disabled={isAnalyzing}
@@ -973,6 +973,81 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                 <Play className="w-4 h-4 mr-2" />
                 {isAnalyzing ? "Analyzing..." : "Run Analysis"}
               </Button>
+              
+              {/* Visualization buttons for each analysis type */}
+              {selectedAnalysis === 'descriptive' && (
+                <>
+                  <Button
+                    variant="outline"
+                    onClick={() => createVisualization('correlation_matrix')}
+                    disabled={isCreatingVisualization || numericFields.length < 2}
+                  >
+                    <TrendingUp className="w-4 h-4 mr-2" />
+                    Correlation Matrix
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => createVisualization('distribution')}
+                    disabled={isCreatingVisualization || !analysisConfig.fields?.length}
+                  >
+                    <BarChart3 className="w-4 h-4 mr-2" />
+                    Distribution Plot
+                  </Button>
+                </>
+              )}
+              
+              {selectedAnalysis === 'distribution' && (
+                <>
+                  <Button
+                    variant="outline"
+                    onClick={() => createVisualization('histogram')}
+                    disabled={isCreatingVisualization || !analysisConfig.fields?.length}
+                  >
+                    <BarChart3 className="w-4 h-4 mr-2" />
+                    Histograms
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => createVisualization('box_plot')}
+                    disabled={isCreatingVisualization || !analysisConfig.fields?.length}
+                  >
+                    <PieChart className="w-4 h-4 mr-2" />
+                    Box Plots
+                  </Button>
+                </>
+              )}
+              
+              {selectedAnalysis === 'correlation' && (
+                <Button
+                  variant="outline"
+                  onClick={() => createVisualization('correlation_heatmap')}
+                  disabled={isCreatingVisualization || numericFields.length < 2}
+                >
+                  <TrendingUp className="w-4 h-4 mr-2" />
+                  Correlation Heatmap
+                </Button>
+              )}
+              
+              {selectedAnalysis === 'categorical' && (
+                <>
+                  <Button
+                    variant="outline"
+                    onClick={() => createVisualization('bar_chart')}
+                    disabled={isCreatingVisualization || !analysisConfig.fields?.length}
+                  >
+                    <BarChart3 className="w-4 h-4 mr-2" />
+                    Bar Charts
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => createVisualization('pie_chart')}
+                    disabled={isCreatingVisualization || !analysisConfig.fields?.length}
+                  >
+                    <PieChart className="w-4 h-4 mr-2" />
+                    Pie Charts
+                  </Button>
+                </>
+              )}
             </div>
           </CardContent>
         </Card>

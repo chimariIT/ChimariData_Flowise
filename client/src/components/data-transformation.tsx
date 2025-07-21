@@ -216,6 +216,133 @@ export default function DataTransformation({ project }: DataTransformationProps)
           </div>
         );
 
+      case "rename":
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium mb-2 block">Column Mappings</label>
+              <div className="space-y-2">
+                {fields.map(field => (
+                  <div key={field} className="flex items-center space-x-2">
+                    <span className="w-32 text-sm font-medium">{field}:</span>
+                    <Input
+                      placeholder={`New name for ${field}`}
+                      value={config.mappings?.[field] || ''}
+                      onChange={(e) => updateTransformation(transformation.id, {
+                        ...config,
+                        mappings: { ...config.mappings, [field]: e.target.value }
+                      })}
+                      className="flex-1"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+
+      case "aggregate":
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium mb-2 block">Group By Fields</label>
+              <div className="space-y-2">
+                {fields.map(field => (
+                  <div key={field} className="flex items-center space-x-2">
+                    <Checkbox
+                      id={`group-${field}`}
+                      checked={config.groupBy?.includes(field) || false}
+                      onCheckedChange={(checked) => {
+                        const newGroupBy = checked
+                          ? [...(config.groupBy || []), field]
+                          : (config.groupBy || []).filter((f: string) => f !== field);
+                        updateTransformation(transformation.id, { ...config, groupBy: newGroupBy });
+                      }}
+                    />
+                    <label htmlFor={`group-${field}`} className="text-sm">
+                      {field}
+                    </label>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-2 block">Aggregations</label>
+              <div className="space-y-2">
+                {fields.filter(field => schema[field]?.type === 'number').map(field => (
+                  <div key={field} className="grid grid-cols-2 gap-2">
+                    <span className="text-sm font-medium self-center">{field}:</span>
+                    <Select
+                      value={config.aggregations?.find((a: any) => a.field === field)?.operation || ''}
+                      onValueChange={(value) => {
+                        const newAggregations = config.aggregations?.filter((a: any) => a.field !== field) || [];
+                        if (value) {
+                          newAggregations.push({ field, operation: value });
+                        }
+                        updateTransformation(transformation.id, { ...config, aggregations: newAggregations });
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select operation" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="sum">Sum</SelectItem>
+                        <SelectItem value="avg">Average</SelectItem>
+                        <SelectItem value="count">Count</SelectItem>
+                        <SelectItem value="min">Minimum</SelectItem>
+                        <SelectItem value="max">Maximum</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+
+      case "sort":
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium mb-2 block">Sort Fields</label>
+              <div className="space-y-2">
+                {fields.map(field => (
+                  <div key={field} className="flex items-center space-x-2">
+                    <Checkbox
+                      id={`sort-${field}`}
+                      checked={config.fields?.includes(field) || false}
+                      onCheckedChange={(checked) => {
+                        const newFields = checked
+                          ? [...(config.fields || []), field]
+                          : (config.fields || []).filter((f: string) => f !== field);
+                        updateTransformation(transformation.id, { ...config, fields: newFields });
+                      }}
+                    />
+                    <label htmlFor={`sort-${field}`} className="text-sm">
+                      {field}
+                    </label>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-2 block">Sort Order</label>
+              <Select
+                value={config.order}
+                onValueChange={(value) => updateTransformation(transformation.id, { ...config, order: value })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="asc">Ascending</SelectItem>
+                  <SelectItem value="desc">Descending</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        );
+
       default:
         return <p className="text-sm text-gray-500">Configuration options for {type}</p>;
     }

@@ -9,6 +9,7 @@ import AuthPage from "@/pages/auth";
 import GuidedAnalysisCheckout from "@/pages/checkout";
 import GuidedAnalysisResults from "@/pages/guided-analysis-results";
 import { apiClient } from "@/lib/api";
+import { ProjectProvider } from "@/hooks/useProjectContext";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -75,7 +76,8 @@ export default function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <div className="min-h-screen bg-gray-50">
+      <ProjectProvider>
+        <div className="min-h-screen bg-gray-50">
         <Switch>
           <Route path="/">
             {() => <HomePage user={user} onLogout={handleLogout} />}
@@ -110,8 +112,9 @@ export default function App() {
             </div>
           </Route>
         </Switch>
-      </div>
-      <Toaster />
+        </div>
+        <Toaster />
+      </ProjectProvider>
     </QueryClientProvider>
   );
 }
