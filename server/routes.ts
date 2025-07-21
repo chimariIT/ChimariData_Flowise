@@ -1999,24 +1999,6 @@ This link will expire in 24 hours.
       // Redirect to home page with success message
       res.redirect('/?verified=true');
       
-      // Check if token is expired
-      if (user.emailVerificationExpires && new Date() > user.emailVerificationExpires) {
-        console.log('❌ Verification token expired');
-        return res.redirect('/?error=expired_token');
-      }
-      
-      // Update user as verified
-      const updatedUser = await storage.updateUser(user.id, {
-        emailVerified: true,
-        emailVerificationToken: null,
-        emailVerificationExpires: null
-      });
-      
-      console.log(`✅ Email verification successful for ${user.email}`);
-      
-      // Redirect to home page with success message
-      res.redirect('/?verified=true');
-      
     } catch (error) {
       console.error('❌ Email verification error:', error);
       res.redirect('/?error=verification_failed');
