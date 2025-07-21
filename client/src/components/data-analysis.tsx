@@ -21,6 +21,8 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
   const [results, setResults] = useState<any>(null);
   const [showAdvancedModal, setShowAdvancedModal] = useState(false);
   const [showAnonymizationToolkit, setShowAnonymizationToolkit] = useState(false);
+  const [visualizations, setVisualizations] = useState<any[]>([]);
+  const [isCreatingVisualization, setIsCreatingVisualization] = useState(false);
 
   const schema = project.schema || {};
   const numericFields = Object.entries(schema)
