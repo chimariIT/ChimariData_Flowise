@@ -20,12 +20,13 @@ import { MCPAIService } from './mcp-ai-service';
 import { AnonymizationEngine } from './anonymization-engine';
 import { UnifiedPIIProcessor } from './unified-pii-processor';
 import { EmailService } from './email-service';
+import { PythonVisualizationService } from './python-visualization';
 import { SUBSCRIPTION_TIERS, getTierLimits, canUserUpload, canUserRequestAIInsight } from '@shared/subscription-tiers';
 import bcrypt from 'bcrypt';
 
 // Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
-  apiVersion: '2025-05-28.basil',
+  apiVersion: '2024-06-20' as any,
 });
 
 // Configure multer for file uploads
@@ -373,13 +374,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         
         const newProjectData = {
-          userId: req.user?.id || 'anonymous',
+          userId: (req.user as any)?.id || 'anonymous',
           name: projectMetadata.name || "Uploaded Data",
           description: projectMetadata.description || "",
-          questions: projectMetadata.questions || [],
           fileName: fileInfo.originalname,
           fileSize: fileInfo.size,
           fileType: fileInfo.mimetype,
+          isTrial: false,
+          dataSource: "upload" as const,
+          isPaid: false,
           data: finalData,
           schema: processedData.schema,
           recordCount: finalData.length,
@@ -388,9 +391,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             userDecision: actualDecision,
             overriddenColumns: anonymizationConfig?.overriddenColumns || [],
             decisionTimestamp: new Date()
-          },
-          createdAt: new Date(),
-          updatedAt: new Date()
+          }
         };
         
 
@@ -454,20 +455,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Create project with processed data
       const project = await storage.createProject({
-        userId: req.user?.id || 'anonymous',
+        userId: (req.user as any)?.id || 'anonymous',
         name: name.trim(),
         description: description || '',
-        questions: parsedQuestions,
         fileName: req.file.originalname,
         fileSize: req.file.size,
-        mimeType: req.file.mimetype,
-        uploadedAt: new Date(),
-        processed: true,
+        fileType: req.file.mimetype,
+        isTrial: false,
+        dataSource: "upload" as const,
+        isPaid: false,
         schema: updatedSchema,
         recordCount: processedData.recordCount,
         data: finalData,
-        isTrial: false,
-        purchasedFeatures: [],
         piiAnalysis: {
           ...piiAnalysis,
           userDecision: decision,
@@ -878,20 +877,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Create project with actual data
       const project = await storage.createProject({
-        userId: req.user?.id || 'anonymous',
+        userId: (req.user as any)?.id || 'anonymous',
         name: name.trim(),
         description: description || '',
-        questions: parsedQuestions,
         fileName: req.file.originalname,
         fileSize: req.file.size,
-        mimeType: req.file.mimetype,
-        uploadedAt: new Date(),
-        processed: true,
+        fileType: req.file.mimetype,
+        isTrial: false,
+        dataSource: "upload" as const,
+        isPaid: false,
         schema: processedData.schema,
         recordCount: processedData.recordCount,
-        data: processedData.data, // Store actual data rows
-        isTrial: false,
-        purchasedFeatures: [],
+        data: processedData.data,
         piiAnalysis: piiAnalysis
       });
 
@@ -1031,16 +1028,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Create project in storage
       const project = await storage.createProject({
-        userId: req.user?.id || 'anonymous',
+        userId: (req.user as any)?.id || 'anonymous',
         name: file.originalname.replace(/\.[^/.]+$/, ""),
         fileName: file.originalname,
         fileSize: file.size,
         fileType: file.mimetype,
         description,
+        isTrial: false,
+        dataSource: "upload" as const,
+        isPaid: false,
         schema: processedData.schema,
         recordCount: processedData.recordCount,
-        isTrial: false,
-        purchasedFeatures: [],
         piiAnalysis: piiAnalysis
       });
 
@@ -1671,10 +1669,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Create project
       const project = await storage.createProject({
-        userId: req.user?.id || 'anonymous',
+        userId: (req.user as any)?.id || 'anonymous',
         name: req.file.originalname.replace(/\.[^/.]+$/, ""),
         fileName: req.file.originalname,
         fileSize: req.file.size,
+        fileType: req.file.mimetype,
+        isTrial: false,
+        dataSource: "upload" as const,
         schema: processedData.schema,
         recordCount: processedData.recordCount,
         isPaid: true,
@@ -2170,6 +2171,61 @@ This link will expire in 24 hours.
     } catch (error) {
       console.error('Email verification error:', error);
       res.status(500).json({ error: "Email verification failed" });
+    }
+  });
+
+  // Create visualization endpoint
+  app.post("/api/visualizations/create", ensureAuthenticated, async (req, res) => {
+    try {
+      const { projectId, visualizationType, selectedColumns, groupByColumn, colorByColumn } = req.body;
+      
+      if (!projectId || !visualizationType) {
+        return res.status(400).json({ error: "Project ID and visualization type are required" });
+      }
+
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+
+      const result = await PythonVisualizationService.createVisualization({
+        data: project.data || [],
+        schema: project.schema || {},
+        visualizationType,
+        selectedColumns,
+        groupByColumn,
+        colorByColumn
+      }, projectId);
+
+      if (!result.success) {
+        return res.status(500).json({ error: result.error });
+      }
+
+      // Store visualization in project
+      const existingVisualizations = project.visualizations || [];
+      const newVisualization = {
+        id: Date.now().toString(),
+        type: visualizationType,
+        imageData: result.imageData,
+        insights: result.insights || [],
+        selectedColumns,
+        groupByColumn,
+        colorByColumn,
+        createdAt: new Date()
+      };
+
+      await storage.updateProject(projectId, {
+        visualizations: [...existingVisualizations, newVisualization]
+      });
+
+      res.json({
+        success: true,
+        visualization: newVisualization
+      });
+
+    } catch (error: any) {
+      console.error('Visualization creation error:', error);
+      res.status(500).json({ error: error.message || "Failed to create visualization" });
     }
   });
 

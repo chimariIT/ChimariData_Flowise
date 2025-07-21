@@ -85,6 +85,8 @@ export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
   upsertUser(user: { id: string; email: string; firstName?: string; lastName?: string; profileImageUrl?: string }): Promise<User>;
   getUserByEmail(email: string): Promise<User | undefined>;
+  getUserByVerificationToken(token: string): Promise<User | undefined>;
+  updateUser(id: string, updates: Partial<User>): Promise<User | undefined>;
   createUser(user: { email: string; hashedPassword: string; firstName?: string; lastName?: string; provider?: string; emailVerified?: boolean; emailVerificationToken?: string; emailVerificationExpires?: Date }): Promise<User>;
   validateUserCredentials(email: string, password: string): Promise<User | null>;
   updateUserPassword(userId: string, hashedPassword: string): Promise<void>;
@@ -105,6 +107,9 @@ export interface IStorage {
   // Guided analysis operations
   createGuidedAnalysisOrder(order: InsertGuidedAnalysisOrder): Promise<GuidedAnalysisOrder>;
   getGuidedAnalysisOrders(): Promise<GuidedAnalysisOrder[]>;
+  getGuidedAnalysisOrder(id: string): Promise<GuidedAnalysisOrder | undefined>;
+  updateGuidedAnalysisOrder(id: string, updates: any): Promise<void>;
+  storeGuidedAnalysisOrder(id: string, order: any): Promise<void>;
 }
 
 // Write-behind cache for async persistence
@@ -199,6 +204,18 @@ class WriteBackCache {
         break;
       case 'create-guided-analysis-order':
         await db.insert(guidedAnalysisOrders).values(data);
+        break;
+      case 'update-user':
+        await db.update(users).set(data.updates).where(eq(users.id, data.id));
+        break;
+      case 'update-guided-analysis-order':
+        await db.update(guidedAnalysisOrders).set(data.updates).where(eq(guidedAnalysisOrders.id, data.id));
+        break;
+      case 'store-guided-analysis-order':
+        await db.insert(guidedAnalysisOrders).values(data).onConflictDoUpdate({
+          target: guidedAnalysisOrders.id,
+          set: { ...data, updatedAt: new Date() }
+        });
         break;
     }
   }
@@ -314,6 +331,31 @@ export class HybridStorage implements IStorage {
   async getUserByEmail(email: string): Promise<User | undefined> {
     await this.init();
     return this.usersByEmail.get(email);
+  }
+
+  async getUserByVerificationToken(token: string): Promise<User | undefined> {
+    await this.init();
+    return Array.from(this.userCache.values()).find(user => user.emailVerificationToken === token);
+  }
+
+  async updateUser(id: string, updates: Partial<User>): Promise<User | undefined> {
+    await this.init();
+    
+    const existingUser = this.userCache.get(id);
+    if (!existingUser) {
+      return undefined;
+    }
+
+    const updatedUser = { ...existingUser, ...updates, updatedAt: new Date() };
+    this.userCache.set(id, updatedUser);
+    if (updatedUser.email) {
+      this.usersByEmail.set(updatedUser.email, updatedUser);
+    }
+
+    // Queue for async persistence
+    this.writeBackCache.enqueue(`user-update-${id}`, 'update-user', { id, updates });
+    
+    return updatedUser;
   }
 
   async createUser(user: { email: string; hashedPassword: string; firstName?: string; lastName?: string; provider?: string; emailVerified?: boolean; emailVerificationToken?: string; emailVerificationExpires?: Date }): Promise<User> {
@@ -501,6 +543,41 @@ export class HybridStorage implements IStorage {
   async getGuidedAnalysisOrders(): Promise<GuidedAnalysisOrder[]> {
     await this.init();
     return [...this.guidedAnalysisOrderCache];
+  }
+
+  async getGuidedAnalysisOrder(id: string): Promise<GuidedAnalysisOrder | undefined> {
+    await this.init();
+    return this.guidedAnalysisOrderCache.find(order => order.id === id);
+  }
+
+  async updateGuidedAnalysisOrder(id: string, updates: any): Promise<void> {
+    await this.init();
+    
+    const index = this.guidedAnalysisOrderCache.findIndex(order => order.id === id);
+    if (index !== -1) {
+      this.guidedAnalysisOrderCache[index] = { 
+        ...this.guidedAnalysisOrderCache[index], 
+        ...updates, 
+        updatedAt: new Date() 
+      };
+      
+      // Queue for async persistence
+      this.writeBackCache.enqueue(`guided-analysis-update-${id}`, 'update-guided-analysis-order', { id, updates });
+    }
+  }
+
+  async storeGuidedAnalysisOrder(id: string, order: any): Promise<void> {
+    await this.init();
+    
+    const existingIndex = this.guidedAnalysisOrderCache.findIndex(o => o.id === id);
+    if (existingIndex !== -1) {
+      this.guidedAnalysisOrderCache[existingIndex] = { ...order, updatedAt: new Date() };
+    } else {
+      this.guidedAnalysisOrderCache.push({ id, ...order, createdAt: new Date() });
+    }
+    
+    // Queue for async persistence
+    this.writeBackCache.enqueue(`guided-analysis-store-${id}`, 'store-guided-analysis-order', { id, ...order });
   }
 }
 
