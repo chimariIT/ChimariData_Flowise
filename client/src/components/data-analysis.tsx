@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3, PieChart, TrendingUp, Calculator, Play, Download, Brain, Zap, Shield } from "lucide-react";
+import { BarChart3, PieChart, TrendingUp, Calculator, Play, Download, Brain, Zap, Shield, FileText } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import AdvancedAnalysisModal from "./advanced-analysis-modal";
 import AnonymizationToolkit from "./AnonymizationToolkit";
@@ -23,6 +23,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
   const [showAnonymizationToolkit, setShowAnonymizationToolkit] = useState(false);
   const [visualizations, setVisualizations] = useState<any[]>([]);
   const [isCreatingVisualization, setIsCreatingVisualization] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
 
   const schema = project.schema || {};
   const numericFields = Object.entries(schema)
@@ -174,6 +175,89 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
     }
   };
 
+  const createVisualization = async (type: string, selectedColumns?: string[]) => {
+    setIsCreatingVisualization(true);
+    try {
+      const response = await fetch('/api/visualizations/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        },
+        body: JSON.stringify({
+          projectId: project.id,
+          visualizationType: type,
+          selectedColumns: selectedColumns || (analysisConfig.fields ? analysisConfig.fields : [])
+        })
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to create visualization');
+      }
+
+      const result = await response.json();
+      
+      setVisualizations(prev => [...prev, result.visualization]);
+      
+      toast({
+        title: "Visualization created",
+        description: "Your chart has been generated successfully",
+      });
+
+    } catch (error: any) {
+      toast({
+        title: "Visualization failed",
+        description: error.message || "Failed to create visualization",
+        variant: "destructive",
+      });
+    } finally {
+      setIsCreatingVisualization(false);
+    }
+  };
+
+  const exportToPDF = async () => {
+    setIsExporting(true);
+    try {
+      const response = await fetch(`/api/projects/${project.id}/export-pdf`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        }
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to export PDF');
+      }
+
+      // Download the PDF file
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `analysis_report_${project.name || 'project'}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      toast({
+        title: "Export successful",
+        description: "PDF report has been downloaded",
+      });
+
+    } catch (error: any) {
+      toast({
+        title: "Export failed", 
+        description: error.message || "Failed to export PDF",
+        variant: "destructive",
+      });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   const renderAnalysisConfig = () => {
     if (!selectedAnalysis) return null;
 
@@ -228,6 +312,35 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                   })}
                 >
                   Clear All
+                </Button>
+              </div>
+            </div>
+            
+            {/* Visualization Options */}
+            <div>
+              <label className="text-sm font-medium mb-2 block">Create Visualization</label>
+              <div className="grid grid-cols-2 gap-4">
+                <Button 
+                  onClick={() => createVisualization('correlation_matrix')}
+                  disabled={isCreatingVisualization || numericFields.length < 2}
+                  variant="outline"
+                  className="h-auto py-3 px-4"
+                >
+                  <div className="text-center">
+                    <TrendingUp className="mx-auto mb-1" size={20} />
+                    <div>Correlation Matrix</div>
+                  </div>
+                </Button>
+                <Button 
+                  onClick={() => createVisualization('multivariate')}
+                  disabled={isCreatingVisualization || numericFields.length < 3}
+                  variant="outline"
+                  className="h-auto py-3 px-4"
+                >
+                  <div className="text-center">
+                    <BarChart3 className="mx-auto mb-1" size={20} />
+                    <div>Multivariate Plot</div>
+                  </div>
                 </Button>
               </div>
             </div>
@@ -866,14 +979,55 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
       )}
 
       {/* Results */}
+      {/* Visualizations Section */}
+      {visualizations.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Generated Visualizations</CardTitle>
+            <CardDescription>Charts created from your data analysis</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {visualizations.map((viz) => (
+                <div key={viz.id} className="border rounded-lg p-4">
+                  <h4 className="font-medium mb-2">{viz.type.replace('_', ' ').toUpperCase()}</h4>
+                  {viz.imageData && (
+                    <img 
+                      src={`data:image/png;base64,${viz.imageData}`}
+                      alt={viz.type}
+                      className="w-full rounded border"
+                    />
+                  )}
+                  {viz.insights && viz.insights.length > 0 && (
+                    <div className="mt-2">
+                      <p className="text-sm font-medium text-gray-700">Insights:</p>
+                      <ul className="text-sm text-gray-600 list-disc list-inside">
+                        {viz.insights.map((insight: string, idx: number) => (
+                          <li key={idx}>{insight}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {results && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center justify-between">
               <span>Analysis Results</span>
-              <Button variant="outline" size="sm">
-                <Download className="w-4 h-4 mr-2" />
-                Export Results
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={exportToPDF}
+                disabled={isExporting}
+              >
+                <FileText className="w-4 h-4 mr-2" />
+                {isExporting ? "Exporting..." : "Export PDF"}
               </Button>
             </CardTitle>
             <CardDescription>
