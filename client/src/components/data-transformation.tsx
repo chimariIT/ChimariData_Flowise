@@ -5,7 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
-import { Filter, RefreshCw, Download, Play } from "lucide-react";
+import { Filter, RefreshCw, Download, Play, CheckCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface DataTransformationProps {
@@ -96,12 +96,19 @@ export default function DataTransformation({ project }: DataTransformationProps)
         
         toast({
           title: "Transformations applied",
-          description: "Your data has been successfully transformed",
+          description: "Preview your changes and save to project when ready",
         });
         
-        // Enable export button and store download URL
+        // Store transformation results for validation and preview
         setHasTransformedData(true);
         setTransformedDataUrl(result.downloadUrl);
+        
+        // Show validation preview in console for now
+        console.log('Transformation preview:', {
+          appliedTransformations: transformations.length,
+          resultData: result.transformedData?.slice(0, 5),
+          downloadUrl: result.downloadUrl
+        });
         
         console.log('Transformation result:', result);
       } else {
@@ -116,6 +123,47 @@ export default function DataTransformation({ project }: DataTransformationProps)
       });
     } finally {
       setIsTransforming(false);
+    }
+  };
+
+  const saveTransformationsToProject = async () => {
+    if (!project?.id || !hasTransformedData) return;
+    
+    try {
+      const response = await fetch(`/api/save-transformations/${project.id}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        },
+        body: JSON.stringify({
+          transformations: transformations.map(t => ({
+            type: t.type,
+            config: t.config
+          }))
+        })
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        
+        toast({
+          title: "Transformations saved",
+          description: "Your transformed data has been saved to the project",
+        });
+        
+        // Update project data with transformed results
+        console.log('Saved transformation result:', result);
+      } else {
+        throw new Error('Failed to save transformations');
+      }
+    } catch (error) {
+      console.error('Error saving transformations:', error);
+      toast({
+        title: "Save failed",
+        description: "Failed to save transformations to project",
+        variant: "destructive",
+      });
     }
   };
 
@@ -446,6 +494,46 @@ export default function DataTransformation({ project }: DataTransformationProps)
         </CardContent>
       </Card>
 
+      {/* Transformation Results Preview */}
+      {hasTransformedData && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <CheckCircle className="w-5 h-5 text-green-600" />
+              Transformation Preview
+            </CardTitle>
+            <CardDescription>
+              Review your changes before saving to project
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+              <h4 className="font-medium text-green-800 mb-2">Transformations Applied Successfully</h4>
+              <p className="text-green-700 text-sm mb-3">
+                {transformations.length} transformation(s) have been applied to your data.
+              </p>
+              <div className="flex space-x-2">
+                <Button 
+                  variant="default"
+                  onClick={saveTransformationsToProject}
+                >
+                  <CheckCircle className="w-4 h-4 mr-2" />
+                  Save to Project
+                </Button>
+                
+                <Button 
+                  variant="outline"
+                  onClick={exportTransformedData}
+                >
+                  <Download className="w-4 h-4 mr-2" />
+                  Export Data
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Active Transformations */}
       {transformations.length > 0 && (
         <Card>
@@ -485,15 +573,6 @@ export default function DataTransformation({ project }: DataTransformationProps)
               >
                 <Play className="w-4 h-4 mr-2" />
                 {isTransforming ? "Applying..." : "Apply Transformations"}
-              </Button>
-              
-              <Button 
-                variant="outline"
-                onClick={exportTransformedData}
-                disabled={!hasTransformedData}
-              >
-                <Download className="w-4 h-4 mr-2" />
-                Export Transformed Data
               </Button>
             </div>
           </CardContent>
