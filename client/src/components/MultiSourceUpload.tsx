@@ -160,8 +160,10 @@ export function MultiSourceUpload({
         
         // Pass complete project data for navigation
         onComplete({
+          success: true,
           projectId: projectData.id,
-          ...projectData,
+          id: projectData.id,
+          name: projectData.name || file.name.split('.')[0],
           sourceType: selectedSource,
           filename: file.name,
           size: file.size,
@@ -171,7 +173,9 @@ export function MultiSourceUpload({
           insights: result.insights,
           questions: questions,
           analysisType: 'descriptive',
-          isTrial: result.isTrial
+          isTrial: result.isTrial,
+          recordCount: result.recordCount,
+          schema: result.schema
         });
       }
     } catch (error) {
@@ -269,6 +273,8 @@ export function MultiSourceUpload({
         
         // Call onComplete with the processed results
         onComplete({
+          success: true,
+          projectId: result.projectId?.id || result.projectId,
           id: result.projectId?.id || result.projectId,
           name: result.projectId?.name || uploadedFile.name.split('.')[0],
           sourceType: selectedSource,
