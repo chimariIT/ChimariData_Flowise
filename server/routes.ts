@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import multer from "multer";
 import Stripe from "stripe";
-import { storage } from "./hybrid-storage";
+import { storage } from "./storage";
 import { FileProcessor } from "./file-processor";
 import { PythonProcessor } from "./python-processor";
 import { PricingService } from "./pricing-service";
@@ -912,6 +912,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
         success: false, 
         error: error.message || "Failed to process file" 
       });
+    }
+  });
+
+  // Projects API endpoints
+  app.get("/api/projects", async (req, res) => {
+    try {
+      const projects = await storage.getAllProjects();
+      res.json({ projects });
+    } catch (error: any) {
+      console.error('Failed to fetch projects:', error);
+      res.status(500).json({ error: "Failed to fetch projects" });
+    }
+  });
+
+  app.get("/api/projects/:id", async (req, res) => {
+    try {
+      const project = await storage.getProject(req.params.id);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+      res.json(project);
+    } catch (error: any) {
+      console.error('Failed to fetch project:', error);
+      res.status(500).json({ error: "Failed to fetch project" });
     }
   });
 
