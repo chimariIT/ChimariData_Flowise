@@ -175,7 +175,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                 category: `Category ${i + 1}`,
                 count: Math.floor(Math.random() * 100)
               })),
-            statistics: numericFields.includes(field) ? {
+            statistics: numericFields.includes(field as string) ? {
               mean: (Math.random() * 100).toFixed(2),
               median: (Math.random() * 100).toFixed(2),
               mode: (Math.random() * 100).toFixed(2),
@@ -358,7 +358,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                         const currentFields = analysisConfig.fields || [];
                         const newFields = e.target.checked 
                           ? [...currentFields, field]
-                          : currentFields.filter(f => f !== field);
+                          : currentFields.filter((f: string) => f !== field);
                         setAnalysisConfig({
                           ...analysisConfig,
                           fields: newFields
@@ -662,7 +662,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                         const currentFields = analysisConfig.fields || [];
                         const newFields = e.target.checked 
                           ? [...currentFields, field]
-                          : currentFields.filter(f => f !== field);
+                          : currentFields.filter((f: string) => f !== field);
                         setAnalysisConfig({
                           ...analysisConfig,
                           fields: newFields
