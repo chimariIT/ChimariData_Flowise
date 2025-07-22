@@ -405,5 +405,6 @@ export class DatabaseStorage implements IStorage {
   }
 }
 
-// Use DatabaseStorage instead of MemStorage
-export const storage = new DatabaseStorage();
+// Use HybridStorage for optimal performance with persistence
+import { HybridStorage } from './hybrid-storage';
+export const storage = new HybridStorage();
