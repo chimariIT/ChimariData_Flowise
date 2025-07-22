@@ -91,59 +91,115 @@ def descriptive_analysis(df: pd.DataFrame) -> Dict[str, Any]:
     return results
 
 def create_visualization(df: pd.DataFrame, viz_type: str, column: str = None) -> str:
-    """Create a visualization and return as base64 encoded string"""
+    """Create a visualization and return as base64 encoded string with proper labels and axes"""
     plt.style.use('seaborn-v0_8')
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(12, 8))
     
     try:
         if viz_type == 'correlation_heatmap':
             numerical_cols = df.select_dtypes(include=[np.number]).columns
             if len(numerical_cols) > 1:
                 corr_matrix = df[numerical_cols].corr()
-                sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', center=0, ax=ax)
-                ax.set_title('Correlation Heatmap')
+                # Enhanced heatmap with better formatting
+                sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', center=0, ax=ax,
+                           fmt='.2f', square=True, linewidths=0.5,
+                           cbar_kws={'label': 'Correlation Coefficient'})
+                ax.set_title('Correlation Matrix Heatmap', fontsize=16, fontweight='bold', pad=20)
+                ax.set_xlabel('Variables', fontsize=12, fontweight='bold')
+                ax.set_ylabel('Variables', fontsize=12, fontweight='bold')
+                plt.xticks(rotation=45, ha='right')
+                plt.yticks(rotation=0)
             else:
                 ax.text(0.5, 0.5, 'Not enough numerical columns for correlation', 
-                       ha='center', va='center', transform=ax.transAxes)
-                ax.set_title('Correlation Analysis Not Available')
+                       ha='center', va='center', transform=ax.transAxes, fontsize=14)
+                ax.set_title('Correlation Analysis Not Available', fontsize=16)
         
         elif viz_type == 'distribution_overview':
             numerical_cols = df.select_dtypes(include=[np.number]).columns
             if len(numerical_cols) > 0:
-                # Create simple histogram for FIRST numeric column only
                 col = numerical_cols[0]
                 col_data = df[col].dropna()
                 if len(col_data) > 0:
-                    col_data.hist(bins=20, ax=ax, alpha=0.7, color='skyblue')
-                    ax.set_title(f'Distribution of {col}')
-                    ax.set_xlabel(col)
-                    ax.set_ylabel('Frequency')
-                    ax.grid(True, alpha=0.3)
+                    # Enhanced histogram with better styling
+                    n, bins, patches = ax.hist(col_data, bins=25, alpha=0.8, color='skyblue', 
+                                             edgecolor='navy', linewidth=0.5)
+                    ax.set_title(f'Distribution of {col}', fontsize=16, fontweight='bold', pad=20)
+                    ax.set_xlabel(f'{col} Values', fontsize=12, fontweight='bold')
+                    ax.set_ylabel('Frequency', fontsize=12, fontweight='bold')
+                    ax.grid(True, alpha=0.3, linestyle='--')
+                    
+                    # Add statistics text box
+                    mean_val = col_data.mean()
+                    std_val = col_data.std()
+                    ax.axvline(mean_val, color='red', linestyle='--', linewidth=2, label=f'Mean: {mean_val:.2f}')
+                    ax.legend(fontsize=10)
+                    
+                    # Add value labels on x-axis
+                    ax.tick_params(axis='both', which='major', labelsize=10)
                 else:
                     ax.text(0.5, 0.5, 'No data available for distribution', 
-                           ha='center', va='center', transform=ax.transAxes)
-                    ax.set_title('Distribution Analysis Not Available')
+                           ha='center', va='center', transform=ax.transAxes, fontsize=14)
+                    ax.set_title('Distribution Analysis Not Available', fontsize=16)
             else:
                 ax.text(0.5, 0.5, 'No numerical columns for distribution analysis', 
-                       ha='center', va='center', transform=ax.transAxes)
-                ax.set_title('Distribution Analysis Not Available')
+                       ha='center', va='center', transform=ax.transAxes, fontsize=14)
+                ax.set_title('Distribution Analysis Not Available', fontsize=16)
         
         elif viz_type == 'categorical_counts':
             categorical_cols = df.select_dtypes(include=['object', 'category']).columns
             if len(categorical_cols) > 0:
-                col = categorical_cols[0]  # Use first categorical column
-                top_values = df[col].value_counts().head(5)  # Only top 5 for simplicity
-                bars = ax.bar(range(len(top_values)), top_values.values, color='lightcoral', alpha=0.7)
-                ax.set_title(f'Top Values in {col}')
-                ax.set_xlabel(col)
-                ax.set_ylabel('Count')
+                col = categorical_cols[0]
+                top_values = df[col].value_counts().head(8)  # Show more categories
+                
+                # Enhanced bar chart with better styling
+                bars = ax.bar(range(len(top_values)), top_values.values, 
+                             color='lightcoral', alpha=0.8, edgecolor='darkred', linewidth=0.5)
+                ax.set_title(f'Top Categories in {col}', fontsize=16, fontweight='bold', pad=20)
+                ax.set_xlabel(f'{col} Categories', fontsize=12, fontweight='bold')
+                ax.set_ylabel('Count', fontsize=12, fontweight='bold')
                 ax.set_xticks(range(len(top_values)))
-                ax.set_xticklabels(top_values.index, rotation=45, ha='right')
-                ax.grid(True, alpha=0.3)
+                ax.set_xticklabels(top_values.index, rotation=45, ha='right', fontsize=10)
+                ax.grid(True, alpha=0.3, linestyle='--', axis='y')
+                
+                # Add value labels on bars
+                for i, bar in enumerate(bars):
+                    height = bar.get_height()
+                    ax.text(bar.get_x() + bar.get_width()/2., height + height*0.01,
+                           f'{int(height)}', ha='center', va='bottom', fontsize=10, fontweight='bold')
+                
+                ax.tick_params(axis='both', which='major', labelsize=10)
             else:
                 ax.text(0.5, 0.5, 'No categorical columns for count analysis', 
-                       ha='center', va='center', transform=ax.transAxes)
-                ax.set_title('Categorical Analysis Not Available')
+                       ha='center', va='center', transform=ax.transAxes, fontsize=14)
+                ax.set_title('Categorical Analysis Not Available', fontsize=16)
+        
+        # Add a box plot visualization type
+        elif viz_type == 'box_plot':
+            numerical_cols = df.select_dtypes(include=[np.number]).columns
+            if len(numerical_cols) > 0:
+                # Create box plots for numerical columns
+                box_data = [df[col].dropna() for col in numerical_cols[:6]]  # Limit to 6 columns
+                box_labels = list(numerical_cols[:6])
+                
+                bp = ax.boxplot(box_data, labels=box_labels, patch_artist=True, 
+                               notch=True, showmeans=True)
+                
+                # Color the boxes
+                colors = ['lightblue', 'lightgreen', 'lightcoral', 'lightyellow', 'lightpink', 'lightgray']
+                for patch, color in zip(bp['boxes'], colors):
+                    patch.set_facecolor(color)
+                    patch.set_alpha(0.7)
+                
+                ax.set_title('Box Plot Analysis', fontsize=16, fontweight='bold', pad=20)
+                ax.set_xlabel('Variables', fontsize=12, fontweight='bold')
+                ax.set_ylabel('Values', fontsize=12, fontweight='bold')
+                ax.grid(True, alpha=0.3, linestyle='--', axis='y')
+                plt.xticks(rotation=45, ha='right')
+                ax.tick_params(axis='both', which='major', labelsize=10)
+            else:
+                ax.text(0.5, 0.5, 'No numerical columns for box plot analysis', 
+                       ha='center', va='center', transform=ax.transAxes, fontsize=14)
+                ax.set_title('Box Plot Analysis Not Available', fontsize=16)
         
         plt.tight_layout()
         

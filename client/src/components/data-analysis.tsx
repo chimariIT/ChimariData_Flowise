@@ -175,7 +175,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                 category: `Category ${i + 1}`,
                 count: Math.floor(Math.random() * 100)
               })),
-            statistics: numericFields.includes(field as string) ? {
+            statistics: numericFields.includes(field) ? {
               mean: (Math.random() * 100).toFixed(2),
               median: (Math.random() * 100).toFixed(2),
               mode: (Math.random() * 100).toFixed(2),
@@ -1062,81 +1062,60 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                 {isAnalyzing ? "Analyzing..." : "Run Analysis"}
               </Button>
               
-              {/* Visualization buttons consolidated */}
-              {(selectedAnalysis === 'descriptive' || selectedAnalysis === 'correlation') && (
-                <Button
-                  variant="outline"
-                  onClick={() => createVisualization('correlation_matrix')}
-                  disabled={isCreatingVisualization || numericFields.length < 2}
-                >
-                  <TrendingUp className="w-4 h-4 mr-2" />
-                  Correlation Matrix
-                </Button>
-              )}
-              
-              {(selectedAnalysis === 'descriptive' || selectedAnalysis === 'distribution') && (
-                <Button
-                  variant="outline"
-                  onClick={() => createVisualization('distribution_plot')}
-                  disabled={isCreatingVisualization || !analysisConfig.fields?.length}
-                >
-                  <BarChart3 className="w-4 h-4 mr-2" />
-                  Distribution Plot
-                </Button>
-              )}
-              
-              {selectedAnalysis === 'distribution' && (
-                <>
+              {/* Consolidated Visualization Options */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 pt-2">
+                {(selectedAnalysis === 'descriptive' || selectedAnalysis === 'correlation') && numericFields.length >= 2 && (
                   <Button
                     variant="outline"
-                    onClick={() => createVisualization('histogram')}
-                    disabled={isCreatingVisualization || !analysisConfig.fields?.length}
+                    size="sm"
+                    onClick={() => createVisualization('correlation_heatmap')}
+                    disabled={isCreatingVisualization}
+                    className="flex flex-col items-center p-3 h-16"
                   >
-                    <BarChart3 className="w-4 h-4 mr-2" />
-                    Histograms
+                    <TrendingUp className="w-5 h-5 mb-1" />
+                    <span className="text-xs">Correlation</span>
                   </Button>
+                )}
+                
+                {(selectedAnalysis === 'descriptive' || selectedAnalysis === 'distribution') && analysisConfig.fields?.length > 0 && (
                   <Button
                     variant="outline"
+                    size="sm"
+                    onClick={() => createVisualization('distribution_overview')}
+                    disabled={isCreatingVisualization}
+                    className="flex flex-col items-center p-3 h-16"
+                  >
+                    <BarChart3 className="w-5 h-5 mb-1" />
+                    <span className="text-xs">Distribution</span>
+                  </Button>
+                )}
+                
+                {selectedAnalysis === 'categorical' && analysisConfig.fields?.length > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => createVisualization('categorical_counts')}
+                    disabled={isCreatingVisualization}
+                    className="flex flex-col items-center p-3 h-16"
+                  >
+                    <PieChart className="w-5 h-5 mb-1" />
+                    <span className="text-xs">Categories</span>
+                  </Button>
+                )}
+                
+                {numericFields.length > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
                     onClick={() => createVisualization('box_plot')}
-                    disabled={isCreatingVisualization || !analysisConfig.fields?.length}
+                    disabled={isCreatingVisualization}
+                    className="flex flex-col items-center p-3 h-16"
                   >
-                    <PieChart className="w-4 h-4 mr-2" />
-                    Box Plots
+                    <BarChart3 className="w-5 h-5 mb-1" />
+                    <span className="text-xs">Box Plot</span>
                   </Button>
-                </>
-              )}
-              
-              {selectedAnalysis === 'correlation' && (
-                <Button
-                  variant="outline"
-                  onClick={() => createVisualization('correlation_heatmap')}
-                  disabled={isCreatingVisualization || numericFields.length < 2}
-                >
-                  <TrendingUp className="w-4 h-4 mr-2" />
-                  Correlation Heatmap
-                </Button>
-              )}
-              
-              {selectedAnalysis === 'categorical' && (
-                <>
-                  <Button
-                    variant="outline"
-                    onClick={() => createVisualization('bar_chart')}
-                    disabled={isCreatingVisualization || !analysisConfig.fields?.length}
-                  >
-                    <BarChart3 className="w-4 h-4 mr-2" />
-                    Bar Charts
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => createVisualization('pie_chart')}
-                    disabled={isCreatingVisualization || !analysisConfig.fields?.length}
-                  >
-                    <PieChart className="w-4 h-4 mr-2" />
-                    Pie Charts
-                  </Button>
-                </>
-              )}
+                )}
+              </div>
             </div>
           </CardContent>
         </Card>
