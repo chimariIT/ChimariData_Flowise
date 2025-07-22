@@ -452,7 +452,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
                 </div>
 
                 <div className="mt-4 text-center text-sm text-gray-600">
-                  <p>All plans include email verification from registration@chimaridata.com</p>
+                  <p>All plans include email verification from verification@chimaridata.com</p>
                   <p>Start with any tier and upgrade anytime</p>
                 </div>
               </CardContent>
