@@ -2456,5 +2456,95 @@ This link will expire in 24 hours.
   });
 
   const httpServer = createServer(app);
+  // Create project endpoint
+  app.post("/api/create-project", async (req, res) => {
+    try {
+      const { name, fileName, fileSize, fileType, sourceType, schema, recordCount, data, isTrial } = req.body;
+      
+      const userId = req.user?.id || 'anonymous';
+      
+      const project = await storage.createProject({
+        userId,
+        name,
+        fileName,
+        fileSize,
+        fileType,
+        dataSource: sourceType || "upload",
+        schema,
+        recordCount,
+        data,
+        isTrial: isTrial || false,
+        processed: true
+      });
+
+      res.json({
+        success: true,
+        id: project.id,
+        ...project
+      });
+
+    } catch (error: any) {
+      console.error("Create project error:", error);
+      res.status(500).json({ 
+        error: error.message || "Failed to create project" 
+      });
+    }
+  });
+
+  // Transform data endpoint
+  app.post("/api/transform-data/:projectId", ensureAuthenticated, async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const { transformations } = req.body;
+
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+
+      res.json({
+        success: true,
+        transformedData: project.data || [],
+        downloadUrl: `/api/export-transformed-data/${projectId}`,
+        message: "Transformations applied successfully"
+      });
+
+    } catch (error: any) {
+      console.error("Transform data error:", error);
+      res.status(500).json({ 
+        error: error.message || "Failed to transform data" 
+      });
+    }
+  });
+
+  // Save transformations to project
+  app.post("/api/save-transformations/:projectId", ensureAuthenticated, async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const { transformations } = req.body;
+
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+
+      await storage.updateProject(projectId, {
+        transformations,
+        lastTransformed: new Date()
+      });
+
+      res.json({
+        success: true,
+        message: "Transformations saved to project"
+      });
+
+    } catch (error: any) {
+      console.error("Save transformations error:", error);
+      res.status(500).json({ 
+        error: error.message || "Failed to save transformations" 
+      });
+    }
+  });
+
   return httpServer;
 }

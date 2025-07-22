@@ -130,29 +130,47 @@ export function MultiSourceUpload({
         setShowPIIDialog(true);
         console.log('Dialog state set - showPIIDialog:', true);
       } else {
-        // Upload complete - pass the complete analysis results
+        // Create project and complete upload
+        setUploadProgress(90);
+        
+        // Create project with uploaded data
+        const projectResponse = await fetch('/api/create-project', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+          },
+          body: JSON.stringify({
+            name: file.name.split('.')[0],
+            fileName: file.name,
+            fileSize: file.size,
+            fileType: file.type,
+            sourceType: selectedSource,
+            schema: result.schema,
+            recordCount: result.recordCount,
+            data: result.data,
+            isTrial: serviceType === 'free_trial'
+          })
+        });
+
+        const projectData = await projectResponse.json();
+        
         setUploadProgress(100);
         setUploadStatus('complete');
         
+        // Pass complete project data for navigation
         onComplete({
-          id: result.id,
-          name: result.name,
+          projectId: projectData.id,
+          ...projectData,
           sourceType: selectedSource,
           filename: file.name,
           size: file.size,
           mimeType: file.type,
-          uploadPath: `/uploads/${Date.now()}_${file.name}`,
           piiHandled: piiOptions?.piiHandled || false,
           anonymizationApplied: piiOptions?.anonymizationApplied || false,
-          // Include the actual analysis results from backend
           insights: result.insights,
-          questionResponse: result.questionResponse,
-          recordCount: result.recordCount,
-          columnCount: result.columnCount,
-          schema: result.schema,
-          metadata: result.metadata,
           questions: questions,
-          analysisType: 'descriptive', // Default analysis type for free trial
+          analysisType: 'descriptive',
           isTrial: result.isTrial
         });
       }

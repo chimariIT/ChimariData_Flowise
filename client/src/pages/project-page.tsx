@@ -176,14 +176,26 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
         </Card>
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-2">
+          <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="overview" className="flex items-center gap-2">
               <Database className="w-4 h-4" />
-              Project Overview
+              Overview
             </TabsTrigger>
             <TabsTrigger value="schema" className="flex items-center gap-2">
               <Settings className="w-4 h-4" />
               Schema
+            </TabsTrigger>
+            <TabsTrigger value="transform" className="flex items-center gap-2">
+              <Wrench className="w-4 h-4" />
+              Transform
+            </TabsTrigger>
+            <TabsTrigger value="analysis" className="flex items-center gap-2">
+              <BarChart3 className="w-4 h-4" />
+              Analysis
+            </TabsTrigger>
+            <TabsTrigger value="insights" className="flex items-center gap-2">
+              <Brain className="w-4 h-4" />
+              AI Insights
             </TabsTrigger>
           </TabsList>
 
