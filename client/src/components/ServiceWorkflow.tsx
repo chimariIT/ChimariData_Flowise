@@ -109,8 +109,17 @@ export function ServiceWorkflow({
     setError(null);
 
     try {
-      // Here you would call your API to process upload
-      await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate API call
+      // Check if project was created successfully
+      if (uploadInfo.success && uploadInfo.projectId) {
+        // Navigate directly to project page
+        if (onComplete) {
+          onComplete({
+            projectId: uploadInfo.projectId,
+            ...uploadInfo
+          });
+        }
+        return;
+      }
       
       updateWorkflowStep('upload', { uploadInfo });
     } catch (err) {
@@ -157,8 +166,9 @@ export function ServiceWorkflow({
       case 'upload':
         return (
           <MultiSourceUpload
-            onUploadComplete={handleUploadComplete}
+            onComplete={handleUploadComplete}
             isLoading={isProcessing}
+            serviceType="automated_analysis"
           />
         );
 
