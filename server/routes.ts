@@ -1049,12 +1049,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       console.log(`File processed successfully: ${project.id}`);
 
+      // Store the actual data for the project
+      await storage.updateProject(project.id, { 
+        data: processedData.data,
+        file_path: `/uploads/${project.id}.json`
+      });
+
       res.json({
         success: true,
         projectId: project.id,
         project: {
           ...project,
-          preview: processedData.preview
+          preview: processedData.preview,
+          file_path: `/uploads/${project.id}.json`,
+          data: processedData.data
         }
       });
 
