@@ -16,6 +16,8 @@ export default function DataTransformation({ project }: DataTransformationProps)
   const { toast } = useToast();
   const [transformations, setTransformations] = useState<any[]>([]);
   const [isTransforming, setIsTransforming] = useState(false);
+  const [hasTransformedData, setHasTransformedData] = useState(false);
+  const [transformedDataUrl, setTransformedDataUrl] = useState<string | null>(null);
 
   const schema = project.schema || {};
   const fields = Object.keys(schema);
@@ -71,23 +73,89 @@ export default function DataTransformation({ project }: DataTransformationProps)
   };
 
   const executeTransformations = async () => {
+    if (!project?.id) return;
+    
     setIsTransforming(true);
     try {
-      // Here you would send the transformations to the backend
-      await new Promise(resolve => setTimeout(resolve, 2000)); // Simulate processing
-      
-      toast({
-        title: "Transformations applied",
-        description: "Your data has been successfully transformed",
+      const response = await fetch(`/api/transform-data/${project.id}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        },
+        body: JSON.stringify({
+          transformations: transformations.map(t => ({
+            type: t.type,
+            config: t.config
+          }))
+        })
       });
+
+      if (response.ok) {
+        const result = await response.json();
+        
+        toast({
+          title: "Transformations applied",
+          description: "Your data has been successfully transformed",
+        });
+        
+        // Enable export button and store download URL
+        setHasTransformedData(true);
+        setTransformedDataUrl(result.downloadUrl);
+        
+        console.log('Transformation result:', result);
+      } else {
+        throw new Error('Failed to apply transformations');
+      }
     } catch (error) {
+      console.error('Error applying transformations:', error);
       toast({
-        title: "Transformation failed",
-        description: "There was an error applying the transformations",
+        title: "Error",
+        description: "Failed to apply transformations",
         variant: "destructive",
       });
     } finally {
       setIsTransforming(false);
+    }
+  };
+
+  const exportTransformedData = async () => {
+    if (!project?.id || !hasTransformedData) return;
+    
+    try {
+      const response = await fetch(`/api/export-transformed-data/${project.id}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        }
+      });
+
+      if (response.ok) {
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = `${project.file_name || 'data'}_transformed.csv`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+        
+        toast({
+          title: "Export successful",
+          description: "Transformed data has been downloaded",
+        });
+      } else {
+        throw new Error('Failed to export data');
+      }
+    } catch (error) {
+      console.error('Error exporting data:', error);
+      toast({
+        title: "Export failed",
+        description: "Failed to export transformed data",
+        variant: "destructive",
+      });
     }
   };
 
@@ -419,7 +487,11 @@ export default function DataTransformation({ project }: DataTransformationProps)
                 {isTransforming ? "Applying..." : "Apply Transformations"}
               </Button>
               
-              <Button variant="outline">
+              <Button 
+                variant="outline"
+                onClick={exportTransformedData}
+                disabled={!hasTransformedData}
+              >
                 <Download className="w-4 h-4 mr-2" />
                 Export Transformed Data
               </Button>
