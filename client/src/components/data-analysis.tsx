@@ -14,6 +14,20 @@ interface DataAnalysisProps {
 }
 
 export default function DataAnalysis({ project }: DataAnalysisProps) {
+  // Add error boundary check
+  if (!project) {
+    return (
+      <div className="p-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Analysis Not Available</CardTitle>
+            <CardDescription>Project data is not loaded yet.</CardDescription>
+          </CardHeader>
+        </Card>
+      </div>
+    );
+  }
+
   const { toast } = useToast();
   const [selectedAnalysis, setSelectedAnalysis] = useState("");
   const [analysisConfig, setAnalysisConfig] = useState<any>({});
@@ -24,6 +38,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
   const [visualizations, setVisualizations] = useState<any[]>([]);
   const [isCreatingVisualization, setIsCreatingVisualization] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [visualizationResults, setVisualizationResults] = useState<any[]>([]);
 
   const schema = project.schema || {};
   const numericFields = Object.entries(schema)
