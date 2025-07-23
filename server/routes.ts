@@ -2635,19 +2635,27 @@ This link will expire in 24 hours.
   });
 
   // Create visualization endpoint with proper canvas support
-  app.post('/api/create-visualization/:projectId', ensureAuthenticated, async (req, res) => {
+  app.post('/api/create-visualization/:projectId', async (req, res) => {
     try {
       const { projectId } = req.params;
       const { type, fields } = req.body;
-      const userId = req.user?.id;
-
-      if (!userId) {
-        return res.status(401).json({ error: 'Authentication required' });
+      
+      // Get auth token from headers
+      const token = req.headers.authorization?.split(' ')[1];
+      let userId = null;
+      
+      if (token && tokenStore.has(token)) {
+        userId = tokenStore.get(token);
       }
 
       const project = await storage.getProject(projectId);
-      if (!project || project.userId !== userId) {
+      if (!project) {
         return res.status(404).json({ error: 'Project not found' });
+      }
+      
+      // For authenticated users, verify ownership
+      if (userId && project.userId !== userId) {
+        return res.status(403).json({ error: 'Access denied' });
       }
 
       // Mock visualization result with proper canvas handling

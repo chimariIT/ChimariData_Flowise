@@ -1053,27 +1053,38 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
           <CardContent className="space-y-4">
             {renderAnalysisConfig()}
             
-            <div className="flex flex-wrap gap-2 pt-4">
+            {/* Analysis Execution Section */}
+            <div className="pt-4 border-t">
+              <div className="flex items-center justify-between mb-4">
+                <h4 className="text-sm font-medium text-gray-700">Execute Analysis</h4>
+              </div>
               <Button
                 onClick={executeAnalysis}
                 disabled={isAnalyzing}
+                className="w-full"
               >
                 <Play className="w-4 h-4 mr-2" />
                 {isAnalyzing ? "Analyzing..." : "Run Analysis"}
               </Button>
-              
-              {/* Consolidated Visualization Options */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 pt-2">
+            </div>
+            
+            {/* Visualization Creation Section */}
+            <div className="pt-4 border-t">
+              <div className="flex items-center justify-between mb-4">
+                <h4 className="text-sm font-medium text-gray-700">Create Visualizations</h4>
+                <span className="text-xs text-gray-500">Choose a chart type</span>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {(selectedAnalysis === 'descriptive' || selectedAnalysis === 'correlation') && numericFields.length >= 2 && (
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={() => createVisualization('correlation_heatmap')}
                     disabled={isCreatingVisualization}
-                    className="flex flex-col items-center p-3 h-16"
+                    className="flex flex-col items-center p-4 h-20 hover:bg-blue-50"
                   >
-                    <TrendingUp className="w-5 h-5 mb-1" />
-                    <span className="text-xs">Correlation</span>
+                    <TrendingUp className="w-6 h-6 mb-2 text-blue-600" />
+                    <span className="text-xs font-medium">Correlation</span>
                   </Button>
                 )}
                 
@@ -1083,10 +1094,10 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                     size="sm"
                     onClick={() => createVisualization('distribution_overview')}
                     disabled={isCreatingVisualization}
-                    className="flex flex-col items-center p-3 h-16"
+                    className="flex flex-col items-center p-4 h-20 hover:bg-green-50"
                   >
-                    <BarChart3 className="w-5 h-5 mb-1" />
-                    <span className="text-xs">Distribution</span>
+                    <BarChart3 className="w-6 h-6 mb-2 text-green-600" />
+                    <span className="text-xs font-medium">Distribution</span>
                   </Button>
                 )}
                 
@@ -1096,10 +1107,10 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                     size="sm"
                     onClick={() => createVisualization('categorical_counts')}
                     disabled={isCreatingVisualization}
-                    className="flex flex-col items-center p-3 h-16"
+                    className="flex flex-col items-center p-4 h-20 hover:bg-purple-50"
                   >
-                    <PieChart className="w-5 h-5 mb-1" />
-                    <span className="text-xs">Categories</span>
+                    <PieChart className="w-6 h-6 mb-2 text-purple-600" />
+                    <span className="text-xs font-medium">Categories</span>
                   </Button>
                 )}
                 
@@ -1109,13 +1120,21 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                     size="sm"
                     onClick={() => createVisualization('box_plot')}
                     disabled={isCreatingVisualization}
-                    className="flex flex-col items-center p-3 h-16"
+                    className="flex flex-col items-center p-4 h-20 hover:bg-orange-50"
                   >
-                    <BarChart3 className="w-5 h-5 mb-1" />
-                    <span className="text-xs">Box Plot</span>
+                    <BarChart3 className="w-6 h-6 mb-2 text-orange-600" />
+                    <span className="text-xs font-medium">Box Plot</span>
                   </Button>
                 )}
               </div>
+              {isCreatingVisualization && (
+                <div className="mt-3 p-3 bg-blue-50 rounded-lg">
+                  <div className="flex items-center text-sm text-blue-700">
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-700 mr-2"></div>
+                    Creating visualization...
+                  </div>
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>
