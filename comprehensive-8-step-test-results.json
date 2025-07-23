@@ -1,0 +1,171 @@
+{
+  "testRun": {
+    "timestamp": "2025-07-23T15:39:52.707Z",
+    "totalTests": 17,
+    "passedTests": 12,
+    "failedTests": 5,
+    "successRate": 70.6
+  },
+  "testResults": [
+    {
+      "step": 1,
+      "testName": "User Registration",
+      "passed": true,
+      "details": "Status: 201, Token: Present",
+      "timestamp": "2025-07-23T15:39:47.228Z"
+    },
+    {
+      "step": 1,
+      "testName": "User Login",
+      "passed": true,
+      "details": "Status: 200",
+      "timestamp": "2025-07-23T15:39:47.473Z"
+    },
+    {
+      "step": 1,
+      "testName": "Authentication Validation",
+      "passed": true,
+      "details": "User ID: Not found",
+      "timestamp": "2025-07-23T15:39:47.476Z"
+    },
+    {
+      "step": 2,
+      "testName": "File Upload",
+      "passed": true,
+      "details": "Status: 200, Response: {\"success\":true,\"requiresPIIDecision\":true,\"tempFileId\":\"temp_1753285187481_wookkrst9\",\"piiResult\":{\"detectedPII\":[\"name\",\"email\",\"age\"],\"columnAnalysis\":{\"name\":{\"isPII\":true,\"confidence\":1,\"type\":\"name\"},\"email\":{\"isPII\":true,\"confidence\":1,\"type\":\"email\"},\"age\":{\"isPII\":true,\"confidence\":0.6,\"type\":\"personal_identifier\"},\"salary\":{\"isPII\":false,\"confidence\":0,\"type\":\"unknown\"}},\"recommendations\":[\"Found 3 column(s) with potential PII: name, email, age\",\"Consider anonymizing or removing PII columns if not necessary for analysis\",\"Ensure proper data handling compliance (GDPR, CCPA, etc.)\"]},\"sampleData\":[{\"name\":\"John Doe\",\"email\":\"john@example.com\",\"age\":30,\"salary\":50000},{\"name\":\"Jane Smith\",\"email\":\"jane@example.com\",\"age\":25,\"salary\":60000},{\"name\":\"Bob Johnson\",\"email\":\"bob@example.com\",\"age\":35,\"salary\":70000}],\"name\":\"test_data\",\"fileInfo\":{\"originalname\":\"test_data.csv\",\"size\":130,\"mimetype\":\"text/csv\"}}",
+      "timestamp": "2025-07-23T15:39:47.483Z"
+    },
+    {
+      "step": 2,
+      "testName": "PII Detection",
+      "passed": true,
+      "details": "PII detected: No",
+      "timestamp": "2025-07-23T15:39:47.483Z"
+    },
+    {
+      "step": 3,
+      "testName": "PII Decision Processing",
+      "passed": true,
+      "details": "Status: 200, Response: {\"success\":true,\"projectId\":\"-vnyz0eUwBj4irxuahhli\",\"project\":{\"id\":\"-vnyz0eUwBj4irxuahhli\",\"uploadedAt\":\"2025-07-23T15:39:47.485Z\",\"processed\":false,\"userId\":\"zX4zWpyJ_D1Axyuw3V5wb\",\"name\":\"Uploaded Data\",\"description\":\"\",\"fileName\":\"test_data.csv\",\"fileSize\":130,\"fileType\":\"text/csv\",\"isTrial\":false,\"dataSource\":\"upload\",\"isPaid\":false,\"data\":[{\"name\":\"John Doe\",\"email\":\"john@example.com\",\"age\":30,\"salary\":50000},{\"name\":\"Jane Smith\",\"email\":\"jane@example.com\",\"age\":25,\"salary\":60000},{\"name\":\"Bob Johnson\",\"email\":\"bob@example.com\",\"age\":35,\"salary\":70000}],\"schema\":{\"name\":{\"type\":\"text\",\"nullable\":false,\"sampleValues\":[\"John Doe\",\"Jane Smith\",\"Bob Johnson\"]},\"email\":{\"type\":\"email\",\"nullable\":false,\"sampleValues\":[\"john@example.com\",\"jane@example.com\",\"bob@example.com\"]},\"age\":{\"type\":\"number\",\"nullable\":false,\"sampleValues\":[\"30\",\"25\",\"35\"]},\"salary\":{\"type\":\"number\",\"nullable\":false,\"sampleValues\":[\"50000\",\"60000\",\"70000\"]}},\"recordCount\":3,\"piiAnalysis\":{\"detectedPII\":[\"name\",\"email\",\"age\"],\"columnAnalysis\":{\"name\":{\"isPII\":true,\"confidence\":1,\"type\":\"name\"},\"email\":{\"isPII\":true,\"confidence\":1,\"type\":\"email\"},\"age\":{\"isPII\":true,\"confidence\":0.6,\"type\":\"personal_identifier\"},\"salary\":{\"isPII\":false,\"confidence\":0,\"type\":\"unknown\"}},\"recommendations\":[\"Found 3 column(s) with potential PII: name, email, age\",\"Consider anonymizing or removing PII columns if not necessary for analysis\",\"Ensure proper data handling compliance (GDPR, CCPA, etc.)\"],\"userDecision\":\"include\",\"overriddenColumns\":[],\"decisionTimestamp\":\"2025-07-23T15:39:47.485Z\"}},\"message\":\"Project created successfully with PII decision applied\"}",
+      "timestamp": "2025-07-23T15:39:47.487Z"
+    },
+    {
+      "step": 3,
+      "testName": "Project Creation",
+      "passed": true,
+      "details": "Projects found: 1",
+      "timestamp": "2025-07-23T15:39:47.488Z"
+    },
+    {
+      "step": 4,
+      "testName": "Schema Access",
+      "passed": {
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "sampleValues": [
+            "John Doe",
+            "Jane Smith",
+            "Bob Johnson"
+          ]
+        },
+        "email": {
+          "type": "email",
+          "nullable": false,
+          "sampleValues": [
+            "john@example.com",
+            "jane@example.com",
+            "bob@example.com"
+          ]
+        },
+        "age": {
+          "type": "number",
+          "nullable": false,
+          "sampleValues": [
+            "30",
+            "25",
+            "35"
+          ]
+        },
+        "salary": {
+          "type": "number",
+          "nullable": false,
+          "sampleValues": [
+            "50000",
+            "60000",
+            "70000"
+          ]
+        }
+      },
+      "details": "Schema fields: 4",
+      "timestamp": "2025-07-23T15:39:47.491Z"
+    },
+    {
+      "step": 4,
+      "testName": "Schema PDF Export",
+      "passed": true,
+      "details": "Export status: 200",
+      "timestamp": "2025-07-23T15:39:50.476Z"
+    },
+    {
+      "step": 5,
+      "testName": "Visualization Creation",
+      "passed": true,
+      "details": "Status: 200",
+      "timestamp": "2025-07-23T15:39:52.569Z"
+    },
+    {
+      "step": 5,
+      "testName": "Visualization Configuration",
+      "passed": true,
+      "details": "Status: 200",
+      "timestamp": "2025-07-23T15:39:52.598Z"
+    },
+    {
+      "step": 6,
+      "testName": "Descriptive Analysis",
+      "passed": false,
+      "details": "Status: 500",
+      "timestamp": "2025-07-23T15:39:52.630Z"
+    },
+    {
+      "step": 6,
+      "testName": "Machine Learning Analysis",
+      "passed": false,
+      "details": "Status: 500",
+      "timestamp": "2025-07-23T15:39:52.641Z"
+    },
+    {
+      "step": 7,
+      "testName": "Industry Templates Access",
+      "passed": false,
+      "details": "Status: 401",
+      "timestamp": "2025-07-23T15:39:52.645Z"
+    },
+    {
+      "step": 7,
+      "testName": "Guided Analysis Workflow",
+      "passed": false,
+      "details": "Status: 500",
+      "timestamp": "2025-07-23T15:39:52.671Z"
+    },
+    {
+      "step": 8,
+      "testName": "AI Insights Generation",
+      "passed": true,
+      "details": "Status: 200",
+      "timestamp": "2025-07-23T15:39:52.687Z"
+    },
+    {
+      "step": 8,
+      "testName": "Payment Integration",
+      "passed": false,
+      "details": "Status: 500",
+      "timestamp": "2025-07-23T15:39:52.705Z"
+    }
+  ],
+  "environment": {
+    "baseUrl": "http://localhost:5000",
+    "testEmail": "test1753285186710@chimaridata.com"
+  }
+}
