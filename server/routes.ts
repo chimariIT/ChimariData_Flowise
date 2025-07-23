@@ -64,10 +64,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Initialize MCP AI Service
   MCPAIService.initializeMCPServer().catch(console.error);
   
-  // Token store for authentication
-  const tokenStore = new Map<string, string>();
-  
-  // Authentication middleware
+  // Define ensureAuthenticated middleware within routes scope to access tokenStore
   const ensureAuthenticated = async (req: any, res: any, next: any) => {
     try {
       // First try OAuth session authentication
@@ -83,7 +80,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (userId) {
           const user = await storage.getUser(userId);
           if (user) {
-            req.user = user;
+            req.user = { id: user.id };
+            req.userId = user.id;
             return next();
           }
         }
@@ -95,6 +93,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(401).json({ error: "Authentication required" });
     }
   };
+  
+  // Token store for authentication (shared between middleware functions)
+  const tokenStore = new Map<string, string>();
   
   // Temporary storage for trial file data
   const tempTrialData = new Map();
