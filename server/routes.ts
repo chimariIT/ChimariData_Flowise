@@ -915,23 +915,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Projects API endpoints
-  app.get("/api/projects", async (req, res) => {
+  // Projects API endpoints - USER AUTHENTICATED ONLY
+  app.get("/api/projects", ensureAuthenticated, async (req, res) => {
     try {
-      const projects = await storage.getAllProjects();
+      const userId = (req.user as any)?.id;
+      if (!userId) {
+        return res.status(401).json({ error: "User authentication required" });
+      }
+      
+      const projects = await storage.getProjectsByUser(userId);
       res.json({ projects });
     } catch (error: any) {
-      console.error('Failed to fetch projects:', error);
+      console.error('Failed to fetch user projects:', error);
       res.status(500).json({ error: "Failed to fetch projects" });
     }
   });
 
-  app.get("/api/projects/:id", async (req, res) => {
+  app.get("/api/projects/:id", ensureAuthenticated, async (req, res) => {
     try {
+      const userId = (req.user as any)?.id;
       const project = await storage.getProject(req.params.id);
+      
       if (!project) {
         return res.status(404).json({ error: "Project not found" });
       }
+      
+      // Verify user owns this project
+      if (project.userId !== userId) {
+        return res.status(403).json({ error: "Access denied - not your project" });
+      }
+      
       res.json(project);
     } catch (error: any) {
       console.error('Failed to fetch project:', error);
