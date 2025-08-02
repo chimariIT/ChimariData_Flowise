@@ -59,7 +59,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
     {
       value: "visualization",
       label: "Data Visualization",
-      description: "Interactive charts and graphs",
+      description: "Interactive charts and graphs with field configuration",
       icon: BarChart3,
       fields: "any"
     },
