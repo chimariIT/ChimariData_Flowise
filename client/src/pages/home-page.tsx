@@ -72,7 +72,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
         
         toast({
           title: "File uploaded successfully!",
-          description: `Processed ${result.recordCount || 0} records from ${file.name}`,
+          description: `Processed ${result.record_count || result.recordCount || 0} records from ${file.name}`,
         });
         refetch();
         setLocation(`/project/${result.projectId}`);
@@ -138,7 +138,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
         
         toast({
           title: "File uploaded successfully!",
-          description: `Processed with ${decision} PII decision`,
+          description: `Processed ${result.record_count || result.recordCount || 0} records with ${decision} PII decision`,
         });
         refetch();
         setLocation(`/project/${result.projectId}`);
