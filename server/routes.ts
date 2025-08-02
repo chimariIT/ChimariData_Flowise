@@ -101,7 +101,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Temporary storage for trial file data
   const tempTrialData = new Map();
 
-  // Enhanced trial upload endpoint with PII analysis
+  // Legacy trial upload endpoint - redirect to unified upload
   app.post("/api/trial-upload", upload.single('file'), async (req, res) => {
     try {
       if (!req.file) {
@@ -297,7 +297,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // PII decision endpoint - unified for both JSON and FormData
+  // Unified PII decision endpoint for all users
   app.post("/api/pii-decision", (req, res, next) => {
     // Apply upload middleware only for FormData requests
     if (req.get('Content-Type')?.includes('application/json')) {
@@ -336,7 +336,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         
         const tempData = tempTrialData.get(tempFileId);
-        const { processedData, piiAnalysis, fileInfo } = tempData;
+        const { processedData, piiAnalysis, fileInfo, projectMetadata, userId, isAuthenticated } = tempData;
         
         let finalData, updatedSchema;
         
@@ -364,8 +364,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         processedData.schema = updatedSchema;
         
-        // Create project with processed data
-        const projectMetadata = projectData || {};
+        // Create project with processed data  
         const actualDecision = anonymizationConfig?.bypassPII ? 'bypassed' : decision;
         
         // Validate fileInfo exists and has required fields
@@ -378,13 +377,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         
         const newProjectData = {
-          userId: req.user?.id || 'anonymous',
-          name: projectMetadata.name || "Uploaded Data",
-          description: projectMetadata.description || "",
+          userId: userId || 'anonymous',
+          name: (projectData || projectMetadata)?.name || "Uploaded Data", 
+          description: (projectData || projectMetadata)?.description || "",
           fileName: fileInfo.originalname,
           fileSize: fileInfo.size,
           fileType: fileInfo.mimetype,
-          isTrial: false,
+          isTrial: !isAuthenticated, // Mark as trial if user is not authenticated
           dataSource: "upload" as const,
           isPaid: false,
           data: finalData,
@@ -1178,7 +1177,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Paid project upload endpoint
+  // Unified upload endpoint for all users (trial and authenticated)
   app.post("/api/upload", upload.single('file'), async (req, res) => {
     try {
       if (!req.file) {
@@ -1189,9 +1188,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const file = req.file;
+      const name = req.body.name || file.originalname.replace(/\.[^/.]+$/, "");
       const description = req.body.description || '';
+      const questions = req.body.questions ? JSON.parse(req.body.questions) : [];
+      
+      // Determine if user is authenticated (for feature access control)
+      const isAuthenticated = req.user?.id;
+      const userId = req.user?.id || 'anonymous';
 
-      console.log(`Processing file: ${file.originalname} (${file.size} bytes)`);
+      console.log(`Processing file: ${file.originalname} (${file.size} bytes) for user: ${userId}`);
+
+      // Check file size limits based on authentication status
+      if (!isAuthenticated) {
+        const freeTrialLimit = PricingService.getFreeTrialLimits();
+        if (file.size > freeTrialLimit.maxFileSize) {
+          return res.status(400).json({
+            success: false,
+            error: `File size exceeds free trial limit of ${Math.round(freeTrialLimit.maxFileSize / (1024 * 1024))}MB. Please create an account for larger files.`
+          });
+        }
+      }
 
       // Process the file
       const processedData = await FileProcessor.processFile(
@@ -1208,7 +1224,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Store temporary file info for PII consent
         const tempFileId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         
-        // Store processed data temporarily
+        // Store processed data temporarily with user metadata
         tempTrialData.set(tempFileId, {
           processedData,
           piiAnalysis,
@@ -1216,7 +1232,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
             originalname: file.originalname,
             size: file.size,
             mimetype: file.mimetype
-          }
+          },
+          projectMetadata: {
+            name,
+            description,
+            questions
+          },
+          userId,
+          isAuthenticated
         });
 
         // Clean up old temp data (older than 1 hour)
@@ -1234,7 +1257,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           tempFileId,
           piiResult: piiAnalysis,
           sampleData: processedData.preview,
-          name: file.originalname.replace(/\.[^/.]+$/, ""),
+          name,
           fileInfo: {
             originalname: file.originalname,
             size: file.size,
@@ -1243,19 +1266,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      // Create project in storage
+      // Create project in storage with appropriate trial status
       const project = await storage.createProject({
-        userId: (req.user as any)?.id || 'anonymous',
-        name: file.originalname.replace(/\.[^/.]+$/, ""),
+        userId,
+        name,
         fileName: file.originalname,
         fileSize: file.size,
         fileType: file.mimetype,
         description,
-        isTrial: false,
+        isTrial: !isAuthenticated, // Mark as trial if user is not authenticated
         dataSource: "upload" as const,
         isPaid: false,
         schema: processedData.schema,
         recordCount: processedData.recordCount,
+        data: processedData.data,
         piiAnalysis: piiAnalysis
       });
 

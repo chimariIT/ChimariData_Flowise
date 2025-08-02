@@ -35,7 +35,7 @@ export class APIClient {
       formData.append('selectedColumns', JSON.stringify(options.selectedColumns));
     }
 
-    const endpoint = options.isTrial ? '/api/trial-upload' : '/api/upload';
+    const endpoint = '/api/upload'; // Unified endpoint for all users
     
     // Add authentication headers
     const token = localStorage.getItem('auth_token');

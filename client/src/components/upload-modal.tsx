@@ -117,15 +117,11 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
         ];
       }
 
-      // Check if user is authenticated
-      const token = localStorage.getItem('auth_token');
-      
-      // Try trial upload first if no authentication, then fallback to authenticated upload
+      // Use unified upload endpoint for all users
       const result = await apiClient.uploadFile(selectedFile, {
         name: formData.projectName,
         description: formData.description,
-        questions: questionsArray,
-        isTrial: !token // Use trial upload if not authenticated
+        questions: questionsArray
       });
       
       // Check if PII decision is required
@@ -199,10 +195,8 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
         headers['Authorization'] = `Bearer ${token}`;
       }
 
-      // Use trial PII decision endpoint if no authentication, otherwise use authenticated endpoint
-      const endpoint = token ? '/api/pii-decision' : '/api/trial-pii-decision';
-
-      const response = await fetch(endpoint, {
+      // Use unified PII decision endpoint for all users
+      const response = await fetch('/api/pii-decision', {
         method: 'POST',
         headers,
         body: JSON.stringify(requestData),
