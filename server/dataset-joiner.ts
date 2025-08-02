@@ -2,6 +2,7 @@ export interface JoinConfig {
   joinWithProjects: string[];
   joinType: 'inner' | 'left' | 'right' | 'outer';
   joinKeys: { [projectId: string]: string };
+  mergeStrategy: 'merge' | 'concat';
 }
 
 export interface JoinResult {
@@ -19,32 +20,74 @@ export class DatasetJoiner {
     config: JoinConfig
   ): Promise<JoinResult> {
     try {
-      console.log(`Joining ${joinProjects.length} datasets with base project ${baseProject.id}`);
+      console.log(`${config.mergeStrategy === 'merge' ? 'Merging' : 'Concatenating'} ${joinProjects.length} datasets with base project ${baseProject.id}`);
       
       const baseData = baseProject.data || [];
-      const baseJoinKey = config.joinKeys[baseProject.id] || Object.keys(baseProject.schema || {})[0];
+      let resultData: any[] = [];
+      let joinedFields: string[] = [];
       
-      let resultData = [...baseData];
-      let joinedFields = Object.keys(baseProject.schema || {});
-      
-      // Process each project to join
-      for (const joinProject of joinProjects) {
-        const joinKey = config.joinKeys[joinProject.id];
-        const joinData = joinProject.data || [];
+      if (config.mergeStrategy === 'concat') {
+        // Concatenation strategy - stack datasets vertically
+        resultData = [...baseData];
+        joinedFields = Object.keys(baseProject.schema || {});
         
-        if (!joinKey) {
-          throw new Error(`No join key specified for project ${joinProject.name}`);
+        // Get all unique fields across all projects
+        const allFields = new Set(joinedFields);
+        
+        for (const joinProject of joinProjects) {
+          const projectFields = Object.keys(joinProject.schema || {});
+          projectFields.forEach(field => allFields.add(field));
         }
         
-        // Get fields from join project (exclude the join key to avoid duplication)
-        const projectFields = Object.keys(joinProject.schema || {}).filter(field => field !== joinKey);
+        joinedFields = Array.from(allFields);
         
-        // Add prefix to field names to avoid conflicts
-        const prefixedFields = projectFields.map(field => `${joinProject.name}_${field}`);
-        joinedFields = [...joinedFields, ...prefixedFields];
+        // Add data from each project, filling missing columns with null
+        for (const joinProject of joinProjects) {
+          const projectData = joinProject.data || [];
+          const alignedData = projectData.map(row => {
+            const alignedRow: any = {};
+            joinedFields.forEach(field => {
+              alignedRow[field] = row[field] || null;
+            });
+            return alignedRow;
+          });
+          resultData = [...resultData, ...alignedData];
+        }
         
-        // Perform the join operation
-        resultData = this.performJoin(resultData, joinData, baseJoinKey, joinKey, config.joinType, joinProject.name);
+        // Align base data to have all fields
+        resultData = resultData.map(row => {
+          const alignedRow: any = {};
+          joinedFields.forEach(field => {
+            alignedRow[field] = row[field] || null;
+          });
+          return alignedRow;
+        });
+        
+      } else {
+        // Merge strategy - join on keys
+        const baseJoinKey = config.joinKeys[baseProject.id] || Object.keys(baseProject.schema || {})[0];
+        resultData = [...baseData];
+        joinedFields = Object.keys(baseProject.schema || {});
+        
+        // Process each project to join
+        for (const joinProject of joinProjects) {
+          const joinKey = config.joinKeys[joinProject.id];
+          const joinData = joinProject.data || [];
+          
+          if (!joinKey) {
+            throw new Error(`No join key specified for project ${joinProject.name}`);
+          }
+          
+          // Get fields from join project (exclude the join key to avoid duplication)
+          const projectFields = Object.keys(joinProject.schema || {}).filter(field => field !== joinKey);
+          
+          // Add prefix to field names to avoid conflicts
+          const prefixedFields = projectFields.map(field => `${joinProject.name}_${field}`);
+          joinedFields = [...joinedFields, ...prefixedFields];
+          
+          // Perform the join operation
+          resultData = this.performJoin(resultData, joinData, baseJoinKey, joinKey, config.joinType, joinProject.name);
+        }
       }
       
       // Create new schema for joined dataset
@@ -76,6 +119,7 @@ export class DatasetJoiner {
         recordCount: resultData.length,
         joinedFiles: config.joinWithProjects,
         joinMetadata: {
+          mergeStrategy: config.mergeStrategy,
           joinType: config.joinType,
           joinKeys: config.joinKeys,
           originalProjects: [baseProject.id, ...config.joinWithProjects],
@@ -194,20 +238,31 @@ export class DatasetJoiner {
   }
   
   static validateJoinRequest(config: JoinConfig, baseProject: any, joinProjects: any[]): string | null {
-    // Validate join keys exist
-    for (const projectId of config.joinWithProjects) {
-      const joinKey = config.joinKeys[projectId];
-      if (!joinKey) {
-        return `Join key not specified for project ${projectId}`;
+    if (!config.joinWithProjects || config.joinWithProjects.length === 0) {
+      return 'At least one dataset must be selected for joining';
+    }
+
+    // For merge strategy, validate join keys exist
+    if (config.mergeStrategy === 'merge') {
+      for (const projectId of config.joinWithProjects) {
+        const joinKey = config.joinKeys[projectId];
+        if (!joinKey) {
+          return `Join key not specified for project ${projectId}`;
+        }
+        
+        const project = joinProjects.find(p => p.id === projectId);
+        if (!project) {
+          return `Project ${projectId} not found`;
+        }
+        
+        if (!project.schema || !project.schema[joinKey]) {
+          return `Join key '${joinKey}' not found in project ${project.name}`;
+        }
       }
       
-      const project = joinProjects.find(p => p.id === projectId);
-      if (!project) {
-        return `Project ${projectId} not found`;
-      }
-      
-      if (!project.schema || !project.schema[joinKey]) {
-        return `Join key '${joinKey}' not found in project ${project.name}`;
+      // Validate base project join key
+      if (!config.joinKeys[baseProject.id]) {
+        return 'Join key not specified for base project';
       }
     }
     

@@ -621,6 +621,10 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
             <MultiFileJoiner
               currentProject={project}
               userProjects={projectsData?.projects || []}
+              onProjectsRefresh={() => {
+                // Refresh projects list when new dataset uploaded
+                window.location.reload();
+              }}
               onJoinComplete={(joinedProject) => {
                 setShowJoiner(false);
                 if (onProjectUpdate) {

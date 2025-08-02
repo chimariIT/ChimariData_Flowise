@@ -1756,7 +1756,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/join-datasets/:projectId", ensureAuthenticated, async (req, res) => {
     try {
       const projectId = req.params.projectId;
-      const { joinWithProjects, joinType, joinKeys } = req.body;
+      const { joinWithProjects, joinType, joinKeys, mergeStrategy } = req.body;
       const userId = req.user?.id;
 
       if (!userId) {
@@ -1780,8 +1780,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Validate join configuration
+      const config = { joinWithProjects, joinType, joinKeys, mergeStrategy: mergeStrategy || 'merge' };
       const validationError = DatasetJoiner.validateJoinRequest(
-        { joinWithProjects, joinType, joinKeys },
+        config,
         baseProject,
         joinProjects
       );
@@ -1794,7 +1795,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const joinResult = await DatasetJoiner.joinDatasets(
         baseProject,
         joinProjects,
-        { joinWithProjects, joinType, joinKeys }
+        config
       );
 
       if (!joinResult.success) {
