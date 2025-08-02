@@ -329,6 +329,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
         
         if (!tempFileId || !tempTrialData.has(tempFileId)) {
+          console.error("Temp file lookup failed:", {
+            tempFileId,
+            hasFileId: !!tempFileId,
+            tempDataKeys: Array.from(tempTrialData.keys()),
+            tempDataSize: tempTrialData.size
+          });
           return res.status(400).json({
             success: false,
             error: "Temporary file data not found. Please upload the file again."
@@ -1867,16 +1873,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get specific project for authenticated user
-  app.get("/api/projects/:id", unifiedAuth, async (req, res) => {
+  // Unified project retrieval endpoint - handles both authenticated and anonymous trial projects
+  app.get("/api/projects/:id", async (req, res) => {
     try {
       const projectId = req.params.id;
-      const userId = req.user?.id;
       
-      if (!userId) {
-        return res.status(401).json({ error: "Authentication required" });
-      }
-      
-      console.log(`Fetching project: ${projectId} for user: ${userId}`);
+      console.log(`Fetching project: ${projectId}`);
       
       const project = await storage.getProject(projectId);
       if (!project) {
@@ -1884,13 +1886,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Project not found" });
       }
       
-      // Check if project belongs to user
-      if (project.userId !== userId) {
-        console.log(`Project ${projectId} does not belong to user ${userId}`);
+      // Get authentication info (optional for this endpoint)
+      const token = req.headers.authorization?.replace('Bearer ', '');
+      let userId = null;
+      
+      if (token) {
+        try {
+          const decoded = jwt.verify(token, JWT_SECRET);
+          userId = (decoded as any).userId;
+        } catch (jwtError) {
+          // Invalid token, but we'll continue as anonymous if it's a trial project
+          console.log("Invalid JWT token, continuing as anonymous");
+        }
+      }
+      
+      // Allow access if:
+      // 1. Project belongs to authenticated user
+      // 2. Project is a trial project (userId: 'anonymous') and no authentication required
+      // 3. User is anonymous and project is anonymous
+      const isTrialProject = project.isTrial && project.userId === 'anonymous';
+      const isOwner = userId && project.userId === userId;
+      const isAnonymousAccess = !userId && isTrialProject;
+      
+      if (!isOwner && !isAnonymousAccess) {
+        console.log(`Access denied - Project ${projectId} user: ${project.userId}, requesting user: ${userId || 'anonymous'}, isTrial: ${project.isTrial}`);
         return res.status(403).json({ error: "Access denied" });
       }
       
-      console.log(`Project ${projectId} found successfully`);
+      console.log(`Project ${projectId} access granted - Owner: ${isOwner}, Anonymous: ${isAnonymousAccess}, Trial: ${isTrialProject}`);
       res.json(project);
     } catch (error: any) {
       console.error("Error fetching project:", error);
