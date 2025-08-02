@@ -19,7 +19,8 @@ import {
   Eye,
   Settings,
   Palette,
-  Play
+  Play,
+  Box
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { ChartContainer } from "@/components/ui/chart";
@@ -36,7 +37,9 @@ interface ChartConfig {
   yAxis?: string | string[];
   groupBy?: string;
   colorBy?: string;
+  sizeBy?: string;
   aggregation?: string;
+  title?: string;
   filters?: any;
   style?: {
     theme: string;
@@ -49,6 +52,7 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
   const { toast } = useToast();
   const [chartConfig, setChartConfig] = useState<ChartConfig>({
     chartType: '',
+    aggregation: 'sum',
     style: {
       theme: 'default',
       colors: ['#8884d8', '#82ca9d', '#ffc658', '#ff7300', '#00ff00'],
@@ -425,30 +429,59 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                       </Select>
                     </div>
 
-                    {/* Group By */}
+                    {/* Enhanced Field Interaction Section */}
+                    <div className="bg-blue-50 p-4 rounded-lg space-y-3">
+                      <h4 className="font-medium text-blue-900 text-sm">Field Interaction Configuration</h4>
+                      <p className="text-xs text-blue-700">Configure how fields interact to reveal data patterns and insights.</p>
+                    </div>
+
+                    {/* Color By Field */}
                     <div className="space-y-2">
-                      <label className="text-sm font-medium">Group By (Optional)</label>
+                      <label className="text-sm font-medium">Color By (Optional)</label>
                       <Select 
                         value={chartConfig.groupBy} 
                         onValueChange={(value) => updateChartConfig('groupBy', value)}
                       >
                         <SelectTrigger>
-                          <SelectValue placeholder="Select grouping field" />
+                          <SelectValue placeholder="Select color grouping field" />
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="">None</SelectItem>
                           {categoricalFields.map((field: string) => (
                             <SelectItem key={field} value={field}>
-                              {field}
+                              {field} <Badge variant="outline" className="ml-1 text-xs">categorical</Badge>
                             </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
                     </div>
 
+                    {/* Size By Field (for scatter plots primarily) */}
+                    {chartConfig.chartType === 'scatter' && (
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">Size By (Optional)</label>
+                        <Select 
+                          value={chartConfig.sizeBy} 
+                          onValueChange={(value) => updateChartConfig('sizeBy', value)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select size field" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="">None</SelectItem>
+                            {numericFields.map((field: string) => (
+                              <SelectItem key={field} value={field}>
+                                {field} <Badge variant="outline" className="ml-1 text-xs">numeric</Badge>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+
                     {/* Aggregation */}
                     <div className="space-y-2">
-                      <label className="text-sm font-medium">Aggregation</label>
+                      <label className="text-sm font-medium">Aggregation Method</label>
                       <Select 
                         value={chartConfig.aggregation} 
                         onValueChange={(value) => updateChartConfig('aggregation', value)}
@@ -465,6 +498,34 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                         </SelectContent>
                       </Select>
                     </div>
+
+                    {/* Chart Title */}
+                    <div className="space-y-2">  
+                      <label className="text-sm font-medium">Chart Title (Optional)</label>
+                      <input
+                        type="text"
+                        value={chartConfig.title || ''}
+                        onChange={(e) => updateChartConfig('title', e.target.value)}
+                        placeholder="Enter custom chart title"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                      />
+                    </div>
+
+                    {/* Field Interaction Analysis Display */}
+                    {chartConfig.xAxis && chartConfig.yAxis && (
+                      <div className="bg-green-50 p-3 rounded-lg">
+                        <h5 className="font-medium text-green-900 text-sm mb-1">Field Interaction Analysis</h5>
+                        <p className="text-xs text-green-700">
+                          Analyzing relationship between <strong>{chartConfig.xAxis}</strong> and <strong>{chartConfig.yAxis}</strong>
+                          {chartConfig.groupBy && (
+                            <span>, grouped by <strong>{chartConfig.groupBy}</strong></span>
+                          )}
+                          {chartConfig.sizeBy && (
+                            <span>, with size based on <strong>{chartConfig.sizeBy}</strong></span>
+                          )}. This will reveal patterns, correlations, and insights in your data.
+                        </p>
+                      </div>
+                    )}
 
                     <Button 
                       onClick={generateVisualization} 
@@ -559,47 +620,200 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
         </TabsContent>
 
         <TabsContent value="insights" className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Zap className="h-5 w-5" />
-                Data Insights & Recommendations
-              </CardTitle>
-              <CardDescription>
-                AI-powered suggestions for effective data visualization
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="p-4 border rounded">
-                  <h4 className="font-medium mb-2">Suggested Charts</h4>
-                  <ul className="text-sm space-y-1">
-                    {numericFields.slice(0, 3).map(field => (
-                      <li key={field} className="flex items-center gap-2">
-                        <BarChart3 className="h-3 w-3" />
-                        Bar chart for {field} distribution
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-                
-                <div className="p-4 border rounded">
-                  <h4 className="font-medium mb-2">Data Quality</h4>
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span>Completeness</span>
-                      <span className="font-medium">95%</span>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Data Overview</CardTitle>
+                <CardDescription>Overview of your data structure and field types</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="text-center p-4 bg-muted rounded-lg">
+                      <div className="text-2xl font-bold text-blue-600">{previewData.length}</div>
+                      <div className="text-sm text-muted-foreground">Total Records</div>
                     </div>
-                    <div className="flex justify-between text-sm">
-                      <span>Numeric Fields</span>
-                      <span className="font-medium">{numericFields.length}</span>
+                    <div className="text-center p-4 bg-muted rounded-lg">
+                      <div className="text-2xl font-bold text-green-600">{Object.keys(schema).length}</div>
+                      <div className="text-sm text-muted-foreground">Total Fields</div>
                     </div>
-                    <div className="flex justify-between text-sm">
-                      <span>Categories</span>
-                      <span className="font-medium">{categoricalFields.length}</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-sm">
+                    <div className="text-center p-2 bg-blue-50 rounded">
+                      <div className="font-medium text-blue-700">{numericFields.length}</div>
+                      <div className="text-blue-600">Numeric</div>
+                    </div>
+                    <div className="text-center p-2 bg-green-50 rounded">
+                      <div className="font-medium text-green-700">{categoricalFields.length}</div>
+                      <div className="text-green-600">Categorical</div>
+                    </div>
+                    <div className="text-center p-2 bg-purple-50 rounded">
+                      <div className="font-medium text-purple-700">{dateTimeFields.length}</div>
+                      <div className="text-purple-600">DateTime</div>
                     </div>
                   </div>
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Smart Chart Recommendations</CardTitle>
+                <CardDescription>AI-powered field interaction suggestions</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  {numericFields.length >= 2 && (
+                    <div 
+                      className="p-3 border rounded-lg cursor-pointer hover:bg-blue-50 transition-colors"
+                      onClick={() => {
+                        setChartConfig(prev => ({
+                          ...prev,
+                          chartType: 'scatter',
+                          xAxis: numericFields[0],
+                          yAxis: numericFields[1],
+                          title: `${numericFields[1]} vs ${numericFields[0]} Correlation`
+                        }));
+                      }}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <ScatterChart className="h-4 w-4 text-blue-500" />
+                        <span className="font-medium text-sm">Correlation Analysis</span>
+                        <Badge variant="outline" className="text-xs">Click to apply</Badge>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Explore relationships between <strong>{numericFields[0]}</strong> and <strong>{numericFields[1]}</strong> using scatter plots
+                      </p>
+                    </div>
+                  )}
+                  
+                  {categoricalFields.length > 0 && numericFields.length > 0 && (
+                    <div 
+                      className="p-3 border rounded-lg cursor-pointer hover:bg-green-50 transition-colors"
+                      onClick={() => {
+                        setChartConfig(prev => ({
+                          ...prev,
+                          chartType: 'bar',
+                          xAxis: categoricalFields[0],
+                          yAxis: numericFields[0],
+                          aggregation: 'mean',
+                          title: `${numericFields[0]} by ${categoricalFields[0]}`
+                        }));
+                      }}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <BarChart3 className="h-4 w-4 text-green-500" />
+                        <span className="font-medium text-sm">Category Comparison</span>
+                        <Badge variant="outline" className="text-xs">Click to apply</Badge>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Compare <strong>{numericFields[0]}</strong> across <strong>{categoricalFields[0]}</strong> categories
+                      </p>
+                    </div>
+                  )}
+                  
+                  {dateTimeFields.length > 0 && numericFields.length > 0 && (
+                    <div 
+                      className="p-3 border rounded-lg cursor-pointer hover:bg-purple-50 transition-colors"
+                      onClick={() => {
+                        setChartConfig(prev => ({
+                          ...prev,
+                          chartType: 'line',
+                          xAxis: dateTimeFields[0],
+                          yAxis: numericFields[0],
+                          title: `${numericFields[0]} Trends Over Time`
+                        }));
+                      }}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <LineChart className="h-4 w-4 text-purple-500" />
+                        <span className="font-medium text-sm">Trend Analysis</span>
+                        <Badge variant="outline" className="text-xs">Click to apply</Badge>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Track <strong>{numericFields[0]}</strong> trends over <strong>{dateTimeFields[0]}</strong>
+                      </p>
+                    </div>
+                  )}
+
+                  {numericFields.length >= 3 && categoricalFields.length > 0 && (
+                    <div 
+                      className="p-3 border rounded-lg cursor-pointer hover:bg-yellow-50 transition-colors"
+                      onClick={() => {
+                        setChartConfig(prev => ({
+                          ...prev,
+                          chartType: 'scatter',
+                          xAxis: numericFields[0],
+                          yAxis: numericFields[1],
+                          sizeBy: numericFields[2],
+                          groupBy: categoricalFields[0],
+                          title: `Multi-dimensional Analysis`
+                        }));
+                      }}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <Box className="h-4 w-4 text-yellow-500" />
+                        <span className="font-medium text-sm">Multi-Field Interaction</span>
+                        <Badge variant="outline" className="text-xs">Click to apply</Badge>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Analyze <strong>{numericFields[0]}</strong> vs <strong>{numericFields[1]}</strong>, sized by <strong>{numericFields[2]}</strong>, grouped by <strong>{categoricalFields[0]}</strong>
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Field Interaction Matrix */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Field Interaction Matrix</CardTitle>
+              <CardDescription>Discover how your fields can work together to create meaningful visualizations</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b">
+                      <th className="text-left p-2">Field Combination</th>
+                      <th className="text-left p-2">Best Chart Type</th>
+                      <th className="text-left p-2">Insights Revealed</th>
+                      <th className="text-left p-2">Use Case</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {numericFields.slice(0, 2).map((numField, i) => 
+                      categoricalFields.slice(0, 2).map((catField, j) => (
+                        <tr key={`${i}-${j}`} className="border-b hover:bg-gray-50">
+                          <td className="p-2">
+                            <span className="font-medium text-blue-600">{numField}</span> × <span className="font-medium text-green-600">{catField}</span>
+                          </td>
+                          <td className="p-2">
+                            <Badge variant="outline">Bar Chart</Badge>
+                          </td>
+                          <td className="p-2 text-xs text-gray-600">Compare {numField} across {catField} groups</td>
+                          <td className="p-2 text-xs text-gray-500">Performance by category</td>
+                        </tr>
+                      ))
+                    )}
+                    {numericFields.slice(0, 2).map((field1, i) => 
+                      numericFields.slice(i + 1, 3).map((field2, j) => (
+                        <tr key={`num-${i}-${j}`} className="border-b hover:bg-gray-50">
+                          <td className="p-2">
+                            <span className="font-medium text-blue-600">{field1}</span> × <span className="font-medium text-blue-600">{field2}</span>
+                          </td>
+                          <td className="p-2">
+                            <Badge variant="outline">Scatter Plot</Badge>
+                          </td>
+                          <td className="p-2 text-xs text-gray-600">Correlation and patterns</td>
+                          <td className="p-2 text-xs text-gray-500">Relationship analysis</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
               </div>
             </CardContent>
           </Card>
