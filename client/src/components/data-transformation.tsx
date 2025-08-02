@@ -5,19 +5,33 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
-import { Filter, RefreshCw, Download, Play, CheckCircle } from "lucide-react";
+import { Filter, RefreshCw, Download, Play, CheckCircle, Database, Merge } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import MultiFileJoiner from "./multi-file-joiner";
+import { useQuery } from "@tanstack/react-query";
+import { apiClient } from "@/lib/api";
 
 interface DataTransformationProps {
   project: any;
+  onProjectUpdate?: (updatedProject: any) => void;
 }
 
-export default function DataTransformation({ project }: DataTransformationProps) {
+export default function DataTransformation({ project, onProjectUpdate }: DataTransformationProps) {
   const { toast } = useToast();
   const [transformations, setTransformations] = useState<any[]>([]);
   const [isTransforming, setIsTransforming] = useState(false);
   const [hasTransformedData, setHasTransformedData] = useState(false);
   const [transformedDataUrl, setTransformedDataUrl] = useState<string | null>(null);
+  const [showJoiner, setShowJoiner] = useState(false);
+
+  // Fetch user projects for joining
+  const { data: projectsData } = useQuery({
+    queryKey: ["/api/projects"],
+    queryFn: async () => {
+      const result = await apiClient.getProjects();
+      return result;
+    },
+  });
 
   const schema = project.schema || {};
   const fields = Object.keys(schema);
@@ -578,6 +592,49 @@ export default function DataTransformation({ project }: DataTransformationProps)
           </CardContent>
         </Card>
       )}
+
+      {/* Multi-File Data Joining */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Merge className="w-5 h-5" />
+                Multi-File Data Joining
+              </CardTitle>
+              <CardDescription>
+                Combine multiple datasets based on common fields
+              </CardDescription>
+            </div>
+            <Button
+              variant="outline"
+              onClick={() => setShowJoiner(!showJoiner)}
+              className="flex items-center gap-2"
+            >
+              <Database className="w-4 h-4" />
+              {showJoiner ? 'Hide Joiner' : 'Join Datasets'}
+            </Button>
+          </div>
+        </CardHeader>
+        {showJoiner && (
+          <CardContent>
+            <MultiFileJoiner
+              currentProject={project}
+              userProjects={projectsData?.projects || []}
+              onJoinComplete={(joinedProject) => {
+                setShowJoiner(false);
+                if (onProjectUpdate) {
+                  onProjectUpdate(joinedProject);
+                }
+                toast({
+                  title: "Datasets Joined Successfully",
+                  description: `New project created with ${joinedProject.recordCount} records`
+                });
+              }}
+            />
+          </CardContent>
+        )}
+      </Card>
     </div>
   );
 }

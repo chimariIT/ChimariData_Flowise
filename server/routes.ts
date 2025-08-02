@@ -22,6 +22,7 @@ import { UnifiedPIIProcessor } from './unified-pii-processor';
 import { EmailService } from './email-service';
 import { PythonVisualizationService } from './python-visualization';
 import { PDFExportService } from './pdf-export';
+import { DatasetJoiner } from './dataset-joiner';
 import { SUBSCRIPTION_TIERS, getTierLimits, canUserUpload, canUserRequestAIInsight } from '@shared/subscription-tiers';
 import bcrypt from 'bcrypt';
 import fs from 'fs/promises';
@@ -1748,6 +1749,78 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("Error processing features:", error);
       res.status(500).json({ error: "Failed to process features" });
+    }
+  });
+
+  // Join datasets endpoint
+  app.post("/api/join-datasets/:projectId", ensureAuthenticated, async (req, res) => {
+    try {
+      const projectId = req.params.projectId;
+      const { joinWithProjects, joinType, joinKeys } = req.body;
+      const userId = req.user?.id;
+
+      if (!userId) {
+        return res.status(401).json({ error: "Authentication required" });
+      }
+
+      // Get base project
+      const baseProject = await storage.getProject(projectId);
+      if (!baseProject || baseProject.userId !== userId) {
+        return res.status(404).json({ error: "Base project not found" });
+      }
+
+      // Get projects to join
+      const joinProjects = [];
+      for (const id of joinWithProjects) {
+        const project = await storage.getProject(id);
+        if (!project || project.userId !== userId) {
+          return res.status(404).json({ error: `Project ${id} not found or access denied` });
+        }
+        joinProjects.push(project);
+      }
+
+      // Validate join configuration
+      const validationError = DatasetJoiner.validateJoinRequest(
+        { joinWithProjects, joinType, joinKeys },
+        baseProject,
+        joinProjects
+      );
+
+      if (validationError) {
+        return res.status(400).json({ error: validationError });
+      }
+
+      // Perform the join
+      const joinResult = await DatasetJoiner.joinDatasets(
+        baseProject,
+        joinProjects,
+        { joinWithProjects, joinType, joinKeys }
+      );
+
+      if (!joinResult.success) {
+        return res.status(500).json({ error: joinResult.error });
+      }
+
+      // Save the joined project
+      const savedProject = await storage.createProject({
+        ...joinResult.project,
+        userId,
+        createdAt: new Date().toISOString(),
+        processed: true
+      });
+
+      console.log(`Successfully joined datasets: ${joinResult.recordCount} records`);
+
+      res.json({
+        success: true,
+        project: savedProject,
+        recordCount: joinResult.recordCount,
+        joinedFields: joinResult.joinedFields
+      });
+
+    } catch (error: any) {
+      console.error("Dataset join error:", error);
+      res.status(500).json({ error: "Failed to join datasets" });
     }
   });
 
