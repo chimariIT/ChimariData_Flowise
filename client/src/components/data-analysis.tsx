@@ -57,10 +57,17 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
       fields: "numeric"
     },
     {
+      value: "visualization",
+      label: "Data Visualization",
+      description: "Interactive charts and graphs",
+      icon: BarChart3,
+      fields: "any"
+    },
+    {
       value: "distribution",
       label: "Data Distribution",
       description: "Histograms, frequency distributions",
-      icon: BarChart3,
+      icon: TrendingUp,
       fields: "any"
     },
     {
@@ -94,6 +101,13 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
   ];
 
   const executeAnalysis = async () => {
+    // Special handling for visualization analysis type
+    if (selectedAnalysis === 'visualization') {
+      // Navigate to the visualization workshop
+      window.location.href = `/visualization/${project.id}`;
+      return;
+    }
+
     setIsAnalyzing(true);
     try {
       const response = await fetch(`/api/analyze-data/${project.id}`, {

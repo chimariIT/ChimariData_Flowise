@@ -77,7 +77,7 @@ export class PythonProcessor {
       case 'analyze':
         return 'data_analyzer.py';
       case 'visualize':
-        return 'data_visualizer.py';
+        return 'visualization_generator.py';
       case 'trial_analysis':
         return 'trial_analyzer.py';
       default:
@@ -176,6 +176,36 @@ export class PythonProcessor {
       operation: 'visualize',
       data,
       config: { chartTypes, ...config }
+    });
+  }
+
+  // Execute script method for legacy compatibility
+  static async executeScript(operation: string, data: any): Promise<any> {
+    const tempProjectId = `temp_${Date.now()}`;
+    
+    if (operation === 'visualize') {
+      const result = await this.processData({
+        projectId: tempProjectId,
+        operation: 'visualize',
+        data: data.data || [],
+        config: data
+      });
+      
+      return {
+        success: result.success,
+        processedData: data.data || [],
+        insights: result.data?.insights || [],
+        statistics: result.data?.statistics || {},
+        error: result.error
+      };
+    }
+    
+    // For other operations, fall back to existing processData method
+    return this.processData({
+      projectId: tempProjectId,
+      operation: operation as any,
+      data,
+      config: {}
     });
   }
 

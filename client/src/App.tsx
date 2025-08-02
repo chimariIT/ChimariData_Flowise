@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import HomePage from "@/pages/home-page";
 import ProjectPage from "@/pages/project-page";
 import DescriptiveStatsPage from "@/pages/descriptive-stats-page";
+import VisualizationPage from "@/pages/visualization-page";
 import AuthPage from "@/pages/auth";
 import GuidedAnalysisCheckout from "@/pages/checkout";
 import GuidedAnalysisResults from "@/pages/guided-analysis-results";
@@ -93,6 +94,9 @@ export default function App() {
           </Route>
           <Route path="/stats/:id">
             {(params) => <DescriptiveStatsPage />}
+          </Route>
+          <Route path="/visualization/:projectId">
+            {(params) => user ? <VisualizationPage /> : <AuthPage onLogin={handleLogin} />}
           </Route>
           <Route path="/checkout">
             {() => <GuidedAnalysisCheckout />}
