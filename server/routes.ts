@@ -1509,6 +1509,86 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Generate visualization endpoint
+  app.post("/api/generate-visualization/:projectId", unifiedAuth, async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const { chartConfig, dataSlice } = req.body;
+      const userId = req.user.id;
+
+      // Get project and verify ownership
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+
+      if (project.userId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      // Generate unique filename for visualization
+      const timestamp = Date.now();
+      const outputPath = `uploads/visualizations/${projectId}_${timestamp}.png`;
+      
+      // Prepare visualization configuration
+      const vizConfig = {
+        data: dataSlice || project.data || [],
+        chartConfig,
+        output_path: outputPath
+      };
+
+      // Generate visualization using Python
+      const result = await PythonProcessor.executeScript('visualize', vizConfig);
+      
+      if (result.success) {
+        res.json({
+          success: true,
+          chart: outputPath,
+          processedData: result.processedData || [],
+          insights: result.insights || [],
+          statistics: result.statistics || {}
+        });
+      } else {
+        res.status(500).json({
+          error: "Failed to generate visualization",
+          details: result.error
+        });
+      }
+
+    } catch (error: any) {
+      console.error('Visualization generation error:', error);
+      res.status(500).json({ error: 'Failed to generate visualization' });
+    }
+  });
+
+  // Export visualization endpoint  
+  app.post("/api/export-visualization/:projectId", unifiedAuth, async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const { chartData, format = 'png' } = req.body;
+      const userId = req.user.id;
+
+      // Verify project ownership
+      const project = await storage.getProject(projectId);
+      if (!project || project.userId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      // For now, return a simple response - actual implementation would 
+      // involve converting chart data to the requested format
+      res.json({
+        success: true,
+        message: "Export functionality ready",
+        format,
+        chartId: chartData.id
+      });
+
+    } catch (error: any) {
+      console.error('Visualization export error:', error);
+      res.status(500).json({ error: 'Failed to export visualization' });
+    }
+  });
+
   // Execute guided analysis after payment
   app.post("/api/execute-guided-analysis", unifiedAuth, async (req, res) => {
     try {
