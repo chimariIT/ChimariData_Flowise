@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3, PieChart, TrendingUp, Calculator, Play, Download, Brain, Zap, Shield, FileText } from "lucide-react";
+import { BarChart3, PieChart, TrendingUp, Calculator, Play, Download, Brain, Zap, Shield, FileText, Activity } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import AdvancedAnalysisModal from "./advanced-analysis-modal";
 import AnonymizationToolkit from "./AnonymizationToolkit";
@@ -177,7 +177,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
         };
       case "distribution":
         return {
-          distributions: (analysisConfig.fields || [...numericFields, ...categoricalFields]).map(field => ({
+          distributions: (analysisConfig.fields || [...numericFields, ...categoricalFields]).map((field: string) => ({
             field,
             type: numericFields.includes(field) ? 'numeric' : 'categorical',
             histogram: numericFields.includes(field) ? 
@@ -462,7 +462,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
             });
             
             // Add legend with actual category names
-            categories.forEach((category, index) => {
+            categories.forEach((category: string, index: number) => {
               const legendY = 100 + index * 25;
               ctx.fillStyle = colors[index];
               ctx.fillRect(50, legendY, 15, 15);
@@ -628,6 +628,184 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                 </Button>
               </div>
             </div>
+          </div>
+        );
+
+      case "visualization":
+        return (
+          <div className="space-y-6">
+            {/* Chart Type Selection */}
+            <div className="space-y-3">
+              <label className="text-sm font-medium">Chart Type</label>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {[
+                  { value: 'bar', label: 'Bar Chart', icon: BarChart3, description: 'Compare categories' },
+                  { value: 'line', label: 'Line Chart', icon: TrendingUp, description: 'Show trends over time' },
+                  { value: 'scatter', label: 'Scatter Plot', icon: Activity, description: 'Explore relationships' },
+                  { value: 'pie', label: 'Pie Chart', icon: PieChart, description: 'Show proportions' },
+                  { value: 'histogram', label: 'Histogram', icon: BarChart3, description: 'Show distribution' },
+                  { value: 'box_plot', label: 'Box Plot', icon: Calculator, description: 'Show quartiles' },
+                  { value: 'heatmap', label: 'Heatmap', icon: Brain, description: 'Show correlations' },
+                  { value: 'violin', label: 'Violin Plot', icon: Activity, description: 'Distribution shape' }
+                ].map((chartType) => (
+                  <Button
+                    key={chartType.value}
+                    variant={analysisConfig.chartType === chartType.value ? "default" : "outline"}
+                    className="h-auto p-3 flex flex-col items-center gap-2"
+                    onClick={() => setAnalysisConfig({
+                      ...analysisConfig,
+                      chartType: chartType.value
+                    })}
+                  >
+                    <chartType.icon className="h-5 w-5" />
+                    <div className="text-center">
+                      <div className="text-xs font-medium">{chartType.label}</div>
+                      <div className="text-xs text-muted-foreground mt-1">{chartType.description}</div>
+                    </div>
+                  </Button>
+                ))}
+              </div>
+            </div>
+
+            {/* Field Configuration based on chart type */}
+            {analysisConfig.chartType && (
+              <div className="space-y-4 p-4 bg-blue-50 rounded-lg">
+                <h4 className="font-medium text-blue-900">Configure Chart Fields</h4>
+                
+                {/* X-Axis Field */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">X-Axis Field</label>
+                  <Select
+                    value={analysisConfig.xAxis || ''}
+                    onValueChange={(value) => setAnalysisConfig({
+                      ...analysisConfig,
+                      xAxis: value
+                    })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select X-axis field" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[...numericFields, ...categoricalFields].map(field => (
+                        <SelectItem key={field} value={field}>
+                          {field} 
+                          <Badge variant="outline" className="ml-2 text-xs">
+                            {numericFields.includes(field) ? 'numeric' : 'categorical'}
+                          </Badge>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Y-Axis Field */}
+                {!['pie', 'heatmap'].includes(analysisConfig.chartType) && (
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Y-Axis Field</label>
+                    <Select
+                      value={analysisConfig.yAxis || ''}
+                      onValueChange={(value) => setAnalysisConfig({
+                        ...analysisConfig,
+                        yAxis: value
+                      })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select Y-axis field" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {numericFields.map(field => (
+                          <SelectItem key={field} value={field}>
+                            {field}
+                            <Badge variant="outline" className="ml-2 text-xs">numeric</Badge>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+                {/* Group By Field */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Color/Group By (Optional)</label>
+                  <Select
+                    value={analysisConfig.groupBy || ''}
+                    onValueChange={(value) => setAnalysisConfig({
+                      ...analysisConfig,
+                      groupBy: value
+                    })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select grouping field" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">None</SelectItem>
+                      {categoricalFields.map(field => (
+                        <SelectItem key={field} value={field}>
+                          {field}
+                          <Badge variant="outline" className="ml-2 text-xs">categorical</Badge>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Aggregation Method */}
+                {['bar', 'line'].includes(analysisConfig.chartType) && (
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Aggregation Method</label>
+                    <Select
+                      value={analysisConfig.aggregation || 'sum'}
+                      onValueChange={(value) => setAnalysisConfig({
+                        ...analysisConfig,
+                        aggregation: value
+                      })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select aggregation" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="sum">Sum</SelectItem>
+                        <SelectItem value="mean">Mean</SelectItem>
+                        <SelectItem value="median">Median</SelectItem>
+                        <SelectItem value="count">Count</SelectItem>
+                        <SelectItem value="min">Minimum</SelectItem>
+                        <SelectItem value="max">Maximum</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+                {/* Chart Title */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Chart Title (Optional)</label>
+                  <input
+                    type="text"
+                    value={analysisConfig.title || ''}
+                    onChange={(e) => setAnalysisConfig({
+                      ...analysisConfig,
+                      title: e.target.value
+                    })}
+                    placeholder="Enter custom chart title"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                  />
+                </div>
+
+                {/* Field Interaction Preview */}
+                {analysisConfig.xAxis && (analysisConfig.yAxis || ['pie', 'histogram'].includes(analysisConfig.chartType)) && (
+                  <div className="bg-green-50 p-3 rounded-lg">
+                    <h5 className="font-medium text-green-900 text-sm mb-1">Chart Preview</h5>
+                    <p className="text-xs text-green-700">
+                      Creating {analysisConfig.chartType} chart with <strong>{analysisConfig.xAxis}</strong>
+                      {analysisConfig.yAxis && <span> vs <strong>{analysisConfig.yAxis}</strong></span>}
+                      {analysisConfig.groupBy && <span>, grouped by <strong>{analysisConfig.groupBy}</strong></span>}
+                      {analysisConfig.aggregation && analysisConfig.aggregation !== 'sum' && (
+                        <span> using <strong>{analysisConfig.aggregation}</strong> aggregation</span>
+                      )}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         );
 
@@ -1249,7 +1427,96 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
           <CardContent className="space-y-4">
             {renderAnalysisConfig()}
             
-            {/* Analysis Execution Section */}
+            {/* Visualization Creation Section - Positioned BEFORE Run Analysis */}
+            {selectedAnalysis === 'visualization' && analysisConfig.chartType && (
+              <div className="pt-4 border-t">
+                <div className="flex items-center justify-between mb-4">
+                  <h4 className="text-sm font-medium text-gray-700">Create Custom Visualization</h4>
+                  <span className="text-xs text-gray-500">Configure and generate</span>
+                </div>
+                <Button
+                  onClick={() => createVisualization(analysisConfig.chartType, [analysisConfig.xAxis, analysisConfig.yAxis].filter(Boolean))}
+                  disabled={isCreatingVisualization || !analysisConfig.xAxis || (!analysisConfig.yAxis && !['pie', 'histogram'].includes(analysisConfig.chartType))}
+                  className="w-full"
+                >
+                  <BarChart3 className="w-4 h-4 mr-2" />
+                  {isCreatingVisualization ? "Creating Chart..." : `Create ${analysisConfig.chartType?.replace('_', ' ')} Chart`}
+                </Button>
+              </div>
+            )}
+
+            {/* Standard Visualization Options */}
+            {selectedAnalysis !== 'visualization' && (
+              <div className="pt-4 border-t">
+                <div className="flex items-center justify-between mb-4">
+                  <h4 className="text-sm font-medium text-gray-700">Create Visualizations</h4>
+                  <span className="text-xs text-gray-500">Choose a chart type</span>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {(selectedAnalysis === 'descriptive' || selectedAnalysis === 'correlation') && numericFields.length >= 2 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => createVisualization('correlation_heatmap')}
+                      disabled={isCreatingVisualization}
+                      className="flex flex-col items-center p-4 h-20 hover:bg-blue-50"
+                    >
+                      <TrendingUp className="w-6 h-6 mb-2 text-blue-600" />
+                      <span className="text-xs font-medium">Correlation</span>
+                    </Button>
+                  )}
+                  
+                  {(selectedAnalysis === 'descriptive' || selectedAnalysis === 'distribution') && analysisConfig.fields?.length > 0 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => createVisualization('distribution_overview')}
+                      disabled={isCreatingVisualization}
+                      className="flex flex-col items-center p-4 h-20 hover:bg-green-50"
+                    >
+                      <BarChart3 className="w-6 h-6 mb-2 text-green-600" />
+                      <span className="text-xs font-medium">Distribution</span>
+                    </Button>
+                  )}
+                  
+                  {selectedAnalysis === 'categorical' && analysisConfig.fields?.length > 0 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => createVisualization('categorical_counts')}
+                      disabled={isCreatingVisualization}
+                      className="flex flex-col items-center p-4 h-20 hover:bg-purple-50"
+                    >
+                      <PieChart className="w-6 h-6 mb-2 text-purple-600" />
+                      <span className="text-xs font-medium">Categories</span>
+                    </Button>
+                  )}
+                  
+                  {numericFields.length > 0 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => createVisualization('box_plot')}
+                      disabled={isCreatingVisualization}
+                      className="flex flex-col items-center p-4 h-20 hover:bg-orange-50"
+                    >
+                      <BarChart3 className="w-6 h-6 mb-2 text-orange-600" />
+                      <span className="text-xs font-medium">Box Plot</span>
+                    </Button>
+                  )}
+                </div>
+                {isCreatingVisualization && (
+                  <div className="mt-3 p-3 bg-blue-50 rounded-lg">
+                    <div className="flex items-center space-x-2">
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                      <span className="text-sm text-blue-700">Generating visualization...</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            
+            {/* Analysis Execution Section - Positioned AFTER Visualization */}
             <div className="pt-4 border-t">
               <div className="flex items-center justify-between mb-4">
                 <h4 className="text-sm font-medium text-gray-700">Execute Analysis</h4>
@@ -1262,75 +1529,6 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                 <Play className="w-4 h-4 mr-2" />
                 {isAnalyzing ? "Analyzing..." : "Run Analysis"}
               </Button>
-            </div>
-            
-            {/* Visualization Creation Section */}
-            <div className="pt-4 border-t">
-              <div className="flex items-center justify-between mb-4">
-                <h4 className="text-sm font-medium text-gray-700">Create Visualizations</h4>
-                <span className="text-xs text-gray-500">Choose a chart type</span>
-              </div>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                {(selectedAnalysis === 'descriptive' || selectedAnalysis === 'correlation') && numericFields.length >= 2 && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => createVisualization('correlation_heatmap')}
-                    disabled={isCreatingVisualization}
-                    className="flex flex-col items-center p-4 h-20 hover:bg-blue-50"
-                  >
-                    <TrendingUp className="w-6 h-6 mb-2 text-blue-600" />
-                    <span className="text-xs font-medium">Correlation</span>
-                  </Button>
-                )}
-                
-                {(selectedAnalysis === 'descriptive' || selectedAnalysis === 'distribution') && analysisConfig.fields?.length > 0 && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => createVisualization('distribution_overview')}
-                    disabled={isCreatingVisualization}
-                    className="flex flex-col items-center p-4 h-20 hover:bg-green-50"
-                  >
-                    <BarChart3 className="w-6 h-6 mb-2 text-green-600" />
-                    <span className="text-xs font-medium">Distribution</span>
-                  </Button>
-                )}
-                
-                {selectedAnalysis === 'categorical' && analysisConfig.fields?.length > 0 && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => createVisualization('categorical_counts')}
-                    disabled={isCreatingVisualization}
-                    className="flex flex-col items-center p-4 h-20 hover:bg-purple-50"
-                  >
-                    <PieChart className="w-6 h-6 mb-2 text-purple-600" />
-                    <span className="text-xs font-medium">Categories</span>
-                  </Button>
-                )}
-                
-                {numericFields.length > 0 && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => createVisualization('box_plot')}
-                    disabled={isCreatingVisualization}
-                    className="flex flex-col items-center p-4 h-20 hover:bg-orange-50"
-                  >
-                    <BarChart3 className="w-6 h-6 mb-2 text-orange-600" />
-                    <span className="text-xs font-medium">Box Plot</span>
-                  </Button>
-                )}
-              </div>
-              {isCreatingVisualization && (
-                <div className="mt-3 p-3 bg-blue-50 rounded-lg">
-                  <div className="flex items-center text-sm text-blue-700">
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-700 mr-2"></div>
-                    Creating visualization...
-                  </div>
-                </div>
-              )}
             </div>
           </CardContent>
         </Card>
