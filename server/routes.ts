@@ -298,7 +298,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // PII decision endpoint - unified for both JSON and FormData
-  app.post("/api/pii-decision", ensureAuthenticated, (req, res, next) => {
+  app.post("/api/pii-decision", (req, res, next) => {
     // Apply upload middleware only for FormData requests
     if (req.get('Content-Type')?.includes('application/json')) {
       // Skip file upload middleware for JSON requests
@@ -378,7 +378,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         
         const newProjectData = {
-          userId: (req.user as any)?.id || 'anonymous',
+          userId: req.user?.id || 'anonymous',
           name: projectMetadata.name || "Uploaded Data",
           description: projectMetadata.description || "",
           fileName: fileInfo.originalname,
@@ -459,7 +459,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Create project with processed data
       const project = await storage.createProject({
-        userId: (req.user as any)?.id || 'anonymous',
+        userId: req.user?.id || 'anonymous',
         name: name.trim(),
         description: description || '',
         fileName: req.file.originalname,
@@ -1179,7 +1179,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Paid project upload endpoint
-  app.post("/api/upload", ensureAuthenticated, upload.single('file'), async (req, res) => {
+  app.post("/api/upload", upload.single('file'), async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ 
