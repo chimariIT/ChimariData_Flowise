@@ -117,10 +117,15 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
         ];
       }
 
+      // Check if user is authenticated
+      const token = localStorage.getItem('auth_token');
+      
+      // Try trial upload first if no authentication, then fallback to authenticated upload
       const result = await apiClient.uploadFile(selectedFile, {
         name: formData.projectName,
         description: formData.description,
-        questions: questionsArray
+        questions: questionsArray,
+        isTrial: !token // Use trial upload if not authenticated
       });
       
       // Check if PII decision is required
@@ -194,7 +199,10 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
         headers['Authorization'] = `Bearer ${token}`;
       }
 
-      const response = await fetch('/api/pii-decision', {
+      // Use trial PII decision endpoint if no authentication, otherwise use authenticated endpoint
+      const endpoint = token ? '/api/pii-decision' : '/api/trial-pii-decision';
+
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers,
         body: JSON.stringify(requestData),
