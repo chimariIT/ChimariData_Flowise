@@ -297,8 +297,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Unified PII decision endpoint for all users
-  app.post("/api/pii-decision", (req, res, next) => {
+  // Unified PII decision endpoint for all authenticated users
+  app.post("/api/pii-decision", unifiedAuth, (req, res, next) => {
     // Apply upload middleware only for FormData requests
     if (req.get('Content-Type')?.includes('application/json')) {
       // Skip file upload middleware for JSON requests
@@ -342,7 +342,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         
         const tempData = tempTrialData.get(tempFileId);
-        const { processedData, piiAnalysis, fileInfo, projectMetadata, userId, isAuthenticated } = tempData;
+        const { processedData, piiAnalysis, fileInfo, projectMetadata } = tempData;
+        
+        // All users are now authenticated
+        const userId = req.user.id;
+        const user = await storage.getUser(userId);
+        const hasTrialLimits = !user?.isPaid;
         
         let finalData, updatedSchema;
         
@@ -383,13 +388,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         
         const newProjectData = {
-          userId: userId || 'anonymous',
+          userId: userId,
           name: (projectData || projectMetadata)?.name || "Uploaded Data", 
           description: (projectData || projectMetadata)?.description || "",
           fileName: fileInfo.originalname,
           fileSize: fileInfo.size,
           fileType: fileInfo.mimetype,
-          isTrial: !isAuthenticated, // Mark as trial if user is not authenticated
+          isTrial: hasTrialLimits, // Mark as trial based on user's subscription status
           dataSource: "upload" as const,
           isPaid: false,
           data: finalData,
@@ -1183,8 +1188,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Unified upload endpoint for all users (trial and authenticated)
-  app.post("/api/upload", upload.single('file'), async (req, res) => {
+  // Unified upload endpoint for all authenticated users
+  app.post("/api/upload", unifiedAuth, upload.single('file'), async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ 
@@ -1198,19 +1203,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const description = req.body.description || '';
       const questions = req.body.questions ? JSON.parse(req.body.questions) : [];
       
-      // Determine if user is authenticated (for feature access control)
-      const isAuthenticated = req.user?.id;
-      const userId = req.user?.id || 'anonymous';
+      // All users must be authenticated now
+      if (!req.user?.id) {
+        return res.status(401).json({
+          success: false,
+          error: "Authentication required. Please create an account to upload files."
+        });
+      }
+      
+      const userId = req.user.id;
+      const isAuthenticated = true;
 
       console.log(`Processing file: ${file.originalname} (${file.size} bytes) for user: ${userId}`);
 
-      // Check file size limits based on authentication status
-      if (!isAuthenticated) {
+      // Check if user has trial limitations (free account vs paid features)
+      const user = await storage.getUser(userId);
+      const hasTrialLimits = !user?.isPaid;
+      
+      if (hasTrialLimits) {
         const freeTrialLimit = PricingService.getFreeTrialLimits();
         if (file.size > freeTrialLimit.maxFileSize) {
           return res.status(400).json({
             success: false,
-            error: `File size exceeds free trial limit of ${Math.round(freeTrialLimit.maxFileSize / (1024 * 1024))}MB. Please create an account for larger files.`
+            error: `File size exceeds free account limit of ${Math.round(freeTrialLimit.maxFileSize / (1024 * 1024))}MB. Please upgrade to upload larger files.`
           });
         }
       }
@@ -1244,8 +1259,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             description,
             questions
           },
-          userId,
-          isAuthenticated
+          userId
         });
 
         // Clean up old temp data (older than 1 hour)
@@ -1280,7 +1294,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         fileSize: file.size,
         fileType: file.mimetype,
         description,
-        isTrial: !isAuthenticated, // Mark as trial if user is not authenticated
+        isTrial: hasTrialLimits, // Mark as trial based on user's subscription status
         dataSource: "upload" as const,
         isPaid: false,
         schema: processedData.schema,
@@ -1873,12 +1887,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get specific project for authenticated user
-  // Unified project retrieval endpoint - handles both authenticated and anonymous trial projects
-  app.get("/api/projects/:id", async (req, res) => {
+  // Project retrieval endpoint for authenticated users
+  app.get("/api/projects/:id", unifiedAuth, async (req, res) => {
     try {
       const projectId = req.params.id;
+      const userId = req.user.id;
       
-      console.log(`Fetching project: ${projectId}`);
+      console.log(`Fetching project: ${projectId} for user: ${userId}`);
       
       const project = await storage.getProject(projectId);
       if (!project) {
@@ -1886,34 +1901,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Project not found" });
       }
       
-      // Get authentication info (optional for this endpoint)
-      const token = req.headers.authorization?.replace('Bearer ', '');
-      let userId = null;
-      
-      if (token) {
-        try {
-          const decoded = jwt.verify(token, JWT_SECRET);
-          userId = (decoded as any).userId;
-        } catch (jwtError) {
-          // Invalid token, but we'll continue as anonymous if it's a trial project
-          console.log("Invalid JWT token, continuing as anonymous");
-        }
-      }
-      
-      // Allow access if:
-      // 1. Project belongs to authenticated user
-      // 2. Project is a trial project (userId: 'anonymous') and no authentication required
-      // 3. User is anonymous and project is anonymous
-      const isTrialProject = project.isTrial && project.userId === 'anonymous';
-      const isOwner = userId && project.userId === userId;
-      const isAnonymousAccess = !userId && isTrialProject;
-      
-      if (!isOwner && !isAnonymousAccess) {
-        console.log(`Access denied - Project ${projectId} user: ${project.userId}, requesting user: ${userId || 'anonymous'}, isTrial: ${project.isTrial}`);
+      // Check if project belongs to authenticated user
+      if (project.userId !== userId) {
+        console.log(`Access denied - Project ${projectId} belongs to ${project.userId}, requesting user: ${userId}`);
         return res.status(403).json({ error: "Access denied" });
       }
       
-      console.log(`Project ${projectId} access granted - Owner: ${isOwner}, Anonymous: ${isAnonymousAccess}, Trial: ${isTrialProject}`);
+      console.log(`Project ${projectId} access granted for user ${userId}`);
       res.json(project);
     } catch (error: any) {
       console.error("Error fetching project:", error);
