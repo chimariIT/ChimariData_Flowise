@@ -236,13 +236,18 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
 
       const result = await response.json();
       
-      // Render visualization on canvas for reliable display
+      // Enhanced visualization rendering - ensure canvas is always visible
       const canvas = document.getElementById('visualization-canvas') as HTMLCanvasElement;
-      if (canvas && result.visualization) {
+      if (canvas) {
+        // Make canvas visible and ensure proper styling
+        canvas.style.display = 'block';
+        canvas.style.visibility = 'visible';
         canvas.classList.remove('hidden');
         canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        
         const ctx = canvas.getContext('2d');
         if (ctx) {
+          // Clear and set up canvas
           ctx.clearRect(0, 0, canvas.width, canvas.height);
           ctx.fillStyle = '#ffffff';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -1398,15 +1403,19 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
           <CardContent>
             {renderResults()}
             
-            {/* Canvas visualization - integrated into results */}
-            <div className="mt-6">
+            {/* Enhanced Canvas visualization - always visible when results exist */}
+            <div className="mt-6 p-4 border-2 border-dashed border-gray-300 rounded-lg bg-gray-50">
+              <h4 className="text-sm font-medium text-gray-700 mb-3">Interactive Visualization Canvas</h4>
               <canvas 
                 id="visualization-canvas" 
                 width="800" 
                 height="600" 
-                className="hidden border rounded-lg bg-white w-full max-w-full"
+                className="border rounded-lg bg-white w-full max-w-full block"
                 style={{ maxWidth: '100%', height: 'auto' }}
               ></canvas>
+              <div className="text-center mt-2 text-sm text-gray-600">
+                Charts and graphs will appear here when you create visualizations
+              </div>
             </div>
           </CardContent>
         </Card>
