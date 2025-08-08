@@ -88,9 +88,10 @@ export interface IStorage {
   updateProject(id: string, updates: Partial<DataProject>): Promise<DataProject | undefined>;
   deleteProject(id: string): Promise<boolean>;
   
-  // User operations
-  createUser(user: Omit<User, 'createdAt' | 'updatedAt'>): Promise<User>;
+  // User operations (required for Replit Auth)
   getUser(id: string): Promise<User | undefined>;
+  upsertUser(user: { id: string; email: string; firstName?: string; lastName?: string; profileImageUrl?: string; }): Promise<User>;
+  createUser(user: Omit<User, 'createdAt' | 'updatedAt'>): Promise<User>;
   getUserByEmail(email: string): Promise<User | undefined>;
   getUserByVerificationToken(token: string): Promise<User | undefined>;
   updateUser(id: string, updates: Partial<User>): Promise<User | undefined>;
@@ -146,7 +147,53 @@ export class MemStorage implements IStorage {
     return this.projects.delete(id);
   }
 
-  // User operations
+  // User operations (required for Replit Auth)
+  async upsertUser(userData: { id: string; email: string; firstName?: string; lastName?: string; profileImageUrl?: string; }): Promise<User> {
+    const existingUser = this.users.get(userData.id);
+    if (existingUser) {
+      const updatedUser = {
+        ...existingUser,
+        email: userData.email,
+        firstName: userData.firstName || existingUser.firstName,
+        lastName: userData.lastName || existingUser.lastName,
+        profileImageUrl: userData.profileImageUrl || existingUser.profileImageUrl,
+        updatedAt: new Date(),
+      };
+      this.users.set(userData.id, updatedUser);
+      return updatedUser;
+    }
+    
+    const newUser: User = {
+      id: userData.id,
+      email: userData.email,
+      hashedPassword: null,
+      firstName: userData.firstName || null,
+      lastName: userData.lastName || null,
+      profileImageUrl: userData.profileImageUrl || null,
+      provider: "replit",
+      providerId: userData.id,
+      emailVerified: true,
+      emailVerificationToken: null,
+      emailVerificationExpires: null,
+      passwordResetToken: null,
+      passwordResetExpires: null,
+      subscriptionTier: "none",
+      subscriptionStatus: "inactive",
+      stripeCustomerId: null,
+      stripeSubscriptionId: null,
+      subscriptionExpiresAt: null,
+      monthlyUploads: 0,
+      monthlyDataVolume: 0,
+      monthlyAIInsights: 0,
+      usageResetAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    
+    this.users.set(userData.id, newUser);
+    return newUser;
+  }
+
   async createUser(userData: Omit<User, 'createdAt' | 'updatedAt'>): Promise<User> {
     const user: User = {
       ...userData,
@@ -215,6 +262,35 @@ export class MemStorage implements IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
+  // User operations (required for Replit Auth)
+  async upsertUser(userData: { id: string; email: string; firstName?: string; lastName?: string; profileImageUrl?: string; }): Promise<User> {
+    const [user] = await db
+      .insert(users)
+      .values({
+        id: userData.id,
+        email: userData.email,
+        firstName: userData.firstName || null,
+        lastName: userData.lastName || null,
+        profileImageUrl: userData.profileImageUrl || null,
+        provider: 'replit',
+        providerId: userData.id,
+        emailVerified: true,
+      })
+      .onConflictDoUpdate({
+        target: users.id,
+        set: {
+          email: userData.email,
+          firstName: userData.firstName || null,
+          lastName: userData.lastName || null,
+          profileImageUrl: userData.profileImageUrl || null,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    
+    return user;
+  }
+
   // Project operations
   async createProject(projectData: InsertDataProject): Promise<DataProject> {
     const insertData = dataProjectToInsertProject(projectData);

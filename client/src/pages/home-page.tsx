@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { Upload, FileText, Database, Trash2, Eye, Zap, TrendingUp, BarChart3, Brain, Target } from "lucide-react";
+import { Upload, FileText, Database, Trash2, Eye, Zap, TrendingUp, BarChart3, Brain, Target, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/useAuth";
 import { apiClient } from "@/lib/api";
 import FileUploader from "@/components/file-uploader";
 import AuthModal from "@/components/auth-modal";
@@ -14,16 +15,12 @@ import SubscriptionTierDisplay from "@/components/subscription-tier-display";
 
 import { PIIInterimDialog } from "@/components/PIIInterimDialog";
 
-interface HomePageProps {
-  user?: any;
-  onLogout?: () => void;
-}
-
-export default function HomePage({ user, onLogout }: HomePageProps) {
+export default function HomePage() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const { user } = useAuth();
   const [isUploading, setIsUploading] = useState(false);
-  const [activeTab, setActiveTab] = useState(user ? "upload" : "auth");
+  const [activeTab, setActiveTab] = useState("upload");
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authModalTab, setAuthModalTab] = useState<'login' | 'register'>('register');
   const [showPIIDialog, setShowPIIDialog] = useState(false);
@@ -214,9 +211,10 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
           <Button 
             variant="outline" 
             size="sm" 
-            onClick={onLogout}
+            onClick={() => window.location.href = '/api/logout'}
             className="text-gray-600 hover:text-gray-900"
           >
+            <LogOut className="w-4 h-4 mr-2" />
             Logout
           </Button>
         </div>

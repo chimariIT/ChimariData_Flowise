@@ -65,35 +65,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Initialize MCP AI Service
   MCPAIService.initializeMCPServer().catch(console.error);
   
-  // Define ensureAuthenticated middleware within routes scope to access tokenStore
-  const ensureAuthenticated = async (req: any, res: any, next: any) => {
+  // Set up Replit authentication
+  const { setupAuth, isAuthenticated } = await import('./replitAuth');
+  await setupAuth(app);
+  
+  // Add user authentication API route
+  app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
     try {
-      // First try OAuth session authentication
-      if (req.isAuthenticated && req.isAuthenticated()) {
-        return next();
-      }
-      
-      // Then try token authentication
-      const authHeader = req.headers.authorization;
-      if (authHeader && authHeader.startsWith('Bearer ')) {
-        const token = authHeader.substring(7);
-        const userId = tokenStore.get(token);
-        if (userId) {
-          const user = await storage.getUser(userId);
-          if (user) {
-            req.user = { id: user.id };
-            req.userId = user.id;
-            return next();
-          }
-        }
-      }
-      
-      res.status(401).json({ error: "Authentication required" });
+      const userId = req.user.claims.sub;
+      const user = await storage.getUser(userId);
+      res.json(user);
     } catch (error) {
-      console.error('Authentication error:', error);
-      res.status(401).json({ error: "Authentication required" });
+      console.error("Error fetching user:", error);
+      res.status(500).json({ message: "Failed to fetch user" });
     }
-  };
+  });
   
   // Token store for authentication (shared between middleware functions)
   const tokenStore = new Map<string, string>();
@@ -752,7 +738,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Advanced analysis endpoints
-  app.post("/api/step-by-step-analysis", ensureAuthenticated, async (req, res) => {
+  app.post("/api/step-by-step-analysis", isAuthenticated, async (req, res) => {
     try {
       const { projectId, analysisType, analysisPath, config } = req.body;
       console.log('Step-by-step analysis request:', { projectId, analysisType, analysisPath, config });
@@ -928,7 +914,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // AI insights endpoint
-  app.post("/api/ai-insights", ensureAuthenticated, async (req, res) => {
+  app.post("/api/ai-insights", isAuthenticated, async (req, res) => {
     try {
       const { projectId, role, questions, instructions } = req.body;
       
@@ -975,7 +961,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Main project upload endpoint with PII detection
-  app.post("/api/projects/upload", ensureAuthenticated, upload.single('file'), async (req, res) => {
+  app.post("/api/projects/upload", isAuthenticated, upload.single('file'), async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ 
@@ -1104,7 +1090,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Projects API endpoints - USER AUTHENTICATED ONLY
-  app.get("/api/projects", ensureAuthenticated, async (req, res) => {
+  app.get("/api/projects", isAuthenticated, async (req, res) => {
     try {
       const userId = (req.user as any)?.id;
       if (!userId) {
@@ -1119,7 +1105,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/projects/:id", ensureAuthenticated, async (req, res) => {
+  app.get("/api/projects/:id", isAuthenticated, async (req, res) => {
     try {
       const userId = (req.user as any)?.id;
       const project = await storage.getProject(req.params.id);
@@ -1877,7 +1863,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Join datasets endpoint
-  app.post("/api/join-datasets/:projectId", ensureAuthenticated, async (req, res) => {
+  app.post("/api/join-datasets/:projectId", isAuthenticated, async (req, res) => {
     try {
       const projectId = req.params.projectId;
       const { joinWithProjects, joinType, joinKeys, mergeStrategy } = req.body;
@@ -2599,7 +2585,7 @@ This link will expire in 24 hours.
   });
 
   // Create visualization endpoint
-  app.post("/api/visualizations/create", ensureAuthenticated, async (req, res) => {
+  app.post("/api/visualizations/create", isAuthenticated, async (req, res) => {
     try {
       const { projectId, visualizationType, selectedColumns, groupByColumn, colorByColumn } = req.body;
       
@@ -2654,7 +2640,7 @@ This link will expire in 24 hours.
   });
 
   // Export analysis to PDF
-  app.post("/api/projects/:id/export-pdf", ensureAuthenticated, async (req, res) => {
+  app.post("/api/projects/:id/export-pdf", isAuthenticated, async (req, res) => {
     try {
       const projectId = req.params.id;
       const userId = (req.user as any)?.id;
@@ -2752,7 +2738,7 @@ This link will expire in 24 hours.
   });
 
   // Data transformation endpoint
-  app.post('/api/transform-data/:projectId', ensureAuthenticated, async (req, res) => {
+  app.post('/api/transform-data/:projectId', isAuthenticated, async (req, res) => {
     try {
       const { projectId } = req.params;
       const { transformations } = req.body;
@@ -2794,7 +2780,7 @@ This link will expire in 24 hours.
   });
 
   // Export transformed data endpoint
-  app.get('/api/export-transformed-data/:projectId', ensureAuthenticated, async (req, res) => {
+  app.get('/api/export-transformed-data/:projectId', isAuthenticated, async (req, res) => {
     try {
       const { projectId } = req.params;
       const userId = req.user?.id;
@@ -2914,7 +2900,7 @@ This link will expire in 24 hours.
   });
 
   // Transform data endpoint
-  app.post("/api/transform-data/:projectId", ensureAuthenticated, async (req, res) => {
+  app.post("/api/transform-data/:projectId", isAuthenticated, async (req, res) => {
     try {
       const { projectId } = req.params;
       const { transformations } = req.body;
@@ -2940,7 +2926,7 @@ This link will expire in 24 hours.
   });
 
   // Save transformations to project
-  app.post("/api/save-transformations/:projectId", ensureAuthenticated, async (req, res) => {
+  app.post("/api/save-transformations/:projectId", isAuthenticated, async (req, res) => {
     try {
       const { projectId } = req.params;
       const { transformations } = req.body;
