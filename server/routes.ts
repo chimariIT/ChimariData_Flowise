@@ -26,6 +26,7 @@ import { DatasetJoiner } from './dataset-joiner';
 import { SUBSCRIPTION_TIERS, getTierLimits, canUserUpload, canUserRequestAIInsight } from '@shared/subscription-tiers';
 import bcrypt from 'bcrypt';
 import fs from 'fs/promises';
+import { setupOAuth } from './oauth-config';
 
 // Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
@@ -65,21 +66,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Initialize MCP AI Service
   MCPAIService.initializeMCPServer().catch(console.error);
   
-  // Set up Replit authentication
-  const { setupAuth, isAuthenticated } = await import('./replitAuth');
-  await setupAuth(app);
-  
-  // Add user authentication API route
-  app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const user = await storage.getUser(userId);
-      res.json(user);
-    } catch (error) {
-      console.error("Error fetching user:", error);
-      res.status(500).json({ message: "Failed to fetch user" });
-    }
-  });
+  // Setup OAuth providers
+  setupOAuth(app);
   
   // Token store for authentication (shared between middleware functions)
   const tokenStore = new Map<string, string>();
@@ -738,7 +726,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Advanced analysis endpoints
-  app.post("/api/step-by-step-analysis", isAuthenticated, async (req, res) => {
+  app.post("/api/step-by-step-analysis", unifiedAuth, async (req, res) => {
     try {
       const { projectId, analysisType, analysisPath, config } = req.body;
       console.log('Step-by-step analysis request:', { projectId, analysisType, analysisPath, config });
@@ -914,7 +902,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // AI insights endpoint
-  app.post("/api/ai-insights", isAuthenticated, async (req, res) => {
+  app.post("/api/ai-insights", unifiedAuth, async (req, res) => {
     try {
       const { projectId, role, questions, instructions } = req.body;
       
@@ -961,7 +949,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Main project upload endpoint with PII detection
-  app.post("/api/projects/upload", isAuthenticated, upload.single('file'), async (req, res) => {
+  app.post("/api/projects/upload", unifiedAuth, upload.single('file'), async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ 
@@ -1090,7 +1078,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Projects API endpoints - USER AUTHENTICATED ONLY
-  app.get("/api/projects", isAuthenticated, async (req, res) => {
+  app.get("/api/projects", unifiedAuth, async (req, res) => {
     try {
       const userId = (req.user as any)?.id;
       if (!userId) {
@@ -1105,7 +1093,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/projects/:id", isAuthenticated, async (req, res) => {
+  app.get("/api/projects/:id", unifiedAuth, async (req, res) => {
     try {
       const userId = (req.user as any)?.id;
       const project = await storage.getProject(req.params.id);
@@ -1863,7 +1851,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Join datasets endpoint
-  app.post("/api/join-datasets/:projectId", isAuthenticated, async (req, res) => {
+  app.post("/api/join-datasets/:projectId", unifiedAuth, async (req, res) => {
     try {
       const projectId = req.params.projectId;
       const { joinWithProjects, joinType, joinKeys, mergeStrategy } = req.body;
@@ -2243,6 +2231,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.status(401).json({ error: 'Authentication required' });
   }
 
+  // Add user authentication API route
+  app.get('/api/auth/user', unifiedAuth, async (req: any, res) => {
+    try {
+      const userId = req.user?.id || req.userId;
+      const user = await storage.getUser(userId);
+      res.json(user);
+    } catch (error) {
+      console.error("Error fetching user:", error);
+      res.status(500).json({ message: "Failed to fetch user" });
+    }
+  });
+
   // OAuth providers endpoint
   app.get('/api/auth/providers', (req, res) => {
     // Return available OAuth providers - for now only Google is fully configured
@@ -2585,7 +2585,7 @@ This link will expire in 24 hours.
   });
 
   // Create visualization endpoint
-  app.post("/api/visualizations/create", isAuthenticated, async (req, res) => {
+  app.post("/api/visualizations/create", unifiedAuth, async (req, res) => {
     try {
       const { projectId, visualizationType, selectedColumns, groupByColumn, colorByColumn } = req.body;
       
@@ -2640,7 +2640,7 @@ This link will expire in 24 hours.
   });
 
   // Export analysis to PDF
-  app.post("/api/projects/:id/export-pdf", isAuthenticated, async (req, res) => {
+  app.post("/api/projects/:id/export-pdf", unifiedAuth, async (req, res) => {
     try {
       const projectId = req.params.id;
       const userId = (req.user as any)?.id;
@@ -2738,7 +2738,7 @@ This link will expire in 24 hours.
   });
 
   // Data transformation endpoint
-  app.post('/api/transform-data/:projectId', isAuthenticated, async (req, res) => {
+  app.post('/api/transform-data/:projectId', unifiedAuth, async (req, res) => {
     try {
       const { projectId } = req.params;
       const { transformations } = req.body;
@@ -2780,7 +2780,7 @@ This link will expire in 24 hours.
   });
 
   // Export transformed data endpoint
-  app.get('/api/export-transformed-data/:projectId', isAuthenticated, async (req, res) => {
+  app.get('/api/export-transformed-data/:projectId', unifiedAuth, async (req, res) => {
     try {
       const { projectId } = req.params;
       const userId = req.user?.id;
@@ -2900,7 +2900,7 @@ This link will expire in 24 hours.
   });
 
   // Transform data endpoint
-  app.post("/api/transform-data/:projectId", isAuthenticated, async (req, res) => {
+  app.post("/api/transform-data/:projectId", unifiedAuth, async (req, res) => {
     try {
       const { projectId } = req.params;
       const { transformations } = req.body;
@@ -2926,7 +2926,7 @@ This link will expire in 24 hours.
   });
 
   // Save transformations to project
-  app.post("/api/save-transformations/:projectId", isAuthenticated, async (req, res) => {
+  app.post("/api/save-transformations/:projectId", unifiedAuth, async (req, res) => {
     try {
       const { projectId } = req.params;
       const { transformations } = req.body;
