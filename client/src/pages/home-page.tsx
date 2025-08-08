@@ -7,7 +7,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { useAuth } from "@/hooks/useAuth";
 import { apiClient } from "@/lib/api";
 import FileUploader from "@/components/file-uploader";
 import AuthModal from "@/components/auth-modal";
@@ -15,12 +14,16 @@ import SubscriptionTierDisplay from "@/components/subscription-tier-display";
 
 import { PIIInterimDialog } from "@/components/PIIInterimDialog";
 
-export default function HomePage() {
+interface HomePageProps {
+  user?: any;
+  onLogout?: () => void;
+}
+
+export default function HomePage({ user, onLogout }: HomePageProps) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
-  const { user } = useAuth();
   const [isUploading, setIsUploading] = useState(false);
-  const [activeTab, setActiveTab] = useState("upload");
+  const [activeTab, setActiveTab] = useState(user ? "upload" : "auth");
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authModalTab, setAuthModalTab] = useState<'login' | 'register'>('register');
   const [showPIIDialog, setShowPIIDialog] = useState(false);
@@ -211,7 +214,7 @@ export default function HomePage() {
           <Button 
             variant="outline" 
             size="sm" 
-            onClick={() => window.location.href = '/api/logout'}
+            onClick={onLogout}
             className="text-gray-600 hover:text-gray-900"
           >
             <LogOut className="w-4 h-4 mr-2" />
