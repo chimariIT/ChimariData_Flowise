@@ -103,8 +103,9 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
   const executeAnalysis = async () => {
     // Special handling for visualization analysis type
     if (selectedAnalysis === 'visualization') {
-      // Navigate to the visualization workshop
-      window.location.href = `/visualization/${project.id}`;
+      // Navigate to the visualization workshop with current config
+      const configParams = analysisConfig.chartType ? `?chartType=${analysisConfig.chartType}&xAxis=${analysisConfig.xAxis || ''}&yAxis=${analysisConfig.yAxis || ''}` : '';
+      window.location.href = `/visualization/${project.id}${configParams}`;
       return;
     }
 
@@ -251,7 +252,25 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
       const result = await response.json();
       
       // Enhanced visualization rendering - ensure canvas is always visible
-      const canvas = document.getElementById('visualization-canvas') as HTMLCanvasElement;
+      let canvas = document.getElementById('visualization-canvas') as HTMLCanvasElement;
+      
+      // Create canvas if it doesn't exist
+      if (!canvas) {
+        canvas = document.createElement('canvas');
+        canvas.id = 'visualization-canvas';
+        canvas.width = 800;
+        canvas.height = 600;
+        canvas.style.border = '1px solid #e5e7eb';
+        canvas.style.borderRadius = '8px';
+        canvas.style.maxWidth = '100%';
+        
+        // Find a container to add the canvas to
+        const container = document.querySelector('[data-canvas-container]') || 
+                         document.querySelector('.visualization-results') || 
+                         document.body;
+        container.appendChild(canvas);
+      }
+      
       if (canvas) {
         // Make canvas visible and ensure proper styling
         canvas.style.display = 'block';
@@ -275,7 +294,8 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
           ctx.fillStyle = '#1f2937';
           ctx.font = 'bold 20px Arial';
           ctx.textAlign = 'center';
-          ctx.fillText(result.visualization.title || 'Data Visualization', canvas.width/2, 30);
+          const title = result.visualization?.title || result.title || `${type.replace('_', ' ')} Chart`;
+          ctx.fillText(title, canvas.width/2, 30);
           
           // Draw actual chart visualizations
           if (type.includes('correlation')) {
@@ -1427,94 +1447,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
           <CardContent className="space-y-4">
             {renderAnalysisConfig()}
             
-            {/* Visualization Creation Section - Positioned BEFORE Run Analysis */}
-            {selectedAnalysis === 'visualization' && analysisConfig.chartType && (
-              <div className="pt-4 border-t">
-                <div className="flex items-center justify-between mb-4">
-                  <h4 className="text-sm font-medium text-gray-700">Create Custom Visualization</h4>
-                  <span className="text-xs text-gray-500">Configure and generate</span>
-                </div>
-                <Button
-                  onClick={() => createVisualization(analysisConfig.chartType, [analysisConfig.xAxis, analysisConfig.yAxis].filter(Boolean))}
-                  disabled={isCreatingVisualization || !analysisConfig.xAxis || (!analysisConfig.yAxis && !['pie', 'histogram'].includes(analysisConfig.chartType))}
-                  className="w-full"
-                >
-                  <BarChart3 className="w-4 h-4 mr-2" />
-                  {isCreatingVisualization ? "Creating Chart..." : `Create ${analysisConfig.chartType?.replace('_', ' ')} Chart`}
-                </Button>
-              </div>
-            )}
 
-            {/* Standard Visualization Options */}
-            {selectedAnalysis !== 'visualization' && (
-              <div className="pt-4 border-t">
-                <div className="flex items-center justify-between mb-4">
-                  <h4 className="text-sm font-medium text-gray-700">Create Visualizations</h4>
-                  <span className="text-xs text-gray-500">Choose a chart type</span>
-                </div>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  {(selectedAnalysis === 'descriptive' || selectedAnalysis === 'correlation') && numericFields.length >= 2 && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => createVisualization('correlation_heatmap')}
-                      disabled={isCreatingVisualization}
-                      className="flex flex-col items-center p-4 h-20 hover:bg-blue-50"
-                    >
-                      <TrendingUp className="w-6 h-6 mb-2 text-blue-600" />
-                      <span className="text-xs font-medium">Correlation</span>
-                    </Button>
-                  )}
-                  
-                  {(selectedAnalysis === 'descriptive' || selectedAnalysis === 'distribution') && analysisConfig.fields?.length > 0 && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => createVisualization('distribution_overview')}
-                      disabled={isCreatingVisualization}
-                      className="flex flex-col items-center p-4 h-20 hover:bg-green-50"
-                    >
-                      <BarChart3 className="w-6 h-6 mb-2 text-green-600" />
-                      <span className="text-xs font-medium">Distribution</span>
-                    </Button>
-                  )}
-                  
-                  {selectedAnalysis === 'categorical' && analysisConfig.fields?.length > 0 && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => createVisualization('categorical_counts')}
-                      disabled={isCreatingVisualization}
-                      className="flex flex-col items-center p-4 h-20 hover:bg-purple-50"
-                    >
-                      <PieChart className="w-6 h-6 mb-2 text-purple-600" />
-                      <span className="text-xs font-medium">Categories</span>
-                    </Button>
-                  )}
-                  
-                  {numericFields.length > 0 && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => createVisualization('box_plot')}
-                      disabled={isCreatingVisualization}
-                      className="flex flex-col items-center p-4 h-20 hover:bg-orange-50"
-                    >
-                      <BarChart3 className="w-6 h-6 mb-2 text-orange-600" />
-                      <span className="text-xs font-medium">Box Plot</span>
-                    </Button>
-                  )}
-                </div>
-                {isCreatingVisualization && (
-                  <div className="mt-3 p-3 bg-blue-50 rounded-lg">
-                    <div className="flex items-center space-x-2">
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
-                      <span className="text-sm text-blue-700">Generating visualization...</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
             
             {/* Analysis Execution Section - Positioned AFTER Visualization */}
             <div className="pt-4 border-t">
