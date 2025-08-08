@@ -201,6 +201,12 @@ export class MemStorage implements IStorage {
       updatedAt: new Date(),
     };
     
+    console.log("Creating user with data:", {
+      email: user.email,
+      provider: user.provider,
+      hasPassword: !!user.hashedPassword
+    });
+    
     this.users.set(user.id, user);
     return user;
   }
@@ -483,4 +489,4 @@ export class DatabaseStorage implements IStorage {
 
 // Use HybridStorage for optimal performance with persistence
 import { HybridStorage } from './hybrid-storage';
-export const storage = new HybridStorage();
+export const storage = new MemStorage();

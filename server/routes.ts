@@ -20,6 +20,7 @@ import { MCPAIService } from './mcp-ai-service';
 import { AnonymizationEngine } from './anonymization-engine';
 import { UnifiedPIIProcessor } from './unified-pii-processor';
 import { EmailService } from './email-service';
+import { emailAuthService } from './email-auth';
 import { PythonVisualizationService } from './python-visualization';
 import { PDFExportService } from './pdf-export';
 import { DatasetJoiner } from './dataset-joiner';
@@ -2216,21 +2217,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     
     // Check for Authorization header with Bearer token (email-based auth)
     const authHeader = req.headers.authorization;
+    console.log("Auth header:", authHeader);
+    
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.substring(7);
+      console.log("Extracted token:", token.substring(0, 10) + "...");
       
       try {
-        // Check if token exists in our token store
-        const userId = tokenStore.get(token);
+        // Use email auth service to verify token
+        const tokenResult = await emailAuthService.verifyAuthToken(token);
+        console.log("Token verification result:", tokenResult);
         
-        if (userId) {
+        if (tokenResult && tokenResult.userId) {
           // Verify user still exists
-          const user = await storage.getUser(userId);
+          const user = await storage.getUser(tokenResult.userId);
+          console.log("User lookup result:", user ? "found" : "not found");
           
           if (user) {
             // Set user on request object to match OAuth format
             req.user = { id: user.id };
             req.userId = user.id; // Also set direct userId for compatibility
+            console.log("Auth successful for user:", user.email);
             return next();
           }
         }
@@ -2430,23 +2437,29 @@ This link will expire in 24 hours.
         return res.status(401).json({ error: "Invalid email or password" });
       }
       
+      console.log("Login check for user:", {
+        email: user.email,
+        provider: user.provider,
+        hasPassword: !!user.hashedPassword
+      });
+      
       // Check if user is using email/password authentication
-      if (user.provider !== "local" || !user.password) {
+      if (user.provider !== "local" || !user.hashedPassword) {
+        console.log("Login failed - provider check:", user.provider, "hasPassword:", !!user.hashedPassword);
         return res.status(400).json({ error: "This account uses social login. Please use the sign-in button." });
       }
       
       // Verify password
-      const isPasswordValid = await bcrypt.compare(password, user.password);
+      const isPasswordValid = await bcrypt.compare(password, user.hashedPassword);
       if (!isPasswordValid) {
         return res.status(401).json({ error: "Invalid email or password" });
       }
       
-      // Generate simple auth token
-      const crypto = await import('crypto');
-      const authToken = crypto.randomBytes(32).toString('hex');
-      
-      // Store token in our simple token store
-      tokenStore.set(authToken, user.id);
+      // Generate auth token using email auth service
+      console.log("About to generate token for user:", user.id);
+      console.log("Full user object:", JSON.stringify(user, null, 2));
+      const authToken = emailAuthService.generateAuthToken(user.id);
+      console.log("Generated token via emailAuthService:", authToken.substring(0, 10) + "...");
       
       res.json({
         success: true,
@@ -2478,6 +2491,22 @@ This link will expire in 24 hours.
         ai: 'available'
       }
     });
+  });
+
+  // Debug token verification endpoint
+  app.get('/api/debug/token', async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.json({ error: 'No token provided' });
+    }
+    
+    const token = authHeader.substring(7);
+    try {
+      const result = await emailAuthService.verifyAuthToken(token);
+      res.json({ tokenValid: !!result, result });
+    } catch (error) {
+      res.json({ error: error.message });
+    }
   });
 
   // Get current user (unified auth - handles both token and OAuth session)
