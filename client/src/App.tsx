@@ -34,7 +34,7 @@ export default function App() {
         const token = localStorage.getItem('auth_token');
         if (token) {
           const userData = await apiClient.getCurrentUser();
-          setUser(userData.user);
+          setUser(userData);
         }
       } catch (error) {
         // Clear invalid token
@@ -79,13 +79,19 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <ProjectProvider>
         <Switch>
-          <Route path="/" component={() => <HomePage user={user} onLogout={handleLogout} />} />
-          <Route path="/project/:id" component={ProjectPage} />
-          <Route path="/descriptive-stats/:id" component={DescriptiveStatsPage} />
-          <Route path="/visualization/:id" component={VisualizationPage} />
           <Route path="/auth" component={() => <AuthPage onLogin={handleLogin} />} />
-          <Route path="/checkout" component={GuidedAnalysisCheckout} />
-          <Route path="/guided-analysis/:id" component={GuidedAnalysisResults} />
+          {user ? (
+            <>
+              <Route path="/" component={() => <HomePage user={user} onLogout={handleLogout} />} />
+              <Route path="/project/:id" component={ProjectPage} />
+              <Route path="/descriptive-stats/:id" component={DescriptiveStatsPage} />
+              <Route path="/visualization/:id" component={VisualizationPage} />
+              <Route path="/checkout" component={GuidedAnalysisCheckout} />
+              <Route path="/guided-analysis/:id" component={GuidedAnalysisResults} />
+            </>
+          ) : (
+            <Route path="/" component={() => <AuthPage onLogin={handleLogin} />} />
+          )}
         </Switch>
         <Toaster />
       </ProjectProvider>
