@@ -66,16 +66,166 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Initialize MCP AI Service
   MCPAIService.initializeMCPServer().catch(console.error);
   
-  // Set up Replit authentication
-  const { setupAuth, isAuthenticated } = await import('./replitAuth');
-  await setupAuth(app);
+  // Set up custom email/OAuth authentication (not Replit Auth)
   
-  // Add user authentication API route
-  app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
+  // Register endpoint
+  app.post('/api/auth/register', async (req, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const user = await storage.getUser(userId);
-      res.json(user);
+      const { email, password, firstName, lastName } = req.body;
+      
+      // Check if user already exists
+      const existingUser = await storage.getUserByEmail(email);
+      if (existingUser) {
+        return res.status(400).json({ error: 'User already exists' });
+      }
+      
+      // Hash password
+      const hashedPassword = await bcrypt.hash(password, 12);
+      
+      // Create user with proper ID generation
+      const newUser = await storage.createUser({
+        email,
+        hashedPassword,
+        firstName,
+        lastName,
+        provider: 'local',
+        emailVerified: false
+      });
+      
+      // Send verification email
+      await emailAuthService.sendVerificationEmail(newUser.email, newUser.emailVerificationToken!);
+      
+      res.status(201).json({
+        success: true,
+        message: 'Account created successfully. Please check your email for verification.',
+        user: {
+          id: newUser.id,
+          email: newUser.email,
+          firstName: newUser.firstName,
+          lastName: newUser.lastName,
+          emailVerified: newUser.emailVerified
+        }
+      });
+    } catch (error: any) {
+      console.error('Registration error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Login endpoint
+  app.post('/api/auth/login', async (req, res) => {
+    try {
+      const { email, password } = req.body;
+      
+      const user = await storage.getUserByEmail(email);
+      if (!user) {
+        return res.status(401).json({ error: 'Invalid credentials' });
+      }
+      
+      if (user.provider !== 'local' || !user.hashedPassword) {
+        return res.status(401).json({ error: 'Use OAuth to login with this account' });
+      }
+      
+      const isValidPassword = await bcrypt.compare(password, user.hashedPassword);
+      if (!isValidPassword) {
+        return res.status(401).json({ error: 'Invalid credentials' });
+      }
+      
+      // Generate auth token
+      const token = await emailAuthService.generateAuthToken(user.id);
+      
+      res.json({
+        success: true,
+        message: 'Login successful',
+        user: {
+          id: user.id,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          emailVerified: user.emailVerified
+        },
+        token
+      });
+    } catch (error: any) {
+      console.error('Login error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Email verification endpoint
+  app.get('/api/auth/verify-email', async (req, res) => {
+    try {
+      const { token } = req.query;
+      
+      if (!token || typeof token !== 'string') {
+        return res.status(400).json({ error: 'Invalid verification token' });
+      }
+      
+      const result = await emailAuthService.verifyEmail(token);
+      
+      if (result.success) {
+        res.json({ message: 'Email verified successfully' });
+      } else {
+        res.status(400).json({ error: result.error });
+      }
+    } catch (error: any) {
+      console.error('Email verification error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Debug token endpoint
+  app.get('/api/debug/token', async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.json({ tokenValid: false, error: 'No auth header' });
+    }
+    
+    const token = authHeader.replace('Bearer ', '');
+    const result = await emailAuthService.verifyAuthToken(token);
+    
+    res.json({ tokenValid: !!result, result });
+  });
+  
+  // Custom authentication middleware
+  async function requireAuth(req: any, res: any, next: any) {
+    try {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ message: 'Unauthorized' });
+      }
+
+      const token = authHeader.substring(7);
+      const tokenResult = await emailAuthService.verifyAuthToken(token);
+      
+      if (!tokenResult) {
+        return res.status(401).json({ message: 'Unauthorized' });
+      }
+
+      // Get full user object
+      const user = await storage.getUser(tokenResult.userId);
+      if (!user) {
+        return res.status(401).json({ message: 'Unauthorized' });
+      }
+
+      req.user = user;
+      next();
+    } catch (error) {
+      console.error('Auth middleware error:', error);
+      res.status(401).json({ message: 'Unauthorized' });
+    }
+  }
+
+  // Add user authentication API route
+  app.get('/api/auth/user', requireAuth, async (req: any, res) => {
+    try {
+      res.json({
+        id: req.user.id,
+        email: req.user.email,
+        firstName: req.user.firstName,
+        lastName: req.user.lastName,
+        emailVerified: req.user.emailVerified
+      });
     } catch (error) {
       console.error("Error fetching user:", error);
       res.status(500).json({ message: "Failed to fetch user" });
@@ -739,7 +889,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Advanced analysis endpoints
-  app.post("/api/step-by-step-analysis", isAuthenticated, async (req, res) => {
+  app.post("/api/step-by-step-analysis", requireAuth, async (req, res) => {
     try {
       const { projectId, analysisType, analysisPath, config } = req.body;
       console.log('Step-by-step analysis request:', { projectId, analysisType, analysisPath, config });
@@ -915,7 +1065,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // AI insights endpoint
-  app.post("/api/ai-insights", isAuthenticated, async (req, res) => {
+  app.post("/api/ai-insights", requireAuth, async (req, res) => {
     try {
       const { projectId, role, questions, instructions } = req.body;
       
@@ -962,7 +1112,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Main project upload endpoint with PII detection
-  app.post("/api/projects/upload", isAuthenticated, upload.single('file'), async (req, res) => {
+  app.post("/api/projects/upload", requireAuth, upload.single('file'), async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ 
@@ -1091,22 +1241,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Projects API endpoints - USER AUTHENTICATED ONLY
-  app.get("/api/projects", isAuthenticated, async (req, res) => {
+  app.get("/api/projects", requireAuth, async (req, res) => {
     try {
       const userId = (req.user as any)?.id;
       if (!userId) {
         return res.status(401).json({ error: "User authentication required" });
       }
       
-      const projects = await storage.getProjectsByUser(userId);
-      res.json({ projects });
+      // Get all projects and filter by userId since getProjectsByUser doesn't exist
+      const allProjects = await storage.getAllProjects();
+      const projects = allProjects.filter(project => project.userId === userId);
+      res.json(projects);
     } catch (error: any) {
       console.error('Failed to fetch user projects:', error);
       res.status(500).json({ error: "Failed to fetch projects" });
     }
   });
 
-  app.get("/api/projects/:id", isAuthenticated, async (req, res) => {
+  app.get("/api/projects/:id", requireAuth, async (req, res) => {
     try {
       const userId = (req.user as any)?.id;
       const project = await storage.getProject(req.params.id);
@@ -1864,7 +2016,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Join datasets endpoint
-  app.post("/api/join-datasets/:projectId", isAuthenticated, async (req, res) => {
+  app.post("/api/join-datasets/:projectId", requireAuth, async (req, res) => {
     try {
       const projectId = req.params.projectId;
       const { joinWithProjects, joinType, joinKeys, mergeStrategy } = req.body;
@@ -1936,22 +2088,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get all projects for authenticated user
-  app.get("/api/projects", async (req, res) => {
-    try {
-      const userId = req.user?.id;
-      if (!userId) {
-        // Return empty projects for unauthenticated users instead of 401
-        return res.json({ projects: [] });
-      }
-      
-      const projects = await storage.getProjectsByUser(userId);
-      res.json({ projects });
-    } catch (error: any) {
-      console.error("Error fetching projects:", error);
-      res.status(500).json({ error: "Failed to fetch projects" });
-    }
-  });
+  // Duplicate route removed - using the authenticated version above
 
   // Get specific project for authenticated user
   // Project retrieval endpoint for authenticated users
@@ -2621,7 +2758,7 @@ This link will expire in 24 hours.
   });
 
   // Create visualization endpoint
-  app.post("/api/visualizations/create", isAuthenticated, async (req, res) => {
+  app.post("/api/visualizations/create", requireAuth, async (req, res) => {
     try {
       const { projectId, visualizationType, selectedColumns, groupByColumn, colorByColumn } = req.body;
       
@@ -2676,7 +2813,7 @@ This link will expire in 24 hours.
   });
 
   // Export analysis to PDF
-  app.post("/api/projects/:id/export-pdf", isAuthenticated, async (req, res) => {
+  app.post("/api/projects/:id/export-pdf", requireAuth, async (req, res) => {
     try {
       const projectId = req.params.id;
       const userId = (req.user as any)?.id;
@@ -2774,7 +2911,7 @@ This link will expire in 24 hours.
   });
 
   // Data transformation endpoint
-  app.post('/api/transform-data/:projectId', isAuthenticated, async (req, res) => {
+  app.post('/api/transform-data/:projectId', requireAuth, async (req, res) => {
     try {
       const { projectId } = req.params;
       const { transformations } = req.body;
@@ -2816,7 +2953,7 @@ This link will expire in 24 hours.
   });
 
   // Export transformed data endpoint
-  app.get('/api/export-transformed-data/:projectId', isAuthenticated, async (req, res) => {
+  app.get('/api/export-transformed-data/:projectId', requireAuth, async (req, res) => {
     try {
       const { projectId } = req.params;
       const userId = req.user?.id;
@@ -2936,7 +3073,7 @@ This link will expire in 24 hours.
   });
 
   // Transform data endpoint
-  app.post("/api/transform-data/:projectId", isAuthenticated, async (req, res) => {
+  app.post("/api/transform-data/:projectId", requireAuth, async (req, res) => {
     try {
       const { projectId } = req.params;
       const { transformations } = req.body;
@@ -2962,7 +3099,7 @@ This link will expire in 24 hours.
   });
 
   // Save transformations to project
-  app.post("/api/save-transformations/:projectId", isAuthenticated, async (req, res) => {
+  app.post("/api/save-transformations/:projectId", requireAuth, async (req, res) => {
     try {
       const { projectId } = req.params;
       const { transformations } = req.body;
