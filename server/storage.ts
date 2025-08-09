@@ -195,13 +195,17 @@ export class MemStorage implements IStorage {
   }
 
   async createUser(userData: Omit<User, 'createdAt' | 'updatedAt'>): Promise<User> {
+    // Ensure the user has an ID
+    const userId = userData.id || crypto.randomUUID();
     const user: User = {
       ...userData,
+      id: userId, // Explicitly set the ID
       createdAt: new Date(),
       updatedAt: new Date(),
     };
     
     console.log("Creating user with data:", {
+      id: user.id,
       email: user.email,
       provider: user.provider,
       hasPassword: !!user.hashedPassword
