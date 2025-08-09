@@ -1,0 +1,100 @@
+{
+  "timestamp": "2025-08-09T21:44:32.965Z",
+  "summary": {
+    "totalTests": 14,
+    "passed": 9,
+    "failed": 5,
+    "successRate": "64.3%"
+  },
+  "scenarios": {
+    "Frontend Routes Accessibility": {
+      "status": "passed",
+      "duration": "1315ms",
+      "timestamp": "2025-08-09T21:44:32.318Z"
+    },
+    "API Health Check": {
+      "status": "passed",
+      "duration": "69ms",
+      "timestamp": "2025-08-09T21:44:32.387Z"
+    },
+    "Small CSV File Upload & Analysis": {
+      "status": "passed",
+      "duration": "268ms",
+      "timestamp": "2025-08-09T21:44:32.656Z"
+    },
+    "Medium Dataset with PII": {
+      "status": "passed",
+      "duration": "89ms",
+      "timestamp": "2025-08-09T21:44:32.745Z"
+    },
+    "Large Dataset Processing": {
+      "status": "passed",
+      "duration": "93ms",
+      "timestamp": "2025-08-09T21:44:32.838Z"
+    },
+    "Single Feature Pricing Calculation": {
+      "status": "failed",
+      "error": "Cannot read properties of undefined (reading 'toFixed')",
+      "timestamp": "2025-08-09T21:44:32.842Z"
+    },
+    "Multi-Feature Discount Calculation": {
+      "status": "failed",
+      "error": "Cannot read properties of undefined (reading 'multiFeatureDiscount')",
+      "timestamp": "2025-08-09T21:44:32.845Z"
+    },
+    "Maximum Discount (All Features)": {
+      "status": "failed",
+      "error": "Cannot read properties of undefined (reading 'multiFeatureDiscount')",
+      "timestamp": "2025-08-09T21:44:32.848Z"
+    },
+    "Quick Estimate API": {
+      "status": "passed",
+      "duration": "9ms",
+      "timestamp": "2025-08-09T21:44:32.857Z"
+    },
+    "Workflow State Management": {
+      "status": "passed",
+      "duration": "6ms",
+      "timestamp": "2025-08-09T21:44:32.864Z"
+    },
+    "High Complexity Dataset": {
+      "status": "failed",
+      "error": "Cannot read properties of undefined (reading 'toFixed')",
+      "timestamp": "2025-08-09T21:44:32.954Z"
+    },
+    "Error Handling - Invalid Project ID": {
+      "status": "passed",
+      "duration": "2ms",
+      "timestamp": "2025-08-09T21:44:32.956Z"
+    },
+    "Error Handling - Empty Features": {
+      "status": "failed",
+      "error": "Empty features should have zero total cost",
+      "timestamp": "2025-08-09T21:44:32.959Z"
+    },
+    "Integration Endpoints Check": {
+      "status": "passed",
+      "duration": "5ms",
+      "timestamp": "2025-08-09T21:44:32.964Z"
+    }
+  },
+  "errors": [
+    "Single Feature Pricing Calculation: Cannot read properties of undefined (reading 'toFixed')",
+    "Multi-Feature Discount Calculation: Cannot read properties of undefined (reading 'multiFeatureDiscount')",
+    "Maximum Discount (All Features): Cannot read properties of undefined (reading 'multiFeatureDiscount')",
+    "High Complexity Dataset: Cannot read properties of undefined (reading 'toFixed')",
+    "Error Handling - Empty Features: Empty features should have zero total cost"
+  ],
+  "projectIds": [
+    "project_1",
+    "project_2",
+    "project_3",
+    "project_4"
+  ],
+  "testFiles": [
+    "small_dataset.csv",
+    "pii_dataset.csv",
+    "large_dataset.csv",
+    "complex_dataset.csv"
+  ]
+}

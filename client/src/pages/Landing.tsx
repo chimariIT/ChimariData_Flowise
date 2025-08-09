@@ -2,24 +2,58 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Upload, BarChart3, Brain, TrendingUp } from "lucide-react";
 
-export default function Landing() {
+interface LandingPageProps {
+  onGetStarted?: () => void;
+  onPayPerAnalysis?: () => void;
+  onExpertConsultation?: () => void;
+  onDemo?: () => void;
+  onPricing?: () => void;
+  onFreeTrial?: () => void;
+}
+
+export default function Landing({ 
+  onGetStarted = () => window.location.href = '/auth',
+  onPayPerAnalysis = () => window.location.href = '/pricing',
+  onExpertConsultation = () => window.location.href = '/auth',
+  onDemo = () => window.location.href = '/auth',
+  onPricing = () => window.location.href = '/pricing',
+  onFreeTrial = () => window.location.href = '/auth'
+}: LandingPageProps = {}) {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
       <div className="container mx-auto px-4 py-12">
         <div className="text-center mb-12">
           <h1 className="text-4xl font-bold text-gray-900 mb-4">
-            ChimariData.com
+            ChimariData - Progressive Data Analytics Platform
           </h1>
           <p className="text-xl text-gray-600 mb-8 max-w-2xl mx-auto">
             Transform your data into actionable insights with our progressive analytics platform
           </p>
-          <Button 
-            onClick={() => window.location.href = '/auth'} 
-            size="lg"
-            className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3"
-          >
-            Log In to Get Started
-          </Button>
+          <div className="flex flex-wrap gap-4 justify-center">
+            <Button 
+              onClick={onGetStarted} 
+              size="lg"
+              className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3"
+            >
+              Get Started
+            </Button>
+            <Button 
+              onClick={onFreeTrial} 
+              size="lg"
+              variant="outline"
+              className="border-blue-600 text-blue-600 hover:bg-blue-50 px-8 py-3"
+            >
+              Free Trial
+            </Button>
+            <Button 
+              onClick={onPricing} 
+              size="lg"
+              variant="outline"
+              className="border-green-600 text-green-600 hover:bg-green-50 px-8 py-3"
+            >
+              Pricing
+            </Button>
+          </div>
         </div>
 
         <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
@@ -80,11 +114,33 @@ export default function Landing() {
             Choose from Data Transformation, Data Analysis, Data Visualizations, or AI Insights. 
             Each path is designed to meet your specific analytical needs with professional-grade tools.
           </p>
-          <div className="bg-white rounded-lg p-6 shadow-lg max-w-md mx-auto">
+          <div className="bg-white rounded-lg p-6 shadow-lg max-w-md mx-auto mb-8">
             <h3 className="font-semibold text-lg mb-2">Free Trial Available</h3>
-            <p className="text-gray-600 text-sm">
+            <p className="text-gray-600 text-sm mb-4">
               Try our platform with basic descriptive analysis and visualizations for files up to 10MB
             </p>
+            <div className="flex gap-3 justify-center">
+              <Button 
+                onClick={onPayPerAnalysis} 
+                className="bg-purple-600 hover:bg-purple-700"
+              >
+                Pay Per Analysis
+              </Button>
+              <Button 
+                onClick={onExpertConsultation} 
+                variant="outline"
+                className="border-orange-600 text-orange-600 hover:bg-orange-50"
+              >
+                Expert Consultation
+              </Button>
+              <Button 
+                onClick={onDemo} 
+                variant="outline"
+                className="border-gray-600 text-gray-600 hover:bg-gray-50"
+              >
+                Demo
+              </Button>
+            </div>
           </div>
         </div>
       </div>

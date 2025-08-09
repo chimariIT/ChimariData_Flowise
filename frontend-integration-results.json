@@ -1,52 +1,94 @@
 {
+  "timestamp": "2025-08-09T21:38:01.674Z",
   "summary": {
-    "passed": 4,
-    "failed": 3,
-    "total": 7
+    "totalTests": 14,
+    "passed": 9,
+    "failed": 5,
+    "successRate": "64.3%"
   },
-  "tests": [
-    {
-      "test": "Duplicate Prevention Logic",
-      "status": "PASS",
-      "message": "Server properly handles duplicate project names",
-      "timestamp": "2025-06-12T00:12:09.733Z"
+  "testCategories": {
+    "components": {
+      "Landing Page Load": {
+        "status": "failed",
+        "error": "Landing page missing required element: ChimariData",
+        "timestamp": "2025-08-09T21:38:01.317Z"
+      },
+      "Landing Page Buttons": {
+        "status": "failed",
+        "error": "Button onGetStarted not found",
+        "timestamp": "2025-08-09T21:38:01.372Z"
+      },
+      "Pricing Page Access (Public)": {
+        "status": "failed",
+        "error": "Pricing page missing key elements (found 0/7)",
+        "timestamp": "2025-08-09T21:38:01.403Z"
+      },
+      "Pricing Page with Project ID": {
+        "status": "passed",
+        "duration": "12ms",
+        "timestamp": "2025-08-09T21:38:01.416Z"
+      },
+      "Auth Page Load": {
+        "status": "failed",
+        "error": "Auth page missing key elements (found 1/5)",
+        "timestamp": "2025-08-09T21:38:01.436Z"
+      }
     },
-    {
-      "test": "Authentication Middleware",
-      "status": "PASS",
-      "message": "Authentication middleware properly implemented",
-      "timestamp": "2025-06-12T00:12:09.734Z"
+    "navigation": {
+      "Landing to Pricing Navigation": {
+        "status": "passed",
+        "duration": "30ms",
+        "timestamp": "2025-08-09T21:38:01.472Z"
+      },
+      "Landing to Auth Navigation": {
+        "status": "passed",
+        "duration": "17ms",
+        "timestamp": "2025-08-09T21:38:01.489Z"
+      },
+      "Direct Route Access": {
+        "status": "passed",
+        "duration": "71ms",
+        "timestamp": "2025-08-09T21:38:01.560Z"
+      },
+      "Invalid Route Handling": {
+        "status": "failed",
+        "error": "Invalid route /nonexistent-page returned 200 without proper fallback",
+        "timestamp": "2025-08-09T21:38:01.629Z"
+      }
     },
-    {
-      "test": "Landing Page Access",
-      "status": "FAIL",
-      "message": "Landing page content not found",
-      "timestamp": "2025-06-12T00:12:09.794Z"
-    },
-    {
-      "test": "Auth Route Configuration",
-      "status": "FAIL",
-      "message": "Authentication routes not properly configured",
-      "timestamp": "2025-06-12T00:12:09.795Z"
-    },
-    {
-      "test": "Upload Error Handling",
-      "status": "PASS",
-      "message": "Upload modal has proper error handling and user feedback",
-      "timestamp": "2025-06-12T00:12:09.795Z"
-    },
-    {
-      "test": "File Validation",
-      "status": "FAIL",
-      "message": "File validation not properly implemented",
-      "timestamp": "2025-06-12T00:12:09.796Z"
-    },
-    {
-      "test": "Demo Page Structure",
-      "status": "PASS",
-      "message": "Demo page properly structured without duplicate headers",
-      "timestamp": "2025-06-12T00:12:09.796Z"
+    "integration": {
+      "API Endpoint Availability": {
+        "status": "passed",
+        "duration": "25ms",
+        "timestamp": "2025-08-09T21:38:01.586Z"
+      },
+      "Static Asset Loading": {
+        "status": "passed",
+        "duration": "7ms",
+        "timestamp": "2025-08-09T21:38:01.594Z"
+      },
+      "Responsive Design Elements": {
+        "status": "passed",
+        "duration": "15ms",
+        "timestamp": "2025-08-09T21:38:01.609Z"
+      },
+      "Form Handling Components": {
+        "status": "passed",
+        "duration": "14ms",
+        "timestamp": "2025-08-09T21:38:01.623Z"
+      },
+      "Page Load Performance": {
+        "status": "passed",
+        "duration": "45ms",
+        "timestamp": "2025-08-09T21:38:01.674Z"
+      }
     }
-  ],
-  "timestamp": "2025-06-12T00:12:09.798Z"
+  },
+  "errors": [
+    "Landing Page Load: Landing page missing required element: ChimariData",
+    "Landing Page Buttons: Button onGetStarted not found",
+    "Pricing Page Access (Public): Pricing page missing key elements (found 0/7)",
+    "Auth Page Load: Auth page missing key elements (found 1/5)",
+    "Invalid Route Handling: Invalid route /nonexistent-page returned 200 without proper fallback"
+  ]
 }

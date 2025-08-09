@@ -1,90 +1,47 @@
 {
-  "summary": {
-    "passed": 7,
-    "failed": 2,
-    "warnings": 1,
-    "skipped": 2,
-    "critical": 0
+  "startTime": "2025-08-09T21:38:01.254Z",
+  "endTime": "2025-08-09T21:38:02.193Z",
+  "duration": 939,
+  "overallSummary": {
+    "totalTests": 28,
+    "passed": 14,
+    "failed": 14,
+    "successRate": "50.0%"
   },
-  "timestamp": "2025-06-12T01:37:38.291Z",
-  "results": [
-    {
-      "test": "Server Connection",
-      "status": "PASS",
-      "message": "Health endpoint accessible",
-      "timestamp": "2025-06-12T01:37:38.151Z"
+  "testSuites": {
+    "Frontend Integration Tests": {
+      "status": "completed",
+      "totalTests": 14,
+      "passed": 9,
+      "failed": 5,
+      "successRate": "64.3%",
+      "errors": [
+        "Landing Page Load: Landing page missing required element: ChimariData",
+        "Landing Page Buttons: Button onGetStarted not found",
+        "Pricing Page Access (Public): Pricing page missing key elements (found 0/7)",
+        "Auth Page Load: Auth page missing key elements (found 1/5)",
+        "Invalid Route Handling: Invalid route /nonexistent-page returned 200 without proper fallback"
+      ],
+      "timestamp": "2025-08-09T21:38:01.683Z"
     },
-    {
-      "test": "User Registration",
-      "status": "FAIL",
-      "message": "Registration error: Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON",
-      "timestamp": "2025-06-12T01:37:38.189Z"
-    },
-    {
-      "test": "User Login",
-      "status": "FAIL",
-      "message": "Login error: Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON",
-      "timestamp": "2025-06-12T01:37:38.204Z"
-    },
-    {
-      "test": "Demo Page Access",
-      "status": "PARTIAL",
-      "message": "Demo page returns content but may need verification",
-      "timestamp": "2025-06-12T01:37:38.218Z"
-    },
-    {
-      "test": "Auth Protection /api/projects",
-      "status": "PASS",
-      "message": "Route properly protected",
-      "timestamp": "2025-06-12T01:37:38.226Z"
-    },
-    {
-      "test": "Auth Protection /api/user",
-      "status": "WARN",
-      "message": "Route may not be properly protected",
-      "timestamp": "2025-06-12T01:37:38.243Z"
-    },
-    {
-      "test": "File Upload",
-      "status": "SKIP",
-      "message": "No auth token available",
-      "timestamp": "2025-06-12T01:37:38.243Z"
-    },
-    {
-      "test": "Project Management",
-      "status": "SKIP",
-      "message": "No auth token available",
-      "timestamp": "2025-06-12T01:37:38.243Z"
-    },
-    {
-      "test": "AI Providers",
-      "status": "PASS",
-      "message": "0 AI providers available",
-      "timestamp": "2025-06-12T01:37:38.256Z"
-    },
-    {
-      "test": "Logout",
-      "status": "PASS",
-      "message": "Logout endpoint accessible",
-      "timestamp": "2025-06-12T01:37:38.261Z"
-    },
-    {
-      "test": "Frontend Route /",
-      "status": "PASS",
-      "message": "Route returns HTML",
-      "timestamp": "2025-06-12T01:37:38.270Z"
-    },
-    {
-      "test": "Frontend Route /demo",
-      "status": "PASS",
-      "message": "Route returns HTML",
-      "timestamp": "2025-06-12T01:37:38.277Z"
-    },
-    {
-      "test": "Frontend Route /auth",
-      "status": "PASS",
-      "message": "Route returns HTML",
-      "timestamp": "2025-06-12T01:37:38.286Z"
+    "End-to-End Tests": {
+      "status": "completed",
+      "totalTests": 14,
+      "passed": 5,
+      "failed": 9,
+      "successRate": "35.7%",
+      "errors": [
+        "Small CSV File Upload & Analysis: PII decision failed: {\"error\":\"API endpoint not found\"}",
+        "Medium Dataset with PII: PII decision failed: {\"error\":\"API endpoint not found\"}",
+        "Large Dataset Processing: PII decision failed: {\"error\":\"API endpoint not found\"}",
+        "Single Feature Pricing Calculation: No project IDs available for pricing test",
+        "Multi-Feature Discount Calculation: No project IDs available for pricing test",
+        "Maximum Discount (All Features): No project IDs available for pricing test",
+        "Workflow State Management: No project IDs available for workflow test",
+        "High Complexity Dataset: PII decision failed: {\"error\":\"API endpoint not found\"}",
+        "Error Handling - Empty Features: No project IDs available for error test"
+      ],
+      "timestamp": "2025-08-09T21:38:02.192Z"
     }
-  ]
+  }
 }
