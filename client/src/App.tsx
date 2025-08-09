@@ -8,7 +8,7 @@ import VisualizationPage from "@/pages/visualization-page";
 import AuthPage from "@/pages/auth";
 import GuidedAnalysisCheckout from "@/pages/checkout";
 import GuidedAnalysisResults from "@/pages/guided-analysis-results";
-import Landing from "@/pages/Landing";
+import Landing from "@/pages/landing";
 import { ProjectProvider } from "@/hooks/useProjectContext";
 import { useAuth } from "@/hooks/useAuth";
 import "./index.css";
@@ -27,15 +27,25 @@ function Router() {
 
   return (
     <Switch>
+      {/* Auth route should be available regardless of authentication status */}
+      <Route path="/auth">
+        {() => <AuthPage onLogin={(user) => {
+          // After successful login, redirect to home
+          window.location.href = '/';
+        }} />}
+      </Route>
+      
+      {/* Show landing page for non-authenticated users, home for authenticated */}
       {isLoading || !isAuthenticated ? (
         <Route path="/" component={Landing} />
       ) : (
         <>
           <Route path="/" component={HomePage} />
-          <Route path="/project/:id" component={ProjectPage} />
+          <Route path="/project/:id">
+            {(params) => <ProjectPage projectId={params.id} />}
+          </Route>
           <Route path="/descriptive-stats/:id" component={DescriptiveStatsPage} />
           <Route path="/visualization/:id" component={VisualizationPage} />
-          <Route path="/auth" component={AuthPage} />
           <Route path="/checkout" component={GuidedAnalysisCheckout} />
           <Route path="/guided-analysis/:id" component={GuidedAnalysisResults} />
         </>

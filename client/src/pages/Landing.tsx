@@ -14,7 +14,7 @@ export default function Landing() {
             Transform your data into actionable insights with our progressive analytics platform
           </p>
           <Button 
-            onClick={() => window.location.href = '/api/login'} 
+            onClick={() => window.location.href = '/auth'} 
             size="lg"
             className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3"
           >
