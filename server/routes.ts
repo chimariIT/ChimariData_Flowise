@@ -2293,8 +2293,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const verificationToken = crypto.randomBytes(32).toString('hex');
       const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
       
-      // Create user
+      // Create user with explicit ID
+      const userId = crypto.randomUUID();
       const user = await storage.createUser({
+        id: userId,
         email,
         hashedPassword,
         firstName,
@@ -2458,7 +2460,12 @@ This link will expire in 24 hours.
       // Generate auth token using email auth service
       console.log("About to generate token for user:", user.id);
       console.log("Full user object:", JSON.stringify(user, null, 2));
-      const authToken = emailAuthService.generateAuthToken(user.id);
+      
+      // Fix the user ID issue - use email as fallback if id is undefined
+      const userId = user.id || user.email;
+      console.log("Using userId for token:", userId);
+      console.log("User has ID field:", "id" in user, "Type:", typeof user.id);
+      const authToken = emailAuthService.generateAuthToken(userId);
       console.log("Generated token via emailAuthService:", authToken.substring(0, 10) + "...");
       
       res.json({
