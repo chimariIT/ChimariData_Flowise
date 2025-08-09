@@ -24,6 +24,8 @@ import { emailAuthService } from './email-auth';
 import { PythonVisualizationService } from './python-visualization';
 import { PDFExportService } from './pdf-export';
 import { DatasetJoiner } from './dataset-joiner';
+import { DynamicPricingService } from './dynamic-pricing-service';
+import { GuidedWorkflowService } from './guided-workflow-service';
 import { SUBSCRIPTION_TIERS, getTierLimits, canUserUpload, canUserRequestAIInsight } from '@shared/subscription-tiers';
 import bcrypt from 'bcrypt';
 import fs from 'fs/promises';
@@ -3124,6 +3126,311 @@ This link will expire in 24 hours.
       res.status(500).json({ 
         error: error.message || "Failed to save transformations" 
       });
+    }
+  });
+
+  // ===== DYNAMIC PRICING WORKFLOW ENDPOINTS =====
+
+  // Initialize dynamic pricing workflow
+  app.post("/api/pricing-workflow/:projectId/initialize", requireAuth, async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const userId = req.user?.id;
+
+      if (!userId) {
+        return res.status(401).json({ error: "Authentication required" });
+      }
+
+      const workflow = GuidedWorkflowService.initializeWorkflow(projectId, userId);
+      
+      res.json({
+        success: true,
+        workflow
+      });
+    } catch (error: any) {
+      console.error("Initialize workflow error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Get project analysis for dynamic pricing
+  app.get("/api/project-analysis/:projectId", requireAuth, async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const project = await storage.getProject(projectId);
+      
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+
+      // Analyze file characteristics
+      const fileAnalysis = {
+        fileSizeBytes: project.fileSize,
+        recordCount: project.recordCount || 0,
+        columnCount: Object.keys(project.schema || {}).length,
+        schema: project.schema,
+        dataPreview: project.data?.slice(0, 5) || [],
+        piiDetected: (project.piiAnalysis?.detectedPII?.length || 0) > 0,
+        piiColumns: project.piiAnalysis?.detectedPII || [],
+        missingDataPercentage: project.missingDataAnalysis?.patterns?.missingPercentage || 0,
+        outliersDetected: !!project.outlierAnalysis?.outliers?.length,
+        dataTypes: {
+          numerical: Object.values(project.schema || {}).filter((col: any) => 
+            ['number', 'integer', 'float'].includes(col.type)).length,
+          categorical: Object.values(project.schema || {}).filter((col: any) => 
+            ['string', 'category'].includes(col.type)).length,
+          datetime: Object.values(project.schema || {}).filter((col: any) => 
+            ['date', 'datetime'].includes(col.type)).length,
+          text: Object.values(project.schema || {}).filter((col: any) => 
+            col.type === 'text').length
+        }
+      };
+
+      // Generate feature suggestions and workflow steps
+      const suggestions = GuidedWorkflowService.analyzeFileAndSuggestFeatures(fileAnalysis);
+      const workflowSteps = GuidedWorkflowService.generateWorkflowSteps(
+        suggestions.suggestedFeatures,
+        fileAnalysis
+      );
+
+      res.json({
+        success: true,
+        ...fileAnalysis,
+        recommendations: suggestions.recommendations,
+        suggestedFeatures: suggestions.suggestedFeatures,
+        estimatedComplexity: suggestions.estimatedComplexity,
+        workflowSteps,
+        requiredSteps: suggestions.requiredSteps
+      });
+    } catch (error: any) {
+      console.error("Project analysis error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Calculate dynamic pricing
+  app.get("/api/dynamic-pricing/:projectId", requireAuth, async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const { features, configurations } = req.query;
+      
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+
+      let selectedFeatures: string[] = [];
+      let featureConfigurations: Record<string, any> = {};
+
+      try {
+        selectedFeatures = features ? JSON.parse(features as string) : [];
+        featureConfigurations = configurations ? JSON.parse(configurations as string) : {};
+      } catch (e) {
+        // Use defaults if parsing fails
+      }
+
+      if (selectedFeatures.length === 0) {
+        return res.json({
+          success: true,
+          finalTotal: 0,
+          breakdown: [],
+          estimatedProcessing: { timeMinutes: 0, resourceIntensity: "low" }
+        });
+      }
+
+      // Build pricing request
+      const pricingRequest = {
+        fileSizeBytes: project.fileSize,
+        recordCount: project.recordCount || 0,
+        columnCount: Object.keys(project.schema || {}).length,
+        complexityFactors: {
+          piiColumnsCount: project.piiAnalysis?.detectedPII?.length || 0,
+          uniqueIdentifiersCount: 0,
+          missingDataPercentage: project.missingDataAnalysis?.patterns?.missingPercentage || 0,
+          dataTypes: {
+            numerical: Object.values(project.schema || {}).filter((col: any) => 
+              ['number', 'integer', 'float'].includes(col.type)).length,
+            categorical: Object.values(project.schema || {}).filter((col: any) => 
+              ['string', 'category'].includes(col.type)).length,
+            datetime: Object.values(project.schema || {}).filter((col: any) => 
+              ['date', 'datetime'].includes(col.type)).length,
+            text: Object.values(project.schema || {}).filter((col: any) => 
+              col.type === 'text').length
+          },
+          outliersDetected: !!project.outlierAnalysis?.outliers?.length,
+          needsNormalization: false
+        },
+        selectedFeatures,
+        featureRequirements: featureConfigurations
+      };
+
+      const pricingResult = DynamicPricingService.calculateDynamicPricing(pricingRequest);
+      
+      res.json({
+        success: true,
+        ...pricingResult
+      });
+    } catch (error: any) {
+      console.error("Dynamic pricing error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Get workflow state
+  app.get("/api/pricing-workflow/:projectId", requireAuth, async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const workflow = GuidedWorkflowService.getWorkflow(projectId);
+      
+      if (!workflow) {
+        const userId = req.user?.id;
+        if (!userId) {
+          return res.status(401).json({ error: "Authentication required" });
+        }
+        const newWorkflow = GuidedWorkflowService.initializeWorkflow(projectId, userId);
+        return res.json({ success: true, workflow: newWorkflow });
+      }
+
+      res.json({ success: true, workflow });
+    } catch (error: any) {
+      console.error("Get workflow error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Update workflow state
+  app.put("/api/pricing-workflow/:projectId", requireAuth, async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const { currentStep, selectedFeatures, featureConfigurations, estimatedCost } = req.body;
+
+      const workflow = GuidedWorkflowService.updateWorkflow(projectId, currentStep, {
+        selectedFeatures,
+        featureConfigurations,
+        estimatedCost
+      });
+
+      if (!workflow) {
+        return res.status(404).json({ error: "Workflow not found" });
+      }
+
+      res.json({ success: true, workflow });
+    } catch (error: any) {
+      console.error("Update workflow error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Get quick pricing estimate
+  app.post("/api/quick-estimate", requireAuth, async (req, res) => {
+    try {
+      const { fileSizeBytes, recordCount, columnCount, selectedFeatures } = req.body;
+
+      const estimate = DynamicPricingService.getQuickEstimate(
+        fileSizeBytes,
+        recordCount,
+        columnCount,
+        selectedFeatures
+      );
+
+      res.json({
+        success: true,
+        ...estimate
+      });
+    } catch (error: any) {
+      console.error("Quick estimate error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Enhanced payment intent creation for dynamic pricing
+  app.post("/api/create-payment-intent", requireAuth, async (req, res) => {
+    try {
+      const { projectId, selectedFeatures, featureConfigurations, amount } = req.body;
+      const userId = req.user?.id;
+
+      if (!userId) {
+        return res.status(401).json({ error: "Authentication required" });
+      }
+
+      if (!selectedFeatures || selectedFeatures.length === 0) {
+        return res.status(400).json({ error: "No features selected" });
+      }
+
+      // Create payment intent with Stripe
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: Math.round(amount * 100), // Convert to cents
+        currency: 'usd',
+        metadata: {
+          projectId,
+          userId,
+          selectedFeatures: JSON.stringify(selectedFeatures),
+          featureConfigurations: JSON.stringify(featureConfigurations)
+        }
+      });
+
+      // Update workflow with payment intent
+      GuidedWorkflowService.updateWorkflow(projectId, 'payment', {
+        stripePaymentIntentId: paymentIntent.id,
+        selectedFeatures,
+        featureConfigurations,
+        estimatedCost: Math.round(amount * 100)
+      });
+
+      res.json({
+        success: true,
+        paymentIntentId: paymentIntent.id,
+        clientSecret: paymentIntent.client_secret,
+        amount: amount
+      });
+    } catch (error: any) {
+      console.error("Create payment intent error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Process successful payment and trigger processing
+  app.post("/api/process-payment-success", requireAuth, async (req, res) => {
+    try {
+      const { paymentIntentId } = req.body;
+
+      // Verify payment with Stripe
+      const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+      
+      if (paymentIntent.status !== 'succeeded') {
+        return res.status(400).json({ error: "Payment not completed" });
+      }
+
+      const { projectId, selectedFeatures, featureConfigurations } = paymentIntent.metadata;
+      
+      if (!projectId) {
+        return res.status(400).json({ error: "Invalid payment metadata" });
+      }
+
+      // Update project with purchased features
+      await storage.updateProject(projectId, {
+        isPaid: true,
+        selectedFeatures: JSON.parse(selectedFeatures || '[]'),
+        paymentIntentId,
+        upgradedAt: new Date()
+      });
+
+      // Update workflow to processing status
+      GuidedWorkflowService.updateWorkflow(projectId, 'processing', {
+        status: 'paid',
+        paidAt: new Date(),
+        finalCost: paymentIntent.amount
+      });
+
+      res.json({
+        success: true,
+        message: "Payment processed successfully. Your data processing has begun.",
+        projectId,
+        selectedFeatures: JSON.parse(selectedFeatures || '[]')
+      });
+    } catch (error: any) {
+      console.error("Process payment success error:", error);
+      res.status(500).json({ error: error.message });
     }
   });
 

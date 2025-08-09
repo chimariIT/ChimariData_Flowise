@@ -8,7 +8,8 @@ import VisualizationPage from "@/pages/visualization-page";
 import AuthPage from "@/pages/auth";
 import GuidedAnalysisCheckout from "@/pages/checkout";
 import GuidedAnalysisResults from "@/pages/guided-analysis-results";
-import Landing from "@/pages/landing";
+import { DynamicPricingPage } from "@/pages/DynamicPricingPage";
+import Landing from "@/pages/Landing";
 import { ProjectProvider } from "@/hooks/useProjectContext";
 import { useAuth } from "@/hooks/useAuth";
 import "./index.css";
@@ -35,9 +36,21 @@ function Router() {
         }} />}
       </Route>
       
+      {/* Routes available for all users */}
+      <Route path="/pricing/:projectId?" component={DynamicPricingPage} />
+      
       {/* Show landing page for non-authenticated users, home for authenticated */}
       {isLoading || !isAuthenticated ? (
-        <Route path="/" component={Landing} />
+        <Route path="/">
+          {() => <Landing 
+            onGetStarted={() => window.location.href = '/auth'}
+            onPayPerAnalysis={() => window.location.href = '/pricing'}
+            onExpertConsultation={() => window.location.href = '/auth'}
+            onDemo={() => window.location.href = '/auth'}
+            onPricing={() => window.location.href = '/pricing'}
+            onFreeTrial={() => window.location.href = '/auth'}
+          />}
+        </Route>
       ) : (
         <>
           <Route path="/" component={HomePage} />
