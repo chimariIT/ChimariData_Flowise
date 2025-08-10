@@ -110,6 +110,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Send verification email
       await emailAuthService.sendVerificationEmail(newUser.email, newUser.emailVerificationToken!);
       
+      // Generate auth token for immediate login after registration
+      const token = await emailAuthService.generateAuthToken(newUser.id);
+      
+      // Store token for session management
+      tokenStore.set(token, newUser.id);
+      
       res.status(201).json({
         success: true,
         message: 'Account created successfully. Please check your email for verification.',
@@ -119,7 +125,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           firstName: newUser.firstName,
           lastName: newUser.lastName,
           emailVerified: newUser.emailVerified
-        }
+        },
+        token
       });
     } catch (error: any) {
       console.error('Registration error:', error);
@@ -148,6 +155,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Generate auth token
       const token = await emailAuthService.generateAuthToken(user.id);
+      
+      // Store token for session management
+      tokenStore.set(token, user.id);
       
       res.json({
         success: true,
@@ -231,21 +241,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   }
 
-  // Add user authentication API route
-  app.get('/api/auth/user', requireAuth, async (req: any, res) => {
-    try {
-      res.json({
-        id: req.user.id,
-        email: req.user.email,
-        firstName: req.user.firstName,
-        lastName: req.user.lastName,
-        emailVerified: req.user.emailVerified
-      });
-    } catch (error) {
-      console.error("Error fetching user:", error);
-      res.status(500).json({ message: "Failed to fetch user" });
-    }
-  });
+  // Remove duplicate - using unified auth endpoint later
   
   // Token store for authentication (shared between middleware functions)
   const tokenStore = new Map<string, string>();
@@ -2673,17 +2669,19 @@ This link will expire in 24 hours.
     try {
       let user = null;
       
-      // First try OAuth session authentication
-      if (req.user) {
-        user = req.user;
+      // First try OAuth session authentication (Replit OAuth)
+      if (req.user && req.user.claims) {
+        // This is a Replit OAuth session
+        const claims = req.user.claims;
+        user = await storage.getUser(claims.sub);
       } else {
-        // Try token authentication
+        // Try token authentication (custom email auth)
         const authHeader = req.headers.authorization;
         if (authHeader && authHeader.startsWith('Bearer ')) {
           const token = authHeader.substring(7);
-          const userId = tokenStore.get(token);
-          if (userId) {
-            user = await storage.getUser(userId);
+          const tokenResult = await emailAuthService.verifyAuthToken(token);
+          if (tokenResult) {
+            user = await storage.getUser(tokenResult.userId);
           }
         }
       }
@@ -2693,13 +2691,11 @@ This link will expire in 24 hours.
       }
       
       res.json({
-        user: {
-          id: user.id,
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          emailVerified: user.emailVerified
-        }
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        emailVerified: user.emailVerified
       });
       
     } catch (error) {
