@@ -48,6 +48,12 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
           localStorage.setItem('auth_token', result.token);
         }
         onLogin(result.user);
+        
+        // Force refresh the page to ensure authentication state is updated
+        setTimeout(() => {
+          window.location.href = '/';
+        }, 500);
+        return;
       }
       
       toast({

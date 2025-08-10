@@ -31,8 +31,8 @@ function Router() {
       {/* Auth route should be available regardless of authentication status */}
       <Route path="/auth">
         {() => <AuthPage onLogin={(user) => {
-          // After successful login, redirect to home
-          window.location.href = '/';
+          // Authentication handled in AuthPage component with auto-redirect
+          console.log('User logged in:', user);
         }} />}
       </Route>
       
