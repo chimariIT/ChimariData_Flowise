@@ -18,7 +18,7 @@ import { PIIInterimDialog } from "@/components/PIIInterimDialog";
 export default function HomePage() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const [isUploading, setIsUploading] = useState(false);
   const [activeTab, setActiveTab] = useState("upload");
   const [showAuthModal, setShowAuthModal] = useState(false);
