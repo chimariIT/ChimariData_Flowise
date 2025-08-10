@@ -42,11 +42,17 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
             password: formData.password 
           });
 
-      if (result.user) {
+      if (result.success && result.user) {
         // Store auth token in localStorage
         if (result.token) {
           localStorage.setItem('auth_token', result.token);
         }
+        
+        toast({
+          title: "Success",
+          description: isLogin ? "Welcome back!" : "Account created successfully!"
+        });
+        
         onLogin(result.user);
         
         // Force refresh the page to ensure authentication state is updated
