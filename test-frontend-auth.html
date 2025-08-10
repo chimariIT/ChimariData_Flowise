@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Authentication Test</title>
+</head>
+<body>
+    <h1>Authentication Test</h1>
+    <div id="status">Testing authentication...</div>
+    
+    <script>
+        async function testAuth() {
+            const status = document.getElementById('status');
+            
+            try {
+                // 1. Register a test user
+                status.innerHTML = 'Step 1: Registering user...';
+                const registerResponse = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        email: 'frontend-test@example.com',
+                        firstName: 'Frontend',
+                        lastName: 'Test',
+                        password: 'Test123!'
+                    })
+                });
+                
+                const registerData = await registerResponse.json();
+                console.log('Register response:', registerData);
+                
+                if (!registerData.success) {
+                    throw new Error('Registration failed: ' + registerData.error);
+                }
+                
+                // Store token
+                const token = registerData.token;
+                localStorage.setItem('auth_token', token);
+                
+                // 2. Test authenticated endpoint
+                status.innerHTML = 'Step 2: Testing authenticated endpoint...';
+                const userResponse = await fetch('/api/auth/user', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                
+                const userData = await userResponse.json();
+                console.log('User response:', userData);
+                
+                if (userResponse.ok) {
+                    status.innerHTML = `✅ Authentication Working!<br>
+                        User: ${userData.firstName} ${userData.lastName}<br>
+                        Email: ${userData.email}<br>
+                        Token: ${token.substring(0, 20)}...`;
+                } else {
+                    throw new Error('User endpoint failed: ' + userData.error);
+                }
+                
+            } catch (error) {
+                status.innerHTML = `❌ Authentication Failed: ${error.message}`;
+                console.error('Auth test error:', error);
+            }
+        }
+        
+        // Run test when page loads
+        testAuth();
+    </script>
+</body>
+</html>
