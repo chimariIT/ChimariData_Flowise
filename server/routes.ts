@@ -81,167 +81,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
   
-  // Set up custom email/OAuth authentication (not Replit Auth)
-  
-  // Register endpoint
-  app.post('/api/auth/register', async (req, res) => {
-    try {
-      const { email, password, firstName, lastName } = req.body;
-      
-      // Check if user already exists
-      const existingUser = await storage.getUserByEmail(email);
-      if (existingUser) {
-        return res.status(400).json({ error: 'User already exists' });
-      }
-      
-      // Hash password
-      const hashedPassword = await bcrypt.hash(password, 12);
-      
-      // Create user with proper ID generation
-      const newUser = await storage.createUser({
-        email,
-        hashedPassword,
-        firstName,
-        lastName,
-        provider: 'local',
-        emailVerified: false
-      });
-      
-      // Send verification email
-      await emailAuthService.sendVerificationEmail(newUser.email, newUser.emailVerificationToken!);
-      
-      // Generate auth token for immediate login after registration
-      const token = await emailAuthService.generateAuthToken(newUser.id);
-      
-      // Store token for session management
-      tokenStore.set(token, newUser.id);
-      
-      res.status(201).json({
-        success: true,
-        message: 'Account created successfully. Please check your email for verification.',
-        user: {
-          id: newUser.id,
-          email: newUser.email,
-          firstName: newUser.firstName,
-          lastName: newUser.lastName,
-          emailVerified: newUser.emailVerified
-        },
-        token
-      });
-    } catch (error: any) {
-      console.error('Registration error:', error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Login endpoint
-  app.post('/api/auth/login', async (req, res) => {
-    try {
-      const { email, password } = req.body;
-      
-      const user = await storage.getUserByEmail(email);
-      if (!user) {
-        return res.status(401).json({ error: 'Invalid credentials' });
-      }
-      
-      if (user.provider !== 'local' || !user.hashedPassword) {
-        return res.status(401).json({ error: 'Use OAuth to login with this account' });
-      }
-      
-      const isValidPassword = await bcrypt.compare(password, user.hashedPassword);
-      if (!isValidPassword) {
-        return res.status(401).json({ error: 'Invalid credentials' });
-      }
-      
-      // Generate auth token
-      const token = await emailAuthService.generateAuthToken(user.id);
-      
-      // Store token for session management
-      tokenStore.set(token, user.id);
-      
-      res.json({
-        success: true,
-        message: 'Login successful',
-        user: {
-          id: user.id,
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          emailVerified: user.emailVerified
-        },
-        token
-      });
-    } catch (error: any) {
-      console.error('Login error:', error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Email verification endpoint
-  app.get('/api/auth/verify-email', async (req, res) => {
-    try {
-      const { token } = req.query;
-      
-      if (!token || typeof token !== 'string') {
-        return res.status(400).json({ error: 'Invalid verification token' });
-      }
-      
-      const result = await emailAuthService.verifyEmail(token);
-      
-      if (result.success) {
-        res.json({ message: 'Email verified successfully' });
-      } else {
-        res.status(400).json({ error: result.error });
-      }
-    } catch (error: any) {
-      console.error('Email verification error:', error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Debug token endpoint
-  app.get('/api/debug/token', async (req, res) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) {
-      return res.json({ tokenValid: false, error: 'No auth header' });
-    }
-    
-    const token = authHeader.replace('Bearer ', '');
-    const result = await emailAuthService.verifyAuthToken(token);
-    
-    res.json({ tokenValid: !!result, result });
-  });
-  
-  // Custom authentication middleware
-  async function requireAuth(req: any, res: any, next: any) {
-    try {
-      const authHeader = req.headers.authorization;
-      if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return res.status(401).json({ message: 'Unauthorized' });
-      }
-
-      const token = authHeader.substring(7);
-      const tokenResult = await emailAuthService.verifyAuthToken(token);
-      
-      if (!tokenResult) {
-        return res.status(401).json({ message: 'Unauthorized' });
-      }
-
-      // Get full user object
-      const user = await storage.getUser(tokenResult.userId);
-      if (!user) {
-        return res.status(401).json({ message: 'Unauthorized' });
-      }
-
-      req.user = user;
-      next();
-    } catch (error) {
-      console.error('Auth middleware error:', error);
-      res.status(401).json({ message: 'Unauthorized' });
-    }
-  }
-
-  // Remove duplicate - using unified auth endpoint later
+  // Authentication system - clean email/OAuth without Replit dependencies
   
   // Token store for authentication (shared between middleware functions)
   const tokenStore = new Map<string, string>();
@@ -900,7 +740,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Advanced analysis endpoints
-  app.post("/api/step-by-step-analysis", requireAuth, async (req, res) => {
+  app.post("/api/step-by-step-analysis", unifiedAuth, async (req, res) => {
     try {
       const { projectId, analysisType, analysisPath, config } = req.body;
       console.log('Step-by-step analysis request:', { projectId, analysisType, analysisPath, config });
@@ -1076,7 +916,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // AI insights endpoint
-  app.post("/api/ai-insights", requireAuth, async (req, res) => {
+  app.post("/api/ai-insights", unifiedAuth, async (req, res) => {
     try {
       const { projectId, role, questions, instructions } = req.body;
       
@@ -1123,7 +963,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Main project upload endpoint with PII detection
-  app.post("/api/projects/upload", requireAuth, upload.single('file'), async (req, res) => {
+  app.post("/api/projects/upload", unifiedAuth, upload.single('file'), async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ 
@@ -1252,7 +1092,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Projects API endpoints - USER AUTHENTICATED ONLY
-  app.get("/api/projects", requireAuth, async (req, res) => {
+  app.get("/api/projects", unifiedAuth, async (req, res) => {
     try {
       const userId = (req.user as any)?.id;
       if (!userId) {
@@ -1269,7 +1109,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/projects/:id", requireAuth, async (req, res) => {
+  app.get("/api/projects/:id", unifiedAuth, async (req, res) => {
     try {
       const userId = (req.user as any)?.id;
       const project = await storage.getProject(req.params.id);
@@ -1557,6 +1397,73 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("Error creating payment intent:", error);
       res.status(500).json({ error: "Failed to create payment intent" });
+    }
+  });
+
+  // Dynamic pricing endpoint - calculates pricing based on project complexity
+  app.post("/api/dynamic-pricing", unifiedAuth, async (req, res) => {
+    try {
+      const { projectId, features } = req.body;
+      const userId = req.user?.id;
+
+      if (!userId) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+
+      if (!projectId || !features || !Array.isArray(features)) {
+        return res.status(400).json({ error: "Project ID and features array are required" });
+      }
+
+      // Get project data for complexity analysis
+      const project = await storage.getProject(projectId);
+      if (!project || project.userId !== userId) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+
+      // Calculate complexity based on project data
+      const fileSize = project.fileSize || 0;
+      const recordCount = project.data?.length || 0;
+      const columnCount = project.schema ? Object.keys(project.schema).length : 0;
+      
+      // Simple complexity scoring
+      let complexityScore = 1.0;
+      if (fileSize > 1000000) complexityScore += 0.2; // Large file
+      if (recordCount > 10000) complexityScore += 0.3; // Many records  
+      if (columnCount > 10) complexityScore += 0.2; // Many columns
+      if (project.piiAnalysis?.detectedPII?.length > 0) complexityScore += 0.3; // PII present
+
+      // Get base pricing 
+      const validation = PricingService.validateFeatures(features);
+      if (!validation.valid) {
+        return res.status(400).json({ 
+          error: "Invalid features", 
+          invalidFeatures: validation.invalidFeatures 
+        });
+      }
+
+      const basePricing = PricingService.calculatePrice(features);
+      
+      // Apply complexity multiplier
+      const adjustedPrice = Math.round(basePricing.total * complexityScore * 100) / 100;
+      
+      res.json({
+        pricing: {
+          basePrice: basePricing.total,
+          complexityScore: complexityScore,
+          adjustedPrice: adjustedPrice,
+          breakdown: basePricing.breakdown,
+          factors: {
+            fileSize: fileSize,
+            recordCount: recordCount,
+            columnCount: columnCount,
+            hasPII: (project.piiAnalysis?.detectedPII?.length || 0) > 0
+          }
+        }
+      });
+
+    } catch (error: any) {
+      console.error("Dynamic pricing error:", error);
+      res.status(500).json({ error: "Failed to calculate dynamic pricing" });
     }
   });
 
@@ -2027,7 +1934,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Join datasets endpoint
-  app.post("/api/join-datasets/:projectId", requireAuth, async (req, res) => {
+  app.post("/api/join-datasets/:projectId", unifiedAuth, async (req, res) => {
     try {
       const projectId = req.params.projectId;
       const { joinWithProjects, joinType, joinKeys, mergeStrategy } = req.body;
@@ -2358,10 +2265,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Unified authentication middleware that handles both OAuth and token-based auth
   async function unifiedAuth(req: any, res: any, next: any) {
-    // First check if already authenticated via OAuth/passport session
-    if (req.isAuthenticated && req.isAuthenticated()) {
-      return next();
-    }
+    // Email/OAuth token-based authentication only
     
     // Check for Authorization header with Bearer token (email-based auth)
     const authHeader = req.headers.authorization;
@@ -2456,11 +2360,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       
       // Send verification email using SendGrid
-      // Use the proper Replit app domain for verification - avoid SendGrid URL tracking
-      const replitDomain = process.env.REPLIT_DOMAINS?.split(',')[0];
-      const baseUrl = replitDomain ? 
-        `https://${replitDomain}` : 
-        `${req.protocol}://${req.get('host')}`;
+      const baseUrl = `${req.protocol}://${req.get('host')}`;
       const verificationUrl = `${baseUrl}/verify-email?token=${verificationToken}`;
       
       console.log(`🔗 Generated verification URL: ${verificationUrl}`);
@@ -2492,15 +2392,14 @@ This link will expire in 24 hours.
       console.log(`📧 EMAIL VERIFICATION DETAILS:
       ===============================================
       Email: ${email}
-      Domain: ${replitDomain || 'localhost'}
       Verification URL: ${verificationUrl}
       Token: ${verificationToken.substring(0, 8)}...
       ===============================================`);
       
-      // Generate simple auth token
-      const authToken = crypto.randomBytes(32).toString('hex');
+      // Generate auth token using email auth service
+      const authToken = await emailAuthService.generateAuthToken(user.id);
       
-      // Store token in our simple token store
+      // Store token in our simple token store for consistency
       tokenStore.set(authToken, user.id);
       
       res.status(201).json({
@@ -2606,15 +2505,10 @@ This link will expire in 24 hours.
       }
       
       // Generate auth token using email auth service
-      console.log("About to generate token for user:", user.id);
-      console.log("Full user object:", JSON.stringify(user, null, 2));
+      const authToken = await emailAuthService.generateAuthToken(user.id);
       
-      // Fix the user ID issue - use email as fallback if id is undefined
-      const userId = user.id || user.email;
-      console.log("Using userId for token:", userId);
-      console.log("User has ID field:", "id" in user, "Type:", typeof user.id);
-      const authToken = emailAuthService.generateAuthToken(userId);
-      console.log("Generated token via emailAuthService:", authToken.substring(0, 10) + "...");
+      // Store token in our simple token store for consistency
+      tokenStore.set(authToken, user.id);
       
       res.json({
         success: true,
@@ -2635,18 +2529,7 @@ This link will expire in 24 hours.
     }
   });
 
-  // Health check endpoint
-  app.get('/api/health', (req, res) => {
-    res.json({
-      status: 'healthy',
-      timestamp: new Date().toISOString(),
-      services: {
-        database: 'connected',
-        storage: 'operational',
-        ai: 'available'
-      }
-    });
-  });
+  // Remove duplicate health check
 
   // Debug token verification endpoint
   app.get('/api/debug/token', async (req, res) => {
@@ -2669,20 +2552,13 @@ This link will expire in 24 hours.
     try {
       let user = null;
       
-      // First try OAuth session authentication (Replit OAuth)
-      if (req.user && req.user.claims) {
-        // This is a Replit OAuth session
-        const claims = req.user.claims;
-        user = await storage.getUser(claims.sub);
-      } else {
-        // Try token authentication (custom email auth)
-        const authHeader = req.headers.authorization;
-        if (authHeader && authHeader.startsWith('Bearer ')) {
-          const token = authHeader.substring(7);
-          const tokenResult = await emailAuthService.verifyAuthToken(token);
-          if (tokenResult) {
-            user = await storage.getUser(tokenResult.userId);
-          }
+      // Try token authentication (custom email auth)
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.substring(7);
+        const tokenResult = await emailAuthService.verifyAuthToken(token);
+        if (tokenResult) {
+          user = await storage.getUser(tokenResult.userId);
         }
       }
       
@@ -2714,14 +2590,7 @@ This link will expire in 24 hours.
         tokenStore.delete(token);
       }
       
-      // Handle OAuth logout
-      if (req.logout) {
-        req.logout((err) => {
-          if (err) {
-            console.error('OAuth logout error:', err);
-          }
-        });
-      }
+      // Clean logout - no OAuth session to clear
       
       res.json({ success: true, message: "Logged out successfully" });
     } catch (error) {
@@ -2769,7 +2638,7 @@ This link will expire in 24 hours.
   });
 
   // Create visualization endpoint
-  app.post("/api/visualizations/create", requireAuth, async (req, res) => {
+  app.post("/api/visualizations/create", unifiedAuth, async (req, res) => {
     try {
       const { projectId, visualizationType, selectedColumns, groupByColumn, colorByColumn } = req.body;
       
@@ -2824,7 +2693,7 @@ This link will expire in 24 hours.
   });
 
   // Export analysis to PDF
-  app.post("/api/projects/:id/export-pdf", requireAuth, async (req, res) => {
+  app.post("/api/projects/:id/export-pdf", unifiedAuth, async (req, res) => {
     try {
       const projectId = req.params.id;
       const userId = (req.user as any)?.id;
@@ -2922,7 +2791,7 @@ This link will expire in 24 hours.
   });
 
   // Data transformation endpoint
-  app.post('/api/transform-data/:projectId', requireAuth, async (req, res) => {
+  app.post('/api/transform-data/:projectId', unifiedAuth, async (req, res) => {
     try {
       const { projectId } = req.params;
       const { transformations } = req.body;
@@ -2964,7 +2833,7 @@ This link will expire in 24 hours.
   });
 
   // Export transformed data endpoint
-  app.get('/api/export-transformed-data/:projectId', requireAuth, async (req, res) => {
+  app.get('/api/export-transformed-data/:projectId', unifiedAuth, async (req, res) => {
     try {
       const { projectId } = req.params;
       const userId = req.user?.id;
@@ -3084,7 +2953,7 @@ This link will expire in 24 hours.
   });
 
   // Transform data endpoint
-  app.post("/api/transform-data/:projectId", requireAuth, async (req, res) => {
+  app.post("/api/transform-data/:projectId", unifiedAuth, async (req, res) => {
     try {
       const { projectId } = req.params;
       const { transformations } = req.body;
@@ -3110,7 +2979,7 @@ This link will expire in 24 hours.
   });
 
   // Save transformations to project
-  app.post("/api/save-transformations/:projectId", requireAuth, async (req, res) => {
+  app.post("/api/save-transformations/:projectId", unifiedAuth, async (req, res) => {
     try {
       const { projectId } = req.params;
       const { transformations } = req.body;
@@ -3141,7 +3010,7 @@ This link will expire in 24 hours.
   // ===== DYNAMIC PRICING WORKFLOW ENDPOINTS =====
 
   // Initialize dynamic pricing workflow
-  app.post("/api/pricing-workflow/:projectId/initialize", requireAuth, async (req, res) => {
+  app.post("/api/pricing-workflow/:projectId/initialize", unifiedAuth, async (req, res) => {
     try {
       const { projectId } = req.params;
       const userId = req.user?.id;
@@ -3163,7 +3032,7 @@ This link will expire in 24 hours.
   });
 
   // Get project analysis for dynamic pricing
-  app.get("/api/project-analysis/:projectId", requireAuth, async (req, res) => {
+  app.get("/api/project-analysis/:projectId", unifiedAuth, async (req, res) => {
     try {
       const { projectId } = req.params;
       const project = await storage.getProject(projectId);
@@ -3218,7 +3087,7 @@ This link will expire in 24 hours.
   });
 
   // Calculate dynamic pricing
-  app.get("/api/dynamic-pricing/:projectId", requireAuth, async (req, res) => {
+  app.get("/api/dynamic-pricing/:projectId", unifiedAuth, async (req, res) => {
     try {
       const { projectId } = req.params;
       const { features, configurations } = req.query;
@@ -3286,7 +3155,7 @@ This link will expire in 24 hours.
   });
 
   // Get workflow state
-  app.get("/api/pricing-workflow/:projectId", requireAuth, async (req, res) => {
+  app.get("/api/pricing-workflow/:projectId", unifiedAuth, async (req, res) => {
     try {
       const { projectId } = req.params;
       const workflow = GuidedWorkflowService.getWorkflow(projectId);
@@ -3308,7 +3177,7 @@ This link will expire in 24 hours.
   });
 
   // Update workflow state
-  app.put("/api/pricing-workflow/:projectId", requireAuth, async (req, res) => {
+  app.put("/api/pricing-workflow/:projectId", unifiedAuth, async (req, res) => {
     try {
       const { projectId } = req.params;
       const { currentStep, selectedFeatures, featureConfigurations, estimatedCost } = req.body;
@@ -3363,7 +3232,7 @@ This link will expire in 24 hours.
   });
 
   // Enhanced payment intent creation for dynamic pricing
-  app.post("/api/create-payment-intent", requireAuth, async (req, res) => {
+  app.post("/api/create-payment-intent", unifiedAuth, async (req, res) => {
     try {
       const { projectId, selectedFeatures, featureConfigurations, amount } = req.body;
       const userId = req.user?.id;
@@ -3409,7 +3278,7 @@ This link will expire in 24 hours.
   });
 
   // Process successful payment and trigger processing
-  app.post("/api/process-payment-success", requireAuth, async (req, res) => {
+  app.post("/api/process-payment-success", unifiedAuth, async (req, res) => {
     try {
       const { paymentIntentId } = req.body;
 
