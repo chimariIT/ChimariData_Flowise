@@ -67,6 +67,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Initialize MCP AI Service
   MCPAIService.initializeMCPServer().catch(console.error);
   
+  // Token store for authentication (shared between middleware functions)
+  const tokenStore = new Map<string, string>();
+  
   // Define ensureAuthenticated middleware within routes scope to access tokenStore
   const ensureAuthenticated = async (req: any, res: any, next: any) => {
     try {
@@ -96,9 +99,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(401).json({ error: "Authentication required" });
     }
   };
-  
-  // Token store for authentication (shared between middleware functions)
-  const tokenStore = new Map<string, string>();
+
+  // Unified auth middleware for both OAuth and token-based authentication
+  const unifiedAuth = async (req: any, res: any, next: any) => {
+    try {
+      // First check if already authenticated via OAuth/passport session
+      if (req.isAuthenticated && req.isAuthenticated()) {
+        return next();
+      }
+      
+      // Check for Authorization header with Bearer token (email-based auth)
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.substring(7);
+        
+        try {
+          // Check if token exists in our token store
+          const userId = tokenStore.get(token);
+          
+          if (userId) {
+            // Verify user still exists
+            const user = await storage.getUser(userId);
+            
+            if (user) {
+              // Set user on request object to match OAuth format
+              req.user = { id: user.id };
+              req.userId = user.id; // Also set direct userId for compatibility
+              return next();
+            }
+          }
+        } catch (error) {
+          console.error('Token validation error:', error);
+        }
+      }
+      
+      // If neither authentication method worked, return 401
+      res.status(401).json({ error: 'Authentication required' });
+    } catch (error) {
+      console.error('Authentication error:', error);
+      res.status(401).json({ error: 'Authentication required' });
+    }
+  };
   
   // Temporary storage for trial file data
   const tempTrialData = new Map();
@@ -2319,43 +2360,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Authentication routes
 
-
-  // Unified authentication middleware that handles both OAuth and token-based auth
-  async function unifiedAuth(req: any, res: any, next: any) {
-    // First check if already authenticated via OAuth/passport session
-    if (req.isAuthenticated && req.isAuthenticated()) {
-      return next();
-    }
-    
-    // Check for Authorization header with Bearer token (email-based auth)
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.substring(7);
-      
-      try {
-        // Check if token exists in our token store
-        const userId = tokenStore.get(token);
-        
-        if (userId) {
-          // Verify user still exists
-          const user = await storage.getUser(userId);
-          
-          if (user) {
-            // Set user on request object to match OAuth format
-            req.user = { id: user.id };
-            req.userId = user.id; // Also set direct userId for compatibility
-            return next();
-          }
-        }
-      } catch (error) {
-        console.error('Token validation error:', error);
-      }
-    }
-    
-    // If neither authentication method worked, return 401
-    res.status(401).json({ error: 'Authentication required' });
-  }
-
   // OAuth providers endpoint
   app.get('/api/auth/providers', (req, res) => {
     // Return available OAuth providers - for now only Google is fully configured
@@ -2929,7 +2933,7 @@ This link will expire in 24 hours.
   });
 
   // Create visualization endpoint with proper canvas support
-  app.post('/api/create-visualization/:projectId', async (req, res) => {
+  app.post('/api/create-visualization/:projectId', unifiedAuth, async (req, res) => {
     try {
       const { projectId } = req.params;
       const { type, fields } = req.body;
@@ -3023,9 +3027,15 @@ This link will expire in 24 hours.
         return res.status(404).json({ error: "Project not found" });
       }
 
+      // Apply transformations using DataTransformer
+      const transformedData = await DataTransformer.applyTransformations(
+        project.data || [],
+        transformations
+      );
+
       res.json({
         success: true,
-        transformedData: project.data || [],
+        transformedData: transformedData,
         downloadUrl: `/api/export-transformed-data/${projectId}`,
         message: "Transformations applied successfully"
       });
@@ -3034,6 +3044,91 @@ This link will expire in 24 hours.
       console.error("Transform data error:", error);
       res.status(500).json({ 
         error: error.message || "Failed to transform data" 
+      });
+    }
+  });
+
+  // Analyze data endpoint
+  app.post("/api/analyze-data/:projectId", ensureAuthenticated, async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const { analysisType, config } = req.body;
+
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+
+      if (!project.data || !Array.isArray(project.data)) {
+        return res.status(400).json({ error: "No data available for analysis" });
+      }
+
+      let analysisResults;
+
+      switch (analysisType) {
+        case 'descriptive_statistics':
+          analysisResults = await AdvancedAnalyzer.performDescriptiveAnalysis(
+            project.data,
+            config.fields || Object.keys(project.schema || {})
+          );
+          break;
+
+        case 'correlation_analysis':
+          analysisResults = await AdvancedAnalyzer.performCorrelationAnalysis(
+            project.data,
+            config.fields || []
+          );
+          break;
+
+        case 'time_series':
+          if (!config.dateField) {
+            return res.status(400).json({ error: "Date field required for time series analysis" });
+          }
+          analysisResults = await TimeSeriesAnalyzer.analyzeTimeSeries(
+            project.data,
+            config.dateField,
+            config.valueFields || []
+          );
+          break;
+
+        case 'regression_analysis':
+          if (!config.targetVariable || !config.features) {
+            return res.status(400).json({ error: "Target variable and features required for regression" });
+          }
+          analysisResults = await AdvancedAnalyzer.performRegressionAnalysis(
+            project.data,
+            config.targetVariable,
+            config.features
+          );
+          break;
+
+        case 'clustering':
+          analysisResults = await AdvancedAnalyzer.performClusteringAnalysis(
+            project.data,
+            config.features || [],
+            config.clusterCount || 3
+          );
+          break;
+
+        default:
+          // Fallback to basic descriptive analysis
+          analysisResults = await AdvancedAnalyzer.performDescriptiveAnalysis(
+            project.data,
+            config.fields || Object.keys(project.schema || {})
+          );
+      }
+
+      res.json({
+        success: true,
+        analysisType,
+        data: analysisResults,
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error: any) {
+      console.error("Analysis error:", error);
+      res.status(500).json({ 
+        error: error.message || "Failed to perform analysis" 
       });
     }
   });
@@ -3049,14 +3144,24 @@ This link will expire in 24 hours.
         return res.status(404).json({ error: "Project not found" });
       }
 
+      // Apply transformations to the project data
+      const transformedData = await DataTransformer.applyTransformations(
+        project.data || [],
+        transformations
+      );
+
+      // Update the project with the transformed data
       await storage.updateProject(projectId, {
+        data: transformedData,
+        recordCount: transformedData.length,
         transformations,
         lastTransformed: new Date()
       });
 
       res.json({
         success: true,
-        message: "Transformations saved to project"
+        message: "Transformations saved to project",
+        recordCount: transformedData.length
       });
 
     } catch (error: any) {
