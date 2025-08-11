@@ -79,13 +79,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
       icon: Clock,
       fields: "time_series"
     },
-    {
-      value: "cloud_import",
-      label: "Cloud Data Import",
-      description: "Import data from AWS S3, Azure, Google Cloud",
-      icon: Cloud,
-      fields: "none"
-    },
+
     {
       value: "correlation",
       label: "Correlation Analysis",
@@ -1377,13 +1371,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
       case "time_series":
         return <TimeSeriesAnalysis project={project} />;
 
-      case "cloud_import":
-        return <CloudDataConnector onDataImported={(data) => {
-          toast({
-            title: "Data imported",
-            description: "Cloud data successfully imported"
-          });
-        }} />;
+
 
       default:
         return <p className="text-gray-600">{results.data.message}</p>;
