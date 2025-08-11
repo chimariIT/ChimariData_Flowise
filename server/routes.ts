@@ -3009,11 +3009,11 @@ This link will expire in 24 hours.
     }
   });
 
-  // Create visualization endpoint with proper canvas support
+  // Create visualization endpoint with enhanced configuration support
   app.post('/api/create-visualization/:projectId', unifiedAuth, async (req, res) => {
     try {
       const { projectId } = req.params;
-      const { type, fields } = req.body;
+      const { type, config, groupByColumn, colorByColumn, fields } = req.body;
       
       // Get auth token from headers
       const token = req.headers.authorization?.split(' ')[1];
@@ -3033,24 +3033,84 @@ This link will expire in 24 hours.
         return res.status(403).json({ error: 'Access denied' });
       }
 
-      // Mock visualization result with proper canvas handling
-      const mockChartData = {
-        type,
-        title: `${type.replace('_', ' ')} Chart`,
-        fields,
-        imageUrl: '/api/placeholder-chart.png',
-        insights: [
-          `Analysis of ${fields?.join(', ') || 'selected fields'}`,
-          `Generated ${type} visualization`,
-          'Chart created successfully with proper canvas rendering'
-        ]
-      };
+      // Validate required configuration based on chart type
+      if (config?.xAxis || config?.yAxis) {
+        const availableFields = project.schema ? Object.keys(project.schema) : [];
+        
+        if (config.xAxis && !availableFields.includes(config.xAxis)) {
+          return res.status(400).json({ error: `X-axis field '${config.xAxis}' not found in project data` });
+        }
+        
+        if (config.yAxis && !availableFields.includes(config.yAxis)) {
+          return res.status(400).json({ error: `Y-axis field '${config.yAxis}' not found in project data` });
+        }
+      }
 
-      res.json({
-        success: true,
-        visualization: mockChartData,
-        message: 'Visualization created successfully'
-      });
+      try {
+        // Attempt to create visualization with Python service
+        const visualizationService = new PythonVisualizationService();
+        
+        const result = await visualizationService.createVisualization(project, {
+          type,
+          config: {
+            xAxis: config?.xAxis,
+            yAxis: config?.yAxis,
+            title: config?.title || `${type.replace('_', ' ').toUpperCase()} Chart`,
+            xlabel: config?.xlabel || config?.xAxis || 'X-Axis',
+            ylabel: config?.ylabel || config?.yAxis || 'Y-Axis',
+            aggregation: config?.aggregation || 'sum',
+            orientation: config?.orientation || 'vertical',
+            chartStyle: config?.chartStyle || 'default',
+            showGrid: config?.showGrid !== false,
+            showLegend: config?.showLegend !== false
+          },
+          groupByColumn: groupByColumn || undefined,
+          colorByColumn: colorByColumn || undefined,
+          fields: fields || [config?.xAxis, config?.yAxis].filter(Boolean)
+        });
+
+        res.json({
+          success: true,
+          type,
+          imageData: result.imageData,
+          insights: result.insights || [
+            `Created ${type.replace('_', ' ')} visualization`,
+            `Data fields: ${[config?.xAxis, config?.yAxis].filter(Boolean).join(', ')}`,
+            config?.aggregation ? `Aggregation: ${config.aggregation}` : null,
+            groupByColumn ? `Grouped by: ${groupByColumn}` : null,
+            colorByColumn ? `Colored by: ${colorByColumn}` : null
+          ].filter(Boolean),
+          config,
+          message: 'Interactive visualization created successfully'
+        });
+        
+      } catch (pythonError) {
+        console.warn('Python visualization failed, using fallback:', pythonError.message);
+        
+        // Fallback to enhanced mock data
+        const mockChartData = {
+          type,
+          title: config?.title || `${type.replace('_', ' ').toUpperCase()} Chart`,
+          imageData: null, // Will trigger demo mode in frontend
+          config,
+          insights: [
+            `Interactive ${type.replace('_', ' ')} chart configured`,
+            `X-Axis: ${config?.xAxis || 'Not configured'}`,
+            `Y-Axis: ${config?.yAxis || 'Not configured'}`,
+            `Aggregation: ${config?.aggregation || 'sum'}`,
+            groupByColumn ? `Grouped by: ${groupByColumn}` : 'No grouping',
+            colorByColumn ? `Colored by: ${colorByColumn}` : 'Default colors',
+            `Style: ${config?.chartStyle || 'default'}`
+          ].filter(insight => !insight.includes('Not configured')),
+          message: 'Visualization configured (Python service unavailable - using enhanced preview)'
+        };
+
+        res.json({
+          success: true,
+          ...mockChartData
+        });
+      }
+      
     } catch (error) {
       console.error('Create visualization error:', error);
       res.status(500).json({ error: error.message || 'Failed to create visualization' });
