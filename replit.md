@@ -23,10 +23,13 @@ The platform is built with a React TypeScript frontend for a comprehensive data 
     - **Authentication:** A unified registration-first system with email verification, supporting token-based authentication and handling local and OAuth providers. All users must create accounts to access the platform, with feature access differentiated by subscription status (free vs paid) rather than authentication status.
     - **Payment:** Integrated with Stripe for progressive pricing, handling payment completion and project creation.
     - **Advanced Analytics:** Comprehensive analytics modal offering statistical (ANOVA, ANCOVA, MANOVA, MANCOVA, Regression), machine learning (classification, regression, clustering, feature importance), and agentic analysis (business insights, comparative analysis, predictive insights, root cause analysis) capabilities. Features dynamic parameter configuration based on selected algorithms and supports multiple variable selection.
+    - **Time Series Analysis:** Advanced forecasting capabilities with Prophet integration, trend analysis, seasonal decomposition, and confidence intervals for temporal data patterns.
+    - **Cloud Data Connectors:** Support for AWS S3, Azure Blob Storage, and Google Cloud Storage integration for seamless data import from cloud platforms.
 
 ## External Dependencies
 - **AI/ML:** Gemini API, OpenAI, Anthropic, Ollama
 - **Payment Processing:** Stripe
 - **Email Service:** SendGrid
 - **Database:** PostgreSQL
-- **Cloud Storage Integration (Planned/Implemented):** Google Drive
+- **Cloud Storage Integration:** AWS S3, Azure Blob Storage, Google Cloud Storage
+- **Time Series:** Prophet forecasting library (Python)

@@ -4,10 +4,12 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3, PieChart, TrendingUp, Calculator, Play, Download, Brain, Zap, Shield, FileText, Activity } from "lucide-react";
+import { BarChart3, PieChart, TrendingUp, Calculator, Play, Download, Brain, Zap, Shield, FileText, Activity, Clock, Cloud } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import AdvancedAnalysisModal from "./advanced-analysis-modal";
 import AnonymizationToolkit from "./AnonymizationToolkit";
+import TimeSeriesAnalysis from "./time-series-analysis";
+import CloudDataConnector from "./cloud-data-connector";
 
 interface DataAnalysisProps {
   project: any;
@@ -69,6 +71,20 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
       description: "Histograms, frequency distributions",
       icon: TrendingUp,
       fields: "any"
+    },
+    {
+      value: "time_series",
+      label: "Time Series Analysis",
+      description: "Forecasting, trend analysis, seasonal decomposition",
+      icon: Clock,
+      fields: "time_series"
+    },
+    {
+      value: "cloud_import",
+      label: "Cloud Data Import",
+      description: "Import data from AWS S3, Azure, Google Cloud",
+      icon: Cloud,
+      fields: "none"
     },
     {
       value: "correlation",
@@ -1357,6 +1373,17 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
             ))}
           </div>
         );
+
+      case "time_series":
+        return <TimeSeriesAnalysis project={project} />;
+
+      case "cloud_import":
+        return <CloudDataConnector onDataImported={(data) => {
+          toast({
+            title: "Data imported",
+            description: "Cloud data successfully imported"
+          });
+        }} />;
 
       default:
         return <p className="text-gray-600">{results.data.message}</p>;
