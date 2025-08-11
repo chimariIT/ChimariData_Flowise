@@ -20,6 +20,7 @@ import { MCPAIService } from './mcp-ai-service';
 import { AnonymizationEngine } from './anonymization-engine';
 import { UnifiedPIIProcessor } from './unified-pii-processor';
 import { EmailService } from './email-service';
+import { DataTransformationService } from './data-transformation-service';
 import { PythonVisualizationService } from './python-visualization';
 import { PDFExportService } from './pdf-export';
 import { DatasetJoiner } from './dataset-joiner';
@@ -549,6 +550,75 @@ export async function registerRoutes(app: Express): Promise<Server> {
         success: false, 
         error: error.message || "Failed to process PII decision" 
       });
+    }
+  });
+
+  // Save transformations endpoint
+  app.post("/api/save-transformations/:projectId", unifiedAuth, async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const { transformations } = req.body;
+      const userId = req.user?.id;
+
+      if (!userId) {
+        return res.status(401).json({ error: "Authentication required" });
+      }
+
+      const project = await storage.getProject(projectId);
+      if (!project || project.userId !== userId) {
+        return res.status(404).json({ error: "Project not found or access denied" });
+      }
+
+      // Apply transformations to project data
+      const transformedData = await DataTransformationService.applyTransformations(
+        project.data,
+        transformations
+      );
+
+      // Update project with transformed data
+      const updatedProject = await storage.updateProject(projectId, {
+        transformedData: transformedData,
+        transformations: transformations,
+        updatedAt: new Date()
+      });
+
+      res.json({
+        success: true,
+        message: "Transformations saved successfully",
+        project: updatedProject
+      });
+    } catch (error: any) {
+      console.error("Error saving transformations:", error);
+      res.status(500).json({ error: error.message || "Failed to save transformations" });
+    }
+  });
+
+  // Get transformed data endpoint  
+  app.get("/api/get-transformed-data/:projectId", unifiedAuth, async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const userId = req.user?.id;
+
+      if (!userId) {
+        return res.status(401).json({ error: "Authentication required" });
+      }
+
+      const project = await storage.getProject(projectId);
+      if (!project || project.userId !== userId) {
+        return res.status(404).json({ error: "Project not found or access denied" });
+      }
+
+      const transformedData = project.transformedData || project.data;
+      
+      res.json({
+        success: true,
+        data: transformedData.slice(0, 100), // First 100 rows for preview
+        totalRows: transformedData.length,
+        message: "Transformed data retrieved successfully"
+      });
+    } catch (error: any) {
+      console.error("Error getting transformed data:", error);
+      res.status(500).json({ error: error.message || "Failed to get transformed data" });
     }
   });
 

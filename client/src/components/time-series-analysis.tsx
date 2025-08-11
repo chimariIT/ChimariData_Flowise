@@ -5,6 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { TrendingUp, Calendar, Activity, BarChart3, AlertCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -233,40 +234,68 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
           <CardContent className="space-y-6">
             {/* Date Column Selection */}
             <div>
-              <Label htmlFor="date-column">Date Column</Label>
+              <Label htmlFor="date-column">Date/Timestamp Column</Label>
               <Select value={config.dateColumn} onValueChange={(value) => 
                 setConfig(prev => ({ ...prev, dateColumn: value }))
               }>
                 <SelectTrigger>
-                  <SelectValue placeholder="Select date column" />
+                  <SelectValue placeholder="Choose date or timestamp field" />
                 </SelectTrigger>
                 <SelectContent>
-                  {detection.dateColumns.map((col: string) => (
-                    <SelectItem key={col} value={col}>{col}</SelectItem>
-                  ))}
+                  {detection?.dateColumns?.map((col: string) => (
+                    <SelectItem key={col} value={col}>
+                      <div className="flex items-center space-x-2">
+                        <Calendar className="w-4 h-4" />
+                        <span>{col}</span>
+                      </div>
+                    </SelectItem>
+                  )) || (
+                    <SelectItem value="" disabled>No date columns detected</SelectItem>
+                  )}
                 </SelectContent>
               </Select>
+              <p className="text-xs text-gray-500 mt-1">
+                Select the column containing dates or timestamps for your time series
+              </p>
             </div>
 
             {/* Value Columns Selection */}
             <div>
-              <Label>Value Columns</Label>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-2 max-h-40 overflow-y-auto border rounded-lg p-3">
-                {detection.numericColumns.map((col: string) => (
-                  <div key={col} className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
+              <Label>Variables to Visualize</Label>
+              <p className="text-sm text-gray-600 mb-2">
+                Choose which variables you want to visualize relationships with over time
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-2 max-h-48 overflow-y-auto border rounded-lg p-3">
+                {detection?.numericColumns?.map((col: string) => (
+                  <div key={col} className="flex items-center space-x-2 p-2 hover:bg-gray-50 rounded">
+                    <Checkbox
                       id={`value-${col}`}
                       checked={config.valueColumns.includes(col)}
-                      onChange={() => toggleValueColumn(col)}
-                      className="rounded border-gray-300"
+                      onCheckedChange={() => toggleValueColumn(col)}
                     />
-                    <label htmlFor={`value-${col}`} className="text-sm">
-                      {col}
+                    <label htmlFor={`value-${col}`} className="text-sm flex items-center space-x-1">
+                      <BarChart3 className="w-3 h-3 text-blue-500" />
+                      <span>{col}</span>
                     </label>
                   </div>
-                ))}
+                )) || (
+                  <p className="text-sm text-gray-500 p-2">No numeric columns available for visualization</p>
+                )}
               </div>
+              {config.valueColumns.length > 0 && (
+                <p className="text-xs text-green-600 mt-2">
+                  ✓ Selected {config.valueColumns.length} variable(s) for time series visualization
+                </p>
+              )}
+            </div>
+
+            {/* Visualization Options */}
+            <div className="bg-blue-50 rounded-lg p-4">
+              <h4 className="font-medium text-blue-900 mb-2">Time Series Relationships</h4>
+              <p className="text-sm text-blue-700">
+                This analysis will show how your selected variables change over time and their relationships with the date/timestamp field. 
+                You can visualize trends, seasonal patterns, and correlations between different variables.
+              </p>
             </div>
 
             {/* Analysis Parameters */}

@@ -226,6 +226,46 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
     }
   };
 
+  const viewTransformedData = async () => {
+    if (!project?.id || !hasTransformedData) {
+      toast({
+        title: "No transformed data",
+        description: "Please run transformations first to view the data",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    try {
+      const response = await fetch(`/api/get-transformed-data/${project.id}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        }
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        setPreviewData(result.data);
+        setShowPreview(true);
+        
+        toast({
+          title: "Data preview loaded",
+          description: `Showing first 100 rows of transformed data`,
+        });
+      } else {
+        throw new Error('Failed to load transformed data');
+      }
+    } catch (error) {
+      console.error('Error viewing transformed data:', error);
+      toast({
+        title: "Preview failed",
+        description: "Failed to load transformed data for preview",
+        variant: "destructive",
+      });
+    }
+  };
+
   const renderTransformationConfig = (transformation: any) => {
     const { type, config } = transformation;
 
@@ -534,10 +574,7 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
               <div className="flex space-x-2">
                 <Button 
                   variant="outline"
-                  onClick={() => {
-                    setPreviewData(transformedData);
-                    setShowPreview(true);
-                  }}
+                  onClick={viewTransformedData}
                 >
                   <Eye className="w-4 h-4 mr-2" />
                   View Data

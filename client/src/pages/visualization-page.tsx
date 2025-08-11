@@ -10,7 +10,18 @@ export default function VisualizationPage() {
   const [, setLocation] = useLocation();
 
   const { data: project, isLoading, error } = useQuery({
-    queryKey: [`/api/projects/${projectId}`],
+    queryKey: ["/api/projects", projectId],
+    queryFn: async () => {
+      const response = await fetch(`/api/projects/${projectId}`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        }
+      });
+      if (!response.ok) {
+        throw new Error('Failed to fetch project');
+      }
+      return await response.json();
+    },
     enabled: !!projectId
   });
 
