@@ -12,17 +12,26 @@ export default function VisualizationPage() {
   const { data: project, isLoading, error } = useQuery({
     queryKey: ["/api/projects", projectId],
     queryFn: async () => {
+      const token = localStorage.getItem('auth_token');
       const response = await fetch(`/api/projects/${projectId}`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+          'Authorization': `Bearer ${token}`
         }
       });
+      
+      if (response.status === 401) {
+        // Clear invalid token
+        localStorage.removeItem('auth_token');
+        throw new Error('Authentication required');
+      }
+      
       if (!response.ok) {
-        throw new Error('Failed to fetch project');
+        throw new Error(`Failed to fetch project: ${response.status}`);
       }
       return await response.json();
     },
-    enabled: !!projectId
+    enabled: !!projectId,
+    retry: false // Don't retry on auth failures
   });
 
   if (isLoading) {
@@ -37,20 +46,37 @@ export default function VisualizationPage() {
   }
 
   if (error || !project) {
+    const isAuthError = error?.message?.includes('Authentication required');
+    
     return (
       <div className="min-h-screen flex items-center justify-center">
         <Card className="w-full max-w-md">
           <CardHeader>
-            <CardTitle>Project Not Found</CardTitle>
+            <CardTitle>{isAuthError ? "Authentication Required" : "Project Not Found"}</CardTitle>
             <CardDescription>
-              The requested project could not be found. This may happen if the project was deleted or you don't have access to it.
+              {isAuthError 
+                ? "You need to sign in to access this visualization. Please log in and try again."
+                : "The requested project could not be found. This may happen if the project was deleted or you don't have access to it."
+              }
             </CardDescription>
           </CardHeader>
-          <CardContent>
-            <Button onClick={() => setLocation("/dashboard")} className="w-full">
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to Dashboard
-            </Button>
+          <CardContent className="space-y-3">
+            {isAuthError ? (
+              <>
+                <Button onClick={() => setLocation("/auth/login")} className="w-full">
+                  Sign In
+                </Button>
+                <Button onClick={() => setLocation("/")} variant="outline" className="w-full">
+                  <ArrowLeft className="h-4 w-4 mr-2" />
+                  Back to Home
+                </Button>
+              </>
+            ) : (
+              <Button onClick={() => setLocation("/")} className="w-full">
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Back to Home
+              </Button>
+            )}
           </CardContent>
         </Card>
       </div>

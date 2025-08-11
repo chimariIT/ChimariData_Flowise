@@ -96,7 +96,7 @@ export default function App() {
             {(params) => <DescriptiveStatsPage />}
           </Route>
           <Route path="/visualization/:projectId">
-            {(params) => user ? <VisualizationPage /> : <AuthPage onLogin={handleLogin} />}
+            {(params) => <VisualizationPage />}
           </Route>
           <Route path="/checkout">
             {() => <GuidedAnalysisCheckout />}

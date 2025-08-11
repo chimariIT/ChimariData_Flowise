@@ -35,6 +35,15 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedChart, setGeneratedChart] = useState<any>(null);
 
+  // Handle URL query parameters for chart type selection
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const chartType = urlParams.get('type');
+    if (chartType && visualizationTypes.some(v => v.type === chartType)) {
+      setSelectedVisualization(chartType);
+    }
+  }, []);
+
   // Get fields from schema or infer from data
   const schema = project?.schema || {};
   let fields = Object.keys(schema);
@@ -42,6 +51,11 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
   // Fallback: infer fields from project data if schema is empty
   if (fields.length === 0 && project?.data && Array.isArray(project.data) && project.data.length > 0) {
     fields = Object.keys(project.data[0]);
+  }
+
+  // If no project data is available, show sample field types for demo purposes
+  if (fields.length === 0) {
+    fields = ['sales', 'date', 'category', 'region']; // Sample fields for demo
   }
   
   const numericFields = fields.filter(field => {
@@ -144,6 +158,23 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
 
     setIsGenerating(true);
     try {
+      if (!project?.id) {
+        // Demo mode - show placeholder
+        setTimeout(() => {
+          setGeneratedChart({
+            type: selectedVisualization,
+            demo: true,
+            message: "Demo visualization - Sign in to create actual charts from your data"
+          });
+          setIsGenerating(false);
+          toast({
+            title: "Demo Visualization",
+            description: "Sign in to create actual charts from your data",
+          });
+        }, 1500);
+        return;
+      }
+
       const response = await fetch(`/api/create-visualization/${project.id}`, {
         method: 'POST',
         headers: {
@@ -175,7 +206,7 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
       console.error('Visualization error:', error);
       toast({
         title: "Generation Failed",
-        description: error.message || "Failed to create visualization",
+        description: error.message || "Failed to create visualization. Please check your authentication.",
         variant: "destructive",
       });
     } finally {
@@ -222,6 +253,11 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Visualization Workshop</h1>
           <p className="text-gray-600">Create interactive charts from your data</p>
+          {!project && (
+            <p className="text-sm text-orange-600 mt-1">
+              Demo mode - Sign in to use with your actual data
+            </p>
+          )}
         </div>
         <Button variant="outline" onClick={onClose}>
           Back to Project
@@ -444,6 +480,19 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                         alt="Generated Visualization"
                         className="w-full h-auto"
                       />
+                    ) : generatedChart.demo ? (
+                      <div className="p-8 text-center bg-gradient-to-br from-blue-50 to-indigo-50">
+                        <div className="max-w-md mx-auto">
+                          <TrendingUp className="w-16 h-16 text-blue-600 mx-auto mb-4" />
+                          <h3 className="text-lg font-medium text-gray-900 mb-2">
+                            {selectedVisualization?.replace('_', ' ').toUpperCase()} Chart Preview
+                          </h3>
+                          <p className="text-blue-700 mb-4">{generatedChart.message}</p>
+                          <div className="text-xs text-gray-600">
+                            Chart configuration: {selectedColumns.join(', ')}
+                          </div>
+                        </div>
+                      </div>
                     ) : (
                       <div className="p-8 text-center">
                         <p className="text-gray-600">Chart generated but image not available</p>
