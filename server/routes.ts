@@ -2625,12 +2625,15 @@ This link will expire in 24 hours.
       }
       
       // Check if user is using email/password authentication
-      if (user.provider !== "local" || !user.password) {
-        return res.status(400).json({ error: "This account uses social login. Please use the sign-in button." });
+      if (user.provider !== "local" || !user.hashedPassword) {
+        return res.status(400).json({ 
+          error: "This account uses social login. Please use the sign-in button.",
+          provider: user.provider 
+        });
       }
       
       // Verify password
-      const isPasswordValid = await bcrypt.compare(password, user.password);
+      const isPasswordValid = await bcrypt.compare(password, user.hashedPassword);
       if (!isPasswordValid) {
         return res.status(401).json({ error: "Invalid email or password" });
       }

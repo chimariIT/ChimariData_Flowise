@@ -1,8 +1,20 @@
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
-import { storage } from "./hybrid-storage";
-import { registerSchema, loginSchema } from "@shared/schema";
 import { z } from "zod";
+import { storage } from "./hybrid-storage";
+
+// Validation schemas for auth
+const registerSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(8),
+  firstName: z.string().min(1),
+  lastName: z.string().min(1)
+});
+
+const loginSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(1)
+});
 
 export interface EmailAuthService {
   register(userData: z.infer<typeof registerSchema>): Promise<{ user: any; token: string }>;
@@ -38,7 +50,7 @@ class EmailAuthServiceImpl implements EmailAuthService {
     const user = await storage.createUser({
       id: userId,
       email,
-      password: hashedPassword,
+      hashedPassword,
       firstName,
       lastName,
       provider: "local",
@@ -75,12 +87,12 @@ class EmailAuthServiceImpl implements EmailAuthService {
     }
     
     // Check if user is using email/password authentication
-    if (user.provider !== "local" || !user.password) {
+    if (user.provider !== "local" || !user.hashedPassword) {
       throw new Error("This account uses social login. Please use the sign-in button.");
     }
     
     // Verify password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
+    const isPasswordValid = await bcrypt.compare(password, user.hashedPassword);
     if (!isPasswordValid) {
       throw new Error("Invalid email or password");
     }
