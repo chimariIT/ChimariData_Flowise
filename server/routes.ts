@@ -2625,9 +2625,16 @@ This link will expire in 24 hours.
       }
       
       // Check if user is using email/password authentication
-      if (user.provider !== "local" || !user.hashedPassword) {
+      if (user.provider !== "local") {
         return res.status(400).json({ 
           error: "This account uses social login. Please use the sign-in button.",
+          provider: user.provider 
+        });
+      }
+      
+      if (!user.hashedPassword) {
+        return res.status(400).json({ 
+          error: "Account password not set. Please reset your password or contact support.",
           provider: user.provider 
         });
       }

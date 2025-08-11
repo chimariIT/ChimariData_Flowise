@@ -44,7 +44,7 @@ export const googleProvider: OAuthProviderConfig = {
   strategy: new DynamicGoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID || '',
     clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
-    callbackURL: "/api/auth/google/callback"
+    callbackURL: "/api/auth/google/callback" // Dynamic URL is handled by the DynamicGoogleStrategy
   }, async (accessToken: string, refreshToken: string, profile: any, done: any) => {
     try {
       const email = profile.emails?.[0]?.value;
