@@ -58,13 +58,12 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
       icon: Calculator,
       fields: "numeric"
     },
-
     {
-      value: "distribution",
-      label: "Data Distribution",
-      description: "Histograms, frequency distributions",
+      value: "correlation",
+      label: "Correlation Analysis", 
+      description: "Relationships between variables",
       icon: TrendingUp,
-      fields: "any"
+      fields: "numeric"
     },
     {
       value: "time_series",
@@ -73,26 +72,25 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
       icon: Clock,
       fields: "time_series"
     },
-
     {
-      value: "correlation",
-      label: "Correlation Analysis",
-      description: "Relationships between variables",
-      icon: TrendingUp,
+      value: "regression",
+      label: "Regression Analysis",
+      description: "Linear and multiple regression models",
+      icon: Brain,
       fields: "numeric"
     },
     {
-      value: "advanced",
-      label: "Advanced Analysis",
-      description: "ANOVA, ANCOVA, MANOVA, Regression, ML",
+      value: "clustering",
+      label: "Clustering Analysis", 
+      description: "Group data into similar clusters",
       icon: Brain,
-      fields: "advanced"
+      fields: "numeric"
     },
     {
       value: "categorical",
       label: "Categorical Analysis",
       description: "Frequency counts, cross-tabulations",
-      icon: PieChart,
+      icon: BarChart3,
       fields: "categorical"
     },
     {
@@ -101,6 +99,51 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
       description: "Define your own analysis requirements",
       icon: Calculator,
       fields: "any"
+    }
+  ];
+
+  const visualizationTypes = [
+    {
+      value: "bar_chart",
+      label: "Bar Chart",
+      description: "Compare categories or show distributions",
+      icon: BarChart3,
+      fields: "categorical"
+    },
+    {
+      value: "line_chart", 
+      label: "Line Chart",
+      description: "Show trends over time or continuous data",
+      icon: LineChart,
+      fields: "time_series"
+    },
+    {
+      value: "scatter_plot",
+      label: "Scatter Plot", 
+      description: "Explore relationships between variables",
+      icon: ScatterChart,
+      fields: "numeric"
+    },
+    {
+      value: "pie_chart",
+      label: "Pie Chart",
+      description: "Show proportions of a whole",
+      icon: PieChart,
+      fields: "categorical"
+    },
+    {
+      value: "histogram",
+      label: "Histogram",
+      description: "Show distribution of numeric data", 
+      icon: Activity,
+      fields: "numeric"
+    },
+    {
+      value: "correlation_matrix",
+      label: "Correlation Matrix",
+      description: "Show relationships between all numeric variables",
+      icon: Grid,
+      fields: "numeric"
     }
   ];
 
@@ -1420,6 +1463,55 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                 </Button>
               );
             })}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Visualization Workshop Section */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <PieChart className="w-5 h-5" />
+            Create Visualizations
+          </CardTitle>
+          <CardDescription>
+            Build interactive charts and graphs from your data
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-4 md:grid-cols-3">
+            {visualizationTypes.map((viz) => {
+              const Icon = viz.icon;
+              return (
+                <Button
+                  key={viz.value}
+                  variant="outline"
+                  className="h-auto flex-col items-start space-y-2 p-4 hover:bg-blue-50"
+                  onClick={() => {
+                    // Navigate to visualization workshop with the selected type
+                    window.location.href = `/visualization/${project.id}?type=${viz.value}`;
+                  }}
+                >
+                  <div className="flex items-center space-x-2">
+                    <Icon className="w-5 h-5 text-blue-600" />
+                    <span className="font-medium">{viz.label}</span>
+                  </div>
+                  <p className="text-xs text-left opacity-75">{viz.description}</p>
+                  <Badge variant="outline" className="text-xs">
+                    {viz.fields}
+                  </Badge>
+                </Button>
+              );
+            })}
+          </div>
+          <div className="mt-6 pt-4 border-t">
+            <Button 
+              className="w-full"
+              onClick={() => window.location.href = `/visualization/${project.id}`}
+            >
+              <Eye className="w-4 h-4 mr-2" />
+              Open Visualization Workshop
+            </Button>
           </div>
         </CardContent>
       </Card>
