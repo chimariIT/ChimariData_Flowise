@@ -387,7 +387,14 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
                     <Database className="w-5 h-5 text-slate-600 mt-0.5 flex-shrink-0" />
                     <div>
                       <h5 className="font-medium text-slate-900 mb-2">Dataset Overview</h5>
-                      <p className="text-slate-700">{data.uploadInfo?.insights || 'Dataset successfully processed and analyzed.'}</p>
+                      <p className="text-slate-700">
+                        {data.uploadInfo?.insights || 'Dataset successfully processed and analyzed.'}
+                        {data.uploadInfo?.recordCount && (
+                          <span className="block mt-1 text-sm font-medium text-blue-600">
+                            📊 {data.uploadInfo.recordCount.toLocaleString()} records analyzed
+                          </span>
+                        )}
+                      </p>
                     </div>
                   </div>
                 </div>
