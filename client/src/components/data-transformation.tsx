@@ -5,11 +5,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
-import { Filter, RefreshCw, Download, Play, CheckCircle, Database, Merge } from "lucide-react";
+import { Filter, RefreshCw, Download, Play, CheckCircle, Database, Merge, Eye, Save, FileDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import MultiFileJoiner from "./multi-file-joiner";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface DataTransformationProps {
   project: any;
@@ -22,7 +23,10 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
   const [isTransforming, setIsTransforming] = useState(false);
   const [hasTransformedData, setHasTransformedData] = useState(false);
   const [transformedDataUrl, setTransformedDataUrl] = useState<string | null>(null);
+  const [transformedData, setTransformedData] = useState<any>(null);
   const [showJoiner, setShowJoiner] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
+  const [previewData, setPreviewData] = useState<any>(null);
 
   // Fetch user projects for joining
   const { data: projectsData } = useQuery({
@@ -528,10 +532,21 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
               </p>
               <div className="flex space-x-2">
                 <Button 
+                  variant="outline"
+                  onClick={() => {
+                    setPreviewData(transformedData);
+                    setShowPreview(true);
+                  }}
+                >
+                  <Eye className="w-4 h-4 mr-2" />
+                  View Data
+                </Button>
+                
+                <Button 
                   variant="default"
                   onClick={saveTransformationsToProject}
                 >
-                  <CheckCircle className="w-4 h-4 mr-2" />
+                  <Save className="w-4 h-4 mr-2" />
                   Save to Project
                 </Button>
                 
@@ -539,7 +554,7 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
                   variant="outline"
                   onClick={exportTransformedData}
                 >
-                  <Download className="w-4 h-4 mr-2" />
+                  <FileDown className="w-4 h-4 mr-2" />
                   Export Data
                 </Button>
               </div>
@@ -639,6 +654,51 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
           </CardContent>
         )}
       </Card>
+
+      {/* Data Preview Dialog */}
+      <Dialog open={showPreview} onOpenChange={setShowPreview}>
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-auto">
+          <DialogHeader>
+            <DialogTitle>Transformed Data Preview</DialogTitle>
+            <DialogDescription>
+              Preview of your transformed dataset (first 100 rows)
+            </DialogDescription>
+          </DialogHeader>
+          {previewData && (
+            <div className="mt-4">
+              <div className="overflow-x-auto">
+                <table className="min-w-full border-collapse border border-gray-300">
+                  <thead>
+                    <tr className="bg-gray-50">
+                      {Object.keys(previewData[0] || {}).map(key => (
+                        <th key={key} className="border border-gray-300 px-4 py-2 text-left text-sm font-medium">
+                          {key}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {previewData.slice(0, 100).map((row: any, index: number) => (
+                      <tr key={index} className={index % 2 === 0 ? "bg-white" : "bg-gray-50"}>
+                        {Object.keys(previewData[0] || {}).map(key => (
+                          <td key={key} className="border border-gray-300 px-4 py-2 text-sm">
+                            {String(row[key] || '')}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {previewData.length > 100 && (
+                <p className="text-sm text-gray-600 mt-2">
+                  Showing first 100 rows of {previewData.length} total rows
+                </p>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

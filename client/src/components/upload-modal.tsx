@@ -9,8 +9,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/lib/api";
-import { X, Upload, File, CheckCircle, FileSpreadsheet, AlertCircle, HardDrive } from "lucide-react";
+import { X, Upload, File, CheckCircle, FileSpreadsheet, AlertCircle, HardDrive, Cloud } from "lucide-react";
 import GoogleDriveImport from "./google-drive-import";
+import CloudDataConnector from "./cloud-data-connector";
 import { PIIInterimDialog } from "./PIIInterimDialog";
 
 interface UploadModalProps {
@@ -277,7 +278,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
         
         <CardContent>
           <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="grid w-full grid-cols-2">
+            <TabsList className="grid w-full grid-cols-3">
               <TabsTrigger value="upload" className="flex items-center gap-2">
                 <Upload className="w-4 h-4" />
                 Local Upload
@@ -285,6 +286,10 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
               <TabsTrigger value="drive" className="flex items-center gap-2">
                 <HardDrive className="w-4 h-4" />
                 Google Drive
+              </TabsTrigger>
+              <TabsTrigger value="cloud" className="flex items-center gap-2">
+                <Cloud className="w-4 h-4" />
+                Cloud Storage
               </TabsTrigger>
             </TabsList>
             
@@ -401,6 +406,17 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
                 onImportSuccess={handleGoogleDriveImportSuccess}
                 onClose={onClose}
               />
+            </TabsContent>
+
+            <TabsContent value="cloud" className="mt-6">
+              <CloudDataConnector onDataImported={(data) => {
+                toast({
+                  title: "Data imported",
+                  description: "Cloud data successfully imported"
+                });
+                onSuccess();
+                onClose();
+              }} />
             </TabsContent>
           </Tabs>
         </CardContent>
