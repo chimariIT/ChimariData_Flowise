@@ -508,12 +508,10 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                           <SelectContent>
                             {fields.map(field => (
                               <SelectItem key={field} value={field}>
-                                <div className="flex items-center gap-2">
-                                  {field}
-                                  <Badge variant="outline" className="text-xs">
-                                    {schema[field]?.type || 'unknown'}
-                                  </Badge>
-                                </div>
+                                {field}
+                                <span className="ml-2 text-xs text-gray-500">
+                                  ({schema[field]?.type || 'unknown'})
+                                </span>
                               </SelectItem>
                             ))}
                           </SelectContent>
@@ -536,12 +534,10 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                           <SelectContent>
                             {numericFields.map(field => (
                               <SelectItem key={field} value={field}>
-                                <div className="flex items-center gap-2">
-                                  {field}
-                                  <Badge variant="outline" className="text-xs">
-                                    {schema[field]?.type || 'number'}
-                                  </Badge>
-                                </div>
+                                {field}
+                                <span className="ml-2 text-xs text-gray-500">
+                                  ({schema[field]?.type || 'number'})
+                                </span>
                               </SelectItem>
                             ))}
                           </SelectContent>
