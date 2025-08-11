@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3, PieChart, TrendingUp, Calculator, Play, Download, Brain, Zap, Shield, FileText, Activity, Clock, Cloud } from "lucide-react";
+import { BarChart3, PieChart, TrendingUp, Calculator, Play, Download, Brain, Zap, Shield, FileText, Activity, Clock, Cloud, LineChart, ScatterChart, Eye, Grid } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import AdvancedAnalysisModal from "./advanced-analysis-modal";
 import AnonymizationToolkit from "./AnonymizationToolkit";
@@ -16,15 +16,35 @@ interface DataAnalysisProps {
 }
 
 export default function DataAnalysis({ project }: DataAnalysisProps) {
-  // Add error boundary check
+  // Add error boundary check and debug info
   if (!project) {
     return (
       <div className="p-6">
         <Card>
           <CardHeader>
             <CardTitle>Analysis Not Available</CardTitle>
-            <CardDescription>Project data is not loaded yet.</CardDescription>
+            <CardDescription>Project data is not loaded yet. Please make sure you have uploaded a dataset first.</CardDescription>
           </CardHeader>
+          <CardContent>
+            <p className="text-sm text-gray-600">Debug: Project prop is null or undefined</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Debug: Check project structure
+  if (!project.id) {
+    return (
+      <div className="p-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Analysis Configuration Error</CardTitle>
+            <CardDescription>Project is missing required information.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-gray-600">Debug: Project missing ID - {JSON.stringify(Object.keys(project))}</p>
+          </CardContent>
         </Card>
       </div>
     );

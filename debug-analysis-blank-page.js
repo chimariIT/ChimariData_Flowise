@@ -1,148 +1,103 @@
-/**
- * Debug blank page issue in Analysis tab
- */
+// Debug script to identify why analysis tab shows blank page
+const puppeteer = require('puppeteer');
 
-console.log('🔍 Debugging Analysis Tab Blank Page Issue...\n');
-
-async function debugBlankPage() {
+async function debugAnalysisBlankPage() {
+  console.log('🔍 Debugging Analysis Tab Blank Page Issue');
+  
+  let browser;
   try {
-    // First, let's create a test project to work with
-    console.log('1. 📊 Creating test project...');
-    
-    const testProject = {
-      id: 'test-debug-project',
-      name: 'Debug Test Project',
-      fileName: 'test-data.csv',
-      fileSize: 1024,
-      fileType: 'csv',
-      recordCount: 100,
-      uploadedAt: new Date().toISOString(),
-      processed: true,
-      schema: {
-        'name': { type: 'text', sample: 'John Doe' },
-        'age': { type: 'number', sample: 25 },
-        'city': { type: 'text', sample: 'New York' },
-        'salary': { type: 'number', sample: 50000 }
-      },
-      data: [
-        { name: 'John Doe', age: 25, city: 'New York', salary: 50000 },
-        { name: 'Jane Smith', age: 30, city: 'Los Angeles', salary: 60000 }
-      ]
-    };
-    
-    // Create project via API
-    const createResponse = await fetch('http://localhost:5000/api/projects', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(testProject)
+    browser = await puppeteer.launch({ 
+      headless: false,
+      defaultViewport: null,
+      args: ['--start-maximized']
     });
     
-    console.log(`   ✓ Create project response: ${createResponse.status}`);
+    const page = await browser.newPage();
     
-    if (createResponse.ok) {
-      const project = await createResponse.json();
-      console.log(`   ✓ Project created with ID: ${project.id}`);
+    // Set up console logging
+    page.on('console', msg => {
+      console.log(`[CONSOLE ${msg.type()}]:`, msg.text());
+    });
+    
+    page.on('pageerror', error => {
+      console.log(`[PAGE ERROR]:`, error.message);
+    });
+    
+    page.on('requestfailed', request => {
+      console.log(`[REQUEST FAILED]:`, request.url(), request.failure());
+    });
+
+    console.log('1. Loading homepage...');
+    await page.goto('http://localhost:5173', { waitUntil: 'networkidle0' });
+    
+    // Check if we can get to a project page (mock authentication)
+    console.log('2. Testing direct project page access...');
+    await page.goto('http://localhost:5173/project/test-project', { waitUntil: 'networkidle0' });
+    
+    await page.waitForTimeout(3000);
+    
+    // Check if project page loaded
+    const pageContent = await page.content();
+    
+    if (pageContent.includes('Project Not Found')) {
+      console.log('❌ Project not found - need to upload data first');
       
-      // Test fetching the project
-      const fetchResponse = await fetch(`http://localhost:5000/api/projects/${project.id}`);
-      console.log(`   ✓ Fetch project response: ${fetchResponse.status}`);
+      // Go back to home and try to create a project
+      await page.goto('http://localhost:5173', { waitUntil: 'networkidle0' });
       
-      if (fetchResponse.ok) {
-        const fetchedProject = await fetchResponse.json();
-        console.log(`   ✓ Project data available: ${Object.keys(fetchedProject.schema).length} columns`);
+      // Check if we can see upload interface
+      const uploadButton = await page.$('input[type="file"]');
+      if (uploadButton) {
+        console.log('✅ Upload interface found');
+      } else {
+        console.log('❌ Upload interface not found');
       }
-    }
-    
-    console.log('\n2. 🧪 Testing DataAnalysis component directly...');
-    
-    // Check if DataAnalysis component has any import issues
-    const fs = await import('fs');
-    const dataAnalysisContent = await fs.promises.readFile('client/src/components/data-analysis.tsx', 'utf8');
-    
-    // Check for potential issues
-    const issues = [];
-    
-    if (!dataAnalysisContent.includes('export default')) {
-      issues.push('Missing default export');
-    }
-    
-    if (!dataAnalysisContent.includes('interface DataAnalysisProps')) {
-      issues.push('Missing props interface');
-    }
-    
-    if (!dataAnalysisContent.includes('return (')) {
-      issues.push('Missing return statement');
-    }
-    
-    // Check for incomplete JSX
-    const openTags = (dataAnalysisContent.match(/<\w+/g) || []).length;
-    const closeTags = (dataAnalysisContent.match(/<\/\w+>/g) || []).length;
-    const selfClosingTags = (dataAnalysisContent.match(/<\w+[^>]*\/>/g) || []).length;
-    
-    if (openTags !== closeTags + selfClosingTags) {
-      issues.push(`JSX tag mismatch: ${openTags} open tags, ${closeTags} close tags, ${selfClosingTags} self-closing`);
-    }
-    
-    if (issues.length > 0) {
-      console.log('   ❌ Component issues found:');
-      issues.forEach(issue => console.log(`      • ${issue}`));
+      
+    } else if (pageContent.includes('Analysis')) {
+      console.log('✅ Project page loaded with Analysis tab');
+      
+      // Try to click the analysis tab
+      const analysisTab = await page.$('[data-value="analysis"], [value="analysis"]');
+      if (analysisTab) {
+        console.log('3. Clicking Analysis tab...');
+        await analysisTab.click();
+        await page.waitForTimeout(2000);
+        
+        // Check what's rendered in the analysis tab
+        const analysisContent = await page.$eval('body', el => el.innerText);
+        
+        if (analysisContent.includes('Choose Analysis Type') || analysisContent.includes('Analysis Not Available')) {
+          console.log('✅ Analysis component loaded');
+          
+          if (analysisContent.includes('Analysis Not Available')) {
+            console.log('⚠️  Analysis shows "Not Available" - project data missing');
+          } else {
+            console.log('✅ Analysis component working correctly');
+          }
+        } else {
+          console.log('❌ Analysis tab appears blank');
+          console.log('Current page text (first 500 chars):', analysisContent.substring(0, 500));
+        }
+        
+      } else {
+        console.log('❌ Could not find Analysis tab');
+      }
+      
     } else {
-      console.log('   ✓ DataAnalysis component structure looks correct');
+      console.log('⚠️  Unknown page state');
+      console.log('Page title:', await page.title());
+      console.log('Page URL:', page.url());
     }
-    
-    console.log('\n3. 🔧 Checking for common React issues...');
-    
-    // Check for missing imports
-    const requiredImports = [
-      'useState',
-      'Card',
-      'Button',
-      'useToast'
-    ];
-    
-    const missingImports = requiredImports.filter(imp => !dataAnalysisContent.includes(imp));
-    if (missingImports.length > 0) {
-      console.log(`   ❌ Missing imports: ${missingImports.join(', ')}`);
-    } else {
-      console.log('   ✓ All required imports present');
-    }
-    
-    console.log('\n4. 📱 Checking project-page.tsx integration...');
-    
-    const projectPageContent = await fs.promises.readFile('client/src/pages/project-page.tsx', 'utf8');
-    
-    // Verify DataAnalysis import and usage
-    if (!projectPageContent.includes('import DataAnalysis from "@/components/data-analysis"')) {
-      console.log('   ❌ DataAnalysis import missing or incorrect');
-    } else {
-      console.log('   ✓ DataAnalysis import correct');
-    }
-    
-    if (!projectPageContent.includes('<DataAnalysis project={project} />')) {
-      console.log('   ❌ DataAnalysis component usage missing');
-    } else {
-      console.log('   ✓ DataAnalysis component usage correct');
-    }
-    
-    console.log('\n💡 COMMON CAUSES OF BLANK PAGES:');
-    console.log('   • JavaScript runtime errors (check browser console)');
-    console.log('   • Component not receiving required props');
-    console.log('   • Infinite render loops');
-    console.log('   • Missing conditional rendering guards');
-    console.log('   • CSS height/width issues');
-    
-    console.log('\n🔧 RECOMMENDATIONS:');
-    console.log('   1. Open browser developer tools (F12)');
-    console.log('   2. Check Console tab for JavaScript errors');
-    console.log('   3. Check Network tab for failed API requests');
-    console.log('   4. Try refreshing the page');
-    console.log('   5. Test with a fresh browser session');
+
+    console.log('\n📊 DIAGNOSIS COMPLETE');
     
   } catch (error) {
-    console.error('❌ Debug failed:', error.message);
+    console.error('❌ Debug error:', error.message);
+  } finally {
+    if (browser) {
+      await browser.close();
+    }
   }
 }
 
-debugBlankPage();
+debugAnalysisBlankPage().catch(console.error);
