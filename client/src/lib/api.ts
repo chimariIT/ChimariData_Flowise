@@ -54,6 +54,13 @@ export class APIClient {
 
     if (!response.ok) {
       const error = await response.json();
+      
+      if (response.status === 401) {
+        // Clear invalid token
+        localStorage.removeItem('auth_token');
+        throw new Error("Authentication required - Please sign in to upload files");
+      }
+      
       throw new Error(error.error || `Upload failed: ${response.status}`);
     }
 
