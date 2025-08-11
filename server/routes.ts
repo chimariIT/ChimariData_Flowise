@@ -237,11 +237,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({
         success: true,
         isTrial: true,
+        recordCount: processedData.recordCount,
         trialResults: {
           schema: processedData.schema,
           descriptiveAnalysis: trialResults.data,
           basicVisualizations: trialResults.visualizations || [],
-          piiAnalysis: piiAnalysis
+          piiAnalysis: piiAnalysis,
+          recordCount: processedData.recordCount
         }
       });
 
@@ -693,7 +695,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             },
             piiDecision: 'bypassed',
             recordCount: finalData.length
-          }
+          },
+          recordCount: finalData.length
         });
       }
 
@@ -747,7 +750,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           },
           piiDecision: decision,
           recordCount: finalData.length
-        }
+        },
+        recordCount: finalData.length
       });
 
     } catch (error: any) {
@@ -1270,6 +1274,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           tempFileId,
           name: name.trim(),
           questions: parsedQuestions,
+          recordCount: processedData.recordCount,
           sampleData: processedData.preview,
           message: 'PII detected - user consent required'
         });
@@ -1527,11 +1532,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({
         success: true,
         projectId: project.id,
+        recordCount: processedData.recordCount,
         project: {
           ...project,
           preview: processedData.preview,
           file_path: `/uploads/${project.id}.json`,
-          data: processedData.data
+          data: processedData.data,
+          recordCount: processedData.recordCount
         }
       });
 

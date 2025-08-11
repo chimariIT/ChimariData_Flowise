@@ -91,7 +91,14 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
   };
 
   const executeTransformations = async () => {
-    if (!project?.id) return;
+    if (!project?.id) {
+      toast({
+        title: "No project",
+        description: "Project information is missing. Please ensure you've uploaded data.",
+        variant: "destructive",
+      });
+      return;
+    }
     
     setIsTransforming(true);
     try {
@@ -131,13 +138,15 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
         
         console.log('Transformation result:', result);
       } else {
-        throw new Error('Failed to apply transformations');
+        const errorData = await response.json();
+        console.error('Transformation error:', errorData);
+        throw new Error(errorData.error || 'Failed to apply transformations');
       }
     } catch (error) {
       console.error('Error applying transformations:', error);
       toast({
-        title: "Error",
-        description: "Failed to apply transformations",
+        title: "Transformation Error",
+        description: error instanceof Error ? error.message : "Failed to apply transformations. Please check your authentication.",
         variant: "destructive",
       });
     } finally {
@@ -227,40 +236,56 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
   };
 
   const viewTransformedData = async () => {
-    if (!project?.id || !hasTransformedData) {
+    if (!project?.id) {
       toast({
-        title: "No transformed data",
-        description: "Please run transformations first to view the data",
+        title: "No project data",
+        description: "Project information is not available",
         variant: "destructive",
       });
       return;
     }
-    
-    try {
-      const response = await fetch(`/api/get-transformed-data/${project.id}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        }
-      });
 
-      if (response.ok) {
-        const result = await response.json();
-        setPreviewData(result.data);
+    try {
+      // First try to get transformed data if transformations have been applied
+      if (hasTransformedData) {
+        const response = await fetch(`/api/get-transformed-data/${project.id}`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+          }
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          setPreviewData(result.data);
+          setShowPreview(true);
+          
+          toast({
+            title: "Data preview loaded",
+            description: `Showing first 100 rows of transformed data`,
+          });
+          return;
+        }
+      }
+
+      // Fallback: show original project data if available
+      if (project.data && Array.isArray(project.data)) {
+        const previewData = project.data.slice(0, 100);
+        setPreviewData(previewData);
         setShowPreview(true);
         
         toast({
-          title: "Data preview loaded",
-          description: `Showing first 100 rows of transformed data`,
+          title: "Original data preview",
+          description: `Showing first 100 rows of original data (${project.data.length} total records)`,
         });
       } else {
-        throw new Error('Failed to load transformed data');
+        throw new Error('No data available to preview');
       }
     } catch (error) {
-      console.error('Error viewing transformed data:', error);
+      console.error('Error viewing data:', error);
       toast({
         title: "Preview failed",
-        description: "Failed to load transformed data for preview",
+        description: "Failed to load data for preview. Please check if you're logged in.",
         variant: "destructive",
       });
     }
@@ -575,6 +600,7 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
                 <Button 
                   variant="outline"
                   onClick={viewTransformedData}
+                  disabled={!project?.data && !hasTransformedData}
                 >
                   <Eye className="w-4 h-4 mr-2" />
                   View Data

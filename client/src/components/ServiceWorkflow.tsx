@@ -239,6 +239,11 @@ export function ServiceWorkflow({
                   <CheckCircle className="h-4 w-4 text-green-600" />
                   <AlertDescription>
                     <strong className="text-green-800">Success!</strong> Your analysis has been completed successfully.
+                    {uploadInfo?.recordCount && (
+                      <span className="block mt-1 text-sm font-medium text-blue-600">
+                        📊 {uploadInfo.recordCount.toLocaleString()} records processed
+                      </span>
+                    )}
                   </AlertDescription>
                 </Alert>
                 <div className="flex space-x-3">

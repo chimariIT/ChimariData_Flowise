@@ -48,24 +48,81 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
   const detectTimeSeriesColumns = async () => {
     setIsDetecting(true);
     try {
-      const response = await fetch(`/api/projects/${project.id}/time-series/detect`);
-      const data = await response.json();
+      // Try API endpoint first
+      const response = await fetch(`/api/projects/${project.id}/time-series/detect`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        }
+      });
       
-      if (data.success) {
-        setDetection(data.detection);
+      if (response.ok) {
+        const data = await response.json();
         
-        // Auto-select first date column if available
-        if (data.detection.dateColumns.length > 0) {
-          setConfig(prev => ({
-            ...prev,
-            dateColumn: data.detection.dateColumns[0]
-          }));
+        if (data.success) {
+          setDetection(data.detection);
+          
+          // Auto-select first date column if available
+          if (data.detection.dateColumns.length > 0) {
+            setConfig(prev => ({
+              ...prev,
+              dateColumn: data.detection.dateColumns[0]
+            }));
+          }
+          return;
         }
       }
+      
+      // Fallback: analyze project data directly if API isn't available
+      if (project?.data && Array.isArray(project.data) && project.data.length > 0) {
+        const sampleRow = project.data[0];
+        const fields = Object.keys(sampleRow);
+        
+        // Simple heuristics to detect date and numeric columns
+        const dateColumns = fields.filter(field => {
+          const value = sampleRow[field];
+          return (
+            field.toLowerCase().includes('date') ||
+            field.toLowerCase().includes('time') ||
+            field.toLowerCase().includes('created') ||
+            field.toLowerCase().includes('updated') ||
+            (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value))
+          );
+        });
+        
+        const numericColumns = fields.filter(field => {
+          const value = sampleRow[field];
+          return typeof value === 'number' && !dateColumns.includes(field);
+        });
+        
+        const detection = {
+          dateColumns,
+          numericColumns,
+          totalRows: project.data.length,
+          fields
+        };
+        
+        setDetection(detection);
+        
+        // Auto-select first date column if available
+        if (dateColumns.length > 0) {
+          setConfig(prev => ({
+            ...prev,
+            dateColumn: dateColumns[0]
+          }));
+        }
+        
+        toast({
+          title: "Column detection complete",
+          description: `Found ${dateColumns.length} date columns and ${numericColumns.length} numeric columns`,
+        });
+      } else {
+        throw new Error('No project data available for analysis');
+      }
     } catch (error: any) {
+      console.error('Detection error:', error);
       toast({
         title: "Detection failed",
-        description: error.message,
+        description: error.message || "Failed to detect time series columns",
         variant: "destructive"
       });
     } finally {

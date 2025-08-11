@@ -174,8 +174,8 @@ export function MultiSourceUpload({
           questions: questions,
           analysisType: 'descriptive',
           isTrial: result.isTrial,
-          recordCount: result.recordCount,
-          schema: result.schema
+          recordCount: result.recordCount || projectData.recordCount,
+          schema: result.schema || projectData.schema
         });
       }
     } catch (error) {
@@ -284,10 +284,10 @@ export function MultiSourceUpload({
           uploadPath: `/uploads/${Date.now()}_${uploadedFile.name}`,
           piiHandled: true,
           anonymizationApplied: decision === 'anonymize',
-          // Include the actual analysis results from backend
+          // Include the actual analysis results from backend - prioritize root level recordCount
           insights: result.insights || result.trialResults?.insights,
           questionResponse: result.questionResponse || result.trialResults?.questionResponse,
-          recordCount: result.recordCount || result.trialResults?.recordCount,
+          recordCount: result.recordCount || result.trialResults?.recordCount || 0,
           columnCount: result.columnCount || result.trialResults?.columnCount,
           schema: result.schema || result.trialResults?.schema,
           metadata: result.metadata || result.trialResults?.metadata,

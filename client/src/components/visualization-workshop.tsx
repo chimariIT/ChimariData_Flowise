@@ -35,14 +35,38 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedChart, setGeneratedChart] = useState<any>(null);
 
+  // Get fields from schema or infer from data
   const schema = project?.schema || {};
-  const fields = Object.keys(schema);
-  const numericFields = fields.filter(field => 
-    schema[field]?.type === 'number' || schema[field]?.type === 'float' || schema[field]?.type === 'int'
-  );
-  const categoricalFields = fields.filter(field => 
-    schema[field]?.type === 'string' || schema[field]?.type === 'text'
-  );
+  let fields = Object.keys(schema);
+  
+  // Fallback: infer fields from project data if schema is empty
+  if (fields.length === 0 && project?.data && Array.isArray(project.data) && project.data.length > 0) {
+    fields = Object.keys(project.data[0]);
+  }
+  
+  const numericFields = fields.filter(field => {
+    if (schema[field]) {
+      return schema[field]?.type === 'number' || schema[field]?.type === 'float' || schema[field]?.type === 'int';
+    }
+    // Fallback: infer from data
+    if (project?.data && project.data.length > 0) {
+      const value = project.data[0][field];
+      return typeof value === 'number';
+    }
+    return false;
+  });
+  
+  const categoricalFields = fields.filter(field => {
+    if (schema[field]) {
+      return schema[field]?.type === 'string' || schema[field]?.type === 'text';
+    }
+    // Fallback: infer from data
+    if (project?.data && project.data.length > 0) {
+      const value = project.data[0][field];
+      return typeof value === 'string' && !numericFields.includes(field);
+    }
+    return false;
+  });
 
   const visualizationTypes = [
     {
