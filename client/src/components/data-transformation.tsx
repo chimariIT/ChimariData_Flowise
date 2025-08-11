@@ -120,6 +120,7 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
         // Store transformation results for validation and preview
         setHasTransformedData(true);
         setTransformedDataUrl(result.downloadUrl);
+        setTransformedData(result.transformedData);
         
         // Show validation preview in console for now
         console.log('Transformation preview:', {
