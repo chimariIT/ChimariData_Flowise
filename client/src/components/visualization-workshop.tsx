@@ -5,6 +5,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { 
   BarChart3, 
   LineChart, 
@@ -17,7 +20,12 @@ import {
   Palette,
   Settings,
   Eye,
-  Grid
+  Grid,
+  Save,
+  RotateCcw,
+  Zap,
+  ChevronDown,
+  ChevronRight
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -34,6 +42,22 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
   const [colorByColumn, setColorByColumn] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedChart, setGeneratedChart] = useState<any>(null);
+  
+  // Enhanced configuration options
+  const [chartConfig, setChartConfig] = useState({
+    xAxis: "",
+    yAxis: "",
+    title: "",
+    xlabel: "",
+    ylabel: "",
+    aggregation: "sum", // sum, avg, count, min, max
+    chartStyle: "default", // default, minimal, colorful
+    showGrid: true,
+    showLegend: true,
+    orientation: "vertical" // for bar charts
+  });
+  
+  const [showAdvancedConfig, setShowAdvancedConfig] = useState(false);
 
   // Handle URL query parameters for chart type selection
   useEffect(() => {
@@ -89,7 +113,10 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
       description: "Compare categories or show distributions",
       icon: BarChart3,
       requiredFields: { numeric: 1, categorical: 1 },
-      recommended: "categorical data with numeric values"
+      recommended: "categorical data with numeric values",
+      configFields: ["xAxis", "yAxis", "aggregation", "orientation"],
+      supportsGrouping: true,
+      supportsColor: true
     },
     {
       type: "line_chart", 
@@ -97,7 +124,10 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
       description: "Show trends over time or continuous data",
       icon: LineChart,
       requiredFields: { numeric: 1, any: 1 },
-      recommended: "time series or trend data"
+      recommended: "time series or trend data",
+      configFields: ["xAxis", "yAxis", "aggregation"],
+      supportsGrouping: true,
+      supportsColor: true
     },
     {
       type: "scatter_plot",
@@ -105,7 +135,10 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
       description: "Explore relationships between two variables",
       icon: ScatterChart,
       requiredFields: { numeric: 2 },
-      recommended: "exploring correlations"
+      recommended: "exploring correlations",
+      configFields: ["xAxis", "yAxis"],
+      supportsGrouping: false,
+      supportsColor: true
     },
     {
       type: "pie_chart",
@@ -113,7 +146,10 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
       description: "Show proportions of a whole",
       icon: PieChart,
       requiredFields: { categorical: 1, numeric: 1 },
-      recommended: "categorical proportions"
+      recommended: "categorical proportions",
+      configFields: ["xAxis", "yAxis"],
+      supportsGrouping: false,
+      supportsColor: false
     },
     {
       type: "histogram",
@@ -121,15 +157,43 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
       description: "Show distribution of numeric data",
       icon: Activity,
       requiredFields: { numeric: 1 },
-      recommended: "data distribution analysis"
+      recommended: "data distribution analysis",
+      configFields: ["xAxis"],
+      supportsGrouping: false,
+      supportsColor: false
     },
     {
-      type: "correlation_matrix",
-      name: "Correlation Matrix",
-      description: "Show relationships between all numeric variables",
+      type: "box_plot",
+      name: "Box Plot",
+      description: "Show quartiles and outliers",
+      icon: Activity,
+      requiredFields: { numeric: 1 },
+      recommended: "statistical distributions",
+      configFields: ["xAxis", "yAxis"],
+      supportsGrouping: true,
+      supportsColor: true
+    },
+    {
+      type: "heatmap",
+      name: "Heatmap",
+      description: "Show correlations with color intensity",
       icon: Grid,
       requiredFields: { numeric: 2 },
-      recommended: "finding variable relationships"
+      recommended: "correlation analysis",
+      configFields: [],
+      supportsGrouping: false,
+      supportsColor: false
+    },
+    {
+      type: "violin_plot",
+      name: "Violin Plot",
+      description: "Show distribution shape and density",
+      icon: Activity,
+      requiredFields: { numeric: 1 },
+      recommended: "distribution analysis",
+      configFields: ["xAxis", "yAxis"],
+      supportsGrouping: true,
+      supportsColor: true
     }
   ];
 
@@ -147,10 +211,28 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
   };
 
   const generateVisualization = async () => {
-    if (!selectedVisualization || selectedColumns.length === 0) {
+    // Validation based on chart type
+    const requiredFields = [];
+    if (selectedVizType?.configFields.includes("xAxis") && !chartConfig.xAxis) {
+      requiredFields.push("X-Axis field");
+    }
+    if (selectedVizType?.configFields.includes("yAxis") && !chartConfig.yAxis) {
+      requiredFields.push("Y-Axis field");
+    }
+
+    if (!selectedVisualization) {
+      toast({
+        title: "Select Chart Type",
+        description: "Please choose a visualization type first",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (requiredFields.length > 0) {
       toast({
         title: "Configuration Required",
-        description: "Please select a visualization type and at least one column",
+        description: `Please select: ${requiredFields.join(", ")}`,
         variant: "destructive",
       });
       return;
@@ -159,17 +241,24 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
     setIsGenerating(true);
     try {
       if (!project?.id) {
-        // Demo mode - show placeholder
+        // Demo mode - show enhanced placeholder
         setTimeout(() => {
           setGeneratedChart({
             type: selectedVisualization,
             demo: true,
-            message: "Demo visualization - Sign in to create actual charts from your data"
+            message: "Demo visualization - Sign in to create actual charts from your data",
+            config: chartConfig,
+            fields: {
+              xAxis: chartConfig.xAxis,
+              yAxis: chartConfig.yAxis,
+              groupBy: groupByColumn,
+              colorBy: colorByColumn
+            }
           });
           setIsGenerating(false);
           toast({
             title: "Demo Visualization",
-            description: "Sign in to create actual charts from your data",
+            description: `${selectedVizType?.name} preview generated. Sign in to create with your data.`,
           });
         }, 1500);
         return;
@@ -183,7 +272,18 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
         },
         body: JSON.stringify({
           type: selectedVisualization,
-          fields: selectedColumns,
+          config: {
+            xAxis: chartConfig.xAxis,
+            yAxis: chartConfig.yAxis,
+            title: chartConfig.title || `${selectedVizType?.name} - ${chartConfig.xAxis} vs ${chartConfig.yAxis}`,
+            xlabel: chartConfig.xlabel || chartConfig.xAxis,
+            ylabel: chartConfig.ylabel || chartConfig.yAxis,
+            aggregation: chartConfig.aggregation,
+            orientation: chartConfig.orientation,
+            chartStyle: chartConfig.chartStyle,
+            showGrid: chartConfig.showGrid,
+            showLegend: chartConfig.showLegend
+          },
           groupByColumn: groupByColumn || undefined,
           colorByColumn: colorByColumn || undefined
         })
@@ -199,7 +299,7 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
 
       toast({
         title: "Visualization Created",
-        description: "Your chart has been generated successfully",
+        description: `${selectedVizType?.name} chart generated successfully`,
       });
 
     } catch (error: any) {
@@ -244,7 +344,63 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
     setGroupByColumn("");
     setColorByColumn("");
     setGeneratedChart(null);
+    setChartConfig({
+      xAxis: "",
+      yAxis: "",
+      title: "",
+      xlabel: "",
+      ylabel: "",
+      aggregation: "sum",
+      chartStyle: "default",
+      showGrid: true,
+      showLegend: true,
+      orientation: "vertical"
+    });
+    setShowAdvancedConfig(false);
   };
+
+  // Get the currently selected visualization type configuration
+  const selectedVizType = visualizationTypes.find(v => v.type === selectedVisualization);
+
+  // Auto-suggest field assignments based on chart type
+  const suggestFields = (vizType: any) => {
+    if (!vizType || fields.length === 0) return;
+    
+    let newConfig = { ...chartConfig };
+    
+    switch (vizType.type) {
+      case "bar_chart":
+      case "pie_chart":
+        if (categoricalFields.length > 0) newConfig.xAxis = categoricalFields[0];
+        if (numericFields.length > 0) newConfig.yAxis = numericFields[0];
+        break;
+      case "line_chart":
+        if (fields.length > 0) newConfig.xAxis = fields[0];
+        if (numericFields.length > 0) newConfig.yAxis = numericFields[0];
+        break;
+      case "scatter_plot":
+        if (numericFields.length >= 2) {
+          newConfig.xAxis = numericFields[0];
+          newConfig.yAxis = numericFields[1];
+        }
+        break;
+      case "histogram":
+      case "box_plot":
+      case "violin_plot":
+        if (numericFields.length > 0) newConfig.xAxis = numericFields[0];
+        break;
+    }
+    
+    setChartConfig(newConfig);
+  };
+
+  // Auto-suggest when visualization type changes
+  useEffect(() => {
+    if (selectedVisualization && !chartConfig.xAxis && !chartConfig.yAxis) {
+      const vizType = visualizationTypes.find(v => v.type === selectedVisualization);
+      suggestFields(vizType);
+    }
+  }, [selectedVisualization, fields.length]);
 
   return (
     <div className="max-w-7xl mx-auto p-6 space-y-6">
@@ -322,97 +478,244 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Settings className="w-5 h-5" />
-                  Data Configuration
+                  Chart Configuration
                 </CardTitle>
                 <CardDescription>
-                  Select the data columns for your visualization
+                  Configure your {selectedVizType?.name} with field mappings and styling options
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-4">
-                {/* Primary Columns */}
-                <div>
-                  <label className="text-sm font-medium mb-2 block">
-                    Data Columns *
-                  </label>
-                  <div className="space-y-2 max-h-40 overflow-y-auto">
-                    {fields.map(field => (
-                      <div key={field} className="flex items-center space-x-2">
-                        <Checkbox
-                          id={`field-${field}`}
-                          checked={selectedColumns.includes(field)}
-                          onCheckedChange={(checked) => {
-                            if (checked) {
-                              setSelectedColumns([...selectedColumns, field]);
-                            } else {
-                              setSelectedColumns(selectedColumns.filter(f => f !== field));
-                            }
-                          }}
-                        />
-                        <label 
-                          htmlFor={`field-${field}`} 
-                          className="text-sm flex items-center gap-2"
+              <CardContent>
+                <Tabs defaultValue="fields" className="w-full">
+                  <TabsList className="grid w-full grid-cols-2">
+                    <TabsTrigger value="fields">Field Mapping</TabsTrigger>
+                    <TabsTrigger value="styling">Chart Styling</TabsTrigger>
+                  </TabsList>
+                  
+                  <TabsContent value="fields" className="space-y-4 mt-4">
+                    {/* Chart-specific field configuration */}
+                    {selectedVizType?.configFields.includes("xAxis") && (
+                      <div className="space-y-2">
+                        <Label className="text-sm font-medium">
+                          X-Axis Field *
+                        </Label>
+                        <Select 
+                          value={chartConfig.xAxis} 
+                          onValueChange={(value) => setChartConfig({...chartConfig, xAxis: value})}
                         >
-                          {field}
-                          <Badge variant="outline" className="text-xs">
-                            {schema[field]?.type || 'unknown'}
-                          </Badge>
-                        </label>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Choose X-axis field" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {fields.map(field => (
+                              <SelectItem key={field} value={field}>
+                                <div className="flex items-center gap-2">
+                                  {field}
+                                  <Badge variant="outline" className="text-xs">
+                                    {schema[field]?.type || 'unknown'}
+                                  </Badge>
+                                </div>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       </div>
-                    ))}
-                  </div>
-                </div>
+                    )}
 
-                {/* Group By Column */}
-                {categoricalFields.length > 0 && (
-                  <div>
-                    <label className="text-sm font-medium mb-2 block">
-                      Group By (Optional)
-                    </label>
-                    <Select value={groupByColumn} onValueChange={setGroupByColumn}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select grouping column" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="">None</SelectItem>
-                        {categoricalFields.map(field => (
-                          <SelectItem key={field} value={field}>
-                            {field}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
+                    {selectedVizType?.configFields.includes("yAxis") && (
+                      <div className="space-y-2">
+                        <Label className="text-sm font-medium">
+                          Y-Axis Field *
+                        </Label>
+                        <Select 
+                          value={chartConfig.yAxis} 
+                          onValueChange={(value) => setChartConfig({...chartConfig, yAxis: value})}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Choose Y-axis field" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {numericFields.map(field => (
+                              <SelectItem key={field} value={field}>
+                                <div className="flex items-center gap-2">
+                                  {field}
+                                  <Badge variant="outline" className="text-xs">
+                                    {schema[field]?.type || 'number'}
+                                  </Badge>
+                                </div>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
 
-                {/* Color By Column */}
-                {categoricalFields.length > 0 && (
-                  <div>
-                    <label className="text-sm font-medium mb-2 block">
-                      Color By (Optional)
-                    </label>
-                    <Select value={colorByColumn} onValueChange={setColorByColumn}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select color column" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="">None</SelectItem>
-                        {categoricalFields.map(field => (
-                          <SelectItem key={field} value={field}>
-                            {field}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
+                    {/* Aggregation for bar/line charts */}
+                    {selectedVizType?.configFields.includes("aggregation") && (
+                      <div className="space-y-2">
+                        <Label className="text-sm font-medium">Data Aggregation</Label>
+                        <Select 
+                          value={chartConfig.aggregation} 
+                          onValueChange={(value) => setChartConfig({...chartConfig, aggregation: value})}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="sum">Sum</SelectItem>
+                            <SelectItem value="avg">Average</SelectItem>
+                            <SelectItem value="count">Count</SelectItem>
+                            <SelectItem value="min">Minimum</SelectItem>
+                            <SelectItem value="max">Maximum</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
 
-                <Separator />
+                    {/* Orientation for bar charts */}
+                    {selectedVizType?.configFields.includes("orientation") && (
+                      <div className="space-y-2">
+                        <Label className="text-sm font-medium">Chart Orientation</Label>
+                        <Select 
+                          value={chartConfig.orientation} 
+                          onValueChange={(value) => setChartConfig({...chartConfig, orientation: value})}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="vertical">Vertical Bars</SelectItem>
+                            <SelectItem value="horizontal">Horizontal Bars</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
 
-                {/* Action Buttons */}
-                <div className="flex gap-2">
+                    {/* Group By */}
+                    {selectedVizType?.supportsGrouping && categoricalFields.length > 0 && (
+                      <div className="space-y-2">
+                        <Label className="text-sm font-medium">Group By (Optional)</Label>
+                        <Select value={groupByColumn} onValueChange={setGroupByColumn}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select grouping field" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="">None</SelectItem>
+                            {categoricalFields.map(field => (
+                              <SelectItem key={field} value={field}>{field}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+
+                    {/* Color By */}
+                    {selectedVizType?.supportsColor && categoricalFields.length > 0 && (
+                      <div className="space-y-2">
+                        <Label className="text-sm font-medium">Color By (Optional)</Label>
+                        <Select value={colorByColumn} onValueChange={setColorByColumn}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select color field" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="">Default Colors</SelectItem>
+                            {categoricalFields.map(field => (
+                              <SelectItem key={field} value={field}>{field}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+
+                    <Separator />
+                    
+                    {/* Auto-suggest button */}
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={() => suggestFields(selectedVizType)}
+                      className="w-full"
+                    >
+                      <Zap className="w-4 h-4 mr-2" />
+                      Auto-suggest Fields
+                    </Button>
+                  </TabsContent>
+                  
+                  <TabsContent value="styling" className="space-y-4 mt-4">
+                    {/* Chart Title */}
+                    <div className="space-y-2">
+                      <Label className="text-sm font-medium">Chart Title</Label>
+                      <Input
+                        value={chartConfig.title}
+                        onChange={(e) => setChartConfig({...chartConfig, title: e.target.value})}
+                        placeholder="Enter chart title"
+                      />
+                    </div>
+
+                    {/* Axis Labels */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-2">
+                        <Label className="text-sm font-medium">X-Axis Label</Label>
+                        <Input
+                          value={chartConfig.xlabel}
+                          onChange={(e) => setChartConfig({...chartConfig, xlabel: e.target.value})}
+                          placeholder="X-axis label"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label className="text-sm font-medium">Y-Axis Label</Label>
+                        <Input
+                          value={chartConfig.ylabel}
+                          onChange={(e) => setChartConfig({...chartConfig, ylabel: e.target.value})}
+                          placeholder="Y-axis label"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Chart Style */}
+                    <div className="space-y-2">
+                      <Label className="text-sm font-medium">Chart Style</Label>
+                      <Select 
+                        value={chartConfig.chartStyle} 
+                        onValueChange={(value) => setChartConfig({...chartConfig, chartStyle: value})}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="default">Default</SelectItem>
+                          <SelectItem value="minimal">Minimal</SelectItem>
+                          <SelectItem value="colorful">Colorful</SelectItem>
+                          <SelectItem value="professional">Professional</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Grid and Legend */}
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <Checkbox
+                          id="show-grid"
+                          checked={chartConfig.showGrid}
+                          onCheckedChange={(checked) => setChartConfig({...chartConfig, showGrid: !!checked})}
+                        />
+                        <Label htmlFor="show-grid" className="text-sm">Show Grid</Label>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <Checkbox
+                          id="show-legend"
+                          checked={chartConfig.showLegend}
+                          onCheckedChange={(checked) => setChartConfig({...chartConfig, showLegend: !!checked})}
+                        />
+                        <Label htmlFor="show-legend" className="text-sm">Show Legend</Label>
+                      </div>
+                    </div>
+                  </TabsContent>
+                </Tabs>
+
+                <div className="mt-6 flex gap-2">
                   <Button 
                     onClick={generateVisualization}
-                    disabled={isGenerating || selectedColumns.length === 0}
+                    disabled={isGenerating || (!chartConfig.xAxis && selectedVizType?.configFields.includes("xAxis"))}
                     className="flex-1"
                   >
                     {isGenerating ? (
@@ -423,10 +726,11 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                     Generate Chart
                   </Button>
                   <Button 
-                    variant="outline" 
+                    variant="outline"
                     onClick={resetConfiguration}
+                    disabled={isGenerating}
                   >
-                    Reset
+                    <RotateCcw className="w-4 h-4" />
                   </Button>
                 </div>
               </CardContent>
@@ -439,20 +743,54 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
           <Card className="h-full">
             <CardHeader>
               <CardTitle className="flex items-center justify-between">
-                <span>Chart Preview</span>
-                {generatedChart && (
-                  <Button 
-                    variant="outline" 
-                    size="sm"
-                    onClick={downloadVisualization}
-                  >
-                    <Download className="w-4 h-4 mr-2" />
-                    Download
-                  </Button>
-                )}
+                <div className="flex items-center gap-2">
+                  <span>Chart Preview</span>
+                  {selectedVizType && (
+                    <Badge variant="outline" className="text-xs">
+                      {selectedVizType.name}
+                    </Badge>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  {generatedChart && (
+                    <>
+                      <Button 
+                        variant="outline" 
+                        size="sm"
+                        onClick={() => {/* Save to project */}}
+                      >
+                        <Save className="w-4 h-4 mr-2" />
+                        Save to Project
+                      </Button>
+                      <Button 
+                        variant="outline" 
+                        size="sm"
+                        onClick={downloadVisualization}
+                      >
+                        <Download className="w-4 h-4 mr-2" />
+                        Download
+                      </Button>
+                    </>
+                  )}
+                </div>
               </CardTitle>
+              {selectedVisualization && !generatedChart && (
+                <CardDescription className="flex items-center gap-2">
+                  <div className="text-sm">
+                    Ready to generate: {chartConfig.xAxis && chartConfig.yAxis ? 
+                      `${chartConfig.xAxis} vs ${chartConfig.yAxis}` : 
+                      'Configure fields to preview'
+                    }
+                  </div>
+                  {chartConfig.xAxis && chartConfig.yAxis && (
+                    <Badge variant="secondary" className="text-xs">
+                      {chartConfig.aggregation}
+                    </Badge>
+                  )}
+                </CardDescription>
+              )}
             </CardHeader>
-            <CardContent>
+            <CardContent className="h-96">
               {!generatedChart ? (
                 <div className="flex items-center justify-center h-96 border-2 border-dashed border-gray-300 rounded-lg">
                   <div className="text-center">
