@@ -38,7 +38,7 @@ class EmailAuthServiceImpl implements EmailAuthService {
     const user = await storage.createUser({
       id: userId,
       email,
-      hashedPassword: hashedPassword,
+      password: hashedPassword,
       firstName,
       lastName,
       provider: "local",
@@ -74,20 +74,13 @@ class EmailAuthServiceImpl implements EmailAuthService {
       throw new Error("Invalid email or password");
     }
     
-    console.log("Login attempt for user:", {
-      email: user.email,
-      provider: user.provider,
-      hasPassword: !!user.hashedPassword
-    });
-    
     // Check if user is using email/password authentication
-    if (user.provider !== "local" || !user.hashedPassword) {
-      console.log("Login failed - wrong provider or no password:", user.provider, !!user.hashedPassword);
+    if (user.provider !== "local" || !user.password) {
       throw new Error("This account uses social login. Please use the sign-in button.");
     }
     
     // Verify password
-    const isPasswordValid = await bcrypt.compare(password, user.hashedPassword);
+    const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
       throw new Error("Invalid email or password");
     }
@@ -163,30 +156,13 @@ class EmailAuthServiceImpl implements EmailAuthService {
     
     // Store token in memory for simplicity
     // In production, use Redis or database
-    const tokenData = { userId, expiresAt };
-    tokenStore.set(token, tokenData);
-    
-    console.log("Generated auth token:", {
-      token: token.substring(0, 10) + "...",
-      userId,
-      expiresAt: new Date(expiresAt).toISOString(),
-      stored: tokenStore.has(token)
-    });
+    tokenStore.set(token, { userId, expiresAt });
     
     return token;
   }
   
   async verifyAuthToken(token: string): Promise<{ userId: string } | null> {
     const tokenData = tokenStore.get(token);
-    
-    console.log("Token verification debug:", {
-      token: token.substring(0, 10) + "...",
-      tokenExists: !!tokenData,
-      tokenData: tokenData,
-      tokenStoreSize: tokenStore.size,
-      allTokens: Array.from(tokenStore.keys()).map(k => k.substring(0, 10) + "..."),
-      actualData: tokenData ? JSON.stringify(tokenData) : 'null'
-    });
     
     if (!tokenData) {
       return null;

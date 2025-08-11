@@ -273,40 +273,6 @@ export const guidedAnalysisOrders = pgTable("guided_analysis_orders", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// Dynamic pricing workflows table
-export const pricingWorkflows = pgTable("pricing_workflows", {
-  id: varchar("id").primaryKey().notNull(),
-  projectId: varchar("project_id").notNull(),
-  userId: varchar("user_id").notNull(),
-  currentStep: varchar("current_step").notNull().default("file_upload"),
-  stepData: jsonb("step_data"),
-  selectedFeatures: jsonb("selected_features"),
-  featureConfigurations: jsonb("feature_configurations"),
-  estimatedCost: integer("estimated_cost"), // in cents
-  finalCost: integer("final_cost"), // in cents
-  pricingBreakdown: jsonb("pricing_breakdown"),
-  status: varchar("status").default("in_progress"), // in_progress, completed, cancelled, paid
-  stripePaymentIntentId: varchar("stripe_payment_intent_id"),
-  completedAt: timestamp("completed_at"),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
-
-// Feature requirements tracking table
-export const featureRequirements = pgTable("feature_requirements", {
-  id: varchar("id").primaryKey().notNull(),
-  workflowId: varchar("workflow_id").notNull(),
-  feature: varchar("feature").notNull(), // data_transformation, data_analysis, etc.
-  requirements: jsonb("requirements"), // specific feature configuration
-  estimatedCost: integer("estimated_cost"), // in cents
-  complexity: varchar("complexity").default("medium"), // low, medium, high, very_high
-  processingTime: integer("processing_time"), // estimated minutes
-  status: varchar("status").default("pending"), // pending, configured, processing, completed
-  results: jsonb("results"), // processing results
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
-
 // Drizzle insert schemas
 export const insertProjectSchema = createInsertSchema(projects).omit({
   id: true,
@@ -331,18 +297,6 @@ export const insertGuidedAnalysisOrderSchema = createInsertSchema(guidedAnalysis
   updatedAt: true,
 });
 
-export const insertPricingWorkflowSchema = createInsertSchema(pricingWorkflows).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-
-export const insertFeatureRequirementSchema = createInsertSchema(featureRequirements).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-
 // Types for database operations
 export type User = typeof users.$inferSelect;
 export type UpsertUser = typeof users.$inferInsert;
@@ -352,7 +306,3 @@ export type EnterpriseInquiry = typeof enterpriseInquiries.$inferSelect;
 export type InsertEnterpriseInquiry = typeof insertEnterpriseInquirySchema._type;
 export type GuidedAnalysisOrder = typeof guidedAnalysisOrders.$inferSelect;
 export type InsertGuidedAnalysisOrder = typeof insertGuidedAnalysisOrderSchema._type;
-export type PricingWorkflow = typeof pricingWorkflows.$inferSelect;
-export type InsertPricingWorkflow = typeof insertPricingWorkflowSchema._type;
-export type FeatureRequirement = typeof featureRequirements.$inferSelect;
-export type InsertFeatureRequirement = typeof insertFeatureRequirementSchema._type;

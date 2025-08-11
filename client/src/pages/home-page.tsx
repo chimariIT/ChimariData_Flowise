@@ -1,13 +1,12 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { Upload, FileText, Database, Trash2, Eye, Zap, TrendingUp, BarChart3, Brain, Target, LogOut } from "lucide-react";
+import { Upload, FileText, Database, Trash2, Eye, Zap, TrendingUp, BarChart3, Brain, Target } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { useAuth } from "@/hooks/useAuth";
 import { apiClient } from "@/lib/api";
 import FileUploader from "@/components/file-uploader";
 import AuthModal from "@/components/auth-modal";
@@ -15,12 +14,16 @@ import SubscriptionTierDisplay from "@/components/subscription-tier-display";
 
 import { PIIInterimDialog } from "@/components/PIIInterimDialog";
 
-export default function HomePage() {
+interface HomePageProps {
+  user?: any;
+  onLogout?: () => void;
+}
+
+export default function HomePage({ user, onLogout }: HomePageProps) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
-  const { user, logout } = useAuth();
   const [isUploading, setIsUploading] = useState(false);
-  const [activeTab, setActiveTab] = useState("upload");
+  const [activeTab, setActiveTab] = useState(user ? "upload" : "auth");
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authModalTab, setAuthModalTab] = useState<'login' | 'register'>('register');
   const [showPIIDialog, setShowPIIDialog] = useState(false);
@@ -69,7 +72,7 @@ export default function HomePage() {
         
         toast({
           title: "File uploaded successfully!",
-          description: `Processed ${result.recordCount || result.record_count || result.rows_processed || 'unknown number of'} records from ${file.name}`,
+          description: `Processed ${result.record_count || result.recordCount || 0} records from ${file.name}`,
         });
         refetch();
         setLocation(`/project/${result.projectId}`);
@@ -135,7 +138,7 @@ export default function HomePage() {
         
         toast({
           title: "File uploaded successfully!",
-          description: `Processed ${result.recordCount || result.record_count || result.rows_processed || 'unknown number of'} records with ${decision} PII decision`,
+          description: `Processed ${result.record_count || result.recordCount || 0} records with ${decision} PII decision`,
         });
         refetch();
         setLocation(`/project/${result.projectId}`);
@@ -211,10 +214,9 @@ export default function HomePage() {
           <Button 
             variant="outline" 
             size="sm" 
-            onClick={() => window.location.href = '/api/logout'}
+            onClick={onLogout}
             className="text-gray-600 hover:text-gray-900"
           >
-            <LogOut className="w-4 h-4 mr-2" />
             Logout
           </Button>
         </div>
