@@ -20,12 +20,9 @@ import { MCPAIService } from './mcp-ai-service';
 import { AnonymizationEngine } from './anonymization-engine';
 import { UnifiedPIIProcessor } from './unified-pii-processor';
 import { EmailService } from './email-service';
-import { emailAuthService } from './email-auth';
 import { PythonVisualizationService } from './python-visualization';
 import { PDFExportService } from './pdf-export';
 import { DatasetJoiner } from './dataset-joiner';
-import { DynamicPricingService } from './dynamic-pricing-service';
-import { GuidedWorkflowService } from './guided-workflow-service';
 import { SUBSCRIPTION_TIERS, getTierLimits, canUserUpload, canUserRequestAIInsight } from '@shared/subscription-tiers';
 import bcrypt from 'bcrypt';
 import fs from 'fs/promises';
@@ -68,20 +65,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Initialize MCP AI Service
   MCPAIService.initializeMCPServer().catch(console.error);
   
-  // Health check endpoint (public)
-  app.get('/api/health', (req, res) => {
-    res.json({ 
-      status: 'healthy', 
-      timestamp: new Date().toISOString(),
-      services: {
-        database: 'connected',
-        fileProcessor: 'available',
-        pricingEngine: 'available'
+  // Define ensureAuthenticated middleware within routes scope to access tokenStore
+  const ensureAuthenticated = async (req: any, res: any, next: any) => {
+    try {
+      // First try OAuth session authentication
+      if (req.isAuthenticated && req.isAuthenticated()) {
+        return next();
       }
-    });
-  });
-  
-  // Authentication system - clean email/OAuth without Replit dependencies
+      
+      // Then try token authentication
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.substring(7);
+        const userId = tokenStore.get(token);
+        if (userId) {
+          const user = await storage.getUser(userId);
+          if (user) {
+            req.user = { id: user.id };
+            req.userId = user.id;
+            return next();
+          }
+        }
+      }
+      
+      res.status(401).json({ error: "Authentication required" });
+    } catch (error) {
+      console.error('Authentication error:', error);
+      res.status(401).json({ error: "Authentication required" });
+    }
+  };
   
   // Token store for authentication (shared between middleware functions)
   const tokenStore = new Map<string, string>();
@@ -740,7 +752,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Advanced analysis endpoints
-  app.post("/api/step-by-step-analysis", unifiedAuth, async (req, res) => {
+  app.post("/api/step-by-step-analysis", ensureAuthenticated, async (req, res) => {
     try {
       const { projectId, analysisType, analysisPath, config } = req.body;
       console.log('Step-by-step analysis request:', { projectId, analysisType, analysisPath, config });
@@ -916,7 +928,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // AI insights endpoint
-  app.post("/api/ai-insights", unifiedAuth, async (req, res) => {
+  app.post("/api/ai-insights", ensureAuthenticated, async (req, res) => {
     try {
       const { projectId, role, questions, instructions } = req.body;
       
@@ -963,7 +975,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Main project upload endpoint with PII detection
-  app.post("/api/projects/upload", unifiedAuth, upload.single('file'), async (req, res) => {
+  app.post("/api/projects/upload", ensureAuthenticated, upload.single('file'), async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ 
@@ -1092,24 +1104,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Projects API endpoints - USER AUTHENTICATED ONLY
-  app.get("/api/projects", unifiedAuth, async (req, res) => {
+  app.get("/api/projects", ensureAuthenticated, async (req, res) => {
     try {
       const userId = (req.user as any)?.id;
       if (!userId) {
         return res.status(401).json({ error: "User authentication required" });
       }
       
-      // Get all projects and filter by userId since getProjectsByUser doesn't exist
-      const allProjects = await storage.getAllProjects();
-      const projects = allProjects.filter(project => project.userId === userId);
-      res.json(projects);
+      const projects = await storage.getProjectsByUser(userId);
+      res.json({ projects });
     } catch (error: any) {
       console.error('Failed to fetch user projects:', error);
       res.status(500).json({ error: "Failed to fetch projects" });
     }
   });
 
-  app.get("/api/projects/:id", unifiedAuth, async (req, res) => {
+  app.get("/api/projects/:id", ensureAuthenticated, async (req, res) => {
     try {
       const userId = (req.user as any)?.id;
       const project = await storage.getProject(req.params.id);
@@ -1397,73 +1407,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("Error creating payment intent:", error);
       res.status(500).json({ error: "Failed to create payment intent" });
-    }
-  });
-
-  // Dynamic pricing endpoint - calculates pricing based on project complexity
-  app.post("/api/dynamic-pricing", unifiedAuth, async (req, res) => {
-    try {
-      const { projectId, features } = req.body;
-      const userId = req.user?.id;
-
-      if (!userId) {
-        return res.status(401).json({ error: 'Authentication required' });
-      }
-
-      if (!projectId || !features || !Array.isArray(features)) {
-        return res.status(400).json({ error: "Project ID and features array are required" });
-      }
-
-      // Get project data for complexity analysis
-      const project = await storage.getProject(projectId);
-      if (!project || project.userId !== userId) {
-        return res.status(404).json({ error: 'Project not found' });
-      }
-
-      // Calculate complexity based on project data
-      const fileSize = project.fileSize || 0;
-      const recordCount = project.data?.length || 0;
-      const columnCount = project.schema ? Object.keys(project.schema).length : 0;
-      
-      // Simple complexity scoring
-      let complexityScore = 1.0;
-      if (fileSize > 1000000) complexityScore += 0.2; // Large file
-      if (recordCount > 10000) complexityScore += 0.3; // Many records  
-      if (columnCount > 10) complexityScore += 0.2; // Many columns
-      if (project.piiAnalysis?.detectedPII?.length > 0) complexityScore += 0.3; // PII present
-
-      // Get base pricing 
-      const validation = PricingService.validateFeatures(features);
-      if (!validation.valid) {
-        return res.status(400).json({ 
-          error: "Invalid features", 
-          invalidFeatures: validation.invalidFeatures 
-        });
-      }
-
-      const basePricing = PricingService.calculatePrice(features);
-      
-      // Apply complexity multiplier
-      const adjustedPrice = Math.round(basePricing.total * complexityScore * 100) / 100;
-      
-      res.json({
-        pricing: {
-          basePrice: basePricing.total,
-          complexityScore: complexityScore,
-          adjustedPrice: adjustedPrice,
-          breakdown: basePricing.breakdown,
-          factors: {
-            fileSize: fileSize,
-            recordCount: recordCount,
-            columnCount: columnCount,
-            hasPII: (project.piiAnalysis?.detectedPII?.length || 0) > 0
-          }
-        }
-      });
-
-    } catch (error: any) {
-      console.error("Dynamic pricing error:", error);
-      res.status(500).json({ error: "Failed to calculate dynamic pricing" });
     }
   });
 
@@ -1934,7 +1877,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Join datasets endpoint
-  app.post("/api/join-datasets/:projectId", unifiedAuth, async (req, res) => {
+  app.post("/api/join-datasets/:projectId", ensureAuthenticated, async (req, res) => {
     try {
       const projectId = req.params.projectId;
       const { joinWithProjects, joinType, joinKeys, mergeStrategy } = req.body;
@@ -2006,7 +1949,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Duplicate route removed - using the authenticated version above
+  // Get all projects for authenticated user
+  app.get("/api/projects", async (req, res) => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        // Return empty projects for unauthenticated users instead of 401
+        return res.json({ projects: [] });
+      }
+      
+      const projects = await storage.getProjectsByUser(userId);
+      res.json({ projects });
+    } catch (error: any) {
+      console.error("Error fetching projects:", error);
+      res.status(500).json({ error: "Failed to fetch projects" });
+    }
+  });
 
   // Get specific project for authenticated user
   // Project retrieval endpoint for authenticated users
@@ -2265,31 +2223,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Unified authentication middleware that handles both OAuth and token-based auth
   async function unifiedAuth(req: any, res: any, next: any) {
-    // Email/OAuth token-based authentication only
+    // First check if already authenticated via OAuth/passport session
+    if (req.isAuthenticated && req.isAuthenticated()) {
+      return next();
+    }
     
     // Check for Authorization header with Bearer token (email-based auth)
     const authHeader = req.headers.authorization;
-    console.log("Auth header:", authHeader);
-    
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.substring(7);
-      console.log("Extracted token:", token.substring(0, 10) + "...");
       
       try {
-        // Use email auth service to verify token
-        const tokenResult = await emailAuthService.verifyAuthToken(token);
-        console.log("Token verification result:", tokenResult);
+        // Check if token exists in our token store
+        const userId = tokenStore.get(token);
         
-        if (tokenResult && tokenResult.userId) {
+        if (userId) {
           // Verify user still exists
-          const user = await storage.getUser(tokenResult.userId);
-          console.log("User lookup result:", user ? "found" : "not found");
+          const user = await storage.getUser(userId);
           
           if (user) {
             // Set user on request object to match OAuth format
             req.user = { id: user.id };
             req.userId = user.id; // Also set direct userId for compatibility
-            console.log("Auth successful for user:", user.email);
             return next();
           }
         }
@@ -2345,10 +2300,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const verificationToken = crypto.randomBytes(32).toString('hex');
       const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
       
-      // Create user with explicit ID
-      const userId = crypto.randomUUID();
+      // Create user
       const user = await storage.createUser({
-        id: userId,
         email,
         hashedPassword,
         firstName,
@@ -2360,7 +2313,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       
       // Send verification email using SendGrid
-      const baseUrl = `${req.protocol}://${req.get('host')}`;
+      // Use the proper Replit app domain for verification - avoid SendGrid URL tracking
+      const replitDomain = process.env.REPLIT_DOMAINS?.split(',')[0];
+      const baseUrl = replitDomain ? 
+        `https://${replitDomain}` : 
+        `${req.protocol}://${req.get('host')}`;
       const verificationUrl = `${baseUrl}/verify-email?token=${verificationToken}`;
       
       console.log(`🔗 Generated verification URL: ${verificationUrl}`);
@@ -2392,14 +2349,15 @@ This link will expire in 24 hours.
       console.log(`📧 EMAIL VERIFICATION DETAILS:
       ===============================================
       Email: ${email}
+      Domain: ${replitDomain || 'localhost'}
       Verification URL: ${verificationUrl}
       Token: ${verificationToken.substring(0, 8)}...
       ===============================================`);
       
-      // Generate auth token using email auth service
-      const authToken = await emailAuthService.generateAuthToken(user.id);
+      // Generate simple auth token
+      const authToken = crypto.randomBytes(32).toString('hex');
       
-      // Store token in our simple token store for consistency
+      // Store token in our simple token store
       tokenStore.set(authToken, user.id);
       
       res.status(201).json({
@@ -2486,28 +2444,22 @@ This link will expire in 24 hours.
         return res.status(401).json({ error: "Invalid email or password" });
       }
       
-      console.log("Login check for user:", {
-        email: user.email,
-        provider: user.provider,
-        hasPassword: !!user.hashedPassword
-      });
-      
       // Check if user is using email/password authentication
-      if (user.provider !== "local" || !user.hashedPassword) {
-        console.log("Login failed - provider check:", user.provider, "hasPassword:", !!user.hashedPassword);
+      if (user.provider !== "local" || !user.password) {
         return res.status(400).json({ error: "This account uses social login. Please use the sign-in button." });
       }
       
       // Verify password
-      const isPasswordValid = await bcrypt.compare(password, user.hashedPassword);
+      const isPasswordValid = await bcrypt.compare(password, user.password);
       if (!isPasswordValid) {
         return res.status(401).json({ error: "Invalid email or password" });
       }
       
-      // Generate auth token using email auth service
-      const authToken = await emailAuthService.generateAuthToken(user.id);
+      // Generate simple auth token
+      const crypto = await import('crypto');
+      const authToken = crypto.randomBytes(32).toString('hex');
       
-      // Store token in our simple token store for consistency
+      // Store token in our simple token store
       tokenStore.set(authToken, user.id);
       
       res.json({
@@ -2529,22 +2481,17 @@ This link will expire in 24 hours.
     }
   });
 
-  // Remove duplicate health check
-
-  // Debug token verification endpoint
-  app.get('/api/debug/token', async (req, res) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.json({ error: 'No token provided' });
-    }
-    
-    const token = authHeader.substring(7);
-    try {
-      const result = await emailAuthService.verifyAuthToken(token);
-      res.json({ tokenValid: !!result, result });
-    } catch (error) {
-      res.json({ error: error.message });
-    }
+  // Health check endpoint
+  app.get('/api/health', (req, res) => {
+    res.json({
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      services: {
+        database: 'connected',
+        storage: 'operational',
+        ai: 'available'
+      }
+    });
   });
 
   // Get current user (unified auth - handles both token and OAuth session)
@@ -2552,13 +2499,18 @@ This link will expire in 24 hours.
     try {
       let user = null;
       
-      // Try token authentication (custom email auth)
-      const authHeader = req.headers.authorization;
-      if (authHeader && authHeader.startsWith('Bearer ')) {
-        const token = authHeader.substring(7);
-        const tokenResult = await emailAuthService.verifyAuthToken(token);
-        if (tokenResult) {
-          user = await storage.getUser(tokenResult.userId);
+      // First try OAuth session authentication
+      if (req.user) {
+        user = req.user;
+      } else {
+        // Try token authentication
+        const authHeader = req.headers.authorization;
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+          const token = authHeader.substring(7);
+          const userId = tokenStore.get(token);
+          if (userId) {
+            user = await storage.getUser(userId);
+          }
         }
       }
       
@@ -2567,11 +2519,13 @@ This link will expire in 24 hours.
       }
       
       res.json({
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        emailVerified: user.emailVerified
+        user: {
+          id: user.id,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          emailVerified: user.emailVerified
+        }
       });
       
     } catch (error) {
@@ -2590,7 +2544,14 @@ This link will expire in 24 hours.
         tokenStore.delete(token);
       }
       
-      // Clean logout - no OAuth session to clear
+      // Handle OAuth logout
+      if (req.logout) {
+        req.logout((err) => {
+          if (err) {
+            console.error('OAuth logout error:', err);
+          }
+        });
+      }
       
       res.json({ success: true, message: "Logged out successfully" });
     } catch (error) {
@@ -2638,7 +2599,7 @@ This link will expire in 24 hours.
   });
 
   // Create visualization endpoint
-  app.post("/api/visualizations/create", unifiedAuth, async (req, res) => {
+  app.post("/api/visualizations/create", ensureAuthenticated, async (req, res) => {
     try {
       const { projectId, visualizationType, selectedColumns, groupByColumn, colorByColumn } = req.body;
       
@@ -2693,7 +2654,7 @@ This link will expire in 24 hours.
   });
 
   // Export analysis to PDF
-  app.post("/api/projects/:id/export-pdf", unifiedAuth, async (req, res) => {
+  app.post("/api/projects/:id/export-pdf", ensureAuthenticated, async (req, res) => {
     try {
       const projectId = req.params.id;
       const userId = (req.user as any)?.id;
@@ -2791,7 +2752,7 @@ This link will expire in 24 hours.
   });
 
   // Data transformation endpoint
-  app.post('/api/transform-data/:projectId', unifiedAuth, async (req, res) => {
+  app.post('/api/transform-data/:projectId', ensureAuthenticated, async (req, res) => {
     try {
       const { projectId } = req.params;
       const { transformations } = req.body;
@@ -2833,7 +2794,7 @@ This link will expire in 24 hours.
   });
 
   // Export transformed data endpoint
-  app.get('/api/export-transformed-data/:projectId', unifiedAuth, async (req, res) => {
+  app.get('/api/export-transformed-data/:projectId', ensureAuthenticated, async (req, res) => {
     try {
       const { projectId } = req.params;
       const userId = req.user?.id;
@@ -2953,7 +2914,7 @@ This link will expire in 24 hours.
   });
 
   // Transform data endpoint
-  app.post("/api/transform-data/:projectId", unifiedAuth, async (req, res) => {
+  app.post("/api/transform-data/:projectId", ensureAuthenticated, async (req, res) => {
     try {
       const { projectId } = req.params;
       const { transformations } = req.body;
@@ -2979,7 +2940,7 @@ This link will expire in 24 hours.
   });
 
   // Save transformations to project
-  app.post("/api/save-transformations/:projectId", unifiedAuth, async (req, res) => {
+  app.post("/api/save-transformations/:projectId", ensureAuthenticated, async (req, res) => {
     try {
       const { projectId } = req.params;
       const { transformations } = req.body;
@@ -3005,613 +2966,6 @@ This link will expire in 24 hours.
         error: error.message || "Failed to save transformations" 
       });
     }
-  });
-
-  // ===== DYNAMIC PRICING WORKFLOW ENDPOINTS =====
-
-  // Initialize dynamic pricing workflow
-  app.post("/api/pricing-workflow/:projectId/initialize", unifiedAuth, async (req, res) => {
-    try {
-      const { projectId } = req.params;
-      const userId = req.user?.id;
-
-      if (!userId) {
-        return res.status(401).json({ error: "Authentication required" });
-      }
-
-      const workflow = GuidedWorkflowService.initializeWorkflow(projectId, userId);
-      
-      res.json({
-        success: true,
-        workflow
-      });
-    } catch (error: any) {
-      console.error("Initialize workflow error:", error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Get project analysis for dynamic pricing
-  app.get("/api/project-analysis/:projectId", unifiedAuth, async (req, res) => {
-    try {
-      const { projectId } = req.params;
-      const project = await storage.getProject(projectId);
-      
-      if (!project) {
-        return res.status(404).json({ error: "Project not found" });
-      }
-
-      // Analyze file characteristics
-      const fileAnalysis = {
-        fileSizeBytes: project.fileSize,
-        recordCount: project.recordCount || 0,
-        columnCount: Object.keys(project.schema || {}).length,
-        schema: project.schema,
-        dataPreview: project.data?.slice(0, 5) || [],
-        piiDetected: (project.piiAnalysis?.detectedPII?.length || 0) > 0,
-        piiColumns: project.piiAnalysis?.detectedPII || [],
-        missingDataPercentage: project.missingDataAnalysis?.patterns?.missingPercentage || 0,
-        outliersDetected: !!project.outlierAnalysis?.outliers?.length,
-        dataTypes: {
-          numerical: Object.values(project.schema || {}).filter((col: any) => 
-            ['number', 'integer', 'float'].includes(col.type)).length,
-          categorical: Object.values(project.schema || {}).filter((col: any) => 
-            ['string', 'category'].includes(col.type)).length,
-          datetime: Object.values(project.schema || {}).filter((col: any) => 
-            ['date', 'datetime'].includes(col.type)).length,
-          text: Object.values(project.schema || {}).filter((col: any) => 
-            col.type === 'text').length
-        }
-      };
-
-      // Generate feature suggestions and workflow steps
-      const suggestions = GuidedWorkflowService.analyzeFileAndSuggestFeatures(fileAnalysis);
-      const workflowSteps = GuidedWorkflowService.generateWorkflowSteps(
-        suggestions.suggestedFeatures,
-        fileAnalysis
-      );
-
-      res.json({
-        success: true,
-        ...fileAnalysis,
-        recommendations: suggestions.recommendations,
-        suggestedFeatures: suggestions.suggestedFeatures,
-        estimatedComplexity: suggestions.estimatedComplexity,
-        workflowSteps,
-        requiredSteps: suggestions.requiredSteps
-      });
-    } catch (error: any) {
-      console.error("Project analysis error:", error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Calculate dynamic pricing
-  app.get("/api/dynamic-pricing/:projectId", unifiedAuth, async (req, res) => {
-    try {
-      const { projectId } = req.params;
-      const { features, configurations } = req.query;
-      
-      const project = await storage.getProject(projectId);
-      if (!project) {
-        return res.status(404).json({ error: "Project not found" });
-      }
-
-      let selectedFeatures: string[] = [];
-      let featureConfigurations: Record<string, any> = {};
-
-      try {
-        selectedFeatures = features ? JSON.parse(features as string) : [];
-        featureConfigurations = configurations ? JSON.parse(configurations as string) : {};
-      } catch (e) {
-        // Use defaults if parsing fails
-      }
-
-      if (selectedFeatures.length === 0) {
-        return res.json({
-          success: true,
-          finalTotal: 0,
-          breakdown: [],
-          estimatedProcessing: { timeMinutes: 0, resourceIntensity: "low" }
-        });
-      }
-
-      // Build pricing request
-      const pricingRequest = {
-        fileSizeBytes: project.fileSize,
-        recordCount: project.recordCount || 0,
-        columnCount: Object.keys(project.schema || {}).length,
-        complexityFactors: {
-          piiColumnsCount: project.piiAnalysis?.detectedPII?.length || 0,
-          uniqueIdentifiersCount: 0,
-          missingDataPercentage: project.missingDataAnalysis?.patterns?.missingPercentage || 0,
-          dataTypes: {
-            numerical: Object.values(project.schema || {}).filter((col: any) => 
-              ['number', 'integer', 'float'].includes(col.type)).length,
-            categorical: Object.values(project.schema || {}).filter((col: any) => 
-              ['string', 'category'].includes(col.type)).length,
-            datetime: Object.values(project.schema || {}).filter((col: any) => 
-              ['date', 'datetime'].includes(col.type)).length,
-            text: Object.values(project.schema || {}).filter((col: any) => 
-              col.type === 'text').length
-          },
-          outliersDetected: !!project.outlierAnalysis?.outliers?.length,
-          needsNormalization: false
-        },
-        selectedFeatures,
-        featureRequirements: featureConfigurations
-      };
-
-      const pricingResult = DynamicPricingService.calculateDynamicPricing(pricingRequest);
-      
-      res.json({
-        success: true,
-        ...pricingResult
-      });
-    } catch (error: any) {
-      console.error("Dynamic pricing error:", error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Get workflow state
-  app.get("/api/pricing-workflow/:projectId", unifiedAuth, async (req, res) => {
-    try {
-      const { projectId } = req.params;
-      const workflow = GuidedWorkflowService.getWorkflow(projectId);
-      
-      if (!workflow) {
-        const userId = req.user?.id;
-        if (!userId) {
-          return res.status(401).json({ error: "Authentication required" });
-        }
-        const newWorkflow = GuidedWorkflowService.initializeWorkflow(projectId, userId);
-        return res.json({ success: true, workflow: newWorkflow });
-      }
-
-      res.json({ success: true, workflow });
-    } catch (error: any) {
-      console.error("Get workflow error:", error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Update workflow state
-  app.put("/api/pricing-workflow/:projectId", unifiedAuth, async (req, res) => {
-    try {
-      const { projectId } = req.params;
-      const { currentStep, selectedFeatures, featureConfigurations, estimatedCost } = req.body;
-
-      const workflow = GuidedWorkflowService.updateWorkflow(projectId, currentStep, {
-        selectedFeatures,
-        featureConfigurations,
-        estimatedCost
-      });
-
-      if (!workflow) {
-        return res.status(404).json({ error: "Workflow not found" });
-      }
-
-      res.json({ success: true, workflow });
-    } catch (error: any) {
-      console.error("Update workflow error:", error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Get quick pricing estimate
-  app.post("/api/quick-estimate", async (req, res) => {
-    try {
-      const { fileSizeBytes, recordCount, columnCount, selectedFeatures } = req.body;
-
-      // Validate and ensure selectedFeatures is an array
-      const featuresArray = Array.isArray(selectedFeatures) ? selectedFeatures : 
-                           selectedFeatures ? [selectedFeatures] : 
-                           [];
-
-      // Provide defaults for missing parameters
-      const safeFileSizeBytes = typeof fileSizeBytes === 'number' ? fileSizeBytes : 1024 * 1024; // 1MB default
-      const safeRecordCount = typeof recordCount === 'number' ? recordCount : 1000;
-      const safeColumnCount = typeof columnCount === 'number' ? columnCount : 10;
-
-      const estimate = DynamicPricingService.getQuickEstimate(
-        safeFileSizeBytes,
-        safeRecordCount,
-        safeColumnCount,
-        featuresArray
-      );
-
-      res.json({
-        success: true,
-        ...estimate
-      });
-    } catch (error: any) {
-      console.error("Quick estimate error:", error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Enhanced payment intent creation for dynamic pricing
-  app.post("/api/create-payment-intent", unifiedAuth, async (req, res) => {
-    try {
-      const { projectId, selectedFeatures, featureConfigurations, amount } = req.body;
-      const userId = req.user?.id;
-
-      if (!userId) {
-        return res.status(401).json({ error: "Authentication required" });
-      }
-
-      if (!selectedFeatures || selectedFeatures.length === 0) {
-        return res.status(400).json({ error: "No features selected" });
-      }
-
-      // Create payment intent with Stripe
-      const paymentIntent = await stripe.paymentIntents.create({
-        amount: Math.round(amount * 100), // Convert to cents
-        currency: 'usd',
-        metadata: {
-          projectId,
-          userId,
-          selectedFeatures: JSON.stringify(selectedFeatures),
-          featureConfigurations: JSON.stringify(featureConfigurations)
-        }
-      });
-
-      // Update workflow with payment intent
-      GuidedWorkflowService.updateWorkflow(projectId, 'payment', {
-        stripePaymentIntentId: paymentIntent.id,
-        selectedFeatures,
-        featureConfigurations,
-        estimatedCost: Math.round(amount * 100)
-      });
-
-      res.json({
-        success: true,
-        paymentIntentId: paymentIntent.id,
-        clientSecret: paymentIntent.client_secret,
-        amount: amount
-      });
-    } catch (error: any) {
-      console.error("Create payment intent error:", error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Process successful payment and trigger processing
-  app.post("/api/process-payment-success", unifiedAuth, async (req, res) => {
-    try {
-      const { paymentIntentId } = req.body;
-
-      // Verify payment with Stripe
-      const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
-      
-      if (paymentIntent.status !== 'succeeded') {
-        return res.status(400).json({ error: "Payment not completed" });
-      }
-
-      const { projectId, selectedFeatures, featureConfigurations } = paymentIntent.metadata;
-      
-      if (!projectId) {
-        return res.status(400).json({ error: "Invalid payment metadata" });
-      }
-
-      // Update project with purchased features
-      await storage.updateProject(projectId, {
-        isPaid: true,
-        selectedFeatures: JSON.parse(selectedFeatures || '[]'),
-        paymentIntentId,
-        upgradedAt: new Date()
-      });
-
-      // Update workflow to processing status
-      GuidedWorkflowService.updateWorkflow(projectId, 'processing', {
-        status: 'paid',
-        paidAt: new Date(),
-        finalCost: paymentIntent.amount
-      });
-
-      res.json({
-        success: true,
-        message: "Payment processed successfully. Your data processing has begun.",
-        projectId,
-        selectedFeatures: JSON.parse(selectedFeatures || '[]')
-      });
-    } catch (error: any) {
-      console.error("Process payment success error:", error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Test-friendly endpoint for project analysis (bypasses auth for testing)
-  app.get("/api/test/project-analysis/:projectId", async (req, res) => {
-    try {
-      const { projectId } = req.params;
-      const project = await storage.getProject(projectId);
-      
-      if (!project) {
-        return res.status(404).json({ 
-          success: false, 
-          error: "Project not found" 
-        });
-      }
-
-      // Return basic project analysis info for testing in the expected format
-      res.json({
-        success: true,
-        data: {
-          recordCount: project.recordCount,
-          columnCount: project.schema ? Object.keys(project.schema).length : 0,
-          estimatedComplexity: project.recordCount > 500 ? 'high' : project.recordCount > 100 ? 'medium' : 'low',
-          piiDetected: project.piiAnalysis?.detectedPII?.length > 0,
-          piiColumns: project.piiAnalysis?.detectedPII || []
-        },
-        project: {
-          id: project.id,
-          name: project.name,
-          description: project.description,
-          recordCount: project.recordCount,
-          fileSize: project.fileSize,
-          schema: project.schema
-        }
-      });
-    } catch (error: any) {
-      console.error("Test project analysis error:", error);
-      res.status(500).json({ 
-        success: false, 
-        error: error.message 
-      });
-    }
-  });
-
-  // Test-friendly endpoint for dynamic pricing (bypasses auth for testing)
-  app.get("/api/test/dynamic-pricing/:projectId", async (req, res) => {
-    try {
-      const { projectId } = req.params;
-      const { selectedFeatures } = req.query;
-      
-      const project = await storage.getProject(projectId);
-      
-      if (!project) {
-        return res.status(404).json({ 
-          success: false, 
-          error: "Project not found" 
-        });
-      }
-
-      // Parse selected features from query parameter
-      const featuresArray = selectedFeatures ? 
-        (typeof selectedFeatures === 'string' ? selectedFeatures.split(',') : selectedFeatures) : 
-        [];
-
-      // Handle empty features case
-      if (featuresArray.length === 0) {
-        return res.json({
-          success: true,
-          pricing: {
-            totalCost: 0,
-            breakdown: {
-              baseCost: 0,
-              featureCosts: {},
-              discounts: [],
-              finalCost: 0
-            },
-            estimatedTime: 0
-          }
-        });
-      }
-
-      // Prepare pricing calculation with proper data structure
-      const piiColumnsCount = project.piiAnalysis?.detectedPII?.length || 0;
-      const totalColumns = project.schema ? Object.keys(project.schema).length : 0;
-      
-      const pricingRequest = {
-        fileSizeBytes: project.fileSize || 1024,
-        recordCount: project.recordCount || 100,
-        columnCount: totalColumns,
-        complexityFactors: {
-          piiColumnsCount: piiColumnsCount,
-          missingDataPercentage: 0,
-          outliersDetected: false,
-          dataTypes: { string: totalColumns / 2, number: totalColumns / 2 }
-        },
-        selectedFeatures: featuresArray,
-        featureRequirements: {}
-      };
-
-      // Calculate pricing using the dynamic pricing service
-      const pricing = DynamicPricingService.calculateDynamicPricing(pricingRequest);
-
-      res.json({
-        success: true,
-        projectId,
-        pricing,
-        selectedFeatures: featuresArray
-      });
-    } catch (error: any) {
-      console.error("Test dynamic pricing error:", error);
-      res.status(500).json({ 
-        success: false, 
-        error: error.message 
-      });
-    }
-  });
-
-  // Test-friendly endpoint for workflow initialization (bypasses auth for testing)
-  app.post("/api/test/pricing-workflow/:projectId/initialize", async (req, res) => {
-    try {
-      const { projectId } = req.params;
-      const { selectedFeatures } = req.body;
-      
-      const project = await storage.getProject(projectId);
-      
-      if (!project) {
-        return res.status(404).json({ 
-          success: false, 
-          error: "Project not found" 
-        });
-      }
-
-      // Mock workflow initialization for testing
-      const workflowId = `workflow_${Date.now()}_${projectId}`;
-      
-      const features = Array.isArray(selectedFeatures) ? selectedFeatures : (selectedFeatures ? [selectedFeatures] : []);
-      
-      res.json({
-        success: true,
-        workflowId,
-        projectId,
-        selectedFeatures: features,
-        status: 'initialized',
-        steps: features.map((feature: string, index: number) => ({
-          id: `step_${index + 1}`,
-          feature,
-          status: 'pending',
-          estimatedDuration: Math.floor(Math.random() * 10) + 1
-        }))
-      });
-    } catch (error: any) {
-      console.error("Test workflow initialization error:", error);
-      res.status(500).json({ 
-        success: false, 
-        error: error.message 
-      });
-    }
-  });
-
-  // Test workflow state endpoint
-  app.get('/api/test/pricing-workflow/:projectId', async (req, res) => {
-    try {
-      const { projectId } = req.params;
-      
-      // Mock workflow state for testing
-      res.json({
-        success: true,
-        workflowId: `workflow_${Date.now()}_${projectId}`,
-        projectId,
-        status: 'completed',
-        progress: 100,
-        currentStep: 'finished',
-        results: {
-          totalCost: 45.50,
-          estimatedTime: 15,
-          completedFeatures: ['Data Engineering', 'Data Analysis']
-        }
-      });
-    } catch (error: any) {
-      res.status(500).json({
-        success: false,
-        error: error.message
-      });
-    }
-  });
-
-  // Test workflow update endpoint
-  app.put('/api/test/pricing-workflow/:projectId', async (req, res) => {
-    try {
-      const { projectId } = req.params;
-      const { currentStep, selectedFeatures, featureConfigurations, estimatedCost } = req.body;
-      
-      // Mock workflow update for testing
-      res.json({
-        success: true,
-        workflowId: `workflow_${Date.now()}_${projectId}`,
-        projectId,
-        currentStep: currentStep || 'feature_selection',
-        selectedFeatures: selectedFeatures || [],
-        estimatedCost: estimatedCost || 0,
-        updated: true
-      });
-    } catch (error: any) {
-      res.status(500).json({
-        success: false,
-        error: error.message
-      });
-    }
-  });
-
-  // Complete upload endpoint (alias for trial-pii-decision for testing compatibility)
-  app.post("/api/complete-upload", async (req, res) => {
-    try {
-      const { tempFileId, name, description, questions, decision, anonymizationConfig } = req.body;
-      
-      if (!tempFileId || !decision) {
-        return res.status(400).json({ 
-          success: false, 
-          error: "tempFileId and decision are required" 
-        });
-      }
-
-      // Get temporary data from storage
-      const tempData = tempTrialData.get(tempFileId);
-      if (!tempData) {
-        return res.status(400).json({ 
-          success: false, 
-          error: "Temporary file data not found. Please upload the file again." 
-        });
-      }
-
-      const { processedData, piiAnalysis, fileInfo } = tempData;
-
-      // Apply PII handling using unified processor
-      const piiProcessingResult = await UnifiedPIIProcessor.processPIIData({
-        decision,
-        anonymizationConfig,
-        piiAnalysis,
-        originalData: processedData.data,
-        originalSchema: processedData.schema,
-        overriddenColumns: anonymizationConfig?.overriddenColumns || []
-      });
-      
-      const finalData = piiProcessingResult.finalData;
-      const updatedSchema = piiProcessingResult.updatedSchema;
-      
-      console.log(UnifiedPIIProcessor.generateProcessingSummary(piiProcessingResult));
-
-      // Create project with processed data
-      const newProjectData = {
-        userId: 'anonymous',
-        name: name || 'Test Project',
-        description: description || 'Test project from complete upload',
-        questions: questions || [],
-        originalFilename: fileInfo.originalname,
-        fileSize: fileInfo.size,
-        fileMimeType: fileInfo.mimetype,
-        uploadedAt: new Date(),
-        isPaid: false,
-        data: finalData,
-        schema: updatedSchema,
-        recordCount: finalData.length,
-        piiAnalysis: {
-          ...piiAnalysis,
-          userDecision: decision,
-          overriddenColumns: anonymizationConfig?.overriddenColumns || [],
-          decisionTimestamp: new Date()
-        }
-      };
-      
-      const project = await storage.createProject(newProjectData);
-      
-      // Clean up temporary data
-      tempTrialData.delete(tempFileId);
-      
-      res.json({
-        success: true,
-        projectId: project.id,
-        project: project,
-        message: "Project created successfully with PII decision applied"
-      });
-    } catch (error: any) {
-      console.error("Complete upload error:", error);
-      res.status(500).json({ 
-        success: false, 
-        error: error.message || "Failed to complete upload" 
-      });
-    }
-  });
-
-  // 404 handler for API routes
-  app.use('/api/*', (req, res) => {
-    res.status(404).json({ error: 'API endpoint not found' });
   });
 
   return httpServer;
