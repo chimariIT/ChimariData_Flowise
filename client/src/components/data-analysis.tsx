@@ -58,13 +58,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
       icon: Calculator,
       fields: "numeric"
     },
-    {
-      value: "visualization",
-      label: "Data Visualization",
-      description: "Interactive charts and graphs with field configuration",
-      icon: BarChart3,
-      fields: "any"
-    },
+
     {
       value: "distribution",
       label: "Data Distribution",
@@ -449,7 +443,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
             
             let startAngle = 0;
             
-            categories.forEach((category, index) => {
+            categories.forEach((category: string, index: number) => {
               const sliceAngle = (values[index] / 100) * 2 * Math.PI;
               
               // Draw slice
@@ -572,7 +566,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                         const currentFields = analysisConfig.fields || [];
                         const newFields = e.target.checked 
                           ? [...currentFields, field]
-                          : currentFields.filter((f: string) => f !== field);
+                          : currentFields.filter((f: any) => f !== field);
                         setAnalysisConfig({
                           ...analysisConfig,
                           fields: newFields
@@ -1054,7 +1048,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                         const currentFields = analysisConfig.fields || [];
                         const newFields = e.target.checked 
                           ? [...currentFields, field]
-                          : currentFields.filter((f: string) => f !== field);
+                          : currentFields.filter((f: any) => f !== field);
                         setAnalysisConfig({
                           ...analysisConfig,
                           fields: newFields
