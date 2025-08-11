@@ -178,6 +178,18 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
   }, [updateWorkflowStep]);
 
   const handleUploadComplete = useCallback((uploadInfo: any) => {
+    if (uploadInfo.error && uploadInfo.requiresAuth) {
+      // Handle authentication required error
+      setError('Authentication required. Please sign in to continue with data analysis.');
+      // You could also redirect to login page here
+      return;
+    }
+    
+    if (uploadInfo.error) {
+      setError(uploadInfo.error);
+      return;
+    }
+    
     updateWorkflowStep('upload', { uploadInfo });
   }, [updateWorkflowStep]);
 

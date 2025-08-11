@@ -178,9 +178,23 @@ export function MultiSourceUpload({
           schema: result.schema || projectData.schema
         });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Upload error:', error);
       setUploadStatus('error');
+      
+      // Handle authentication errors specifically
+      if (error.message?.includes('Authentication required')) {
+        onComplete({
+          error: 'Please sign in to upload files. Authentication is required to access data analysis features.',
+          errorType: 'AUTHENTICATION_REQUIRED',
+          requiresAuth: true
+        });
+      } else {
+        onComplete({
+          error: error.message || 'Upload failed. Please try again.',
+          errorType: 'UPLOAD_ERROR'
+        });
+      }
     }
   }, [onComplete, selectedSource, serviceType, questions]);
 

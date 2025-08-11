@@ -23,7 +23,8 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [isUploading, setIsUploading] = useState(false);
-  const [activeTab, setActiveTab] = useState(user ? "upload" : "auth");
+  const [activeTab, setActiveTab] = useState("upload"); // Always show upload tab first
+  const [authError, setAuthError] = useState<string | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authModalTab, setAuthModalTab] = useState<'login' | 'register'>('register');
   const [showPIIDialog, setShowPIIDialog] = useState(false);
@@ -34,6 +35,12 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
     queryFn: async () => {
       return await apiClient.getProjects();
     },
+    retry: false, // Don't retry on authentication failures
+    onError: (error: any) => {
+      if (error.message?.includes('authentication') || error.message?.includes('401')) {
+        setAuthError('Please sign in to view your projects and access all features.');
+      }
+    }
   });
 
   const { data: pricingData } = useQuery({
@@ -78,11 +85,26 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
         setLocation(`/project/${result.projectId}`);
       }
     } catch (error: any) {
+      let errorMessage = error.message;
+      let requiresAuth = false;
+      
+      if (error.message?.includes('Authentication required')) {
+        errorMessage = "Please sign in to upload files. All data analysis features require authentication.";
+        requiresAuth = true;
+        setAuthError(errorMessage);
+        setActiveTab('auth'); // Switch to auth tab
+      }
+      
       toast({
         title: "Upload failed",
-        description: error.message,
+        description: errorMessage,
         variant: "destructive",
       });
+      
+      if (requiresAuth) {
+        setShowAuthModal(true);
+        setAuthModalTab('login');
+      }
     } finally {
       setIsUploading(false);
     }
@@ -475,6 +497,19 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
               </CardDescription>
             </CardHeader>
             <CardContent>
+              {/* Show authentication warning if user tried to upload without auth */}
+              {authError && !user && (
+                <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+                  <div className="flex items-start gap-3">
+                    <div className="w-5 h-5 text-red-600 mt-0.5">⚠️</div>
+                    <div>
+                      <h3 className="font-medium text-red-900 mb-1">Authentication Required</h3>
+                      <p className="text-sm text-red-700">{authError}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+              
               {user ? (
                 <FileUploader
                   onFileUpload={handleFileUpload}
@@ -483,21 +518,36 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
                 />
               ) : (
                 <div className="text-center py-8">
-                  <p className="text-gray-600 mb-4">
-                    Sign in to access full platform features
-                  </p>
-                  <Button 
-                    onClick={() => setLocation('/auth/login')}
-                    className="mr-2"
-                  >
-                    Sign In
-                  </Button>
-                  <Button 
-                    variant="outline"
-                    onClick={() => setLocation('/auth/register')}
-                  >
-                    Create Account
-                  </Button>
+                  <div className="max-w-md mx-auto mb-6">
+                    <FileUploader
+                      onFileUpload={handleFileUpload}
+                      isUploading={isUploading}
+                      maxSize={10 * 1024 * 1024} // 10MB demo limit
+                      disabled={true}
+                    />
+                    <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                      <p className="text-sm text-yellow-800 mb-2">
+                        <strong>Demo Mode:</strong> Upload is disabled. Sign in to enable full functionality.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-gray-600 mb-4">
+                      Sign in to access full platform features
+                    </p>
+                    <Button 
+                      onClick={() => setLocation('/auth/login')}
+                      className="mr-2"
+                    >
+                      Sign In
+                    </Button>
+                    <Button 
+                      variant="outline"
+                      onClick={() => setLocation('/auth/register')}
+                    >
+                      Create Account
+                    </Button>
+                  </div>
                 </div>
               )}
             </CardContent>
