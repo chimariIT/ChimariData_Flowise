@@ -23,6 +23,8 @@ import { EmailService } from './email-service';
 import { PythonVisualizationService } from './python-visualization';
 import { PDFExportService } from './pdf-export';
 import { DatasetJoiner } from './dataset-joiner';
+import { TimeSeriesAnalyzer } from './time-series-analyzer';
+import { cloudConnectorService } from './cloud-connectors';
 import { SUBSCRIPTION_TIERS, getTierLimits, canUserUpload, canUserRequestAIInsight } from '@shared/subscription-tiers';
 import bcrypt from 'bcrypt';
 import fs from 'fs/promises';
@@ -924,6 +926,103 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error('Error getting templates:', error);
       res.status(500).json({ error: 'Failed to get guided analysis templates' });
+    }
+  });
+
+  // Time series analysis endpoint
+  app.post("/api/projects/:projectId/time-series", ensureAuthenticated, async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const config = req.body;
+      
+      const project = await storage.getProject(projectId);
+      if (!project || !project.data) {
+        return res.status(404).json({ error: "Project or data not found" });
+      }
+      
+      const analyzer = new TimeSeriesAnalyzer();
+      const result = await analyzer.analyzeTimeSeries(projectId, project.data, config);
+      
+      res.json({
+        success: true,
+        projectId,
+        result
+      });
+      
+    } catch (error: any) {
+      console.error('Time series analysis error:', error);
+      res.status(500).json({ error: 'Failed to perform time series analysis' });
+    }
+  });
+
+  // Time series column detection endpoint
+  app.get("/api/projects/:projectId/time-series/detect", ensureAuthenticated, async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      
+      const project = await storage.getProject(projectId);
+      if (!project || !project.data) {
+        return res.status(404).json({ error: "Project or data not found" });
+      }
+      
+      const analyzer = new TimeSeriesAnalyzer();
+      const detection = await analyzer.detectTimeSeriesColumns(project.data);
+      
+      res.json({
+        success: true,
+        projectId,
+        detection
+      });
+      
+    } catch (error: any) {
+      console.error('Time series detection error:', error);
+      res.status(500).json({ error: 'Failed to detect time series columns' });
+    }
+  });
+
+  // Cloud connector endpoints
+  app.post("/api/cloud/test-connection", ensureAuthenticated, async (req, res) => {
+    try {
+      const config = req.body;
+      const result = await cloudConnectorService.testConnection(config);
+      res.json(result);
+    } catch (error: any) {
+      console.error('Cloud connection test error:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  app.post("/api/cloud/list-files", ensureAuthenticated, async (req, res) => {
+    try {
+      const { config, path } = req.body;
+      const files = await cloudConnectorService.listFiles(config, path);
+      res.json({ success: true, files });
+    } catch (error: any) {
+      console.error('Cloud file listing error:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  app.post("/api/cloud/download", ensureAuthenticated, async (req, res) => {
+    try {
+      const { config, filePath } = req.body;
+      const fileBuffer = await cloudConnectorService.downloadFile(config, filePath);
+      
+      // Process the downloaded file similar to regular upload
+      const processedData = await FileProcessor.processFile(
+        fileBuffer,
+        filePath.split('/').pop() || 'cloud-file',
+        'application/octet-stream'
+      );
+      
+      res.json({
+        success: true,
+        data: processedData
+      });
+      
+    } catch (error: any) {
+      console.error('Cloud file download error:', error);
+      res.status(500).json({ success: false, message: error.message });
     }
   });
 

@@ -1,0 +1,119 @@
+A comprehensive data science-as-a-service platform that enables users to perform end-to-end data analysis, from data ingestion to advanced analytics and machine learning.
+
+## Features
+
+### 🔐 Authentication & Security
+- Email verification system
+- OAuth2 integration (Google, GitHub, Microsoft)
+- Role-based access control
+- Secure API endpoints
+
+### 📊 Data Management
+- Multiple data ingestion methods:
+  - File upload (CSV, Excel, JSON, Parquet)
+  - API integration
+  - Cloud platform connectors (AWS S3, Google Cloud, Azure)
+- Automated schema detection and validation
+- Custom schema editing capabilities
+- Data quality assessment
+
+### 🔄 Data Transformation
+- Interactive data cleaning tools
+- Dataset joining and merging
+- Data type conversion and validation
+- Custom transformation pipelines
+
+### 📈 Progressive Statistical Analysis
+- Research question formulation
+- Hypothesis generation and testing
+- Descriptive statistics
+- Inferential statistics
+- Statistical significance testing
+
+### 🤖 Advanced Analytics
+- Machine Learning algorithms
+- Time series analysis
+- Path analysis and causal inference
+- Root cause analysis
+- Predictive modeling
+
+### 🎯 AI-Guided Analysis
+- Template-based analysis workflows
+- Business domain-specific templates
+- AI-powered analysis recommendations
+- Automated insight generation
+
+## Architecture
+
+### Backend
+- **FastAPI**: High-performance Python web framework
+- **PostgreSQL**: Primary database for user data and metadata
+- **Redis**: Caching and session management
+- **Celery**: Background task processing
+- **Jupyter**: Interactive analysis environment
+
+### Frontend
+- **React**: Modern UI framework
+- **TypeScript**: Type-safe development
+- **Material-UI**: Professional design system
+- **D3.js**: Data visualization
+- **Plotly**: Interactive charts
+
+### Data Processing
+- **Pandas**: Data manipulation and analysis
+- **NumPy**: Numerical computing
+- **Scikit-learn**: Machine learning
+- **Statsmodels**: Statistical modeling
+- **Prophet**: Time series forecasting
+
+## Quick Start
+
+### Prerequisites
+- Python 3.9+
+- Node.js 16+
+- PostgreSQL 13+
+- Redis 6+
+
+### Backend Setup
+```bash
+cd backend
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
+uvicorn main:app --reload
+```
+
+### Frontend Setup
+```bash
+cd frontend
+npm install
+npm start
+```
+
+### Database Setup
+```bash
+# Create database
+createdb chimaridata
+
+# Run migrations
+cd backend
+alembic upgrade head
+```
+
+## API Documentation
+
+Once the backend is running, visit:
+- **Swagger UI**: http://localhost:8000/docs
+- **ReDoc**: http://localhost:8000/redoc
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests
+5. Submit a pull request
+
+## License
+
+MIT License - see LICENSE file for details
