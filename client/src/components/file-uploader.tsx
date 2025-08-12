@@ -19,7 +19,22 @@ export default function FileUploader({ onFileUpload, isUploading, maxSize = 50 *
     if (acceptedFiles.length > 0) {
       const file = acceptedFiles[0];
       if (file.size > maxSize) {
-        // Handle oversized file
+        // Show upgrade message for oversized files
+        const fileSizeMB = Math.round(file.size / (1024 * 1024));
+        const maxSizeMB = Math.round(maxSize / (1024 * 1024));
+        
+        // Create upgrade error message with link
+        const upgradeMessage = `File size exceeds free account limit of ${maxSizeMB}MB. Please upgrade to upload larger files.`;
+        
+        // Dispatch custom event to show upgrade dialog
+        window.dispatchEvent(new CustomEvent('showUpgradeDialog', {
+          detail: {
+            reason: 'file_size_limit',
+            currentSize: fileSizeMB,
+            maxSize: maxSizeMB
+          }
+        }));
+        
         return;
       }
       setSelectedFile(file);

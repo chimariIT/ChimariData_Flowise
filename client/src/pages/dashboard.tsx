@@ -8,6 +8,7 @@ import { apiClient } from "@/lib/api";
 import { ChartLine, Folder, FileText, Lightbulb, Plus, Search, Calendar, Database, TrendingUp, Bell, LogOut, Settings, BarChart3, Target, Zap, Calculator, Brain, HardDrive } from "lucide-react";
 import UploadModal from "@/components/upload-modal";
 import AdvancedAnalysisModal from "@/components/advanced-analysis-modal";
+import UpgradeDialog from "@/components/upgrade-dialog";
 
 interface DashboardProps {
   user: { id: number; email: string; firstName?: string; lastName?: string; username?: string };
@@ -23,7 +24,28 @@ export default function Dashboard({ user, onLogout, onProjectSelect, onSettings,
   const [isAdvancedAnalysisOpen, setIsAdvancedAnalysisOpen] = useState(false);
   const [selectedProjectForAnalysis, setSelectedProjectForAnalysis] = useState<any>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [upgradeDialog, setUpgradeDialog] = useState<{
+    isOpen: boolean;
+    reason?: string;
+    details?: any;
+  }>({ isOpen: false });
   const { toast } = useToast();
+
+  // Listen for upgrade dialog events
+  useEffect(() => {
+    const handleUpgradeEvent = (event: CustomEvent) => {
+      setUpgradeDialog({
+        isOpen: true,
+        reason: event.detail.reason,
+        details: event.detail
+      });
+    };
+
+    window.addEventListener('showUpgradeDialog', handleUpgradeEvent as EventListener);
+    return () => {
+      window.removeEventListener('showUpgradeDialog', handleUpgradeEvent as EventListener);
+    };
+  }, []);
 
   const { data: projectsData, isLoading, refetch } = useQuery({
     queryKey: ["/api/projects"],
@@ -347,6 +369,14 @@ export default function Dashboard({ user, onLogout, onProjectSelect, onSettings,
           schema={selectedProjectForAnalysis.schema}
         />
       )}
+
+      {/* Upgrade Dialog */}
+      <UpgradeDialog
+        isOpen={upgradeDialog.isOpen}
+        onClose={() => setUpgradeDialog({ isOpen: false })}
+        reason={upgradeDialog.reason}
+        details={upgradeDialog.details}
+      />
     </div>
   );
 }

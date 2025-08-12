@@ -59,9 +59,19 @@ export default function AuthLoginPage({ onLogin, onRegister }: AuthLoginProps) {
           description: isLogin ? "Successfully logged in" : "Your account has been created successfully"
         });
       } else {
+        let description = data.error || "Please check your credentials";
+        
+        // Handle specific error cases
+        if (data.error?.includes("password not set")) {
+          description = "Account password not set. Please reset your password or contact support.";
+          // TODO: Add password reset link here
+        } else if (data.error?.includes("social login")) {
+          description = "This account uses social login. Please use the sign-in button above.";
+        }
+        
         toast({
           title: "Authentication Error",
-          description: data.error || "Please check your credentials",
+          description,
           variant: "destructive"
         });
       }

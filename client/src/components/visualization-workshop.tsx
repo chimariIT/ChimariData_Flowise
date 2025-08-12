@@ -496,7 +496,10 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                     {selectedVizType?.configFields.includes("xAxis") && (
                       <div className="space-y-2">
                         <Label className="text-sm font-medium">
-                          X-Axis Field *
+                          X-Axis Field * 
+                          <span className="text-xs font-normal text-gray-500 ml-1">
+                            (categorical/discrete data)
+                          </span>
                         </Label>
                         <Select 
                           value={chartConfig.xAxis} 
@@ -523,6 +526,9 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                       <div className="space-y-2">
                         <Label className="text-sm font-medium">
                           Y-Axis Field *
+                          <span className="text-xs font-normal text-gray-500 ml-1">
+                            (numeric values for measurement)
+                          </span>
                         </Label>
                         <Select 
                           value={chartConfig.yAxis} 
@@ -607,7 +613,12 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                     {/* Color By */}
                     {selectedVizType?.supportsColor && categoricalFields.length > 0 && (
                       <div className="space-y-2">
-                        <Label className="text-sm font-medium">Color By (Optional)</Label>
+                        <Label className="text-sm font-medium">
+                          Color By (Optional)
+                          <span className="text-xs font-normal text-gray-500 ml-1">
+                            (categorical field for color differentiation)
+                          </span>
+                        </Label>
                         <Select value={colorByColumn} onValueChange={setColorByColumn}>
                           <SelectTrigger>
                             <SelectValue placeholder="Select color field" />
