@@ -40,6 +40,9 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
   const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
   const [groupByColumn, setGroupByColumn] = useState("");
   const [colorByColumn, setColorByColumn] = useState("");
+  
+  // Multiple field selection for advanced charts
+  const [multipleFields, setMultipleFields] = useState<string[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedChart, setGeneratedChart] = useState<any>(null);
   
@@ -197,6 +200,9 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
     }
   ];
 
+  // Get the selected visualization type object
+  const selectedVizType = visualizationTypes.find(v => v.type === selectedVisualization);
+
   const canCreateVisualization = (vizType: any) => {
     const numericCount = numericFields.length;
     const categoricalCount = categoricalFields.length;
@@ -218,6 +224,11 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
     }
     if (selectedVizType?.configFields.includes("yAxis") && !chartConfig.yAxis) {
       requiredFields.push("Y-Axis field");
+    }
+
+    // Validate multiple field selection for advanced charts
+    if ((selectedVisualization === 'heatmap' || selectedVisualization === 'correlation_matrix') && multipleFields.length < 2) {
+      requiredFields.push("At least 2 numeric fields");
     }
 
     if (!selectedVisualization) {
@@ -284,6 +295,7 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
             showGrid: chartConfig.showGrid,
             showLegend: chartConfig.showLegend
           },
+          fields: multipleFields.length > 0 ? multipleFields : [chartConfig.xAxis, chartConfig.yAxis].filter(Boolean),
           groupByColumn: groupByColumn || undefined,
           colorByColumn: colorByColumn || undefined
         })
@@ -344,6 +356,7 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
     setGroupByColumn("");
     setColorByColumn("");
     setGeneratedChart(null);
+    setMultipleFields([]);
     setChartConfig({
       xAxis: "",
       yAxis: "",
@@ -358,9 +371,6 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
     });
     setShowAdvancedConfig(false);
   };
-
-  // Get the currently selected visualization type configuration
-  const selectedVizType = visualizationTypes.find(v => v.type === selectedVisualization);
 
   // Auto-suggest field assignments based on chart type
   const suggestFields = (vizType: any) => {
@@ -607,6 +617,53 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                             ))}
                           </SelectContent>
                         </Select>
+                      </div>
+                    )}
+
+                    {/* Multiple Field Selection for Advanced Charts */}
+                    {(selectedVisualization === 'heatmap' || selectedVisualization === 'correlation_matrix') && (
+                      <div className="space-y-2">
+                        <Label className="text-sm font-medium">
+                          Select Multiple Fields *
+                          <span className="text-xs font-normal text-gray-500 ml-1">
+                            (Choose 2 or more numeric fields)
+                          </span>
+                        </Label>
+                        <div className="grid grid-cols-2 gap-2 max-h-32 overflow-y-auto border rounded p-2">
+                          {numericFields.map(field => (
+                            <div key={field} className="flex items-center space-x-2">
+                              <Checkbox
+                                id={`field-${field}`}
+                                checked={multipleFields.includes(field)}
+                                onCheckedChange={(checked) => {
+                                  if (checked) {
+                                    setMultipleFields([...multipleFields, field]);
+                                  } else {
+                                    setMultipleFields(multipleFields.filter(f => f !== field));
+                                  }
+                                }}
+                              />
+                              <Label htmlFor={`field-${field}`} className="text-sm">
+                                {field}
+                              </Label>
+                            </div>
+                          ))}
+                        </div>
+                        {multipleFields.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {multipleFields.map(field => (
+                              <Badge key={field} variant="secondary" className="text-xs">
+                                {field}
+                                <button
+                                  onClick={() => setMultipleFields(multipleFields.filter(f => f !== field))}
+                                  className="ml-1 text-red-500 hover:text-red-700"
+                                >
+                                  ×
+                                </button>
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
 
