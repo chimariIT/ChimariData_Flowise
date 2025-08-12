@@ -97,6 +97,41 @@ export class EmailService {
     }
   }
 
+  static async sendPasswordResetCode(email: string, code: string, firstName?: string): Promise<boolean> {
+    try {
+      const msg = {
+        to: email,
+        from: {
+          email: this.FROM_EMAIL,
+          name: this.FROM_NAME
+        },
+        subject: 'Your ChimariData password reset code',
+        html: this.getPasswordResetCodeTemplate(firstName || 'User', code),
+        text: this.getPasswordResetCodeText(firstName || 'User', code),
+        // Disable click tracking to prevent SendGrid from modifying URLs
+        trackingSettings: {
+          clickTracking: {
+            enable: false,
+            enableText: false
+          },
+          openTracking: {
+            enable: false
+          },
+          subscriptionTracking: {
+            enable: false
+          }
+        }
+      };
+
+      await mailService.send(msg);
+      console.log(`✅ Password reset code email sent to ${email}`);
+      return true;
+    } catch (error) {
+      console.error('❌ SendGrid password reset code email error:', error);
+      return false;
+    }
+  }
+
   private static getVerificationEmailTemplate(firstName: string, verificationUrl: string): string {
     return `
 <!DOCTYPE html>
@@ -241,6 +276,72 @@ ${resetUrl}
 If you didn't request this password reset, you can safely ignore this email. Your password will remain unchanged.
 
 This reset link will expire in 1 hour for security reasons.
+
+Best regards,
+The ChimariData Team
+
+© 2025 ChimariData. All rights reserved.
+`;
+  }
+
+  private static getPasswordResetCodeTemplate(firstName: string, code: string): string {
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Your ChimariData Password Reset Code</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+        .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 8px 8px; }
+        .code { font-size: 32px; font-weight: bold; color: #667eea; text-align: center; letter-spacing: 8px; background: white; padding: 20px; border-radius: 8px; margin: 20px 0; border: 2px dashed #667eea; }
+        .footer { text-align: center; margin-top: 30px; font-size: 12px; color: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Password Reset Code</h1>
+            <p>ChimariData</p>
+        </div>
+        <div class="content">
+            <h2>Hi ${firstName},</h2>
+            <p>We received a request to reset your ChimariData account password. Use the verification code below to proceed:</p>
+            
+            <div class="code">${code}</div>
+            
+            <p><strong>Enter this code in the password reset form to continue.</strong></p>
+            
+            <p>If you didn't request this password reset, you can safely ignore this email. Your password will remain unchanged.</p>
+            
+            <p>This verification code will expire in 15 minutes for security reasons.</p>
+            
+            <p>Best regards,<br>The ChimariData Team</p>
+        </div>
+        <div class="footer">
+            <p>© 2025 ChimariData. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>`;
+  }
+
+  private static getPasswordResetCodeText(firstName: string, code: string): string {
+    return `
+Hi ${firstName},
+
+We received a request to reset your ChimariData account password. Use the verification code below to proceed:
+
+Verification Code: ${code}
+
+Enter this code in the password reset form to continue.
+
+If you didn't request this password reset, you can safely ignore this email. Your password will remain unchanged.
+
+This verification code will expire in 15 minutes for security reasons.
 
 Best regards,
 The ChimariData Team
