@@ -48,7 +48,7 @@ export class PasswordResetService {
       const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
 
       // Clean up any existing unused tokens for this email
-      for (const [key, value] of resetTokens.entries()) {
+      for (const [key, value] of Array.from(resetTokens.entries())) {
         if (value.email === email && !value.used) {
           resetTokens.delete(key);
         }
@@ -62,9 +62,17 @@ export class PasswordResetService {
         used: false
       });
 
-      console.log(`Password reset code for ${email}: ${code}`); // In production, send via email
+      // Send email with verification code
+      try {
+        const { EmailService } = await import('./email-service');
+        await EmailService.sendPasswordResetCode(email, code, existingUser.firstName || 'User');
+        console.log(`Password reset code email sent to ${email}`);
+      } catch (emailError) {
+        console.error('Failed to send password reset email:', emailError);
+        // Still return success to not reveal whether email exists
+      }
 
-      return { success: true, code };
+      return { success: true };
     } catch (error) {
       console.error('Error creating reset request:', error);
       return { success: false, error: 'Failed to create reset request' };
@@ -74,7 +82,7 @@ export class PasswordResetService {
   // Verify the reset code
   static async verifyResetCode(email: string, code: string): Promise<{ success: boolean; error?: string }> {
     try {
-      for (const [token, data] of resetTokens.entries()) {
+      for (const [token, data] of Array.from(resetTokens.entries())) {
         if (data.email === email && 
             data.code === code && 
             !data.used && 
@@ -102,7 +110,7 @@ export class PasswordResetService {
       
       // Find and validate the reset token
       let validToken: string | null = null;
-      for (const [token, data] of resetTokens.entries()) {
+      for (const [token, data] of Array.from(resetTokens.entries())) {
         if (data.email === email && 
             data.code === code && 
             !data.used && 
@@ -149,7 +157,7 @@ export class PasswordResetService {
   static async cleanupExpiredTokens(): Promise<void> {
     try {
       const now = new Date();
-      for (const [token, data] of resetTokens.entries()) {
+      for (const [token, data] of Array.from(resetTokens.entries())) {
         if (data.expiresAt < now) {
           resetTokens.delete(token);
         }
