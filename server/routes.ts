@@ -27,6 +27,7 @@ import { DatasetJoiner } from './dataset-joiner';
 import { TimeSeriesAnalyzer } from './time-series-analyzer';
 import { cloudConnectorService } from './cloud-connectors';
 import { SUBSCRIPTION_TIERS, getTierLimits, canUserUpload, canUserRequestAIInsight } from '@shared/subscription-tiers';
+import { PasswordResetService } from './password-reset-service';
 import bcrypt from 'bcrypt';
 import fs from 'fs/promises';
 
@@ -3312,6 +3313,77 @@ This link will expire in 24 hours.
       res.status(500).json({ 
         error: error.message || "Failed to save transformations" 
       });
+    }
+  });
+
+  // Password reset endpoints
+  app.post("/api/auth/forgot-password", async (req, res) => {
+    try {
+      const { email } = req.body;
+      
+      if (!email) {
+        return res.status(400).json({ error: "Email is required" });
+      }
+
+      const result = await PasswordResetService.createResetRequest(email);
+      
+      if (result.success) {
+        res.json({ 
+          success: true, 
+          message: "If an account with this email exists, you will receive a reset code." 
+        });
+      } else {
+        res.status(400).json({ error: result.error });
+      }
+    } catch (error) {
+      console.error('Forgot password error:', error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.post("/api/auth/verify-reset-code", async (req, res) => {
+    try {
+      const { email, code } = req.body;
+      
+      if (!email || !code) {
+        return res.status(400).json({ error: "Email and code are required" });
+      }
+
+      const result = await PasswordResetService.verifyResetCode(email, code);
+      
+      if (result.success) {
+        res.json({ success: true, message: "Code verified successfully" });
+      } else {
+        res.status(400).json({ error: result.error });
+      }
+    } catch (error) {
+      console.error('Verify reset code error:', error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.post("/api/auth/reset-password", async (req, res) => {
+    try {
+      const { email, code, newPassword } = req.body;
+      
+      if (!email || !code || !newPassword) {
+        return res.status(400).json({ error: "Email, code, and new password are required" });
+      }
+
+      if (newPassword.length < 8) {
+        return res.status(400).json({ error: "Password must be at least 8 characters long" });
+      }
+
+      const result = await PasswordResetService.resetPassword(email, code, newPassword);
+      
+      if (result.success) {
+        res.json({ success: true, message: "Password reset successfully" });
+      } else {
+        res.status(400).json({ error: result.error });
+      }
+    } catch (error) {
+      console.error('Reset password error:', error);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
