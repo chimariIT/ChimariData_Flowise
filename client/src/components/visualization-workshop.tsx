@@ -119,7 +119,8 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
       recommended: "categorical data with numeric values",
       configFields: ["xAxis", "yAxis", "aggregation", "orientation"],
       supportsGrouping: true,
-      supportsColor: true
+      supportsColor: true,
+      supportsMultipleFields: true
     },
     {
       type: "line_chart", 
@@ -130,7 +131,8 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
       recommended: "time series or trend data",
       configFields: ["xAxis", "yAxis", "aggregation"],
       supportsGrouping: true,
-      supportsColor: true
+      supportsColor: true,
+      supportsMultipleFields: true
     },
     {
       type: "scatter_plot",
@@ -141,7 +143,8 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
       recommended: "exploring correlations",
       configFields: ["xAxis", "yAxis"],
       supportsGrouping: false,
-      supportsColor: true
+      supportsColor: true,
+      supportsMultipleFields: true
     },
     {
       type: "pie_chart",
@@ -163,7 +166,8 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
       recommended: "data distribution analysis",
       configFields: ["xAxis"],
       supportsGrouping: false,
-      supportsColor: false
+      supportsColor: false,
+      supportsMultipleFields: true
     },
     {
       type: "box_plot",
@@ -174,7 +178,8 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
       recommended: "statistical distributions",
       configFields: ["xAxis", "yAxis"],
       supportsGrouping: true,
-      supportsColor: true
+      supportsColor: true,
+      supportsMultipleFields: true
     },
     {
       type: "heatmap",
@@ -185,7 +190,8 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
       recommended: "correlation analysis",
       configFields: [],
       supportsGrouping: false,
-      supportsColor: false
+      supportsColor: false,
+      supportsMultipleFields: true
     },
     {
       type: "violin_plot",
@@ -196,7 +202,8 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
       recommended: "distribution analysis",
       configFields: ["xAxis", "yAxis"],
       supportsGrouping: true,
-      supportsColor: true
+      supportsColor: true,
+      supportsMultipleFields: true
     }
   ];
 
@@ -227,7 +234,7 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
     }
 
     // Validate multiple field selection for advanced charts
-    if ((selectedVisualization === 'heatmap' || selectedVisualization === 'correlation_matrix') && multipleFields.length < 2) {
+    if (selectedVizType?.supportsMultipleFields && selectedVizType?.requiredFields?.numeric > 1 && multipleFields.length < 2) {
       requiredFields.push("At least 2 numeric fields");
     }
 
@@ -307,12 +314,25 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
       }
 
       const result = await response.json();
-      setGeneratedChart(result);
-
-      toast({
-        title: "Visualization Created",
-        description: `${selectedVizType?.name} chart generated successfully`,
-      });
+      
+      // Handle successful response
+      if (result.success) {
+        setGeneratedChart({
+          type: selectedVisualization,
+          imageData: result.imageData,
+          insights: result.insights || [`${selectedVizType?.name} chart generated successfully`],
+          config: chartConfig,
+          message: result.message || 'Visualization created successfully',
+          demo: !result.imageData // Flag for demo mode if no actual image
+        });
+        
+        toast({
+          title: "Visualization Created",
+          description: result.message || `${selectedVizType?.name} chart generated successfully`,
+        });
+      } else {
+        throw new Error(result.error || 'Failed to create visualization');
+      }
 
     } catch (error: any) {
       console.error('Visualization error:', error);
@@ -620,8 +640,8 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                       </div>
                     )}
 
-                    {/* Multiple Field Selection for Advanced Charts */}
-                    {(selectedVisualization === 'heatmap' || selectedVisualization === 'correlation_matrix') && (
+                    {/* Multiple Field Selection for Charts that Support It */}
+                    {selectedVizType?.supportsMultipleFields && (
                       <div className="space-y-2">
                         <Label className="text-sm font-medium">
                           Select Multiple Fields *
@@ -887,17 +907,28 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                         <div className="max-w-md mx-auto">
                           <TrendingUp className="w-16 h-16 text-blue-600 mx-auto mb-4" />
                           <h3 className="text-lg font-medium text-gray-900 mb-2">
-                            {selectedVisualization?.replace('_', ' ').toUpperCase()} Chart Preview
+                            {selectedVizType?.name} Chart Preview
                           </h3>
                           <p className="text-blue-700 mb-4">{generatedChart.message}</p>
                           <div className="text-xs text-gray-600">
-                            Chart configuration: {selectedColumns.join(', ')}
+                            Chart configuration: {multipleFields.length > 0 ? multipleFields.join(', ') : [chartConfig.xAxis, chartConfig.yAxis].filter(Boolean).join(' vs ')}
                           </div>
                         </div>
                       </div>
                     ) : (
-                      <div className="p-8 text-center">
-                        <p className="text-gray-600">Chart generated but image not available</p>
+                      <div className="p-8 text-center bg-gradient-to-br from-green-50 to-emerald-50">
+                        <div className="max-w-md mx-auto">
+                          <TrendingUp className="w-16 h-16 text-green-600 mx-auto mb-4" />
+                          <h3 className="text-lg font-medium text-gray-900 mb-2">
+                            {selectedVizType?.name} Generated
+                          </h3>
+                          <p className="text-green-700 mb-4">
+                            {generatedChart.message || "Chart created successfully"}
+                          </p>
+                          <div className="text-xs text-gray-600">
+                            Configuration: {multipleFields.length > 0 ? multipleFields.join(', ') : [chartConfig.xAxis, chartConfig.yAxis].filter(Boolean).join(' vs ')}
+                          </div>
+                        </div>
                       </div>
                     )}
                   </div>
