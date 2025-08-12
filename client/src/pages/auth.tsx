@@ -7,6 +7,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/lib/api";
 import { ChartLine, Upload, Brain, BarChart } from "lucide-react";
 import { OAuthProviders } from "@/components/oauth-providers";
+import ForgotPasswordModal from "@/components/forgot-password-modal";
 
 interface AuthPageProps {
   onLogin: (user: { id: string; email: string; firstName?: string; lastName?: string; username?: string }) => void;
@@ -15,6 +16,7 @@ interface AuthPageProps {
 export default function AuthPage({ onLogin }: AuthPageProps) {
   const [isLogin, setIsLogin] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
+  const [isForgotPasswordOpen, setIsForgotPasswordOpen] = useState(false);
   const [formData, setFormData] = useState({
     email: "",
     firstName: "",
@@ -184,7 +186,19 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
                 )}
                 
                 <div>
-                  <Label htmlFor="password">Password</Label>
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="password">Password</Label>
+                    {isLogin && (
+                      <Button
+                        type="button"
+                        variant="link"
+                        className="p-0 h-auto text-xs text-primary"
+                        onClick={() => setIsForgotPasswordOpen(true)}
+                      >
+                        Forgot password?
+                      </Button>
+                    )}
+                  </div>
                   <Input
                     id="password"
                     name="password"
@@ -267,6 +281,12 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
               </div>
             </CardContent>
           </Card>
+
+          {/* Forgot Password Modal */}
+          <ForgotPasswordModal
+            isOpen={isForgotPasswordOpen}
+            onClose={() => setIsForgotPasswordOpen(false)}
+          />
         </div>
       </div>
     </div>
