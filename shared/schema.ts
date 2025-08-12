@@ -206,6 +206,20 @@ export const users = pgTable("users", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Password reset tokens table
+export const passwordResetTokens = pgTable("password_reset_tokens", {
+  id: varchar("id").primaryKey().notNull(),
+  email: varchar("email").notNull(),
+  token: varchar("token").notNull(),
+  code: varchar("code", { length: 6 }).notNull(), // 6-digit verification code
+  expiresAt: timestamp("expires_at").notNull(),
+  used: boolean("used").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  emailIdx: index("password_reset_email_idx").on(table.email),
+  tokenIdx: index("password_reset_token_idx").on(table.token),
+}));
+
 // Main projects table for persistent storage
 export const projects = pgTable("projects", {
   id: varchar("id").primaryKey().notNull(),

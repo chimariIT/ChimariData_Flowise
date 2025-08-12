@@ -7,6 +7,7 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { BarChart3, Mail, Lock, User } from "lucide-react";
 import { FaGoogle, FaMicrosoft, FaApple } from "react-icons/fa";
+import ForgotPasswordModal from "@/components/forgot-password-modal";
 
 interface AuthLoginProps {
   onLogin: (user: { id: number; username: string }) => void;
@@ -22,6 +23,7 @@ export default function AuthLoginPage({ onLogin, onRegister }: AuthLoginProps) {
     confirmPassword: ""
   });
   const [isLoading, setIsLoading] = useState(false);
+  const [isForgotPasswordOpen, setIsForgotPasswordOpen] = useState(false);
   const { toast } = useToast();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -206,6 +208,20 @@ export default function AuthLoginPage({ onLogin, onRegister }: AuthLoginProps) {
                 </div>
               )}
 
+              {/* Forgot Password Link for Login */}
+              {isLogin && (
+                <div className="text-right">
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="p-0 h-auto text-xs text-primary"
+                    onClick={() => setIsForgotPasswordOpen(true)}
+                  >
+                    Forgot password?
+                  </Button>
+                </div>
+              )}
+
               <Button type="submit" className="w-full h-11" disabled={isLoading}>
                 {isLoading ? "Please wait..." : (isLogin ? "Sign In" : "Create Account")}
               </Button>
@@ -229,6 +245,12 @@ export default function AuthLoginPage({ onLogin, onRegister }: AuthLoginProps) {
         <div className="text-center mt-6 text-xs text-slate-500">
           By continuing, you agree to our Terms of Service and Privacy Policy
         </div>
+
+        {/* Forgot Password Modal */}
+        <ForgotPasswordModal
+          isOpen={isForgotPasswordOpen}
+          onClose={() => setIsForgotPasswordOpen(false)}
+        />
       </div>
     </div>
   );
