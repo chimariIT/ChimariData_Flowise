@@ -3059,13 +3059,15 @@ This link will expire in 24 hours.
 
       try {
         // Attempt to create visualization with Python service
+        const selectedColumns = fields && fields.length > 0 ? fields : [config?.xAxis, config?.yAxis].filter(Boolean);
         const result = await PythonVisualizationService.createVisualization({
           data: project.data || [],
           schema: project.schema || {},
           visualizationType: type,
-          selectedColumns: [config?.xAxis, config?.yAxis].filter(Boolean),
+          selectedColumns: selectedColumns,
           groupByColumn: groupByColumn,
-          colorByColumn: colorByColumn
+          colorByColumn: colorByColumn,
+          config: config || {}
         }, projectId);
         
         if (!result.success) {
