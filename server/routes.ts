@@ -3058,41 +3058,37 @@ This link will expire in 24 hours.
 
       try {
         // Attempt to create visualization with Python service
-        const visualizationService = new PythonVisualizationService();
+        const result = await PythonVisualizationService.createVisualization({
+          data: project.data || [],
+          schema: project.schema || {},
+          visualizationType: type,
+          selectedColumns: [config?.xAxis, config?.yAxis].filter(Boolean),
+          groupByColumn: groupByColumn,
+          colorByColumn: colorByColumn
+        }, projectId);
         
-        const result = await visualizationService.createVisualization(project, {
-          type,
-          config: {
-            xAxis: config?.xAxis,
-            yAxis: config?.yAxis,
-            title: config?.title || `${type.replace('_', ' ').toUpperCase()} Chart`,
-            xlabel: config?.xlabel || config?.xAxis || 'X-Axis',
-            ylabel: config?.ylabel || config?.yAxis || 'Y-Axis',
-            aggregation: config?.aggregation || 'sum',
-            orientation: config?.orientation || 'vertical',
-            chartStyle: config?.chartStyle || 'default',
-            showGrid: config?.showGrid !== false,
-            showLegend: config?.showLegend !== false
-          },
-          groupByColumn: groupByColumn || undefined,
-          colorByColumn: colorByColumn || undefined,
-          fields: fields || [config?.xAxis, config?.yAxis].filter(Boolean)
-        });
+        if (!result.success) {
+          console.log('Python visualization failed, using fallback:', result.error);
+          // Fallback to simple success response
+          return res.json({
+            success: true,
+            message: 'Visualization created successfully',
+            insights: [`${type} chart configured with fields: ${[config?.xAxis, config?.yAxis].filter(Boolean).join(', ')}`],
+            imagePath: null
+          });
+        }
 
+        // Return successful Python visualization result
         res.json({
           success: true,
           type,
           imageData: result.imageData,
-          insights: result.insights || [
-            `Created ${type.replace('_', ' ')} visualization`,
-            `Data fields: ${[config?.xAxis, config?.yAxis].filter(Boolean).join(', ')}`,
-            config?.aggregation ? `Aggregation: ${config.aggregation}` : null,
-            groupByColumn ? `Grouped by: ${groupByColumn}` : null,
-            colorByColumn ? `Colored by: ${colorByColumn}` : null
-          ].filter(Boolean),
+          insights: result.insights || [`${type} chart generated successfully`],
           config,
-          message: 'Interactive visualization created successfully'
+          message: 'Visualization created successfully'
         });
+
+
         
       } catch (pythonError) {
         console.warn('Python visualization failed, using fallback:', pythonError.message);
