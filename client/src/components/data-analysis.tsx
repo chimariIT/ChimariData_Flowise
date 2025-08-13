@@ -159,9 +159,23 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
       fields: "numeric"
     },
     {
-      value: "correlation_matrix",
-      label: "Correlation Matrix",
-      description: "Show relationships between all numeric variables",
+      value: "box_plot",
+      label: "Box Plot",
+      description: "Show quartiles and outliers",
+      icon: Activity,
+      fields: "numeric"
+    },
+    {
+      value: "violin_plot", 
+      label: "Violin Plot",
+      description: "Show distribution shape and density",
+      icon: Activity,
+      fields: "numeric"
+    },
+    {
+      value: "heatmap",
+      label: "Heatmap",
+      description: "Show correlations with color intensity",
       icon: Grid,
       fields: "numeric"
     }
