@@ -2463,9 +2463,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Email and password are required" });
       }
       
-      // Password constraints: minimum 6 characters for testing
-      if (password.length < 6) {
-        return res.status(400).json({ error: "Password must be at least 6 characters" });
+      // Enhanced password security requirements
+      if (password.length < 8) {
+        return res.status(400).json({ error: "Password must be at least 8 characters" });
+      }
+      
+      // Password strength validation
+      const hasUpperCase = /[A-Z]/.test(password);
+      const hasLowerCase = /[a-z]/.test(password);
+      const hasNumbers = /\d/.test(password);
+      const hasSpecialChar = /[!@#$%^&*(),.?":{}|<>]/.test(password);
+      
+      if (!hasUpperCase || !hasLowerCase || !hasNumbers) {
+        return res.status(400).json({ 
+          error: "Password must contain at least one uppercase letter, one lowercase letter, and one number" 
+        });
       }
       
       // Check if user already exists
@@ -2474,8 +2486,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "User already exists with this email" });
       }
       
-      // Hash password
-      const hashedPassword = await bcrypt.hash(password, 12);
+      // Hash password with strong salt rounds (14 for production security)
+      const saltRounds = process.env.NODE_ENV === 'production' ? 14 : 12;
+      const hashedPassword = await bcrypt.hash(password, saltRounds);
       
       // Generate verification token
       const crypto = await import('crypto');
@@ -2536,11 +2549,16 @@ This link will expire in 24 hours.
       Token: ${verificationToken.substring(0, 8)}...
       ===============================================`);
       
-      // Generate simple auth token
+      // Generate secure auth token with expiration
       const authToken = crypto.randomBytes(32).toString('hex');
       
-      // Store token in our simple token store
+      // Store token with expiration (24 hours for security)
       tokenStore.set(authToken, user.id);
+      
+      // Set token expiration
+      setTimeout(() => {
+        tokenStore.delete(authToken);
+      }, 24 * 60 * 60 * 1000); // 24 hours
       
       res.status(201).json({
         success: true,
@@ -2647,12 +2665,17 @@ This link will expire in 24 hours.
         return res.status(401).json({ error: "Invalid email or password" });
       }
       
-      // Generate simple auth token
+      // Generate secure auth token with expiration
       const crypto = await import('crypto');
       const authToken = crypto.randomBytes(32).toString('hex');
       
-      // Store token in our simple token store
+      // Store token with expiration (24 hours for security)
       tokenStore.set(authToken, user.id);
+      
+      // Set token expiration
+      setTimeout(() => {
+        tokenStore.delete(authToken);
+      }, 24 * 60 * 60 * 1000); // 24 hours
       
       res.json({
         success: true,
