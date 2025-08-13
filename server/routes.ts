@@ -3173,17 +3173,25 @@ This link will expire in 24 hours.
         return res.status(404).json({ error: "Project not found" });
       }
 
-      // Apply transformations using DataTransformer
-      const transformedData = await DataTransformer.applyTransformations(
+      // Apply transformations using DataTransformationService with pandas aggregation
+      const transformedData = await DataTransformationService.applyTransformations(
         project.data || [],
         transformations
       );
 
+      // Save transformed data to project for preview/export
+      await storage.updateProject(projectId, {
+        transformedData: transformedData,
+        lastTransformed: new Date().toISOString(),
+        transformations: transformations
+      });
+
       res.json({
         success: true,
         transformedData: transformedData,
+        recordCount: transformedData.length,
         downloadUrl: `/api/export-transformed-data/${projectId}`,
-        message: "Transformations applied successfully"
+        message: "Transformations applied successfully with pandas aggregation"
       });
 
     } catch (error: any) {

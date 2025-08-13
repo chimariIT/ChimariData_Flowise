@@ -540,7 +540,7 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                           </SelectTrigger>
                           <SelectContent>
                             {fields.map(field => (
-                              <SelectItem key={field} value={field}>
+                              <SelectItem key={field} value={field || ""}>
                                 {field}
                                 <span className="ml-2 text-xs text-gray-500">
                                   ({schema[field]?.type || 'unknown'})
@@ -569,7 +569,7 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                           </SelectTrigger>
                           <SelectContent>
                             {numericFields.map(field => (
-                              <SelectItem key={field} value={field}>
+                              <SelectItem key={field} value={field || ""}>
                                 {field}
                                 <span className="ml-2 text-xs text-gray-500">
                                   ({schema[field]?.type || 'number'})
@@ -633,7 +633,7 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                           <SelectContent>
                             <SelectItem value="">None</SelectItem>
                             {categoricalFields.map(field => (
-                              <SelectItem key={field} value={field}>{field}</SelectItem>
+                              <SelectItem key={field} value={field || ""}>{field}</SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
@@ -703,7 +703,7 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                           <SelectContent>
                             <SelectItem value="">Default Colors</SelectItem>
                             {categoricalFields.map(field => (
-                              <SelectItem key={field} value={field}>{field}</SelectItem>
+                              <SelectItem key={field} value={field || ""}>{field}</SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
