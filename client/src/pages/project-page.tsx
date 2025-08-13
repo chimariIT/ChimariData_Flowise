@@ -12,6 +12,8 @@ import DataTransformation from "@/components/data-transformation";
 import DataAnalysis from "@/components/data-analysis";
 import AIInsights from "@/components/ai-insights";
 import GuidedAnalysisWizard from "@/components/GuidedAnalysisWizard";
+import { AdvancedVisualizationWorkshop } from "@/components/advanced-visualization-workshop";
+import { toast } from "@/hooks/use-toast";
 
 interface ProjectPageProps {
   projectId: string;
@@ -191,7 +193,7 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
             </TabsTrigger>
             <TabsTrigger value="analysis" className="flex items-center gap-2">
               <BarChart3 className="w-4 h-4" />
-              Analysis
+              Visualizations
             </TabsTrigger>
             <TabsTrigger value="insights" className="flex items-center gap-2">
               <Brain className="w-4 h-4" />
@@ -276,7 +278,15 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
           </TabsContent>
 
           <TabsContent value="analysis" className="mt-6">
-            <DataAnalysis project={project} />
+            <AdvancedVisualizationWorkshop 
+              project={project} 
+              onSave={() => {
+                toast({
+                  title: "Visualization saved",
+                  description: "Your chart has been saved to the project",
+                });
+              }}
+            />
           </TabsContent>
 
           <TabsContent value="insights" className="mt-6">
