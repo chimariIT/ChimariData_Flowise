@@ -14,6 +14,7 @@ ChimariData.com is a progressive data analytics platform offering four distinct 
 - Prefers cloud data import in upload section rather than analysis section ✅
 - Expects transformations to include view transformed data, save to project, and export functionality ✅
 - Remove visualizations from analysis options since there's a separate visualizations section ✅
+- Emphasizes secure authentication system with strong password requirements ✅
 
 ## System Architecture
 The platform is built with a React TypeScript frontend for a comprehensive data workflow interface and an Express.js backend with Python integration for data processing. Core architectural decisions include:
@@ -24,7 +25,7 @@ The platform is built with a React TypeScript frontend for a comprehensive data 
     - **AI Integration:** A multi-provider AI system (Chimaridata Stack) with Gemini API as primary and OpenAI, Anthropic, Ollama as fallbacks. Users can configure custom API keys.
     - **Storage:** Implements a hybrid storage system combining in-memory speed with PostgreSQL persistence, using a write-behind caching pattern for optimal performance and data recovery. Projects and user data are persistently stored.
     - **Security & PII:** Automated PII detection with a user consent workflow, offering options to include, exclude, or anonymize data using various techniques (masking, substitution, encryption, generalization). User-specific project authentication ensures data isolation.
-    - **Authentication:** A unified registration-first system with email verification, supporting token-based authentication and handling local and OAuth providers. All users must create accounts to access the platform, with feature access differentiated by subscription status (free vs paid) rather than authentication status.
+    - **Authentication:** A secure registration-first system with email verification, strong password requirements (8+ chars, mixed case, numbers), production-grade bcrypt hashing, token-based authentication with 24-hour expiration, and OAuth integration. Database schema inconsistencies fixed for secure operation.
     - **Payment:** Integrated with Stripe for progressive pricing, handling payment completion and project creation.
     - **Advanced Analytics:** Comprehensive analytics modal offering statistical (ANOVA, ANCOVA, MANOVA, MANCOVA, Regression), machine learning (classification, regression, clustering, feature importance), and agentic analysis (business insights, comparative analysis, predictive insights, root cause analysis) capabilities. Features dynamic parameter configuration based on selected algorithms and supports multiple variable selection.
     - **Time Series Analysis:** Advanced forecasting capabilities with Prophet integration, trend analysis, seasonal decomposition, and confidence intervals for temporal data patterns.

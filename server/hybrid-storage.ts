@@ -391,10 +391,14 @@ export class HybridStorage implements IStorage {
     await this.init();
     
     const user = this.usersByEmail.get(email);
-    if (!user || !user.password) return null;
+    if (!user || (!user.password && !user.hashedPassword)) return null;
     
     const bcrypt = await import('bcrypt');
-    const isValid = await bcrypt.compare(password, user.password);
+    // Use hashedPassword field (newer) or fallback to password field (legacy)
+    const storedHash = user.hashedPassword || user.password;
+    if (!storedHash) return null;
+    
+    const isValid = await bcrypt.compare(password, storedHash);
     return isValid ? user : null;
   }
 
@@ -404,8 +408,13 @@ export class HybridStorage implements IStorage {
     const user = this.userCache.get(userId);
     if (!user) return;
 
-    // Update cache immediately
-    const updatedUser = { ...user, password: hashedPassword, updatedAt: new Date() };
+    // Update cache immediately - use hashedPassword field for security
+    const updatedUser = { 
+      ...user, 
+      hashedPassword: hashedPassword,
+      password: undefined, // Clear legacy password field
+      updatedAt: new Date() 
+    };
     this.userCache.set(userId, updatedUser);
     if (user.email) {
       this.usersByEmail.set(user.email, updatedUser);
