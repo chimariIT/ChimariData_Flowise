@@ -468,33 +468,53 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
             </div>
             <div>
               <label className="text-sm font-medium mb-2 block">Aggregations</label>
-              <div className="space-y-2">
-                {fields.filter(field => schema[field]?.type === 'number').map(field => (
-                  <div key={field} className="grid grid-cols-2 gap-2">
-                    <span className="text-sm font-medium self-center">{field}:</span>
-                    <Select
-                      value={config.aggregations?.find((a: any) => a.field === field)?.operation || ''}
-                      onValueChange={(value) => {
-                        const newAggregations = config.aggregations?.filter((a: any) => a.field !== field) || [];
-                        if (value) {
-                          newAggregations.push({ field, operation: value });
-                        }
-                        updateTransformation(transformation.id, { ...config, aggregations: newAggregations });
-                      }}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select operation" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="sum">Sum</SelectItem>
-                        <SelectItem value="avg">Average</SelectItem>
-                        <SelectItem value="count">Count</SelectItem>
-                        <SelectItem value="min">Minimum</SelectItem>
-                        <SelectItem value="max">Maximum</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                ))}
+              <div className="space-y-3">
+                {fields.filter(field => schema[field]?.type === 'number').map(field => {
+                  const existingAgg = config.aggregations?.find((a: any) => a.field === field);
+                  return (
+                    <div key={field} className="grid grid-cols-3 gap-2 items-center">
+                      <span className="text-sm font-medium">{field}:</span>
+                      <Select
+                        value={existingAgg?.operation || ''}
+                        onValueChange={(value) => {
+                          const newAggregations = config.aggregations?.filter((a: any) => a.field !== field) || [];
+                          if (value) {
+                            newAggregations.push({ 
+                              field, 
+                              operation: value, 
+                              alias: existingAgg?.alias || field // Keep existing alias or default to field name
+                            });
+                          }
+                          updateTransformation(transformation.id, { ...config, aggregations: newAggregations });
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select operation" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="sum">Sum</SelectItem>
+                          <SelectItem value="avg">Average</SelectItem>
+                          <SelectItem value="count">Count</SelectItem>
+                          <SelectItem value="min">Minimum</SelectItem>
+                          <SelectItem value="max">Maximum</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {existingAgg && (
+                        <Input
+                          placeholder="Column name"
+                          value={existingAgg.alias || ''}
+                          onChange={(e) => {
+                            const newAggregations = config.aggregations?.map((a: any) => 
+                              a.field === field ? { ...a, alias: e.target.value } : a
+                            ) || [];
+                            updateTransformation(transformation.id, { ...config, aggregations: newAggregations });
+                          }}
+                          className="text-sm"
+                        />
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>
