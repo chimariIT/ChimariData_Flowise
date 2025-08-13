@@ -30,6 +30,7 @@ import { SUBSCRIPTION_TIERS, getTierLimits, canUserUpload, canUserRequestAIInsig
 import { PasswordResetService } from './password-reset-service';
 import bcrypt from 'bcrypt';
 import fs from 'fs/promises';
+import { VisualizationAPIService, PandasTransformationAPIService } from './visualization-api-service';
 
 // Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
@@ -3163,7 +3164,7 @@ This link will expire in 24 hours.
   });
 
   // Transform data endpoint
-  app.post("/api/transform-data/:projectId", ensureAuthenticated, async (req, res) => {
+  app.post("/api/transform-data/:projectId", unifiedAuth, async (req, res) => {
     try {
       const { projectId } = req.params;
       const { transformations } = req.body;
@@ -3173,11 +3174,19 @@ This link will expire in 24 hours.
         return res.status(404).json({ error: "Project not found" });
       }
 
-      // Apply transformations using DataTransformationService with pandas aggregation
-      const transformedData = await DataTransformationService.applyTransformations(
+      // Apply transformations using pandas-based service
+      const transformationResult = await PandasTransformationAPIService.applyTransformations(
         project.data || [],
         transformations
       );
+      
+      if (!transformationResult.success) {
+        return res.status(400).json({ 
+          error: transformationResult.error || "Transformation failed" 
+        });
+      }
+      
+      const transformedData = transformationResult.data;
 
       // Save transformed data to project for preview/export
       await storage.updateProject(projectId, {
@@ -3191,13 +3200,78 @@ This link will expire in 24 hours.
         transformedData: transformedData,
         recordCount: transformedData.length,
         downloadUrl: `/api/export-transformed-data/${projectId}`,
-        message: "Transformations applied successfully with pandas aggregation"
+        message: "Transformations applied successfully with pandas aggregation",
+        transformationResult: transformationResult
       });
 
     } catch (error: any) {
       console.error("Transform data error:", error);
       res.status(500).json({ 
         error: error.message || "Failed to transform data" 
+      });
+    }
+  });
+
+  // Create visualization endpoint
+  app.post("/api/create-visualization/:projectId", unifiedAuth, async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const { chart_type, fields, options, aggregate } = req.body;
+      
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+      
+      // Use transformed data if available, otherwise use original data
+      const dataToVisualize = project.transformedData || project.data || [];
+      
+      if (!Array.isArray(dataToVisualize) || dataToVisualize.length === 0) {
+        return res.status(400).json({ error: "No data available for visualization" });
+      }
+      
+      const visualizationConfig = {
+        chart_type,
+        fields,
+        options: options || {},
+        aggregate
+      };
+      
+      console.log('Creating visualization for project:', projectId);
+      console.log('Chart type:', chart_type);
+      console.log('Data rows:', dataToVisualize.length);
+      
+      const visualizationResult = await VisualizationAPIService.createVisualization(
+        dataToVisualize,
+        visualizationConfig
+      );
+      
+      if (!visualizationResult.success) {
+        return res.status(400).json({ 
+          error: visualizationResult.error || "Visualization creation failed" 
+        });
+      }
+      
+      // Save visualization to project
+      await storage.updateProject(projectId, {
+        lastVisualization: {
+          config: visualizationConfig,
+          created: new Date().toISOString(),
+          chart_type
+        }
+      });
+      
+      res.json({
+        success: true,
+        visualization: visualizationResult,
+        projectId,
+        chart_type
+      });
+      
+    } catch (error: any) {
+      console.error("Visualization creation error:", error);
+      res.status(500).json({ 
+        error: error.message || "Failed to create visualization" 
       });
     }
   });
