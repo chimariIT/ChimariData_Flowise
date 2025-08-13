@@ -36,9 +36,24 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
       return await apiClient.getProjects();
     },
     retry: false, // Don't retry on authentication failures
-    onError: (error: any) => {
-      if (error.message?.includes('authentication') || error.message?.includes('401')) {
-        setAuthError('Please sign in to view your projects and access all features.');
+    onSuccess: (data: any) => {
+      // Clear auth error when projects load successfully
+      setAuthError(null);
+    },
+    onSettled: (data: any, error: any) => {
+      if (error && (error.message?.includes('authentication') || error.message?.includes('401'))) {
+        // Only show auth error if user is not signed in
+        if (!user) {
+          setAuthError('Please sign in to view your projects and access all features.');
+        } else {
+          // User is signed in but getting auth errors - token might be expired
+          console.log('Authentication error for signed-in user, token may be expired');
+          // Clear invalid token and refresh
+          localStorage.removeItem('auth_token');
+          setTimeout(() => {
+            window.location.reload();
+          }, 500);
+        }
       }
     }
   });
@@ -89,10 +104,21 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
       let requiresAuth = false;
       
       if (error.message?.includes('Authentication required')) {
-        errorMessage = "Please sign in to upload files. All data analysis features require authentication.";
-        requiresAuth = true;
-        setAuthError(errorMessage);
-        setActiveTab('auth'); // Switch to auth tab
+        // Only show auth modal if user is not already signed in
+        if (!user) {
+          errorMessage = "Please sign in to upload files. All data analysis features require authentication.";
+          requiresAuth = true;
+          setAuthError(errorMessage);
+          setActiveTab('auth'); // Switch to auth tab
+          setShowAuthModal(true);
+          setAuthModalTab('login');
+        } else {
+          // User is signed in but token might be expired - refresh the page to re-authenticate
+          errorMessage = "Session expired. Refreshing page to re-authenticate...";
+          setTimeout(() => {
+            window.location.reload();
+          }, 1500);
+        }
       }
       
       toast({
@@ -100,11 +126,6 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
         description: errorMessage,
         variant: "destructive",
       });
-      
-      if (requiresAuth) {
-        setShowAuthModal(true);
-        setAuthModalTab('login');
-      }
     } finally {
       setIsUploading(false);
     }
@@ -523,7 +544,6 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
                       onFileUpload={handleFileUpload}
                       isUploading={isUploading}
                       maxSize={10 * 1024 * 1024} // 10MB demo limit
-                      disabled={true}
                     />
                     <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
                       <p className="text-sm text-yellow-800 mb-2">
