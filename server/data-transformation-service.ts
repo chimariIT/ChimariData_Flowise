@@ -147,7 +147,10 @@ export class DataTransformationService {
 
   private static applyAggregate(data: any[], config: any): any[] {
     const { groupBy, aggregations } = config;
+    console.log('Applying aggregation with config:', { groupBy, aggregations, dataLength: data.length });
+    
     if (!groupBy || groupBy.length === 0 || !aggregations || aggregations.length === 0) {
+      console.log('Invalid aggregation config, returning original data');
       return data;
     }
 
@@ -162,42 +165,50 @@ export class DataTransformationService {
       groups[groupKey].push(row);
     });
 
+    console.log(`Created ${Object.keys(groups).length} groups from ${data.length} rows`);
+
     // Apply aggregations
-    return Object.keys(groups).map(groupKey => {
+    const result = Object.keys(groups).map(groupKey => {
       const group = groups[groupKey];
-      const result: any = {};
+      const resultRow: any = {};
       
       // Add group by fields
       groupBy.forEach((field: string, index: number) => {
-        result[field] = groupKey.split('|')[index];
+        resultRow[field] = groupKey.split('|')[index];
       });
       
       // Apply aggregations
       aggregations.forEach((agg: any) => {
-        const { field, operation } = agg;
+        const { field, operation, alias } = agg;
         const values = group.map(row => Number(row[field])).filter(v => !isNaN(v));
+        
+        // Use alias if provided, otherwise use field_operation format
+        const resultFieldName = alias || `${field}_${operation}`;
         
         switch (operation) {
           case 'sum':
-            result[`${field}_sum`] = values.reduce((a, b) => a + b, 0);
+            resultRow[resultFieldName] = values.reduce((a, b) => a + b, 0);
             break;
           case 'avg':
-            result[`${field}_avg`] = values.length > 0 ? values.reduce((a, b) => a + b, 0) / values.length : 0;
+            resultRow[resultFieldName] = values.length > 0 ? values.reduce((a, b) => a + b, 0) / values.length : 0;
             break;
           case 'count':
-            result[`${field}_count`] = group.length;
+            resultRow[resultFieldName] = group.length;
             break;
           case 'min':
-            result[`${field}_min`] = Math.min(...values);
+            resultRow[resultFieldName] = Math.min(...values);
             break;
           case 'max':
-            result[`${field}_max`] = Math.max(...values);
+            resultRow[resultFieldName] = Math.max(...values);
             break;
         }
       });
       
-      return result;
+      return resultRow;
     });
+
+    console.log('Aggregation result:', { resultCount: result.length, sampleRow: result[0] });
+    return result;
   }
 
   private static applySort(data: any[], config: any): any[] {
