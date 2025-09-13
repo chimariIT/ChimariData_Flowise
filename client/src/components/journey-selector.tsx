@@ -110,16 +110,14 @@ export function JourneySelector({ user, onJourneySelect }: JourneySelectorProps)
       setSelectedJourney(savedJourney);
       hydratedRef.current = true;
       
-      // If user is authenticated, trigger the journey selection for routing (without toast)
-      if (user) {
-        const journey = JOURNEYS.find(j => j.id === savedJourney);
-        if (journey) {
-          onJourneySelect(savedJourney, {
-            title: journey.title,
-            workflow: journey.workflow,
-            userType: journey.userType
-          }, true); // skipToast = true for hydration
-        }
+      // Trigger the journey selection for routing (without toast) for all users
+      const journey = JOURNEYS.find(j => j.id === savedJourney);
+      if (journey) {
+        onJourneySelect(savedJourney, {
+          title: journey.title,
+          workflow: journey.workflow,
+          userType: journey.userType
+        }, true); // skipToast = true for hydration
       }
     }
   }, [user, onJourneySelect]);
@@ -130,13 +128,8 @@ export function JourneySelector({ user, onJourneySelect }: JourneySelectorProps)
     // Always store journey preference in localStorage, regardless of auth status
     localStorage.setItem('selected_journey', journey.id);
     
-    if (!user) {
-      // For unauthenticated users, just show the selection but don't redirect
-      // They'll see the auth prompt at the bottom
-      return;
-    }
-    
-    // Call the parent handler with journey type for authenticated users
+    // Always call the parent handler to show workflow tabs for all users
+    // Authentication gating happens at the feature level, not journey selection
     onJourneySelect(journey.id, {
       title: journey.title,
       workflow: journey.workflow,

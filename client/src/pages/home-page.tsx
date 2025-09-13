@@ -36,29 +36,30 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
   const { data: projectsData, isLoading, refetch } = useQuery({
     queryKey: ["/api/projects"],
     queryFn: async () => {
-      return await apiClient.getProjects();
+      try {
+        const result = await apiClient.getProjects();
+        // Clear auth error when projects load successfully
+        setAuthError(null);
+        return result;
+      } catch (error: any) {
+        if (error && (error.message?.includes('authentication') || error.message?.includes('401'))) {
+          // Only show auth error if user is not signed in
+          if (!user) {
+            setAuthError('Please sign in to view your projects and access all features.');
+          } else {
+            // User is signed in but getting auth errors - token might be expired
+            console.log('Authentication error for signed-in user, token may be expired');
+            // Clear invalid token and refresh
+            localStorage.removeItem('auth_token');
+            setTimeout(() => {
+              window.location.reload();
+            }, 500);
+          }
+        }
+        throw error;
+      }
     },
     retry: false, // Don't retry on authentication failures
-    onSuccess: (data: any) => {
-      // Clear auth error when projects load successfully
-      setAuthError(null);
-    },
-    onSettled: (data: any, error: any) => {
-      if (error && (error.message?.includes('authentication') || error.message?.includes('401'))) {
-        // Only show auth error if user is not signed in
-        if (!user) {
-          setAuthError('Please sign in to view your projects and access all features.');
-        } else {
-          // User is signed in but getting auth errors - token might be expired
-          console.log('Authentication error for signed-in user, token may be expired');
-          // Clear invalid token and refresh
-          localStorage.removeItem('auth_token');
-          setTimeout(() => {
-            window.location.reload();
-          }, 500);
-        }
-      }
-    }
   });
 
   const { data: pricingData } = useQuery({
@@ -243,38 +244,26 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
     
     // localStorage is now handled in the journey selector component
     
-    // Navigate based on journey type
-    switch (journey) {
-      case 'non-tech':
-        // AI-guided workflow - start with upload and AI orchestration
-        setActiveTab('upload');
-        if (!skipToast) {
-          toast({
-            title: "AI Journey Selected",
-            description: "Upload your data and let our AI guide you through the analysis",
-          });
-        }
-        break;
-      case 'business':
-        // Template-based analysis
-        setActiveTab('guided');
-        if (!skipToast) {
-          toast({
-            title: "Template-Based Analysis Selected",
-            description: "Choose from proven business analysis templates",
-          });
-        }
-        break;
-      case 'technical':
-        // Self-service with optional guidance
-        setActiveTab('upload');
-        if (!skipToast) {
-          toast({
-            title: "Technical Mode Activated",
-            description: "Full platform access with advanced features enabled",
-          });
-        }
-        break;
+    // Don't automatically switch tabs - let users navigate manually
+    // This allows them to see the journey confirmation and choose when to proceed
+    if (!skipToast) {
+      let description = "";
+      switch (journey) {
+        case 'non-tech':
+          description = "AI-guided workflow activated. Click 'Upload Data' to start your analysis.";
+          break;
+        case 'business':
+          description = "Template-based analysis ready. Click 'Template Analysis' to browse options.";
+          break;
+        case 'technical':
+          description = "Technical mode activated. Access 'Upload Data' or 'AI Console' for advanced features.";
+          break;
+      }
+      
+      toast({
+        title: "Journey Selected",
+        description,
+      });
     }
   }, [toast]);
 
@@ -351,96 +340,133 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
         </div>
       </div>
 
-      {/* Feature Overview */}
+      {/* Feature Overview - Journey Selection Guide */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-        <Card className="text-center hover:shadow-lg transition-shadow cursor-pointer" onClick={() => setActiveTab('transformation')}>
+        <Card className="text-center hover:shadow-lg transition-shadow">
           <CardContent className="pt-6">
             <TrendingUp className="w-8 h-8 mx-auto mb-2 text-blue-600" />
             <h3 className="font-semibold text-sm">Transformation</h3>
             <p className="text-xs text-gray-500 mt-1">Clean & reshape data</p>
             <div className="mt-2 flex justify-center gap-1">
-              <Badge variant="secondary" className="text-xs">Trial</Badge>
-              <Badge variant="outline" className="text-xs">Full</Badge>
+              <Badge variant="secondary" className="text-xs">All Journeys</Badge>
             </div>
           </CardContent>
         </Card>
         
-        <Card className="text-center hover:shadow-lg transition-shadow cursor-pointer" onClick={() => setActiveTab('analysis')}>
+        <Card className="text-center hover:shadow-lg transition-shadow">
           <CardContent className="pt-6">
             <BarChart3 className="w-8 h-8 mx-auto mb-2 text-green-600" />
             <h3 className="font-semibold text-sm">Analysis</h3>
             <p className="text-xs text-gray-500 mt-1">Statistical insights</p>
             <div className="mt-2 flex justify-center gap-1">
-              <Badge variant="secondary" className="text-xs">Trial</Badge>
-              <Badge variant="outline" className="text-xs">Full</Badge>
+              <Badge variant="secondary" className="text-xs">All Journeys</Badge>
             </div>
           </CardContent>
         </Card>
         
-        <Card className="text-center hover:shadow-lg transition-shadow cursor-pointer" onClick={() => setActiveTab('visualization')}>
+        <Card className="text-center hover:shadow-lg transition-shadow">
           <CardContent className="pt-6">
             <Database className="w-8 h-8 mx-auto mb-2 text-purple-600" />
             <h3 className="font-semibold text-sm">Visualization</h3>
-            <p className="text-xs text-gray-500 mt-1">Analytics to Visualisation</p>
+            <p className="text-xs text-gray-500 mt-1">Charts & dashboards</p>
             <div className="mt-2 flex justify-center gap-1">
-              <Badge variant="secondary" className="text-xs">Trial</Badge>
-              <Badge variant="outline" className="text-xs">Full</Badge>
+              <Badge variant="secondary" className="text-xs">All Journeys</Badge>
             </div>
           </CardContent>
         </Card>
         
-        <Card className="text-center hover:shadow-lg transition-shadow cursor-pointer" onClick={() => setActiveTab('insights')}>
+        <Card className="text-center hover:shadow-lg transition-shadow">
           <CardContent className="pt-6">
             <Brain className="w-8 h-8 mx-auto mb-2 text-orange-600" />
             <h3 className="font-semibold text-sm">AI Insights</h3>
             <p className="text-xs text-gray-500 mt-1">Intelligent analysis</p>
             <div className="mt-2 flex justify-center gap-1">
-              <Badge variant="secondary" className="text-xs">Trial</Badge>
-              <Badge variant="outline" className="text-xs">Full</Badge>
+              <Badge variant="secondary" className="text-xs">All Journeys</Badge>
             </div>
           </CardContent>
         </Card>
       </div>
+      
+      {/* Journey Selection Prompt */}
+      {!selectedJourney && (
+        <Card className="mb-8 border-2 border-blue-200 bg-blue-50">
+          <CardContent className="pt-6">
+            <div className="text-center">
+              <Target className="w-12 h-12 mx-auto mb-4 text-blue-600" />
+              <h3 className="text-lg font-semibold text-blue-900 mb-2">Choose Your Analytics Journey</h3>
+              <p className="text-blue-700 mb-4">
+                Select the approach that best matches your experience level and analysis goals to get started
+              </p>
+              <Button 
+                onClick={() => setActiveTab('journey')} 
+                className="bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                Select Journey →
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
 
 
-      {/* Upload Tabs */}
+      {/* Journey-Based Navigation */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-8">
-        <TabsList className={`grid w-full ${user ? 'grid-cols-7' : 'grid-cols-8'}`}>
+        <TabsList className={`grid w-full ${!selectedJourney ? (user ? 'grid-cols-2' : 'grid-cols-3') : (user ? 'grid-cols-4' : 'grid-cols-4')}`}>
           <TabsTrigger value="journey" className="flex items-center gap-2">
             <Target className="w-4 h-4" />
             Choose Journey
           </TabsTrigger>
+          
           {!user && (
             <TabsTrigger value="auth" className="flex items-center gap-2">
               <Zap className="w-4 h-4" />
               Get Started
             </TabsTrigger>
           )}
-          <TabsTrigger value={user ? "upload" : "paid"} className="flex items-center gap-2">
-            <Upload className="w-4 h-4" />
-            {user ? "Upload Data" : "Full Features"}
-          </TabsTrigger>
-          <TabsTrigger value="guided" className="flex items-center gap-2">
-            <Brain className="w-4 h-4" />
-            Guided Analysis
-          </TabsTrigger>
-          <TabsTrigger value="transformation" className="flex items-center gap-2">
-            <TrendingUp className="w-4 h-4" />
-            Transformation
-          </TabsTrigger>
-          <TabsTrigger value="analysis" className="flex items-center gap-2">
-            <BarChart3 className="w-4 h-4" />
-            Analysis
-          </TabsTrigger>
-          <TabsTrigger value="visualization" className="flex items-center gap-2">
-            <Database className="w-4 h-4" />
-            Visualization
-          </TabsTrigger>
-          <TabsTrigger value="insights" className="flex items-center gap-2">
-            <Brain className="w-4 h-4" />
-            AI Insights
-          </TabsTrigger>
+          
+          {/* Show workflow tabs only after journey selection */}
+          {selectedJourney && (
+            <>
+              {/* Non-Tech AI Agent Journey - Upload and let AI guide */}
+              {selectedJourney === 'non-tech' && (
+                <TabsTrigger value={user ? "upload" : "paid"} className="flex items-center gap-2">
+                  <Upload className="w-4 h-4" />
+                  Upload Data
+                </TabsTrigger>
+              )}
+              
+              {/* Business User Journey - Template-based analysis */}
+              {selectedJourney === 'business' && (
+                <TabsTrigger value="guided" className="flex items-center gap-2">
+                  <Brain className="w-4 h-4" />
+                  Template Analysis
+                </TabsTrigger>
+              )}
+              
+              {/* Technical User Journey - Full platform access */}
+              {selectedJourney === 'technical' && (
+                <>
+                  <TabsTrigger value={user ? "upload" : "paid"} className="flex items-center gap-2">
+                    <Upload className="w-4 h-4" />
+                    Upload Data
+                  </TabsTrigger>
+                  <TabsTrigger value="technical-console" className="flex items-center gap-2">
+                    <Brain className="w-4 h-4" />
+                    AI Console
+                  </TabsTrigger>
+                </>
+              )}
+            </>
+          )}
+          
+          {/* Projects tab - always available for authenticated users with selected journey */}
+          {user && selectedJourney && (
+            <TabsTrigger value="projects" className="flex items-center gap-2">
+              <FileText className="w-4 h-4" />
+              My Projects
+            </TabsTrigger>
+          )}
         </TabsList>
 
         {!user && (
@@ -996,78 +1022,122 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
             </CardContent>
           </Card>
         </TabsContent>
+        
+        {/* Technical Console Tab */}
+        <TabsContent value="technical-console">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Brain className="w-5 h-5 text-purple-600" />
+                Technical AI Console
+              </CardTitle>
+              <CardDescription>
+                Advanced AI capabilities for technical users - code generation, debugging, and optimization
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="text-center py-12">
+                <Brain className="w-16 h-16 mx-auto mb-4 text-purple-600" />
+                <h3 className="text-lg font-semibold mb-2">Advanced AI Console Coming Soon</h3>
+                <p className="text-gray-600 mb-6">
+                  Technical AI agent with multi-provider support, code generation, debugging assistance, and performance optimization.
+                </p>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-2xl mx-auto">
+                  <div className="p-4 bg-blue-50 rounded-lg">
+                    <div className="text-2xl mb-2">🔧</div>
+                    <div className="text-sm font-medium">Code Generation</div>
+                  </div>
+                  <div className="p-4 bg-green-50 rounded-lg">
+                    <div className="text-2xl mb-2">🐛</div>
+                    <div className="text-sm font-medium">Debugging</div>
+                  </div>
+                  <div className="p-4 bg-purple-50 rounded-lg">
+                    <div className="text-2xl mb-2">⚡</div>
+                    <div className="text-sm font-medium">Optimization</div>
+                  </div>
+                  <div className="p-4 bg-orange-50 rounded-lg">
+                    <div className="text-2xl mb-2">🧠</div>
+                    <div className="text-sm font-medium">AI Models</div>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Projects Tab */}
+        <TabsContent value="projects">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Database className="w-5 h-5" />
+                Your Data Projects
+              </CardTitle>
+              <CardDescription>
+                {projects.length === 0 
+                  ? "No projects yet. Upload a file to get started!" 
+                  : `${projects.length} project${projects.length === 1 ? '' : 's'} available`
+                }
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {isLoading ? (
+                <div className="text-center py-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+                  <p className="mt-2 text-gray-600">Loading projects...</p>
+                </div>
+              ) : projects.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  <FileText className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                  <p>Upload your first data file to see it here</p>
+                </div>
+              ) : (
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {projects.map((project: any) => (
+                    <Card key={project.id} className="hover:shadow-md transition-shadow">
+                      <CardContent className="pt-4">
+                        <div className="flex items-start justify-between mb-2">
+                          <h3 className="font-semibold text-gray-900 truncate mr-2">
+                            {project.name}
+                          </h3>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDeleteProject(project.id, project.name)}
+                            className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                        
+                        <div className="space-y-1 text-sm text-gray-600 mb-3">
+                          <p className="flex items-center gap-1">
+                            <FileText className="w-3 h-3" />
+                            {project.fileName}
+                          </p>
+                          <p>{formatFileSize(project.fileSize)}</p>
+                          <p>{project.recordCount?.toLocaleString()} records</p>
+                          <p>{formatDate(project.uploadedAt)}</p>
+                        </div>
+
+                        <Button 
+                          onClick={() => setLocation(`/project/${project.id}`)}
+                          className="w-full"
+                          size="sm"
+                        >
+                          <Eye className="w-4 h-4 mr-2" />
+                          View Details
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
       </Tabs>
 
-      {/* Projects List */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Database className="w-5 h-5" />
-            Your Data Projects
-          </CardTitle>
-          <CardDescription>
-            {projects.length === 0 
-              ? "No projects yet. Upload a file to get started!" 
-              : `${projects.length} project${projects.length === 1 ? '' : 's'} available`
-            }
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <div className="text-center py-8">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
-              <p className="mt-2 text-gray-600">Loading projects...</p>
-            </div>
-          ) : projects.length === 0 ? (
-            <div className="text-center py-8 text-gray-500">
-              <FileText className="w-12 h-12 mx-auto mb-4 opacity-50" />
-              <p>Upload your first data file to see it here</p>
-            </div>
-          ) : (
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {projects.map((project: any) => (
-                <Card key={project.id} className="hover:shadow-md transition-shadow">
-                  <CardContent className="pt-4">
-                    <div className="flex items-start justify-between mb-2">
-                      <h3 className="font-semibold text-gray-900 truncate mr-2">
-                        {project.name}
-                      </h3>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleDeleteProject(project.id, project.name)}
-                        className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    </div>
-                    
-                    <div className="space-y-1 text-sm text-gray-600 mb-3">
-                      <p className="flex items-center gap-1">
-                        <FileText className="w-3 h-3" />
-                        {project.fileName}
-                      </p>
-                      <p>{formatFileSize(project.fileSize)}</p>
-                      <p>{project.recordCount?.toLocaleString()} records</p>
-                      <p>{formatDate(project.uploadedAt)}</p>
-                    </div>
-
-                    <Button 
-                      onClick={() => setLocation(`/project/${project.id}`)}
-                      className="w-full"
-                      size="sm"
-                    >
-                      <Eye className="w-4 h-4 mr-2" />
-                      View Details
-                    </Button>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-      
       {/* Authentication Modal */}
       <AuthModal
         isOpen={showAuthModal}
