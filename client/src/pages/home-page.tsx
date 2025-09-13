@@ -427,11 +427,11 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
           )}
           
           {/* Show workflow tabs only after journey selection */}
-          {selectedJourney && (
+          {selectedJourney && user && (
             <>
               {/* Non-Tech AI Agent Journey - Upload and let AI guide */}
               {selectedJourney === 'non-tech' && (
-                <TabsTrigger value={user ? "upload" : "paid"} className="flex items-center gap-2">
+                <TabsTrigger value="upload" className="flex items-center gap-2">
                   <Upload className="w-4 h-4" />
                   Upload Data
                 </TabsTrigger>
@@ -448,7 +448,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
               {/* Technical User Journey - Full platform access */}
               {selectedJourney === 'technical' && (
                 <>
-                  <TabsTrigger value={user ? "upload" : "paid"} className="flex items-center gap-2">
+                  <TabsTrigger value="upload" className="flex items-center gap-2">
                     <Upload className="w-4 h-4" />
                     Upload Data
                   </TabsTrigger>
