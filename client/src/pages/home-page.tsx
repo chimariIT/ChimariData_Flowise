@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Upload, FileText, Database, Trash2, Eye, Zap, TrendingUp, BarChart3, Brain, Target } from "lucide-react";
@@ -11,6 +11,7 @@ import { apiClient } from "@/lib/api";
 import FileUploader from "@/components/file-uploader";
 import AuthModal from "@/components/auth-modal";
 import SubscriptionTierDisplay from "@/components/subscription-tier-display";
+import { JourneySelector } from "@/components/journey-selector";
 
 import { PIIInterimDialog } from "@/components/PIIInterimDialog";
 
@@ -23,12 +24,14 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [isUploading, setIsUploading] = useState(false);
-  const [activeTab, setActiveTab] = useState("upload"); // Always show upload tab first
+  const [activeTab, setActiveTab] = useState("journey"); // Start with journey selection
   const [authError, setAuthError] = useState<string | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authModalTab, setAuthModalTab] = useState<'login' | 'register'>('register');
   const [showPIIDialog, setShowPIIDialog] = useState(false);
   const [piiDialogData, setPIIDialogData] = useState<any>(null);
+  const [selectedJourney, setSelectedJourney] = useState<'non-tech' | 'business' | 'technical' | null>(null);
+  const [journeyConfig, setJourneyConfig] = useState<any>(null);
 
   const { data: projectsData, isLoading, refetch } = useQuery({
     queryKey: ["/api/projects"],
@@ -234,6 +237,47 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
     });
   };
 
+  const handleJourneySelect = useCallback((journey: 'non-tech' | 'business' | 'technical', config?: any, skipToast?: boolean) => {
+    setSelectedJourney(journey);
+    setJourneyConfig(config);
+    
+    // localStorage is now handled in the journey selector component
+    
+    // Navigate based on journey type
+    switch (journey) {
+      case 'non-tech':
+        // AI-guided workflow - start with upload and AI orchestration
+        setActiveTab('upload');
+        if (!skipToast) {
+          toast({
+            title: "AI Journey Selected",
+            description: "Upload your data and let our AI guide you through the analysis",
+          });
+        }
+        break;
+      case 'business':
+        // Template-based analysis
+        setActiveTab('guided');
+        if (!skipToast) {
+          toast({
+            title: "Template-Based Analysis Selected",
+            description: "Choose from proven business analysis templates",
+          });
+        }
+        break;
+      case 'technical':
+        // Self-service with optional guidance
+        setActiveTab('upload');
+        if (!skipToast) {
+          toast({
+            title: "Technical Mode Activated",
+            description: "Full platform access with advanced features enabled",
+          });
+        }
+        break;
+    }
+  }, [toast]);
+
   return (
     <div className="container mx-auto px-4 py-8 max-w-6xl">
       {/* User Header */}
@@ -362,7 +406,11 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
 
       {/* Upload Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-8">
-        <TabsList className={`grid w-full ${user ? 'grid-cols-6' : 'grid-cols-7'}`}>
+        <TabsList className={`grid w-full ${user ? 'grid-cols-7' : 'grid-cols-8'}`}>
+          <TabsTrigger value="journey" className="flex items-center gap-2">
+            <Target className="w-4 h-4" />
+            Choose Journey
+          </TabsTrigger>
           {!user && (
             <TabsTrigger value="auth" className="flex items-center gap-2">
               <Zap className="w-4 h-4" />
@@ -503,17 +551,58 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
           </TabsContent>
         )}
 
+        <TabsContent value="journey">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Target className="w-5 h-5 text-blue-600" />
+                Choose Your Analytics Journey
+              </CardTitle>
+              <CardDescription>
+                Select the best approach based on your experience level and analysis needs
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <JourneySelector 
+                user={user} 
+                onJourneySelect={handleJourneySelect}
+              />
+              
+              {selectedJourney && journeyConfig && (
+                <div className="mt-6 p-4 bg-green-50 border border-green-200 rounded-lg">
+                  <div className="flex items-start gap-3">
+                    <div className="w-5 h-5 text-green-600 mt-0.5">✅</div>
+                    <div>
+                      <h3 className="font-medium text-green-900 mb-1">Journey Selected: {journeyConfig.title}</h3>
+                      <p className="text-sm text-green-700">
+                        {journeyConfig.workflow} is now active. You can proceed to upload your data or access the relevant features.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
         <TabsContent value={user ? "upload" : "paid"}>
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Upload className="w-5 h-5" />
                 {user ? "Upload Your Data" : "Full Platform Access"}
+                {selectedJourney && journeyConfig && (
+                  <Badge variant="secondary" className="ml-2">
+                    {journeyConfig.title} Mode
+                  </Badge>
+                )}
               </CardTitle>
               <CardDescription>
-                {user 
-                  ? "Upload files and access all platform features with your account"
-                  : "Upload larger files and choose your data journey with progressive pricing"
+                {selectedJourney && journeyConfig
+                  ? `Upload your data with ${journeyConfig.workflow} - ${journeyConfig.userType}`
+                  : user 
+                    ? "Upload files and access all platform features with your account"
+                    : "Upload larger files and choose your data journey with progressive pricing"
                 }
               </CardDescription>
             </CardHeader>
@@ -528,6 +617,19 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
                       <p className="text-sm text-red-700">{authError}</p>
                     </div>
                   </div>
+                </div>
+              )}
+              
+              {selectedJourney && journeyConfig && user && (
+                <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                  <h3 className="font-medium text-blue-900 mb-1">
+                    {journeyConfig.title} Mode Active
+                  </h3>
+                  <p className="text-sm text-blue-700">
+                    {selectedJourney === 'non-tech' && "Our AI will guide you through the entire analysis process automatically."}
+                    {selectedJourney === 'business' && "After upload, you'll access proven business analysis templates."}
+                    {selectedJourney === 'technical' && "You'll have full control over analysis parameters and advanced features."}
+                  </p>
                 </div>
               )}
               
@@ -580,10 +682,16 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Brain className="w-5 h-5 text-indigo-600" />
-                Guided Business Analysis
+                Template-Based Business Analysis
+                {selectedJourney === 'business' && (
+                  <Badge variant="secondary" className="ml-2">Active Journey</Badge>
+                )}
               </CardTitle>
               <CardDescription>
-                Step-by-step guided analysis with business context questions and AI-powered insights
+                {selectedJourney === 'business' 
+                  ? "Pre-built business templates with guided workflows - your selected analysis path"
+                  : "Choose from proven business analysis templates with step-by-step guidance"
+                }
               </CardDescription>
             </CardHeader>
             <CardContent>
