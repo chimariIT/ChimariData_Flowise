@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useLocation } from "wouter";
-import { Upload, FileText, Database, Trash2, Eye, Zap, TrendingUp, BarChart3, Brain, Target } from "lucide-react";
+import { useLocation, Link } from "wouter";
+import { Upload, FileText, Database, Trash2, Eye, Zap, TrendingUp, BarChart3, Brain, Target, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -314,6 +314,18 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
           Combining the power of traditional, advanced and AI powered Analytics. Bring your Own Data (BYOD) → Transform → Visualize → Analyze → Talk to your Data in natural language.
         </p>
         <div className="flex justify-center gap-4">
+          <Button 
+            asChild
+            variant="outline" 
+            size="lg" 
+            className="flex items-center gap-2 hover:bg-blue-50 border-blue-200 text-blue-700"
+            data-testid="button-view-demos"
+          >
+            <Link href="/demos">
+              <Play className="w-5 h-5" />
+              View Demos
+            </Link>
+          </Button>
           {!user && (
             <Button 
               size="lg" 
