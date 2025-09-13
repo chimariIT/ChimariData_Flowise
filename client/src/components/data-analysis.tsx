@@ -767,7 +767,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                       <SelectValue placeholder="Select X-axis field" />
                     </SelectTrigger>
                     <SelectContent>
-                      {[...numericFields, ...categoricalFields].map(field => (
+                      {[...numericFields, ...categoricalFields].filter(field => field && field.trim()).map(field => (
                         <SelectItem key={field} value={field}>
                           {field} 
                           <Badge variant="outline" className="ml-2 text-xs">
@@ -794,7 +794,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                         <SelectValue placeholder="Select Y-axis field" />
                       </SelectTrigger>
                       <SelectContent>
-                        {numericFields.map(field => (
+                        {numericFields.filter(field => field && field.trim()).map(field => (
                           <SelectItem key={field} value={field}>
                             {field}
                             <Badge variant="outline" className="ml-2 text-xs">numeric</Badge>
@@ -809,18 +809,18 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Color/Group By (Optional)</label>
                   <Select
-                    value={analysisConfig.groupBy || ''}
+                    value={analysisConfig.groupBy || undefined}
                     onValueChange={(value) => setAnalysisConfig({
                       ...analysisConfig,
-                      groupBy: value
+                      groupBy: value === '__none__' ? '' : value
                     })}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select grouping field" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">None</SelectItem>
-                      {categoricalFields.map(field => (
+                      <SelectItem value="__none__">None</SelectItem>
+                      {categoricalFields.filter(field => field && field.trim()).map(field => (
                         <SelectItem key={field} value={field}>
                           {field}
                           <Badge variant="outline" className="ml-2 text-xs">categorical</Badge>
@@ -906,7 +906,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                         const currentFields = analysisConfig.fields || [];
                         const newFields = e.target.checked 
                           ? [...currentFields, field]
-                          : currentFields.filter(f => f !== field);
+                          : currentFields.filter((f: string) => f !== field);
                         setAnalysisConfig({
                           ...analysisConfig,
                           fields: newFields
@@ -1050,7 +1050,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                         const currentFields = analysisConfig.fields || [];
                         const newFields = e.target.checked 
                           ? [...currentFields, field]
-                          : currentFields.filter(f => f !== field);
+                          : currentFields.filter((f: string) => f !== field);
                         setAnalysisConfig({
                           ...analysisConfig,
                           fields: newFields
