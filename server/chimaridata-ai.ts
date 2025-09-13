@@ -60,7 +60,7 @@ export class ChimaridataAI {
           insights,
           provider: provider.name
         };
-      } catch (error) {
+      } catch (error: any) {
         console.error(`Provider ${provider.name} failed:`, error.message);
         
         // If this is the last provider, return the error

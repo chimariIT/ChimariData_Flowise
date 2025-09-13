@@ -7,6 +7,7 @@ import { FileProcessor } from "./file-processor";
 import { PythonProcessor } from "./python-processor";
 import { PricingService } from "./pricing-service";
 import { chimaridataAI } from "./chimaridata-ai";
+import { technicalAIAgent, TechnicalQuery } from "./technical-ai-agent";
 import { 
   insertDataProjectSchema, 
   fileUploadResponseSchema,
@@ -1402,6 +1403,329 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ success: true, result });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Technical AI Agent Routes for Advanced Users
+  
+  // Get available models and capabilities
+  app.get("/api/technical-ai/models", ensureAuthenticated, (req, res) => {
+    try {
+      const models = technicalAIAgent.getAvailableModels();
+      const capabilities = technicalAIAgent.getCapabilities();
+      
+      res.json({
+        success: true,
+        models,
+        capabilities
+      });
+    } catch (error: any) {
+      res.status(500).json({ 
+        success: false, 
+        error: error.message 
+      });
+    }
+  });
+
+  // Get model configuration details
+  app.get("/api/technical-ai/models/:modelId", ensureAuthenticated, (req, res) => {
+    try {
+      const { modelId } = req.params;
+      const config = technicalAIAgent.getModelConfig(modelId);
+      
+      if (!config) {
+        return res.status(404).json({
+          success: false,
+          error: "Model not found"
+        });
+      }
+      
+      res.json({
+        success: true,
+        config
+      });
+    } catch (error: any) {
+      res.status(500).json({ 
+        success: false, 
+        error: error.message 
+      });
+    }
+  });
+
+  // Estimate cost for a technical query
+  app.post("/api/technical-ai/estimate-cost", ensureAuthenticated, (req, res) => {
+    try {
+      const { modelId, estimatedTokens } = req.body;
+      
+      if (!modelId || !estimatedTokens) {
+        return res.status(400).json({
+          success: false,
+          error: "Model ID and estimated tokens are required"
+        });
+      }
+      
+      const cost = technicalAIAgent.estimateCost(modelId, estimatedTokens);
+      
+      res.json({
+        success: true,
+        estimatedCost: cost,
+        modelId,
+        estimatedTokens
+      });
+    } catch (error: any) {
+      res.status(500).json({ 
+        success: false, 
+        error: error.message 
+      });
+    }
+  });
+
+  // Process technical AI query
+  app.post("/api/technical-ai/query", ensureAuthenticated, async (req, res) => {
+    try {
+      const query: TechnicalQuery = req.body;
+      
+      // Validate required fields
+      if (!query.type || !query.prompt) {
+        return res.status(400).json({
+          success: false,
+          error: "Query type and prompt are required"
+        });
+      }
+
+      // Get user settings for API key (if using custom provider)
+      const userSettings = await storage.getUserSettings((req.user as any)?.id);
+      const apiKey = userSettings?.aiApiKey;
+
+      // If user has selected a non-platform provider, they need an API key
+      if (query.parameters?.model) {
+        const modelConfig = technicalAIAgent.getModelConfig(query.parameters.model);
+        if (modelConfig && modelConfig.provider !== 'gemini' && !apiKey) {
+          return res.status(400).json({
+            success: false,
+            error: "Custom API key required for selected model. Please configure in settings."
+          });
+        }
+      }
+
+      // Process the technical query
+      const result = await technicalAIAgent.processQuery(query, apiKey);
+      
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          error: result.error
+        });
+      }
+
+      // Log usage for tracking
+      if (userSettings) {
+        await storage.logUsage({
+          userId: (req.user as any)?.id,
+          projectId: query.context.data?.projectId || null,
+          action: `technical_ai_${query.type}`,
+          provider: result.model || 'unknown',
+          tokensUsed: result.tokensUsed || 0,
+          cost: result.cost?.toString() || '0.00'
+        });
+      }
+
+      res.json({
+        success: true,
+        result: result.result,
+        model: result.model,
+        tokensUsed: result.tokensUsed,
+        cost: result.cost,
+        queryType: query.type
+      });
+
+    } catch (error: any) {
+      console.error("Technical AI query error:", error);
+      res.status(500).json({ 
+        success: false, 
+        error: error.message 
+      });
+    }
+  });
+
+  // Process code generation request
+  app.post("/api/technical-ai/generate-code", ensureAuthenticated, async (req, res) => {
+    try {
+      const { projectId, codeType, requirements, language, framework } = req.body;
+      
+      if (!projectId || !codeType || !requirements) {
+        return res.status(400).json({
+          success: false,
+          error: "Project ID, code type, and requirements are required"
+        });
+      }
+
+      // Get project data for context
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({
+          success: false,
+          error: "Project not found"
+        });
+      }
+
+      // Build technical query for code generation
+      const query: TechnicalQuery = {
+        type: 'code_generation',
+        prompt: `Generate ${codeType} code for the following requirements: ${requirements}`,
+        context: {
+          data: project.data,
+          schema: project.schema,
+          requirements: Array.isArray(requirements) ? requirements : [requirements]
+        },
+        parameters: {
+          technicalLevel: 'advanced',
+          temperature: 0.3 // Lower temperature for more deterministic code
+        },
+        metadata: {
+          language,
+          framework,
+          domain: 'data_analysis'
+        }
+      };
+
+      // Get user settings for API key
+      const userSettings = await storage.getUserSettings((req.user as any)?.id);
+      const result = await technicalAIAgent.processQuery(query, userSettings?.aiApiKey);
+      
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          error: result.error
+        });
+      }
+
+      res.json({
+        success: true,
+        generatedCode: result.result,
+        codeType,
+        language,
+        model: result.model,
+        tokensUsed: result.tokensUsed
+      });
+
+    } catch (error: any) {
+      console.error("Code generation error:", error);
+      res.status(500).json({ 
+        success: false, 
+        error: error.message 
+      });
+    }
+  });
+
+  // Debug code assistance
+  app.post("/api/technical-ai/debug", ensureAuthenticated, async (req, res) => {
+    try {
+      const { code, error, context, language } = req.body;
+      
+      if (!code || !error) {
+        return res.status(400).json({
+          success: false,
+          error: "Code and error message are required"
+        });
+      }
+
+      const query: TechnicalQuery = {
+        type: 'debugging',
+        prompt: `Debug the following code error: ${error}`,
+        context: {
+          code,
+          error,
+          requirements: context ? [context] : []
+        },
+        parameters: {
+          technicalLevel: 'advanced',
+          temperature: 0.2
+        },
+        metadata: {
+          language,
+          domain: 'debugging'
+        }
+      };
+
+      const userSettings = await storage.getUserSettings((req.user as any)?.id);
+      const result = await technicalAIAgent.processQuery(query, userSettings?.aiApiKey);
+      
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          error: result.error
+        });
+      }
+
+      res.json({
+        success: true,
+        debugSolution: result.result,
+        model: result.model,
+        tokensUsed: result.tokensUsed
+      });
+
+    } catch (error: any) {
+      console.error("Debug assistance error:", error);
+      res.status(500).json({ 
+        success: false, 
+        error: error.message 
+      });
+    }
+  });
+
+  // Performance optimization suggestions
+  app.post("/api/technical-ai/optimize", ensureAuthenticated, async (req, res) => {
+    try {
+      const { projectId, code, performanceMetrics, optimizationType } = req.body;
+      
+      if (!code) {
+        return res.status(400).json({
+          success: false,
+          error: "Code is required for optimization"
+        });
+      }
+
+      const query: TechnicalQuery = {
+        type: 'optimization',
+        prompt: `Optimize the following code for ${optimizationType || 'performance'}`,
+        context: {
+          code,
+          requirements: performanceMetrics ? [performanceMetrics] : ['Performance improvement']
+        },
+        parameters: {
+          technicalLevel: 'expert',
+          temperature: 0.3
+        },
+        metadata: {
+          domain: 'optimization'
+        }
+      };
+
+      const userSettings = await storage.getUserSettings((req.user as any)?.id);
+      const result = await technicalAIAgent.processQuery(query, userSettings?.aiApiKey);
+      
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          error: result.error
+        });
+      }
+
+      res.json({
+        success: true,
+        optimizationSuggestions: result.result,
+        optimizationType: optimizationType || 'performance',
+        model: result.model,
+        tokensUsed: result.tokensUsed
+      });
+
+    } catch (error: any) {
+      console.error("Optimization error:", error);
+      res.status(500).json({ 
+        success: false, 
+        error: error.message 
+      });
     }
   });
 
