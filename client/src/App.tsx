@@ -10,6 +10,7 @@ import AuthPage from "@/pages/auth";
 import GuidedAnalysisCheckout from "@/pages/checkout";
 import GuidedAnalysisResults from "@/pages/guided-analysis-results";
 import ExpertConsultation from "@/pages/expert-consultation";
+import DemosPage from "@/pages/demos";
 import { apiClient } from "@/lib/api";
 import { ProjectProvider } from "@/hooks/useProjectContext";
 import "./index.css";
@@ -115,6 +116,9 @@ export default function App() {
           </Route>
           <Route path="/expert-consultation">
             {() => <ExpertConsultation onBack={() => setLocation('/')} />}
+          </Route>
+          <Route path="/demos">
+            {() => <DemosPage />}
           </Route>
           <Route>
             <div className="flex items-center justify-center min-h-screen">
