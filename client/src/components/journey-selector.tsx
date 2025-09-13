@@ -19,11 +19,11 @@ import {
 
 interface JourneySelectorProps {
   user?: any;
-  onJourneySelect: (journey: 'non-tech' | 'business' | 'technical', config?: any, skipToast?: boolean) => void;
+  onJourneySelect: (journey: 'non-tech' | 'business' | 'technical' | 'consultation', config?: any, skipToast?: boolean) => void;
 }
 
 interface Journey {
-  id: 'non-tech' | 'business' | 'technical';
+  id: 'non-tech' | 'business' | 'technical' | 'consultation';
   title: string;
   subtitle: string;
   description: string;
@@ -93,6 +93,25 @@ const JOURNEYS: Journey[] = [
     workflow: 'Self-Service + Optional Guidance',
     buttonText: 'Access Full Platform',
     badge: 'Advanced Features'
+  },
+  {
+    id: 'consultation',
+    title: 'Expert Consultation',
+    subtitle: 'Work with data science experts',
+    description: 'Perfect for complex projects requiring expert guidance. Get 1-on-1 consultation with senior data scientists.',
+    icon: Users,
+    color: 'bg-orange-50 border-orange-200 hover:bg-orange-100',
+    features: [
+      'Video consultation with experts',
+      'Custom analysis strategy',
+      'Real-time collaboration',
+      'Follow-up summary report',
+      'Priority scheduling available'
+    ],
+    userType: 'Consultation Client',
+    workflow: 'Expert-Led Consultation',
+    buttonText: 'Book Consultation',
+    badge: 'Expert Support'
   }
 ];
 
@@ -105,7 +124,7 @@ export function JourneySelector({ user, onJourneySelect }: JourneySelectorProps)
   useEffect(() => {
     if (hydratedRef.current) return; // Prevent repeated hydration
 
-    const savedJourney = localStorage.getItem('selected_journey') as 'non-tech' | 'business' | 'technical' | null;
+    const savedJourney = localStorage.getItem('selected_journey') as 'non-tech' | 'business' | 'technical' | 'consultation' | null;
     if (savedJourney && JOURNEYS.find(j => j.id === savedJourney)) {
       setSelectedJourney(savedJourney);
       hydratedRef.current = true;

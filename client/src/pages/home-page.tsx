@@ -30,7 +30,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
   const [authModalTab, setAuthModalTab] = useState<'login' | 'register'>('register');
   const [showPIIDialog, setShowPIIDialog] = useState(false);
   const [piiDialogData, setPIIDialogData] = useState<any>(null);
-  const [selectedJourney, setSelectedJourney] = useState<'non-tech' | 'business' | 'technical' | null>(null);
+  const [selectedJourney, setSelectedJourney] = useState<'non-tech' | 'business' | 'technical' | 'consultation' | null>(null);
   const [journeyConfig, setJourneyConfig] = useState<any>(null);
 
   const { data: projectsData, isLoading, refetch } = useQuery({
@@ -238,7 +238,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
     });
   };
 
-  const handleJourneySelect = useCallback((journey: 'non-tech' | 'business' | 'technical', config?: any, skipToast?: boolean) => {
+  const handleJourneySelect = useCallback((journey: 'non-tech' | 'business' | 'technical' | 'consultation', config?: any, skipToast?: boolean) => {
     setSelectedJourney(journey);
     setJourneyConfig(config);
     
@@ -258,6 +258,10 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
         case 'technical':
           description = "Technical mode activated. Access 'Upload Data' or 'AI Console' for advanced features.";
           break;
+        case 'consultation':
+          description = "Expert consultation selected. Get professional guidance from data science experts.";
+          setLocation('/expert-consultation');
+          return;
       }
       
       toast({
