@@ -166,7 +166,7 @@ export function JourneySelector({ user, onJourneySelect }: JourneySelectorProps)
           </span>
         </div>
         <h2 className="text-3xl font-bold text-gray-900 mb-4">
-          Three Ways to Unlock Your Data's Potential
+          Four Ways to Unlock Your Data's Potential
         </h2>
         <p className="text-lg text-gray-600 max-w-3xl mx-auto">
           Whether you're a data novice or expert, we have the perfect path for your analytics needs.
@@ -174,7 +174,7 @@ export function JourneySelector({ user, onJourneySelect }: JourneySelectorProps)
         </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
         {JOURNEYS.map((journey) => {
           const IconComponent = journey.icon;
           const isSelected = selectedJourney === journey.id;
