@@ -356,73 +356,58 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
         </div>
       </div>
 
-      {/* Feature Overview - Journey Selection Guide */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-        <Card className="text-center hover:shadow-lg transition-shadow">
-          <CardContent className="pt-6">
-            <TrendingUp className="w-8 h-8 mx-auto mb-2 text-blue-600" />
-            <h3 className="font-semibold text-sm">Transformation</h3>
-            <p className="text-xs text-gray-500 mt-1">Clean & reshape data</p>
-            <div className="mt-2 flex justify-center gap-1">
-              <Badge variant="secondary" className="text-xs">All Journeys</Badge>
-            </div>
-          </CardContent>
-        </Card>
-        
-        <Card className="text-center hover:shadow-lg transition-shadow">
-          <CardContent className="pt-6">
-            <BarChart3 className="w-8 h-8 mx-auto mb-2 text-green-600" />
-            <h3 className="font-semibold text-sm">Analysis</h3>
-            <p className="text-xs text-gray-500 mt-1">Statistical insights</p>
-            <div className="mt-2 flex justify-center gap-1">
-              <Badge variant="secondary" className="text-xs">All Journeys</Badge>
-            </div>
-          </CardContent>
-        </Card>
-        
-        <Card className="text-center hover:shadow-lg transition-shadow">
-          <CardContent className="pt-6">
-            <Database className="w-8 h-8 mx-auto mb-2 text-purple-600" />
-            <h3 className="font-semibold text-sm">Visualization</h3>
-            <p className="text-xs text-gray-500 mt-1">Charts & dashboards</p>
-            <div className="mt-2 flex justify-center gap-1">
-              <Badge variant="secondary" className="text-xs">All Journeys</Badge>
-            </div>
-          </CardContent>
-        </Card>
-        
-        <Card className="text-center hover:shadow-lg transition-shadow">
-          <CardContent className="pt-6">
-            <Brain className="w-8 h-8 mx-auto mb-2 text-orange-600" />
-            <h3 className="font-semibold text-sm">AI Insights</h3>
-            <p className="text-xs text-gray-500 mt-1">Intelligent analysis</p>
-            <div className="mt-2 flex justify-center gap-1">
-              <Badge variant="secondary" className="text-xs">All Journeys</Badge>
-            </div>
-          </CardContent>
-        </Card>
+      {/* Consolidated Feature Preview */}
+      <div className="text-center mb-8">
+        <div className="flex justify-center items-center gap-6 mb-4">
+          <div className="flex items-center gap-2 text-sm text-gray-600">
+            <TrendingUp className="w-5 h-5 text-blue-600" />
+            <span>Transform</span>
+          </div>
+          <div className="flex items-center gap-2 text-sm text-gray-600">
+            <BarChart3 className="w-5 h-5 text-green-600" />
+            <span>Analyze</span>
+          </div>
+          <div className="flex items-center gap-2 text-sm text-gray-600">
+            <Database className="w-5 h-5 text-purple-600" />
+            <span>Visualize</span>
+          </div>
+          <div className="flex items-center gap-2 text-sm text-gray-600">
+            <Brain className="w-5 h-5 text-orange-600" />
+            <span>AI Insights</span>
+          </div>
+        </div>
+        <p className="text-sm text-gray-500">Complete data pipeline • All skill levels supported</p>
       </div>
       
-      {/* Journey Selection Prompt */}
-      {!selectedJourney && (
-        <Card className="mb-8 border-2 border-blue-200 bg-blue-50">
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <Target className="w-12 h-12 mx-auto mb-4 text-blue-600" />
-              <h3 className="text-lg font-semibold text-blue-900 mb-2">Choose Your Analytics Journey</h3>
-              <p className="text-blue-700 mb-4">
-                Select the approach that best matches your experience level and analysis goals to get started
+      {/* Enhanced Journey Selection - Make it the main focal point */}
+      <div className="mb-12">
+        <div className="text-center mb-8">
+          <Target className="w-16 h-16 mx-auto mb-4 text-blue-600" />
+          <h2 className="text-3xl font-bold text-gray-900 mb-3">Choose Your Analytics Journey</h2>
+          <p className="text-lg text-gray-600 max-w-2xl mx-auto">
+            Select the path that matches your experience and goals. Each journey provides the same powerful capabilities tailored to your workflow.
+          </p>
+        </div>
+        
+        {!selectedJourney && (
+          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-6 border border-blue-200">
+            <div className="text-center mb-6">
+              <h3 className="text-xl font-semibold text-blue-900 mb-2">Ready to unlock insights from your data?</h3>
+              <p className="text-blue-700">
+                Start by choosing your preferred approach below, then upload your data to begin
               </p>
-              <Button 
-                onClick={() => setActiveTab('journey')} 
-                className="bg-blue-600 hover:bg-blue-700 text-white"
-              >
-                Select Journey →
-              </Button>
             </div>
-          </CardContent>
-        </Card>
-      )}
+            <Button 
+              onClick={() => setActiveTab('journey')} 
+              size="lg"
+              className="w-full max-w-md mx-auto block bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              <Target className="w-5 h-5 mr-2" />
+              Choose Your Journey
+            </Button>
+          </div>
+        )}
+      </div>
 
 
 
