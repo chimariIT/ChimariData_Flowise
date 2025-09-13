@@ -9,6 +9,7 @@ import VisualizationPage from "@/pages/visualization-page";
 import AuthPage from "@/pages/auth";
 import GuidedAnalysisCheckout from "@/pages/checkout";
 import GuidedAnalysisResults from "@/pages/guided-analysis-results";
+import ExpertConsultation from "@/pages/expert-consultation";
 import { apiClient } from "@/lib/api";
 import { ProjectProvider } from "@/hooks/useProjectContext";
 import "./index.css";
@@ -111,6 +112,9 @@ export default function App() {
           </Route>
           <Route path="/dashboard">
             {() => user ? <ProjectPage projectId="dashboard" /> : <AuthPage onLogin={handleLogin} />}
+          </Route>
+          <Route path="/expert-consultation">
+            {() => <ExpertConsultation onBack={() => setLocation('/')} />}
           </Route>
           <Route>
             <div className="flex items-center justify-center min-h-screen">
