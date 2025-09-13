@@ -62,11 +62,11 @@ const JOURNEY_DEMOS: JourneyDemo[] = [
     steps: [
       {
         id: 'upload',
-        title: 'Upload Your Data',
-        description: 'Simply drag and drop your CSV, Excel, or JSON file',
+        title: 'Data Onboarding',
+        description: 'Upload your data files after signing in to your account',
         icon: Upload,
         duration: 2000,
-        action: 'File uploaded successfully',
+        action: 'Ready to upload after sign-in',
         mockup: {
           type: 'upload',
           data: { filename: 'sales_data.csv', size: '2.3 MB', rows: 1500, columns: 12 }
@@ -156,11 +156,11 @@ const JOURNEY_DEMOS: JourneyDemo[] = [
     steps: [
       {
         id: 'upload',
-        title: 'Upload Data',
-        description: 'Upload your business data file',
+        title: 'Data Onboarding',
+        description: 'Upload your business data after signing in',
         icon: Upload,
         duration: 2000,
-        action: 'Data uploaded',
+        action: 'Ready for upload after sign-in',
         mockup: {
           type: 'upload',
           data: { filename: 'quarterly_sales.xlsx', size: '1.8 MB', rows: 2500, columns: 8 }
@@ -249,10 +249,10 @@ const JOURNEY_DEMOS: JourneyDemo[] = [
       {
         id: 'upload',
         title: 'Data Import',
-        description: 'Import from multiple sources: files, databases, APIs',
+        description: 'Import from multiple sources after authentication',
         icon: Database,
         duration: 2000,
-        action: 'Connected to PostgreSQL',
+        action: 'Ready for import after sign-in',
         mockup: {
           type: 'technical',
           data: {
@@ -397,7 +397,10 @@ export default function DemosPage() {
             <div className="text-center space-y-4">
               <Upload className="w-12 h-12 text-blue-500 mx-auto" />
               <div className="space-y-2">
-                <h3 className="text-lg font-semibold text-gray-800">Upload Complete!</h3>
+                <h3 className="text-lg font-semibold text-gray-800">Data Upload Interface</h3>
+                <p className="text-sm text-gray-600 mb-4">
+                  This is what you'll see after signing in to upload your data
+                </p>
                 <div className="bg-white rounded-lg p-4 text-left space-y-2">
                   <div className="flex justify-between text-sm">
                     <span>📄 {data?.filename}</span>
@@ -407,6 +410,18 @@ export default function DemosPage() {
                     <span>Rows: {data?.rows?.toLocaleString()}</span>
                     <span>Columns: {data?.columns}</span>
                   </div>
+                </div>
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mt-4">
+                  <p className="text-sm text-yellow-800 mb-2">
+                    🔒 Upload functionality requires authentication
+                  </p>
+                  <Button 
+                    size="sm" 
+                    className="w-full bg-blue-600 hover:bg-blue-700"
+                    onClick={() => window.location.href = '/auth/login'}
+                  >
+                    Sign In to Upload Your Data
+                  </Button>
                 </div>
               </div>
             </div>
@@ -423,7 +438,7 @@ export default function DemosPage() {
                 <Badge className="ml-auto bg-green-100 text-green-800">{data?.quality}% Quality</Badge>
               </div>
               <div className="grid grid-cols-2 gap-4">
-                {data?.columns?.slice(0, 5).map((col, idx) => (
+                {data?.columns?.slice(0, 5).map((col: string, idx: number) => (
                   <div key={idx} className="bg-gray-50 rounded p-3 text-sm">
                     <div className="font-medium text-gray-800">{col}</div>
                     <div className="text-gray-600 text-xs">{data?.types?.[idx]}</div>
@@ -443,7 +458,7 @@ export default function DemosPage() {
                 <h3 className="text-lg font-semibold">AI Recommendations</h3>
               </div>
               <div className="space-y-3">
-                {data?.recommendations?.map((rec, idx) => (
+                {data?.recommendations?.map((rec: string, idx: number) => (
                   <div key={idx} className="flex items-center gap-3 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
                     <CheckCircle className="w-5 h-5 text-yellow-600 flex-shrink-0" />
                     <div>
@@ -468,7 +483,7 @@ export default function DemosPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-3">
                   <h4 className="text-sm font-medium text-gray-700">Generated Charts</h4>
-                  {data?.charts?.map((chart, idx) => (
+                  {data?.charts?.map((chart: string, idx: number) => (
                     <div key={idx} className="flex items-center gap-2 text-sm">
                       <div className="w-3 h-3 bg-blue-500 rounded"></div>
                       <span>{chart}</span>
@@ -477,7 +492,7 @@ export default function DemosPage() {
                 </div>
                 <div className="space-y-3">
                   <h4 className="text-sm font-medium text-gray-700">Key Correlations</h4>
-                  {data?.correlations?.map((corr, idx) => (
+                  {data?.correlations?.map((corr: string, idx: number) => (
                     <div key={idx} className="flex items-center gap-2 text-sm">
                       <TrendingUp className="w-4 h-4 text-green-500" />
                       <span>{corr}</span>
@@ -501,7 +516,7 @@ export default function DemosPage() {
                 <h3 className="text-lg font-semibold">Analysis Results</h3>
               </div>
               <div className="space-y-3">
-                {data?.insights?.map((insight, idx) => (
+                {data?.insights?.map((insight: string, idx: number) => (
                   <div key={idx} className="bg-green-50 border border-green-200 rounded-lg p-4">
                     <p className="text-gray-800">{insight}</p>
                   </div>
