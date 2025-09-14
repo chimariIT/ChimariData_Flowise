@@ -233,6 +233,103 @@ export class APIClient {
     return await response.json();
   }
 
+  // Dataset management methods
+  async getDatasets(): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/datasets`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch datasets: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async getDataset(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/datasets/${id}`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch dataset: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async createDataset(data: {
+    name: string;
+    description?: string;
+    sourceType: string;
+    sourceUri?: string;
+    schema: any;
+    content?: any;
+    ingestionMetadata?: any;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/datasets`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(data),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to create dataset: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async deleteDataset(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/datasets/${id}`, {
+      method: 'DELETE',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to delete dataset: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
   async getProject(id: string): Promise<any> {
     const token = localStorage.getItem('auth_token');
     const headers: any = {};
@@ -270,6 +367,213 @@ export class APIClient {
 
     if (!response.ok) {
       throw new Error(`Failed to delete project: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  // Project-Dataset Association methods
+  async getProjectDatasets(projectId: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/projects/${projectId}/datasets`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch project datasets: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async addDatasetToProject(projectId: string, datasetId: string, role?: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/projects/${projectId}/datasets`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ datasetId, role }),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to add dataset to project: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async removeDatasetFromProject(projectId: string, datasetId: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/projects/${projectId}/datasets/${datasetId}`, {
+      method: 'DELETE',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to remove dataset from project: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  // Project Artifact methods
+  async getProjectArtifacts(projectId: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/projects/${projectId}/artifacts`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch project artifacts: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async createProjectArtifact(projectId: string, data: {
+    type: string;
+    name: string;
+    description?: string;
+    content: any;
+    parentArtifactId?: string;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/projects/${projectId}/artifacts`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(data),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to create project artifact: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async getProjectArtifact(projectId: string, artifactId: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/projects/${projectId}/artifacts/${artifactId}`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch project artifact: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  // Multi-source import methods
+  async importFromUrl(data: {
+    url: string;
+    name?: string;
+    description?: string;
+    format?: string;
+    projectId?: string;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/import/url`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(data),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to import from URL: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async importFromApiEndpoint(data: {
+    url: string;
+    method: string;
+    headers?: Record<string, string>;
+    body?: string;
+    name?: string;
+    description?: string;
+    projectId?: string;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/import/api`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(data),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to import from API: ${response.status}`);
     }
 
     return await response.json();

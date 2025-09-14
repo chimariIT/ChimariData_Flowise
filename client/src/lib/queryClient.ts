@@ -49,7 +49,16 @@ export const getQueryFn: <T>(options: {
       headers["Authorization"] = `Bearer ${token}`;
     }
 
-    const res = await fetch(queryKey[0] as string, {
+    // Construct URL from hierarchical query keys
+    // For keys like ['/api/projects', projectId, 'datasets'], join them properly
+    let url = queryKey[0] as string;
+    if (queryKey.length > 1) {
+      // Join non-null query key segments to form the URL
+      const segments = queryKey.filter(segment => segment != null).map(String);
+      url = segments.join('/');
+    }
+
+    const res = await fetch(url, {
       headers,
       credentials: "include",
     });

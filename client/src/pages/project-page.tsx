@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { ArrowLeft, Database, FileText, Settings, BarChart3, Brain, Wrench, Target } from "lucide-react";
+import { ArrowLeft, Database, FileText, Settings, BarChart3, Brain, Wrench, Target, Layers, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -13,6 +13,8 @@ import DataAnalysis from "@/components/data-analysis";
 import AIInsights from "@/components/ai-insights";
 import GuidedAnalysisWizard from "@/components/GuidedAnalysisWizard";
 import { AdvancedVisualizationWorkshop } from "@/components/advanced-visualization-workshop";
+import { ProjectArtifactTimeline } from "@/components/ProjectArtifactTimeline";
+import { EnhancedDataWorkflow } from "@/components/EnhancedDataWorkflow";
 import { toast } from "@/hooks/use-toast";
 
 interface ProjectPageProps {
@@ -178,10 +180,18 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
         </Card>
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-5">
+          <TabsList className="grid w-full grid-cols-7">
             <TabsTrigger value="overview" className="flex items-center gap-2">
               <Database className="w-4 h-4" />
               Overview
+            </TabsTrigger>
+            <TabsTrigger value="datasets" className="flex items-center gap-2">
+              <Layers className="w-4 h-4" />
+              Datasets
+            </TabsTrigger>
+            <TabsTrigger value="timeline" className="flex items-center gap-2">
+              <FileText className="w-4 h-4" />
+              Timeline
             </TabsTrigger>
             <TabsTrigger value="schema" className="flex items-center gap-2">
               <Settings className="w-4 h-4" />
@@ -208,29 +218,37 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <FileText className="w-5 h-5" />
-                    File Information
+                    Project Information
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <div className="flex justify-between">
-                    <span className="text-gray-600">File Name:</span>
-                    <span className="font-medium">{project.fileName}</span>
+                    <span className="text-gray-600">Project Name:</span>
+                    <span className="font-medium">{project.name}</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">File Size:</span>
-                    <span className="font-medium">{formatFileSize(project.fileSize)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">File Type:</span>
-                    <span className="font-medium">{project.fileType}</span>
-                  </div>
+                  {project.fileName && (
+                    <>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">File Name:</span>
+                        <span className="font-medium">{project.fileName}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">File Size:</span>
+                        <span className="font-medium">{formatFileSize(project.fileSize)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">File Type:</span>
+                        <span className="font-medium">{project.fileType}</span>
+                      </div>
+                    </>
+                  )}
                   <div className="flex justify-between">
                     <span className="text-gray-600">Records:</span>
                     <span className="font-medium">{project.recordCount?.toLocaleString()}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-600">Uploaded:</span>
-                    <span className="font-medium">{formatDate(project.uploadedAt)}</span>
+                    <span className="text-gray-600">Created:</span>
+                    <span className="font-medium">{formatDate(project.createdAt || project.uploadedAt)}</span>
                   </div>
                 </CardContent>
               </Card>
@@ -267,6 +285,49 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
                 </CardContent>
               </Card>
             </div>
+          </TabsContent>
+
+          <TabsContent value="datasets" className="mt-6">
+            <EnhancedDataWorkflow
+              onComplete={(result) => {
+                if (result.success) {
+                  toast({
+                    title: "Datasets Updated",
+                    description: `Successfully ${result.workflowType === 'upload' ? 'uploaded' : 'added'} ${result.datasets?.length || 1} dataset${result.datasets?.length !== 1 ? 's' : ''} to project.`
+                  });
+                  // Refresh project data
+                  window.location.reload();
+                } else if (result.error) {
+                  toast({
+                    title: "Error",
+                    description: result.error,
+                    variant: "destructive"
+                  });
+                }
+              }}
+              projectId={projectId}
+              allowMultipleDatasets={true}
+            />
+          </TabsContent>
+
+          <TabsContent value="timeline" className="mt-6">
+            <ProjectArtifactTimeline
+              projectId={projectId}
+              onViewArtifact={(artifact) => {
+                toast({
+                  title: "Viewing Artifact",
+                  description: `Opening ${artifact.name}`
+                });
+                // TODO: Implement artifact viewing modal
+              }}
+              onExportArtifact={(artifact) => {
+                toast({
+                  title: "Exporting Artifact",
+                  description: `Preparing ${artifact.name} for download`
+                });
+                // TODO: Implement artifact export functionality
+              }}
+            />
           </TabsContent>
 
           <TabsContent value="schema" className="mt-6">
