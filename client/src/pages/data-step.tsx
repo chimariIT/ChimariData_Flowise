@@ -286,7 +286,41 @@ export default function DataStep({ journeyType, onNext, onPrevious, renderAsCont
               </p>
             </div>
 
-            {/* Pricing Banner - Removed due to incompatible props interface */}
+            {/* Cost Transparency Section */}
+            <div className="mb-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-4">
+                  <CostChip
+                    journeyType={journeyType as 'guided' | 'business' | 'technical'}
+                    features={['data_preparation', 'schema_validation', 'privacy_check']}
+                    dataSizeMB={Math.round((currentProject?.fileSize || 0) / 1024 / 1024)}
+                    complexityLevel="basic"
+                    expectedQuestions={3}
+                    size="lg"
+                    data-testid="cost-chip-data-step"
+                  />
+                  <Badge variant="secondary" data-testid="badge-data-stage">
+                    Data Preparation • Step 2 of 3
+                  </Badge>
+                </div>
+              </div>
+              
+              <PricingBanner
+                journeyType={journeyType as 'guided' | 'business' | 'technical'}
+                features={['data_preparation', 'schema_validation', 'privacy_check']}
+                dataSizeMB={Math.round((currentProject?.fileSize || 0) / 1024 / 1024)}
+                complexityLevel="basic"
+                expectedQuestions={3}
+                onConfirm={(estimate) => {
+                  toast({
+                    title: "Data Preparation Confirmed",
+                    description: `Proceeding with data preparation for ${formatCurrency(estimate.total)}`,
+                  });
+                }}
+                className="border-blue-200 bg-blue-50"
+                data-testid="pricing-banner-data-step"
+              />
+            </div>
           </>
         )}
 
