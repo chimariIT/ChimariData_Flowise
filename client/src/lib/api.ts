@@ -662,6 +662,548 @@ export class APIClient {
 
     return await response.json();
   }
+
+  // Streaming Sources API methods
+  async createStreamingSource(config: {
+    name: string;
+    description?: string;
+    datasetId: string;
+    protocol: 'websocket' | 'sse' | 'poll';
+    endpoint: string;
+    headers?: Record<string, string>;
+    parseSpec?: {
+      format?: 'json' | 'text';
+      jsonPath?: string;
+      delimiter?: string;
+      timestampPath?: string;
+      dedupeKeyPath?: string;
+    };
+    batchSize?: number;
+    flushMs?: number;
+    maxBuffer?: number;
+    pollInterval?: number;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/streaming-sources`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(config),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to create streaming source: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async getStreamingSources(filters?: {
+    projectId?: string;
+    datasetId?: string;
+    status?: string;
+    protocol?: string;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const params = new URLSearchParams();
+    if (filters?.projectId) params.set('projectId', filters.projectId);
+    if (filters?.datasetId) params.set('datasetId', filters.datasetId);
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.protocol) params.set('protocol', filters.protocol);
+
+    const response = await fetch(`${API_BASE}/api/streaming-sources?${params}`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch streaming sources: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async getStreamingSource(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/streaming-sources/${id}`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch streaming source: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async updateStreamingSource(id: string, updates: {
+    name?: string;
+    description?: string;
+    endpoint?: string;
+    headers?: Record<string, string>;
+    parseSpec?: any;
+    batchSize?: number;
+    flushMs?: number;
+    maxBuffer?: number;
+    pollInterval?: number;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/streaming-sources/${id}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify(updates),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to update streaming source: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async startStreamingSource(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/streaming-sources/${id}/start`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to start streaming source: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async stopStreamingSource(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/streaming-sources/${id}/stop`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to stop streaming source: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async deleteStreamingSource(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/streaming-sources/${id}`, {
+      method: 'DELETE',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to delete streaming source: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  // Scraping Jobs API methods
+  async createScrapingJob(config: {
+    name: string;
+    description?: string;
+    datasetId: string;
+    strategy: 'http' | 'puppeteer';
+    targetUrl: string;
+    schedule?: string;
+    extractionSpec: {
+      selectors?: Record<string, string>;
+      jsonPath?: string;
+      tableSelector?: string;
+      followPagination?: {
+        enabled: boolean;
+        nextSelector?: string;
+        maxPages?: number;
+        waitTime?: number;
+      };
+    };
+    loginSpec?: {
+      type: 'form' | 'basic' | 'header';
+      usernameSelector?: string;
+      passwordSelector?: string;
+      username?: string;
+      password?: string;
+      headers?: Record<string, string>;
+    };
+    rateLimitRPM?: number;
+    maxConcurrency?: number;
+    respectRobots?: boolean;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/scraping-jobs`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(config),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to create scraping job: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async getScrapingJobs(filters?: {
+    projectId?: string;
+    datasetId?: string;
+    status?: string;
+    strategy?: string;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const params = new URLSearchParams();
+    if (filters?.projectId) params.set('projectId', filters.projectId);
+    if (filters?.datasetId) params.set('datasetId', filters.datasetId);
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.strategy) params.set('strategy', filters.strategy);
+
+    const response = await fetch(`${API_BASE}/api/scraping-jobs?${params}`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch scraping jobs: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async getScrapingJob(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/scraping-jobs/${id}`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch scraping job: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async updateScrapingJob(id: string, updates: {
+    name?: string;
+    description?: string;
+    targetUrl?: string;
+    schedule?: string;
+    extractionSpec?: any;
+    loginSpec?: any;
+    rateLimitRPM?: number;
+    maxConcurrency?: number;
+    respectRobots?: boolean;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/scraping-jobs/${id}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify(updates),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to update scraping job: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async startScrapingJob(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/scraping-jobs/${id}/start`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to start scraping job: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async stopScrapingJob(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/scraping-jobs/${id}/stop`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to stop scraping job: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async runScrapingJobOnce(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/scraping-jobs/${id}/run`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to run scraping job: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async deleteScrapingJob(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/scraping-jobs/${id}`, {
+      method: 'DELETE',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to delete scraping job: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async getScrapingJobRuns(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/scraping-jobs/${id}/runs`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch scraping job runs: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  // Live Sources Overview API method
+  async getLiveSourcesOverview(projectId?: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const params = new URLSearchParams();
+    if (projectId) params.set('projectId', projectId);
+
+    const response = await fetch(`${API_BASE}/api/live-sources/overview?${params}`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch live sources overview: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  // Test connection methods
+  async testStreamingConnection(config: {
+    protocol: 'websocket' | 'sse' | 'poll';
+    endpoint: string;
+    headers?: Record<string, string>;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/streaming-sources/test-connection`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(config),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Connection test failed: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async testScrapingExtraction(config: {
+    strategy: 'http' | 'puppeteer';
+    targetUrl: string;
+    extractionSpec: any;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/scraping-jobs/test-extraction`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(config),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Extraction test failed: ${response.status}`);
+    }
+
+    return await response.json();
+  }
 }
 
 export const apiClient = new APIClient();
