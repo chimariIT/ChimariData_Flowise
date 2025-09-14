@@ -129,6 +129,12 @@ export class RealtimeServer extends EventEmitter {
           const bearerToken = authHeader.substring(7);
           return this.validateToken(bearerToken);
         }
+        
+        // Allow unauthenticated connections in development mode
+        if (!process.env.JWT_SECRET || process.env.NODE_ENV !== 'production') {
+          return { id: 'dev-guest' };
+        }
+        
         return null;
       }
 

@@ -97,8 +97,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   // Initialize WebSocket server for real-time updates
   const wss = new WebSocketServer({ 
-    server,
-    path: '/ws'
+    noServer: true
+  });
+
+  // Custom upgrade handler to properly handle paths with query parameters
+  server.on('upgrade', (request, socket, head) => {
+    try {
+      const { pathname } = new URL(request.url || '', `http://${request.headers.host}`);
+      
+      // Only handle /ws and /ws/ - let other handlers (like Vite HMR) handle their own paths
+      if (pathname === '/ws' || pathname === '/ws/') {
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          wss.emit('connection', ws, request);
+        });
+      }
+      // Don't destroy socket for other paths - let Vite and other handlers process them
+    } catch (error) {
+      console.error('WebSocket upgrade error:', error);
+      socket.destroy();
+    }
   });
   
   // Initialize real-time server

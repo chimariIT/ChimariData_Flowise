@@ -83,13 +83,12 @@ export class RealtimeClient {
 
   private getWebSocketUrl(): string {
     if (typeof window === 'undefined') {
-      return 'ws://localhost:8080';
+      return 'ws://localhost:5000/ws';
     }
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.hostname;
-    const port = window.location.port ? `:${window.location.port}` : '';
-    return `${protocol}//${host}${port}/ws`;
+    // Use same-origin to avoid port mismatch issues
+    const wsOrigin = window.location.origin.replace(/^http/, 'ws');
+    return `${wsOrigin}/ws`;
   }
 
   private log(message: string, ...args: any[]): void {
@@ -113,10 +112,12 @@ export class RealtimeClient {
     try {
       // Get authentication token
       const authToken = this.getAuthToken();
+      const baseUrl = this.getWebSocketUrl(); // Use fresh URL each time
       const url = authToken 
-        ? `${this.config.url}?token=${encodeURIComponent(authToken)}`
-        : this.config.url;
+        ? `${baseUrl}?token=${encodeURIComponent(authToken)}`
+        : baseUrl;
 
+      console.log('[DEBUG] WebSocket connecting to:', url); // Debug logging
       this.ws = new WebSocket(url);
 
       // Set connection timeout
