@@ -1,5 +1,5 @@
 import { DataProject, InsertDataProject, User, Project, InsertProject, EnterpriseInquiry, InsertEnterpriseInquiry, GuidedAnalysisOrder, InsertGuidedAnalysisOrder, Dataset, InsertDataset, ProjectDataset, InsertProjectDataset, ProjectArtifact, InsertProjectArtifact, StreamingSource, InsertStreamingSource, StreamChunk, InsertStreamChunk, StreamCheckpoint, InsertStreamCheckpoint, ScrapingJob, InsertScrapingJob, ScrapingRun, InsertScrapingRun, DatasetVersion, InsertDatasetVersion, Journey, InsertJourney, JourneyStepProgress, InsertJourneyStepProgress, CostEstimate, InsertCostEstimate, EligibilityCheck, InsertEligibilityCheck } from "@shared/schema";
-import { users, projects, enterpriseInquiries, guidedAnalysisOrders, datasets, projectDatasets, projectArtifacts, streamingSources, streamChunks, streamCheckpoints, scrapingJobs, scrapingRuns, datasetVersions } from "@shared/schema";
+import { users, projects, enterpriseInquiries, guidedAnalysisOrders, datasets, projectDatasets, projectArtifacts, streamingSources, streamChunks, streamCheckpoints, scrapingJobs, scrapingRuns, datasetVersions, costEstimates, eligibilityChecks } from "@shared/schema";
 import { db } from "./db";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
@@ -207,6 +207,21 @@ export interface IStorage {
   getDatasetVersions(datasetId: string): Promise<DatasetVersion[]>;
   getLatestDatasetVersion(datasetId: string): Promise<DatasetVersion | undefined>;
   deleteDatasetVersion(id: string): Promise<boolean>;
+  
+  // Cost Estimates
+  createCostEstimate(estimate: InsertCostEstimate): Promise<CostEstimate>;
+  getCostEstimate(id: string): Promise<CostEstimate | undefined>;
+  getCostEstimatesByUser(userId: string): Promise<CostEstimate[]>;
+  getCostEstimatesByJourney(journeyId: string): Promise<CostEstimate[]>;
+  updateCostEstimate(id: string, updates: Partial<CostEstimate>): Promise<CostEstimate | undefined>;
+  getValidCostEstimates(userId: string): Promise<CostEstimate[]>;
+  
+  // Eligibility Checks
+  createEligibilityCheck(check: InsertEligibilityCheck): Promise<EligibilityCheck>;
+  getEligibilityCheck(id: string): Promise<EligibilityCheck | undefined>;
+  getEligibilityChecksByUser(userId: string): Promise<EligibilityCheck[]>;
+  getEligibilityChecksByFeature(userId: string, feature: string): Promise<EligibilityCheck[]>;
+  getLatestEligibilityCheck(userId: string, feature: string): Promise<EligibilityCheck | undefined>;
 }
 
 export class MemStorage implements IStorage {
@@ -750,6 +765,87 @@ export class MemStorage implements IStorage {
 
   async deleteDatasetVersion(id: string): Promise<boolean> {
     return this.datasetVersions.delete(id);
+  }
+
+  // Cost Estimates - MemStorage Implementation
+  async createCostEstimate(estimateData: InsertCostEstimate): Promise<CostEstimate> {
+    const id = `estimate_${this.nextId++}`;
+    const estimate: CostEstimate = {
+      ...estimateData,
+      id,
+      createdAt: new Date(),
+    };
+    
+    this.costEstimates.set(id, estimate);
+    return estimate;
+  }
+
+  async getCostEstimate(id: string): Promise<CostEstimate | undefined> {
+    return this.costEstimates.get(id);
+  }
+
+  async getCostEstimatesByUser(userId: string): Promise<CostEstimate[]> {
+    return Array.from(this.costEstimates.values())
+      .filter(estimate => estimate.userId === userId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async getCostEstimatesByJourney(journeyId: string): Promise<CostEstimate[]> {
+    return Array.from(this.costEstimates.values())
+      .filter(estimate => estimate.journeyId === journeyId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async updateCostEstimate(id: string, updates: Partial<CostEstimate>): Promise<CostEstimate | undefined> {
+    const existing = this.costEstimates.get(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...updates };
+    this.costEstimates.set(id, updated);
+    return updated;
+  }
+
+  async getValidCostEstimates(userId: string): Promise<CostEstimate[]> {
+    const now = new Date();
+    return Array.from(this.costEstimates.values())
+      .filter(estimate => 
+        estimate.userId === userId && 
+        estimate.validUntil > now
+      )
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  // Eligibility Checks - MemStorage Implementation
+  async createEligibilityCheck(checkData: InsertEligibilityCheck): Promise<EligibilityCheck> {
+    const id = `eligibility_${this.nextId++}`;
+    const check: EligibilityCheck = {
+      ...checkData,
+      id,
+      createdAt: new Date(),
+    };
+    
+    this.eligibilityChecks.set(id, check);
+    return check;
+  }
+
+  async getEligibilityCheck(id: string): Promise<EligibilityCheck | undefined> {
+    return this.eligibilityChecks.get(id);
+  }
+
+  async getEligibilityChecksByUser(userId: string): Promise<EligibilityCheck[]> {
+    return Array.from(this.eligibilityChecks.values())
+      .filter(check => check.userId === userId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async getEligibilityChecksByFeature(userId: string, feature: string): Promise<EligibilityCheck[]> {
+    return Array.from(this.eligibilityChecks.values())
+      .filter(check => check.userId === userId && check.feature === feature)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async getLatestEligibilityCheck(userId: string, feature: string): Promise<EligibilityCheck | undefined> {
+    const checks = await this.getEligibilityChecksByFeature(userId, feature);
+    return checks[0];
   }
 }
 
@@ -1477,6 +1573,121 @@ export class DatabaseStorage implements IStorage {
       .where(eq(datasetVersions.id, id));
     
     return (result.rowCount || 0) > 0;
+  }
+
+  // Cost Estimates - DatabaseStorage Implementation
+  async createCostEstimate(estimateData: InsertCostEstimate): Promise<CostEstimate> {
+    const [estimate] = await db
+      .insert(costEstimates)
+      .values({
+        ...estimateData,
+        id: nanoid(),
+      })
+      .returning();
+    
+    return estimate;
+  }
+
+  async getCostEstimate(id: string): Promise<CostEstimate | undefined> {
+    const [estimate] = await db
+      .select()
+      .from(costEstimates)
+      .where(eq(costEstimates.id, id));
+    
+    return estimate || undefined;
+  }
+
+  async getCostEstimatesByUser(userId: string): Promise<CostEstimate[]> {
+    const { desc } = await import("drizzle-orm");
+    return await db
+      .select()
+      .from(costEstimates)
+      .where(eq(costEstimates.userId, userId))
+      .orderBy(desc(costEstimates.createdAt));
+  }
+
+  async getCostEstimatesByJourney(journeyId: string): Promise<CostEstimate[]> {
+    const { desc } = await import("drizzle-orm");
+    return await db
+      .select()
+      .from(costEstimates)
+      .where(eq(costEstimates.journeyId, journeyId))
+      .orderBy(desc(costEstimates.createdAt));
+  }
+
+  async updateCostEstimate(id: string, updates: Partial<CostEstimate>): Promise<CostEstimate | undefined> {
+    const [estimate] = await db
+      .update(costEstimates)
+      .set(updates)
+      .where(eq(costEstimates.id, id))
+      .returning();
+    
+    return estimate || undefined;
+  }
+
+  async getValidCostEstimates(userId: string): Promise<CostEstimate[]> {
+    const { desc, gt } = await import("drizzle-orm");
+    const now = new Date();
+    return await db
+      .select()
+      .from(costEstimates)
+      .where(
+        and(
+          eq(costEstimates.userId, userId),
+          gt(costEstimates.validUntil, now)
+        )
+      )
+      .orderBy(desc(costEstimates.createdAt));
+  }
+
+  // Eligibility Checks - DatabaseStorage Implementation
+  async createEligibilityCheck(checkData: InsertEligibilityCheck): Promise<EligibilityCheck> {
+    const [check] = await db
+      .insert(eligibilityChecks)
+      .values({
+        ...checkData,
+        id: nanoid(),
+      })
+      .returning();
+    
+    return check;
+  }
+
+  async getEligibilityCheck(id: string): Promise<EligibilityCheck | undefined> {
+    const [check] = await db
+      .select()
+      .from(eligibilityChecks)
+      .where(eq(eligibilityChecks.id, id));
+    
+    return check || undefined;
+  }
+
+  async getEligibilityChecksByUser(userId: string): Promise<EligibilityCheck[]> {
+    const { desc } = await import("drizzle-orm");
+    return await db
+      .select()
+      .from(eligibilityChecks)
+      .where(eq(eligibilityChecks.userId, userId))
+      .orderBy(desc(eligibilityChecks.createdAt));
+  }
+
+  async getEligibilityChecksByFeature(userId: string, feature: string): Promise<EligibilityCheck[]> {
+    const { desc } = await import("drizzle-orm");
+    return await db
+      .select()
+      .from(eligibilityChecks)
+      .where(
+        and(
+          eq(eligibilityChecks.userId, userId),
+          eq(eligibilityChecks.feature, feature)
+        )
+      )
+      .orderBy(desc(eligibilityChecks.createdAt));
+  }
+
+  async getLatestEligibilityCheck(userId: string, feature: string): Promise<EligibilityCheck | undefined> {
+    const checks = await this.getEligibilityChecksByFeature(userId, feature);
+    return checks[0];
   }
 }
 
