@@ -22,6 +22,7 @@ import {
 import { PricingBanner } from "./PricingBanner";
 import { CostChip } from "./CostChip";
 import PrepareStep from "@/pages/prepare-step";
+import DataStep from "@/pages/data-step";
 
 interface JourneyStep {
   id: string;
@@ -370,69 +371,61 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
           />
         </div>
 
-        <Card data-testid="card-step-content">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              {(() => {
-                const currentStep = steps[currentStepIndex];
-                const Icon = currentStep?.icon;
-                return (
-                  <>
-                    {Icon && <Icon className="w-5 h-5" />}
-                    {currentStep?.title}
-                  </>
-                );
-              })()}
-            </CardTitle>
-            <CardDescription>
-              {steps[currentStepIndex]?.description}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {/* Render step-specific content based on currentStage */}
-            {currentStage === 'prepare' && (
-              <PrepareStep journeyType={journeyType} />
-            )}
+{/* Render step-specific content based on currentStage */}
+        {currentStage === 'data' ? (
+          // DataStep has its own layout, render it without Card wrapper
+          <DataStep 
+            journeyType={journeyType}
+            onNext={handleNext}
+            onPrevious={handlePrevious}
+            renderAsContent={true}
+          />
+        ) : (
+          // Other steps use the Card layout
+          <Card data-testid="card-step-content">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                {(() => {
+                  const currentStep = steps[currentStepIndex];
+                  const Icon = currentStep?.icon;
+                  return (
+                    <>
+                      {Icon && <Icon className="w-5 h-5" />}
+                      {currentStep?.title}
+                    </>
+                  );
+                })()}
+              </CardTitle>
+              <CardDescription>
+                {steps[currentStepIndex]?.description}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {currentStage === 'prepare' && (
+                <PrepareStep journeyType={journeyType} />
+              )}
 
-            {currentStage === 'data' && (
-              <div className="space-y-6" data-testid="content-data-step">
-                <div className="text-center py-12">
-                  <Database className="w-12 h-12 text-green-500 mx-auto mb-4" />
-                  <h3 className="text-lg font-semibold mb-2">Data Preparation</h3>
-                  <p className="text-gray-600 max-w-md mx-auto mb-6">
-                    Upload your data from multiple sources, validate data quality, 
-                    and apply necessary transformations for analysis.
-                  </p>
-                  <div className="bg-green-50 border border-green-200 rounded-lg p-4 max-w-md mx-auto">
-                    <h4 className="font-medium text-green-900 mb-2">Coming Soon</h4>
-                    <p className="text-green-700 text-sm">
-                      Enhanced upload interface, schema validation, and data transformation tools
+              {currentStage === 'execute' && (
+                <div className="space-y-6" data-testid="content-execute-step">
+                  <div className="text-center py-12">
+                    <BarChart3 className="w-12 h-12 text-purple-500 mx-auto mb-4" />
+                    <h3 className="text-lg font-semibold mb-2">Analysis Execution</h3>
+                    <p className="text-gray-600 max-w-md mx-auto mb-6">
+                      Execute your analysis plan with guided workflows, 
+                      generate insights, and export results with professional artifacts.
                     </p>
+                    <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 max-w-md mx-auto">
+                      <h4 className="font-medium text-purple-900 mb-2">Coming Soon</h4>
+                      <p className="text-purple-700 text-sm">
+                        Step-by-step analysis execution, interactive results, and comprehensive export options
+                      </p>
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
-
-            {currentStage === 'execute' && (
-              <div className="space-y-6" data-testid="content-execute-step">
-                <div className="text-center py-12">
-                  <BarChart3 className="w-12 h-12 text-purple-500 mx-auto mb-4" />
-                  <h3 className="text-lg font-semibold mb-2">Analysis Execution</h3>
-                  <p className="text-gray-600 max-w-md mx-auto mb-6">
-                    Execute your analysis plan with guided workflows, 
-                    generate insights, and export results with professional artifacts.
-                  </p>
-                  <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 max-w-md mx-auto">
-                    <h4 className="font-medium text-purple-900 mb-2">Coming Soon</h4>
-                    <p className="text-purple-700 text-sm">
-                      Step-by-step analysis execution, interactive results, and comprehensive export options
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {/* Navigation Footer */}
         <div className="flex items-center justify-between mt-8">
