@@ -1149,6 +1149,57 @@ export const eligibilityCheckResponseSchema = z.object({
   error: z.string().optional(),
 });
 
+// Goal Extraction Request/Response Schemas
+export const goalExtractionRequestSchema = z.object({
+  userDescription: z.string().min(10, 'Please provide a detailed description of at least 10 characters'),
+  journeyType: z.enum(['guided', 'business', 'technical']),
+  context: z.object({
+    industry: z.string().optional(),
+    businessRole: z.string().optional(),
+    technicalLevel: z.enum(['basic', 'intermediate', 'advanced']).optional(),
+    dataTypes: z.array(z.string()).optional(),
+    previousAnalysisExperience: z.boolean().optional(),
+  }).optional(),
+  journeyId: z.string().optional(),
+});
+
+export const goalExtractionResponseSchema = z.object({
+  success: z.boolean(),
+  extractionId: z.string(),
+  extractedGoals: z.array(z.object({
+    goal: z.string(),
+    description: z.string(),
+    priority: z.enum(['high', 'medium', 'low']),
+    category: z.enum(['business_insight', 'prediction', 'optimization', 'exploration', 'validation']),
+  })),
+  businessQuestions: z.array(z.object({
+    question: z.string(),
+    type: z.enum(['descriptive', 'diagnostic', 'predictive', 'prescriptive']),
+    complexity: z.enum(['basic', 'intermediate', 'advanced']),
+    dataRequirements: z.array(z.string()),
+  })),
+  suggestedAnalysisPaths: z.array(z.object({
+    name: z.string(),
+    type: z.enum(['statistical', 'machine_learning', 'visualization', 'business_intelligence', 'time_series']),
+    description: z.string(),
+    complexity: z.enum(['basic', 'intermediate', 'advanced']),
+    estimatedDuration: z.string(),
+    expectedOutcomes: z.array(z.string()),
+    requiredFeatures: z.array(z.enum(['preparation', 'data_processing', 'analysis', 'visualization', 'ai_insights'])),
+    confidence: z.number().min(0).max(100),
+  })),
+  dataRequirements: z.object({
+    estimatedColumns: z.number().optional(),
+    estimatedRows: z.number().optional(),
+    requiredDataTypes: z.array(z.string()),
+    qualityRequirements: z.array(z.string()),
+  }),
+  recommendedFeatures: z.array(z.enum(['preparation', 'data_processing', 'analysis', 'visualization', 'ai_insights'])),
+  aiProvider: z.string(),
+  processingTimeMs: z.number(),
+  error: z.string().optional(),
+});
+
 // Type Exports for Journey Tracking
 export type Journey = z.infer<typeof journeySchema>;
 export type JourneyStepProgress = z.infer<typeof journeyStepProgressSchema>;
@@ -1162,6 +1213,8 @@ export type PricingVerifyRequest = z.infer<typeof pricingVerifyRequestSchema>;
 export type PricingConfirmRequest = z.infer<typeof pricingConfirmRequestSchema>;
 export type EligibilityCheckRequest = z.infer<typeof eligibilityCheckRequestSchema>;
 export type EligibilityCheckResponse = z.infer<typeof eligibilityCheckResponseSchema>;
+export type GoalExtractionRequest = z.infer<typeof goalExtractionRequestSchema>;
+export type GoalExtractionResponse = z.infer<typeof goalExtractionResponseSchema>;
 
 export type InsertJourney = z.infer<typeof insertJourneySchema>;
 export type InsertJourneyStepProgress = z.infer<typeof insertJourneyStepProgressSchema>;

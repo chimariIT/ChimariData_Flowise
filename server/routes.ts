@@ -41,10 +41,14 @@ import {
   pricingConfirmRequestSchema,
   eligibilityCheckRequestSchema,
   eligibilityCheckResponseSchema,
+  goalExtractionRequestSchema,
+  goalExtractionResponseSchema,
   PricingEstimateRequest,
   PricingVerifyRequest,
   PricingConfirmRequest,
-  EligibilityCheckRequest
+  EligibilityCheckRequest,
+  GoalExtractionRequest,
+  GoalExtractionResponse
 } from "@shared/schema";
 import { PIIAnalyzer } from './pii-analyzer';
 import { GoogleDriveService } from './google-drive-service';
@@ -1793,6 +1797,338 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ 
         success: false, 
         error: error.message 
+      });
+    }
+  });
+
+  // Helper functions for goal extraction
+  function buildGoalExtractionPrompt(userDescription: string, journeyType: string, context?: any): string {
+    const journeyContext = {
+      guided: "You are helping a non-technical business user who needs guided analysis with clear explanations.",
+      business: "You are helping a business professional who wants to use pre-built templates for common business scenarios.",
+      technical: "You are helping a data professional who wants advanced customization and technical control."
+    }[journeyType] || "You are helping a user with data analysis.";
+
+    return `${journeyContext}
+
+TASK: Extract structured goals and suggest analysis paths from the user's description.
+
+USER DESCRIPTION: "${userDescription}"
+
+CONTEXT:
+${context?.industry ? `- Industry: ${context.industry}` : ''}
+${context?.businessRole ? `- Role: ${context.businessRole}` : ''}
+${context?.technicalLevel ? `- Technical Level: ${context.technicalLevel}` : ''}
+${context?.dataTypes ? `- Expected Data Types: ${context.dataTypes.join(', ')}` : ''}
+
+INSTRUCTIONS: Respond with a JSON object containing:
+
+1. "goals": Array of extracted goals, each with:
+   - "goal": Clear objective statement
+   - "description": Detailed explanation
+   - "priority": "high", "medium", or "low"
+   - "category": "business_insight", "prediction", "optimization", "exploration", or "validation"
+
+2. "questions": Array of business questions, each with:
+   - "question": Specific question to answer
+   - "type": "descriptive", "diagnostic", "predictive", or "prescriptive"
+   - "complexity": "basic", "intermediate", or "advanced"
+   - "dataRequirements": Array of required data types/features
+
+3. "analysisPaths": Array of suggested analysis approaches, each with:
+   - "name": Analysis approach name
+   - "type": "statistical", "machine_learning", "visualization", "business_intelligence", or "time_series"
+   - "description": What this analysis does
+   - "complexity": "basic", "intermediate", or "advanced"
+   - "estimatedDuration": Rough time estimate
+   - "expectedOutcomes": Array of what user will learn
+   - "requiredFeatures": Array from ["preparation", "data_processing", "analysis", "visualization", "ai_insights"]
+   - "confidence": Number 0-100 representing how well this fits the user's needs
+
+4. "dataRequirements": Object with:
+   - "estimatedColumns": Rough number estimate
+   - "estimatedRows": Rough number estimate  
+   - "requiredDataTypes": Array of data types needed
+   - "qualityRequirements": Array of data quality needs
+
+5. "recommendedFeatures": Array from ["preparation", "data_processing", "analysis", "visualization", "ai_insights"]
+
+Focus on practical, actionable analysis that matches the user's technical level and business needs.
+Respond with valid JSON only, no additional text.`;
+  }
+
+  function parseGoalExtractionResponse(aiResponse: string, journeyType: string): any {
+    try {
+      // First try to parse as JSON directly
+      let parsedResponse;
+      try {
+        parsedResponse = JSON.parse(aiResponse);
+      } catch {
+        // If direct JSON parsing fails, try to extract JSON from the response
+        const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          parsedResponse = JSON.parse(jsonMatch[0]);
+        } else {
+          throw new Error("No valid JSON found in AI response");
+        }
+      }
+
+      // Validate and provide defaults for required fields
+      const result = {
+        goals: parsedResponse.goals || [
+          {
+            goal: "Understand key insights from the data",
+            description: "Analyze the dataset to identify important patterns and trends",
+            priority: "high" as const,
+            category: "business_insight" as const
+          }
+        ],
+        questions: parsedResponse.questions || [
+          {
+            question: "What are the main patterns in this dataset?",
+            type: "descriptive" as const,
+            complexity: "basic" as const,
+            dataRequirements: ["Quantitative data", "Clean dataset"]
+          }
+        ],
+        analysisPaths: parsedResponse.analysisPaths || [
+          {
+            name: "Exploratory Data Analysis",
+            type: "statistical" as const,
+            description: "Comprehensive overview of data patterns, distributions, and relationships",
+            complexity: "basic" as const,
+            estimatedDuration: "2-4 hours",
+            expectedOutcomes: ["Data overview", "Key statistics", "Initial insights"],
+            requiredFeatures: ["preparation", "analysis", "visualization"],
+            confidence: 85
+          }
+        ],
+        dataRequirements: {
+          estimatedColumns: parsedResponse.dataRequirements?.estimatedColumns || 10,
+          estimatedRows: parsedResponse.dataRequirements?.estimatedRows || 1000,
+          requiredDataTypes: parsedResponse.dataRequirements?.requiredDataTypes || ["Numerical", "Categorical"],
+          qualityRequirements: parsedResponse.dataRequirements?.qualityRequirements || ["Clean data", "Consistent formatting"]
+        },
+        recommendedFeatures: parsedResponse.recommendedFeatures || ["preparation", "analysis", "visualization"]
+      };
+
+      return result;
+
+    } catch (error) {
+      console.error('Failed to parse AI response:', error);
+      console.error('AI Response was:', aiResponse);
+      
+      // Return fallback response based on journey type
+      return getFallbackGoalExtraction(journeyType);
+    }
+  }
+
+  function getFallbackGoalExtraction(journeyType: string): any {
+    const fallbacks = {
+      guided: {
+        goals: [
+          {
+            goal: "Understand your data patterns",
+            description: "Get clear insights about what your data shows using guided analysis",
+            priority: "high" as const,
+            category: "business_insight" as const
+          }
+        ],
+        questions: [
+          {
+            question: "What are the key trends in my data?",
+            type: "descriptive" as const,
+            complexity: "basic" as const,
+            dataRequirements: ["Historical data", "Key metrics"]
+          }
+        ],
+        analysisPaths: [
+          {
+            name: "Guided Data Exploration",
+            type: "business_intelligence" as const,
+            description: "Step-by-step analysis with AI guidance perfect for business users",
+            complexity: "basic" as const,
+            estimatedDuration: "1-2 hours",
+            expectedOutcomes: ["Business insights", "Key trends", "Actionable recommendations"],
+            requiredFeatures: ["preparation", "analysis", "ai_insights"],
+            confidence: 90
+          }
+        ],
+        dataRequirements: {
+          estimatedColumns: 5,
+          estimatedRows: 500,
+          requiredDataTypes: ["Business metrics", "Time data"],
+          qualityRequirements: ["Complete records", "Business-relevant data"]
+        },
+        recommendedFeatures: ["preparation", "analysis", "ai_insights"]
+      },
+      business: {
+        goals: [
+          {
+            goal: "Apply proven business analysis templates",
+            description: "Use pre-built analysis frameworks for common business scenarios",
+            priority: "high" as const,
+            category: "business_insight" as const
+          }
+        ],
+        questions: [
+          {
+            question: "How does my business performance compare to benchmarks?",
+            type: "diagnostic" as const,
+            complexity: "intermediate" as const,
+            dataRequirements: ["Performance metrics", "Historical data"]
+          }
+        ],
+        analysisPaths: [
+          {
+            name: "Business Performance Dashboard",
+            type: "business_intelligence" as const,
+            description: "Pre-built templates for sales, marketing, and operational analysis",
+            complexity: "intermediate" as const,
+            estimatedDuration: "2-3 hours",
+            expectedOutcomes: ["Performance metrics", "Trend analysis", "Business recommendations"],
+            requiredFeatures: ["preparation", "analysis", "visualization"],
+            confidence: 85
+          }
+        ],
+        dataRequirements: {
+          estimatedColumns: 15,
+          estimatedRows: 2000,
+          requiredDataTypes: ["Business metrics", "Time series", "Categorical data"],
+          qualityRequirements: ["Consistent metrics", "Regular time intervals"]
+        },
+        recommendedFeatures: ["preparation", "analysis", "visualization"]
+      },
+      technical: {
+        goals: [
+          {
+            goal: "Perform advanced statistical analysis",
+            description: "Apply sophisticated analytical techniques with full customization",
+            priority: "high" as const,
+            category: "exploration" as const
+          }
+        ],
+        questions: [
+          {
+            question: "What complex relationships exist in my data?",
+            type: "predictive" as const,
+            complexity: "advanced" as const,
+            dataRequirements: ["Large dataset", "Multiple variables", "Clean data"]
+          }
+        ],
+        analysisPaths: [
+          {
+            name: "Advanced Statistical Modeling",
+            type: "machine_learning" as const,
+            description: "Custom statistical models with full parameter control",
+            complexity: "advanced" as const,
+            estimatedDuration: "4-8 hours",
+            expectedOutcomes: ["Statistical models", "Predictive insights", "Technical documentation"],
+            requiredFeatures: ["preparation", "data_processing", "analysis", "ai_insights"],
+            confidence: 80
+          }
+        ],
+        dataRequirements: {
+          estimatedColumns: 25,
+          estimatedRows: 10000,
+          requiredDataTypes: ["Numerical data", "Multiple variables", "Time series"],
+          qualityRequirements: ["High data quality", "Complete cases", "Validated measurements"]
+        },
+        recommendedFeatures: ["preparation", "data_processing", "analysis", "ai_insights"]
+      }
+    };
+
+    return fallbacks[journeyType] || fallbacks.guided;
+  }
+
+  // Goal extraction endpoint for journey preparation
+  app.post("/api/analysis/extract-goals", ensureAuthenticated, async (req, res) => {
+    try {
+      // Validate input using Zod schema
+      const requestData = goalExtractionRequestSchema.parse(req.body);
+      const { userDescription, journeyType, context, journeyId } = requestData;
+
+      // Check user eligibility for AI features
+      const userId = (req.user as any)?.id;
+      const userSettings = await storage.getUserSettings(userId);
+      const user = await storage.getUser(userId);
+      
+      if (!canUserRequestAIInsight(user?.subscriptionTier || 'none')) {
+        return res.status(403).json({
+          success: false,
+          error: "AI goal extraction requires a paid plan. Please upgrade your subscription."
+        });
+      }
+
+      console.log(`Processing goal extraction for user: ${userId}, journey: ${journeyType}`);
+
+      // Build specialized prompt for goal extraction
+      const goalExtractionPrompt = buildGoalExtractionPrompt(userDescription, journeyType, context);
+
+      // Use ChimaridataAI service for goal extraction
+      const startTime = Date.now();
+      const aiResult = await chimaridataAI.generateInsights({}, "goal_extraction", goalExtractionPrompt);
+
+      if (!aiResult.success) {
+        console.error('AI goal extraction failed:', aiResult.error);
+        return res.status(500).json({
+          success: false,
+          error: "Failed to extract goals using AI. Please try again or contact support.",
+          details: aiResult.error
+        });
+      }
+
+      // Parse AI response into structured format
+      const extractedData = parseGoalExtractionResponse(aiResult.insights, journeyType);
+
+      // Generate unique extraction ID for tracking
+      const extractionId = `goal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      // Create response following the schema
+      const response: GoalExtractionResponse = {
+        success: true,
+        extractionId,
+        extractedGoals: extractedData.goals,
+        businessQuestions: extractedData.questions,
+        suggestedAnalysisPaths: extractedData.analysisPaths,
+        dataRequirements: extractedData.dataRequirements,
+        recommendedFeatures: extractedData.recommendedFeatures,
+        aiProvider: aiResult.provider,
+        processingTimeMs: Date.now() - startTime
+      };
+
+      // Log usage for tracking (following existing patterns)
+      try {
+        await storage.logUsage({
+          userId,
+          projectId: journeyId || null,
+          action: 'goal_extraction',
+          provider: aiResult.provider,
+          tokensUsed: Math.ceil(goalExtractionPrompt.length / 4), // Rough token estimate
+          cost: '0.01' // Small cost for goal extraction
+        });
+      } catch (logError) {
+        console.error('Failed to log usage:', logError);
+        // Continue with response even if logging fails
+      }
+
+      res.json(response);
+
+    } catch (error: any) {
+      console.error("Goal extraction error:", error);
+      
+      if (error.name === 'ZodError') {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid request data",
+          details: error.errors
+        });
+      }
+
+      res.status(500).json({
+        success: false,
+        error: "Failed to extract goals. Please try again.",
+        details: error.message
       });
     }
   });

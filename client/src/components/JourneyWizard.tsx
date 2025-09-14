@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { PricingBanner } from "./PricingBanner";
 import { CostChip } from "./CostChip";
+import PrepareStep from "@/pages/prepare-step";
 
 interface JourneyStep {
   id: string;
@@ -390,22 +391,7 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
           <CardContent>
             {/* Render step-specific content based on currentStage */}
             {currentStage === 'prepare' && (
-              <div className="space-y-6" data-testid="content-prepare-step">
-                <div className="text-center py-12">
-                  <Target className="w-12 h-12 text-blue-500 mx-auto mb-4" />
-                  <h3 className="text-lg font-semibold mb-2">Analysis Preparation</h3>
-                  <p className="text-gray-600 max-w-md mx-auto mb-6">
-                    Define your analysis goals and questions with AI assistance. 
-                    This step helps create a focused analysis plan tailored to your needs.
-                  </p>
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 max-w-md mx-auto">
-                    <h4 className="font-medium text-blue-900 mb-2">Coming Soon</h4>
-                    <p className="text-blue-700 text-sm">
-                      AI-assisted goal extraction, question formulation, and suggested analysis paths
-                    </p>
-                  </div>
-                </div>
-              </div>
+              <PrepareStep journeyType={journeyType} />
             )}
 
             {currentStage === 'data' && (
