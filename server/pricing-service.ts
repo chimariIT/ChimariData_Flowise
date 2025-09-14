@@ -1,29 +1,444 @@
-import { PricingTier } from "@shared/schema";
+import crypto from 'crypto';
+import { storage } from './storage';
+import { 
+  PricingEstimateRequest, 
+  PricingEstimateResponse,
+  CostEstimate,
+  InsertCostEstimate 
+} from '@shared/schema';
+import { nanoid } from 'nanoid';
+
+interface CostItem {
+  description: string;
+  quantity: number;
+  unitPrice: number; // in cents
+  total: number; // in cents
+}
+
+interface PricingCalculation {
+  items: CostItem[];
+  subtotal: number; // in cents
+  discounts: number; // in cents
+  total: number; // in cents
+}
+
+interface CacheEntry {
+  estimate: CostEstimate;
+  timestamp: number;
+  ttlMs: number;
+}
 
 export class PricingService {
-  private static basePrices: PricingTier = {
-    transformation: 15,
-    analysis: 25,
-    visualization: 20,
-    ai_insights: 35,
-    twoFeatures: 0.15,
-    threeFeatures: 0.25,
-    allFeatures: 0.35
+  private static instance: PricingService;
+  private estimateCache = new Map<string, CacheEntry>();
+  private readonly CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+  private readonly ESTIMATE_VALIDITY_MS = 15 * 60 * 1000; // 15 minutes
+  private readonly SECRET_KEY = process.env.PRICING_SECRET_KEY || 'dev-pricing-secret-key-change-in-production';
+
+  // Base pricing in cents (divide by 100 for dollars)
+  private readonly BASE_PRICES = {
+    preparation: 500, // $5.00
+    data_processing: 1000, // $10.00
+    analysis: 1500, // $15.00
+    visualization: 1200, // $12.00
+    ai_insights: 2000, // $20.00
   };
 
+  // Journey type multipliers
+  private readonly JOURNEY_MULTIPLIERS = {
+    guided: 1.0,
+    business: 1.25,
+    technical: 1.5,
+  };
+
+  // Complexity multipliers
+  private readonly COMPLEXITY_MULTIPLIERS = {
+    basic: 1.0,
+    intermediate: 1.3,
+    advanced: 1.6,
+  };
+
+  // Data size pricing per MB (in cents)
+  private readonly DATA_SIZE_RATE = 10; // $0.10 per MB
+
+  // Progressive discounts for multiple features
+  private readonly MULTI_FEATURE_DISCOUNTS = {
+    2: 0.10, // 10% off for 2 features
+    3: 0.20, // 20% off for 3 features
+    4: 0.25, // 25% off for 4 features
+    5: 0.30, // 30% off for 5+ features
+  };
+
+  public static getInstance(): PricingService {
+    if (!PricingService.instance) {
+      PricingService.instance = new PricingService();
+    }
+    return PricingService.instance;
+  }
+
+  /**
+   * Generate a hash of the pricing inputs for caching
+   */
+  private generateInputsHash(request: PricingEstimateRequest): string {
+    const canonical = {
+      journeyType: request.journeyType,
+      features: request.features.sort(), // Sort for consistency
+      dataSizeMB: request.dataSizeMB,
+      complexityLevel: request.complexityLevel,
+      expectedQuestions: request.expectedQuestions,
+    };
+    
+    return crypto
+      .createHash('sha256')
+      .update(JSON.stringify(canonical))
+      .digest('hex');
+  }
+
+  /**
+   * Calculate pricing based on request parameters
+   */
+  private calculatePricing(request: PricingEstimateRequest): PricingCalculation {
+    const items: CostItem[] = [];
+    let subtotal = 0;
+
+    // Journey type multiplier
+    const journeyMultiplier = this.JOURNEY_MULTIPLIERS[request.journeyType];
+    
+    // Complexity multiplier
+    const complexityMultiplier = this.COMPLEXITY_MULTIPLIERS[request.complexityLevel];
+
+    // Feature-based pricing
+    for (const feature of request.features) {
+      const basePrice = this.BASE_PRICES[feature as keyof typeof this.BASE_PRICES];
+      if (!basePrice) continue;
+
+      const adjustedPrice = Math.round(basePrice * journeyMultiplier * complexityMultiplier);
+      
+      items.push({
+        description: `${feature.replace('_', ' ').toUpperCase()} (${request.journeyType} journey, ${request.complexityLevel} complexity)`,
+        quantity: 1,
+        unitPrice: adjustedPrice,
+        total: adjustedPrice,
+      });
+      
+      subtotal += adjustedPrice;
+    }
+
+    // Data size pricing
+    if (request.dataSizeMB > 0) {
+      const dataSizeCost = Math.round(request.dataSizeMB * this.DATA_SIZE_RATE);
+      items.push({
+        description: `Data processing (${request.dataSizeMB} MB)`,
+        quantity: request.dataSizeMB,
+        unitPrice: this.DATA_SIZE_RATE,
+        total: dataSizeCost,
+      });
+      subtotal += dataSizeCost;
+    }
+
+    // Questions complexity pricing
+    if (request.expectedQuestions > 5) {
+      const additionalQuestions = request.expectedQuestions - 5;
+      const questionCost = additionalQuestions * 200; // $2.00 per additional question
+      items.push({
+        description: `Additional analysis questions (${additionalQuestions} extra)`,
+        quantity: additionalQuestions,
+        unitPrice: 200,
+        total: questionCost,
+      });
+      subtotal += questionCost;
+    }
+
+    // Calculate progressive discounts
+    let discounts = 0;
+    const featureCount = request.features.length;
+    if (featureCount >= 2) {
+      const discountRate = this.MULTI_FEATURE_DISCOUNTS[Math.min(featureCount, 5) as keyof typeof this.MULTI_FEATURE_DISCOUNTS];
+      discounts = Math.round(subtotal * discountRate);
+    }
+
+    const total = subtotal - discounts;
+
+    return {
+      items,
+      subtotal,
+      discounts,
+      total,
+    };
+  }
+
+  /**
+   * Generate HMAC signature for cost estimate
+   */
+  private generateSignature(payload: object): string {
+    const canonicalPayload = JSON.stringify(payload);
+    return crypto
+      .createHmac('sha256', this.SECRET_KEY)
+      .update(canonicalPayload)
+      .digest('hex');
+  }
+
+  /**
+   * Verify HMAC signature
+   */
+  public verifySignature(payload: object, signature: string): boolean {
+    try {
+      const expectedSignature = this.generateSignature(payload);
+      return crypto.timingSafeEqual(
+        Buffer.from(signature, 'hex'),
+        Buffer.from(expectedSignature, 'hex')
+      );
+    } catch (error) {
+      console.error('Signature verification error:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Clean expired cache entries
+   */
+  private cleanExpiredCache(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.estimateCache.entries()) {
+      if (now - entry.timestamp > entry.ttlMs) {
+        this.estimateCache.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Generate a signed cost estimate
+   */
+  public async generateEstimate(
+    request: PricingEstimateRequest, 
+    userId: string
+  ): Promise<PricingEstimateResponse> {
+    try {
+      // Check cache first
+      const inputsHash = this.generateInputsHash(request);
+      this.cleanExpiredCache();
+      
+      const cached = this.estimateCache.get(inputsHash);
+      if (cached && Date.now() - cached.timestamp < cached.ttlMs) {
+        const expiresInMs = cached.estimate.validUntil.getTime() - Date.now();
+        return {
+          success: true,
+          estimateId: cached.estimate.id,
+          items: cached.estimate.items as any,
+          subtotal: cached.estimate.subtotal,
+          discounts: cached.estimate.discounts,
+          total: cached.estimate.total,
+          currency: cached.estimate.currency,
+          signature: cached.estimate.signature,
+          validUntil: cached.estimate.validUntil,
+          expiresInMs: Math.max(0, expiresInMs),
+        };
+      }
+
+      // Calculate new pricing
+      const calculation = this.calculatePricing(request);
+      const estimateId = nanoid();
+      const validUntil = new Date(Date.now() + this.ESTIMATE_VALIDITY_MS);
+      const nonce = nanoid();
+
+      // Create signable payload
+      const signablePayload = {
+        estimateId,
+        userId,
+        journeyType: request.journeyType,
+        features: request.features.sort(),
+        subtotal: calculation.subtotal,
+        discounts: calculation.discounts,
+        total: calculation.total,
+        expiresAt: validUntil.toISOString(),
+        nonce,
+      };
+
+      const signature = this.generateSignature(signablePayload);
+
+      // Store in database
+      const estimateData: InsertCostEstimate = {
+        journeyId: request.journeyId || null,
+        userId,
+        estimateType: 'full_journey',
+        items: calculation.items,
+        subtotal: calculation.subtotal,
+        discounts: calculation.discounts,
+        taxes: 0, // No taxes for now
+        total: calculation.total,
+        currency: 'USD',
+        signature,
+        validUntil,
+        approved: false,
+      };
+
+      const estimate = await storage.createCostEstimate(estimateData);
+
+      // Cache the result
+      this.estimateCache.set(inputsHash, {
+        estimate,
+        timestamp: Date.now(),
+        ttlMs: this.CACHE_TTL_MS,
+      });
+
+      const expiresInMs = validUntil.getTime() - Date.now();
+
+      return {
+        success: true,
+        estimateId: estimate.id,
+        items: calculation.items,
+        subtotal: calculation.subtotal,
+        discounts: calculation.discounts,
+        total: calculation.total,
+        currency: 'USD',
+        signature,
+        validUntil,
+        expiresInMs,
+      };
+
+    } catch (error) {
+      console.error('Error generating pricing estimate:', error);
+      return {
+        success: false,
+        estimateId: '',
+        items: [],
+        subtotal: 0,
+        discounts: 0,
+        total: 0,
+        currency: 'USD',
+        signature: '',
+        validUntil: new Date(),
+        expiresInMs: 0,
+        error: 'Failed to generate pricing estimate',
+      };
+    }
+  }
+
+  /**
+   * Verify a cost estimate signature and expiry
+   */
+  public async verifyEstimate(estimateId: string, signature: string): Promise<{
+    valid: boolean;
+    estimate?: CostEstimate;
+    error?: string;
+  }> {
+    try {
+      const estimate = await storage.getCostEstimate(estimateId);
+      if (!estimate) {
+        return { valid: false, error: 'Estimate not found' };
+      }
+
+      // Check expiry
+      if (new Date() > estimate.validUntil) {
+        return { valid: false, error: 'Estimate has expired' };
+      }
+
+      // Verify signature matches stored signature
+      if (estimate.signature !== signature) {
+        return { valid: false, error: 'Invalid signature' };
+      }
+
+      return { valid: true, estimate };
+
+    } catch (error) {
+      console.error('Error verifying estimate:', error);
+      return { valid: false, error: 'Verification failed' };
+    }
+  }
+
+  /**
+   * Confirm an estimate and mark it as approved
+   */
+  public async confirmEstimate(
+    estimateId: string, 
+    signature: string, 
+    journeyId: string
+  ): Promise<{
+    success: boolean;
+    estimate?: CostEstimate;
+    error?: string;
+  }> {
+    try {
+      // First verify the estimate
+      const verification = await this.verifyEstimate(estimateId, signature);
+      if (!verification.valid || !verification.estimate) {
+        return { 
+          success: false, 
+          error: verification.error || 'Invalid estimate' 
+        };
+      }
+
+      // Mark as approved and associate with journey
+      const updatedEstimate = await storage.updateCostEstimate(estimateId, {
+        approved: true,
+        approvedAt: new Date(),
+        journeyId,
+      });
+
+      if (!updatedEstimate) {
+        return { success: false, error: 'Failed to confirm estimate' };
+      }
+
+      return { success: true, estimate: updatedEstimate };
+
+    } catch (error) {
+      console.error('Error confirming estimate:', error);
+      return { success: false, error: 'Confirmation failed' };
+    }
+  }
+
+  /**
+   * Get estimate summary for display purposes (without sensitive data)
+   */
+  public async getEstimateSummary(estimateId: string): Promise<{
+    found: boolean;
+    total?: number;
+    currency?: string;
+    valid?: boolean;
+    error?: string;
+  }> {
+    try {
+      const estimate = await storage.getCostEstimate(estimateId);
+      if (!estimate) {
+        return { found: false, error: 'Estimate not found' };
+      }
+
+      const isValid = new Date() <= estimate.validUntil;
+
+      return {
+        found: true,
+        total: estimate.total,
+        currency: estimate.currency,
+        valid: isValid,
+      };
+
+    } catch (error) {
+      console.error('Error getting estimate summary:', error);
+      return { found: false, error: 'Failed to retrieve estimate' };
+    }
+  }
+
+  // Legacy methods for backward compatibility
   static calculatePrice(features: string[]): {
     subtotal: number;
     discount: number;
     total: number;
     breakdown: Record<string, number>;
   } {
+    const basePrices = {
+      transformation: 15,
+      analysis: 25,
+      visualization: 20,
+      ai_insights: 35,
+    };
+
     const featureCount = features.length;
     let subtotal = 0;
     const breakdown: Record<string, number> = {};
 
     // Calculate subtotal
     features.forEach(feature => {
-      const price = this.basePrices[feature as keyof PricingTier] as number;
+      const price = basePrices[feature as keyof typeof basePrices];
       if (typeof price === 'number' && price > 0) {
         subtotal += price;
         breakdown[feature] = price;
@@ -33,11 +448,11 @@ export class PricingService {
     // Calculate discount
     let discountRate = 0;
     if (featureCount === 2) {
-      discountRate = this.basePrices.twoFeatures;
+      discountRate = 0.15;
     } else if (featureCount === 3) {
-      discountRate = this.basePrices.threeFeatures;
+      discountRate = 0.25;
     } else if (featureCount >= 4) {
-      discountRate = this.basePrices.allFeatures;
+      discountRate = 0.35;
     }
 
     const discount = subtotal * discountRate;
@@ -51,68 +466,6 @@ export class PricingService {
     };
   }
 
-  static getFeatureDescriptions(): Record<string, { name: string; description: string; price: number }> {
-    return {
-      transformation: {
-        name: "Data Transformation",
-        description: "Clean, filter, and reshape your data with advanced Python processing",
-        price: this.basePrices.transformation
-      },
-      analysis: {
-        name: "Statistical Analysis",
-        description: "Comprehensive statistical analysis with correlation, regression, and more",
-        price: this.basePrices.analysis
-      },
-      visualization: {
-        name: "Data Visualizations",
-        description: "Professional charts, graphs, and interactive visualizations",
-        price: this.basePrices.visualization
-      },
-      ai_insights: {
-        name: "AI Insights",
-        description: "Intelligent data interpretation with Chimaridata AI technology",
-        price: this.basePrices.ai_insights
-      }
-    };
-  }
-
-  static getDiscountInfo(): { tiers: Array<{ features: number; discount: number; description: string }> } {
-    return {
-      tiers: [
-        {
-          features: 1,
-          discount: 0,
-          description: "Single feature - full price"
-        },
-        {
-          features: 2,
-          discount: this.basePrices.twoFeatures,
-          description: `Two features - ${(this.basePrices.twoFeatures * 100).toFixed(0)}% discount`
-        },
-        {
-          features: 3,
-          discount: this.basePrices.threeFeatures,
-          description: `Three features - ${(this.basePrices.threeFeatures * 100).toFixed(0)}% discount`
-        },
-        {
-          features: 4,
-          discount: this.basePrices.allFeatures,
-          description: `All features - ${(this.basePrices.allFeatures * 100).toFixed(0)}% discount`
-        }
-      ]
-    };
-  }
-
-  static validateFeatures(features: string[]): { valid: boolean; invalidFeatures: string[] } {
-    const validFeatures = ["transformation", "analysis", "visualization", "ai_insights"];
-    const invalidFeatures = features.filter(f => !validFeatures.includes(f));
-    
-    return {
-      valid: invalidFeatures.length === 0,
-      invalidFeatures
-    };
-  }
-
   static getFreeTrialLimits(): { maxFileSize: number; description: string } {
     return {
       maxFileSize: 10 * 1024 * 1024, // 10MB
@@ -120,3 +473,6 @@ export class PricingService {
     };
   }
 }
+
+// Export singleton instance
+export const pricingService = PricingService.getInstance();

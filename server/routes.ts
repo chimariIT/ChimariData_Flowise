@@ -34,6 +34,18 @@ import {
   scrapingJobResponseSchema,
   liveSourcesOverviewResponseSchema
 } from "@shared/schema";
+import { 
+  pricingEstimateRequestSchema, 
+  pricingEstimateResponseSchema,
+  pricingVerifyRequestSchema,
+  pricingConfirmRequestSchema,
+  eligibilityCheckRequestSchema,
+  eligibilityCheckResponseSchema,
+  PricingEstimateRequest,
+  PricingVerifyRequest,
+  PricingConfirmRequest,
+  EligibilityCheckRequest
+} from "@shared/schema";
 import { PIIAnalyzer } from './pii-analyzer';
 import { GoogleDriveService } from './google-drive-service';
 import { DataTransformer } from './data-transformer';
@@ -50,6 +62,8 @@ import { TimeSeriesAnalyzer } from './time-series-analyzer';
 import { cloudConnectorService } from './cloud-connectors';
 import { SUBSCRIPTION_TIERS, getTierLimits, canUserUpload, canUserRequestAIInsight } from '@shared/subscription-tiers';
 import { PasswordResetService } from './password-reset-service';
+import { pricingService } from './pricing-service';
+import { eligibilityService } from './eligibility-service';
 import bcrypt from 'bcrypt';
 import fs from 'fs/promises';
 import { VisualizationAPIService, PandasTransformationAPIService } from './visualization-api-service';
@@ -5689,6 +5703,259 @@ This link will expire in 24 hours.
       res.status(500).json({ 
         success: false, 
         error: "Failed to broadcast event" 
+      });
+    }
+  });
+
+  // ============================================
+  // PRICING AND ELIGIBILITY API ENDPOINTS
+  // ============================================
+
+  // Generate pricing estimate with HMAC signature
+  app.post('/api/pricing/estimate', unifiedAuth, async (req, res) => {
+    try {
+      const userId = req.user?.id || req.userId;
+      if (!userId) {
+        return res.status(401).json({ 
+          success: false, 
+          error: "Authentication required" 
+        });
+      }
+
+      // Validate request body
+      const validatedRequest = pricingEstimateRequestSchema.parse(req.body);
+      
+      // Generate estimate using pricing service
+      const estimate = await pricingService.generateEstimate(validatedRequest, userId);
+      
+      res.json(estimate);
+    } catch (error: any) {
+      console.error('Error generating pricing estimate:', error);
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid request data", 
+          details: error.errors 
+        });
+      }
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to generate pricing estimate" 
+      });
+    }
+  });
+
+  // Verify pricing estimate signature and expiry
+  app.post('/api/pricing/verify', unifiedAuth, async (req, res) => {
+    try {
+      const validatedRequest = pricingVerifyRequestSchema.parse(req.body);
+      
+      const verification = await pricingService.verifyEstimate(
+        validatedRequest.estimateId, 
+        validatedRequest.signature
+      );
+      
+      res.json({
+        success: verification.valid,
+        valid: verification.valid,
+        error: verification.error,
+      });
+    } catch (error: any) {
+      console.error('Error verifying pricing estimate:', error);
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid request data", 
+          details: error.errors 
+        });
+      }
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to verify pricing estimate" 
+      });
+    }
+  });
+
+  // Confirm pricing estimate and associate with journey
+  app.post('/api/pricing/confirm', unifiedAuth, async (req, res) => {
+    try {
+      const userId = req.user?.id || req.userId;
+      if (!userId) {
+        return res.status(401).json({ 
+          success: false, 
+          error: "Authentication required" 
+        });
+      }
+
+      const validatedRequest = pricingConfirmRequestSchema.parse(req.body);
+      
+      const confirmation = await pricingService.confirmEstimate(
+        validatedRequest.estimateId, 
+        validatedRequest.signature, 
+        validatedRequest.journeyId
+      );
+      
+      if (confirmation.success && confirmation.estimate) {
+        // Update journey with cost estimate reference
+        try {
+          await storage.updateJourney(validatedRequest.journeyId, {
+            costEstimateId: confirmation.estimate.id,
+            lastUpdated: new Date(),
+          });
+        } catch (journeyError) {
+          console.warn('Failed to update journey with cost estimate:', journeyError);
+          // Don't fail the confirmation if journey update fails
+        }
+      }
+      
+      res.json({
+        success: confirmation.success,
+        estimate: confirmation.estimate ? {
+          id: confirmation.estimate.id,
+          total: confirmation.estimate.total,
+          currency: confirmation.estimate.currency,
+          approved: confirmation.estimate.approved,
+        } : undefined,
+        error: confirmation.error,
+      });
+    } catch (error: any) {
+      console.error('Error confirming pricing estimate:', error);
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid request data", 
+          details: error.errors 
+        });
+      }
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to confirm pricing estimate" 
+      });
+    }
+  });
+
+  // Check user eligibility for requested features
+  app.post('/api/eligibility/check', unifiedAuth, async (req, res) => {
+    try {
+      const userId = req.user?.id || req.userId;
+      if (!userId) {
+        return res.status(401).json({ 
+          success: false, 
+          error: "Authentication required" 
+        });
+      }
+
+      const validatedRequest = eligibilityCheckRequestSchema.parse(req.body);
+      
+      const eligibilityResult = await eligibilityService.checkEligibility(userId, validatedRequest);
+      
+      res.json(eligibilityResult);
+    } catch (error: any) {
+      console.error('Error checking eligibility:', error);
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid request data", 
+          details: error.errors 
+        });
+      }
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to check eligibility" 
+      });
+    }
+  });
+
+  // Get user's current usage summary
+  app.get('/api/eligibility/usage', unifiedAuth, async (req, res) => {
+    try {
+      const userId = req.user?.id || req.userId;
+      if (!userId) {
+        return res.status(401).json({ 
+          success: false, 
+          error: "Authentication required" 
+        });
+      }
+
+      const usageSummary = await eligibilityService.getUserUsageSummary(userId);
+      
+      if (!usageSummary) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "User usage data not found" 
+        });
+      }
+      
+      res.json({
+        success: true,
+        data: usageSummary,
+      });
+    } catch (error: any) {
+      console.error('Error getting user usage summary:', error);
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to get usage summary" 
+      });
+    }
+  });
+
+  // Quick action eligibility check
+  app.post('/api/eligibility/action', unifiedAuth, async (req, res) => {
+    try {
+      const userId = req.user?.id || req.userId;
+      if (!userId) {
+        return res.status(401).json({ 
+          success: false, 
+          error: "Authentication required" 
+        });
+      }
+
+      const { action } = req.body;
+      if (!action || !['upload', 'ai_insight', 'analysis'].includes(action)) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid action. Must be 'upload', 'ai_insight', or 'analysis'" 
+        });
+      }
+
+      const result = await eligibilityService.canUserPerformAction(userId, action);
+      
+      res.json({
+        success: true,
+        allowed: result.allowed,
+        reason: result.reason,
+        currentTier: result.tier,
+      });
+    } catch (error: any) {
+      console.error('Error checking action eligibility:', error);
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to check action eligibility" 
+      });
+    }
+  });
+
+  // Get estimate summary (public info only)
+  app.get('/api/pricing/estimate/:estimateId/summary', unifiedAuth, async (req, res) => {
+    try {
+      const { estimateId } = req.params;
+      
+      const summary = await pricingService.getEstimateSummary(estimateId);
+      
+      res.json({
+        success: summary.found,
+        data: summary.found ? {
+          total: summary.total,
+          currency: summary.currency,
+          valid: summary.valid,
+        } : undefined,
+        error: summary.error,
+      });
+    } catch (error: any) {
+      console.error('Error getting estimate summary:', error);
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to get estimate summary" 
       });
     }
   });

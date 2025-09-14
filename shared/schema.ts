@@ -1077,11 +1077,91 @@ export const insertEligibilityCheckSchema = createInsertSchema(eligibilityChecks
   createdAt: true,
 });
 
+// Pricing Request/Response Schemas
+export const pricingEstimateRequestSchema = z.object({
+  journeyType: z.enum(['guided', 'business', 'technical']),
+  features: z.array(z.enum(['preparation', 'data_processing', 'analysis', 'visualization', 'ai_insights'])),
+  dataSizeMB: z.number().min(0).max(1000), // Max 1GB for initial implementation
+  complexityLevel: z.enum(['basic', 'intermediate', 'advanced']).default('basic'),
+  expectedQuestions: z.number().min(1).max(20).default(5),
+  journeyId: z.string().optional(),
+});
+
+export const pricingEstimateResponseSchema = z.object({
+  success: z.boolean(),
+  estimateId: z.string(),
+  items: z.array(z.object({
+    description: z.string(),
+    quantity: z.number(),
+    unitPrice: z.number(),
+    total: z.number(),
+  })),
+  subtotal: z.number(),
+  discounts: z.number(),
+  total: z.number(),
+  currency: z.string(),
+  signature: z.string(),
+  validUntil: z.date(),
+  expiresInMs: z.number(),
+  error: z.string().optional(),
+});
+
+export const pricingVerifyRequestSchema = z.object({
+  estimateId: z.string(),
+  signature: z.string(),
+});
+
+export const pricingConfirmRequestSchema = z.object({
+  estimateId: z.string(),
+  signature: z.string(),
+  journeyId: z.string(),
+});
+
+export const eligibilityCheckRequestSchema = z.object({
+  features: z.array(z.enum(['preparation', 'data_processing', 'analysis', 'visualization', 'ai_insights'])),
+  dataSizeMB: z.number().min(0),
+  journeyType: z.enum(['guided', 'business', 'technical']),
+});
+
+export const eligibilityCheckResponseSchema = z.object({
+  success: z.boolean(),
+  eligible: z.boolean(),
+  checkId: z.string(),
+  blockedFeatures: z.array(z.object({
+    feature: z.string(),
+    reason: z.string(),
+    requiredTier: z.string().optional(),
+    upgradeRequired: z.boolean(),
+  })),
+  currentTier: z.string(),
+  usage: z.object({
+    monthlyUploads: z.number(),
+    monthlyDataVolume: z.number(),
+    monthlyAIInsights: z.number(),
+  }),
+  limits: z.object({
+    monthlyUploads: z.number(),
+    monthlyDataVolume: z.number(),
+    monthlyAIInsights: z.number(),
+  }),
+  nextResetAt: z.date().optional(),
+  upgradeRecommendation: z.string().optional(),
+  error: z.string().optional(),
+});
+
 // Type Exports for Journey Tracking
 export type Journey = z.infer<typeof journeySchema>;
 export type JourneyStepProgress = z.infer<typeof journeyStepProgressSchema>;
 export type CostEstimate = z.infer<typeof costEstimateSchema>;
 export type EligibilityCheck = z.infer<typeof eligibilitySchema>;
+
+// Type Exports for Pricing Requests/Responses
+export type PricingEstimateRequest = z.infer<typeof pricingEstimateRequestSchema>;
+export type PricingEstimateResponse = z.infer<typeof pricingEstimateResponseSchema>;
+export type PricingVerifyRequest = z.infer<typeof pricingVerifyRequestSchema>;
+export type PricingConfirmRequest = z.infer<typeof pricingConfirmRequestSchema>;
+export type EligibilityCheckRequest = z.infer<typeof eligibilityCheckRequestSchema>;
+export type EligibilityCheckResponse = z.infer<typeof eligibilityCheckResponseSchema>;
 
 export type InsertJourney = z.infer<typeof insertJourneySchema>;
 export type InsertJourneyStepProgress = z.infer<typeof insertJourneyStepProgressSchema>;
