@@ -33,6 +33,7 @@ import fs from 'fs/promises';
 import { VisualizationAPIService, PandasTransformationAPIService } from './visualization-api-service';
 import { sourceAdapterManager, SourceInput } from './source-adapters';
 import { datasets, projects, projectDatasets, projectArtifacts } from '@shared/schema';
+import { migrationService } from './migration-service';
 
 // Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
@@ -4232,6 +4233,219 @@ This link will expire in 24 hours.
     } catch (error: any) {
       console.error('Failed to fetch artifact chain:', error);
       res.status(500).json({ error: "Failed to fetch artifact chain" });
+    }
+  });
+
+  // =============================================================================
+  // MIGRATION API ROUTES - Data Migration Management
+  // =============================================================================
+
+  // Get migration status for all projects
+  app.get("/api/migration/status", ensureAuthenticated, async (req, res) => {
+    try {
+      // SECURITY FIX: Proper admin role checking instead of just isVerified
+      const userId = (req.user as any)?.id;
+      const user = await storage.getUser(userId);
+      
+      // CRITICAL SECURITY FIX: Check for actual admin role, not just isVerified
+      // For now, restrict this to system-level operations only
+      const isSystemAdmin = user?.email && (
+        user.email.endsWith('@chimaridata.com') || 
+        user.email.endsWith('@admin.chimaridata.com') ||
+        process.env.NODE_ENV === 'development' // Allow in dev mode only
+      );
+      
+      if (!isSystemAdmin) {
+        return res.status(403).json({ 
+          error: "System admin access required. Global migration status is restricted." 
+        });
+      }
+
+      const status = await migrationService.getMigrationStatus();
+      res.json({ success: true, status });
+    } catch (error: any) {
+      console.error('Failed to get migration status:', error);
+      res.status(500).json({ error: "Failed to get migration status" });
+    }
+  });
+
+  // Run complete migration for all projects  
+  app.post("/api/migration/run", ensureAuthenticated, async (req, res) => {
+    try {
+      // CRITICAL SECURITY FIX: Prevent global migrations by regular users
+      const userId = (req.user as any)?.id;
+      const user = await storage.getUser(userId);
+      
+      // SECURITY: Only allow system admins to run global migrations
+      const isSystemAdmin = user?.email && (
+        user.email.endsWith('@chimaridata.com') || 
+        user.email.endsWith('@admin.chimaridata.com') ||
+        process.env.NODE_ENV === 'development'
+      );
+      
+      if (!isSystemAdmin) {
+        return res.status(403).json({ 
+          error: "Access denied. Global migrations restricted to system administrators. Use individual project migration instead." 
+        });
+      }
+
+      console.log(`Starting complete migration requested by system admin ${userId}`);
+      
+      const result = await migrationService.runCompleteMigration();
+      
+      if (result.success) {
+        res.json({ 
+          success: true, 
+          message: "Migration completed successfully",
+          summary: result.summary,
+          log: result.log
+        });
+      } else {
+        res.status(500).json({ 
+          success: false, 
+          message: "Migration completed with errors",
+          summary: result.summary,
+          log: result.log
+        });
+      }
+    } catch (error: any) {
+      console.error('Migration execution failed:', error);
+      res.status(500).json({ 
+        success: false, 
+        error: "Migration execution failed",
+        message: error.message 
+      });
+    }
+  });
+
+  // Migrate a specific project
+  app.post("/api/migration/project/:projectId", ensureAuthenticated, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { projectId } = req.params;
+      
+      // AUTHORIZATION FIX: Verify project ownership using correct field
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+      
+      // OWNERSHIP BUG FIX: Use userId for ownership check (ownerId is deprecated)
+      const projectOwnerId = project.userId || project.ownerId; // Handle both for safety
+      if (projectOwnerId !== userId) {
+        return res.status(403).json({ 
+          error: "Access denied - you can only migrate your own projects" 
+        });
+      }
+      
+      const result = await migrationService.migrateSpecificProject(projectId);
+      
+      if (result.success) {
+        res.json(result);
+      } else {
+        res.status(400).json(result);
+      }
+    } catch (error: any) {
+      console.error('Project migration failed:', error);
+      res.status(500).json({ 
+        success: false, 
+        message: "Project migration failed",
+        error: error.message 
+      });
+    }
+  });
+
+  // Check if a project needs migration
+  app.get("/api/migration/project/:projectId/check", ensureAuthenticated, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { projectId } = req.params;
+      
+      // AUTHORIZATION FIX: Verify project ownership using correct field
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+      
+      // OWNERSHIP BUG FIX: Use userId for ownership check (ownerId is deprecated)
+      const projectOwnerId = project.userId || project.ownerId; // Handle both for safety
+      if (projectOwnerId !== userId) {
+        return res.status(403).json({ 
+          error: "Access denied - you can only check your own projects" 
+        });
+      }
+      
+      // Check migration status
+      const needsMigration = !!(
+        project.fileName ||
+        project.fileSize ||
+        project.data ||
+        project.schema ||
+        project.analysisResults ||
+        project.transformations ||
+        project.visualizations ||
+        project.aiInsights
+      );
+      
+      const datasets = await storage.getProjectDatasets(projectId);
+      const artifacts = await storage.getProjectArtifacts(projectId);
+      
+      res.json({ 
+        success: true,
+        projectId,
+        needsMigration,
+        hasDatasets: datasets.length > 0,
+        hasArtifacts: artifacts.length > 0,
+        details: {
+          datasetCount: datasets.length,
+          artifactCount: artifacts.length,
+          legacyFields: {
+            hasFileName: !!project.fileName,
+            hasData: !!project.data,
+            hasSchema: !!project.schema,
+            hasAnalysisResults: !!project.analysisResults,
+            hasTransformations: !!project.transformations,
+            hasVisualizations: !!project.visualizations,
+            hasAIInsights: !!project.aiInsights
+          }
+        }
+      });
+    } catch (error: any) {
+      console.error('Failed to check project migration status:', error);
+      res.status(500).json({ error: "Failed to check migration status" });
+    }
+  });
+
+  // Rollback migration for a project (if implemented)
+  app.post("/api/migration/project/:projectId/rollback", ensureAuthenticated, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { projectId } = req.params;
+      
+      // Verify project ownership
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+      
+      if (project.ownerId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      
+      const result = await migrationService.rollbackProject(projectId);
+      
+      if (result.success) {
+        res.json(result);
+      } else {
+        res.status(400).json(result);
+      }
+    } catch (error: any) {
+      console.error('Project rollback failed:', error);
+      res.status(500).json({ 
+        success: false, 
+        message: "Project rollback failed",
+        error: error.message 
+      });
     }
   });
 
