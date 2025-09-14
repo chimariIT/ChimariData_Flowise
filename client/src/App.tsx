@@ -17,6 +17,7 @@ import AskQuestionPage from "@/pages/ask-question-page";
 import PayPerAnalysis from "@/pages/pay-per-analysis";
 import TemplateAnalysis from "@/pages/template-analysis";
 import PricingPage from "@/pages/pricing";
+import StripeTest from "@/pages/stripe-test";
 import { apiClient } from "@/lib/api";
 import { ProjectProvider } from "@/hooks/useProjectContext";
 import "./index.css";
@@ -180,6 +181,9 @@ export default function App() {
               onGetStarted={() => setLocation('/journeys')} 
               onBack={() => setLocation('/journeys')}
             />}
+          </Route>
+          <Route path="/stripe-test">
+            {() => <StripeTest />}
           </Route>
           <Route>
             <div className="flex items-center justify-center min-h-screen">
