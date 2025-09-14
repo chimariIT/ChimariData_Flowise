@@ -244,32 +244,39 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
     
     // localStorage is now handled in the journey selector component
     
-    // Don't automatically switch tabs - let users navigate manually
-    // This allows them to see the journey confirmation and choose when to proceed
+    // Route each journey to its dedicated workflow page
     if (!skipToast) {
+      let routePath = "";
       let description = "";
+      
       switch (journey) {
         case 'non-tech':
-          description = "AI-guided workflow activated. Click 'Upload Data' to start your analysis.";
+          routePath = "/ai-guided";
+          description = "Routing to AI-guided workflow. Let AI orchestrate your entire analysis process.";
           break;
         case 'business':
-          description = "Template-based analysis ready. Click 'Template Analysis' to browse options.";
+          routePath = "/template-based";
+          description = "Routing to template-based analysis. Browse proven business scenario templates.";
           break;
         case 'technical':
-          description = "Technical mode activated. Access 'Upload Data' or 'AI Console' for advanced features.";
+          routePath = "/self-service";
+          description = "Routing to self-service analytics. Full control with advanced features.";
           break;
         case 'consultation':
-          description = "Expert consultation selected. Get professional guidance from data science experts.";
-          setLocation('/expert-consultation');
-          return;
+          routePath = "/expert-consultation";
+          description = "Routing to expert consultation. Get professional guidance from data science experts.";
+          break;
       }
       
       toast({
         title: "Journey Selected",
         description,
       });
+      
+      // Navigate to the dedicated journey page
+      setLocation(routePath);
     }
-  }, [toast]);
+  }, [toast, setLocation]);
 
   return (
     <div className="container mx-auto px-4 py-8 max-w-6xl">

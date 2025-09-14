@@ -11,6 +11,9 @@ import GuidedAnalysisCheckout from "@/pages/checkout";
 import GuidedAnalysisResults from "@/pages/guided-analysis-results";
 import ExpertConsultation from "@/pages/expert-consultation";
 import DemosPage from "@/pages/demos";
+import AskQuestionPage from "@/pages/ask-question-page";
+import PayPerAnalysis from "@/pages/pay-per-analysis";
+import TemplateAnalysis from "@/pages/template-analysis";
 import { apiClient } from "@/lib/api";
 import { ProjectProvider } from "@/hooks/useProjectContext";
 import "./index.css";
@@ -116,6 +119,15 @@ export default function App() {
           </Route>
           <Route path="/expert-consultation">
             {() => <ExpertConsultation onBack={() => setLocation('/')} />}
+          </Route>
+          <Route path="/ai-guided">
+            {() => user ? <AskQuestionPage onBack={() => setLocation('/')} onPaymentRequired={(projectId, questions) => setLocation(`/checkout?projectId=${projectId}`)} /> : <AuthPage onLogin={handleLogin} />}
+          </Route>
+          <Route path="/self-service">
+            {() => user ? <PayPerAnalysis onBack={() => setLocation('/')} /> : <AuthPage onLogin={handleLogin} />}
+          </Route>
+          <Route path="/template-based">
+            {() => user ? <TemplateAnalysis onBack={() => setLocation('/')} /> : <AuthPage onLogin={handleLogin} />}
           </Route>
           <Route path="/demos">
             {() => <DemosPage />}
