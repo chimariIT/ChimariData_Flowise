@@ -9,7 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/lib/api";
 import FileUploader from "@/components/file-uploader";
-import AuthModal from "@/components/auth-modal";
+import { AuthModal } from "@/components/AuthModal";
 import SubscriptionTierDisplay from "@/components/subscription-tier-display";
 import { JourneySelector } from "@/components/journey-selector";
 
@@ -49,10 +49,10 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
           } else {
             // User is signed in but getting auth errors - token might be expired
             console.log('Authentication error for signed-in user, token may be expired');
-            // Clear invalid token and refresh
+            // Clear invalid token and refresh auth state
             localStorage.removeItem('auth_token');
             setTimeout(() => {
-              window.location.reload();
+              // Auth state will be updated via user context - no reload needed
             }, 500);
           }
         }

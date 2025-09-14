@@ -12,8 +12,9 @@ import {
   ExternalLink,
   MessageSquare
 } from "lucide-react";
-import { useState } from "react";
+import React, { useState } from "react";
 import type { AppError } from "@/lib/errorHandler";
+import { ErrorHandler } from "@/lib/errorHandler";
 
 interface ErrorDisplayProps {
   error: AppError;

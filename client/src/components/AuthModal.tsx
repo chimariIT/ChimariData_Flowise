@@ -106,8 +106,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, defaultTab = "login" }: 
         onSuccess();
         onClose();
         
-        // Force a page refresh to ensure auth state is updated
-        window.location.reload();
+        // Auth state updated via onSuccess callback - no reload needed
       } else {
         const error = await handleApiError(response, 'User login');
         setAuthError(error);
@@ -156,8 +155,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, defaultTab = "login" }: 
         onSuccess();
         onClose();
         
-        // Force a page refresh to ensure auth state is updated
-        window.location.reload();
+        // Auth state updated via onSuccess callback - no reload needed
       } else {
         const errorData = await response.json();
         throw new Error(errorData.error || 'Registration failed');
@@ -204,7 +202,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, defaultTab = "login" }: 
               className="mb-4"
             />
           )}
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "login" | "register")}>
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="login">Login</TabsTrigger>
               <TabsTrigger value="register">Sign Up</TabsTrigger>

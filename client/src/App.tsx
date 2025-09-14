@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Switch, Route, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
+import { JourneyWizard } from "@/components/JourneyWizard";
 import HomePage from "@/pages/home-page";
 import JourneysHub from "@/pages/journeys-hub";
 import ProjectPage from "@/pages/project-page";
@@ -97,35 +98,29 @@ export default function App() {
             {() => <JourneysHub user={user} />}
           </Route>
           
-          {/* Journey wizard routes (placeholder for now) */}
+          {/* Journey wizard routes */}
           <Route path="/journeys/:type/prepare">
             {(params) => (
-              <div className="min-h-screen flex items-center justify-center">
-                <div className="text-center">
-                  <h1 className="text-2xl font-bold mb-4">Journey Preparation: {params.type}</h1>
-                  <p>Step 1: Analysis Journey Preparation (Coming Soon)</p>
-                </div>
-              </div>
+              <JourneyWizard 
+                journeyType={params.type} 
+                currentStage="prepare"
+              />
             )}
           </Route>
           <Route path="/journeys/:type/data">
             {(params) => (
-              <div className="min-h-screen flex items-center justify-center">
-                <div className="text-center">
-                  <h1 className="text-2xl font-bold mb-4">Data Preparation: {params.type}</h1>
-                  <p>Step 2: Data Preparation (Coming Soon)</p>
-                </div>
-              </div>
+              <JourneyWizard 
+                journeyType={params.type} 
+                currentStage="data"
+              />
             )}
           </Route>
           <Route path="/journeys/:type/execute">
             {(params) => (
-              <div className="min-h-screen flex items-center justify-center">
-                <div className="text-center">
-                  <h1 className="text-2xl font-bold mb-4">Analysis Execution: {params.type}</h1>
-                  <p>Step 3: Analysis Execution (Coming Soon)</p>
-                </div>
-              </div>
+              <JourneyWizard 
+                journeyType={params.type} 
+                currentStage="execute"
+              />
             )}
           </Route>
           
