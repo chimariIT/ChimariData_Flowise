@@ -1,7 +1,9 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
+import { WebSocketServer } from 'ws';
 import multer from "multer";
 import Stripe from "stripe";
+import { initializeRealtimeServer, getRealtimeServer, createStreamingEvent, createScrapingEvent } from './realtime';
 import { storage } from "./storage";
 import { FileProcessor } from "./file-processor";
 import { PythonProcessor } from "./python-processor";
@@ -90,6 +92,19 @@ const upload = multer({
 });
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Create HTTP server
+  const server = createServer(app);
+  
+  // Initialize WebSocket server for real-time updates
+  const wss = new WebSocketServer({ 
+    server,
+    path: '/ws'
+  });
+  
+  // Initialize real-time server
+  const realtimeServer = initializeRealtimeServer(wss);
+  console.log('Real-time WebSocket server initialized on /ws');
+  
   // Initialize MCP AI Service
   MCPAIService.initializeMCPServer().catch(console.error);
   
@@ -5603,5 +5618,63 @@ This link will expire in 24 hours.
     }
   });
 
-  return httpServer;
+  // Real-time server stats endpoint
+  app.get('/api/realtime/stats', ensureAuthenticated, async (req, res) => {
+    try {
+      const realtimeServer = getRealtimeServer();
+      if (!realtimeServer) {
+        return res.status(503).json({ 
+          success: false, 
+          error: "Real-time server not available" 
+        });
+      }
+      
+      const stats = realtimeServer.getStats();
+      res.json({ 
+        success: true, 
+        data: stats 
+      });
+    } catch (error: any) {
+      console.error('Failed to get real-time stats:', error);
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to get real-time stats" 
+      });
+    }
+  });
+
+  // Real-time broadcast test endpoint
+  app.post('/api/realtime/broadcast', ensureAuthenticated, async (req, res) => {
+    try {
+      const realtimeServer = getRealtimeServer();
+      if (!realtimeServer) {
+        return res.status(503).json({ 
+          success: false, 
+          error: "Real-time server not available" 
+        });
+      }
+      
+      const { type, sourceId, sourceType, data } = req.body;
+      const userId = req.user?.id || req.userId;
+      
+      const event = sourceType === 'streaming' 
+        ? createStreamingEvent(type, sourceId, userId, data)
+        : createScrapingEvent(type, sourceId, userId, data);
+      
+      realtimeServer.broadcast(event);
+      
+      res.json({ 
+        success: true, 
+        message: "Event broadcasted successfully" 
+      });
+    } catch (error: any) {
+      console.error('Failed to broadcast event:', error);
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to broadcast event" 
+      });
+    }
+  });
+
+  return server;
 }

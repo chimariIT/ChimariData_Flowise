@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import { Dataset, InsertDataset, InsertStreamChunk, InsertStreamCheckpoint, ScrapingJob, InsertScrapingJob, ScrapingRun, InsertScrapingRun } from '@shared/schema';
 import { nanoid } from 'nanoid';
+import { getRealtimeServer, createStreamingEvent, createScrapingEvent } from './realtime';
 
 // Dynamic imports for optional dependencies to prevent app crashes
 let WebSocketClass: any = null;
@@ -4119,6 +4120,14 @@ export class StreamingAdapter implements StreamingSourceAdapter {
     this.isRunning = true;
     this.status.isRunning = true;
 
+    // Emit streaming started event
+    this.emitRealtimeEvent('status_change', {
+      status: 'starting',
+      endpoint: config.endpoint,
+      protocol: this.protocol,
+      timestamp: new Date()
+    });
+
     // Initialize batch writer
     this.batchWriter = new BatchWriter(
       {
@@ -4155,6 +4164,12 @@ export class StreamingAdapter implements StreamingSourceAdapter {
     this.isRunning = false;
     this.status.isRunning = false;
 
+    // Emit stopping event
+    this.emitRealtimeEvent('status_change', {
+      status: 'stopping',
+      timestamp: new Date()
+    });
+
     // Disconnect connection manager
     if (this.connectionManager) {
       await this.connectionManager.disconnect();
@@ -4168,6 +4183,12 @@ export class StreamingAdapter implements StreamingSourceAdapter {
     }
 
     this.status.connectionStatus = 'disconnected';
+
+    // Emit stopped event
+    this.emitRealtimeEvent('status_change', {
+      status: 'stopped',
+      timestamp: new Date()
+    });
   }
 
   /**
@@ -4219,6 +4240,24 @@ export class StreamingAdapter implements StreamingSourceAdapter {
         await this.batchWriter!.addRecord(record);
         this.status.recordsReceived++;
       }
+
+      // Emit data received event
+      this.emitRealtimeEvent('data_received', {
+        recordCount: records.length,
+        batchSize: this.batchWriter?.getStatus().bufferSize || 0,
+        timestamp: new Date()
+      });
+
+      // Emit buffer status update
+      const bufferStatus = this.batchWriter?.getStatus();
+      if (bufferStatus) {
+        this.emitRealtimeEvent('buffer_status', {
+          currentSize: bufferStatus.bufferSize,
+          maxSize: this.config?.maxBuffer || 0,
+          flushPending: bufferStatus.flushPending
+        });
+      }
+
     } catch (error: any) {
       this.handleDataError(new Error(`Data processing error: ${error.message}`));
     }
@@ -4354,6 +4393,14 @@ export class StreamingAdapter implements StreamingSourceAdapter {
    */
   private handleStatusChange(status: string): void {
     this.status.connectionStatus = status as any;
+    console.log(`Streaming connection status changed to: ${status}`);
+    
+    // Emit real-time status change event
+    this.emitRealtimeEvent('status_change', {
+      status,
+      connectionStatus: status,
+      timestamp: new Date()
+    });
   }
 
   /**
@@ -4364,6 +4411,13 @@ export class StreamingAdapter implements StreamingSourceAdapter {
     this.status.lastError = error.message;
     this.status.connectionStatus = 'error';
     console.error('Streaming connection error:', error);
+
+    // Emit real-time error event
+    this.emitRealtimeEvent('error', {
+      error: error.message,
+      severity: 'error' as const,
+      timestamp: new Date()
+    });
   }
 
   /**
@@ -4373,6 +4427,39 @@ export class StreamingAdapter implements StreamingSourceAdapter {
     this.status.errorCount++;
     this.status.lastError = error.message;
     console.error('Streaming data error:', error);
+
+    // Emit real-time error event
+    this.emitRealtimeEvent('error', {
+      error: error.message,
+      severity: 'warning' as const,
+      timestamp: new Date()
+    });
+  }
+
+  /**
+   * Emit real-time event to all connected clients
+   */
+  private emitRealtimeEvent(type: any, data: any): void {
+    try {
+      const realtimeServer = getRealtimeServer();
+      if (!realtimeServer || !this.config) {
+        return; // Real-time server not available
+      }
+
+      const event = createStreamingEvent(
+        type,
+        this.datasetId || 'unknown',
+        this.config.userId || 'system',
+        data
+      );
+
+      realtimeServer.broadcast(event, {
+        sourceId: this.datasetId,
+        sourceType: 'streaming'
+      });
+    } catch (error) {
+      console.error('Failed to emit real-time event:', error);
+    }
   }
 }
 
