@@ -1,4 +1,4 @@
-import { DataProject, InsertDataProject, User, Project, InsertProject, EnterpriseInquiry, InsertEnterpriseInquiry, GuidedAnalysisOrder, InsertGuidedAnalysisOrder, Dataset, InsertDataset, ProjectDataset, InsertProjectDataset, ProjectArtifact, InsertProjectArtifact, StreamingSource, InsertStreamingSource, StreamChunk, InsertStreamChunk, StreamCheckpoint, InsertStreamCheckpoint, ScrapingJob, InsertScrapingJob, ScrapingRun, InsertScrapingRun, DatasetVersion, InsertDatasetVersion } from "@shared/schema";
+import { DataProject, InsertDataProject, User, Project, InsertProject, EnterpriseInquiry, InsertEnterpriseInquiry, GuidedAnalysisOrder, InsertGuidedAnalysisOrder, Dataset, InsertDataset, ProjectDataset, InsertProjectDataset, ProjectArtifact, InsertProjectArtifact, StreamingSource, InsertStreamingSource, StreamChunk, InsertStreamChunk, StreamCheckpoint, InsertStreamCheckpoint, ScrapingJob, InsertScrapingJob, ScrapingRun, InsertScrapingRun, DatasetVersion, InsertDatasetVersion, Journey, InsertJourney, JourneyStepProgress, InsertJourneyStepProgress, CostEstimate, InsertCostEstimate, EligibilityCheck, InsertEligibilityCheck } from "@shared/schema";
 import { users, projects, enterpriseInquiries, guidedAnalysisOrders, datasets, projectDatasets, projectArtifacts, streamingSources, streamChunks, streamCheckpoints, scrapingJobs, scrapingRuns, datasetVersions } from "@shared/schema";
 import { db } from "./db";
 import { eq } from "drizzle-orm";
@@ -222,6 +222,10 @@ export class MemStorage implements IStorage {
   private scrapingJobs: Map<string, ScrapingJob> = new Map();
   private scrapingRuns: Map<string, ScrapingRun> = new Map();
   private datasetVersions: Map<string, DatasetVersion> = new Map();
+  private journeys: Map<string, Journey> = new Map();
+  private journeyStepProgress: Map<string, JourneyStepProgress> = new Map();
+  private costEstimates: Map<string, CostEstimate> = new Map();
+  private eligibilityChecks: Map<string, EligibilityCheck> = new Map();
   private nextId = 1;
 
   async createProject(projectData: InsertDataProject): Promise<DataProject> {
