@@ -11,13 +11,19 @@ import {
   Plus, 
   ArrowRight,
   CheckCircle,
-  Layers
+  Layers,
+  Radio,
+  Globe
 } from "lucide-react";
 import { DatasetSelector } from "./DatasetSelector";
 import { MultiSourceUpload } from "./MultiSourceUpload";
+import { StreamingDataTab } from "./StreamingDataTab";
+import { WebScrapingTab } from "./WebScrapingTab";
+import { LiveSourcesManagement } from "./LiveSourcesManagement";
 import { apiClient } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient } from "@/lib/queryClient";
+import { useAllLiveSources } from "@/hooks/useLiveDataSources";
 
 interface EnhancedDataWorkflowProps {
   onComplete: (result: any) => void;
@@ -27,7 +33,7 @@ interface EnhancedDataWorkflowProps {
   allowMultipleDatasets?: boolean;
 }
 
-type WorkflowStep = 'select_option' | 'upload_new' | 'select_existing' | 'configure_project' | 'complete';
+type WorkflowStep = 'select_option' | 'upload_new' | 'select_existing' | 'streaming_config' | 'scraping_config' | 'manage_sources' | 'configure_project' | 'complete';
 
 export function EnhancedDataWorkflow({ 
   onComplete, 
@@ -40,8 +46,9 @@ export function EnhancedDataWorkflow({
   const [selectedDatasets, setSelectedDatasets] = useState<any[]>([]);
   const [createdDatasets, setCreatedDatasets] = useState<any[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [workflowOption, setWorkflowOption] = useState<'upload' | 'select' | null>(null);
+  const [workflowOption, setWorkflowOption] = useState<'upload' | 'select' | 'streaming' | 'scraping' | 'manage' | null>(null);
   const { toast } = useToast();
+  const { streamingSources, scrapingJobs, refetch: refetchLiveSources } = useAllLiveSources(projectId);
 
   const workflowOptions = [
     {
@@ -50,7 +57,7 @@ export function EnhancedDataWorkflow({
       description: 'Upload files from your computer, API, or cloud sources',
       icon: Upload,
       color: 'bg-blue-100 text-blue-800',
-      recommended: !projectId // Recommend upload for new projects
+      recommended: !projectId && serviceType === 'default'
     },
     {
       id: 'select',
@@ -58,13 +65,56 @@ export function EnhancedDataWorkflow({
       description: 'Select from your previously uploaded datasets',
       icon: Database,
       color: 'bg-green-100 text-green-800',
-      recommended: !!projectId // Recommend existing datasets for existing projects
+      recommended: !!projectId
+    },
+    {
+      id: 'streaming',
+      title: 'Streaming Data',
+      description: 'Connect to live data streams (WebSocket, SSE, API polling)',
+      icon: Radio,
+      color: 'bg-purple-100 text-purple-800',
+      recommended: serviceType === 'enterprise'
+    },
+    {
+      id: 'scraping',
+      title: 'Web Scraping',
+      description: 'Extract data from websites with scheduled scraping jobs',
+      icon: Globe,
+      color: 'bg-orange-100 text-orange-800',
+      recommended: false
+    },
+    {
+      id: 'manage',
+      title: 'Manage Live Sources',
+      description: `Monitor ${streamingSources.length + scrapingJobs.length} active live sources`,
+      icon: Layers,
+      color: 'bg-slate-100 text-slate-800',
+      recommended: false,
+      disabled: streamingSources.length + scrapingJobs.length === 0
     }
   ];
 
-  const handleOptionSelect = (option: 'upload' | 'select') => {
+  const handleOptionSelect = (option: 'upload' | 'select' | 'streaming' | 'scraping' | 'manage') => {
     setWorkflowOption(option);
-    setCurrentStep(option === 'upload' ? 'upload_new' : 'select_existing');
+    switch (option) {
+      case 'upload':
+        setCurrentStep('upload_new');
+        break;
+      case 'select':
+        setCurrentStep('select_existing');
+        break;
+      case 'streaming':
+        setCurrentStep('streaming_config');
+        break;
+      case 'scraping':
+        setCurrentStep('scraping_config');
+        break;
+      case 'manage':
+        setCurrentStep('manage_sources');
+        break;
+      default:
+        setCurrentStep('select_option');
+    }
   };
 
   const handleUploadComplete = useCallback(async (uploadResult: any) => {
@@ -202,8 +252,14 @@ export function EnhancedDataWorkflow({
                     key={option.id}
                     className={`cursor-pointer transition-all hover:shadow-md ${
                       option.recommended ? 'ring-2 ring-primary ring-opacity-50' : ''
+                    } ${
+                      (option as any).disabled ? 'opacity-50 cursor-not-allowed' : ''
                     }`}
-                    onClick={() => handleOptionSelect(option.id as 'upload' | 'select')}
+                    onClick={() => {
+                      if (!(option as any).disabled) {
+                        handleOptionSelect(option.id as 'upload' | 'select' | 'streaming' | 'scraping' | 'manage');
+                      }
+                    }}
                     data-testid={`card-option-${option.id}`}
                   >
                     <CardContent className="p-6">
@@ -321,6 +377,95 @@ export function EnhancedDataWorkflow({
           </div>
         );
 
+      case 'streaming_config':
+        return (
+          <div className="space-y-4">
+            <div className="flex items-center space-x-2 mb-4">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentStep('select_option')}
+                data-testid="button-back-to-options"
+              >
+                ← Back to Options
+              </Button>
+            </div>
+            <StreamingDataTab
+              projectId={projectId}
+              onComplete={(result) => {
+                if (result.success) {
+                  setCurrentStep('complete');
+                  toast({
+                    title: "Streaming Source Created",
+                    description: "Successfully configured streaming data source"
+                  });
+                  // Refresh live sources data
+                  refetchLiveSources();
+                }
+                onComplete(result);
+              }}
+            />
+          </div>
+        );
+
+      case 'scraping_config':
+        return (
+          <div className="space-y-4">
+            <div className="flex items-center space-x-2 mb-4">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentStep('select_option')}
+                data-testid="button-back-to-options"
+              >
+                ← Back to Options
+              </Button>
+            </div>
+            <WebScrapingTab
+              projectId={projectId}
+              onComplete={(result) => {
+                if (result.success) {
+                  setCurrentStep('complete');
+                  toast({
+                    title: "Scraping Job Created",
+                    description: "Successfully configured web scraping job"
+                  });
+                  // Refresh live sources data
+                  refetchLiveSources();
+                }
+                onComplete(result);
+              }}
+            />
+          </div>
+        );
+
+      case 'manage_sources':
+        return (
+          <div className="space-y-4">
+            <div className="flex items-center space-x-2 mb-4">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentStep('select_option')}
+                data-testid="button-back-to-options"
+              >
+                ← Back to Options
+              </Button>
+            </div>
+            <LiveSourcesManagement
+              projectId={projectId}
+              sources={[...streamingSources, ...scrapingJobs]}
+              onRefresh={() => {
+                refetchLiveSources();
+                toast({
+                  title: "Sources Refreshed",
+                  description: "Live sources data has been updated"
+                });
+              }}
+            />
+          </div>
+        );
+
       default:
         return null;
     }
@@ -334,8 +479,14 @@ export function EnhancedDataWorkflow({
           Choose Source
         </span>
         <ArrowRight className="w-4 h-4" />
-        <span className={['upload_new', 'select_existing'].includes(currentStep) ? 'text-primary font-medium' : ''}>
-          {workflowOption === 'upload' ? 'Upload Data' : 'Select Datasets'}
+        <span className={[
+          'upload_new', 'select_existing', 'streaming_config', 'scraping_config', 'manage_sources'
+        ].includes(currentStep) ? 'text-primary font-medium' : ''}>
+          {workflowOption === 'upload' ? 'Upload Data' : 
+           workflowOption === 'select' ? 'Select Datasets' : 
+           workflowOption === 'streaming' ? 'Configure Stream' : 
+           workflowOption === 'scraping' ? 'Setup Scraping' : 
+           workflowOption === 'manage' ? 'Manage Sources' : 'Configure'}
         </span>
         <ArrowRight className="w-4 h-4" />
         <span className={currentStep === 'complete' ? 'text-primary font-medium' : ''}>
