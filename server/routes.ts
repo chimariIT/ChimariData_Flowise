@@ -10,7 +10,27 @@ import { chimaridataAI } from "./chimaridata-ai";
 import { technicalAIAgent, TechnicalQuery } from "./technical-ai-agent";
 import { 
   insertDataProjectSchema, 
-  fileUploadResponseSchema
+  fileUploadResponseSchema,
+  // Streaming and Scraping validation schemas
+  createStreamingSourceSchema,
+  updateStreamingSourceSchema,
+  streamingSourceStatusQuerySchema,
+  createScrapingJobSchema,
+  updateScrapingJobSchema,
+  scrapingJobStatusQuerySchema,
+  scrapingRunsQuerySchema,
+  liveSourcesOverviewSchema,
+  liveSourcesMetricsSchema,
+  liveSourcesActivitySchema,
+  projectLiveSourcesQuerySchema,
+  addLiveSourceToProjectSchema,
+  sourceControlActionSchema,
+  runOnceRequestSchema,
+  bulkSourceActionSchema,
+  // Response schemas
+  streamingSourceResponseSchema,
+  scrapingJobResponseSchema,
+  liveSourcesOverviewResponseSchema
 } from "@shared/schema";
 import { PIIAnalyzer } from './pii-analyzer';
 import { GoogleDriveService } from './google-drive-service';
@@ -4445,6 +4465,1140 @@ This link will expire in 24 hours.
         success: false, 
         message: "Project rollback failed",
         error: error.message 
+      });
+    }
+  });
+
+  // =====================================================================
+  // STREAMING SOURCES API ROUTES
+  // =====================================================================
+
+  // Create streaming source
+  app.post("/api/streaming-sources", unifiedAuth, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      
+      // Validate request body
+      const config = createStreamingSourceSchema.parse(req.body);
+      
+      // Verify dataset ownership
+      const dataset = await storage.getDataset(config.datasetId);
+      if (!dataset) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "Dataset not found" 
+        });
+      }
+      
+      if (dataset.ownerId !== userId) {
+        return res.status(403).json({ 
+          success: false, 
+          error: "Access denied - you can only create streaming sources for your own datasets" 
+        });
+      }
+      
+      // Create streaming source
+      const sourceData = {
+        datasetId: config.datasetId,
+        protocol: config.protocol,
+        endpoint: config.endpoint,
+        headers: config.headers || null,
+        params: config.params || null,
+        parseSpec: config.parseSpec || null,
+        batchSize: config.batchSize || 1000,
+        flushMs: config.flushMs || 5000,
+        maxBuffer: config.maxBuffer || 100000,
+        dedupeKeyPath: config.parseSpec?.dedupeKeyPath || null,
+        timestampPath: config.parseSpec?.timestampPath || null,
+        status: 'inactive' as const,
+        lastCheckpoint: null,
+        lastError: null,
+      };
+      
+      const source = await storage.createStreamingSource(sourceData);
+      
+      res.json({ 
+        success: true, 
+        data: {
+          id: source.id,
+          datasetId: source.datasetId,
+          protocol: source.protocol,
+          endpoint: source.endpoint,
+          status: source.status,
+          createdAt: source.createdAt,
+          updatedAt: source.updatedAt
+        }
+      });
+    } catch (error: any) {
+      console.error('Failed to create streaming source:', error);
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid request data", 
+          details: error.errors 
+        });
+      }
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to create streaming source" 
+      });
+    }
+  });
+
+  // Get streaming sources with filtering
+  app.get("/api/streaming-sources", unifiedAuth, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      
+      // Validate query parameters
+      const query = streamingSourceStatusQuerySchema.parse(req.query);
+      
+      // Get user's datasets for ownership filtering
+      const userDatasets = await storage.getDatasetsByOwner(userId);
+      const datasetIds = userDatasets.map(d => d.id);
+      
+      if (datasetIds.length === 0) {
+        return res.json({ 
+          success: true, 
+          data: [], 
+          total: 0 
+        });
+      }
+      
+      // Get streaming sources with filters
+      const sources = await storage.getStreamingSources({
+        datasetIds,
+        status: query.status,
+        protocol: query.protocol,
+        limit: query.limit,
+        offset: query.offset
+      });
+      
+      res.json({ 
+        success: true, 
+        data: sources,
+        total: sources.length 
+      });
+    } catch (error: any) {
+      console.error('Failed to get streaming sources:', error);
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid query parameters", 
+          details: error.errors 
+        });
+      }
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to get streaming sources" 
+      });
+    }
+  });
+
+  // Get specific streaming source
+  app.get("/api/streaming-sources/:id", unifiedAuth, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { id } = req.params;
+      
+      const source = await storage.getStreamingSource(id);
+      if (!source) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "Streaming source not found" 
+        });
+      }
+      
+      // Verify ownership through dataset
+      const dataset = await storage.getDataset(source.datasetId);
+      if (!dataset || dataset.ownerId !== userId) {
+        return res.status(403).json({ 
+          success: false, 
+          error: "Access denied" 
+        });
+      }
+      
+      // Get additional metrics
+      const chunks = await storage.getStreamChunks(source.datasetId, { limit: 10 });
+      const totalRecords = chunks.reduce((sum, chunk) => sum + (chunk.recordCount || 0), 0);
+      
+      res.json({ 
+        success: true, 
+        data: {
+          ...source,
+          metrics: {
+            recordsReceived: totalRecords,
+            lastActivity: chunks[0]?.createdAt || null,
+            avgRecordsPerMinute: totalRecords / Math.max(1, chunks.length),
+            errorCount: source.lastError ? 1 : 0
+          }
+        }
+      });
+    } catch (error: any) {
+      console.error('Failed to get streaming source:', error);
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to get streaming source" 
+      });
+    }
+  });
+
+  // Update streaming source config
+  app.put("/api/streaming-sources/:id", unifiedAuth, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { id } = req.params;
+      
+      // Validate request body
+      const updates = updateStreamingSourceSchema.parse(req.body);
+      
+      const source = await storage.getStreamingSource(id);
+      if (!source) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "Streaming source not found" 
+        });
+      }
+      
+      // Verify ownership through dataset
+      const dataset = await storage.getDataset(source.datasetId);
+      if (!dataset || dataset.ownerId !== userId) {
+        return res.status(403).json({ 
+          success: false, 
+          error: "Access denied" 
+        });
+      }
+      
+      // Update streaming source
+      const updatedSource = await storage.updateStreamingSource(id, updates);
+      
+      res.json({ 
+        success: true, 
+        data: updatedSource 
+      });
+    } catch (error: any) {
+      console.error('Failed to update streaming source:', error);
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid request data", 
+          details: error.errors 
+        });
+      }
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to update streaming source" 
+      });
+    }
+  });
+
+  // Start streaming source
+  app.post("/api/streaming-sources/:id/start", unifiedAuth, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { id } = req.params;
+      
+      const source = await storage.getStreamingSource(id);
+      if (!source) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "Streaming source not found" 
+        });
+      }
+      
+      // Verify ownership through dataset
+      const dataset = await storage.getDataset(source.datasetId);
+      if (!dataset || dataset.ownerId !== userId) {
+        return res.status(403).json({ 
+          success: false, 
+          error: "Access denied" 
+        });
+      }
+      
+      // Update status to active
+      const updatedSource = await storage.updateStreamingSource(id, { 
+        status: 'active',
+        lastError: null 
+      });
+      
+      res.json({ 
+        success: true, 
+        status: updatedSource?.status || 'active',
+        message: "Streaming source started successfully" 
+      });
+    } catch (error: any) {
+      console.error('Failed to start streaming source:', error);
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to start streaming source" 
+      });
+    }
+  });
+
+  // Stop streaming source
+  app.post("/api/streaming-sources/:id/stop", unifiedAuth, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { id } = req.params;
+      
+      const source = await storage.getStreamingSource(id);
+      if (!source) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "Streaming source not found" 
+        });
+      }
+      
+      // Verify ownership through dataset
+      const dataset = await storage.getDataset(source.datasetId);
+      if (!dataset || dataset.ownerId !== userId) {
+        return res.status(403).json({ 
+          success: false, 
+          error: "Access denied" 
+        });
+      }
+      
+      // Update status to inactive
+      const updatedSource = await storage.updateStreamingSource(id, { 
+        status: 'inactive' 
+      });
+      
+      res.json({ 
+        success: true, 
+        status: updatedSource?.status || 'inactive',
+        message: "Streaming source stopped successfully" 
+      });
+    } catch (error: any) {
+      console.error('Failed to stop streaming source:', error);
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to stop streaming source" 
+      });
+    }
+  });
+
+  // Delete streaming source
+  app.delete("/api/streaming-sources/:id", unifiedAuth, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { id } = req.params;
+      
+      const source = await storage.getStreamingSource(id);
+      if (!source) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "Streaming source not found" 
+        });
+      }
+      
+      // Verify ownership through dataset
+      const dataset = await storage.getDataset(source.datasetId);
+      if (!dataset || dataset.ownerId !== userId) {
+        return res.status(403).json({ 
+          success: false, 
+          error: "Access denied" 
+        });
+      }
+      
+      // Delete streaming source
+      const deleted = await storage.deleteStreamingSource(id);
+      
+      if (deleted) {
+        res.json({ 
+          success: true, 
+          message: "Streaming source deleted successfully" 
+        });
+      } else {
+        res.status(400).json({ 
+          success: false, 
+          error: "Failed to delete streaming source" 
+        });
+      }
+    } catch (error: any) {
+      console.error('Failed to delete streaming source:', error);
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to delete streaming source" 
+      });
+    }
+  });
+
+  // =====================================================================
+  // SCRAPING JOBS API ROUTES
+  // =====================================================================
+
+  // Create scraping job
+  app.post("/api/scraping-jobs", unifiedAuth, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      
+      // Validate request body
+      const config = createScrapingJobSchema.parse(req.body);
+      
+      // Verify dataset ownership
+      const dataset = await storage.getDataset(config.datasetId);
+      if (!dataset) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "Dataset not found" 
+        });
+      }
+      
+      if (dataset.ownerId !== userId) {
+        return res.status(403).json({ 
+          success: false, 
+          error: "Access denied - you can only create scraping jobs for your own datasets" 
+        });
+      }
+      
+      // Create scraping job
+      const jobData = {
+        datasetId: config.datasetId,
+        strategy: config.strategy,
+        targetUrl: config.targetUrl,
+        schedule: config.schedule || null,
+        extractionSpec: config.extractionSpec || null,
+        paginationSpec: config.extractionSpec?.followPagination || null,
+        loginSpec: config.loginSpec || null,
+        rateLimitRPM: config.rateLimitRPM || 60,
+        concurrency: config.maxConcurrency || 1,
+        respectRobots: config.respectRobots !== false,
+        status: 'inactive' as const,
+        lastRunAt: null,
+        nextRunAt: null,
+        lastError: null,
+      };
+      
+      const job = await storage.createScrapingJob(jobData);
+      
+      res.json({ 
+        success: true, 
+        data: {
+          id: job.id,
+          datasetId: job.datasetId,
+          strategy: job.strategy,
+          targetUrl: job.targetUrl,
+          status: job.status,
+          createdAt: job.createdAt,
+          updatedAt: job.updatedAt
+        }
+      });
+    } catch (error: any) {
+      console.error('Failed to create scraping job:', error);
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid request data", 
+          details: error.errors 
+        });
+      }
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to create scraping job" 
+      });
+    }
+  });
+
+  // Get scraping jobs with filtering
+  app.get("/api/scraping-jobs", unifiedAuth, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      
+      // Validate query parameters
+      const query = scrapingJobStatusQuerySchema.parse(req.query);
+      
+      // Get user's datasets for ownership filtering
+      const userDatasets = await storage.getDatasetsByOwner(userId);
+      const datasetIds = userDatasets.map(d => d.id);
+      
+      if (datasetIds.length === 0) {
+        return res.json({ 
+          success: true, 
+          data: [], 
+          total: 0 
+        });
+      }
+      
+      // Get scraping jobs with filters
+      const jobs = await storage.getScrapingJobs({
+        datasetIds,
+        status: query.status,
+        strategy: query.strategy,
+        limit: query.limit,
+        offset: query.offset
+      });
+      
+      res.json({ 
+        success: true, 
+        data: jobs,
+        total: jobs.length 
+      });
+    } catch (error: any) {
+      console.error('Failed to get scraping jobs:', error);
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid query parameters", 
+          details: error.errors 
+        });
+      }
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to get scraping jobs" 
+      });
+    }
+  });
+
+  // Get specific scraping job
+  app.get("/api/scraping-jobs/:id", unifiedAuth, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { id } = req.params;
+      
+      const job = await storage.getScrapingJob(id);
+      if (!job) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "Scraping job not found" 
+        });
+      }
+      
+      // Verify ownership through dataset
+      const dataset = await storage.getDataset(job.datasetId);
+      if (!dataset || dataset.ownerId !== userId) {
+        return res.status(403).json({ 
+          success: false, 
+          error: "Access denied" 
+        });
+      }
+      
+      // Get job metrics
+      const runs = await storage.getScrapingRuns({ jobId: id, limit: 10 });
+      const totalRuns = runs.length;
+      const successfulRuns = runs.filter(run => run.status === 'completed').length;
+      const totalRecords = runs.reduce((sum, run) => sum + (run.recordCount || 0), 0);
+      
+      res.json({ 
+        success: true, 
+        data: {
+          ...job,
+          metrics: {
+            totalRuns,
+            recordsExtracted: totalRecords,
+            avgRunDuration: 0, // Could calculate from run timestamps
+            successRate: totalRuns > 0 ? successfulRuns / totalRuns : 0
+          }
+        }
+      });
+    } catch (error: any) {
+      console.error('Failed to get scraping job:', error);
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to get scraping job" 
+      });
+    }
+  });
+
+  // Update scraping job config
+  app.put("/api/scraping-jobs/:id", unifiedAuth, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { id } = req.params;
+      
+      // Validate request body
+      const updates = updateScrapingJobSchema.parse(req.body);
+      
+      const job = await storage.getScrapingJob(id);
+      if (!job) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "Scraping job not found" 
+        });
+      }
+      
+      // Verify ownership through dataset
+      const dataset = await storage.getDataset(job.datasetId);
+      if (!dataset || dataset.ownerId !== userId) {
+        return res.status(403).json({ 
+          success: false, 
+          error: "Access denied" 
+        });
+      }
+      
+      // Update scraping job
+      const updatedJob = await storage.updateScrapingJob(id, updates);
+      
+      res.json({ 
+        success: true, 
+        data: updatedJob 
+      });
+    } catch (error: any) {
+      console.error('Failed to update scraping job:', error);
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid request data", 
+          details: error.errors 
+        });
+      }
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to update scraping job" 
+      });
+    }
+  });
+
+  // Start scraping job
+  app.post("/api/scraping-jobs/:id/start", unifiedAuth, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { id } = req.params;
+      
+      const job = await storage.getScrapingJob(id);
+      if (!job) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "Scraping job not found" 
+        });
+      }
+      
+      // Verify ownership through dataset
+      const dataset = await storage.getDataset(job.datasetId);
+      if (!dataset || dataset.ownerId !== userId) {
+        return res.status(403).json({ 
+          success: false, 
+          error: "Access denied" 
+        });
+      }
+      
+      // Update status to active
+      const updatedJob = await storage.updateScrapingJob(id, { 
+        status: 'active',
+        lastError: null 
+      });
+      
+      res.json({ 
+        success: true, 
+        status: updatedJob?.status || 'active',
+        message: "Scraping job started successfully" 
+      });
+    } catch (error: any) {
+      console.error('Failed to start scraping job:', error);
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to start scraping job" 
+      });
+    }
+  });
+
+  // Stop scraping job
+  app.post("/api/scraping-jobs/:id/stop", unifiedAuth, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { id } = req.params;
+      
+      const job = await storage.getScrapingJob(id);
+      if (!job) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "Scraping job not found" 
+        });
+      }
+      
+      // Verify ownership through dataset
+      const dataset = await storage.getDataset(job.datasetId);
+      if (!dataset || dataset.ownerId !== userId) {
+        return res.status(403).json({ 
+          success: false, 
+          error: "Access denied" 
+        });
+      }
+      
+      // Update status to inactive
+      const updatedJob = await storage.updateScrapingJob(id, { 
+        status: 'inactive' 
+      });
+      
+      res.json({ 
+        success: true, 
+        status: updatedJob?.status || 'inactive',
+        message: "Scraping job stopped successfully" 
+      });
+    } catch (error: any) {
+      console.error('Failed to stop scraping job:', error);
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to stop scraping job" 
+      });
+    }
+  });
+
+  // Run scraping job once (immediate execution)
+  app.post("/api/scraping-jobs/:id/run-once", unifiedAuth, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { id } = req.params;
+      
+      const job = await storage.getScrapingJob(id);
+      if (!job) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "Scraping job not found" 
+        });
+      }
+      
+      // Verify ownership through dataset
+      const dataset = await storage.getDataset(job.datasetId);
+      if (!dataset || dataset.ownerId !== userId) {
+        return res.status(403).json({ 
+          success: false, 
+          error: "Access denied" 
+        });
+      }
+      
+      // Create a scraping run
+      const run = await storage.createScrapingRun({
+        jobId: id,
+        status: 'running',
+        startedAt: new Date(),
+        finishedAt: null,
+        recordCount: null,
+        artifactId: null,
+      });
+      
+      res.json({ 
+        success: true, 
+        runId: run.id,
+        message: "Scraping job execution started" 
+      });
+    } catch (error: any) {
+      console.error('Failed to run scraping job:', error);
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to run scraping job" 
+      });
+    }
+  });
+
+  // Delete scraping job
+  app.delete("/api/scraping-jobs/:id", unifiedAuth, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { id } = req.params;
+      
+      const job = await storage.getScrapingJob(id);
+      if (!job) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "Scraping job not found" 
+        });
+      }
+      
+      // Verify ownership through dataset
+      const dataset = await storage.getDataset(job.datasetId);
+      if (!dataset || dataset.ownerId !== userId) {
+        return res.status(403).json({ 
+          success: false, 
+          error: "Access denied" 
+        });
+      }
+      
+      // Delete scraping job
+      const deleted = await storage.deleteScrapingJob(id);
+      
+      if (deleted) {
+        res.json({ 
+          success: true, 
+          message: "Scraping job deleted successfully" 
+        });
+      } else {
+        res.status(400).json({ 
+          success: false, 
+          error: "Failed to delete scraping job" 
+        });
+      }
+    } catch (error: any) {
+      console.error('Failed to delete scraping job:', error);
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to delete scraping job" 
+      });
+    }
+  });
+
+  // Get scraping runs for a job
+  app.get("/api/scraping-jobs/:id/runs", unifiedAuth, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { id } = req.params;
+      
+      // Validate query parameters
+      const query = scrapingRunsQuerySchema.parse({ ...req.query, jobId: id });
+      
+      const job = await storage.getScrapingJob(id);
+      if (!job) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "Scraping job not found" 
+        });
+      }
+      
+      // Verify ownership through dataset
+      const dataset = await storage.getDataset(job.datasetId);
+      if (!dataset || dataset.ownerId !== userId) {
+        return res.status(403).json({ 
+          success: false, 
+          error: "Access denied" 
+        });
+      }
+      
+      // Get scraping runs
+      const runs = await storage.getScrapingRuns(query);
+      
+      res.json({ 
+        success: true, 
+        data: runs,
+        total: runs.length 
+      });
+    } catch (error: any) {
+      console.error('Failed to get scraping runs:', error);
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid query parameters", 
+          details: error.errors 
+        });
+      }
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to get scraping runs" 
+      });
+    }
+  });
+
+  // =====================================================================
+  // LIVE SOURCES MONITORING ROUTES
+  // =====================================================================
+
+  // Get overview of all live sources
+  app.get("/api/live-sources/overview", unifiedAuth, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      
+      // Validate query parameters
+      const query = liveSourcesOverviewSchema.parse(req.query);
+      
+      // Get user's datasets for ownership filtering
+      const userDatasets = await storage.getDatasetsByOwner(userId);
+      const datasetIds = userDatasets.map(d => d.id);
+      
+      if (datasetIds.length === 0) {
+        return res.json({ 
+          success: true, 
+          data: {
+            streaming: { total: 0, active: 0, inactive: 0, error: 0 },
+            scraping: { total: 0, active: 0, inactive: 0, running: 0, error: 0 },
+            recentActivity: [],
+            metrics: { totalDataReceived: 0, activeSources: 0, errorRate: 0 }
+          }
+        });
+      }
+      
+      // Get streaming sources overview
+      const streamingSources = await storage.getStreamingSources({ datasetIds });
+      const streamingOverview = {
+        total: streamingSources.length,
+        active: streamingSources.filter(s => s.status === 'active').length,
+        inactive: streamingSources.filter(s => s.status === 'inactive').length,
+        error: streamingSources.filter(s => s.status === 'error').length,
+      };
+      
+      // Get scraping jobs overview
+      const scrapingJobs = await storage.getScrapingJobs({ datasetIds });
+      const scrapingOverview = {
+        total: scrapingJobs.length,
+        active: scrapingJobs.filter(j => j.status === 'active').length,
+        inactive: scrapingJobs.filter(j => j.status === 'inactive').length,
+        running: scrapingJobs.filter(j => j.status === 'running').length,
+        error: scrapingJobs.filter(j => j.status === 'error').length,
+      };
+      
+      // Create recent activity (simplified)
+      const recentActivity = [
+        ...streamingSources.slice(0, 5).map(s => ({
+          id: `stream_${s.id}`,
+          type: 'stream_status',
+          sourceType: 'streaming' as const,
+          sourceId: s.id,
+          message: `Streaming source ${s.status}`,
+          timestamp: s.updatedAt,
+          metadata: { protocol: s.protocol, endpoint: s.endpoint }
+        })),
+        ...scrapingJobs.slice(0, 5).map(j => ({
+          id: `scrape_${j.id}`,
+          type: 'scrape_status',
+          sourceType: 'scraping' as const,
+          sourceId: j.id,
+          message: `Scraping job ${j.status}`,
+          timestamp: j.updatedAt,
+          metadata: { strategy: j.strategy, targetUrl: j.targetUrl }
+        }))
+      ].sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime()).slice(0, 10);
+      
+      res.json({ 
+        success: true, 
+        data: {
+          streaming: streamingOverview,
+          scraping: scrapingOverview,
+          recentActivity,
+          metrics: {
+            totalDataReceived: 0, // Could calculate from chunks/runs
+            activeSources: streamingOverview.active + scrapingOverview.active,
+            errorRate: (streamingOverview.error + scrapingOverview.error) / 
+                      Math.max(1, streamingOverview.total + scrapingOverview.total)
+          }
+        }
+      });
+    } catch (error: any) {
+      console.error('Failed to get live sources overview:', error);
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid query parameters", 
+          details: error.errors 
+        });
+      }
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to get live sources overview" 
+      });
+    }
+  });
+
+  // =====================================================================
+  // PROJECT INTEGRATION ROUTES
+  // =====================================================================
+
+  // Get live sources for a specific project
+  app.get("/api/projects/:projectId/live-sources", unifiedAuth, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { projectId } = req.params;
+      
+      // Validate query parameters
+      const query = projectLiveSourcesQuerySchema.parse({ ...req.query, projectId });
+      
+      // Verify project ownership
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "Project not found" 
+        });
+      }
+      
+      const projectOwnerId = project.userId || project.ownerId;
+      if (projectOwnerId !== userId) {
+        return res.status(403).json({ 
+          success: false, 
+          error: "Access denied" 
+        });
+      }
+      
+      // Get project datasets
+      const projectDatasets = await storage.getProjectDatasets(projectId);
+      const datasetIds = projectDatasets.map(pd => pd.datasetId);
+      
+      let streamingSources: any[] = [];
+      let scrapingJobs: any[] = [];
+      
+      if (datasetIds.length > 0) {
+        if (query.sourceType === 'streaming' || query.sourceType === 'all') {
+          streamingSources = await storage.getStreamingSources({ 
+            datasetIds,
+            includeInactive: query.includeInactive 
+          });
+        }
+        
+        if (query.sourceType === 'scraping' || query.sourceType === 'all') {
+          scrapingJobs = await storage.getScrapingJobs({ 
+            datasetIds,
+            includeInactive: query.includeInactive 
+          });
+        }
+      }
+      
+      res.json({ 
+        success: true, 
+        data: {
+          streaming: streamingSources,
+          scraping: scrapingJobs
+        }
+      });
+    } catch (error: any) {
+      console.error('Failed to get project live sources:', error);
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid query parameters", 
+          details: error.errors 
+        });
+      }
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to get project live sources" 
+      });
+    }
+  });
+
+  // Add streaming source to project
+  app.post("/api/projects/:projectId/streaming-sources", unifiedAuth, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { projectId } = req.params;
+      
+      // Validate request body
+      const config = createStreamingSourceSchema.parse(req.body);
+      
+      // Verify project ownership
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "Project not found" 
+        });
+      }
+      
+      const projectOwnerId = project.userId || project.ownerId;
+      if (projectOwnerId !== userId) {
+        return res.status(403).json({ 
+          success: false, 
+          error: "Access denied" 
+        });
+      }
+      
+      // Verify dataset ownership
+      const dataset = await storage.getDataset(config.datasetId);
+      if (!dataset || dataset.ownerId !== userId) {
+        return res.status(403).json({ 
+          success: false, 
+          error: "Dataset access denied" 
+        });
+      }
+      
+      // Create streaming source
+      const sourceData = {
+        datasetId: config.datasetId,
+        protocol: config.protocol,
+        endpoint: config.endpoint,
+        headers: config.headers || null,
+        params: config.params || null,
+        parseSpec: config.parseSpec || null,
+        batchSize: config.batchSize || 1000,
+        flushMs: config.flushMs || 5000,
+        maxBuffer: config.maxBuffer || 100000,
+        dedupeKeyPath: config.parseSpec?.dedupeKeyPath || null,
+        timestampPath: config.parseSpec?.timestampPath || null,
+        status: 'inactive' as const,
+        lastCheckpoint: null,
+        lastError: null,
+      };
+      
+      const source = await storage.createStreamingSource(sourceData);
+      
+      res.json({ 
+        success: true, 
+        sourceId: source.id,
+        message: "Streaming source added to project successfully" 
+      });
+    } catch (error: any) {
+      console.error('Failed to add streaming source to project:', error);
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid request data", 
+          details: error.errors 
+        });
+      }
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to add streaming source to project" 
+      });
+    }
+  });
+
+  // Add scraping job to project
+  app.post("/api/projects/:projectId/scraping-jobs", unifiedAuth, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { projectId } = req.params;
+      
+      // Validate request body
+      const config = createScrapingJobSchema.parse(req.body);
+      
+      // Verify project ownership
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "Project not found" 
+        });
+      }
+      
+      const projectOwnerId = project.userId || project.ownerId;
+      if (projectOwnerId !== userId) {
+        return res.status(403).json({ 
+          success: false, 
+          error: "Access denied" 
+        });
+      }
+      
+      // Verify dataset ownership
+      const dataset = await storage.getDataset(config.datasetId);
+      if (!dataset || dataset.ownerId !== userId) {
+        return res.status(403).json({ 
+          success: false, 
+          error: "Dataset access denied" 
+        });
+      }
+      
+      // Create scraping job
+      const jobData = {
+        datasetId: config.datasetId,
+        strategy: config.strategy,
+        targetUrl: config.targetUrl,
+        schedule: config.schedule || null,
+        extractionSpec: config.extractionSpec || null,
+        paginationSpec: config.extractionSpec?.followPagination || null,
+        loginSpec: config.loginSpec || null,
+        rateLimitRPM: config.rateLimitRPM || 60,
+        concurrency: config.maxConcurrency || 1,
+        respectRobots: config.respectRobots !== false,
+        status: 'inactive' as const,
+        lastRunAt: null,
+        nextRunAt: null,
+        lastError: null,
+      };
+      
+      const job = await storage.createScrapingJob(jobData);
+      
+      res.json({ 
+        success: true, 
+        jobId: job.id,
+        message: "Scraping job added to project successfully" 
+      });
+    } catch (error: any) {
+      console.error('Failed to add scraping job to project:', error);
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid request data", 
+          details: error.errors 
+        });
+      }
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to add scraping job to project" 
       });
     }
   });
