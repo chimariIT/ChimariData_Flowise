@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { Dataset, InsertDataset, InsertStreamChunk, InsertStreamCheckpoint } from '@shared/schema';
+import { Dataset, InsertDataset, InsertStreamChunk, InsertStreamCheckpoint, ScrapingJob, InsertScrapingJob, ScrapingRun, InsertScrapingRun } from '@shared/schema';
 import { nanoid } from 'nanoid';
 
 // Dynamic imports for optional dependencies to prevent app crashes
@@ -101,6 +101,2469 @@ export interface SourceResult {
   // For dataset creation
   storageUri: string; // Where the raw data is stored
   checksum?: string;
+}
+
+// Scraping-specific interfaces
+export interface ScrapingSourceAdapter extends SourceAdapter {
+  sourceType: 'scrape';
+  strategy: 'http' | 'puppeteer';
+  
+  // Lifecycle methods for scraping jobs
+  createJob(config: ScrapingJobConfig): Promise<string>; // Returns jobId
+  startJob(jobId: string): Promise<void>;
+  stopJob(jobId: string): Promise<void>;
+  getJobStatus(jobId: string): Promise<ScrapingJobStatus>;
+  
+  // Manual execution
+  runOnce(config: ScrapingJobConfig): Promise<SourceResult>;
+}
+
+export interface ScrapingJobConfig {
+  strategy: 'http' | 'puppeteer';
+  targetUrl: string;
+  schedule?: string; // Cron expression
+  extractionSpec: ExtractionConfig;
+  rateLimitRPM?: number; // Requests per minute
+  loginSpec?: {
+    usernameSelector: string;
+    passwordSelector: string;
+    submitSelector: string;
+    credentials: {
+      username: string;
+      password: string;
+    };
+  };
+  respectRobots?: boolean;
+  maxConcurrency?: number;
+  requestTimeout?: number;
+  retryConfig?: {
+    maxRetries: number;
+    backoffMs: number;
+  };
+}
+
+export interface ExtractionConfig {
+  selectors?: Record<string, string>; // CSS selectors for data fields
+  jsonPath?: string; // For JSON APIs
+  tableSelector?: string; // For HTML tables
+  textSelector?: string; // For text content
+  followPagination?: {
+    nextSelector: string;
+    maxPages: number;
+  };
+}
+
+export interface ScrapingJobStatus {
+  jobId: string;
+  status: 'scheduled' | 'running' | 'completed' | 'failed' | 'stopped';
+  lastRunAt?: Date;
+  nextRunAt?: Date;
+  totalRuns: number;
+  recordsExtracted: number;
+  lastError?: string;
+  avgRunDuration?: number;
+}
+
+// Dynamic imports for optional dependencies
+let puppeteerClass: any = null;
+let cheerioClass: any = null;
+let jsonPathClass: any = null;
+let cronParserClass: any = null;
+let robotsParserClass: any = null;
+
+async function getPuppeteer() {
+  if (!puppeteerClass) {
+    try {
+      const puppeteer = await import('puppeteer');
+      puppeteerClass = puppeteer.default;
+    } catch (error) {
+      throw new Error('Puppeteer scraping requires "puppeteer" package: npm install puppeteer');
+    }
+  }
+  return puppeteerClass;
+}
+
+async function getCheerio() {
+  if (!cheerioClass) {
+    try {
+      const cheerio = await import('cheerio');
+      cheerioClass = cheerio.default;
+    } catch (error) {
+      throw new Error('HTML parsing requires "cheerio" package: npm install cheerio');
+    }
+  }
+  return cheerioClass;
+}
+
+async function getJsonPath() {
+  if (!jsonPathClass) {
+    try {
+      const jsonPath = await import('jsonpath');
+      jsonPathClass = jsonPath.default || jsonPath;
+    } catch (error) {
+      throw new Error('JSONPath queries require "jsonpath" package: npm install jsonpath');
+    }
+  }
+  return jsonPathClass;
+}
+
+async function getCronParser() {
+  if (!cronParserClass) {
+    try {
+      const cronParser = await import('node-cron');
+      cronParserClass = cronParser.default;
+    } catch (error) {
+      throw new Error('Cron scheduling requires "node-cron" package: npm install node-cron');
+    }
+  }
+  return cronParserClass;
+}
+
+async function getRobotsParser() {
+  if (!robotsParserClass) {
+    try {
+      const robotsParser = await import('robots-txt-parse');
+      robotsParserClass = robotsParser.default;
+    } catch (error) {
+      console.warn('Robots.txt parsing not available - skipping robots compliance check');
+      return null;
+    }
+  }
+  return robotsParserClass;
+}
+
+/**
+ * Rate Limiter - Enforces respectful scraping practices with domain-based rate limiting
+ */
+export class RateLimiter {
+  private requestTimes: Map<string, number[]> = new Map();
+  private cleanupInterval: NodeJS.Timeout;
+  
+  constructor() {
+    // Clean up old request records every 5 minutes
+    this.cleanupInterval = setInterval(() => {
+      this.cleanupAllDomains();
+    }, 5 * 60 * 1000);
+  }
+
+  /**
+   * Check if a request to the domain is allowed based on rate limit
+   */
+  async checkRateLimit(domain: string, rpm: number): Promise<boolean> {
+    const now = Date.now();
+    const requests = this.requestTimes.get(domain) || [];
+    
+    // Clean up requests older than 1 minute
+    this.cleanupOldRequests(domain);
+    
+    const recentRequests = requests.filter(time => now - time < 60000); // 1 minute window
+    return recentRequests.length < rpm;
+  }
+
+  /**
+   * Wait for an available slot based on rate limit, then record the request
+   */
+  async waitForSlot(domain: string, rpm: number): Promise<void> {
+    while (!(await this.checkRateLimit(domain, rpm))) {
+      // Calculate how long to wait before next slot becomes available
+      const requests = this.requestTimes.get(domain) || [];
+      if (requests.length > 0) {
+        const oldestRequest = Math.min(...requests);
+        const waitTime = 60000 - (Date.now() - oldestRequest) + 100; // Add 100ms buffer
+        if (waitTime > 0) {
+          await this.sleep(Math.min(waitTime, 5000)); // Cap at 5 seconds
+        }
+      } else {
+        await this.sleep(1000); // Default 1 second wait
+      }
+    }
+    
+    // Record the request time
+    this.recordRequest(domain);
+  }
+
+  /**
+   * Record a request for the domain
+   */
+  private recordRequest(domain: string): void {
+    const now = Date.now();
+    const requests = this.requestTimes.get(domain) || [];
+    requests.push(now);
+    this.requestTimes.set(domain, requests);
+  }
+
+  /**
+   * Clean up old request records for a specific domain
+   */
+  private cleanupOldRequests(domain: string): void {
+    const now = Date.now();
+    const requests = this.requestTimes.get(domain) || [];
+    const recentRequests = requests.filter(time => now - time < 60000); // Keep only last minute
+    
+    if (recentRequests.length === 0) {
+      this.requestTimes.delete(domain);
+    } else {
+      this.requestTimes.set(domain, recentRequests);
+    }
+  }
+
+  /**
+   * Clean up all domains' old request records
+   */
+  private cleanupAllDomains(): void {
+    for (const [domain] of this.requestTimes) {
+      this.cleanupOldRequests(domain);
+    }
+  }
+
+  /**
+   * Get current request count for a domain in the last minute
+   */
+  getCurrentRequestCount(domain: string): number {
+    const now = Date.now();
+    const requests = this.requestTimes.get(domain) || [];
+    return requests.filter(time => now - time < 60000).length;
+  }
+
+  /**
+   * Get time until next available slot (in ms)
+   */
+  getTimeToNextSlot(domain: string, rpm: number): number {
+    const requests = this.requestTimes.get(domain) || [];
+    if (requests.length < rpm) return 0;
+    
+    const now = Date.now();
+    const oldestRequest = Math.min(...requests);
+    return Math.max(0, 60000 - (now - oldestRequest));
+  }
+
+  /**
+   * Sleep for specified milliseconds
+   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Cleanup resources
+   */
+  destroy(): void {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+    }
+  }
+
+  /**
+   * Extract domain from URL for rate limiting
+   */
+  static getDomainFromUrl(url: string): string {
+    try {
+      const urlObj = new URL(url);
+      return urlObj.hostname.toLowerCase();
+    } catch (error) {
+      throw new Error(`Invalid URL for rate limiting: ${url}`);
+    }
+  }
+}
+
+/**
+ * Security configuration for ScrapeAdapter SSRF protection
+ */
+interface ScrapeAdapterSecurityConfig {
+  allowedDomains: string[];
+  allowPrivateNetworks: boolean;
+  maxResponseSize: number;
+  requestTimeout: number;
+  maxRedirects: number;
+  allowedContentTypes: string[];
+  allowedProtocols: string[];
+  respectRobots: boolean;
+  maxConcurrency: number;
+  defaultRateLimitRPM: number;
+}
+
+/**
+ * Data Extractor - Handles content extraction with HTTP and Puppeteer strategies
+ */
+export class DataExtractor {
+  private strategy: 'http' | 'puppeteer';
+  private securityConfig: ScrapeAdapterSecurityConfig;
+
+  constructor(strategy: 'http' | 'puppeteer', securityConfig?: Partial<ScrapeAdapterSecurityConfig>) {
+    this.strategy = strategy;
+    this.securityConfig = {
+      allowedDomains: [
+        // Popular data sources
+        'api.github.com',
+        'raw.githubusercontent.com',
+        'data.gov',
+        'api.data.gov',
+        'opendata.gov',
+        'kaggle.com',
+        'data.world',
+        'api.census.gov',
+        // News and content sites (for scraping demos)
+        'news.ycombinator.com',
+        'httpbin.org',
+        'jsonplaceholder.typicode.com'
+      ],
+      allowPrivateNetworks: false,
+      maxResponseSize: 50 * 1024 * 1024, // 50MB
+      requestTimeout: 30000,
+      maxRedirects: 3,
+      allowedContentTypes: [
+        'text/html',
+        'application/json',
+        'application/xml',
+        'text/xml',
+        'text/plain',
+        'text/csv'
+      ],
+      allowedProtocols: ['http:', 'https:'],
+      respectRobots: true,
+      maxConcurrency: 3,
+      defaultRateLimitRPM: 60,
+      ...securityConfig
+    };
+  }
+
+  /**
+   * Extract data from URL using configured strategy with rate limiting
+   */
+  async extract(url: string, config: ExtractionConfig, options?: {
+    timeout?: number;
+    headers?: Record<string, string>;
+    loginSpec?: any;
+    rateLimitRPM?: number;
+    rateLimiter?: RateLimiter;
+  }): Promise<any[]> {
+    // Apply rate limiting before extraction
+    if (options?.rateLimiter) {
+      const domain = RateLimiter.getDomainFromUrl(url);
+      const rpm = options.rateLimitRPM || this.securityConfig.defaultRateLimitRPM;
+      await options.rateLimiter.waitForSlot(domain, rpm);
+    }
+    
+    switch (this.strategy) {
+      case 'http':
+        return this.extractWithHTTP(url, config, options);
+      case 'puppeteer':
+        return this.extractWithPuppeteer(url, config, options);
+      default:
+        throw new Error(`Unsupported extraction strategy: ${this.strategy}`);
+    }
+  }
+
+  /**
+   * HTTP Strategy - Fast static content scraping using fetch with proper timeout handling
+   */
+  private async extractWithHTTP(url: string, config: ExtractionConfig, options?: any, redirectCount = 0): Promise<any[]> {
+    // Validate URL for security first
+    await this.validateUrl(url);
+    
+    const fetch = await getFetch();
+    const controller = new AbortController();
+    const timeout = options?.timeout || this.securityConfig.requestTimeout;
+    
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, timeout);
+
+    try {
+      const response = await fetch(url, {
+        signal: controller.signal,
+        redirect: 'manual', // Handle redirects manually for security
+        headers: {
+          'User-Agent': 'ChimariData-ScrapeAdapter/1.0 (SSRF-Protected)',
+          'Accept': this.securityConfig.allowedContentTypes.join(', '),
+          ...options?.headers
+        }
+      });
+      
+      clearTimeout(timeoutId);
+      
+      // Handle redirects securely with limit enforcement
+      if (response.status >= 300 && response.status < 400) {
+        if (redirectCount >= this.securityConfig.maxRedirects) {
+          throw new Error(`Too many redirects: exceeded limit of ${this.securityConfig.maxRedirects}`);
+        }
+        
+        const location = response.headers.get('location');
+        if (!location) {
+          throw new Error('Redirect response missing Location header');
+        }
+        const redirectUrl = new URL(location, url).toString();
+        await this.validateUrl(redirectUrl);
+        return this.extractWithHTTP(redirectUrl, config, options, redirectCount + 1);
+      }
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      // Validate content type
+      const contentType = response.headers.get('content-type') || '';
+      this.validateContentType(contentType);
+      
+      // Stream body with size limit enforcement
+      const bodyBytes = await this.readResponseWithSizeLimit(response);
+      const bodyText = bodyBytes.toString('utf-8');
+      
+      let extractedData: any[];
+      if (contentType.includes('application/json')) {
+        const jsonData = JSON.parse(bodyText);
+        extractedData = await this.extractFromJson(jsonData, config);
+      } else if (contentType.includes('text/html')) {
+        extractedData = await this.extractFromHtml(bodyText, config);
+      } else {
+        throw new Error(`Unsupported content type: ${contentType}`);
+      }
+
+      // Handle HTTP pagination if specified
+      if (config.followPagination && contentType.includes('text/html')) {
+        return await this.handleHttpPagination(url, config, extractedData, options, redirectCount);
+      }
+
+      return extractedData;
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      if (error.name === 'AbortError') {
+        throw new Error(`Request timeout after ${timeout}ms`);
+      }
+      throw new Error(`HTTP extraction failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Puppeteer Strategy - Dynamic content handling with JavaScript execution and security controls
+   */
+  private async extractWithPuppeteer(url: string, config: ExtractionConfig, options?: any): Promise<any[]> {
+    // Validate URL for security first
+    await this.validateUrl(url);
+    
+    const puppeteer = await getPuppeteer();
+    let browser = null;
+    let page = null;
+
+    try {
+      browser = await puppeteer.launch({ 
+        headless: true,
+        args: [
+          '--no-sandbox', 
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--no-first-run',
+          '--disable-gpu',
+          '--disable-background-timer-throttling',
+          '--disable-renderer-backgrounding',
+          '--disable-backgrounding-occluded-windows'
+        ]
+      });
+      
+      page = await browser.newPage();
+      
+      // Set security headers and user agent
+      await page.setUserAgent('ChimariData-ScrapeAdapter/1.0 (SSRF-Protected)');
+      await page.setViewport({ width: 1920, height: 1080 });
+      
+      // Block access to private networks via request interception
+      await page.setRequestInterception(true);
+      page.on('request', async (request) => {
+        try {
+          const requestUrl = request.url();
+          await this.validateUrl(requestUrl);
+          request.continue();
+        } catch (error) {
+          console.warn(`Blocked request to ${request.url()}: ${error.message}`);
+          request.abort('failed');
+        }
+      });
+
+      // Navigate to page with timeout
+      const timeout = options?.timeout || this.securityConfig.requestTimeout;
+      await page.goto(url, { 
+        waitUntil: 'networkidle2', 
+        timeout 
+      });
+
+      // Handle login if specified
+      if (options?.loginSpec) {
+        await this.handleLogin(page, options.loginSpec);
+      }
+
+      // Extract data from the page
+      const data = await this.extractFromPage(page, config);
+
+      // Handle pagination if specified
+      if (config.followPagination) {
+        const allData = [data];
+        let currentPage = 1;
+        
+        while (currentPage < config.followPagination.maxPages) {
+          const nextButton = await page.$(config.followPagination.nextSelector);
+          if (!nextButton) break;
+          
+          await nextButton.click();
+          await page.waitForTimeout(2000); // Wait for page load
+          
+          const pageData = await this.extractFromPage(page, config);
+          if (pageData.length === 0) break; // No more data
+          
+          allData.push(pageData);
+          currentPage++;
+        }
+        
+        return allData.flat();
+      }
+
+      return data;
+    } catch (error: any) {
+      throw new Error(`Puppeteer extraction failed: ${error.message}`);
+    } finally {
+      if (page) await page.close();
+      if (browser) await browser.close();
+    }
+  }
+
+  /**
+   * Extract data from JSON response using proper JSONPath library
+   */
+  private async extractFromJson(data: any, config: ExtractionConfig): Promise<any[]> {
+    if (config.jsonPath) {
+      try {
+        const jsonPath = await getJsonPath();
+        const result = jsonPath.query(data, config.jsonPath);
+        return Array.isArray(result) ? result : [result];
+      } catch (error) {
+        console.warn('JSONPath query failed, falling back to simple extraction:', error.message);
+        const result = this.evaluateJsonPath(data, config.jsonPath);
+        return Array.isArray(result) ? result : [result];
+      }
+    }
+    
+    // If no JSONPath, assume data is already in the right format
+    return Array.isArray(data) ? data : [data];
+  }
+
+  /**
+   * Extract data from HTML using CSS selectors with cheerio
+   */
+  private async extractFromHtml(html: string, config: ExtractionConfig): Promise<any[]> {
+    try {
+      const cheerio = await getCheerio();
+      const $ = cheerio.load(html);
+      const data: any[] = [];
+      
+      if (config.tableSelector) {
+        // Extract table data using cheerio
+        $(config.tableSelector).each((tableIndex, table) => {
+          const $table = $(table);
+          const headers: string[] = [];
+          
+          // Extract headers
+          $table.find('thead tr:first th, tr:first th, tr:first td').each((i, header) => {
+            headers.push($(header).text().trim());
+          });
+          
+          // Extract data rows
+          const selector = headers.length > 0 ? 'tbody tr, tr:not(:first)' : 'tr';
+          $table.find(selector).each((rowIndex, row) => {
+            const $row = $(row);
+            const rowData: any = {};
+            
+            $row.find('td, th').each((cellIndex, cell) => {
+              const cellText = $(cell).text().trim();
+              const header = headers[cellIndex] || `column_${cellIndex}`;
+              const numValue = parseFloat(cellText);
+              rowData[header] = !isNaN(numValue) && cellText !== '' ? numValue : cellText;
+            });
+            
+            if (Object.keys(rowData).length > 0) {
+              data.push(rowData);
+            }
+          });
+        });
+      } else if (config.selectors) {
+        // Extract using CSS selectors
+        const mainSelector = Object.values(config.selectors)[0];
+        $(mainSelector).each((index, element) => {
+          const $element = $(element);
+          const itemData: any = {};
+          
+          for (const [key, selector] of Object.entries(config.selectors)) {
+            const $target = selector === mainSelector ? $element : $element.find(selector);
+            itemData[key] = $target.length > 0 ? $target.first().text().trim() : '';
+          }
+          
+          if (Object.keys(itemData).length > 0 && Object.values(itemData).some(v => v !== '')) {
+            data.push(itemData);
+          }
+        });
+      } else if (config.textSelector) {
+        // Extract text content
+        $(config.textSelector).each((index, element) => {
+          const content = $(element).text().trim();
+          if (content) {
+            data.push({ content, index });
+          }
+        });
+      } else {
+        // Default: extract all paragraphs and headings
+        $('p, h1, h2, h3, h4, h5, h6').each((index, element) => {
+          const content = $(element).text().trim();
+          const tagName = $(element).prop('tagName').toLowerCase();
+          if (content) {
+            data.push({ content, tag: tagName, index });
+          }
+        });
+      }
+
+      return data;
+    } catch (error) {
+      console.warn('Cheerio parsing failed, falling back to regex extraction:', error.message);
+      return this.fallbackHtmlExtraction(html, config);
+    }
+  }
+
+  /**
+   * Extract data from Puppeteer page
+   */
+  private async extractFromPage(page: any, config: ExtractionConfig): Promise<any[]> {
+    if (config.tableSelector) {
+      return await page.evaluate((selector: string) => {
+        const table = document.querySelector(selector);
+        if (!table) return [];
+        
+        const rows = Array.from(table.querySelectorAll('tr'));
+        const headers = Array.from(rows[0]?.querySelectorAll('th, td') || [])
+          .map((cell: any) => cell.textContent.trim());
+        
+        return rows.slice(1).map((row: any) => {
+          const cells = Array.from(row.querySelectorAll('td, th'));
+          const rowData: any = {};
+          cells.forEach((cell: any, index) => {
+            rowData[headers[index] || `column_${index}`] = cell.textContent.trim();
+          });
+          return rowData;
+        });
+      }, config.tableSelector);
+    }
+
+    if (config.selectors) {
+      return await page.evaluate((selectors: Record<string, string>) => {
+        const elements = document.querySelectorAll(Object.values(selectors)[0]); // Use first selector as main
+        return Array.from(elements).map((element: any) => {
+          const data: any = {};
+          for (const [key, selector] of Object.entries(selectors)) {
+            const targetElement = element.querySelector(selector) || element;
+            data[key] = targetElement.textContent?.trim() || '';
+          }
+          return data;
+        });
+      }, config.selectors);
+    }
+
+    if (config.textSelector) {
+      const content = await page.evaluate((selector: string) => {
+        const element = document.querySelector(selector);
+        return element ? element.textContent.trim() : '';
+      }, config.textSelector);
+      
+      return [{ content }];
+    }
+
+    return [];
+  }
+
+  /**
+   * Handle login process in Puppeteer
+   */
+  private async handleLogin(page: any, loginSpec: any): Promise<void> {
+    try {
+      // Fill username
+      await page.waitForSelector(loginSpec.usernameSelector);
+      await page.type(loginSpec.usernameSelector, loginSpec.credentials.username);
+
+      // Fill password
+      await page.waitForSelector(loginSpec.passwordSelector);
+      await page.type(loginSpec.passwordSelector, loginSpec.credentials.password);
+
+      // Submit form
+      await page.click(loginSpec.submitSelector);
+      await page.waitForNavigation({ waitUntil: 'networkidle2' });
+    } catch (error: any) {
+      throw new Error(`Login failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Simple JSONPath evaluator for basic queries
+   */
+  private evaluateJsonPath(data: any, path: string): any {
+    const parts = path.replace(/^\$\./, '').split('.');
+    let current = data;
+    
+    for (const part of parts) {
+      if (current === null || current === undefined) return null;
+      
+      if (part.includes('[') && part.includes(']')) {
+        // Handle array indices like items[0]
+        const [key, indexStr] = part.split('[');
+        const index = parseInt(indexStr.replace(']', ''));
+        current = current[key][index];
+      } else {
+        current = current[part];
+      }
+    }
+    
+    return current;
+  }
+
+  /**
+   * Fallback HTML extraction using regex (when cheerio fails)
+   */
+  private fallbackHtmlExtraction(html: string, config: ExtractionConfig): any[] {
+    const data: any[] = [];
+    
+    if (config.tableSelector) {
+      // Extract table data using regex
+      const tableRegex = /<table[^>]*>[\s\S]*?<\/table>/gi;
+      const tables = html.match(tableRegex);
+      
+      if (tables && tables.length > 0) {
+        for (const table of tables) {
+          data.push(...this.extractTableWithRegex(table));
+        }
+      }
+    } else if (config.textSelector) {
+      // Extract text content
+      const bodyRegex = /<body[^>]*>([\s\S]*?)<\/body>/i;
+      const bodyMatch = html.match(bodyRegex);
+      
+      if (bodyMatch) {
+        const textContent = bodyMatch[1].replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+        data.push({ content: textContent });
+      }
+    }
+
+    return data;
+  }
+  
+  /**
+   * Extract table data using regex fallback
+   */
+  private extractTableWithRegex(tableHtml: string): any[] {
+    const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+    const cellRegex = /<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi;
+    
+    const data: any[] = [];
+    const rows = Array.from(tableHtml.matchAll(rowRegex));
+    
+    if (rows.length === 0) return data;
+    
+    // Extract headers
+    const headerRow = rows[0][1];
+    const headers = Array.from(headerRow.matchAll(cellRegex))
+      .map(match => match[1].replace(/<[^>]*>/g, '').trim());
+    
+    // Extract data rows
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i][1];
+      const cells = Array.from(row.matchAll(cellRegex))
+        .map(match => match[1].replace(/<[^>]*>/g, '').trim());
+      
+      const rowData: any = {};
+      cells.forEach((cell, index) => {
+        const header = headers[index] || `column_${index}`;
+        const numValue = parseFloat(cell);
+        rowData[header] = !isNaN(numValue) && cell !== '' ? numValue : cell;
+      });
+      data.push(rowData);
+    }
+    
+    return data;
+  }
+
+  /**
+   * Comprehensive URL security validation to prevent SSRF attacks
+   */
+  private async validateUrl(url: string): Promise<void> {
+    let urlObj: URL;
+    
+    try {
+      urlObj = new URL(url);
+    } catch (error) {
+      throw new Error('Invalid URL format');
+    }
+
+    // 1. Protocol validation - only allow HTTP/HTTPS
+    if (!this.securityConfig.allowedProtocols.includes(urlObj.protocol)) {
+      throw new Error(`Protocol ${urlObj.protocol} is not allowed. Only ${this.securityConfig.allowedProtocols.join(', ')} are permitted`);
+    }
+
+    // 2. Domain allowlist validation
+    if (!this.isDomainAllowed(urlObj.hostname)) {
+      throw new Error(`Domain ${urlObj.hostname} is not in the allowed domains list. Contact administrator to add trusted domains.`);
+    }
+
+    // 3. IP address validation to prevent access to private networks
+    await this.validateIpAddress(urlObj.hostname);
+
+    // 4. Port validation - only allow standard HTTP/HTTPS ports
+    const port = urlObj.port || (urlObj.protocol === 'https:' ? '443' : '80');
+    if (!['80', '443', '8080', '8443'].includes(port)) {
+      throw new Error(`Port ${port} is not allowed. Only standard HTTP/HTTPS ports are permitted`);
+    }
+
+    // 5. Path validation - prevent access to sensitive paths
+    const path = urlObj.pathname.toLowerCase();
+    const suspiciousPaths = ['/admin', '/internal', '/private', '/management', '/actuator', '/health'];
+    if (suspiciousPaths.some(suspPath => path.includes(suspPath))) {
+      throw new Error(`Access to path ${urlObj.pathname} is not allowed`);
+    }
+  }
+  
+  /**
+   * Check if domain is in the allowlist
+   */
+  private isDomainAllowed(hostname: string): boolean {
+    const cleanHostname = hostname.toLowerCase();
+    
+    return this.securityConfig.allowedDomains.some(allowedDomain => {
+      const cleanAllowed = allowedDomain.toLowerCase();
+      // Exact match or subdomain match
+      return cleanHostname === cleanAllowed || cleanHostname.endsWith('.' + cleanAllowed);
+    });
+  }
+
+  /**
+   * Validate IP address to prevent access to private networks and localhost
+   */
+  private async validateIpAddress(hostname: string): Promise<void> {
+    const dns = require('dns');
+    const { promisify } = require('util');
+    const lookup = promisify(dns.lookup);
+
+    // Block private networks if not explicitly allowed
+    if (!this.securityConfig.allowPrivateNetworks) {
+      // Check if hostname is already an IP address
+      if (this.isPrivateIpAddress(hostname)) {
+        throw new Error(`Access to private IP address ${hostname} is not allowed`);
+      }
+
+      // Resolve hostname to IP and check if it's private
+      try {
+        const result = await lookup(hostname);
+        const ipAddress = result.address;
+        
+        if (this.isPrivateIpAddress(ipAddress)) {
+          throw new Error(`Hostname ${hostname} resolves to private IP address ${ipAddress} which is not allowed`);
+        }
+      } catch (dnsError: any) {
+        throw new Error(`DNS resolution failed for ${hostname}: ${dnsError.message}`);
+      }
+    }
+  }
+
+  /**
+   * Check if an IP address is in private/internal ranges
+   */
+  private isPrivateIpAddress(ip: string): boolean {
+    // IPv4 private ranges
+    const privateRanges = [
+      /^127\./, // Loopback (127.0.0.0/8)
+      /^10\./, // Class A private (10.0.0.0/8)
+      /^172\.(1[6-9]|2[0-9]|3[01])\./, // Class B private (172.16.0.0/12)
+      /^192\.168\./, // Class C private (192.168.0.0/16)
+      /^169\.254\./, // Link-local (169.254.0.0/16) - includes cloud metadata
+      /^::1$/, // IPv6 loopback
+      /^fe80:/, // IPv6 link-local
+      /^fc00:/, // IPv6 unique local
+      /^fd00:/, // IPv6 unique local
+    ];
+
+    return privateRanges.some(range => range.test(ip));
+  }
+  
+  /**
+   * Validate response content type
+   */
+  private validateContentType(contentType: string): void {
+    const cleanContentType = contentType.split(';')[0].trim().toLowerCase();
+    
+    if (!this.securityConfig.allowedContentTypes.some(allowed => 
+      cleanContentType.includes(allowed.toLowerCase())
+    )) {
+      throw new Error(`Content type ${cleanContentType} is not allowed. Allowed types: ${this.securityConfig.allowedContentTypes.join(', ')}`);
+    }
+  }
+
+  /**
+   * Read response body with strict size limit enforcement
+   */
+  private async readResponseWithSizeLimit(response: Response): Promise<Buffer> {
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('Response body is null or not readable');
+    }
+
+    const chunks: Uint8Array[] = [];
+    let totalSize = 0;
+    const decoder = new TextDecoder();
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        
+        if (done) break;
+        
+        if (value) {
+          totalSize += value.length;
+          
+          // Enforce size limit during streaming
+          if (totalSize > this.securityConfig.maxResponseSize) {
+            throw new Error(`Response too large: ${totalSize} bytes exceeds ${this.securityConfig.maxResponseSize} bytes`);
+          }
+          
+          chunks.push(value);
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    // Combine chunks into single buffer
+    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const result = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      result.set(chunk, offset);
+      offset += chunk.length;
+    }
+    
+    return Buffer.from(result);
+  }
+
+  /**
+   * Comprehensive URL security validation to prevent SSRF attacks
+   */
+  async validateUrl(url: string): Promise<void> {
+    let urlObj: URL;
+    
+    try {
+      urlObj = new URL(url);
+    } catch (error) {
+      throw new Error('Invalid URL format');
+    }
+
+    // 1. Protocol validation - only allow HTTP/HTTPS
+    if (!this.securityConfig.allowedProtocols.includes(urlObj.protocol)) {
+      throw new Error(`Protocol ${urlObj.protocol} is not allowed. Only ${this.securityConfig.allowedProtocols.join(', ')} are permitted`);
+    }
+
+    // 2. Domain allowlist validation
+    if (!this.isDomainAllowed(urlObj.hostname)) {
+      throw new Error(`Domain ${urlObj.hostname} is not in the allowed domains list. Contact administrator to add trusted domains.`);
+    }
+
+    // 3. IP address validation to prevent access to private networks
+    await this.validateIpAddress(urlObj.hostname);
+
+    // 4. Port validation - only allow standard HTTP/HTTPS ports
+    const port = urlObj.port || (urlObj.protocol === 'https:' ? '443' : '80');
+    if (!['80', '443', '8080', '8443'].includes(port)) {
+      throw new Error(`Port ${port} is not allowed. Only standard HTTP/HTTPS ports are permitted`);
+    }
+
+    // 5. Path validation - prevent access to sensitive paths
+    const path = urlObj.pathname.toLowerCase();
+    const suspiciousPaths = ['/admin', '/internal', '/private', '/management', '/actuator', '/health'];
+    if (suspiciousPaths.some(suspPath => path.includes(suspPath))) {
+      throw new Error(`Access to path ${urlObj.pathname} is not allowed`);
+    }
+  }
+
+  /**
+   * Check if domain is in the allowlist
+   */
+  private isDomainAllowed(hostname: string): boolean {
+    const cleanHostname = hostname.toLowerCase();
+    
+    return this.securityConfig.allowedDomains.some(allowedDomain => {
+      const cleanAllowed = allowedDomain.toLowerCase();
+      // Exact match or subdomain match
+      return cleanHostname === cleanAllowed || cleanHostname.endsWith('.' + cleanAllowed);
+    });
+  }
+
+  /**
+   * Validate IP address to prevent access to private networks and localhost
+   */
+  private async validateIpAddress(hostname: string): Promise<void> {
+    const dns = require('dns');
+    const { promisify } = require('util');
+    const lookup = promisify(dns.lookup);
+
+    // Block private networks if not explicitly allowed
+    if (!this.securityConfig.allowPrivateNetworks) {
+      // Check if hostname is already an IP address
+      if (this.isPrivateIpAddress(hostname)) {
+        throw new Error(`Access to private IP address ${hostname} is not allowed`);
+      }
+
+      // Resolve hostname to IP and check if it's private
+      try {
+        const result = await lookup(hostname);
+        const ipAddress = result.address;
+        
+        if (this.isPrivateIpAddress(ipAddress)) {
+          throw new Error(`Hostname ${hostname} resolves to private IP address ${ipAddress} which is not allowed`);
+        }
+      } catch (dnsError: any) {
+        throw new Error(`DNS resolution failed for ${hostname}: ${dnsError.message}`);
+      }
+    }
+  }
+
+  /**
+   * Check if an IP address is in private/internal ranges
+   */
+  private isPrivateIpAddress(ip: string): boolean {
+    // IPv4 private ranges
+    const privateRanges = [
+      /^127\./, // Loopback (127.0.0.0/8)
+      /^10\./, // Class A private (10.0.0.0/8)
+      /^172\.(1[6-9]|2[0-9]|3[01])\./, // Class B private (172.16.0.0/12)
+      /^192\.168\./, // Class C private (192.168.0.0/16)
+      /^169\.254\./, // Link-local (169.254.0.0/16) - includes cloud metadata
+      /^::1$/, // IPv6 loopback
+      /^fe80:/, // IPv6 link-local
+      /^fc00:/, // IPv6 unique local
+      /^fd00:/, // IPv6 unique local
+    ];
+
+    return privateRanges.some(range => range.test(ip));
+  }
+
+  /**
+   * Validate cron expression format
+   */
+  async validateCronExpression(schedule: string): Promise<void> {
+    try {
+      const cronParser = await getCronParser();
+      if (cronParser && typeof cronParser.validate === 'function') {
+        const isValid = cronParser.validate(schedule);
+        if (!isValid) {
+          throw new Error('Invalid cron expression format');
+        }
+      } else {
+        // Fallback validation - basic cron format check
+        const parts = schedule.trim().split(/\s+/);
+        if (parts.length !== 5 && parts.length !== 6) {
+          throw new Error('Cron expression must have 5 or 6 parts');
+        }
+      }
+    } catch (error: any) {
+      throw new Error(`Cron validation failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Handle HTTP pagination by following next page links
+   */
+  private async handleHttpPagination(
+    baseUrl: string, 
+    config: ExtractionConfig, 
+    initialData: any[], 
+    options: any,
+    redirectCount: number
+  ): Promise<any[]> {
+    const allData = [...initialData];
+    let currentPage = 1;
+    let currentUrl = baseUrl;
+    
+    try {
+      const cheerio = await getCheerio();
+      
+      while (currentPage < (config.followPagination?.maxPages || 10)) {
+        // Get the current page HTML to find next page link
+        const fetch = await getFetch();
+        const response = await fetch(currentUrl, {
+          headers: {
+            'User-Agent': 'ChimariData-ScrapeAdapter/1.0 (HTTP-Pagination)',
+            'Accept': 'text/html,application/xhtml+xml',
+            ...options?.headers
+          }
+        });
+        
+        if (!response.ok) break;
+        
+        const bodyBytes = await this.readResponseWithSizeLimit(response);
+        const html = bodyBytes.toString('utf-8');
+        const $ = cheerio.load(html);
+        
+        // Look for next page link
+        const nextPageElement = $(config.followPagination!.nextSelector).first();
+        if (!nextPageElement.length) break;
+        
+        const nextPageHref = nextPageElement.attr('href');
+        if (!nextPageHref) break;
+        
+        // Convert relative URLs to absolute
+        const nextPageUrl = new URL(nextPageHref, currentUrl).toString();
+        
+        // Validate next page URL for security
+        await this.validateUrl(nextPageUrl);
+        
+        // Apply rate limiting between pages
+        if (options?.rateLimiter) {
+          const domain = RateLimiter.getDomainFromUrl(nextPageUrl);
+          const rpm = options?.rateLimitRPM || this.securityConfig.defaultRateLimitRPM;
+          await options.rateLimiter.waitForSlot(domain, rpm);
+        }
+        
+        // Extract data from next page
+        const nextPageData = await this.extractWithHTTP(nextPageUrl, config, options, redirectCount);
+        
+        if (nextPageData.length === 0) break; // No more data
+        
+        allData.push(...nextPageData);
+        currentUrl = nextPageUrl;
+        currentPage++;
+        
+        // Small delay between pages to be respectful
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    } catch (error: any) {
+      console.warn(`HTTP pagination stopped at page ${currentPage}: ${error.message}`);
+    }
+    
+    return allData;
+  }
+
+  /**
+   * Extract text content from HTML using selector (simplified)
+   */
+  private extractTextFromHtml(html: string, selector: string): string {
+    // Very basic text extraction - would need proper HTML parser
+    const bodyRegex = /<body[^>]*>([\s\S]*?)<\/body>/i;
+    const bodyMatch = html.match(bodyRegex);
+    
+    if (bodyMatch) {
+      // Remove HTML tags and return text
+      return bodyMatch[1].replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+    
+    return '';
+  }
+}
+
+/**
+ * Job Scheduler - Manages scheduled scraping operations with cron support
+ */
+export class JobScheduler {
+  private activeJobs = new Map<string, ScheduledJob>();
+  private cronTasks = new Map<string, any>();
+  private schedulerInterval: NodeJS.Timeout | null = null;
+  private isRunning = false;
+  private scrapeAdapter: any;
+
+  constructor(private storage: any) {
+    this.startScheduler();
+  }
+
+  /**
+   * Set the ScrapeAdapter instance for job execution
+   */
+  setScrapeAdapter(scrapeAdapter: any): void {
+    this.scrapeAdapter = scrapeAdapter;
+  }
+
+  /**
+   * Schedule a new scraping job with comprehensive persistence
+   */
+  async scheduleJob(config: ScrapingJobConfig, datasetId: string): Promise<string> {
+    const jobId = nanoid();
+    
+    // Parse schedule if provided
+    let nextRunAt: Date | undefined;
+    if (config.schedule) {
+      nextRunAt = await this.getNextRunTime(config.schedule);
+    }
+
+    // Create job in database
+    const jobData: InsertScrapingJob = {
+      id: jobId,
+      datasetId,
+      strategy: config.strategy,
+      targetUrl: config.targetUrl,
+      schedule: config.schedule || null,
+      extractionSpec: config.extractionSpec as any,
+      paginationSpec: config.extractionSpec.followPagination as any || null,
+      loginSpec: config.loginSpec as any || null,
+      rateLimitRPM: config.rateLimitRPM || 60,
+      concurrency: config.maxConcurrency || 1,
+      respectRobots: config.respectRobots !== false,
+      status: config.schedule ? 'active' : 'inactive',
+      nextRunAt,
+      lastRunAt: null,
+      lastError: null
+    };
+
+    try {
+      await this.storage.createScrapingJob(jobData);
+      console.log(`Created scraping job ${jobId} for dataset ${datasetId}`);
+    } catch (error: any) {
+      console.error(`Failed to create scraping job: ${error.message}`);
+      throw new Error(`Failed to create scraping job: ${error.message}`);
+    }
+
+    // Add to active jobs if scheduled
+    if (config.schedule && nextRunAt) {
+      try {
+        // Schedule with node-cron for persistence
+        await this.scheduleJobWithCron(jobId, config.schedule);
+        
+        this.activeJobs.set(jobId, {
+          jobId,
+          config,
+          datasetId,
+          nextRunAt,
+          isRunning: false
+        });
+        
+        console.log(`Scheduled job ${jobId} with cron: ${config.schedule}`);
+      } catch (cronError: any) {
+        console.warn(`Failed to schedule job with cron, using fallback: ${cronError.message}`);
+      }
+    }
+
+    return jobId;
+  }
+
+  /**
+   * Start a job (activate scheduling or run once)
+   */
+  async startJob(jobId: string): Promise<void> {
+    const job = await this.storage.getScrapingJob(jobId);
+    if (!job) {
+      throw new Error(`Scraping job ${jobId} not found`);
+    }
+
+    if (job.schedule) {
+      // Activate scheduled job
+      const nextRunAt = this.getNextRunTime(job.schedule);
+      await this.storage.updateScrapingJob(jobId, {
+        status: 'active',
+        nextRunAt
+      });
+
+      this.activeJobs.set(jobId, {
+        jobId,
+        config: this.convertDbJobToConfig(job),
+        datasetId: job.datasetId,
+        nextRunAt,
+        isRunning: false
+      });
+    } else {
+      // Run once immediately
+      await this.executeJobOnce(jobId);
+    }
+  }
+
+  /**
+   * Stop a scheduled job
+   */
+  async stopJob(jobId: string): Promise<void> {
+    await this.storage.updateScrapingJob(jobId, {
+      status: 'inactive'
+    });
+
+    this.activeJobs.delete(jobId);
+  }
+
+  /**
+   * Get job status with comprehensive run statistics
+   */
+  async getJobStatus(jobId: string): Promise<ScrapingJobStatus> {
+    const job = await this.storage.getScrapingJob(jobId);
+    if (!job) {
+      throw new Error(`Scraping job ${jobId} not found`);
+    }
+
+    // Get run statistics from storage
+    const runs = await this.storage.getScrapingRuns(jobId);
+    const completedRuns = runs.filter((r: any) => r.status === 'completed');
+    const totalRecords = completedRuns.reduce((sum: number, r: any) => sum + (r.recordCount || 0), 0);
+    
+    let avgDuration = 0;
+    if (completedRuns.length > 0) {
+      const durations = completedRuns
+        .filter((r: any) => r.finishedAt && r.startedAt)
+        .map((r: any) => new Date(r.finishedAt!).getTime() - new Date(r.startedAt).getTime());
+      
+      if (durations.length > 0) {
+        avgDuration = durations.reduce((sum: number, d: number) => sum + d, 0) / durations.length;
+      }
+    }
+
+    const activeJob = this.activeJobs.get(jobId);
+    let status: 'scheduled' | 'running' | 'completed' | 'failed' | 'stopped';
+    
+    if (activeJob?.isRunning) {
+      status = 'running';
+    } else if (job.status === 'active' && job.schedule) {
+      status = 'scheduled';
+    } else if (job.status === 'completed') {
+      status = 'completed';
+    } else if (job.status === 'failed') {
+      status = 'failed';
+    } else {
+      status = 'stopped';
+    }
+
+    return {
+      jobId,
+      status,
+      lastRunAt: job.lastRunAt ? new Date(job.lastRunAt) : undefined,
+      nextRunAt: job.nextRunAt ? new Date(job.nextRunAt) : undefined,
+      totalRuns: runs.length,
+      recordsExtracted: totalRecords,
+      lastError: job.lastError || undefined,
+      avgRunDuration: avgDuration
+    };
+  }
+
+  /**
+   * Start the scheduler loop
+   */
+  private startScheduler(): void {
+    if (this.isRunning) return;
+    
+    this.isRunning = true;
+    
+    // Check for jobs to run every minute
+    this.schedulerInterval = setInterval(async () => {
+      await this.checkAndExecuteJobs();
+    }, 60 * 1000);
+
+    // Load existing active jobs from database
+    this.loadActiveJobs();
+  }
+
+  /**
+   * Stop the scheduler
+   */
+  stopScheduler(): void {
+    this.isRunning = false;
+    
+    if (this.schedulerInterval) {
+      clearInterval(this.schedulerInterval);
+      this.schedulerInterval = null;
+    }
+  }
+
+  /**
+   * Load active jobs from database with comprehensive error handling
+   */
+  private async loadActiveJobs(): Promise<void> {
+    try {
+      // Check if storage has the required method
+      if (!this.storage.getJobsToRun) {
+        console.warn('Storage does not implement getJobsToRun method');
+        return;
+      }
+      
+      const activeJobs = await this.storage.getJobsToRun();
+      
+      for (const job of activeJobs) {
+        if (job.schedule && job.nextRunAt) {
+          const config = this.convertDbJobToConfig(job);
+          
+          // Schedule with node-cron if available
+          try {
+            await this.scheduleJobWithCron(job.id, job.schedule);
+          } catch (cronError: any) {
+            console.warn(`Failed to schedule job ${job.id} with cron: ${cronError.message}`);
+          }
+          
+          this.activeJobs.set(job.id, {
+            jobId: job.id,
+            config,
+            datasetId: job.datasetId,
+            nextRunAt: new Date(job.nextRunAt),
+            isRunning: false
+          });
+        }
+      }
+      
+      console.log(`Loaded ${this.activeJobs.size} active scraping jobs`);
+    } catch (error: any) {
+      console.error('Failed to load active scraping jobs:', error.message);
+    }
+  }
+
+  /**
+   * Check for jobs that need to be executed
+   */
+  private async checkAndExecuteJobs(): Promise<void> {
+    const now = new Date();
+    
+    for (const [jobId, scheduledJob] of this.activeJobs.entries()) {
+      if (!scheduledJob.isRunning && scheduledJob.nextRunAt <= now) {
+        // Time to execute this job
+        this.executeJob(jobId).catch(error => {
+          console.error(`Failed to execute scraping job ${jobId}:`, error);
+        });
+      }
+    }
+  }
+
+  /**
+   * Execute a scheduled job
+   */
+  private async executeJob(jobId: string): Promise<void> {
+    const scheduledJob = this.activeJobs.get(jobId);
+    if (!scheduledJob || scheduledJob.isRunning) return;
+
+    scheduledJob.isRunning = true;
+
+    try {
+      await this.executeJobOnce(jobId);
+      
+      // Schedule next run if job still active
+      const jobData = await this.storage.getScrapingJob(jobId);
+      if (jobData && jobData.status === 'active' && jobData.schedule) {
+        const nextRunAt = this.getNextRunTime(jobData.schedule);
+        scheduledJob.nextRunAt = nextRunAt;
+        
+        await this.storage.updateScrapingJob(jobId, {
+          nextRunAt,
+          lastRunAt: new Date()
+        });
+      }
+    } catch (error: any) {
+      console.error(`Job execution failed for ${jobId}:`, error);
+      
+      await this.storage.updateScrapingJob(jobId, {
+        lastError: error.message,
+        lastRunAt: new Date()
+      });
+    } finally {
+      scheduledJob.isRunning = false;
+    }
+  }
+
+  /**
+   * Execute a job once with comprehensive storage integration
+   */
+  async executeJobOnce(jobId: string, scrapeAdapter?: any): Promise<void> {
+    const runId = nanoid();
+    const startTime = new Date();
+
+    try {
+      // Create run record
+      await this.storage.createScrapingRun({
+        id: runId,
+        jobId,
+        startedAt: startTime,
+        finishedAt: null,
+        status: 'running',
+        recordCount: null,
+        artifactId: null
+      });
+
+      // If ScrapeAdapter is provided, execute the actual scraping
+      if (scrapeAdapter && typeof scrapeAdapter.executeJobById === 'function') {
+        const result = await scrapeAdapter.executeJobById(jobId);
+        
+        // Update run with success and record count
+        const finishTime = new Date();
+        await this.storage.updateScrapingRun(runId, {
+          finishedAt: finishTime,
+          status: 'completed',
+          recordCount: result.recordCount || 0
+        });
+      } else {
+        // Fallback: just mark as completed for now
+        const finishTime = new Date();
+        await this.storage.updateScrapingRun(runId, {
+          finishedAt: finishTime,
+          status: 'completed',
+          recordCount: 0
+        });
+      }
+
+      // Update job's last run time
+      await this.storage.updateScrapingJob(jobId, {
+        lastRunAt: new Date()
+      });
+
+    } catch (error: any) {
+      // Mark run as failed
+      await this.storage.updateScrapingRun(runId, {
+        finishedAt: new Date(),
+        status: 'failed'
+      });
+      
+      // Update job with error information
+      await this.storage.updateScrapingJob(jobId, {
+        lastError: error.message,
+        lastRunAt: new Date()
+      });
+      
+      throw error;
+    }
+  }
+
+  /**
+   * Parse cron schedule and get next run time using node-cron with persistence
+   */
+  private async getNextRunTime(schedule: string): Promise<Date> {
+    try {
+      const cronParser = await getCronParser();
+      if (cronParser && typeof cronParser.validate === 'function') {
+        // Validate cron expression first
+        const isValid = cronParser.validate(schedule);
+        if (!isValid) {
+          throw new Error(`Invalid cron expression: ${schedule}`);
+        }
+        
+        // Use node-cron to schedule and get next execution time
+        const now = new Date();
+        const task = cronParser.schedule(schedule, () => {}, { 
+          scheduled: false,
+          timezone: 'UTC' // Use UTC for consistency
+        });
+        
+        // Get the next execution time from the task
+        if (task && typeof task.getSchedule === 'function') {
+          const nextDate = task.getSchedule().next();
+          task.destroy(); // Clean up the temporary task
+          return new Date(nextDate);
+        } else {
+          // Fallback: calculate manually
+          return this.calculateNextCronRun(schedule);
+        }
+      } else {
+        // Fallback to basic scheduling
+        return this.getNextRunTimeBasic(schedule);
+      }
+    } catch (error: any) {
+      console.warn('Advanced cron parsing failed, using basic scheduling:', error.message);
+      return this.getNextRunTimeBasic(schedule);
+    }
+  }
+  
+  /**
+   * Calculate next cron run time (simplified implementation)
+   */
+  private calculateNextCronRun(schedule: string): Date {
+    const parts = schedule.trim().split(/\s+/);
+    const now = new Date();
+    const next = new Date(now);
+    
+    // Parse parts: minute hour day month day-of-week
+    const [minute, hour, day, month, dayOfWeek] = parts;
+    
+    // For complex cron expressions, use approximation
+    if (minute === '*' && hour === '*') {
+      // Every minute
+      next.setMinutes(next.getMinutes() + 1, 0, 0);
+    } else if (minute.includes('/')) {
+      // Every N minutes
+      const interval = parseInt(minute.split('/')[1]);
+      next.setMinutes(next.getMinutes() + interval, 0, 0);
+    } else if (hour.includes('/')) {
+      // Every N hours
+      const interval = parseInt(hour.split('/')[1]);
+      next.setHours(next.getHours() + interval, 0, 0, 0);
+    } else {
+      // Default to next hour
+      next.setHours(next.getHours() + 1, 0, 0, 0);
+    }
+    
+    return next;
+  }
+  
+  /**
+   * Basic cron parsing (fallback)
+   */
+  private getNextRunTimeBasic(schedule: string): Date {
+    const parts = schedule.trim().split(/\s+/);
+    
+    if (parts.length !== 5 && parts.length !== 6) {
+      throw new Error(`Invalid cron schedule: ${schedule}`);
+    }
+
+    const now = new Date();
+    const next = new Date(now);
+    
+    // Simple patterns
+    if (schedule === '0 0 * * *') {
+      // Daily at midnight
+      next.setDate(next.getDate() + 1);
+      next.setHours(0, 0, 0, 0);
+    } else if (schedule === '0 * * * *') {
+      // Every hour
+      next.setHours(next.getHours() + 1);
+      next.setMinutes(0, 0, 0);
+    } else if (schedule.startsWith('*/')) {
+      // Every N minutes
+      const minutes = parseInt(schedule.split(' ')[0].substring(2));
+      next.setMinutes(next.getMinutes() + minutes, 0, 0);
+    } else {
+      // Default to 1 hour from now
+      next.setHours(next.getHours() + 1);
+    }
+    
+    return next;
+  }
+
+  /**
+   * Convert database job to config object
+   */
+  private convertDbJobToConfig(job: any): ScrapingJobConfig {
+    return {
+      strategy: job.strategy,
+      targetUrl: job.targetUrl,
+      schedule: job.schedule,
+      extractionSpec: job.extractionSpec || {},
+      rateLimitRPM: job.rateLimitRPM || 60,
+      loginSpec: job.loginSpec || undefined,
+      respectRobots: job.respectRobots !== false,
+      maxConcurrency: job.concurrency || 1,
+      requestTimeout: 30000,
+      retryConfig: {
+        maxRetries: 3,
+        backoffMs: 1000
+      }
+    };
+  }
+
+  /**
+   * Schedule job with node-cron for persistent execution
+   */
+  private async scheduleJobWithCron(jobId: string, schedule: string): Promise<void> {
+    try {
+      const cronParser = await getCronParser();
+      if (!cronParser || typeof cronParser.schedule !== 'function') {
+        throw new Error('node-cron not available');
+      }
+      
+      // Create a persistent cron job
+      const task = cronParser.schedule(schedule, async () => {
+        try {
+          await this.executeJob(jobId);
+        } catch (error: any) {
+          console.error(`Scheduled execution failed for job ${jobId}: ${error.message}`);
+        }
+      }, {
+        scheduled: true,
+        timezone: 'UTC'
+      });
+      
+      // Store the task reference for cleanup
+      if (!this.cronTasks) {
+        this.cronTasks = new Map();
+      }
+      this.cronTasks.set(jobId, task);
+      
+    } catch (error: any) {
+      console.warn(`Failed to schedule cron job ${jobId}: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Remove cron job scheduling
+   */
+  private async cancelCronJob(jobId: string): Promise<void> {
+    if (this.cronTasks && this.cronTasks.has(jobId)) {
+      const task = this.cronTasks.get(jobId);
+      if (task && typeof task.destroy === 'function') {
+        task.destroy();
+      }
+      this.cronTasks.delete(jobId);
+    }
+  }
+
+  /**
+   * Cleanup resources
+   */
+  destroy(): void {
+    this.stopScheduler();
+    
+    // Cancel all cron jobs
+    if (this.cronTasks) {
+      for (const [jobId] of this.cronTasks) {
+        this.cancelCronJob(jobId).catch(error => {
+          console.error(`Failed to cancel cron job ${jobId}:`, error);
+        });
+      }
+      this.cronTasks.clear();
+    }
+    
+    this.activeJobs.clear();
+  }
+}
+
+// Internal interface for scheduled jobs
+interface ScheduledJob {
+  jobId: string;
+  config: ScrapingJobConfig;
+  datasetId: string;
+  nextRunAt: Date;
+  isRunning: boolean;
+}
+
+/**
+ * Scrape Adapter - Main scraping adapter integrating all scraping components
+ */
+export class ScrapeAdapter implements ScrapingSourceAdapter {
+  sourceType = 'scrape' as const;
+  strategy: 'http' | 'puppeteer';
+  supportedMimeTypes = ['text/html', 'application/json', 'application/xml', 'text/xml'];
+  supportedExtensions = ['.html', '.htm', '.json', '.xml'];
+
+  private jobScheduler: JobScheduler;
+  private dataExtractor: DataExtractor;
+  private rateLimiter: RateLimiter;
+  private storage: any;
+
+  constructor(strategy: 'http' | 'puppeteer' = 'http', storage: any) {
+    this.strategy = strategy;
+    this.storage = storage;
+    this.jobScheduler = new JobScheduler(storage);
+    this.dataExtractor = new DataExtractor(strategy);
+    this.rateLimiter = new RateLimiter();
+    
+    // Wire JobScheduler to this ScrapeAdapter for execution
+    this.jobScheduler.setScrapeAdapter(this);
+  }
+
+  /**
+   * Check if this adapter can handle the given source
+   */
+  canHandle(mimeType: string, fileName: string): boolean {
+    // ScrapeAdapter handles URLs, not files directly
+    return false;
+  }
+
+  /**
+   * Process a URL-based scraping request (for one-time scraping)
+   */
+  async process(input: SourceInput): Promise<SourceResult> {
+    if (!input.url) {
+      throw new Error('ScrapeAdapter requires a URL in the input');
+    }
+
+    // Validate URL for security
+    await this.validateScrapingUrl(input.url);
+
+    // Create a temporary scraping config
+    const config: ScrapingJobConfig = {
+      strategy: this.strategy,
+      targetUrl: input.url,
+      extractionSpec: {
+        ...(input.options?.tableDetection && { tableSelector: 'table' }),
+        ...(input.options?.extractText && { textSelector: 'body' })
+      },
+      rateLimitRPM: 60,
+      respectRobots: true,
+      maxConcurrency: 1,
+      requestTimeout: 30000,
+      retryConfig: {
+        maxRetries: 3,
+        backoffMs: 1000
+      }
+    };
+
+    return await this.runOnce(config);
+  }
+
+  /**
+   * Create a scheduled scraping job
+   */
+  async createJob(config: ScrapingJobConfig): Promise<string> {
+    // Validate configuration
+    await this.validateScrapingConfig(config);
+
+    // Create a dataset for this scraping job
+    const dataset: InsertDataset = {
+      name: `Scraping: ${this.extractDomainFromUrl(config.targetUrl)}`,
+      ownerId: 'system', // This should come from the user context
+      description: `Web scraping data from ${config.targetUrl}`,
+      datasetType: 'scraping',
+      storageLocation: `scraping/${nanoid()}`,
+      totalSize: 0,
+      recordCount: 0,
+      schema: null,
+      lastUpdated: new Date()
+    };
+
+    const createdDataset = await this.storage.createDataset(dataset);
+
+    // Create the scraping job
+    const jobId = await this.jobScheduler.scheduleJob(config, createdDataset.id);
+    
+    return jobId;
+  }
+
+  /**
+   * Start a scraping job
+   */
+  async startJob(jobId: string): Promise<void> {
+    await this.jobScheduler.startJob(jobId);
+  }
+
+  /**
+   * Stop a scraping job
+   */
+  async stopJob(jobId: string): Promise<void> {
+    await this.jobScheduler.stopJob(jobId);
+  }
+
+  /**
+   * Get scraping job status
+   */
+  async getJobStatus(jobId: string): Promise<ScrapingJobStatus> {
+    return await this.jobScheduler.getJobStatus(jobId);
+  }
+
+  /**
+   * Execute scraping job once (manual execution) with comprehensive security and rate limiting
+   */
+  async runOnce(config: ScrapingJobConfig): Promise<SourceResult> {
+    // Validate configuration
+    await this.validateScrapingConfig(config);
+
+    const domain = RateLimiter.getDomainFromUrl(config.targetUrl);
+    
+    return await this.executeWithRetry(async () => {
+      // Check and respect robots.txt if required
+      if (config.respectRobots) {
+        await this.checkRobotsTxt(config.targetUrl);
+      }
+
+      // Rate limiting - ensure respectful scraping
+      await this.rateLimiter.waitForSlot(domain, config.rateLimitRPM || 60);
+
+      // Extract data using the configured strategy with rate limiter integration
+      const extractedData = await this.dataExtractor.extract(
+        config.targetUrl, 
+        config.extractionSpec,
+        {
+          timeout: config.requestTimeout || 30000,
+          loginSpec: config.loginSpec,
+          rateLimitRPM: config.rateLimitRPM,
+          rateLimiter: this.rateLimiter,
+          headers: {
+            'User-Agent': 'ChimariData-ScrapeAdapter/1.0 (SSRF-Protected)',
+            'Accept': 'text/html,application/json,application/xml,text/xml'
+          }
+        }
+      );
+
+      // Generate schema from extracted data
+      const schema = this.generateSchemaFromData(extractedData);
+      const preview = extractedData.slice(0, 100);
+      
+      // Create storage URI for the scraped data
+      const storageUri = `scraping/${nanoid()}-${Date.now()}.json`;
+      const dataJson = JSON.stringify(extractedData);
+
+      return {
+        data: extractedData,
+        schema,
+        recordCount: extractedData.length,
+        preview,
+        sourceMetadata: {
+          originalFileName: `scraped-${domain}-${Date.now()}.json`,
+          mimeType: 'application/json',
+          fileSize: dataJson.length,
+          extractionMethod: this.strategy,
+          processingOptions: {
+            strategy: this.strategy,
+            rateLimitRPM: config.rateLimitRPM,
+            respectRobots: config.respectRobots,
+            securityValidated: true,
+            extractionConfig: config.extractionSpec
+          },
+          rawDataPreserved: true,
+          sourceType: this.sourceType
+        },
+        storageUri,
+        checksum: this.generateChecksum(dataJson)
+      };
+    }, config.retryConfig || { maxRetries: 3, backoffMs: 1000 }, `Scraping ${config.targetUrl}`);
+  }
+
+
+  /**
+   * Check robots.txt compliance before scraping
+   */
+  private async checkRobotsTxt(targetUrl: string): Promise<void> {
+    try {
+      const robotsParser = await getRobotsParser();
+      if (!robotsParser) {
+        console.warn('Robots.txt parser not available - skipping robots compliance check');
+        return;
+      }
+
+      const urlObj = new URL(targetUrl);
+      const robotsUrl = `${urlObj.protocol}//${urlObj.host}/robots.txt`;
+      
+      const fetch = await getFetch();
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+      
+      try {
+        const robotsResponse = await fetch(robotsUrl, {
+          signal: controller.signal,
+          headers: { 'User-Agent': 'ChimariData-ScrapeAdapter/1.0 (Robots Compliance)' }
+        });
+        clearTimeout(timeoutId);
+        
+        if (robotsResponse.ok) {
+          const robotsTxt = await robotsResponse.text();
+          const robots = robotsParser.parse(robotsTxt);
+          
+          const userAgent = 'ChimariData-ScrapeAdapter';
+          const isAllowed = robots.isAllowed(userAgent, urlObj.pathname);
+          
+          if (!isAllowed) {
+            throw new Error(`Robots.txt disallows access to ${urlObj.pathname} for user agent ${userAgent}`);
+          }
+          
+          // Check crawl delay
+          const crawlDelay = robots.getCrawlDelay(userAgent);
+          if (crawlDelay && crawlDelay > 0) {
+            console.log(`Robots.txt specifies crawl delay of ${crawlDelay} seconds for ${targetUrl}`);
+            // Note: This should be used to adjust rate limiting, but for now just log
+          }
+        }
+      } catch (fetchError: any) {
+        if (fetchError.name === 'AbortError') {
+          console.warn('Robots.txt fetch timeout - proceeding with caution');
+        } else {
+          console.warn('Failed to fetch robots.txt:', fetchError.message);
+        }
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    } catch (error: any) {
+      throw new Error(`Robots.txt compliance check failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Execute HTTP request with retry logic and exponential backoff
+   */
+  private async executeWithRetry<T>(
+    operation: () => Promise<T>,
+    retryConfig: { maxRetries: number; backoffMs: number },
+    context: string
+  ): Promise<T> {
+    let lastError: Error;
+    
+    for (let attempt = 0; attempt <= retryConfig.maxRetries; attempt++) {
+      try {
+        return await operation();
+      } catch (error: any) {
+        lastError = error;
+        
+        // Don't retry on certain types of errors
+        if (error.message.includes('SSRF') || 
+            error.message.includes('not allowed') ||
+            error.message.includes('security') ||
+            error.message.includes('robots.txt disallows')) {
+          throw error; // Security errors should not be retried
+        }
+        
+        if (attempt < retryConfig.maxRetries) {
+          const delay = retryConfig.backoffMs * Math.pow(2, attempt);
+          console.log(`${context} attempt ${attempt + 1} failed, retrying in ${delay}ms: ${error.message}`);
+          await this.sleep(delay);
+        }
+      }
+    }
+    
+    throw new Error(`${context} failed after ${retryConfig.maxRetries + 1} attempts. Last error: ${lastError.message}`);
+  }
+
+  /**
+   * Sleep for specified milliseconds
+   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Validate scraping configuration for security and correctness
+   */
+  private async validateScrapingConfig(config: ScrapingJobConfig): Promise<void> {
+    // Validate URL using comprehensive security validation
+    await this.dataExtractor.validateUrl(config.targetUrl);
+
+    // Validate rate limits
+    if (config.rateLimitRPM && config.rateLimitRPM < 1) {
+      throw new Error('Rate limit must be at least 1 request per minute');
+    }
+
+    if (config.rateLimitRPM && config.rateLimitRPM > 300) {
+      throw new Error('Rate limit cannot exceed 300 requests per minute');
+    }
+
+    // Validate strategy
+    if (!['http', 'puppeteer'].includes(config.strategy)) {
+      throw new Error(`Invalid strategy: ${config.strategy}`);
+    }
+
+    // Validate extraction spec
+    if (!config.extractionSpec || Object.keys(config.extractionSpec).length === 0) {
+      throw new Error('Extraction specification is required');
+    }
+
+    // Validate extraction specification details
+    const spec = config.extractionSpec;
+    if (!spec.selectors && !spec.jsonPath && !spec.tableSelector && !spec.textSelector) {
+      throw new Error('At least one extraction method must be specified (selectors, jsonPath, tableSelector, or textSelector)');
+    }
+
+    // Validate concurrency
+    if (config.maxConcurrency && config.maxConcurrency > 10) {
+      throw new Error('Maximum concurrency cannot exceed 10');
+    }
+
+    // Validate pagination spec if provided
+    if (spec.followPagination) {
+      if (!spec.followPagination.nextSelector) {
+        throw new Error('Pagination nextSelector is required when followPagination is enabled');
+      }
+      if (spec.followPagination.maxPages && spec.followPagination.maxPages > 50) {
+        throw new Error('Maximum pages cannot exceed 50 for pagination');
+      }
+    }
+
+    // Validate schedule if provided
+    if (config.schedule) {
+      try {
+        await this.dataExtractor.validateCronExpression(config.schedule);
+      } catch (error: any) {
+        throw new Error(`Invalid cron schedule: ${config.schedule} - ${error.message}`);
+      }
+    }
+  }
+
+  /**
+   * Validate scraping URL for security (wrapper method)
+   */
+  private async validateScrapingUrl(url: string): Promise<void> {
+    await this.dataExtractor.validateUrl(url);
+  }
+
+  /**
+   * Execute a job by ID with comprehensive logging and storage integration
+   */
+  async executeJobById(jobId: string): Promise<SourceResult> {
+    const job = await this.storage.getScrapingJob(jobId);
+    if (!job) {
+      throw new Error(`Scraping job ${jobId} not found`);
+    }
+
+    const config: ScrapingJobConfig = {
+      strategy: job.strategy as 'http' | 'puppeteer',
+      targetUrl: job.targetUrl,
+      extractionSpec: job.extractionSpec || {},
+      rateLimitRPM: job.rateLimitRPM || 60,
+      loginSpec: job.loginSpec || undefined,
+      respectRobots: job.respectRobots !== false,
+      maxConcurrency: job.concurrency || 1,
+      requestTimeout: 30000,
+      retryConfig: {
+        maxRetries: 3,
+        backoffMs: 1000
+      }
+    };
+
+    const runId = nanoid();
+    const startTime = new Date();
+
+    try {
+      // Create scraping run record
+      await this.storage.createScrapingRun({
+        id: runId,
+        jobId,
+        startedAt: startTime,
+        finishedAt: null,
+        status: 'running',
+        recordCount: null,
+        artifactId: null
+      });
+
+      // Execute the scraping
+      const result = await this.runOnce(config);
+
+      // Update scraping run with success
+      const finishTime = new Date();
+      await this.storage.updateScrapingRun(runId, {
+        finishedAt: finishTime,
+        status: 'completed',
+        recordCount: result.recordCount
+      });
+
+      // Update dataset with new data
+      const dataset = await this.storage.getDataset(job.datasetId);
+      if (dataset) {
+        await this.storage.updateDataset(job.datasetId, {
+          recordCount: (dataset.recordCount || 0) + result.recordCount,
+          totalSize: (dataset.totalSize || 0) + result.sourceMetadata.fileSize,
+          schema: result.schema as any,
+          lastUpdated: new Date()
+        });
+      }
+
+      return result;
+    } catch (error: any) {
+      // Update scraping run with failure
+      await this.storage.updateScrapingRun(runId, {
+        finishedAt: new Date(),
+        status: 'failed'
+      });
+      
+      // Update job with error
+      await this.storage.updateScrapingJob(jobId, {
+        lastError: error.message,
+        lastRunAt: new Date()
+      });
+      
+      throw error;
+    }
+  }
+
+  /**
+   * Extract domain from URL for dataset naming
+   */
+  private extractDomainFromUrl(url: string): string {
+    try {
+      const urlObj = new URL(url);
+      return urlObj.hostname;
+    } catch (error) {
+      return 'unknown-domain';
+    }
+  }
+
+  /**
+   * Generate schema from extracted data
+   */
+  private generateSchemaFromData(data: any[]): Record<string, any> {
+    if (!data || data.length === 0) return {};
+
+    const schema: Record<string, any> = {};
+    const sampleSize = Math.min(data.length, 100);
+    const sampleData = data.slice(0, sampleSize);
+
+    // Get all unique keys across the sample
+    const allKeys = new Set<string>();
+    sampleData.forEach(item => {
+      if (item && typeof item === 'object') {
+        Object.keys(item).forEach(key => allKeys.add(key));
+      }
+    });
+
+    allKeys.forEach(key => {
+      const values = sampleData
+        .map(item => item?.[key])
+        .filter(val => val !== null && val !== undefined && val !== '');
+      
+      const nullCount = sampleSize - values.length;
+      const nullable = nullCount > 0;
+      
+      let type = 'text';
+      if (values.length > 0) {
+        const firstValue = values[0];
+        if (typeof firstValue === 'number') {
+          type = 'number';
+        } else if (typeof firstValue === 'boolean') {
+          type = 'boolean';
+        } else if (this.isDate(firstValue)) {
+          type = 'date';
+        } else if (this.isEmail(firstValue)) {
+          type = 'email';
+        } else if (this.isUrl(firstValue)) {
+          type = 'url';
+        }
+      }
+
+      const uniqueValues = Array.from(new Set(values.map(v => String(v))));
+      const sampleValues = uniqueValues.slice(0, 5);
+
+      schema[key] = {
+        type,
+        nullable,
+        sampleValues
+      };
+    });
+
+    return schema;
+  }
+
+  /**
+   * Generate checksum for data integrity
+   */
+  private generateChecksum(data: string): string {
+    const crypto = require('crypto');
+    return crypto.createHash('sha256').update(data).digest('hex');
+  }
+
+  /**
+   * Add a domain to the allowlist (for administrative use)
+   */
+  public addAllowedDomain(domain: string): void {
+    if (!this.dataExtractor.securityConfig.allowedDomains.includes(domain)) {
+      this.dataExtractor.securityConfig.allowedDomains.push(domain);
+    }
+  }
+
+  /**
+   * Get current security configuration (for debugging/auditing)
+   */
+  public getSecurityConfig(): Readonly<ScrapeAdapterSecurityConfig> {
+    return { ...this.dataExtractor.securityConfig };
+  }
+
+  /**
+   * Check robots.txt compliance
+   */
+  private async checkRobotsTxt(url: string): Promise<void> {
+    try {
+      const urlObj = new URL(url);
+      const robotsUrl = `${urlObj.protocol}//${urlObj.host}/robots.txt`;
+      
+      // Check if robots.txt parsing is available
+      const robotsParser = await getRobotsParser();
+      if (!robotsParser) {
+        console.warn('Robots.txt parser not available, skipping robots compliance check');
+        return;
+      }
+      
+      const fetch = await getFetch();
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      
+      try {
+        const response = await fetch(robotsUrl, {
+          signal: controller.signal,
+          headers: {
+            'User-Agent': 'ChimariData-ScrapeAdapter/1.0 (SSRF-Protected)'
+          }
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (response.ok) {
+          const robotsContent = await response.text();
+          
+          // Use robots parser if available, otherwise fallback to simple regex
+          if (typeof robotsParser.canFetch === 'function') {
+            const canFetch = robotsParser.canFetch(robotsContent, url);
+            if (!canFetch) {
+              throw new Error('Scraping disallowed by robots.txt');
+            }
+          } else {
+            // Fallback to simple regex-based checking
+            this.checkRobotsWithRegex(robotsContent, urlObj);
+          }
+        }
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        if (fetchError.name === 'AbortError') {
+          console.warn('Robots.txt check timeout for:', url);
+        } else {
+          throw fetchError;
+        }
+      }
+    } catch (error: any) {
+      // If robots.txt check fails, log warning but don't block scraping
+      console.warn(`Robots.txt check failed for ${url}:`, error.message);
+    }
+  }
+  
+  /**
+   * Simple regex-based robots.txt checking (fallback)
+   */
+  private checkRobotsWithRegex(robotsContent: string, urlObj: URL): void {
+    const userAgentPattern = /User-agent:\s*\*/i;
+    const disallowPattern = /Disallow:\s*(.*)/gi;
+    
+    if (userAgentPattern.test(robotsContent)) {
+      let match;
+      while ((match = disallowPattern.exec(robotsContent)) !== null) {
+        const disallowedPath = match[1].trim();
+        if (disallowedPath === '/' || urlObj.pathname.startsWith(disallowedPath)) {
+          throw new Error(`Scraping disallowed by robots.txt: ${disallowedPath}`);
+        }
+      }
+    }
+  }
+
+  /**
+   * Validate cron expression using node-cron library
+   */
+  private async validateCronExpression(schedule: string): Promise<void> {
+    try {
+      const cronParser = await getCronParser();
+      if (cronParser && typeof cronParser.validate === 'function') {
+        const isValid = cronParser.validate(schedule);
+        if (!isValid) {
+          throw new Error(`Invalid cron expression: ${schedule}`);
+        }
+      } else {
+        // Fallback to basic validation if node-cron not available
+        this.basicCronValidation(schedule);
+      }
+    } catch (error: any) {
+      if (error.message.includes('Invalid cron expression')) {
+        throw error;
+      }
+      // If cron library fails, use basic validation
+      console.warn('Advanced cron validation not available, using basic validation');
+      this.basicCronValidation(schedule);
+    }
+  }
+  
+  /**
+   * Basic cron validation (fallback)
+   */
+  private basicCronValidation(schedule: string): void {
+    const parts = schedule.trim().split(/\s+/);
+    
+    if (parts.length !== 5 && parts.length !== 6) {
+      throw new Error('Cron expression must have 5 or 6 parts');
+    }
+
+    // Basic validation of common patterns
+    const validPatterns = [
+      /^\*$/,           // Any value
+      /^\d+$/,          // Specific number
+      /^\d+-\d+$/,      // Range
+      /^\*\/\d+$/,      // Step values
+      /^(\d+,)*\d+$/    // Lists
+    ];
+
+    for (const part of parts) {
+      if (!validPatterns.some(pattern => pattern.test(part))) {
+        throw new Error(`Invalid cron expression part: ${part}`);
+      }
+    }
+  }
+
+  /**
+   * Generate schema from scraped data
+   */
+  private generateSchemaFromData(data: any[]): Record<string, any> {
+    if (data.length === 0) return {};
+
+    const schema: Record<string, any> = {};
+    const sampleSize = Math.min(data.length, 100);
+    const sampleData = data.slice(0, sampleSize);
+
+    // Collect all keys from sample data
+    const allKeys = new Set<string>();
+    sampleData.forEach(row => {
+      if (row && typeof row === 'object') {
+        Object.keys(row).forEach(key => allKeys.add(key));
+      }
+    });
+
+    // Analyze each field
+    allKeys.forEach(key => {
+      const values = sampleData
+        .map(row => row[key])
+        .filter(val => val !== null && val !== undefined && val !== '');
+      
+      const nullCount = sampleData.length - values.length;
+      const nullable = nullCount > 0;
+      
+      let type = 'text';
+      if (values.length > 0) {
+        const firstValue = values[0];
+        if (typeof firstValue === 'number') {
+          type = 'number';
+        } else if (typeof firstValue === 'boolean') {
+          type = 'boolean';
+        } else if (this.isDate(firstValue)) {
+          type = 'date';
+        } else if (this.isEmail(firstValue)) {
+          type = 'email';
+        } else if (this.isUrl(firstValue)) {
+          type = 'url';
+        }
+      }
+
+      const uniqueValues = Array.from(new Set(values.map(v => String(v))));
+      const sampleValues = uniqueValues.slice(0, 5);
+
+      schema[key] = {
+        type,
+        nullable,
+        sampleValues
+      };
+    });
+
+    return schema;
+  }
+
+  /**
+   * Extract domain from URL
+   */
+  private extractDomainFromUrl(url: string): string {
+    try {
+      const urlObj = new URL(url);
+      return urlObj.hostname;
+    } catch {
+      return 'unknown-domain';
+    }
+  }
+
+  /**
+   * Utility methods for data type detection
+   */
+  private isDate(value: any): boolean {
+    if (typeof value === 'string') {
+      const date = new Date(value);
+      return !isNaN(date.getTime()) && value.length > 8;
+    }
+    return false;
+  }
+
+  private isEmail(value: any): boolean {
+    if (typeof value === 'string') {
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+    }
+    return false;
+  }
+
+  private isUrl(value: any): boolean {
+    if (typeof value === 'string') {
+      try {
+        new URL(value);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Cleanup resources
+   */
+  destroy(): void {
+    this.jobScheduler.destroy();
+    this.rateLimiter.destroy();
+  }
 }
 
 /**
