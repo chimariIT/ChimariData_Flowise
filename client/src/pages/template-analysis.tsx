@@ -1,9 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { ArrowLeft, Briefcase, CheckCircle } from "lucide-react";
-import GuidedAnalysisWizard from "@/components/GuidedAnalysisWizard";
+import { Badge } from "@/components/ui/badge";
+import { ArrowLeft, Briefcase, CheckCircle, Users, TrendingUp, Target, Star, Building, DollarSign } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api";
@@ -12,10 +12,57 @@ interface TemplateAnalysisProps {
   onBack: () => void;
 }
 
+const BUSINESS_SCENARIOS = [
+  {
+    id: 'hr_engagement',
+    role: 'HR Analyst',
+    department: 'Human Resources',
+    scenario: 'Employee engagement survey analysis',
+    businessQuestion: 'I want to analyze engagement scores across different managers and departments',
+    expectedOutcome: 'Identify which managers/departments have highest engagement and key drivers',
+    icon: Users
+  },
+  {
+    id: 'sales_performance',
+    role: 'Sales Manager',
+    department: 'Sales',
+    scenario: 'Sales performance analysis',
+    businessQuestion: 'I want to identify top-performing products and regions for strategic planning',
+    expectedOutcome: 'Strategic insights on product performance and market opportunities',
+    icon: TrendingUp
+  },
+  {
+    id: 'marketing_roi',
+    role: 'Marketing Analyst',
+    department: 'Marketing',
+    scenario: 'Marketing campaign effectiveness',
+    businessQuestion: 'I want to measure ROI and effectiveness of different marketing channels',
+    expectedOutcome: 'Optimize marketing spend and channel allocation',
+    icon: Target
+  },
+  {
+    id: 'customer_satisfaction',
+    role: 'Customer Success Manager',
+    department: 'Customer Experience',
+    scenario: 'Customer satisfaction analysis',
+    businessQuestion: 'I want to understand factors driving customer satisfaction and retention',
+    expectedOutcome: 'Improve customer satisfaction and reduce churn',
+    icon: Star
+  },
+  {
+    id: 'operations_efficiency',
+    role: 'Operations Manager',
+    department: 'Operations',
+    scenario: 'Process efficiency analysis',
+    businessQuestion: 'I want to identify bottlenecks and optimize operational processes',
+    expectedOutcome: 'Streamline operations and reduce costs',
+    icon: Building
+  }
+];
+
 export default function TemplateAnalysis({ onBack }: TemplateAnalysisProps) {
   const [, setLocation] = useLocation();
-  const [showWizard, setShowWizard] = useState(false);
-  const [selectedProject, setSelectedProject] = useState<string>("");
+  const [selectedScenario, setSelectedScenario] = useState<string>("");
   const { toast } = useToast();
 
   const { data: projectsData, isLoading } = useQuery({
@@ -26,35 +73,35 @@ export default function TemplateAnalysis({ onBack }: TemplateAnalysisProps) {
     },
   });
 
-  const handleAnalysisComplete = async (analysisConfig: any) => {
-    try {
+  const handleScenarioSelect = (scenarioId: string) => {
+    setSelectedScenario(scenarioId);
+    const scenario = BUSINESS_SCENARIOS.find(s => s.id === scenarioId);
+    if (scenario) {
       toast({
-        title: "Analysis Configured",
-        description: "Your template-based analysis has been configured successfully.",
-      });
-      
-      // Navigate to checkout or results
-      setLocation('/guided-analysis-results/' + analysisConfig.analysisId);
-    } catch (error) {
-      console.error('Error completing analysis:', error);
-      toast({
-        title: "Error",
-        description: "Failed to complete analysis configuration",
-        variant: "destructive",
+        title: "Template Selected",
+        description: `Selected ${scenario.role} - ${scenario.scenario}`,
       });
     }
   };
 
-  if (showWizard) {
-    return (
-      <GuidedAnalysisWizard
-        projectId={selectedProject}
-        schema={null} // Will be loaded by the wizard
-        onComplete={handleAnalysisComplete}
-        onClose={() => setShowWizard(false)}
-      />
-    );
-  }
+  const handleStartAnalysis = () => {
+    if (!selectedScenario) {
+      toast({
+        title: "Select a Template",
+        description: "Please choose a business scenario template to continue",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    toast({
+      title: "Analysis Starting",
+      description: "Initializing template-based analysis workflow...",
+    });
+
+    // For now, navigate to checkout - in a full implementation this would open the guided wizard
+    setLocation('/checkout?type=guided_analysis&template=' + selectedScenario);
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -131,59 +178,54 @@ export default function TemplateAnalysis({ onBack }: TemplateAnalysisProps) {
           </CardContent>
         </Card>
 
-        {/* Project Selection */}
+        {/* Business Scenario Selection */}
         <Card className="mb-8">
           <CardHeader>
-            <CardTitle>Select Your Data Project</CardTitle>
+            <CardTitle>Choose Your Business Scenario</CardTitle>
             <CardDescription>
-              Choose an existing project with data, or we'll guide you through uploading new data
+              Select a pre-built template that matches your analysis needs
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {isLoading ? (
-              <div className="text-center py-8">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
-                <p className="text-gray-600">Loading your projects...</p>
-              </div>
-            ) : projectsData?.projects?.length > 0 ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                {projectsData.projects.map((project: any) => (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+              {BUSINESS_SCENARIOS.map((scenario) => {
+                const IconComponent = scenario.icon;
+                return (
                   <Card 
-                    key={project.id}
+                    key={scenario.id}
                     className={`cursor-pointer transition-all hover:shadow-md ${
-                      selectedProject === project.id ? 'ring-2 ring-blue-500 bg-blue-50' : ''
+                      selectedScenario === scenario.id ? 'ring-2 ring-blue-500 bg-blue-50' : ''
                     }`}
-                    onClick={() => setSelectedProject(project.id)}
+                    onClick={() => handleScenarioSelect(scenario.id)}
+                    data-testid={`scenario-${scenario.id}`}
                   >
                     <CardHeader className="pb-3">
-                      <CardTitle className="text-lg">{project.name}</CardTitle>
-                      <CardDescription>
-                        {project.description || 'No description available'}
-                      </CardDescription>
+                      <CardTitle className="flex items-center gap-2 text-lg">
+                        <IconComponent className="w-5 h-5" />
+                        {scenario.role}
+                      </CardTitle>
+                      <CardDescription>{scenario.department}</CardDescription>
                     </CardHeader>
                     <CardContent>
-                      <div className="text-sm text-gray-600">
-                        <p>Records: {project.recordCount || 'Unknown'}</p>
-                        <p>Created: {project.createdAt ? new Date(project.createdAt).toLocaleDateString() : 'Unknown'}</p>
-                      </div>
+                      <p className="text-sm text-gray-700 mb-3">{scenario.businessQuestion}</p>
+                      <Badge variant="outline" className="text-xs">
+                        {scenario.expectedOutcome.substring(0, 40)}...
+                      </Badge>
                     </CardContent>
                   </Card>
-                ))}
-              </div>
-            ) : (
-              <div className="text-center py-8">
-                <p className="text-gray-600 mb-4">No projects found. The wizard will guide you through uploading data.</p>
-              </div>
-            )}
+                );
+              })}
+            </div>
             
             <div className="text-center">
               <Button 
-                onClick={() => setShowWizard(true)}
+                onClick={handleStartAnalysis}
                 className="bg-blue-600 hover:bg-blue-700"
                 size="lg"
+                disabled={!selectedScenario}
                 data-testid="button-start-template-analysis"
               >
-                Start Template-Based Analysis
+                {selectedScenario ? 'Start Analysis with Selected Template' : 'Select a Template First'}
               </Button>
             </div>
           </CardContent>
