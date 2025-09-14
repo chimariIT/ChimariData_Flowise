@@ -3,6 +3,7 @@ import { Switch, Route, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import HomePage from "@/pages/home-page";
+import JourneysHub from "@/pages/journeys-hub";
 import ProjectPage from "@/pages/project-page";
 import DescriptiveStatsPage from "@/pages/descriptive-stats-page";
 import VisualizationPage from "@/pages/visualization-page";
@@ -14,6 +15,7 @@ import DemosPage from "@/pages/demos";
 import AskQuestionPage from "@/pages/ask-question-page";
 import PayPerAnalysis from "@/pages/pay-per-analysis";
 import TemplateAnalysis from "@/pages/template-analysis";
+import PricingPage from "@/pages/pricing";
 import { apiClient } from "@/lib/api";
 import { ProjectProvider } from "@/hooks/useProjectContext";
 import "./index.css";
@@ -90,7 +92,53 @@ export default function App() {
       <ProjectProvider>
         <div className="min-h-screen bg-gray-50">
         <Switch>
+          {/* Primary Journeys Hub landing page */}
+          <Route path="/journeys">
+            {() => <JourneysHub user={user} />}
+          </Route>
+          
+          {/* Journey wizard routes (placeholder for now) */}
+          <Route path="/journeys/:type/prepare">
+            {(params) => (
+              <div className="min-h-screen flex items-center justify-center">
+                <div className="text-center">
+                  <h1 className="text-2xl font-bold mb-4">Journey Preparation: {params.type}</h1>
+                  <p>Step 1: Analysis Journey Preparation (Coming Soon)</p>
+                </div>
+              </div>
+            )}
+          </Route>
+          <Route path="/journeys/:type/data">
+            {(params) => (
+              <div className="min-h-screen flex items-center justify-center">
+                <div className="text-center">
+                  <h1 className="text-2xl font-bold mb-4">Data Preparation: {params.type}</h1>
+                  <p>Step 2: Data Preparation (Coming Soon)</p>
+                </div>
+              </div>
+            )}
+          </Route>
+          <Route path="/journeys/:type/execute">
+            {(params) => (
+              <div className="min-h-screen flex items-center justify-center">
+                <div className="text-center">
+                  <h1 className="text-2xl font-bold mb-4">Analysis Execution: {params.type}</h1>
+                  <p>Step 3: Analysis Execution (Coming Soon)</p>
+                </div>
+              </div>
+            )}
+          </Route>
+          
+          {/* Redirect home to journeys hub */}
           <Route path="/">
+            {() => <JourneysHub user={user} />}
+          </Route>
+          
+          {/* Legacy home route for compatibility */}
+          <Route path="/home">
+            {() => <HomePage user={user} onLogout={handleLogout} />}
+          </Route>
+          <Route path="/projects">
             {() => <HomePage user={user} onLogout={handleLogout} />}
           </Route>
           <Route path="/auth/login">
@@ -131,6 +179,12 @@ export default function App() {
           </Route>
           <Route path="/demos">
             {() => <DemosPage />}
+          </Route>
+          <Route path="/pricing">
+            {() => <PricingPage 
+              onGetStarted={() => setLocation('/journeys')} 
+              onBack={() => setLocation('/journeys')}
+            />}
           </Route>
           <Route>
             <div className="flex items-center justify-center min-h-screen">
