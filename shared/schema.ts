@@ -557,3 +557,310 @@ export type ScrapingRun = typeof scrapingRuns.$inferSelect;
 export type InsertScrapingRun = typeof insertScrapingRunSchema._type;
 export type DatasetVersion = typeof datasetVersions.$inferSelect;
 export type InsertDatasetVersion = typeof insertDatasetVersionSchema._type;
+
+// =====================================================================
+// Comprehensive Zod Validation Schemas for Streaming and Scraping APIs
+// =====================================================================
+
+// Streaming Sources Validation Schemas
+export const createStreamingSourceSchema = z.object({
+  datasetId: z.string().min(1, "Dataset ID is required"),
+  protocol: z.enum(['websocket', 'sse', 'poll'], {
+    errorMap: () => ({ message: "Protocol must be one of: websocket, sse, poll" })
+  }),
+  endpoint: z.string().url("Must be a valid URL"),
+  headers: z.record(z.string()).optional(),
+  params: z.record(z.any()).optional(),
+  parseSpec: z.object({
+    format: z.enum(['json', 'text', 'csv']).default('json'),
+    timestampPath: z.string().optional(),
+    dedupeKeyPath: z.string().optional(),
+    delimiter: z.string().optional(), // For CSV parsing
+    hasHeader: z.boolean().default(true),
+    jsonPath: z.string().optional(), // JSONPath for nested data extraction
+  }),
+  batchSize: z.number().min(1).max(10000).default(1000),
+  flushMs: z.number().min(1000).max(300000).default(5000),
+  maxBuffer: z.number().min(100).max(100000).default(100000),
+  pollInterval: z.number().min(1000).max(3600000).optional(), // For polling protocol
+  retryConfig: z.object({
+    maxRetries: z.number().min(0).max(10).default(3),
+    backoffMs: z.number().min(100).max(30000).default(1000),
+    exponentialBackoff: z.boolean().default(true),
+  }).optional(),
+});
+
+export const updateStreamingSourceSchema = createStreamingSourceSchema.partial().omit({
+  datasetId: true, // Cannot change dataset association
+});
+
+export const streamingSourceStatusQuerySchema = z.object({
+  datasetId: z.string().optional(),
+  status: z.enum(['active', 'inactive', 'error']).optional(),
+  protocol: z.enum(['websocket', 'sse', 'poll']).optional(),
+  limit: z.coerce.number().min(1).max(100).default(20),
+  offset: z.coerce.number().min(0).default(0),
+});
+
+// Scraping Jobs Validation Schemas
+export const createScrapingJobSchema = z.object({
+  datasetId: z.string().min(1, "Dataset ID is required"),
+  strategy: z.enum(['http', 'puppeteer'], {
+    errorMap: () => ({ message: "Strategy must be either 'http' or 'puppeteer'" })
+  }),
+  targetUrl: z.string().url("Must be a valid URL"),
+  schedule: z.string().optional(), // Cron expression - validate with cron parser in route
+  extractionSpec: z.object({
+    // CSS selectors for data extraction
+    selectors: z.record(z.string()).optional(),
+    // JSONPath for API responses
+    jsonPath: z.string().optional(),
+    // Table extraction
+    tableSelector: z.string().optional(),
+    tableHeaders: z.array(z.string()).optional(),
+    // Text content extraction
+    textSelector: z.string().optional(),
+    textProcessor: z.enum(['raw', 'markdown', 'plain']).default('raw'),
+    // Pagination handling
+    followPagination: z.object({
+      nextSelector: z.string(),
+      maxPages: z.number().min(1).max(100),
+      waitMs: z.number().min(100).max(10000).default(1000),
+    }).optional(),
+    // Data transformation
+    transformRules: z.array(z.object({
+      field: z.string(),
+      type: z.enum(['date', 'number', 'boolean', 'string']),
+      format: z.string().optional(),
+    })).optional(),
+  }),
+  // Rate limiting and politeness
+  rateLimitRPM: z.number().min(1).max(300).default(60),
+  respectRobots: z.boolean().default(true),
+  maxConcurrency: z.number().min(1).max(10).default(1),
+  requestTimeout: z.number().min(1000).max(60000).default(30000),
+  // Authentication (optional)
+  loginSpec: z.object({
+    usernameSelector: z.string(),
+    passwordSelector: z.string(),
+    submitSelector: z.string(),
+    credentials: z.object({
+      username: z.string(),
+      password: z.string(),
+    }),
+    loginUrl: z.string().url().optional(),
+    successIndicator: z.string().optional(), // CSS selector to verify login success
+  }).optional(),
+  // Retry configuration
+  retryConfig: z.object({
+    maxRetries: z.number().min(0).max(5).default(3),
+    backoffMs: z.number().min(100).max(10000).default(1000),
+    retryOnStatusCodes: z.array(z.number()).default([429, 500, 502, 503, 504]),
+  }).optional(),
+  // Browser configuration (for Puppeteer strategy)
+  browserConfig: z.object({
+    headless: z.boolean().default(true),
+    viewport: z.object({
+      width: z.number().default(1280),
+      height: z.number().default(720),
+    }).optional(),
+    userAgent: z.string().optional(),
+    blockResources: z.array(z.enum(['images', 'stylesheets', 'fonts', 'scripts'])).optional(),
+  }).optional(),
+});
+
+export const updateScrapingJobSchema = createScrapingJobSchema.partial().omit({
+  datasetId: true, // Cannot change dataset association
+});
+
+export const scrapingJobStatusQuerySchema = z.object({
+  datasetId: z.string().optional(),
+  status: z.enum(['active', 'inactive', 'running', 'error']).optional(),
+  strategy: z.enum(['http', 'puppeteer']).optional(),
+  limit: z.coerce.number().min(1).max(100).default(20),
+  offset: z.coerce.number().min(0).default(0),
+});
+
+export const scrapingRunsQuerySchema = z.object({
+  jobId: z.string(),
+  status: z.enum(['running', 'completed', 'failed']).optional(),
+  limit: z.coerce.number().min(1).max(100).default(20),
+  offset: z.coerce.number().min(0).default(0),
+  dateFrom: z.coerce.date().optional(),
+  dateTo: z.coerce.date().optional(),
+});
+
+// Live Sources Monitoring Schemas
+export const liveSourcesOverviewSchema = z.object({
+  period: z.enum(['1h', '24h', '7d', '30d']).default('24h'),
+  includeInactive: z.boolean().default(false),
+});
+
+export const liveSourcesMetricsSchema = z.object({
+  sourceIds: z.array(z.string()).optional(),
+  timeRange: z.object({
+    from: z.coerce.date(),
+    to: z.coerce.date(),
+  }).optional(),
+  granularity: z.enum(['minute', 'hour', 'day']).default('hour'),
+});
+
+export const liveSourcesActivitySchema = z.object({
+  limit: z.coerce.number().min(1).max(100).default(50),
+  types: z.array(z.enum(['started', 'stopped', 'error', 'data_received', 'run_completed'])).optional(),
+  sourceIds: z.array(z.string()).optional(),
+  since: z.coerce.date().optional(),
+});
+
+// Project Integration Schemas
+export const projectLiveSourcesQuerySchema = z.object({
+  projectId: z.string(),
+  includeInactive: z.boolean().default(false),
+  sourceType: z.enum(['streaming', 'scraping', 'all']).default('all'),
+});
+
+export const addLiveSourceToProjectSchema = z.object({
+  projectId: z.string(),
+  sourceType: z.enum(['streaming', 'scraping']),
+  config: z.union([createStreamingSourceSchema, createScrapingJobSchema]),
+});
+
+// Response Schemas
+export const streamingSourceResponseSchema = z.object({
+  success: z.boolean(),
+  data: z.object({
+    id: z.string(),
+    datasetId: z.string(),
+    protocol: z.string(),
+    endpoint: z.string(),
+    status: z.string(),
+    lastCheckpoint: z.string().optional(),
+    lastError: z.string().optional(),
+    metrics: z.object({
+      recordsReceived: z.number(),
+      lastActivity: z.date().optional(),
+      avgRecordsPerMinute: z.number(),
+      errorCount: z.number(),
+    }).optional(),
+    createdAt: z.date(),
+    updatedAt: z.date(),
+  }).optional(),
+  error: z.string().optional(),
+});
+
+export const scrapingJobResponseSchema = z.object({
+  success: z.boolean(),
+  data: z.object({
+    id: z.string(),
+    datasetId: z.string(),
+    strategy: z.string(),
+    targetUrl: z.string(),
+    status: z.string(),
+    schedule: z.string().optional(),
+    lastRunAt: z.date().optional(),
+    nextRunAt: z.date().optional(),
+    lastError: z.string().optional(),
+    metrics: z.object({
+      totalRuns: z.number(),
+      recordsExtracted: z.number(),
+      avgRunDuration: z.number(),
+      successRate: z.number(),
+    }).optional(),
+    createdAt: z.date(),
+    updatedAt: z.date(),
+  }).optional(),
+  error: z.string().optional(),
+});
+
+export const liveSourcesOverviewResponseSchema = z.object({
+  success: z.boolean(),
+  data: z.object({
+    streaming: z.object({
+      total: z.number(),
+      active: z.number(),
+      inactive: z.number(),
+      error: z.number(),
+    }),
+    scraping: z.object({
+      total: z.number(),
+      active: z.number(),
+      inactive: z.number(),
+      running: z.number(),
+      error: z.number(),
+    }),
+    recentActivity: z.array(z.object({
+      id: z.string(),
+      type: z.string(),
+      sourceType: z.enum(['streaming', 'scraping']),
+      sourceId: z.string(),
+      message: z.string(),
+      timestamp: z.date(),
+      metadata: z.record(z.any()).optional(),
+    })),
+    metrics: z.object({
+      totalDataReceived: z.number(),
+      activeSources: z.number(),
+      errorRate: z.number(),
+    }),
+  }).optional(),
+  error: z.string().optional(),
+});
+
+// Control Action Schemas
+export const sourceControlActionSchema = z.object({
+  action: z.enum(['start', 'stop', 'restart', 'pause', 'resume']),
+  force: z.boolean().default(false),
+  config: z.record(z.any()).optional(), // Override config for this action
+});
+
+export const runOnceRequestSchema = z.object({
+  jobId: z.string(),
+  overrideConfig: z.record(z.any()).optional(),
+  priority: z.enum(['low', 'normal', 'high']).default('normal'),
+});
+
+// Bulk Operations Schemas
+export const bulkSourceActionSchema = z.object({
+  sourceIds: z.array(z.string()).min(1, "At least one source ID required"),
+  action: z.enum(['start', 'stop', 'delete']),
+  force: z.boolean().default(false),
+});
+
+// Error Response Schema
+export const apiErrorResponseSchema = z.object({
+  success: z.literal(false),
+  error: z.string(),
+  details: z.record(z.any()).optional(),
+  code: z.string().optional(),
+  timestamp: z.date().optional(),
+});
+
+// Success Response Schema (Generic)
+export const apiSuccessResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.any().optional(),
+  message: z.string().optional(),
+  timestamp: z.date().optional(),
+});
+
+// Infer types for all new schemas
+export type CreateStreamingSourceRequest = z.infer<typeof createStreamingSourceSchema>;
+export type UpdateStreamingSourceRequest = z.infer<typeof updateStreamingSourceSchema>;
+export type StreamingSourceStatusQuery = z.infer<typeof streamingSourceStatusQuerySchema>;
+export type CreateScrapingJobRequest = z.infer<typeof createScrapingJobSchema>;
+export type UpdateScrapingJobRequest = z.infer<typeof updateScrapingJobSchema>;
+export type ScrapingJobStatusQuery = z.infer<typeof scrapingJobStatusQuerySchema>;
+export type ScrapingRunsQuery = z.infer<typeof scrapingRunsQuerySchema>;
+export type LiveSourcesOverviewQuery = z.infer<typeof liveSourcesOverviewSchema>;
+export type LiveSourcesMetricsQuery = z.infer<typeof liveSourcesMetricsSchema>;
+export type LiveSourcesActivityQuery = z.infer<typeof liveSourcesActivitySchema>;
+export type ProjectLiveSourcesQuery = z.infer<typeof projectLiveSourcesQuerySchema>;
+export type AddLiveSourceToProjectRequest = z.infer<typeof addLiveSourceToProjectSchema>;
+export type StreamingSourceResponse = z.infer<typeof streamingSourceResponseSchema>;
+export type ScrapingJobResponse = z.infer<typeof scrapingJobResponseSchema>;
+export type LiveSourcesOverviewResponse = z.infer<typeof liveSourcesOverviewResponseSchema>;
+export type SourceControlActionRequest = z.infer<typeof sourceControlActionSchema>;
+export type RunOnceRequest = z.infer<typeof runOnceRequestSchema>;
+export type BulkSourceActionRequest = z.infer<typeof bulkSourceActionSchema>;
+export type ApiErrorResponse = z.infer<typeof apiErrorResponseSchema>;
+export type ApiSuccessResponse = z.infer<typeof apiSuccessResponseSchema>;
