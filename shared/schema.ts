@@ -865,6 +865,234 @@ export type BulkSourceActionRequest = z.infer<typeof bulkSourceActionSchema>;
 export type ApiErrorResponse = z.infer<typeof apiErrorResponseSchema>;
 export type ApiSuccessResponse = z.infer<typeof apiSuccessResponseSchema>;
 
+// Journey Tracking Schemas - Added for step-by-step user journey management
+export const journeySchema = z.object({
+  id: z.string(),
+  userId: z.string(),
+  projectId: z.string().optional(),
+  journeyType: z.enum(['non-tech', 'business', 'technical']),
+  currentStep: z.enum(['prepare', 'data', 'execute']),
+  title: z.string().optional(),
+  description: z.string().optional(),
+  goals: z.array(z.string()).optional(),
+  questions: z.array(z.string()).optional(),
+  suggestedPlan: z.object({
+    datasets: z.array(z.string()).optional(),
+    templates: z.array(z.string()).optional(),
+    analysisSteps: z.array(z.string()).optional(),
+    estimatedDuration: z.string().optional(),
+  }).optional(),
+  selectedDatasets: z.array(z.string()).optional(),
+  costEstimateId: z.string().optional(), // Reference to separate CostEstimate table
+  eligibilityCheckId: z.string().optional(), // Reference to separate EligibilityCheck table
+  artifacts: z.array(z.object({
+    id: z.string(),
+    type: z.enum(['report', 'visualization', 'dataset', 'model']),
+    name: z.string(),
+    path: z.string(),
+    createdAt: z.date(),
+  })).optional(),
+  completedAt: z.date().optional(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
+export const journeyStepProgressSchema = z.object({
+  id: z.string(),
+  journeyId: z.string(),
+  step: z.enum(['prepare', 'data', 'execute']),
+  status: z.enum(['pending', 'in_progress', 'completed', 'failed']),
+  startedAt: z.date().optional(),
+  completedAt: z.date().optional(),
+  progress: z.number().min(0).max(100).default(0),
+  stepData: z.any().optional(), // Store step-specific data
+  errors: z.array(z.string()).optional(),
+  costIncurred: z.number().default(0),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
+export const costEstimateSchema = z.object({
+  id: z.string(),
+  journeyId: z.string().optional(),
+  userId: z.string(),
+  estimateType: z.enum(['preparation', 'data_processing', 'analysis', 'full_journey']),
+  items: z.array(z.object({
+    description: z.string(),
+    quantity: z.number(),
+    unitPrice: z.number(),
+    total: z.number(),
+  })),
+  subtotal: z.number(),
+  discounts: z.number().default(0),
+  taxes: z.number().default(0),
+  total: z.number(),
+  currency: z.string().default('USD'),
+  signature: z.string(), // Cryptographic signature to prevent tampering
+  validUntil: z.date(),
+  approved: z.boolean().default(false),
+  approvedAt: z.date().optional(),
+  createdAt: z.date(),
+});
+
+export const eligibilitySchema = z.object({
+  id: z.string(),
+  userId: z.string(),
+  feature: z.string(),
+  allowed: z.boolean(),
+  reason: z.string().optional(),
+  requiredTier: z.string().optional(),
+  currentUsage: z.object({
+    monthly: z.number().optional(),
+    total: z.number().optional(),
+  }).optional(),
+  limits: z.object({
+    monthly: z.number().optional(),
+    total: z.number().optional(),
+  }).optional(),
+  nextResetAt: z.date().optional(),
+  checkResult: z.enum(['allowed', 'limit_exceeded', 'tier_required', 'payment_required']),
+  createdAt: z.date(),
+});
+
+// Database Table Definitions for Journey Tracking
+export const journeys = pgTable(
+  "journeys",
+  {
+    id: varchar("id").primaryKey(),
+    userId: varchar("user_id").notNull(),
+    projectId: varchar("project_id"),
+    journeyType: varchar("journey_type").notNull(),
+    currentStep: varchar("current_step").notNull(),
+    title: text("title"),
+    description: text("description"),
+    goals: jsonb("goals").$type<string[]>(),
+    questions: jsonb("questions").$type<string[]>(),
+    suggestedPlan: jsonb("suggested_plan"),
+    selectedDatasets: jsonb("selected_datasets").$type<string[]>(),
+    costEstimateId: varchar("cost_estimate_id"),
+    eligibilityCheckId: varchar("eligibility_check_id"),
+    artifacts: jsonb("artifacts"),
+    completedAt: timestamp("completed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    userIdIdx: index("journeys_user_id_idx").on(table.userId),
+    projectIdIdx: index("journeys_project_id_idx").on(table.projectId),
+    journeyTypeIdx: index("journeys_journey_type_idx").on(table.journeyType),
+  })
+);
+
+export const journeyStepProgress = pgTable(
+  "journey_step_progress",
+  {
+    id: varchar("id").primaryKey(),
+    journeyId: varchar("journey_id").notNull(),
+    step: varchar("step").notNull(),
+    status: varchar("status").notNull(),
+    startedAt: timestamp("started_at"),
+    completedAt: timestamp("completed_at"),
+    progress: integer("progress").default(0),
+    stepData: jsonb("step_data"),
+    errors: jsonb("errors").$type<string[]>(),
+    costIncurred: integer("cost_incurred").default(0),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    journeyIdIdx: index("journey_step_progress_journey_id_idx").on(table.journeyId),
+    stepIdx: index("journey_step_progress_step_idx").on(table.step),
+  })
+);
+
+export const costEstimates = pgTable(
+  "cost_estimates",
+  {
+    id: varchar("id").primaryKey(),
+    journeyId: varchar("journey_id"),
+    userId: varchar("user_id").notNull(),
+    estimateType: varchar("estimate_type").notNull(),
+    items: jsonb("items").notNull(),
+    subtotal: integer("subtotal").notNull(),
+    discounts: integer("discounts").default(0),
+    taxes: integer("taxes").default(0),
+    total: integer("total").notNull(),
+    currency: varchar("currency").default("USD"),
+    signature: text("signature").notNull(),
+    validUntil: timestamp("valid_until").notNull(),
+    approved: boolean("approved").default(false),
+    approvedAt: timestamp("approved_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    userIdIdx: index("cost_estimates_user_id_idx").on(table.userId),
+    journeyIdIdx: index("cost_estimates_journey_id_idx").on(table.journeyId),
+    validUntilIdx: index("cost_estimates_valid_until_idx").on(table.validUntil),
+  })
+);
+
+export const eligibilityChecks = pgTable(
+  "eligibility_checks",
+  {
+    id: varchar("id").primaryKey(),
+    userId: varchar("user_id").notNull(),
+    feature: varchar("feature").notNull(),
+    allowed: boolean("allowed").notNull(),
+    reason: text("reason"),
+    requiredTier: varchar("required_tier"),
+    currentUsage: jsonb("current_usage"),
+    limits: jsonb("limits"),
+    nextResetAt: timestamp("next_reset_at"),
+    checkResult: varchar("check_result").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    userIdIdx: index("eligibility_checks_user_id_idx").on(table.userId),
+    featureIdx: index("eligibility_checks_feature_idx").on(table.feature),
+    userFeatureIdx: index("eligibility_checks_user_feature_idx").on(table.userId, table.feature),
+  })
+);
+
+// Insert Schemas for Journey Tracking
+export const insertJourneySchema = createInsertSchema(journeys).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertJourneyStepProgressSchema = createInsertSchema(journeyStepProgress).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertCostEstimateSchema = createInsertSchema(costEstimates).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertEligibilityCheckSchema = createInsertSchema(eligibilityChecks).omit({
+  id: true,
+  createdAt: true,
+});
+
+// Type Exports for Journey Tracking
+export type Journey = z.infer<typeof journeySchema>;
+export type JourneyStepProgress = z.infer<typeof journeyStepProgressSchema>;
+export type CostEstimate = z.infer<typeof costEstimateSchema>;
+export type EligibilityCheck = z.infer<typeof eligibilitySchema>;
+
+export type InsertJourney = z.infer<typeof insertJourneySchema>;
+export type InsertJourneyStepProgress = z.infer<typeof insertJourneyStepProgressSchema>;
+export type InsertCostEstimate = z.infer<typeof insertCostEstimateSchema>;
+export type InsertEligibilityCheck = z.infer<typeof insertEligibilityCheckSchema>;
+
+export type SelectJourney = typeof journeys.$inferSelect;
+export type SelectJourneyStepProgress = typeof journeyStepProgress.$inferSelect;
+export type SelectCostEstimate = typeof costEstimates.$inferSelect;
+export type SelectEligibilityCheck = typeof eligibilityChecks.$inferSelect;
+
 // Real-time Event Schemas
 export const realtimeEventSchema = z.object({
   type: z.enum(['status_change', 'metrics_update', 'error', 'progress', 'job_complete', 'connection_test', 'data_received', 'buffer_status']),
