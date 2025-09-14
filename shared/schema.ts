@@ -220,47 +220,102 @@ export const passwordResetTokens = pgTable("password_reset_tokens", {
   tokenIdx: index("password_reset_token_idx").on(table.token),
 }));
 
-// Main projects table for persistent storage
-export const projects = pgTable("projects", {
+// Datasets table - files exist independently of projects
+export const datasets = pgTable("datasets", {
   id: varchar("id").primaryKey().notNull(),
-  name: varchar("name").notNull(),
-  fileName: varchar("file_name").notNull(),
+  ownerId: varchar("owner_id").notNull(), // Reference to users.id
+  sourceType: varchar("source_type").notNull().default("upload"), // "upload", "google_drive", "web", "api"
+  originalFileName: varchar("original_file_name").notNull(),
+  mimeType: varchar("mime_type").notNull(),
   fileSize: integer("file_size").notNull(),
-  fileType: varchar("file_type").notNull(),
-  uploadedAt: timestamp("uploaded_at").defaultNow(),
-  description: text("description"),
-  isTrial: boolean("is_trial").default(false),
+  checksum: varchar("checksum"), // For duplicate detection
+  storageUri: varchar("storage_uri").notNull(), // File storage location
+  dataType: varchar("data_type").default("tabular"), // "tabular", "document", "timeseries"
   schema: jsonb("schema"), // JSON schema of the data
   recordCount: integer("record_count"),
-  data: jsonb("data"), // Store actual data rows as JSON
-  processed: boolean("processed").default(false),
-  // PII Analysis
+  preview: jsonb("preview"), // Sample rows for preview
   piiAnalysis: jsonb("pii_analysis"),
-  uniqueIdentifiers: jsonb("unique_identifiers"),
-  dataSource: varchar("data_source").default("upload"),
-  sourceMetadata: jsonb("source_metadata"),
-  // Data transformation capabilities
-  transformations: jsonb("transformations"),
-  joinedFiles: jsonb("joined_files"),
-  outlierAnalysis: jsonb("outlier_analysis"),
-  missingDataAnalysis: jsonb("missing_data_analysis"),
-  normalityTests: jsonb("normality_tests"),
-  // Advanced analysis capabilities
-  analysisResults: jsonb("analysis_results"),
-  stepByStepAnalysis: jsonb("step_by_step_analysis"),
-  // AI capabilities
-  visualizations: jsonb("visualizations"),
-  aiInsights: jsonb("ai_insights"),
-  aiRole: varchar("ai_role"),
-  aiActions: jsonb("ai_actions"),
-  mcpResources: jsonb("mcp_resources"),
-  purchasedFeatures: jsonb("purchased_features"),
-  isPaid: boolean("is_paid").default(false),
-  selectedFeatures: jsonb("selected_features"),
-  paymentIntentId: varchar("payment_intent_id"),
-  upgradedAt: timestamp("upgraded_at"),
-  // Foreign key to users if needed
-  userId: varchar("user_id"),
+  ingestionMetadata: jsonb("ingestion_metadata"), // Source-specific metadata
+  status: varchar("status").default("ready"), // "processing", "ready", "error"
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Many-to-many relationship between projects and datasets
+export const projectDatasets = pgTable("project_datasets", {
+  id: varchar("id").primaryKey().notNull(),
+  projectId: varchar("project_id").notNull(),
+  datasetId: varchar("dataset_id").notNull(),
+  role: varchar("role").default("primary"), // "primary", "secondary", "joined"
+  alias: varchar("alias"), // Custom name for this dataset in the project
+  addedAt: timestamp("added_at").defaultNow(),
+}, (table) => ({
+  projectDatasetIdx: index("project_dataset_idx").on(table.projectId, table.datasetId),
+}));
+
+// Project artifacts - track entire workflow from ingestion to results
+export const projectArtifacts = pgTable("project_artifacts", {
+  id: varchar("id").primaryKey().notNull(),
+  projectId: varchar("project_id").notNull(),
+  type: varchar("type").notNull(), // "ingestion", "transformation", "analysis", "visualization", "report", "export"
+  status: varchar("status").default("pending"), // "pending", "processing", "completed", "error"
+  inputRefs: jsonb("input_refs"), // Array of datasetIds, artifactIds that were inputs
+  params: jsonb("params"), // Configuration/parameters used
+  metrics: jsonb("metrics"), // Performance metrics, processing time, etc.
+  output: jsonb("output"), // Results data
+  fileRefs: jsonb("file_refs"), // URIs to generated files (PDFs, charts, etc.)
+  parentArtifactId: varchar("parent_artifact_id"), // Chain artifacts together
+  createdBy: varchar("created_by"), // User who created this artifact
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  projectArtifactIdx: index("project_artifact_idx").on(table.projectId),
+  parentArtifactIdx: index("parent_artifact_idx").on(table.parentArtifactId),
+}));
+
+// Updated projects table - now a lightweight container for analysis workflows
+export const projects = pgTable("projects", {
+  id: varchar("id").primaryKey().notNull(),
+  ownerId: varchar("owner_id").notNull(), // Reference to users.id
+  name: varchar("name").notNull(),
+  description: text("description"),
+  status: varchar("status").default("active"), // "active", "completed", "archived"
+  journeyType: varchar("journey_type"), // "ai_guided", "template_based", "self_service", "consultation"
+  lastArtifactId: varchar("last_artifact_id"), // Quick reference to latest artifact
+  // Legacy fields for backward compatibility (will be deprecated)
+  fileName: varchar("file_name"), // DEPRECATED
+  fileSize: integer("file_size"), // DEPRECATED
+  fileType: varchar("file_type"), // DEPRECATED
+  uploadedAt: timestamp("uploaded_at").defaultNow(), // DEPRECATED
+  isTrial: boolean("is_trial").default(false), // DEPRECATED
+  schema: jsonb("schema"), // DEPRECATED
+  recordCount: integer("record_count"), // DEPRECATED
+  data: jsonb("data"), // DEPRECATED
+  processed: boolean("processed").default(false), // DEPRECATED
+  piiAnalysis: jsonb("pii_analysis"), // DEPRECATED
+  uniqueIdentifiers: jsonb("unique_identifiers"), // DEPRECATED
+  dataSource: varchar("data_source").default("upload"), // DEPRECATED
+  sourceMetadata: jsonb("source_metadata"), // DEPRECATED
+  transformations: jsonb("transformations"), // DEPRECATED
+  joinedFiles: jsonb("joined_files"), // DEPRECATED
+  outlierAnalysis: jsonb("outlier_analysis"), // DEPRECATED
+  missingDataAnalysis: jsonb("missing_data_analysis"), // DEPRECATED
+  normalityTests: jsonb("normality_tests"), // DEPRECATED
+  analysisResults: jsonb("analysis_results"), // DEPRECATED
+  stepByStepAnalysis: jsonb("step_by_step_analysis"), // DEPRECATED
+  visualizations: jsonb("visualizations"), // DEPRECATED
+  aiInsights: jsonb("ai_insights"), // DEPRECATED
+  aiRole: varchar("ai_role"), // DEPRECATED
+  aiActions: jsonb("ai_actions"), // DEPRECATED
+  mcpResources: jsonb("mcp_resources"), // DEPRECATED
+  purchasedFeatures: jsonb("purchased_features"), // DEPRECATED
+  isPaid: boolean("is_paid").default(false), // DEPRECATED
+  selectedFeatures: jsonb("selected_features"), // DEPRECATED
+  paymentIntentId: varchar("payment_intent_id"), // DEPRECATED
+  upgradedAt: timestamp("upgraded_at"), // DEPRECATED
+  userId: varchar("user_id"), // DEPRECATED - use ownerId instead
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
 // Enterprise inquiries table
@@ -287,9 +342,30 @@ export const guidedAnalysisOrders = pgTable("guided_analysis_orders", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// Drizzle insert schemas
+// New insert schemas for new tables
+export const insertDatasetSchema = createInsertSchema(datasets).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertProjectDatasetSchema = createInsertSchema(projectDatasets).omit({
+  id: true,
+  addedAt: true,
+});
+
+export const insertProjectArtifactSchema = createInsertSchema(projectArtifacts).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+// Updated project insert schema
 export const insertProjectSchema = createInsertSchema(projects).omit({
   id: true,
+  createdAt: true,
+  updatedAt: true,
+  // Omit deprecated fields from inserts
   uploadedAt: true,
   processed: true,
 });
@@ -314,6 +390,12 @@ export const insertGuidedAnalysisOrderSchema = createInsertSchema(guidedAnalysis
 // Types for database operations
 export type User = typeof users.$inferSelect;
 export type UpsertUser = typeof users.$inferInsert;
+export type Dataset = typeof datasets.$inferSelect;
+export type InsertDataset = typeof insertDatasetSchema._type;
+export type ProjectDataset = typeof projectDatasets.$inferSelect;
+export type InsertProjectDataset = typeof insertProjectDatasetSchema._type;
+export type ProjectArtifact = typeof projectArtifacts.$inferSelect;
+export type InsertProjectArtifact = typeof insertProjectArtifactSchema._type;
 export type Project = typeof projects.$inferSelect;
 export type InsertProject = typeof insertProjectSchema._type;
 export type EnterpriseInquiry = typeof enterpriseInquiries.$inferSelect;
