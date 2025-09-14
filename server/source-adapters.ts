@@ -1,6 +1,39 @@
 import * as XLSX from 'xlsx';
-import { Dataset, InsertDataset } from '@shared/schema';
+import { Dataset, InsertDataset, InsertStreamChunk, InsertStreamCheckpoint } from '@shared/schema';
 import { nanoid } from 'nanoid';
+
+// Dynamic imports for optional dependencies to prevent app crashes
+let WebSocketClass: any = null;
+let fetchImpl: any = null;
+
+async function getWebSocket() {
+  if (!WebSocketClass) {
+    try {
+      const ws = await import('ws');
+      WebSocketClass = ws.default;
+    } catch (error) {
+      throw new Error('WebSocket streaming requires "ws" package to be installed: npm install ws');
+    }
+  }
+  return WebSocketClass;
+}
+
+async function getFetch() {
+  if (!fetchImpl) {
+    try {
+      // Try native fetch first (Node 18+), then fallback to node-fetch
+      if (typeof fetch !== 'undefined') {
+        fetchImpl = fetch;
+      } else {
+        const nodeFetch = await import('node-fetch');
+        fetchImpl = nodeFetch.default;
+      }
+    } catch (error) {
+      throw new Error('HTTP requests require native fetch (Node 18+) or "node-fetch" package: npm install node-fetch');
+    }
+  }
+  return fetchImpl;
+}
 
 // Base interface for all source adapters
 export interface SourceAdapter {
@@ -596,6 +629,7 @@ export class WebAdapter implements SourceAdapter {
     await this.validateUrl(input.url);
 
     try {
+      const fetchFn = await getFetch();
       const response = await this.secureHttpRequest(input.url);
       
       if (!response.ok) {
@@ -769,12 +803,13 @@ export class WebAdapter implements SourceAdapter {
   /**
    * Secure HTTP request with timeout and redirect limits
    */
-  private async secureHttpRequest(url: string): Promise<Response> {
+  private async secureHttpRequest(url: string): Promise<any> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.securityConfig.requestTimeout);
 
     try {
-      const response = await fetch(url, {
+      const fetchFn = await getFetch();
+      const response = await fetchFn(url, {
         signal: controller.signal,
         redirect: 'manual', // Handle redirects manually for security
         headers: {
@@ -803,7 +838,7 @@ export class WebAdapter implements SourceAdapter {
   /**
    * Handle redirects with security validation and limits
    */
-  private async handleRedirect(originalUrl: string, response: Response, redirectCount: number): Promise<Response> {
+  private async handleRedirect(originalUrl: string, response: any, redirectCount: number): Promise<any> {
     if (redirectCount >= this.securityConfig.maxRedirects) {
       throw new Error(`Too many redirects (${redirectCount}). Maximum allowed: ${this.securityConfig.maxRedirects}`);
     }
@@ -849,6 +884,1035 @@ export class WebAdapter implements SourceAdapter {
   }
 }
 
+// ==================== STREAMING DATA INGESTION SYSTEM ====================
+
+/**
+ * Configuration interface for streaming data sources
+ */
+export interface StreamingSourceConfig {
+  protocol: 'websocket' | 'sse' | 'poll';
+  endpoint: string;
+  headers?: Record<string, string>;
+  parseSpec: {
+    format: 'json' | 'text';
+    timestampPath?: string; // JSON path for timestamp field
+    dedupeKeyPath?: string; // JSON path for deduplication key
+    textDelimiter?: string; // For text format (default: newline)
+  };
+  batchSize: number; // Records per batch
+  flushMs: number; // Max time between flushes
+  maxBuffer: number; // Max records to buffer
+  pollInterval?: number; // For polling protocol (ms)
+  reconnectOptions?: {
+    maxRetries: number;
+    initialDelay: number;
+    maxDelay: number;
+    backoffMultiplier: number;
+  };
+  authentication?: {
+    type: 'bearer' | 'basic' | 'api_key';
+    token?: string;
+    username?: string;
+    password?: string;
+    keyHeader?: string; // For API key auth
+  };
+}
+
+/**
+ * Status interface for streaming sources
+ */
+export interface StreamingStatus {
+  isRunning: boolean;
+  recordsReceived: number;
+  recordsProcessed: number;
+  lastRecord?: Date;
+  connectionStatus: 'connected' | 'connecting' | 'disconnected' | 'error';
+  bufferSize: number;
+  errorCount: number;
+  lastError?: string;
+  uptime?: number; // Milliseconds since start
+  bytesReceived?: number;
+}
+
+/**
+ * Interface for parsed streaming records
+ */
+export interface StreamRecord {
+  data: any;
+  timestamp: Date;
+  dedupeKey?: string;
+  sequenceId: string;
+  sourceMetadata: {
+    protocol: string;
+    endpoint: string;
+    receivedAt: Date;
+    parseFormat: string;
+  };
+}
+
+/**
+ * BatchWriter - Handles micro-batching with backpressure and time-based flushing
+ */
+export class BatchWriter {
+  private buffer: StreamRecord[] = [];
+  private lastFlush = Date.now();
+  private flushTimer?: NodeJS.Timeout;
+  private isFlushingBatch = false;
+  private flushPromise?: Promise<void>;
+
+  constructor(
+    private config: {
+      batchSize: number;
+      flushMs: number;
+      maxBuffer: number;
+    },
+    private onFlush: (batch: StreamRecord[]) => Promise<void>,
+    private onError: (error: Error) => void
+  ) {
+    this.scheduleFlushTimer();
+  }
+
+  /**
+   * Add a record to the batch buffer
+   */
+  async addRecord(record: StreamRecord): Promise<void> {
+    // Backpressure: wait for current flush if buffer is full
+    if (this.buffer.length >= this.config.maxBuffer) {
+      if (this.flushPromise) {
+        await this.flushPromise;
+      }
+      
+      // If still full after flush, drop oldest records (circular buffer behavior)
+      if (this.buffer.length >= this.config.maxBuffer) {
+        const dropCount = Math.floor(this.config.maxBuffer * 0.1); // Drop 10%
+        this.buffer.splice(0, dropCount);
+        this.onError(new Error(`Buffer overflow: dropped ${dropCount} oldest records`));
+      }
+    }
+
+    this.buffer.push(record);
+
+    // Check if we should flush based on size
+    if (this.buffer.length >= this.config.batchSize) {
+      await this.flush();
+    }
+  }
+
+  /**
+   * Force flush current buffer
+   */
+  async flush(): Promise<void> {
+    if (this.isFlushingBatch || this.buffer.length === 0) {
+      return this.flushPromise || Promise.resolve();
+    }
+
+    this.isFlushingBatch = true;
+    const batch = this.buffer.splice(0); // Take all records
+    this.lastFlush = Date.now();
+
+    this.flushPromise = this.processBatch(batch);
+    await this.flushPromise;
+    
+    this.isFlushingBatch = false;
+    this.flushPromise = undefined;
+  }
+
+  /**
+   * Process a batch of records
+   */
+  private async processBatch(batch: StreamRecord[]): Promise<void> {
+    try {
+      await this.onFlush(batch);
+    } catch (error: any) {
+      this.onError(new Error(`Batch flush failed: ${error.message}`));
+      // Re-queue failed records at the front of buffer
+      this.buffer.unshift(...batch);
+    }
+  }
+
+  /**
+   * Schedule periodic flush timer
+   */
+  private scheduleFlushTimer(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+    }
+
+    this.flushTimer = setTimeout(async () => {
+      const timeSinceLastFlush = Date.now() - this.lastFlush;
+      if (timeSinceLastFlush >= this.config.flushMs && this.buffer.length > 0) {
+        await this.flush();
+      }
+      this.scheduleFlushTimer(); // Reschedule
+    }, Math.min(this.config.flushMs, 5000)); // Check at least every 5 seconds
+  }
+
+  /**
+   * Get current buffer status
+   */
+  getStatus(): { bufferSize: number; lastFlush: Date; isFlushingBatch: boolean } {
+    return {
+      bufferSize: this.buffer.length,
+      lastFlush: new Date(this.lastFlush),
+      isFlushingBatch: this.isFlushingBatch
+    };
+  }
+
+  /**
+   * Cleanup resources
+   */
+  async destroy(): Promise<void> {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+    }
+    
+    // Final flush
+    if (this.buffer.length > 0) {
+      await this.flush();
+    }
+  }
+}
+
+/**
+ * ConnectionManager - Handles WebSocket, SSE, and HTTP polling connections
+ */
+export class ConnectionManager {
+  private connection?: WebSocket | EventSource;
+  private isConnected = false;
+  private reconnectAttempts = 0;
+  private reconnectTimer?: NodeJS.Timeout;
+  private pollTimer?: NodeJS.Timeout;
+  private lastPollCursor?: string;
+
+  constructor(
+    private protocol: 'websocket' | 'sse' | 'poll',
+    private endpoint: string,
+    private config: StreamingSourceConfig,
+    private onData: (data: any) => void,
+    private onStatusChange: (status: string) => void,
+    private onError: (error: Error) => void
+  ) {}
+
+  /**
+   * Establish connection based on protocol
+   */
+  async connect(): Promise<void> {
+    try {
+      this.onStatusChange('connecting');
+      
+      switch (this.protocol) {
+        case 'websocket':
+          await this.connectWebSocket();
+          break;
+        case 'sse':
+          await this.connectSSE();
+          break;
+        case 'poll':
+          await this.startPolling();
+          break;
+        default:
+          throw new Error(`Unsupported protocol: ${this.protocol}`);
+      }
+      
+      this.isConnected = true;
+      this.reconnectAttempts = 0;
+      this.onStatusChange('connected');
+    } catch (error: any) {
+      this.onError(new Error(`Connection failed: ${error.message}`));
+      this.onStatusChange('error');
+      await this.scheduleReconnect();
+    }
+  }
+
+  /**
+   * WebSocket connection handler
+   */
+  private async connectWebSocket(): Promise<void> {
+    const headers = this.buildHeaders();
+    
+    const WebSocketClass = await getWebSocket();
+    const ws = new WebSocketClass(this.endpoint, { headers });
+    
+    return new Promise((resolve, reject) => {
+      ws.on('open', () => {
+        this.connection = ws;
+        resolve();
+      });
+
+      ws.on('message', (data: Buffer) => {
+        try {
+          const text = data.toString('utf-8');
+          const parsed = this.parseIncomingData(text);
+          this.onData(parsed);
+        } catch (error: any) {
+          this.onError(new Error(`WebSocket message parse error: ${error.message}`));
+        }
+      });
+
+      ws.on('error', (error: Error) => {
+        reject(error);
+      });
+
+      ws.on('close', () => {
+        this.isConnected = false;
+        this.onStatusChange('disconnected');
+        this.scheduleReconnect();
+      });
+    });
+  }
+
+  /**
+   * Server-Sent Events connection handler
+   */
+  private async connectSSE(): Promise<void> {
+    // Node.js SSE implementation using fetch + stream parsing
+    const fetchFn = await getFetch();
+    
+    // Validate URL security before connecting
+    await this.validateStreamingUrl(this.endpoint);
+    
+    const response = await fetchFn(this.endpoint, {
+      headers: {
+        ...this.buildHeaders(),
+        'Accept': 'text/event-stream',
+        'Cache-Control': 'no-cache'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`SSE connection failed: ${response.status} ${response.statusText}`);
+    }
+
+    if (!response.body) {
+      throw new Error('SSE response body is null');
+    }
+
+    // Parse SSE stream using Node.js readable stream
+    let buffer = '';
+    const stream = response.body;
+
+    const readStream = async (): Promise<void> => {
+      try {
+        // Handle different stream types for Node.js compatibility
+        if (stream.getReader) {
+          // Modern fetch API with ReadableStream
+          const reader = stream.getReader();
+          const decoder = new TextDecoder();
+          
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || ''; // Keep incomplete line
+            
+            for (const line of lines) {
+              this.processSseLine(line);
+            }
+          }
+        } else {
+          // Node.js stream interface
+          stream.on('data', (chunk: Buffer) => {
+            buffer += chunk.toString('utf-8');
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || ''; // Keep incomplete line
+            
+            for (const line of lines) {
+              this.processSseLine(line);
+            }
+          });
+
+          stream.on('end', () => {
+            this.isConnected = false;
+            this.onStatusChange('disconnected');
+            this.scheduleReconnect();
+          });
+
+          stream.on('error', (error: Error) => {
+            this.onError(new Error(`SSE stream error: ${error.message}`));
+            this.onStatusChange('error');
+            this.scheduleReconnect();
+          });
+        }
+      } catch (error: any) {
+        this.onError(new Error(`SSE setup error: ${error.message}`));
+        this.onStatusChange('error');
+        await this.scheduleReconnect();
+      }
+    };
+
+    this.connection = { 
+      close: () => {
+        if ('destroy' in stream && typeof stream.destroy === 'function') {
+          stream.destroy();
+        }
+      } 
+    } as any;
+    readStream();
+  }
+
+  /**
+   * Process individual SSE line
+   */
+  private processSseLine(line: string): void {
+    if (line.startsWith('data: ')) {
+      const data = line.substring(6);
+      if (data.trim()) {
+        try {
+          const parsed = this.parseIncomingData(data);
+          this.onData(parsed);
+        } catch (error: any) {
+          this.onError(new Error(`SSE data parse error: ${error.message}`));
+        }
+      }
+    }
+  }
+
+  /**
+   * HTTP polling handler
+   */
+  private async startPolling(): Promise<void> {
+    const fetchFn = await getFetch();
+    
+    const poll = async (): Promise<void> => {
+      try {
+        const url = this.buildPollUrl();
+        
+        // Validate URL security before polling
+        await this.validateStreamingUrl(url);
+        
+        const response = await fetchFn(url, {
+          headers: this.buildHeaders()
+        });
+
+        if (!response.ok) {
+          throw new Error(`Poll request failed: ${response.status} ${response.statusText}`);
+        }
+
+        const data = await response.text();
+        if (data.trim()) {
+          const parsed = this.parseIncomingData(data);
+          this.onData(parsed);
+          
+          // Update cursor for next poll if applicable
+          this.updatePollCursor(parsed);
+        }
+      } catch (error: any) {
+        this.onError(new Error(`Poll error: ${error.message}`));
+      }
+      
+      // Schedule next poll
+      if (this.isConnected) {
+        this.pollTimer = setTimeout(poll, this.config.pollInterval || 5000);
+      }
+    };
+
+    await poll(); // Initial poll
+  }
+
+  /**
+   * Parse incoming data based on format specification
+   */
+  private parseIncomingData(rawData: string): any {
+    const { format, textDelimiter } = this.config.parseSpec;
+    
+    if (format === 'json') {
+      try {
+        return JSON.parse(rawData);
+      } catch {
+        // Try parsing as JSON Lines (multiple JSON objects)
+        return rawData.split('\n')
+          .filter(line => line.trim())
+          .map(line => JSON.parse(line));
+      }
+    } else {
+      // Text format
+      const delimiter = textDelimiter || '\n';
+      return rawData.split(delimiter)
+        .filter(line => line.trim())
+        .map(line => ({ text: line }));
+    }
+  }
+
+  /**
+   * Build headers including authentication
+   */
+  private buildHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      ...this.config.headers,
+      'User-Agent': 'ChimariData-StreamingAdapter/1.0'
+    };
+
+    if (this.config.authentication) {
+      const auth = this.config.authentication;
+      switch (auth.type) {
+        case 'bearer':
+          if (auth.token) {
+            headers['Authorization'] = `Bearer ${auth.token}`;
+          }
+          break;
+        case 'basic':
+          if (auth.username && auth.password) {
+            const encoded = Buffer.from(`${auth.username}:${auth.password}`).toString('base64');
+            headers['Authorization'] = `Basic ${encoded}`;
+          }
+          break;
+        case 'api_key':
+          if (auth.keyHeader && auth.token) {
+            headers[auth.keyHeader] = auth.token;
+          }
+          break;
+      }
+    }
+
+    return headers;
+  }
+
+  /**
+   * Validate streaming URL for security (SSRF protection)
+   */
+  private async validateStreamingUrl(url: string): Promise<void> {
+    let urlObj: URL;
+    
+    try {
+      urlObj = new URL(url);
+    } catch (error) {
+      throw new Error('Invalid streaming URL format');
+    }
+
+    // 1. Protocol validation - only allow HTTP/HTTPS and WS/WSS
+    const allowedProtocols = ['http:', 'https:', 'ws:', 'wss:'];
+    if (!allowedProtocols.includes(urlObj.protocol)) {
+      throw new Error(`Protocol ${urlObj.protocol} is not allowed for streaming. Only ${allowedProtocols.join(', ')} are permitted`);
+    }
+
+    // 2. Domain allowlist validation - use same security config as WebAdapter
+    const allowedDomains = [
+      'api.github.com',
+      'raw.githubusercontent.com',
+      'data.gov',
+      'api.data.gov',
+      'opendata.gov',
+      'kaggle.com',
+      'data.world',
+      'api.census.gov',
+      'stream.twitter.com',
+      'api.twitter.com',
+      'api.slack.com',
+      'hooks.slack.com'
+    ];
+    
+    if (!this.isDomainAllowedForStreaming(urlObj.hostname, allowedDomains)) {
+      throw new Error(`Domain ${urlObj.hostname} is not in the streaming allowed domains list. Contact administrator to add trusted streaming domains.`);
+    }
+
+    // 3. IP address validation to prevent access to private networks
+    await this.validateStreamingIpAddress(urlObj.hostname);
+
+    // 4. Port validation - allow standard and common streaming ports
+    const port = urlObj.port || (urlObj.protocol.startsWith('https') || urlObj.protocol.startsWith('wss') ? '443' : '80');
+    const allowedPorts = ['80', '443', '8080', '8443', '3000', '4000', '5000', '8000'];
+    if (!allowedPorts.includes(port)) {
+      throw new Error(`Port ${port} is not allowed for streaming. Only ports ${allowedPorts.join(', ')} are permitted`);
+    }
+
+    // 5. Path validation - prevent access to sensitive paths
+    const path = urlObj.pathname.toLowerCase();
+    const suspiciousPaths = ['/admin', '/internal', '/private', '/management', '/actuator', '/health'];
+    if (suspiciousPaths.some(suspPath => path.includes(suspPath))) {
+      throw new Error(`Access to streaming path ${urlObj.pathname} is not allowed`);
+    }
+  }
+
+  /**
+   * Check if domain is allowed for streaming
+   */
+  private isDomainAllowedForStreaming(hostname: string, allowedDomains: string[]): boolean {
+    const cleanHostname = hostname.toLowerCase();
+    
+    return allowedDomains.some(allowedDomain => {
+      const cleanAllowed = allowedDomain.toLowerCase();
+      // Exact match or subdomain match
+      return cleanHostname === cleanAllowed || cleanHostname.endsWith('.' + cleanAllowed);
+    });
+  }
+
+  /**
+   * Validate IP address for streaming to prevent access to private networks
+   */
+  private async validateStreamingIpAddress(hostname: string): Promise<void> {
+    const dns = require('dns');
+    const { promisify } = require('util');
+    const lookup = promisify(dns.lookup);
+
+    // Check if hostname is already an IP address
+    if (this.isPrivateIpAddressStreaming(hostname)) {
+      throw new Error(`Access to private IP address ${hostname} is not allowed for streaming`);
+    }
+
+    // Resolve hostname to IP and check if it's private
+    try {
+      const result = await lookup(hostname);
+      const ipAddress = result.address;
+      
+      if (this.isPrivateIpAddressStreaming(ipAddress)) {
+        throw new Error(`Streaming hostname ${hostname} resolves to private IP address ${ipAddress} which is not allowed`);
+      }
+    } catch (dnsError: any) {
+      throw new Error(`DNS resolution failed for streaming hostname ${hostname}: ${dnsError.message}`);
+    }
+  }
+
+  /**
+   * Check if an IP address is in private/internal ranges for streaming
+   */
+  private isPrivateIpAddressStreaming(ip: string): boolean {
+    // IPv4 private ranges
+    const privateRanges = [
+      /^127\./, // Loopback (127.0.0.0/8)
+      /^10\./, // Class A private (10.0.0.0/8)
+      /^172\.(1[6-9]|2[0-9]|3[01])\./, // Class B private (172.16.0.0/12)
+      /^192\.168\./, // Class C private (192.168.0.0/16)
+      /^169\.254\./, // Link-local (169.254.0.0/16) - includes cloud metadata
+      /^::1$/, // IPv6 loopback
+      /^fe80:/, // IPv6 link-local
+      /^fc00:/, // IPv6 unique local
+      /^fd00:/, // IPv6 unique local
+    ];
+
+    return privateRanges.some(range => range.test(ip));
+  }
+
+  /**
+   * Build polling URL with cursor parameter
+   */
+  private buildPollUrl(): string {
+    const url = new URL(this.endpoint);
+    if (this.lastPollCursor) {
+      url.searchParams.set('cursor', this.lastPollCursor);
+    }
+    return url.toString();
+  }
+
+  /**
+   * Update polling cursor from response
+   */
+  private updatePollCursor(data: any): void {
+    if (Array.isArray(data) && data.length > 0) {
+      const lastItem = data[data.length - 1];
+      // Try to extract cursor/timestamp for next poll
+      this.lastPollCursor = lastItem.id || lastItem.timestamp || Date.now().toString();
+    }
+  }
+
+  /**
+   * Schedule reconnection with exponential backoff
+   */
+  private async scheduleReconnect(): Promise<void> {
+    const reconnectOptions = this.config.reconnectOptions || {
+      maxRetries: 10,
+      initialDelay: 1000,
+      maxDelay: 30000,
+      backoffMultiplier: 2
+    };
+
+    if (this.reconnectAttempts >= reconnectOptions.maxRetries) {
+      this.onError(new Error(`Max reconnect attempts (${reconnectOptions.maxRetries}) reached`));
+      return;
+    }
+
+    const delay = Math.min(
+      reconnectOptions.initialDelay * Math.pow(reconnectOptions.backoffMultiplier, this.reconnectAttempts),
+      reconnectOptions.maxDelay
+    );
+
+    this.reconnectAttempts++;
+    this.onStatusChange('disconnected');
+
+    this.reconnectTimer = setTimeout(async () => {
+      await this.connect();
+    }, delay);
+  }
+
+  /**
+   * Disconnect from the streaming source
+   */
+  async disconnect(): Promise<void> {
+    this.isConnected = false;
+    
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+    }
+    
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer);
+    }
+
+    if (this.connection) {
+      if (this.protocol === 'websocket' && 'close' in this.connection) {
+        (this.connection as WebSocket).close();
+      } else if ('close' in this.connection) {
+        this.connection.close();
+      }
+      this.connection = undefined;
+    }
+
+    this.onStatusChange('disconnected');
+  }
+
+  /**
+   * Get connection status
+   */
+  getStatus(): { isConnected: boolean; reconnectAttempts: number } {
+    return {
+      isConnected: this.isConnected,
+      reconnectAttempts: this.reconnectAttempts
+    };
+  }
+}
+
+/**
+ * Streaming Source Adapter Interface - extends SourceAdapter for continuous streams
+ */
+export interface StreamingSourceAdapter extends SourceAdapter {
+  sourceType: 'stream';
+  protocol: 'websocket' | 'sse' | 'poll';
+  
+  // Lifecycle methods for streaming
+  start(config: StreamingSourceConfig, storage: any): Promise<void>;
+  stop(): Promise<void>;
+  getStatus(): StreamingStatus;
+  
+  // Override process to handle continuous data
+  process(input: SourceInput): Promise<SourceResult>;
+}
+
+/**
+ * StreamingAdapter - Real-time data ingestion adapter
+ */
+export class StreamingAdapter implements StreamingSourceAdapter {
+  sourceType = 'stream' as const;
+  protocol: 'websocket' | 'sse' | 'poll';
+  supportedMimeTypes = ['application/json', 'text/plain', 'text/event-stream'];
+  supportedExtensions = [];
+
+  private batchWriter?: BatchWriter;
+  private connectionManager?: ConnectionManager;
+  private isRunning = false;
+  private config?: StreamingSourceConfig;
+  private storage?: any;
+  private datasetId?: string;
+  private status: StreamingStatus;
+  private startTime?: Date;
+  private deduplicationSet = new Set<string>();
+  private sequenceCounter = 0;
+
+  constructor(protocol: 'websocket' | 'sse' | 'poll') {
+    this.protocol = protocol;
+    this.status = {
+      isRunning: false,
+      recordsReceived: 0,
+      recordsProcessed: 0,
+      connectionStatus: 'disconnected',
+      bufferSize: 0,
+      errorCount: 0
+    };
+  }
+
+  canHandle(mimeType: string, fileName: string): boolean {
+    // Streaming adapter is used explicitly, not auto-detected
+    return false;
+  }
+
+  /**
+   * Start streaming with the provided configuration
+   */
+  async start(config: StreamingSourceConfig, storage: any, datasetId?: string): Promise<void> {
+    // Validate streaming endpoint security before starting
+    try {
+      const connectionManager = new ConnectionManager(
+        this.protocol,
+        config.endpoint,
+        config,
+        () => {}, // Dummy handlers for validation
+        () => {},
+        () => {}
+      );
+      await (connectionManager as any).validateStreamingUrl(config.endpoint);
+    } catch (error: any) {
+      throw new Error(`Streaming endpoint security validation failed: ${error.message}`);
+    }
+    if (this.isRunning) {
+      throw new Error('Streaming adapter is already running');
+    }
+    
+    // Additional validation passed, continue with startup
+
+    this.config = config;
+    this.storage = storage;
+    this.datasetId = datasetId;
+    this.startTime = new Date();
+    this.isRunning = true;
+    this.status.isRunning = true;
+
+    // Initialize batch writer
+    this.batchWriter = new BatchWriter(
+      {
+        batchSize: config.batchSize,
+        flushMs: config.flushMs,
+        maxBuffer: config.maxBuffer
+      },
+      this.handleBatchFlush.bind(this),
+      this.handleBatchError.bind(this)
+    );
+
+    // Initialize connection manager
+    this.connectionManager = new ConnectionManager(
+      this.protocol,
+      config.endpoint,
+      config,
+      this.handleIncomingData.bind(this),
+      this.handleStatusChange.bind(this),
+      this.handleConnectionError.bind(this)
+    );
+
+    // Start connection
+    await this.connectionManager.connect();
+  }
+
+  /**
+   * Stop the streaming adapter
+   */
+  async stop(): Promise<void> {
+    if (!this.isRunning) {
+      return;
+    }
+
+    this.isRunning = false;
+    this.status.isRunning = false;
+
+    // Disconnect connection manager
+    if (this.connectionManager) {
+      await this.connectionManager.disconnect();
+      this.connectionManager = undefined;
+    }
+
+    // Flush and destroy batch writer
+    if (this.batchWriter) {
+      await this.batchWriter.destroy();
+      this.batchWriter = undefined;
+    }
+
+    this.status.connectionStatus = 'disconnected';
+  }
+
+  /**
+   * Get current streaming status
+   */
+  getStatus(): StreamingStatus {
+    const now = Date.now();
+    const uptime = this.startTime ? now - this.startTime.getTime() : 0;
+    
+    return {
+      ...this.status,
+      uptime,
+      bufferSize: this.batchWriter?.getStatus().bufferSize || 0
+    };
+  }
+
+  /**
+   * Process method for compatibility (not used in streaming)
+   */
+  async process(input: SourceInput): Promise<SourceResult> {
+    throw new Error('StreamingAdapter.process() should not be called directly. Use start() instead.');
+  }
+
+  /**
+   * Handle incoming data from the connection
+   */
+  private async handleIncomingData(rawData: any): Promise<void> {
+    try {
+      const records = this.parseAndNormalizeData(rawData);
+      
+      for (const record of records) {
+        // Check for duplicates
+        if (record.dedupeKey && this.deduplicationSet.has(record.dedupeKey)) {
+          continue; // Skip duplicate
+        }
+
+        if (record.dedupeKey) {
+          this.deduplicationSet.add(record.dedupeKey);
+          
+          // Limit deduplication set size
+          if (this.deduplicationSet.size > 10000) {
+            const keys = Array.from(this.deduplicationSet);
+            this.deduplicationSet.clear();
+            // Keep only the most recent 5000
+            keys.slice(-5000).forEach(key => this.deduplicationSet.add(key));
+          }
+        }
+
+        await this.batchWriter!.addRecord(record);
+        this.status.recordsReceived++;
+      }
+    } catch (error: any) {
+      this.handleDataError(new Error(`Data processing error: ${error.message}`));
+    }
+  }
+
+  /**
+   * Parse and normalize incoming data into StreamRecord format
+   */
+  private parseAndNormalizeData(rawData: any): StreamRecord[] {
+    const records: StreamRecord[] = [];
+    const dataArray = Array.isArray(rawData) ? rawData : [rawData];
+
+    for (const item of dataArray) {
+      const record: StreamRecord = {
+        data: item,
+        timestamp: this.extractTimestamp(item),
+        dedupeKey: this.extractDedupeKey(item),
+        sequenceId: `${this.datasetId || 'stream'}-${++this.sequenceCounter}`,
+        sourceMetadata: {
+          protocol: this.protocol,
+          endpoint: this.config!.endpoint,
+          receivedAt: new Date(),
+          parseFormat: this.config!.parseSpec.format
+        }
+      };
+      
+      records.push(record);
+    }
+
+    return records;
+  }
+
+  /**
+   * Extract timestamp from data using configured path
+   */
+  private extractTimestamp(data: any): Date {
+    const timestampPath = this.config?.parseSpec.timestampPath;
+    
+    if (timestampPath && typeof data === 'object') {
+      const timestamp = this.getValueByPath(data, timestampPath);
+      if (timestamp) {
+        const date = new Date(timestamp);
+        if (!isNaN(date.getTime())) {
+          return date;
+        }
+      }
+    }
+    
+    return new Date(); // Default to current time
+  }
+
+  /**
+   * Extract deduplication key from data using configured path
+   */
+  private extractDedupeKey(data: any): string | undefined {
+    const dedupePath = this.config?.parseSpec.dedupeKeyPath;
+    
+    if (dedupePath && typeof data === 'object') {
+      const key = this.getValueByPath(data, dedupePath);
+      return key ? String(key) : undefined;
+    }
+    
+    return undefined;
+  }
+
+  /**
+   * Get value from object using dot notation path
+   */
+  private getValueByPath(obj: any, path: string): any {
+    return path.split('.').reduce((current, key) => {
+      return current && current[key] !== undefined ? current[key] : undefined;
+    }, obj);
+  }
+
+  /**
+   * Handle batch flush to storage
+   */
+  private async handleBatchFlush(batch: StreamRecord[]): Promise<void> {
+    if (!this.storage || !this.datasetId) {
+      throw new Error('Storage or dataset ID not configured');
+    }
+
+    try {
+      // Create stream chunk for this batch
+      const chunkData: InsertStreamChunk = {
+        datasetId: this.datasetId,
+        seq: Math.floor(Date.now() / 1000), // Use timestamp as sequence
+        fromTs: batch[0]?.timestamp || new Date(),
+        toTs: batch[batch.length - 1]?.timestamp || new Date(),
+        recordCount: batch.length,
+        storageUri: `streams/${this.datasetId}/${Date.now()}`,
+        checksum: this.calculateBatchChecksum(batch)
+      };
+
+      await this.storage.createStreamChunk(chunkData);
+      
+      // Update checkpoint
+      const checkpoint: InsertStreamCheckpoint = {
+        sourceId: this.datasetId,
+        cursor: batch[batch.length - 1]?.sequenceId || '',
+        ts: new Date()
+      };
+
+      await this.storage.createStreamCheckpoint(checkpoint);
+      
+      this.status.recordsProcessed += batch.length;
+      this.status.lastRecord = batch[batch.length - 1]?.timestamp;
+    } catch (error: any) {
+      throw new Error(`Batch storage failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Calculate checksum for batch integrity
+   */
+  private calculateBatchChecksum(batch: StreamRecord[]): string {
+    const crypto = require('crypto');
+    const dataString = JSON.stringify(batch.map(r => r.data));
+    return crypto.createHash('sha256').update(dataString).digest('hex');
+  }
+
+  /**
+   * Handle batch processing errors
+   */
+  private handleBatchError(error: Error): void {
+    this.status.errorCount++;
+    this.status.lastError = error.message;
+    console.error('Streaming batch error:', error);
+  }
+
+  /**
+   * Handle connection status changes
+   */
+  private handleStatusChange(status: string): void {
+    this.status.connectionStatus = status as any;
+  }
+
+  /**
+   * Handle connection errors
+   */
+  private handleConnectionError(error: Error): void {
+    this.status.errorCount++;
+    this.status.lastError = error.message;
+    this.status.connectionStatus = 'error';
+    console.error('Streaming connection error:', error);
+  }
+
+  /**
+   * Handle data processing errors
+   */
+  private handleDataError(error: Error): void {
+    this.status.errorCount++;
+    this.status.lastError = error.message;
+    console.error('Streaming data error:', error);
+  }
+}
+
 /**
  * Source Adapter Manager - factory for creating appropriate adapters
  */
@@ -860,6 +1924,8 @@ export class SourceAdapterManager {
     new PdfAdapter(),
     new WebAdapter()
   ];
+
+  private streamingAdapters: Map<string, StreamingAdapter> = new Map();
 
   /**
    * Get the appropriate adapter for a given input
@@ -884,6 +1950,82 @@ export class SourceAdapterManager {
     }
 
     throw new Error('Invalid input: requires either URL or buffer with fileName and mimeType');
+  }
+
+  /**
+   * Create a new streaming adapter for real-time data ingestion
+   */
+  createStreamingAdapter(protocol: 'websocket' | 'sse' | 'poll', id?: string): StreamingAdapter {
+    const adapterId = id || nanoid();
+    const adapter = new StreamingAdapter(protocol);
+    this.streamingAdapters.set(adapterId, adapter);
+    return adapter;
+  }
+
+  /**
+   * Get a streaming adapter by ID
+   */
+  getStreamingAdapter(id: string): StreamingAdapter | undefined {
+    return this.streamingAdapters.get(id);
+  }
+
+  /**
+   * Start a streaming adapter with configuration
+   */
+  async startStreamingAdapter(
+    id: string, 
+    config: StreamingSourceConfig, 
+    storage: any, 
+    datasetId?: string
+  ): Promise<void> {
+    const adapter = this.streamingAdapters.get(id);
+    if (!adapter) {
+      throw new Error(`Streaming adapter not found: ${id}`);
+    }
+    
+    await adapter.start(config, storage, datasetId);
+  }
+
+  /**
+   * Stop a streaming adapter
+   */
+  async stopStreamingAdapter(id: string): Promise<void> {
+    const adapter = this.streamingAdapters.get(id);
+    if (!adapter) {
+      throw new Error(`Streaming adapter not found: ${id}`);
+    }
+    
+    await adapter.stop();
+    this.streamingAdapters.delete(id);
+  }
+
+  /**
+   * Get status of all streaming adapters
+   */
+  getStreamingStatus(): Record<string, StreamingStatus> {
+    const status: Record<string, StreamingStatus> = {};
+    this.streamingAdapters.forEach((adapter, id) => {
+      status[id] = adapter.getStatus();
+    });
+    return status;
+  }
+
+  /**
+   * Stop all streaming adapters (cleanup)
+   */
+  async stopAllStreamingAdapters(): Promise<void> {
+    const stopPromises = Array.from(this.streamingAdapters.entries()).map(
+      async ([id, adapter]) => {
+        try {
+          await adapter.stop();
+        } catch (error: any) {
+          console.error(`Error stopping streaming adapter ${id}:`, error);
+        }
+      }
+    );
+    
+    await Promise.all(stopPromises);
+    this.streamingAdapters.clear();
   }
 
   /**
