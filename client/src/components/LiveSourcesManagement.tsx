@@ -29,6 +29,13 @@ import {
   useDeleteScrapingJob,
   useLiveSourcesOverview
 } from "@/hooks/useLiveDataSources";
+import {
+  useRealtimeConnectionState,
+  useRealtimeMultiSourceStatus,
+  useRealtimeLiveSourcesOverview,
+  useRealtimeStreamingStatus,
+  useRealtimeScrapingProgress
+} from "@/hooks/useRealtimeUpdates";
 import { 
   Radio, 
   Globe, 
@@ -48,7 +55,9 @@ import {
   AlertTriangle,
   Eye,
   Calendar,
-  Timer
+  Timer,
+  Wifi,
+  WifiOff
 } from "lucide-react";
 
 interface LiveSourcesManagementProps {
@@ -75,9 +84,17 @@ export function LiveSourcesManagement({ projectId, sources = [], onRefresh }: Li
   const runScrapingJobOnce = useRunScrapingJobOnce();
   const deleteScrapingJob = useDeleteScrapingJob();
 
+  // Real-time hooks for live updates
+  const { connectionState, isConnected } = useRealtimeConnectionState();
+  const realtimeOverview = useRealtimeLiveSourcesOverview();
+  
   // Combine sources from props and API
   const allStreamingSources = sources?.filter(s => s.type === 'streaming') || streamingSources;
   const allScrapingJobs = sources?.filter(s => s.type === 'scraping') || scrapingJobs;
+  
+  // Get source IDs for real-time status monitoring
+  const sourceIds = [...allStreamingSources.map(s => s.id), ...allScrapingJobs.map(j => j.id)];
+  const { statuses: realtimeStatuses } = useRealtimeMultiSourceStatus(sourceIds);
 
   // Auto-refresh every 30 seconds
   useEffect(() => {
@@ -203,8 +220,13 @@ export function LiveSourcesManagement({ projectId, sources = [], onRefresh }: Li
     const isStreaming = source.type === 'streaming' || source.protocol;
     const icon = isStreaming ? Radio : Globe;
     const IconComponent = icon;
-    const status = source.status || 'unknown';
-    const isActive = ['active', 'running'].includes(status.toLowerCase());
+    
+    // Get real-time status if available, fallback to static status
+    const realtimeStatus = realtimeStatuses[source.id];
+    const status = realtimeStatus?.status || source.status || 'unknown';
+    const isActive = ['active', 'running', 'connected'].includes(status.toLowerCase());
+    const lastUpdate = realtimeStatus?.lastUpdate;
+    
     const isProcessing = startStreamingSource.isPending || stopStreamingSource.isPending || 
                         startScrapingJob.isPending || stopScrapingJob.isPending || 
                         runScrapingJobOnce.isPending;
@@ -224,10 +246,18 @@ export function LiveSourcesManagement({ projectId, sources = [], onRefresh }: Li
                 </CardDescription>
               </div>
             </div>
-            <Badge className={getStatusColor(status)} data-testid={`badge-status-${source.id}`}>
-              {getStatusIcon(status)}
-              <span className="ml-1">{status}</span>
-            </Badge>
+            <div className="flex items-center space-x-2">
+              <Badge className={getStatusColor(status)} data-testid={`badge-status-${source.id}`}>
+                {getStatusIcon(status)}
+                <span className="ml-1">{status}</span>
+              </Badge>
+              {realtimeStatus?.isActive && (
+                <div className="flex items-center text-green-600">
+                  <div className="w-2 h-2 bg-green-600 rounded-full animate-pulse mr-1"></div>
+                  <span className="text-xs">Live</span>
+                </div>
+              )}
+            </div>
           </div>
         </CardHeader>
         
@@ -246,7 +276,8 @@ export function LiveSourcesManagement({ projectId, sources = [], onRefresh }: Li
               <div>
                 <div className="text-muted-foreground">Last Activity</div>
                 <div className="font-medium">
-                  {source.lastRunAt ? new Date(source.lastRunAt).toLocaleTimeString() : 'Never'}
+                  {lastUpdate ? new Date(lastUpdate).toLocaleTimeString() : 
+                   source.lastRunAt ? new Date(source.lastRunAt).toLocaleTimeString() : 'Never'}
                 </div>
               </div>
               <div>
@@ -269,12 +300,13 @@ export function LiveSourcesManagement({ projectId, sources = [], onRefresh }: Li
               </div>
             )}
 
-            {/* Error Display */}
-            {source.lastError && (
+            {/* Error Display - Real-time or Static */}
+            {(realtimeStatus?.errorCount > 0 || source.lastError) && (
               <Alert variant="destructive" className="py-2">
                 <AlertTriangle className="h-4 w-4" />
                 <AlertDescription className="text-sm">
-                  {source.lastError}
+                  {source.lastError || 'Connection errors detected'}
+                  {realtimeStatus?.errorCount > 0 && ` (${realtimeStatus.errorCount} recent errors)`}
                 </AlertDescription>
               </Alert>
             )}
@@ -354,6 +386,34 @@ export function LiveSourcesManagement({ projectId, sources = [], onRefresh }: Li
 
   return (
     <div className="space-y-6">
+      {/* Real-time Connection Status */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center space-x-2">
+          <div className={`flex items-center space-x-2 px-3 py-1 rounded-full text-sm ${
+            isConnected 
+              ? 'bg-green-100 text-green-800' 
+              : 'bg-red-100 text-red-800'
+          }`}>
+            {isConnected ? (
+              <>
+                <Wifi className="w-4 h-4" />
+                <span>Real-time Connected</span>
+              </>
+            ) : (
+              <>
+                <WifiOff className="w-4 h-4" />
+                <span>Real-time {connectionState === 'reconnecting' ? 'Reconnecting' : 'Disconnected'}</span>
+              </>
+            )}
+          </div>
+          {realtimeOverview.recentActivity.length > 0 && (
+            <Badge variant="secondary">
+              {realtimeOverview.recentActivity.length} recent events
+            </Badge>
+          )}
+        </div>
+      </div>
+
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold flex items-center gap-2">

@@ -864,3 +864,161 @@ export type RunOnceRequest = z.infer<typeof runOnceRequestSchema>;
 export type BulkSourceActionRequest = z.infer<typeof bulkSourceActionSchema>;
 export type ApiErrorResponse = z.infer<typeof apiErrorResponseSchema>;
 export type ApiSuccessResponse = z.infer<typeof apiSuccessResponseSchema>;
+
+// Real-time Event Schemas
+export const realtimeEventSchema = z.object({
+  type: z.enum(['status_change', 'metrics_update', 'error', 'progress', 'job_complete', 'connection_test', 'data_received', 'buffer_status']),
+  sourceType: z.enum(['streaming', 'scraping']),
+  sourceId: z.string(),
+  userId: z.string(),
+  projectId: z.string().optional(),
+  timestamp: z.date(),
+  data: z.any(),
+});
+
+export const clientConnectionSchema = z.object({
+  id: z.string(),
+  userId: z.string(),
+  subscriptions: z.array(z.string()),
+  lastActivity: z.date(),
+  metadata: z.object({
+    userAgent: z.string().optional(),
+    ipAddress: z.string().optional(),
+  }),
+});
+
+export const broadcastOptionsSchema = z.object({
+  userId: z.string().optional(),
+  projectId: z.string().optional(),
+  sourceId: z.string().optional(),
+  sourceType: z.enum(['streaming', 'scraping']).optional(),
+  excludeClient: z.string().optional(),
+});
+
+// Streaming Events Data Schemas
+export const streamingConnectionEstablishedSchema = z.object({
+  endpoint: z.string(),
+  protocol: z.string(),
+  timestamp: z.date(),
+});
+
+export const streamingConnectionLostSchema = z.object({
+  endpoint: z.string(),
+  error: z.string(),
+  timestamp: z.date(),
+});
+
+export const streamingDataReceivedSchema = z.object({
+  recordCount: z.number(),
+  batchSize: z.number(),
+  timestamp: z.date(),
+});
+
+export const streamingBufferStatusSchema = z.object({
+  currentSize: z.number(),
+  maxSize: z.number(),
+  flushPending: z.boolean(),
+});
+
+export const streamingErrorOccurredSchema = z.object({
+  error: z.string(),
+  severity: z.enum(['warning', 'error']),
+  timestamp: z.date(),
+});
+
+export const streamingMetricsUpdateSchema = z.object({
+  recordsPerSecond: z.number(),
+  totalRecords: z.number(),
+  avgProcessingTime: z.number(),
+  errorRate: z.number(),
+});
+
+// Scraping Events Data Schemas
+export const scrapingJobStartedSchema = z.object({
+  jobId: z.string(),
+  strategy: z.string(),
+  targetUrl: z.string(),
+  timestamp: z.date(),
+});
+
+export const scrapingJobCompletedSchema = z.object({
+  jobId: z.string(),
+  success: z.boolean(),
+  recordsExtracted: z.number(),
+  duration: z.number(),
+});
+
+export const scrapingPageScrapedSchema = z.object({
+  jobId: z.string(),
+  url: z.string(),
+  recordsFound: z.number(),
+  pageNumber: z.number(),
+});
+
+export const scrapingExtractionProgressSchema = z.object({
+  jobId: z.string(),
+  pagesCompleted: z.number(),
+  totalPages: z.number(),
+  estimatedRemaining: z.number(),
+});
+
+export const scrapingRateLimitHitSchema = z.object({
+  jobId: z.string(),
+  domain: z.string(),
+  nextAllowedTime: z.date(),
+});
+
+export const scrapingErrorOccurredSchema = z.object({
+  jobId: z.string(),
+  url: z.string(),
+  error: z.string(),
+  willRetry: z.boolean(),
+});
+
+// Real-time Server Stats Schema
+export const realtimeServerStatsSchema = z.object({
+  totalConnections: z.number(),
+  connectionsPerUser: z.record(z.number()),
+  totalUsers: z.number(),
+  serverUptime: z.number(),
+});
+
+// WebSocket Message Schemas
+export const websocketSubscribeMessageSchema = z.object({
+  type: z.literal('subscribe'),
+  channels: z.array(z.string()),
+});
+
+export const websocketUnsubscribeMessageSchema = z.object({
+  type: z.literal('unsubscribe'),
+  channels: z.array(z.string()),
+});
+
+export const websocketPingMessageSchema = z.object({
+  type: z.literal('ping'),
+});
+
+export const websocketMessageSchema = z.union([
+  websocketSubscribeMessageSchema,
+  websocketUnsubscribeMessageSchema,
+  websocketPingMessageSchema,
+]);
+
+// Infer types for real-time schemas
+export type RealtimeEvent = z.infer<typeof realtimeEventSchema>;
+export type ClientConnection = z.infer<typeof clientConnectionSchema>;
+export type BroadcastOptions = z.infer<typeof broadcastOptionsSchema>;
+export type StreamingConnectionEstablished = z.infer<typeof streamingConnectionEstablishedSchema>;
+export type StreamingConnectionLost = z.infer<typeof streamingConnectionLostSchema>;
+export type StreamingDataReceived = z.infer<typeof streamingDataReceivedSchema>;
+export type StreamingBufferStatus = z.infer<typeof streamingBufferStatusSchema>;
+export type StreamingErrorOccurred = z.infer<typeof streamingErrorOccurredSchema>;
+export type StreamingMetricsUpdate = z.infer<typeof streamingMetricsUpdateSchema>;
+export type ScrapingJobStarted = z.infer<typeof scrapingJobStartedSchema>;
+export type ScrapingJobCompleted = z.infer<typeof scrapingJobCompletedSchema>;
+export type ScrapingPageScraped = z.infer<typeof scrapingPageScrapedSchema>;
+export type ScrapingExtractionProgress = z.infer<typeof scrapingExtractionProgressSchema>;
+export type ScrapingRateLimitHit = z.infer<typeof scrapingRateLimitHitSchema>;
+export type ScrapingErrorOccurred = z.infer<typeof scrapingErrorOccurredSchema>;
+export type RealtimeServerStats = z.infer<typeof realtimeServerStatsSchema>;
+export type WebSocketMessage = z.infer<typeof websocketMessageSchema>;
