@@ -1,5 +1,5 @@
-import { DataProject, InsertDataProject, User, Project, InsertProject, EnterpriseInquiry, InsertEnterpriseInquiry, GuidedAnalysisOrder, InsertGuidedAnalysisOrder, Dataset, InsertDataset, ProjectDataset, InsertProjectDataset, ProjectArtifact, InsertProjectArtifact } from "@shared/schema";
-import { users, projects, enterpriseInquiries, guidedAnalysisOrders, datasets, projectDatasets, projectArtifacts } from "@shared/schema";
+import { DataProject, InsertDataProject, User, Project, InsertProject, EnterpriseInquiry, InsertEnterpriseInquiry, GuidedAnalysisOrder, InsertGuidedAnalysisOrder, Dataset, InsertDataset, ProjectDataset, InsertProjectDataset, ProjectArtifact, InsertProjectArtifact, StreamingSource, InsertStreamingSource, StreamChunk, InsertStreamChunk, StreamCheckpoint, InsertStreamCheckpoint, ScrapingJob, InsertScrapingJob, ScrapingRun, InsertScrapingRun, DatasetVersion, InsertDatasetVersion } from "@shared/schema";
+import { users, projects, enterpriseInquiries, guidedAnalysisOrders, datasets, projectDatasets, projectArtifacts, streamingSources, streamChunks, streamCheckpoints, scrapingJobs, scrapingRuns, datasetVersions } from "@shared/schema";
 import { db } from "./db";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
@@ -168,6 +168,45 @@ export interface IStorage {
   getGuidedAnalysisOrder(id: string): Promise<any>;
   updateGuidedAnalysisOrder(id: string, updates: any): Promise<void>;
   listGuidedAnalysisOrders(userId?: string): Promise<any[]>;
+  
+  // Streaming Sources Management
+  createStreamingSource(source: InsertStreamingSource): Promise<StreamingSource>;
+  getStreamingSource(id: string): Promise<StreamingSource | undefined>;
+  getStreamingSourcesByDataset(datasetId: string): Promise<StreamingSource[]>;
+  updateStreamingSource(id: string, updates: Partial<StreamingSource>): Promise<StreamingSource | undefined>;
+  deleteStreamingSource(id: string): Promise<boolean>;
+  startStreamingSource(id: string): Promise<boolean>;
+  stopStreamingSource(id: string): Promise<boolean>;
+  getActiveStreamingSources(): Promise<StreamingSource[]>;
+  
+  // Stream Chunks & Checkpoints
+  createStreamChunk(chunk: InsertStreamChunk): Promise<StreamChunk>;
+  getStreamChunks(datasetId: string, limit?: number): Promise<StreamChunk[]>;
+  getStreamChunksByTimeRange(datasetId: string, fromTs: Date, toTs: Date): Promise<StreamChunk[]>;
+  createStreamCheckpoint(checkpoint: InsertStreamCheckpoint): Promise<StreamCheckpoint>;
+  getLatestCheckpoint(sourceId: string): Promise<StreamCheckpoint | undefined>;
+  updateCheckpoint(sourceId: string, cursor: string): Promise<boolean>;
+  
+  // Scraping Jobs Management
+  createScrapingJob(job: InsertScrapingJob): Promise<ScrapingJob>;
+  getScrapingJob(id: string): Promise<ScrapingJob | undefined>;
+  getScrapingJobsByDataset(datasetId: string): Promise<ScrapingJob[]>;
+  updateScrapingJob(id: string, updates: Partial<ScrapingJob>): Promise<ScrapingJob | undefined>;
+  deleteScrapingJob(id: string): Promise<boolean>;
+  getJobsToRun(): Promise<ScrapingJob[]>;
+  updateJobNextRun(id: string, nextRunAt: Date): Promise<boolean>;
+  
+  // Scraping Runs
+  createScrapingRun(run: InsertScrapingRun): Promise<ScrapingRun>;
+  getScrapingRuns(jobId: string, limit?: number): Promise<ScrapingRun[]>;
+  updateScrapingRun(id: string, updates: Partial<ScrapingRun>): Promise<ScrapingRun | undefined>;
+  getLatestScrapingRun(jobId: string): Promise<ScrapingRun | undefined>;
+  
+  // Dataset Versions
+  createDatasetVersion(version: InsertDatasetVersion): Promise<DatasetVersion>;
+  getDatasetVersions(datasetId: string): Promise<DatasetVersion[]>;
+  getLatestDatasetVersion(datasetId: string): Promise<DatasetVersion | undefined>;
+  deleteDatasetVersion(id: string): Promise<boolean>;
 }
 
 export class MemStorage implements IStorage {
@@ -177,6 +216,12 @@ export class MemStorage implements IStorage {
   private projectDatasets: Map<string, ProjectDataset> = new Map();
   private projectArtifacts: Map<string, ProjectArtifact> = new Map();
   private guidedAnalysisOrders: Map<string, any> = new Map();
+  private streamingSources: Map<string, StreamingSource> = new Map();
+  private streamChunks: Map<string, StreamChunk> = new Map();
+  private streamCheckpoints: Map<string, StreamCheckpoint> = new Map();
+  private scrapingJobs: Map<string, ScrapingJob> = new Map();
+  private scrapingRuns: Map<string, ScrapingRun> = new Map();
+  private datasetVersions: Map<string, DatasetVersion> = new Map();
   private nextId = 1;
 
   async createProject(projectData: InsertDataProject): Promise<DataProject> {
@@ -234,6 +279,8 @@ export class MemStorage implements IStorage {
       piiAnalysis: datasetData.piiAnalysis ?? null,
       ingestionMetadata: datasetData.ingestionMetadata ?? null,
       checksum: datasetData.checksum ?? null,
+      mode: datasetData.mode ?? "static",
+      retentionDays: datasetData.retentionDays ?? null,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -434,6 +481,271 @@ export class MemStorage implements IStorage {
       return orders.filter(order => order.userId === userId);
     }
     return orders;
+  }
+
+  // Streaming Sources Management
+  async createStreamingSource(sourceData: InsertStreamingSource): Promise<StreamingSource> {
+    const id = `streaming_${this.nextId++}`;
+    const source: StreamingSource = {
+      ...sourceData,
+      id,
+      status: sourceData.status ?? "inactive",
+      headers: sourceData.headers ?? null,
+      params: sourceData.params ?? null,
+      parseSpec: sourceData.parseSpec ?? null,
+      batchSize: sourceData.batchSize ?? 1000,
+      flushMs: sourceData.flushMs ?? 5000,
+      maxBuffer: sourceData.maxBuffer ?? 100000,
+      dedupeKeyPath: sourceData.dedupeKeyPath ?? null,
+      timestampPath: sourceData.timestampPath ?? null,
+      lastCheckpoint: sourceData.lastCheckpoint ?? null,
+      lastError: sourceData.lastError ?? null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    
+    this.streamingSources.set(id, source);
+    return source;
+  }
+
+  async getStreamingSource(id: string): Promise<StreamingSource | undefined> {
+    return this.streamingSources.get(id);
+  }
+
+  async getStreamingSourcesByDataset(datasetId: string): Promise<StreamingSource[]> {
+    return Array.from(this.streamingSources.values()).filter(source => source.datasetId === datasetId);
+  }
+
+  async updateStreamingSource(id: string, updates: Partial<StreamingSource>): Promise<StreamingSource | undefined> {
+    const existing = this.streamingSources.get(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...updates, updatedAt: new Date() };
+    this.streamingSources.set(id, updated);
+    return updated;
+  }
+
+  async deleteStreamingSource(id: string): Promise<boolean> {
+    return this.streamingSources.delete(id);
+  }
+
+  async startStreamingSource(id: string): Promise<boolean> {
+    const source = this.streamingSources.get(id);
+    if (!source) return false;
+    const updated = { ...source, status: "active", updatedAt: new Date() };
+    this.streamingSources.set(id, updated);
+    return true;
+  }
+
+  async stopStreamingSource(id: string): Promise<boolean> {
+    const source = this.streamingSources.get(id);
+    if (!source) return false;
+    const updated = { ...source, status: "inactive", updatedAt: new Date() };
+    this.streamingSources.set(id, updated);
+    return true;
+  }
+
+  async getActiveStreamingSources(): Promise<StreamingSource[]> {
+    return Array.from(this.streamingSources.values()).filter(source => source.status === "active");
+  }
+
+  // Stream Chunks & Checkpoints
+  async createStreamChunk(chunkData: InsertStreamChunk): Promise<StreamChunk> {
+    const id = `chunk_${this.nextId++}`;
+    const chunk: StreamChunk = {
+      ...chunkData,
+      id,
+      checksum: chunkData.checksum ?? null,
+      createdAt: new Date(),
+    };
+    
+    this.streamChunks.set(id, chunk);
+    return chunk;
+  }
+
+  async getStreamChunks(datasetId: string, limit?: number): Promise<StreamChunk[]> {
+    const chunks = Array.from(this.streamChunks.values())
+      .filter(chunk => chunk.datasetId === datasetId)
+      .sort((a, b) => b.seq - a.seq);
+    return limit ? chunks.slice(0, limit) : chunks;
+  }
+
+  async getStreamChunksByTimeRange(datasetId: string, fromTs: Date, toTs: Date): Promise<StreamChunk[]> {
+    return Array.from(this.streamChunks.values())
+      .filter(chunk => 
+        chunk.datasetId === datasetId && 
+        chunk.fromTs >= fromTs && 
+        chunk.toTs <= toTs
+      )
+      .sort((a, b) => a.fromTs.getTime() - b.fromTs.getTime());
+  }
+
+  async createStreamCheckpoint(checkpointData: InsertStreamCheckpoint): Promise<StreamCheckpoint> {
+    const id = `checkpoint_${this.nextId++}`;
+    const checkpoint: StreamCheckpoint = {
+      ...checkpointData,
+      id,
+      ts: checkpointData.ts ?? new Date(),
+    };
+    
+    this.streamCheckpoints.set(id, checkpoint);
+    return checkpoint;
+  }
+
+  async getLatestCheckpoint(sourceId: string): Promise<StreamCheckpoint | undefined> {
+    const checkpoints = Array.from(this.streamCheckpoints.values())
+      .filter(checkpoint => checkpoint.sourceId === sourceId)
+      .sort((a, b) => {
+        const aTime = a.ts?.getTime() ?? 0;
+        const bTime = b.ts?.getTime() ?? 0;
+        return bTime - aTime;
+      });
+    return checkpoints[0];
+  }
+
+  async updateCheckpoint(sourceId: string, cursor: string): Promise<boolean> {
+    const latest = await this.getLatestCheckpoint(sourceId);
+    if (latest) {
+      const updated = { ...latest, cursor, ts: new Date() };
+      this.streamCheckpoints.set(latest.id, updated);
+      return true;
+    }
+    // Create new checkpoint if none exists
+    await this.createStreamCheckpoint({ sourceId, cursor });
+    return true;
+  }
+
+  // Scraping Jobs Management
+  async createScrapingJob(jobData: InsertScrapingJob): Promise<ScrapingJob> {
+    const id = `job_${this.nextId++}`;
+    const job: ScrapingJob = {
+      ...jobData,
+      id,
+      schedule: jobData.schedule ?? null,
+      extractionSpec: jobData.extractionSpec ?? null,
+      paginationSpec: jobData.paginationSpec ?? null,
+      loginSpec: jobData.loginSpec ?? null,
+      rateLimitRPM: jobData.rateLimitRPM ?? 60,
+      concurrency: jobData.concurrency ?? 1,
+      respectRobots: jobData.respectRobots ?? true,
+      status: jobData.status ?? "inactive",
+      lastRunAt: jobData.lastRunAt ?? null,
+      nextRunAt: jobData.nextRunAt ?? null,
+      lastError: jobData.lastError ?? null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    
+    this.scrapingJobs.set(id, job);
+    return job;
+  }
+
+  async getScrapingJob(id: string): Promise<ScrapingJob | undefined> {
+    return this.scrapingJobs.get(id);
+  }
+
+  async getScrapingJobsByDataset(datasetId: string): Promise<ScrapingJob[]> {
+    return Array.from(this.scrapingJobs.values()).filter(job => job.datasetId === datasetId);
+  }
+
+  async updateScrapingJob(id: string, updates: Partial<ScrapingJob>): Promise<ScrapingJob | undefined> {
+    const existing = this.scrapingJobs.get(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...updates, updatedAt: new Date() };
+    this.scrapingJobs.set(id, updated);
+    return updated;
+  }
+
+  async deleteScrapingJob(id: string): Promise<boolean> {
+    return this.scrapingJobs.delete(id);
+  }
+
+  async getJobsToRun(): Promise<ScrapingJob[]> {
+    const now = new Date();
+    return Array.from(this.scrapingJobs.values())
+      .filter(job => 
+        job.status === "active" && 
+        job.nextRunAt && 
+        job.nextRunAt <= now
+      );
+  }
+
+  async updateJobNextRun(id: string, nextRunAt: Date): Promise<boolean> {
+    const job = this.scrapingJobs.get(id);
+    if (!job) return false;
+    const updated = { ...job, nextRunAt, updatedAt: new Date() };
+    this.scrapingJobs.set(id, updated);
+    return true;
+  }
+
+  // Scraping Runs
+  async createScrapingRun(runData: InsertScrapingRun): Promise<ScrapingRun> {
+    const id = `run_${this.nextId++}`;
+    const run: ScrapingRun = {
+      ...runData,
+      id,
+      startedAt: runData.startedAt ?? new Date(),
+      finishedAt: runData.finishedAt ?? null,
+      status: runData.status ?? "running",
+      recordCount: runData.recordCount ?? null,
+      artifactId: runData.artifactId ?? null,
+      createdAt: new Date(),
+    };
+    
+    this.scrapingRuns.set(id, run);
+    return run;
+  }
+
+  async getScrapingRuns(jobId: string, limit?: number): Promise<ScrapingRun[]> {
+    const runs = Array.from(this.scrapingRuns.values())
+      .filter(run => run.jobId === jobId)
+      .sort((a, b) => {
+        const aTime = a.startedAt?.getTime() ?? 0;
+        const bTime = b.startedAt?.getTime() ?? 0;
+        return bTime - aTime;
+      });
+    return limit ? runs.slice(0, limit) : runs;
+  }
+
+  async updateScrapingRun(id: string, updates: Partial<ScrapingRun>): Promise<ScrapingRun | undefined> {
+    const existing = this.scrapingRuns.get(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...updates };
+    this.scrapingRuns.set(id, updated);
+    return updated;
+  }
+
+  async getLatestScrapingRun(jobId: string): Promise<ScrapingRun | undefined> {
+    const runs = await this.getScrapingRuns(jobId, 1);
+    return runs[0];
+  }
+
+  // Dataset Versions
+  async createDatasetVersion(versionData: InsertDatasetVersion): Promise<DatasetVersion> {
+    const id = `version_${this.nextId++}`;
+    const version: DatasetVersion = {
+      ...versionData,
+      id,
+      schema: versionData.schema ?? null,
+      createdAt: new Date(),
+    };
+    
+    this.datasetVersions.set(id, version);
+    return version;
+  }
+
+  async getDatasetVersions(datasetId: string): Promise<DatasetVersion[]> {
+    return Array.from(this.datasetVersions.values())
+      .filter(version => version.datasetId === datasetId)
+      .sort((a, b) => b.version - a.version);
+  }
+
+  async getLatestDatasetVersion(datasetId: string): Promise<DatasetVersion | undefined> {
+    const versions = await this.getDatasetVersions(datasetId);
+    return versions[0];
+  }
+
+  async deleteDatasetVersion(id: string): Promise<boolean> {
+    return this.datasetVersions.delete(id);
   }
 }
 
@@ -841,6 +1153,326 @@ export class DatabaseStorage implements IStorage {
     }
 
     return result;
+  }
+
+  // Streaming Sources Management
+  async createStreamingSource(sourceData: InsertStreamingSource): Promise<StreamingSource> {
+    const [source] = await db
+      .insert(streamingSources)
+      .values({
+        ...sourceData,
+        id: nanoid(),
+      })
+      .returning();
+    
+    return source;
+  }
+
+  async getStreamingSource(id: string): Promise<StreamingSource | undefined> {
+    const [source] = await db
+      .select()
+      .from(streamingSources)
+      .where(eq(streamingSources.id, id));
+    
+    return source || undefined;
+  }
+
+  async getStreamingSourcesByDataset(datasetId: string): Promise<StreamingSource[]> {
+    return await db
+      .select()
+      .from(streamingSources)
+      .where(eq(streamingSources.datasetId, datasetId));
+  }
+
+  async updateStreamingSource(id: string, updates: Partial<StreamingSource>): Promise<StreamingSource | undefined> {
+    const [source] = await db
+      .update(streamingSources)
+      .set({
+        ...updates,
+        updatedAt: new Date(),
+      })
+      .where(eq(streamingSources.id, id))
+      .returning();
+    
+    return source || undefined;
+  }
+
+  async deleteStreamingSource(id: string): Promise<boolean> {
+    const result = await db
+      .delete(streamingSources)
+      .where(eq(streamingSources.id, id));
+    
+    return (result.rowCount || 0) > 0;
+  }
+
+  async startStreamingSource(id: string): Promise<boolean> {
+    const result = await db
+      .update(streamingSources)
+      .set({
+        status: "active",
+        updatedAt: new Date(),
+      })
+      .where(eq(streamingSources.id, id));
+    
+    return (result.rowCount || 0) > 0;
+  }
+
+  async stopStreamingSource(id: string): Promise<boolean> {
+    const result = await db
+      .update(streamingSources)
+      .set({
+        status: "inactive",
+        updatedAt: new Date(),
+      })
+      .where(eq(streamingSources.id, id));
+    
+    return (result.rowCount || 0) > 0;
+  }
+
+  async getActiveStreamingSources(): Promise<StreamingSource[]> {
+    return await db
+      .select()
+      .from(streamingSources)
+      .where(eq(streamingSources.status, "active"));
+  }
+
+  // Stream Chunks & Checkpoints
+  async createStreamChunk(chunkData: InsertStreamChunk): Promise<StreamChunk> {
+    const [chunk] = await db
+      .insert(streamChunks)
+      .values({
+        ...chunkData,
+        id: nanoid(),
+      })
+      .returning();
+    
+    return chunk;
+  }
+
+  async getStreamChunks(datasetId: string, limit?: number): Promise<StreamChunk[]> {
+    const baseQuery = db
+      .select()
+      .from(streamChunks)
+      .where(eq(streamChunks.datasetId, datasetId))
+      .orderBy(streamChunks.seq);
+    
+    if (limit) {
+      return await baseQuery.limit(limit);
+    }
+    
+    return await baseQuery;
+  }
+
+  async getStreamChunksByTimeRange(datasetId: string, fromTs: Date, toTs: Date): Promise<StreamChunk[]> {
+    const { and, gte, lte } = await import("drizzle-orm");
+    return await db
+      .select()
+      .from(streamChunks)
+      .where(
+        and(
+          eq(streamChunks.datasetId, datasetId),
+          gte(streamChunks.fromTs, fromTs),
+          lte(streamChunks.toTs, toTs)
+        )
+      )
+      .orderBy(streamChunks.fromTs);
+  }
+
+  async createStreamCheckpoint(checkpointData: InsertStreamCheckpoint): Promise<StreamCheckpoint> {
+    const [checkpoint] = await db
+      .insert(streamCheckpoints)
+      .values({
+        ...checkpointData,
+        id: nanoid(),
+      })
+      .returning();
+    
+    return checkpoint;
+  }
+
+  async getLatestCheckpoint(sourceId: string): Promise<StreamCheckpoint | undefined> {
+    const { desc } = await import("drizzle-orm");
+    const [checkpoint] = await db
+      .select()
+      .from(streamCheckpoints)
+      .where(eq(streamCheckpoints.sourceId, sourceId))
+      .orderBy(desc(streamCheckpoints.ts))
+      .limit(1);
+    
+    return checkpoint || undefined;
+  }
+
+  async updateCheckpoint(sourceId: string, cursor: string): Promise<boolean> {
+    const latest = await this.getLatestCheckpoint(sourceId);
+    if (latest) {
+      const result = await db
+        .update(streamCheckpoints)
+        .set({
+          cursor,
+          ts: new Date(),
+        })
+        .where(eq(streamCheckpoints.id, latest.id));
+      
+      return (result.rowCount || 0) > 0;
+    }
+    
+    // Create new checkpoint if none exists
+    await this.createStreamCheckpoint({ sourceId, cursor });
+    return true;
+  }
+
+  // Scraping Jobs Management
+  async createScrapingJob(jobData: InsertScrapingJob): Promise<ScrapingJob> {
+    const [job] = await db
+      .insert(scrapingJobs)
+      .values({
+        ...jobData,
+        id: nanoid(),
+      })
+      .returning();
+    
+    return job;
+  }
+
+  async getScrapingJob(id: string): Promise<ScrapingJob | undefined> {
+    const [job] = await db
+      .select()
+      .from(scrapingJobs)
+      .where(eq(scrapingJobs.id, id));
+    
+    return job || undefined;
+  }
+
+  async getScrapingJobsByDataset(datasetId: string): Promise<ScrapingJob[]> {
+    return await db
+      .select()
+      .from(scrapingJobs)
+      .where(eq(scrapingJobs.datasetId, datasetId));
+  }
+
+  async updateScrapingJob(id: string, updates: Partial<ScrapingJob>): Promise<ScrapingJob | undefined> {
+    const [job] = await db
+      .update(scrapingJobs)
+      .set({
+        ...updates,
+        updatedAt: new Date(),
+      })
+      .where(eq(scrapingJobs.id, id))
+      .returning();
+    
+    return job || undefined;
+  }
+
+  async deleteScrapingJob(id: string): Promise<boolean> {
+    const result = await db
+      .delete(scrapingJobs)
+      .where(eq(scrapingJobs.id, id));
+    
+    return (result.rowCount || 0) > 0;
+  }
+
+  async getJobsToRun(): Promise<ScrapingJob[]> {
+    const { and, lte } = await import("drizzle-orm");
+    const now = new Date();
+    return await db
+      .select()
+      .from(scrapingJobs)
+      .where(
+        and(
+          eq(scrapingJobs.status, "active"),
+          lte(scrapingJobs.nextRunAt, now)
+        )
+      );
+  }
+
+  async updateJobNextRun(id: string, nextRunAt: Date): Promise<boolean> {
+    const result = await db
+      .update(scrapingJobs)
+      .set({
+        nextRunAt,
+        updatedAt: new Date(),
+      })
+      .where(eq(scrapingJobs.id, id));
+    
+    return (result.rowCount || 0) > 0;
+  }
+
+  // Scraping Runs
+  async createScrapingRun(runData: InsertScrapingRun): Promise<ScrapingRun> {
+    const [run] = await db
+      .insert(scrapingRuns)
+      .values({
+        ...runData,
+        id: nanoid(),
+      })
+      .returning();
+    
+    return run;
+  }
+
+  async getScrapingRuns(jobId: string, limit?: number): Promise<ScrapingRun[]> {
+    const { desc } = await import("drizzle-orm");
+    const baseQuery = db
+      .select()
+      .from(scrapingRuns)
+      .where(eq(scrapingRuns.jobId, jobId))
+      .orderBy(desc(scrapingRuns.startedAt));
+    
+    if (limit) {
+      return await baseQuery.limit(limit);
+    }
+    
+    return await baseQuery;
+  }
+
+  async updateScrapingRun(id: string, updates: Partial<ScrapingRun>): Promise<ScrapingRun | undefined> {
+    const [run] = await db
+      .update(scrapingRuns)
+      .set(updates)
+      .where(eq(scrapingRuns.id, id))
+      .returning();
+    
+    return run || undefined;
+  }
+
+  async getLatestScrapingRun(jobId: string): Promise<ScrapingRun | undefined> {
+    const runs = await this.getScrapingRuns(jobId, 1);
+    return runs[0];
+  }
+
+  // Dataset Versions
+  async createDatasetVersion(versionData: InsertDatasetVersion): Promise<DatasetVersion> {
+    const [version] = await db
+      .insert(datasetVersions)
+      .values({
+        ...versionData,
+        id: nanoid(),
+      })
+      .returning();
+    
+    return version;
+  }
+
+  async getDatasetVersions(datasetId: string): Promise<DatasetVersion[]> {
+    const { desc } = await import("drizzle-orm");
+    return await db
+      .select()
+      .from(datasetVersions)
+      .where(eq(datasetVersions.datasetId, datasetId))
+      .orderBy(desc(datasetVersions.version));
+  }
+
+  async getLatestDatasetVersion(datasetId: string): Promise<DatasetVersion | undefined> {
+    const versions = await this.getDatasetVersions(datasetId);
+    return versions[0];
+  }
+
+  async deleteDatasetVersion(id: string): Promise<boolean> {
+    const result = await db
+      .delete(datasetVersions)
+      .where(eq(datasetVersions.id, id));
+    
+    return (result.rowCount || 0) > 0;
   }
 }
 
