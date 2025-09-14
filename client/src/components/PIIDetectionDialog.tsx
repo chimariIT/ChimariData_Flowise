@@ -192,7 +192,11 @@ export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult }: P
               <Checkbox
                 id="anonymize"
                 checked={anonymizeData}
-                onCheckedChange={setAnonymizeData}
+                onCheckedChange={(checked) => {
+                  if (typeof checked === 'boolean') {
+                    setAnonymizeData(checked);
+                  }
+                }}
               />
               <Label htmlFor="anonymize" className="font-medium">
                 Anonymize sensitive data
