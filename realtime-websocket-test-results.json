@@ -1,0 +1,11 @@
+{
+  "timestamp": "2025-09-14T10:19:28.886Z",
+  "testType": "RealtimeWebSocket",
+  "summary": {
+    "passed": 17,
+    "failed": 0,
+    "successRate": 100
+  },
+  "errors": [],
+  "details": []
+}
