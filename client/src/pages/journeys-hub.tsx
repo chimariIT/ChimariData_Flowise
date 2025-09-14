@@ -13,7 +13,7 @@ import {
   BarChart3,
   Users
 } from "lucide-react";
-import AuthModal from "@/components/auth-modal";
+import { AuthModal } from "@/components/AuthModal";
 import { useState, useEffect } from "react";
 
 interface JourneysHubProps {
