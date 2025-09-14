@@ -237,6 +237,9 @@ export const datasets = pgTable("datasets", {
   piiAnalysis: jsonb("pii_analysis"),
   ingestionMetadata: jsonb("ingestion_metadata"), // Source-specific metadata
   status: varchar("status").default("ready"), // "processing", "ready", "error"
+  // New columns for streaming and web scraping capabilities
+  mode: varchar("mode").default("static"), // "static", "stream", "refreshable"
+  retentionDays: integer("retention_days"), // Data retention period in days (nullable)
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -342,6 +345,113 @@ export const guidedAnalysisOrders = pgTable("guided_analysis_orders", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Streaming and Web Scraping Tables
+
+// Configuration for real-time data streams
+export const streamingSources = pgTable("streaming_sources", {
+  id: varchar("id").primaryKey().notNull(),
+  datasetId: varchar("dataset_id").notNull(), // FK to datasets
+  protocol: varchar("protocol").notNull(), // "websocket", "sse", "poll"
+  endpoint: varchar("endpoint").notNull(),
+  headers: jsonb("headers"), // HTTP headers
+  params: jsonb("params"), // Query parameters or connection config
+  parseSpec: jsonb("parse_spec"), // How to parse incoming data
+  batchSize: integer("batch_size").default(1000),
+  flushMs: integer("flush_ms").default(5000), // Flush interval in milliseconds
+  maxBuffer: integer("max_buffer").default(100000), // Maximum buffer size
+  dedupeKeyPath: varchar("dedupe_key_path"), // JSONPath for deduplication key
+  timestampPath: varchar("timestamp_path"), // JSONPath for timestamp extraction
+  status: varchar("status").default("inactive"), // "active", "inactive", "error"
+  lastCheckpoint: varchar("last_checkpoint"), // Last processed position
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  datasetIdIdx: index("streaming_sources_dataset_id_idx").on(table.datasetId),
+  statusIdx: index("streaming_sources_status_idx").on(table.status),
+}));
+
+// Micro-batches of streaming data
+export const streamChunks = pgTable("stream_chunks", {
+  id: varchar("id").primaryKey().notNull(),
+  datasetId: varchar("dataset_id").notNull(), // FK to datasets
+  seq: integer("seq").notNull(), // Sequence number for ordering
+  fromTs: timestamp("from_ts").notNull(), // Start timestamp for this chunk
+  toTs: timestamp("to_ts").notNull(), // End timestamp for this chunk
+  recordCount: integer("record_count").notNull(),
+  storageUri: varchar("storage_uri").notNull(), // Location of chunk data
+  checksum: varchar("checksum"), // Data integrity verification
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  datasetIdIdx: index("stream_chunks_dataset_id_idx").on(table.datasetId),
+  seqIdx: index("stream_chunks_seq_idx").on(table.datasetId, table.seq),
+  timestampIdx: index("stream_chunks_timestamp_idx").on(table.fromTs, table.toTs),
+}));
+
+// Position tracking for streams
+export const streamCheckpoints = pgTable("stream_checkpoints", {
+  id: varchar("id").primaryKey().notNull(),
+  sourceId: varchar("source_id").notNull(), // FK to streaming_sources
+  cursor: text("cursor").notNull(), // Stream position cursor
+  ts: timestamp("ts").defaultNow(), // Checkpoint timestamp
+}, (table) => ({
+  sourceIdIdx: index("stream_checkpoints_source_id_idx").on(table.sourceId),
+}));
+
+// Web scraping job configurations
+export const scrapingJobs = pgTable("scraping_jobs", {
+  id: varchar("id").primaryKey().notNull(),
+  datasetId: varchar("dataset_id").notNull(), // FK to datasets
+  strategy: varchar("strategy").notNull(), // "http", "puppeteer"
+  targetUrl: varchar("target_url").notNull(),
+  schedule: varchar("schedule"), // Cron expression for scheduling
+  extractionSpec: jsonb("extraction_spec"), // Selectors and extraction rules
+  paginationSpec: jsonb("pagination_spec"), // Pagination handling
+  loginSpec: jsonb("login_spec"), // Authentication configuration
+  rateLimitRPM: integer("rate_limit_rpm").default(60), // Requests per minute
+  concurrency: integer("concurrency").default(1), // Concurrent requests
+  respectRobots: boolean("respect_robots").default(true), // Honor robots.txt
+  status: varchar("status").default("inactive"), // "active", "inactive", "running", "error"
+  lastRunAt: timestamp("last_run_at"),
+  nextRunAt: timestamp("next_run_at"),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  datasetIdIdx: index("scraping_jobs_dataset_id_idx").on(table.datasetId),
+  statusIdx: index("scraping_jobs_status_idx").on(table.status),
+  nextRunIdx: index("scraping_jobs_next_run_idx").on(table.nextRunAt),
+}));
+
+// Individual scraping execution records
+export const scrapingRuns = pgTable("scraping_runs", {
+  id: varchar("id").primaryKey().notNull(),
+  jobId: varchar("job_id").notNull(), // FK to scraping_jobs
+  startedAt: timestamp("started_at").defaultNow(),
+  finishedAt: timestamp("finished_at"),
+  status: varchar("status").default("running"), // "running", "completed", "failed"
+  recordCount: integer("record_count"),
+  artifactId: varchar("artifact_id"), // FK to project_artifacts if applicable
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  jobIdIdx: index("scraping_runs_job_id_idx").on(table.jobId),
+  statusIdx: index("scraping_runs_status_idx").on(table.status),
+}));
+
+// Snapshot versioning for datasets
+export const datasetVersions = pgTable("dataset_versions", {
+  id: varchar("id").primaryKey().notNull(),
+  datasetId: varchar("dataset_id").notNull(), // FK to datasets
+  version: integer("version").notNull(), // Version number (incremental)
+  recordCount: integer("record_count").notNull(),
+  schema: jsonb("schema"), // Schema snapshot at this version
+  snapshotUri: varchar("snapshot_uri").notNull(), // Location of versioned data
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  datasetIdIdx: index("dataset_versions_dataset_id_idx").on(table.datasetId),
+  versionIdx: index("dataset_versions_version_idx").on(table.datasetId, table.version),
+}));
+
 // New insert schemas for new tables
 export const insertDatasetSchema = createInsertSchema(datasets).omit({
   id: true,
@@ -387,6 +497,38 @@ export const insertGuidedAnalysisOrderSchema = createInsertSchema(guidedAnalysis
   updatedAt: true,
 });
 
+// Insert schemas for streaming and web scraping tables
+export const insertStreamingSourceSchema = createInsertSchema(streamingSources).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertStreamChunkSchema = createInsertSchema(streamChunks).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertStreamCheckpointSchema = createInsertSchema(streamCheckpoints).omit({
+  id: true,
+});
+
+export const insertScrapingJobSchema = createInsertSchema(scrapingJobs).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertScrapingRunSchema = createInsertSchema(scrapingRuns).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertDatasetVersionSchema = createInsertSchema(datasetVersions).omit({
+  id: true,
+  createdAt: true,
+});
+
 // Types for database operations
 export type User = typeof users.$inferSelect;
 export type UpsertUser = typeof users.$inferInsert;
@@ -402,3 +544,16 @@ export type EnterpriseInquiry = typeof enterpriseInquiries.$inferSelect;
 export type InsertEnterpriseInquiry = typeof insertEnterpriseInquirySchema._type;
 export type GuidedAnalysisOrder = typeof guidedAnalysisOrders.$inferSelect;
 export type InsertGuidedAnalysisOrder = typeof insertGuidedAnalysisOrderSchema._type;
+// Types for streaming and web scraping tables
+export type StreamingSource = typeof streamingSources.$inferSelect;
+export type InsertStreamingSource = typeof insertStreamingSourceSchema._type;
+export type StreamChunk = typeof streamChunks.$inferSelect;
+export type InsertStreamChunk = typeof insertStreamChunkSchema._type;
+export type StreamCheckpoint = typeof streamCheckpoints.$inferSelect;
+export type InsertStreamCheckpoint = typeof insertStreamCheckpointSchema._type;
+export type ScrapingJob = typeof scrapingJobs.$inferSelect;
+export type InsertScrapingJob = typeof insertScrapingJobSchema._type;
+export type ScrapingRun = typeof scrapingRuns.$inferSelect;
+export type InsertScrapingRun = typeof insertScrapingRunSchema._type;
+export type DatasetVersion = typeof datasetVersions.$inferSelect;
+export type InsertDatasetVersion = typeof insertDatasetVersionSchema._type;
