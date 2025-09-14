@@ -10,8 +10,7 @@ import { chimaridataAI } from "./chimaridata-ai";
 import { technicalAIAgent, TechnicalQuery } from "./technical-ai-agent";
 import { 
   insertDataProjectSchema, 
-  fileUploadResponseSchema,
-  featureRequestSchema 
+  fileUploadResponseSchema
 } from "@shared/schema";
 import { PIIAnalyzer } from './pii-analyzer';
 import { GoogleDriveService } from './google-drive-service';
@@ -32,6 +31,8 @@ import { PasswordResetService } from './password-reset-service';
 import bcrypt from 'bcrypt';
 import fs from 'fs/promises';
 import { VisualizationAPIService, PandasTransformationAPIService } from './visualization-api-service';
+import { sourceAdapterManager, SourceInput } from './source-adapters';
+import { datasets, projects, projectDatasets, projectArtifacts } from '@shared/schema';
 
 // Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
@@ -3815,6 +3816,422 @@ This link will expire in 24 hours.
     } catch (error) {
       console.error('Reset password error:', error);
       res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // =============================================================================
+  // DATASET-CENTRIC API ROUTES - New Architecture
+  // =============================================================================
+
+  // Dataset CRUD endpoints
+  app.get("/api/datasets", ensureAuthenticated, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      if (!userId) {
+        return res.status(401).json({ error: "User authentication required" });
+      }
+      
+      const { search } = req.query;
+      const userDatasets = await storage.searchDatasets(userId, search as string);
+      res.json({ success: true, datasets: userDatasets });
+    } catch (error: any) {
+      console.error('Failed to fetch datasets:', error);
+      res.status(500).json({ error: "Failed to fetch datasets" });
+    }
+  });
+
+  app.get("/api/datasets/:id", ensureAuthenticated, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const dataset = await storage.getDataset(req.params.id);
+      
+      if (!dataset) {
+        return res.status(404).json({ error: "Dataset not found" });
+      }
+      
+      // Verify user owns this dataset
+      if (dataset.ownerId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      
+      res.json({ success: true, dataset });
+    } catch (error: any) {
+      console.error('Failed to fetch dataset:', error);
+      res.status(500).json({ error: "Failed to fetch dataset" });
+    }
+  });
+
+  app.put("/api/datasets/:id", ensureAuthenticated, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const dataset = await storage.getDataset(req.params.id);
+      
+      if (!dataset) {
+        return res.status(404).json({ error: "Dataset not found" });
+      }
+      
+      if (dataset.ownerId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      
+      const { name, description } = req.body;
+      const updatedDataset = await storage.updateDataset(req.params.id, {
+        name: name || dataset.name,
+        description: description || dataset.description,
+        updatedAt: new Date()
+      });
+      
+      res.json({ success: true, dataset: updatedDataset });
+    } catch (error: any) {
+      console.error('Failed to update dataset:', error);
+      res.status(500).json({ error: "Failed to update dataset" });
+    }
+  });
+
+  app.delete("/api/datasets/:id", ensureAuthenticated, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const dataset = await storage.getDataset(req.params.id);
+      
+      if (!dataset) {
+        return res.status(404).json({ error: "Dataset not found" });
+      }
+      
+      if (dataset.ownerId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      
+      const deleted = await storage.deleteDataset(req.params.id);
+      if (deleted) {
+        res.json({ success: true, message: "Dataset deleted successfully" });
+      } else {
+        res.status(500).json({ error: "Failed to delete dataset" });
+      }
+    } catch (error: any) {
+      console.error('Failed to delete dataset:', error);
+      res.status(500).json({ error: "Failed to delete dataset" });
+    }
+  });
+
+  // Web data import endpoint using WebAdapter
+  app.post("/api/datasets/import/web", ensureAuthenticated, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { url, name, description, options } = req.body;
+      
+      if (!url) {
+        return res.status(400).json({ error: "URL is required" });
+      }
+      
+      if (!name || !name.trim()) {
+        return res.status(400).json({ error: "Dataset name is required" });
+      }
+      
+      console.log(`Importing web data from: ${url}`);
+      
+      // Use source adapter manager to process web data
+      const sourceInput: SourceInput = {
+        url,
+        options
+      };
+      
+      const result = await sourceAdapterManager.processInput(sourceInput);
+      
+      // Create dataset record
+      const dataset = await storage.createDataset({
+        ownerId: userId,
+        name: name.trim(),
+        description: description || `Web data imported from ${url}`,
+        sourceType: 'web',
+        sourceUri: url,
+        mimeType: result.sourceMetadata.mimeType,
+        fileSize: result.sourceMetadata.fileSize,
+        recordCount: result.recordCount,
+        schema: result.schema,
+        ingestionMetadata: result.sourceMetadata,
+        status: 'ready',
+        checksum: result.checksum
+      });
+      
+      res.json({ 
+        success: true, 
+        dataset,
+        preview: result.preview,
+        recordCount: result.recordCount
+      });
+      
+    } catch (error: any) {
+      console.error("Web import error:", error);
+      res.status(500).json({ 
+        success: false, 
+        error: error.message || "Failed to import web data" 
+      });
+    }
+  });
+
+  // Upload endpoint using source adapters - creates dataset first
+  app.post("/api/datasets/upload", ensureAuthenticated, upload.single('file'), async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      
+      if (!req.file) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "No file uploaded" 
+        });
+      }
+      
+      const { name, description, options } = req.body;
+      
+      if (!name || !name.trim()) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Dataset name is required" 
+        });
+      }
+      
+      console.log(`Processing uploaded file: ${req.file.originalname} (${req.file.size} bytes)`);
+      
+      // Parse options if provided
+      let parsedOptions = {};
+      if (options) {
+        try {
+          parsedOptions = JSON.parse(options);
+        } catch (e) {
+          console.warn('Failed to parse options:', e);
+        }
+      }
+      
+      // Use source adapter manager to process file
+      const sourceInput: SourceInput = {
+        buffer: req.file.buffer,
+        fileName: req.file.originalname,
+        mimeType: req.file.mimetype,
+        options: parsedOptions
+      };
+      
+      const result = await sourceAdapterManager.processInput(sourceInput);
+      
+      // Perform PII analysis
+      console.log('Starting PII analysis...');
+      const piiAnalysis = await PIIAnalyzer.analyzePII(result.preview || [], result.schema || {});
+      console.log('PII analysis completed:', piiAnalysis.detectedPII?.length || 0, 'PII fields detected');
+      
+      // If PII detected, return for user consent
+      if (piiAnalysis.detectedPII && piiAnalysis.detectedPII.length > 0) {
+        console.log('PII detected, requesting user consent');
+        
+        // Store temporary file info for PII decision
+        const tempFileId = `dataset_temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        
+        tempTrialData.set(tempFileId, {
+          sourceResult: result,
+          piiAnalysis,
+          userId,
+          datasetInfo: {
+            name: name.trim(),
+            description: description || `Dataset from ${req.file.originalname}`,
+            originalname: req.file.originalname,
+            size: req.file.size,
+            mimetype: req.file.mimetype
+          }
+        });
+        
+        return res.json({
+          success: true,
+          requiresPIIDecision: true,
+          piiResult: piiAnalysis,
+          tempFileId,
+          name: name.trim(),
+          recordCount: result.recordCount,
+          sampleData: result.preview,
+          message: 'PII detected - user consent required'
+        });
+      }
+      
+      // Create dataset record
+      const dataset = await storage.createDataset({
+        ownerId: userId,
+        name: name.trim(),
+        description: description || `Dataset from ${req.file.originalname}`,
+        sourceType: result.sourceMetadata.sourceType as any,
+        sourceUri: result.storageUri,
+        mimeType: result.sourceMetadata.mimeType,
+        fileSize: result.sourceMetadata.fileSize,
+        recordCount: result.recordCount,
+        schema: result.schema,
+        ingestionMetadata: result.sourceMetadata,
+        status: 'ready',
+        checksum: result.checksum,
+        piiDetected: false,
+        piiAnalysis: piiAnalysis
+      });
+      
+      console.log(`Dataset created successfully: ${dataset.id}`);
+      
+      res.json({ 
+        success: true, 
+        dataset,
+        preview: result.preview,
+        recordCount: result.recordCount,
+        piiAnalysis
+      });
+      
+    } catch (error: any) {
+      console.error("Dataset upload error:", error);
+      res.status(500).json({ 
+        success: false, 
+        error: error.message || "Failed to upload dataset" 
+      });
+    }
+  });
+
+  // Project-Dataset association endpoints
+  app.post("/api/projects/:projectId/datasets", ensureAuthenticated, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { projectId } = req.params;
+      const { datasetId, role, alias } = req.body;
+      
+      // Verify project ownership
+      const project = await storage.getProject(projectId);
+      if (!project || project.ownerId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      
+      // Verify dataset ownership
+      const dataset = await storage.getDataset(datasetId);
+      if (!dataset || dataset.ownerId !== userId) {
+        return res.status(403).json({ error: "Dataset access denied" });
+      }
+      
+      const association = await storage.addDatasetToProject(projectId, datasetId, role, alias);
+      
+      res.json({ success: true, association });
+    } catch (error: any) {
+      console.error('Failed to add dataset to project:', error);
+      res.status(500).json({ error: "Failed to add dataset to project" });
+    }
+  });
+
+  app.get("/api/projects/:projectId/datasets", ensureAuthenticated, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { projectId } = req.params;
+      
+      // Verify project ownership
+      const project = await storage.getProject(projectId);
+      if (!project || project.ownerId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      
+      const projectDatasets = await storage.getProjectDatasets(projectId);
+      
+      res.json({ success: true, datasets: projectDatasets });
+    } catch (error: any) {
+      console.error('Failed to fetch project datasets:', error);
+      res.status(500).json({ error: "Failed to fetch project datasets" });
+    }
+  });
+
+  app.delete("/api/projects/:projectId/datasets/:datasetId", ensureAuthenticated, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { projectId, datasetId } = req.params;
+      
+      // Verify project ownership
+      const project = await storage.getProject(projectId);
+      if (!project || project.ownerId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      
+      const removed = await storage.removeDatasetFromProject(projectId, datasetId);
+      
+      if (removed) {
+        res.json({ success: true, message: "Dataset removed from project" });
+      } else {
+        res.status(404).json({ error: "Association not found" });
+      }
+    } catch (error: any) {
+      console.error('Failed to remove dataset from project:', error);
+      res.status(500).json({ error: "Failed to remove dataset from project" });
+    }
+  });
+
+  // Project Artifact endpoints
+  app.get("/api/projects/:projectId/artifacts", ensureAuthenticated, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { projectId } = req.params;
+      const { type } = req.query;
+      
+      // Verify project ownership
+      const project = await storage.getProject(projectId);
+      if (!project || project.ownerId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      
+      const artifacts = await storage.getProjectArtifacts(projectId, type as string);
+      
+      res.json({ success: true, artifacts });
+    } catch (error: any) {
+      console.error('Failed to fetch project artifacts:', error);
+      res.status(500).json({ error: "Failed to fetch project artifacts" });
+    }
+  });
+
+  app.post("/api/projects/:projectId/artifacts", ensureAuthenticated, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { projectId } = req.params;
+      const { type, name, description, data, parentArtifactId } = req.body;
+      
+      // Verify project ownership
+      const project = await storage.getProject(projectId);
+      if (!project || project.ownerId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      
+      const artifact = await storage.createArtifact({
+        projectId,
+        type,
+        name,
+        description,
+        data,
+        parentArtifactId,
+        status: 'completed'
+      });
+      
+      res.json({ success: true, artifact });
+    } catch (error: any) {
+      console.error('Failed to create artifact:', error);
+      res.status(500).json({ error: "Failed to create artifact" });
+    }
+  });
+
+  app.get("/api/artifacts/:id/chain", ensureAuthenticated, async (req, res) => {
+    try {
+      const { id } = req.params;
+      
+      // Get the artifact to verify project ownership
+      const artifact = await storage.getArtifact(id);
+      if (!artifact) {
+        return res.status(404).json({ error: "Artifact not found" });
+      }
+      
+      // Verify project ownership
+      const userId = (req.user as any)?.id;
+      const project = await storage.getProject(artifact.projectId);
+      if (!project || project.ownerId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      
+      const chain = await storage.getArtifactChain(id);
+      
+      res.json({ success: true, chain });
+    } catch (error: any) {
+      console.error('Failed to fetch artifact chain:', error);
+      res.status(500).json({ error: "Failed to fetch artifact chain" });
     }
   });
 
