@@ -7,6 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { 
   Upload, 
   Database, 
@@ -20,16 +22,33 @@ import {
   Merge,
   BarChart3,
   Shield,
-  Loader2
+  Loader2,
+  Target,
+  FolderOpen,
+  ArrowRight,
+  Calendar,
+  Hash,
+  Type,
+  Lightbulb,
+  Brain,
+  TrendingUp,
+  Download,
+  Info,
+  Clock,
+  User,
+  Activity,
+  Zap
 } from "lucide-react";
 import { MultiSourceUpload } from "@/components/MultiSourceUpload";
 import SchemaEditor from "@/components/schema-editor";
 import DataTransformation from "@/components/data-transformation";
 import MultiFileJoiner from "@/components/multi-file-joiner";
+import { ProjectArtifactTimeline } from "@/components/ProjectArtifactTimeline";
 import { useProjectContext } from "@/hooks/useProjectContext";
 import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/lib/api";
-import { queryClient } from "@/lib/queryClient";
+import { queryClient, apiRequest } from "@/lib/queryClient";
+import { formatDistanceToNow, format } from "date-fns";
 
 interface DataStepProps {
   journeyType: string;
@@ -52,25 +71,128 @@ export default function DataStep({ journeyType, onNext, onPrevious, renderAsCont
   const { toast } = useToast();
   const { currentProject, setCurrentProject, refreshProject } = useProjectContext();
   
-  // Workflow state
-  const [currentWorkflowStep, setCurrentWorkflowStep] = useState<string>('upload');
+  // Journey and project state
+  const [currentJourney, setCurrentJourney] = useState<any>(null);
+  const [projectData, setProjectData] = useState<any>(null);
+  const [hasExistingProject, setHasExistingProject] = useState(false);
+  
+  // Workflow state - modified for artifact display vs upload
+  const [currentWorkflowStep, setCurrentWorkflowStep] = useState<string>('review');
   const [workflowData, setWorkflowData] = useState<any>({
-    uploadedFiles: [],
+    projectLoaded: false,
     schemaValidated: false,
     piiHandled: false,
     transformationsApplied: false,
-    joinedFiles: []
+    dataReady: false
   });
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // Data step workflow
-  const workflowSteps: WorkflowStep[] = [
+  // Load project and journey data on component mount
+  useEffect(() => {
+    loadProjectAndJourneyData();
+  }, []);
+
+  const loadProjectAndJourneyData = async () => {
+    try {
+      setIsProcessing(true);
+      
+      const projectId = localStorage.getItem('currentProjectId');
+      const journeyId = localStorage.getItem('currentJourneyId');
+      
+      if (projectId) {
+        // Fetch project data
+        const projectResponse = await apiClient.getProject(projectId);
+        if (projectResponse) {
+          setProjectData(projectResponse);
+          setCurrentProject(projectResponse);
+          setHasExistingProject(true);
+          
+          // Update workflow state based on project status
+          setWorkflowData({
+            projectLoaded: true,
+            schemaValidated: !!projectResponse.schema,
+            piiHandled: !!projectResponse.piiAnalysis,
+            transformationsApplied: !!projectResponse.transformations?.length,
+            dataReady: projectResponse.processed || false
+          });
+        }
+      }
+      
+      if (journeyId) {
+        // Fetch journey data
+        const response = await apiRequest("GET", `/api/journeys/${journeyId}`);
+        const data = await response.json();
+        if (data.success) {
+          setCurrentJourney(data.journey);
+        }
+      }
+      
+      // If no project found, show data upload option
+      if (!projectId) {
+        setCurrentWorkflowStep('upload');
+      }
+      
+    } catch (error) {
+      console.error('Failed to load project/journey data:', error);
+      toast({
+        title: "Loading Error",
+        description: "Could not load project data. You may need to upload data.",
+      });
+      setCurrentWorkflowStep('upload');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Data step workflow - adapted for artifact display
+  const workflowSteps: WorkflowStep[] = hasExistingProject ? [
+    {
+      id: 'review',
+      title: 'Project Overview',
+      description: 'Review project setup and goals',
+      icon: Eye,
+      completed: workflowData.projectLoaded,
+      active: currentWorkflowStep === 'review'
+    },
+    {
+      id: 'upload',
+      title: 'Data Upload',
+      description: 'Upload your analysis data',
+      icon: Upload,
+      completed: !!projectData?.fileName && projectData?.fileName !== "journey-generated-project.csv",
+      active: currentWorkflowStep === 'upload'
+    },
+    {
+      id: 'schema',
+      title: 'Schema Review',
+      description: 'Validate and define data structure',
+      icon: Database,
+      completed: workflowData.schemaValidated,
+      active: currentWorkflowStep === 'schema'
+    },
+    {
+      id: 'privacy',
+      title: 'Privacy Check',
+      description: 'Handle PII and sensitive data',
+      icon: Shield,
+      completed: workflowData.piiHandled,
+      active: currentWorkflowStep === 'privacy'
+    },
+    {
+      id: 'transform',
+      title: 'Data Preparation',
+      description: 'Clean and transform your data',
+      icon: Settings,
+      completed: workflowData.transformationsApplied,
+      active: currentWorkflowStep === 'transform'
+    }
+  ] : [
     {
       id: 'upload',
       title: 'Data Upload',
       description: 'Upload files from multiple sources',
       icon: Upload,
-      completed: workflowData.uploadedFiles.length > 0,
+      completed: false,
       active: currentWorkflowStep === 'upload'
     },
     {
@@ -114,6 +236,18 @@ export default function DataStep({ journeyType, onNext, onPrevious, renderAsCont
       const result = await apiClient.getProjects();
       return result;
     },
+  });
+
+  // Fetch project artifacts
+  const { data: projectArtifacts = [] } = useQuery({
+    queryKey: ['/api/projects', projectData?.id, 'artifacts'],
+    enabled: !!projectData?.id
+  });
+
+  // Fetch project datasets
+  const { data: projectDatasets = [] } = useQuery({
+    queryKey: ['/api/projects', projectData?.id, 'datasets'],
+    enabled: !!projectData?.id
   });
 
   // Upload completion handler
@@ -398,30 +532,263 @@ export default function DataStep({ journeyType, onNext, onPrevious, renderAsCont
               </Card>
             )}
 
+            {currentWorkflowStep === 'review' && projectData && (
+              <div className="space-y-6">
+                {/* Project File Information */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <FileText className="w-5 h-5 text-green-600" />
+                      Project Files & Data
+                    </CardTitle>
+                    <CardDescription>
+                      Review uploaded files and data processing status
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4">
+                      {/* Main project file */}
+                      <div className="border rounded-lg p-4 bg-gray-50">
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-3">
+                            <div className="p-2 bg-blue-100 rounded-lg">
+                              <FileText className="w-5 h-5 text-blue-600" />
+                            </div>
+                            <div>
+                              <h3 className="font-semibold">{projectData.fileName || 'Uploaded Data'}</h3>
+                              <p className="text-sm text-gray-600">
+                                {projectData.fileType?.toUpperCase()} • {formatFileSize(projectData.fileSize || 0)}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="flex items-center gap-2">
+                              {projectData.processed ? (
+                                <Badge className="bg-green-100 text-green-800">
+                                  <CheckCircle className="w-3 h-3 mr-1" />
+                                  Processed
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline">
+                                  <Clock className="w-3 h-3 mr-1" />
+                                  Processing
+                                </Badge>
+                              )}
+                            </div>
+                            {projectData.uploadedAt && (
+                              <p className="text-xs text-gray-500 mt-1">
+                                Uploaded {formatDistanceToNow(new Date(projectData.uploadedAt))} ago
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        
+                        {/* File metrics */}
+                        <div className="grid grid-cols-3 gap-4 pt-3 border-t">
+                          <div className="text-center">
+                            <div className="text-lg font-semibold text-gray-900">
+                              {projectData.recordCount?.toLocaleString() || 'N/A'}
+                            </div>
+                            <div className="text-sm text-gray-600">Records</div>
+                          </div>
+                          <div className="text-center">
+                            <div className="text-lg font-semibold text-gray-900">
+                              {projectData.schema ? Object.keys(projectData.schema).length : 'N/A'}
+                            </div>
+                            <div className="text-sm text-gray-600">Columns</div>
+                          </div>
+                          <div className="text-center">
+                            <div className="text-lg font-semibold text-gray-900">
+                              {projectData.dataSource || 'Upload'}
+                            </div>
+                            <div className="text-sm text-gray-600">Source</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Additional datasets if any */}
+                      {projectDatasets && projectDatasets.length > 0 && (
+                        <div className="space-y-3">
+                          <h4 className="font-medium text-gray-900">Additional Datasets</h4>
+                          {projectDatasets.map((dataset: any, index: number) => (
+                            <div key={index} className="border rounded-lg p-3 bg-white">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <Database className="w-4 h-4 text-blue-600" />
+                                  <span className="font-medium">{dataset.dataset?.name || `Dataset ${index + 1}`}</span>
+                                  <Badge variant="outline">{dataset.association?.role || 'Secondary'}</Badge>
+                                </div>
+                                <div className="text-sm text-gray-600">
+                                  {dataset.dataset?.recordCount?.toLocaleString() || 'N/A'} records
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Project Processing Timeline */}
+                {projectArtifacts && projectArtifacts.length > 0 && (
+                  <ProjectArtifactTimeline 
+                    projectId={projectData.id}
+                    onViewArtifact={(artifact) => console.log('View artifact:', artifact)}
+                    onExportArtifact={(artifact) => console.log('Export artifact:', artifact)}
+                  />
+                )}
+              </div>
+            )}
+
             {currentWorkflowStep === 'schema' && currentProject && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Database className="w-5 h-5 text-green-600" />
-                    Schema Review & Definition
-                  </CardTitle>
-                  <CardDescription>
-                    Review detected data structure and customize field definitions
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <SchemaEditor project={currentProject} />
-                  <div className="flex justify-end mt-6">
-                    <Button 
-                      onClick={handleSchemaValidated}
-                      data-testid="button-confirm-schema"
-                    >
-                      <CheckCircle className="w-4 h-4 mr-2" />
-                      Confirm Schema
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
+              <div className="space-y-6">
+                {/* Schema Overview */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Database className="w-5 h-5 text-green-600" />
+                      Data Schema Analysis
+                    </CardTitle>
+                    <CardDescription>
+                      Review detected data structure, column types, and data quality metrics
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {currentProject.schema ? (
+                      <div className="space-y-6">
+                        {/* Schema Summary */}
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-blue-50 rounded-lg">
+                          <div className="text-center">
+                            <div className="text-2xl font-bold text-blue-600">
+                              {Object.keys(currentProject.schema).length}
+                            </div>
+                            <div className="text-sm text-blue-700">Total Columns</div>
+                          </div>
+                          <div className="text-center">
+                            <div className="text-2xl font-bold text-green-600">
+                              {Object.values(currentProject.schema).filter((col: any) => col.type === 'number').length}
+                            </div>
+                            <div className="text-sm text-green-700">Numeric</div>
+                          </div>
+                          <div className="text-center">
+                            <div className="text-2xl font-bold text-purple-600">
+                              {Object.values(currentProject.schema).filter((col: any) => col.type === 'text').length}
+                            </div>
+                            <div className="text-sm text-purple-700">Text</div>
+                          </div>
+                          <div className="text-center">
+                            <div className="text-2xl font-bold text-orange-600">
+                              {Object.values(currentProject.schema).filter((col: any) => col.isPII).length}
+                            </div>
+                            <div className="text-sm text-orange-700">PII Detected</div>
+                          </div>
+                        </div>
+
+                        {/* Column Details */}
+                        <div className="space-y-4">
+                          <h4 className="font-semibold text-gray-900">Column Details</h4>
+                          <ScrollArea className="h-96">
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead>Column Name</TableHead>
+                                  <TableHead>Type</TableHead>
+                                  <TableHead>Sample Values</TableHead>
+                                  <TableHead>Flags</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {Object.entries(currentProject.schema).map(([columnName, columnInfo]: [string, any]) => {
+                                  const TypeIcon = getColumnTypeIcon(columnInfo.type);
+                                  return (
+                                    <TableRow key={columnName}>
+                                      <TableCell className="font-medium">
+                                        <div className="flex items-center gap-2">
+                                          <TypeIcon className="w-4 h-4 text-gray-500" />
+                                          {columnName}
+                                        </div>
+                                      </TableCell>
+                                      <TableCell>
+                                        <Badge className={getColumnTypeColor(columnInfo.type)}>
+                                          {columnInfo.type}
+                                        </Badge>
+                                      </TableCell>
+                                      <TableCell>
+                                        <div className="text-sm text-gray-600 max-w-xs truncate">
+                                          {columnInfo.sampleValues ? 
+                                            columnInfo.sampleValues.slice(0, 3).join(', ') : 
+                                            'No samples'
+                                          }
+                                          {columnInfo.sampleValues && columnInfo.sampleValues.length > 3 && ' ...'}
+                                        </div>
+                                      </TableCell>
+                                      <TableCell>
+                                        <div className="flex gap-1">
+                                          {columnInfo.isPII && (
+                                            <Badge variant="outline" className="text-red-600 border-red-200">
+                                              <Shield className="w-3 h-3 mr-1" />
+                                              PII
+                                            </Badge>
+                                          )}
+                                          {columnInfo.isUniqueIdentifier && (
+                                            <Badge variant="outline" className="text-blue-600 border-blue-200">
+                                              <Hash className="w-3 h-3 mr-1" />
+                                              ID
+                                            </Badge>
+                                          )}
+                                        </div>
+                                      </TableCell>
+                                    </TableRow>
+                                  );
+                                })}
+                              </TableBody>
+                            </Table>
+                          </ScrollArea>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-center py-8">
+                        <Database className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+                        <h3 className="text-lg font-semibold mb-2">No Schema Available</h3>
+                        <p className="text-gray-600 mb-4">
+                          Schema analysis is not available for this project yet.
+                        </p>
+                      </div>
+                    )}
+                    
+                    <div className="flex justify-between mt-6">
+                      <Button variant="outline" onClick={() => setCurrentWorkflowStep('review')}>
+                        <ChevronLeft className="w-4 h-4 mr-2" />
+                        Back to Review
+                      </Button>
+                      <Button 
+                        onClick={handleSchemaValidated}
+                        data-testid="button-confirm-schema"
+                      >
+                        <CheckCircle className="w-4 h-4 mr-2" />
+                        Confirm Schema
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Schema Editor for customization */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Settings className="w-5 h-5 text-blue-600" />
+                      Customize Schema
+                    </CardTitle>
+                    <CardDescription>
+                      Modify column types and add descriptions if needed
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <SchemaEditor project={currentProject} />
+                  </CardContent>
+                </Card>
+              </div>
             )}
 
             {currentWorkflowStep === 'privacy' && currentProject && (
@@ -709,3 +1076,6 @@ export default function DataStep({ journeyType, onNext, onPrevious, renderAsCont
     </div>
   );
 }
+
+// React import for createElement
+import React from 'react';

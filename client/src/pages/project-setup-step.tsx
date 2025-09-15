@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -17,9 +18,11 @@ import {
   Brain,
   Clock,
   Users,
-  Lightbulb
+  Lightbulb,
+  Loader2
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
 
 interface ProjectSetupStepProps {
   journeyType: string;
@@ -40,12 +43,50 @@ export default function ProjectSetupStep({ journeyType }: ProjectSetupStepProps)
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   
-  // Mock data - in real implementation, this would come from previous step or API
-  const [extractedGoals] = useState([
-    { goal: "Identify customer churn patterns", category: "Customer Analytics", priority: "high" },
-    { goal: "Predict high-risk customers", category: "Predictive Modeling", priority: "high" },
-    { goal: "Analyze usage behavior trends", category: "Behavioral Analysis", priority: "medium" }
-  ]);
+  // State for journey data and approaches
+  const [currentJourney, setCurrentJourney] = useState<any>(null);
+  const [extractedGoals, setExtractedGoals] = useState<any[]>([]);
+  const [businessQuestions, setBusinessQuestions] = useState<any[]>([]);
+  
+  // Get journey data from localStorage or API
+  useEffect(() => {
+    const journeyId = localStorage.getItem('currentJourneyId');
+    if (journeyId) {
+      // Fetch journey data from API
+      fetchJourneyData(journeyId);
+    } else {
+      // Fall back to mock data if no journey found
+      setExtractedGoals([
+        { goal: "Identify customer churn patterns", category: "Customer Analytics", priority: "high" },
+        { goal: "Predict high-risk customers", category: "Predictive Modeling", priority: "high" },
+        { goal: "Analyze usage behavior trends", category: "Behavioral Analysis", priority: "medium" }
+      ]);
+    }
+  }, []);
+
+  const fetchJourneyData = async (journeyId: string) => {
+    try {
+      const response = await apiRequest("GET", `/api/journeys/${journeyId}`);
+      const data = await response.json();
+      
+      if (data.success && data.journey) {
+        setCurrentJourney(data.journey);
+        if (data.journey.metadata?.extractedGoals) {
+          setExtractedGoals(data.journey.metadata.extractedGoals);
+        }
+        if (data.journey.metadata?.businessQuestions) {
+          setBusinessQuestions(data.journey.metadata.businessQuestions);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch journey data:', error);
+      toast({
+        title: "Warning",
+        description: "Could not load journey data. Using default configuration.",
+        variant: "destructive",
+      });
+    }
+  };
 
   const [suggestedApproaches] = useState<AnalysisApproach[]>([
     {
@@ -91,7 +132,35 @@ export default function ProjectSetupStep({ journeyType }: ProjectSetupStepProps)
     );
   };
 
-  const handleCreateProject = () => {
+  const createProjectMutation = useMutation({
+    mutationFn: async (projectData: any) => {
+      const response = await apiRequest("POST", "/api/projects/create-from-journey", projectData);
+      return response.json();
+    },
+    onSuccess: (data) => {
+      if (data.success) {
+        setProjectCreated(true);
+        
+        // Store project ID for use in subsequent steps
+        localStorage.setItem('currentProjectId', data.project.id);
+        
+        toast({
+          title: "Project Created",
+          description: "Your analysis project has been created with the selected approaches.",
+        });
+      }
+    },
+    onError: (error: any) => {
+      console.error('Project creation failed:', error);
+      toast({
+        title: "Project Creation Failed",
+        description: "Failed to create your project. Please try again or contact support.",
+        variant: "destructive",
+      });
+    }
+  });
+
+  const handleCreateProject = async () => {
     if (selectedApproaches.length === 0) {
       toast({
         title: "Select Analysis Approach",
@@ -101,13 +170,23 @@ export default function ProjectSetupStep({ journeyType }: ProjectSetupStepProps)
       return;
     }
 
-    // Mock project creation logic
-    setProjectCreated(true);
+    const journeyId = localStorage.getItem('currentJourneyId');
     
-    toast({
-      title: "Project Created",
-      description: "Your analysis project has been created with the selected approaches.",
-    });
+    // Create project with journey data and selected approaches
+    const projectData = {
+      journeyId: journeyId,
+      name: currentJourney?.title || `${journeyType.charAt(0).toUpperCase() + journeyType.slice(1)} Analysis Project`,
+      description: currentJourney?.description || "Analysis project created from journey workflow",
+      journeyType: journeyType,
+      extractedGoals: extractedGoals,
+      businessQuestions: businessQuestions,
+      selectedApproaches: selectedApproaches,
+      approachDetails: suggestedApproaches.filter(approach => 
+        selectedApproaches.includes(approach.id)
+      )
+    };
+
+    await createProjectMutation.mutateAsync(projectData);
   };
 
   const handleContinueToData = () => {

@@ -6754,5 +6754,223 @@ This link will expire in 24 hours.
     }
   });
 
+  // Journey creation and management routes
+  app.post("/api/journeys", ensureAuthenticated, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { 
+        journeyType, 
+        currentStep, 
+        title, 
+        description, 
+        extractedGoals, 
+        businessQuestions, 
+        selectedAnalysisPaths,
+        suggestedPlan,
+        context
+      } = req.body;
+
+      if (!title || !description || !journeyType) {
+        return res.status(400).json({
+          success: false,
+          error: "Missing required fields: title, description, journeyType"
+        });
+      }
+
+      // Create journey in storage
+      const journeyData = {
+        userId,
+        journeyType,
+        currentStep: currentStep || 'project-setup',
+        title,
+        description,
+        goals: extractedGoals?.map((g: any) => g.goal) || [],
+        questions: businessQuestions?.map((q: any) => q.question) || [],
+        suggestedPlan: suggestedPlan || {},
+        metadata: {
+          extractedGoals,
+          businessQuestions,
+          selectedAnalysisPaths,
+          context
+        }
+      };
+
+      const journey = await storage.createJourney(journeyData);
+
+      // Also create step progress tracking
+      await storage.createJourneyStepProgress({
+        journeyId: journey.id,
+        step: currentStep || 'project-setup',
+        status: 'in_progress',
+        stepData: {}
+      });
+
+      res.json({
+        success: true,
+        journey,
+        message: "Journey created successfully"
+      });
+
+    } catch (error: any) {
+      console.error('Journey creation error:', error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to create journey"
+      });
+    }
+  });
+
+  app.get("/api/journeys/:journeyId", ensureAuthenticated, async (req, res) => {
+    try {
+      const { journeyId } = req.params;
+      const userId = (req.user as any)?.id;
+
+      const journey = await storage.getJourney(journeyId);
+      if (!journey) {
+        return res.status(404).json({
+          success: false,
+          error: "Journey not found"
+        });
+      }
+
+      // Verify ownership
+      if (journey.userId !== userId) {
+        return res.status(403).json({
+          success: false,
+          error: "Access denied"
+        });
+      }
+
+      res.json({
+        success: true,
+        journey
+      });
+
+    } catch (error: any) {
+      console.error('Get journey error:', error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to get journey"
+      });
+    }
+  });
+
+  app.put("/api/journeys/:journeyId", ensureAuthenticated, async (req, res) => {
+    try {
+      const { journeyId } = req.params;
+      const userId = (req.user as any)?.id;
+      const updates = req.body;
+
+      const journey = await storage.getJourney(journeyId);
+      if (!journey) {
+        return res.status(404).json({
+          success: false,
+          error: "Journey not found"
+        });
+      }
+
+      // Verify ownership
+      if (journey.userId !== userId) {
+        return res.status(403).json({
+          success: false,
+          error: "Access denied"
+        });
+      }
+
+      const updatedJourney = await storage.updateJourney(journeyId, updates);
+
+      res.json({
+        success: true,
+        journey: updatedJourney
+      });
+
+    } catch (error: any) {
+      console.error('Update journey error:', error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to update journey"
+      });
+    }
+  });
+
+  // Create project from journey data
+  app.post("/api/projects/create-from-journey", ensureAuthenticated, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { 
+        journeyId, 
+        name, 
+        description, 
+        journeyType,
+        extractedGoals,
+        businessQuestions,
+        selectedApproaches,
+        approachDetails
+      } = req.body;
+
+      if (!name || !description) {
+        return res.status(400).json({
+          success: false,
+          error: "Missing required fields: name, description"
+        });
+      }
+
+      // Verify journey ownership if journeyId provided
+      if (journeyId) {
+        const journey = await storage.getJourney(journeyId);
+        if (!journey || journey.userId !== userId) {
+          return res.status(403).json({
+            success: false,
+            error: "Invalid journey or access denied"
+          });
+        }
+      }
+
+      // Create project with journey data
+      const projectData = {
+        userId,
+        name,
+        description,
+        fileName: "journey-generated-project.csv", // Placeholder until data upload
+        fileSize: 0,
+        fileType: "journey",
+        isTrial: false,
+        metadata: {
+          journeyId,
+          journeyType,
+          extractedGoals,
+          businessQuestions,
+          selectedApproaches,
+          approachDetails,
+          createdFromJourney: true
+        },
+        processed: false
+      };
+
+      const project = await storage.createProject(projectData);
+
+      // Update journey to link to project
+      if (journeyId) {
+        await storage.updateJourney(journeyId, {
+          projectId: project.id,
+          currentStep: 'data'
+        });
+      }
+
+      res.json({
+        success: true,
+        project,
+        message: "Project created successfully from journey"
+      });
+
+    } catch (error: any) {
+      console.error('Create project from journey error:', error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to create project from journey"
+      });
+    }
+  });
+
   return server;
 }
