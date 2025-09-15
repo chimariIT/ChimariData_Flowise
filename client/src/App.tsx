@@ -144,11 +144,35 @@ export default function App() {
               />
             )}
           </Route>
+          <Route path="/journeys/:type/project-setup">
+            {(params) => (
+              <JourneyWizard 
+                journeyType={params.type} 
+                currentStage="project-setup"
+              />
+            )}
+          </Route>
           <Route path="/journeys/:type/execute">
             {(params) => (
               <JourneyWizard 
                 journeyType={params.type} 
                 currentStage="execute"
+              />
+            )}
+          </Route>
+          <Route path="/journeys/:type/pricing">
+            {(params) => (
+              <JourneyWizard 
+                journeyType={params.type} 
+                currentStage="pricing"
+              />
+            )}
+          </Route>
+          <Route path="/journeys/:type/results">
+            {(params) => (
+              <JourneyWizard 
+                journeyType={params.type} 
+                currentStage="results"
               />
             )}
           </Route>

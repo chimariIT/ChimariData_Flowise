@@ -14,7 +14,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { PricingBanner } from "@/components/PricingBanner";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { 
@@ -81,7 +80,6 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
   const [businessQuestions, setBusinessQuestions] = useState<BusinessQuestion[]>([]);
   const [suggestedPaths, setSuggestedPaths] = useState<AnalysisPath[]>([]);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
-  const [selectedFeatures, setSelectedFeatures] = useState<string[]>(["preparation"]);
   const [aiProvider, setAiProvider] = useState<string>("");
   const [isExtracting, setIsExtracting] = useState(false);
 
@@ -109,8 +107,7 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
         setSuggestedPaths(data.suggestedAnalysisPaths);
         setAiProvider(data.aiProvider);
         
-        // Auto-select recommended features
-        setSelectedFeatures(data.recommendedFeatures);
+        // Note: Features will be determined later in the pricing step
         
         // Auto-select high-confidence analysis paths
         const highConfidencePaths = data.suggestedAnalysisPaths
@@ -163,14 +160,6 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
     );
   };
 
-  const handleFeatureToggle = (feature: string) => {
-    setSelectedFeatures(prev => 
-      prev.includes(feature) 
-        ? prev.filter(f => f !== feature)
-        : [...prev, feature]
-    );
-  };
-
   const handleProceedToDataStep = () => {
     if (selectedPaths.length === 0) {
       toast({
@@ -208,7 +197,7 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
     });
 
     // Navigate to next step
-    setLocation(`/journeys/${journeyType}/data`);
+    setLocation(`/journeys/${journeyType}/project-setup`);
   };
 
   const getComplexityColor = (complexity: string) => {
@@ -529,58 +518,31 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
           </Card>
         )}
 
-        {/* Feature Selection */}
+        {/* Next Steps Information */}
         {selectedPaths.length > 0 && (
-          <Card data-testid="card-feature-selection">
+          <Card className="bg-green-50 border-green-200" data-testid="card-next-steps">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Zap className="w-5 h-5 text-yellow-600" />
-                Features & Services
+              <CardTitle className="flex items-center gap-2 text-green-900">
+                <CheckCircle className="w-5 h-5" />
+                Analysis Plan Ready
               </CardTitle>
-              <CardDescription>
-                Select the features you need for your analysis
+              <CardDescription className="text-green-700">
+                Your analysis goals and approach have been defined. Features and pricing will be determined in later steps based on your data requirements.
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-2 gap-4">
-                {[
-                  { id: 'preparation', label: 'Data Preparation', description: 'Clean and prepare your data' },
-                  { id: 'data_processing', label: 'Advanced Processing', description: 'Complex data transformations' },
-                  { id: 'analysis', label: 'Statistical Analysis', description: 'Comprehensive analysis' },
-                  { id: 'visualization', label: 'Visualizations', description: 'Professional charts and graphs' },
-                  { id: 'ai_insights', label: 'AI Insights', description: 'AI-powered analysis' },
-                ].map((feature) => (
-                  <div key={feature.id} className="flex items-start space-x-3">
-                    <Checkbox
-                      id={feature.id}
-                      checked={selectedFeatures.includes(feature.id)}
-                      onCheckedChange={() => handleFeatureToggle(feature.id)}
-                      data-testid={`checkbox-feature-${feature.id}`}
-                    />
-                    <div className="flex-1">
-                      <Label htmlFor={feature.id} className="font-medium cursor-pointer">
-                        {feature.label}
-                      </Label>
-                      <p className="text-sm text-gray-500">{feature.description}</p>
-                    </div>
-                  </div>
-                ))}
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-green-900">Selected Analysis Approaches:</p>
+                <div className="flex flex-wrap gap-2">
+                  {selectedPaths.map((path) => (
+                    <Badge key={path} variant="secondary" className="bg-green-100 text-green-800">
+                      {path}
+                    </Badge>
+                  ))}
+                </div>
               </div>
             </CardContent>
           </Card>
-        )}
-
-        {/* Pricing Display */}
-        {selectedPaths.length > 0 && (
-          <PricingBanner
-            journeyType={journeyType as 'guided' | 'business' | 'technical'}
-            features={selectedFeatures}
-            analysisTypes={selectedPaths}
-            dataSizeMB={10} // Default estimate
-            complexityLevel="intermediate"
-            expectedQuestions={businessQuestions.length || 3}
-            data-testid="pricing-banner"
-          />
         )}
 
         {/* Action Buttons */}
@@ -591,7 +553,7 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
             size="lg"
             data-testid="button-proceed-data"
           >
-            Continue to Data Preparation
+            Continue to Project Setup
             <ArrowRight className="w-4 h-4 ml-2" />
           </Button>
         </div>

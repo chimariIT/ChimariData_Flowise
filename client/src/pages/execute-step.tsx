@@ -35,15 +35,11 @@ import {
   Sparkles,
   Target,
   Eye,
-  DollarSign,
   Activity
 } from "lucide-react";
 import GuidedAnalysisWizard from "@/components/GuidedAnalysisWizard";
 import DataAnalysis from "@/components/data-analysis";
 import AdvancedAnalysisModal from "@/components/advanced-analysis-modal";
-import { PricingBanner } from "@/components/PricingBanner";
-import { CostChip } from "@/components/CostChip";
-import { CostConfirmationModal } from "@/components/cost-confirmation-modal";
 import { useProjectContext } from "@/hooks/useProjectContext";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -78,7 +74,6 @@ interface AnalysisOption {
   complexity: "basic" | "intermediate" | "advanced";
   estimatedTime: string;
   features: string[];
-  cost: number;
   recommended?: boolean;
 }
 
@@ -107,10 +102,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
   const [artifacts, setArtifacts] = useState<any[]>([]);
   const [showAdvancedConfig, setShowAdvancedConfig] = useState(false);
   const [showGuidedWizard, setShowGuidedWizard] = useState(false);
-  const [estimatedCost, setEstimatedCost] = useState<number>(0);
   const [currentExecutionStep, setCurrentExecutionStep] = useState<string>("");
-  const [showCostConfirmation, setShowCostConfirmation] = useState(false);
-  const [pendingAnalysisConfig, setPendingAnalysisConfig] = useState<any>(null);
 
   // Form setup
   const form = useForm<ExecuteFormData>({
@@ -140,7 +132,6 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         complexity: "basic",
         estimatedTime: "5-15 minutes",
         features: ["AI Insights", "Business Questions", "Automated Interpretation"],
-        cost: 5,
         recommended: journeyType === "guided" || journeyType === "business"
       },
       {
@@ -150,8 +141,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         icon: Calculator,
         complexity: "intermediate",
         estimatedTime: "10-30 minutes",
-        features: ["Descriptive Statistics", "Correlation Analysis", "Hypothesis Testing", "ANOVA"],
-        cost: 8
+        features: ["Descriptive Statistics", "Correlation Analysis", "Hypothesis Testing", "ANOVA"]
       },
       {
         id: "machine_learning",
@@ -160,8 +150,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         icon: Zap,
         complexity: "advanced",
         estimatedTime: "15-45 minutes",
-        features: ["Predictive Models", "Classification", "Clustering", "Feature Importance"],
-        cost: 15
+        features: ["Predictive Models", "Classification", "Clustering", "Feature Importance"]
       },
       {
         id: "agentic",
@@ -171,7 +160,6 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         complexity: "basic",
         estimatedTime: "20-60 minutes",
         features: ["Autonomous Analysis", "Executive Summary", "Action Recommendations"],
-        cost: 20,
         recommended: journeyType === "business"
       },
       {
@@ -181,8 +169,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         icon: Settings,
         complexity: "advanced",
         estimatedTime: "Variable",
-        features: ["Custom Configuration", "Advanced Parameters", "Multiple Methods"],
-        cost: 12
+        features: ["Custom Configuration", "Advanced Parameters", "Multiple Methods"]
       }
     ];
 
@@ -295,34 +282,11 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     }
   });
 
-  // Cost estimation
-  const calculateCost = (analysisType: string, complexity: string) => {
+  // Analysis validation
+  const validateAnalysisConfig = (analysisType: string, complexity: string) => {
     const option = analysisOptions.find(opt => opt.id === analysisType);
-    if (!option) return 0;
-
-    let baseCost = option.cost;
-    
-    // Complexity multiplier
-    const complexityMultiplier: Record<string, number> = {
-      basic: 1,
-      intermediate: 1.5,
-      advanced: 2
-    };
-    const multiplier = complexityMultiplier[complexity] || 1;
-
-    // Project size multiplier
-    const recordCount = currentProject?.recordCount || 0;
-    const sizeMultiplier = recordCount > 10000 ? 1.5 : recordCount > 1000 ? 1.2 : 1;
-
-    return Math.round(baseCost * multiplier * sizeMultiplier);
+    return !!option && !!complexity;
   };
-
-  // Update cost when selection changes
-  useEffect(() => {
-    const analysisType = form.watch("analysisType");
-    const complexity = form.watch("complexity");
-    setEstimatedCost(calculateCost(analysisType, complexity));
-  }, [form.watch("analysisType"), form.watch("complexity")]);
 
   // Handlers
   const handleAnalysisTypeSelect = (analysisType: string) => {
@@ -358,17 +322,10 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         target: formData.targetVariable,
         selected: formData.selectedVariables
       },
-      estimatedCost: estimatedCost
+      analysisValidated: true
     };
 
-    // Store config and show cost confirmation modal for expensive operations
-    if (estimatedCost > 500) { // Show confirmation for operations over $5.00
-      setPendingAnalysisConfig(config);
-      setShowCostConfirmation(true);
-      return;
-    }
-
-    // Proceed directly with execution for low-cost operations
+    // Proceed with analysis execution
     await executeAnalysisWithConfig(config);
   };
 
@@ -573,10 +530,6 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
                                 <Clock className="w-3 h-3" />
                                 {option.estimatedTime}
                               </span>
-                              <Badge variant="outline" className="bg-green-50 text-green-700">
-                                <DollarSign className="w-3 h-3 mr-1" />
-                                ${option.cost}
-                              </Badge>
                             </div>
                           </div>
                         </div>
@@ -716,26 +669,6 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
                       </div>
                     </div>
 
-                    {/* Cost Estimation */}
-                    <div className="bg-gray-50 p-4 rounded-lg">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <h4 className="font-medium text-gray-900">Estimated Cost</h4>
-                          <p className="text-sm text-gray-600">
-                            Based on complexity and data size
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <Badge className="bg-blue-100 text-blue-800 text-lg px-3 py-1">
-                          <DollarSign className="w-4 h-4 mr-1" />
-                          ${estimatedCost}
-                        </Badge>
-                          <p className="text-xs text-gray-500 mt-1">
-                            ~{Math.ceil(estimatedCost / 2)} credits
-                          </p>
-                        </div>
-                      </div>
-                    </div>
 
                     {/* Execute Button */}
                     <div className="flex justify-end">
@@ -955,31 +888,6 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         />
       )}
 
-      {/* Cost Confirmation Modal */}
-      <CostConfirmationModal
-        isOpen={showCostConfirmation}
-        onClose={() => {
-          setShowCostConfirmation(false);
-          setPendingAnalysisConfig(null);
-        }}
-        onConfirm={async () => {
-          if (pendingAnalysisConfig) {
-            await executeAnalysisWithConfig(pendingAnalysisConfig);
-            setShowCostConfirmation(false);
-            setPendingAnalysisConfig(null);
-          }
-        }}
-        title="Confirm Analysis Execution"
-        description="Please review the cost and details before proceeding with this analysis."
-        operation="Analysis Execution"
-        estimatedCost={estimatedCost}
-        features={selectedAnalysisType ? analysisOptions.find(opt => opt.id === selectedAnalysisType)?.features || [] : []}
-        journeyType={journeyType as 'guided' | 'business' | 'technical'}
-        estimatedDuration={selectedAnalysisType ? analysisOptions.find(opt => opt.id === selectedAnalysisType)?.estimatedTime : undefined}
-        requiresPayment={estimatedCost > 0}
-        upgradeRequired={estimatedCost > 1000}
-        data-testid="cost-confirmation-modal-execute"
-      />
     </div>
   );
 }

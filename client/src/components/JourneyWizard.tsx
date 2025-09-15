@@ -4,10 +4,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { 
   ChevronLeft, 
   ChevronRight, 
@@ -17,11 +13,12 @@ import {
   CheckCircle,
   Circle,
   Settings,
-  DollarSign
+  DollarSign,
+  FolderOpen,
+  Receipt
 } from "lucide-react";
-import { PricingBanner } from "./PricingBanner";
-import { CostChip } from "./CostChip";
 import PrepareStep from "@/pages/prepare-step";
+import ProjectSetupStep from "@/pages/project-setup-step";
 import DataStep from "@/pages/data-step";
 import ExecuteStep from "@/pages/execute-step";
 
@@ -42,13 +39,6 @@ interface JourneyWizardProps {
 export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps) {
   const [, setLocation] = useLocation();
   
-  // Pricing configuration state
-  const [selectedFeatures, setSelectedFeatures] = useState<string[]>(['preparation']);
-  const [dataSizeMB, setDataSizeMB] = useState(5);
-  const [complexityLevel, setComplexityLevel] = useState<'basic' | 'intermediate' | 'advanced'>('basic');
-  const [expectedQuestions, setExpectedQuestions] = useState(3);
-  const [showPricingConfig, setShowPricingConfig] = useState(false);
-  
   const steps: JourneyStep[] = [
     {
       id: 'prepare',
@@ -56,6 +46,14 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
       description: 'Define goals and analysis questions with AI assistance',
       route: `/journeys/${journeyType}/prepare`,
       icon: Target,
+      completed: false
+    },
+    {
+      id: 'project-setup',
+      title: 'Project Setup',
+      description: 'Create project and confirm analysis approach',
+      route: `/journeys/${journeyType}/project-setup`,
+      icon: FolderOpen,
       completed: false
     },
     {
@@ -68,10 +66,26 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
     },
     {
       id: 'execute',
-      title: 'Analysis Execution',
-      description: 'Run analysis and generate insights with artifacts',
+      title: 'Analysis Configuration',
+      description: 'Configure analysis parameters and execute',
       route: `/journeys/${journeyType}/execute`,
       icon: BarChart3,
+      completed: false
+    },
+    {
+      id: 'pricing',
+      title: 'Pricing & Payment',
+      description: 'Review costs and complete payment',
+      route: `/journeys/${journeyType}/pricing`,
+      icon: DollarSign,
+      completed: false
+    },
+    {
+      id: 'results',
+      title: 'Results & Artifacts',
+      description: 'View insights and download artifacts',
+      route: `/journeys/${journeyType}/results`,
+      icon: Receipt,
       completed: false
     }
   ];
@@ -164,130 +178,23 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
             <Progress value={progress} className="h-2" data-testid="progress-journey" />
           </div>
 
-          {/* Pricing Display */}
-          <div className="mb-6 flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <CostChip
-                journeyType={journeyType as 'guided' | 'business' | 'technical'}
-                features={selectedFeatures}
-                dataSizeMB={dataSizeMB}
-                complexityLevel={complexityLevel}
-                expectedQuestions={expectedQuestions}
-                size="lg"
-                data-testid="cost-chip-header"
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowPricingConfig(!showPricingConfig)}
-                data-testid="button-configure-pricing"
-              >
-                <Settings className="w-4 h-4 mr-2" />
-                {showPricingConfig ? 'Hide' : 'Configure'} Pricing
-              </Button>
+          {/* Workflow Progress Info */}
+          <div className="mb-6">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Target className="w-4 h-4 text-blue-600" />
+                <span className="text-sm font-medium text-blue-900">Current Focus</span>
+              </div>
+              <p className="text-sm text-blue-700">
+                {currentStage === 'prepare' && 'Define your analysis goals and requirements without worrying about costs'}
+                {currentStage === 'project-setup' && 'Create your project and confirm the analysis approach'}
+                {currentStage === 'data' && 'Upload and prepare your data for analysis'}
+                {currentStage === 'execute' && 'Configure analysis parameters and run the analysis'}
+                {currentStage === 'pricing' && 'Review final costs based on your completed analysis requirements'}
+                {currentStage === 'results' && 'View your results and download artifacts'}
+              </p>
             </div>
           </div>
-
-          {/* Pricing Configuration Panel */}
-          {showPricingConfig && (
-            <Card className="mb-6 border-blue-200" data-testid="card-pricing-config">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <DollarSign className="w-5 h-5" />
-                  Pricing Configuration
-                </CardTitle>
-                <CardDescription>
-                  Configure your analysis requirements to see accurate pricing
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                {/* Feature Selection */}
-                <div className="space-y-3">
-                  <Label className="text-sm font-medium">Features</Label>
-                  <div className="grid grid-cols-2 gap-3">
-                    {[
-                      { id: 'preparation', label: 'Data Preparation', description: 'Clean and prepare your data' },
-                      { id: 'data_processing', label: 'Data Processing', description: 'Advanced data transformations' },
-                      { id: 'analysis', label: 'Statistical Analysis', description: 'Comprehensive analysis' },
-                      { id: 'visualization', label: 'Visualizations', description: 'Professional charts and graphs' },
-                      { id: 'ai_insights', label: 'AI Insights', description: 'AI-powered analysis' },
-                    ].map((feature) => (
-                      <div key={feature.id} className="flex items-start space-x-2">
-                        <Checkbox
-                          id={feature.id}
-                          checked={selectedFeatures.includes(feature.id)}
-                          onCheckedChange={(checked) => {
-                            if (checked) {
-                              setSelectedFeatures([...selectedFeatures, feature.id]);
-                            } else {
-                              setSelectedFeatures(selectedFeatures.filter(f => f !== feature.id));
-                            }
-                          }}
-                          data-testid={`checkbox-feature-${feature.id}`}
-                        />
-                        <div className="grid gap-1.5 leading-none">
-                          <label
-                            htmlFor={feature.id}
-                            className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
-                          >
-                            {feature.label}
-                          </label>
-                          <p className="text-xs text-muted-foreground">
-                            {feature.description}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Data Size */}
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="data-size">Data Size (MB)</Label>
-                    <Input
-                      id="data-size"
-                      type="number"
-                      min="0"
-                      max="1000"
-                      value={dataSizeMB}
-                      onChange={(e) => setDataSizeMB(Number(e.target.value))}
-                      data-testid="input-data-size"
-                    />
-                  </div>
-
-                  {/* Complexity Level */}
-                  <div className="space-y-2">
-                    <Label htmlFor="complexity">Complexity</Label>
-                    <Select value={complexityLevel} onValueChange={(value: 'basic' | 'intermediate' | 'advanced') => setComplexityLevel(value)}>
-                      <SelectTrigger data-testid="select-complexity">
-                        <SelectValue placeholder="Select complexity" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="basic">Basic</SelectItem>
-                        <SelectItem value="intermediate">Intermediate</SelectItem>
-                        <SelectItem value="advanced">Advanced</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  {/* Expected Questions */}
-                  <div className="space-y-2">
-                    <Label htmlFor="questions">Analysis Questions</Label>
-                    <Input
-                      id="questions"
-                      type="number"
-                      min="1"
-                      max="20"
-                      value={expectedQuestions}
-                      onChange={(e) => setExpectedQuestions(Number(e.target.value))}
-                      data-testid="input-questions"
-                    />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          )}
 
           {/* Steps Navigation */}
           <div className="flex items-center space-x-4">
@@ -356,21 +263,22 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
 
       {/* Main Content Area */}
       <div className="max-w-4xl mx-auto px-4 py-8">
-        {/* Pricing Banner */}
-        <div className="mb-6">
-          <PricingBanner
-            journeyType={journeyType as 'guided' | 'business' | 'technical'}
-            features={selectedFeatures}
-            dataSizeMB={dataSizeMB}
-            complexityLevel={complexityLevel}
-            expectedQuestions={expectedQuestions}
-            onConfirm={(estimate) => {
-              console.log('Pricing confirmed:', estimate);
-              // TODO: Implement payment flow integration
-            }}
-            data-testid="pricing-banner-main"
-          />
-        </div>
+        {/* Step-specific information */}
+        {currentStage === 'pricing' && (
+          <div className="mb-6">
+            <Card className="border-green-200 bg-green-50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-green-900">
+                  <DollarSign className="w-5 h-5" />
+                  Ready for Pricing
+                </CardTitle>
+                <CardDescription className="text-green-700">
+                  All analysis requirements are now defined. Review the final pricing before proceeding.
+                </CardDescription>
+              </CardHeader>
+            </Card>
+          </div>
+        )}
 
         {/* Render step-specific content based on currentStage */}
         <div className="step-content">
@@ -390,6 +298,23 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
               </CardContent>
             </Card>
           )}
+
+          {currentStage === 'project-setup' && (
+            <Card data-testid="card-step-content">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <FolderOpen className="w-5 h-5" />
+                  Project Setup & Requirements
+                </CardTitle>
+                <CardDescription>
+                  Create project and confirm analysis approach based on your goals
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ProjectSetupStep journeyType={journeyType} />
+              </CardContent>
+            </Card>
+          )}
           
           {currentStage === 'data' && (
             <DataStep 
@@ -406,6 +331,46 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
               onNext={handleNext}
               onPrevious={handlePrevious}
             />
+          )}
+
+          {currentStage === 'pricing' && (
+            <Card data-testid="card-step-content">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <DollarSign className="w-5 h-5" />
+                  Pricing & Payment
+                </CardTitle>
+                <CardDescription>
+                  Review final costs based on your completed analysis requirements
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="text-center py-8">
+                  <p className="text-gray-600 mb-4">Pricing step - Coming Soon</p>
+                  <Button onClick={handleNext}>Continue to Results</Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {currentStage === 'results' && (
+            <Card data-testid="card-step-content">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Receipt className="w-5 h-5" />
+                  Results & Artifacts
+                </CardTitle>
+                <CardDescription>
+                  View your analysis results and download artifacts
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="text-center py-8">
+                  <p className="text-gray-600 mb-4">Results step - Coming Soon</p>
+                  <Button onClick={() => setLocation('/dashboard')}>Return to Dashboard</Button>
+                </div>
+              </CardContent>
+            </Card>
           )}
         </div>
 
