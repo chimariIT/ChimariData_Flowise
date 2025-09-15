@@ -444,7 +444,35 @@ export class HybridStorage {
 
   async getUserByEmail(email: string): Promise<User | undefined> {
     await this.init();
-    return this.usersByEmail.get(email);
+    
+    // Check cache first
+    const cachedUser = this.usersByEmail.get(email);
+    if (cachedUser) {
+      return cachedUser;
+    }
+    
+    // Fall back to database query
+    try {
+      const [dbUser] = await db.select().from(users).where(eq(users.email, email));
+      if (dbUser) {
+        // Map database fields to application fields
+        const mappedUser = {
+          ...dbUser,
+          hashedPassword: dbUser.password || dbUser.hashedPassword, // Handle both legacy and new fields
+          password: undefined, // Clear database password field for security
+        };
+        
+        // Update cache for future lookups
+        this.userCache.set(mappedUser.id, mappedUser);
+        this.usersByEmail.set(email, mappedUser);
+        
+        return mappedUser;
+      }
+    } catch (error) {
+      console.error('Error querying user by email from database:', error);
+    }
+    
+    return undefined;
   }
 
   async getUserByVerificationToken(token: string): Promise<User | undefined> {

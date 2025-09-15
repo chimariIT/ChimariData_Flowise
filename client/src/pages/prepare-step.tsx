@@ -160,7 +160,36 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
     );
   };
 
-  const handleProceedToDataStep = () => {
+  const createJourneyMutation = useMutation({
+    mutationFn: async (journeyData: any) => {
+      const response = await apiRequest("POST", "/api/journeys", journeyData);
+      return response.json();
+    },
+    onSuccess: (data) => {
+      if (data.success) {
+        toast({
+          title: "Journey Created",
+          description: "Your analysis journey has been created with your goals and selected approaches.",
+        });
+        
+        // Store journey ID for use in subsequent steps
+        localStorage.setItem('currentJourneyId', data.journey.id);
+        
+        // Navigate to next step
+        setLocation(`/journeys/${journeyType}/project-setup`);
+      }
+    },
+    onError: (error: any) => {
+      console.error('Journey creation failed:', error);
+      toast({
+        title: "Journey Creation Failed",
+        description: "Failed to save your journey. Please try again or contact support.",
+        variant: "destructive",
+      });
+    }
+  });
+
+  const handleProceedToDataStep = async () => {
     if (selectedPaths.length === 0) {
       toast({
         title: "Select Analysis Paths",
@@ -170,34 +199,29 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
       return;
     }
 
-    // TODO: Save journey data to database here
-    // Need to implement journey storage methods in IStorage interface:
-    // - createJourney(journey: InsertJourney): Promise<Journey>
-    // - updateJourney(id: string, updates: Partial<Journey>): Promise<Journey>
-    // 
-    // const journeyData = {
-    //   userId: user?.id,
-    //   journeyType,
-    //   currentStep: 'data',
-    //   title: `${journeyType.charAt(0).toUpperCase() + journeyType.slice(1)} Analysis Journey`,
-    //   description: form.getValues().userDescription,
-    //   goals: extractedGoals.map(g => g.goal),
-    //   questions: businessQuestions.map(q => q.question),
-    //   suggestedPlan: {
-    //     analysisSteps: selectedPaths,
-    //     estimatedDuration: "2-6 hours",
-    //   }
-    // };
-    // 
-    // await storage.createJourney(journeyData);
+    // Create journey with extracted goals and selected approaches
+    const journeyData = {
+      journeyType,
+      currentStep: 'project-setup',
+      title: `${journeyType.charAt(0).toUpperCase() + journeyType.slice(1)} Analysis Journey`,
+      description: form.getValues().userDescription,
+      extractedGoals: extractedGoals,
+      businessQuestions: businessQuestions,
+      selectedAnalysisPaths: selectedPaths,
+      suggestedPlan: {
+        analysisSteps: selectedPaths,
+        estimatedDuration: "2-6 hours",
+        aiProvider: aiProvider
+      },
+      context: {
+        industry: form.getValues().industry,
+        businessRole: form.getValues().businessRole,
+        technicalLevel: form.getValues().technicalLevel,
+        dataTypes: form.getValues().dataTypes
+      }
+    };
 
-    toast({
-      title: "Goals Saved",
-      description: "Your analysis goals have been prepared. Proceeding to data upload.",
-    });
-
-    // Navigate to next step
-    setLocation(`/journeys/${journeyType}/project-setup`);
+    await createJourneyMutation.mutateAsync(journeyData);
   };
 
   const getComplexityColor = (complexity: string) => {

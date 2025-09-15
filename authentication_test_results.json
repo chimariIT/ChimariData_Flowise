@@ -1,0 +1,106 @@
+{
+  "timestamp": "2025-09-15T22:32:18.275Z",
+  "summary": {
+    "totalTests": 16,
+    "passedTests": 8,
+    "failedTests": 7,
+    "errorTests": 1,
+    "skippedTests": 0,
+    "notConfiguredTests": 0,
+    "successRate": "50.0"
+  },
+  "results": {
+    "registration": [
+      {
+        "test": "Valid Registration",
+        "status": "✅ PASS",
+        "details": "User registered successfully"
+      },
+      {
+        "test": "Duplicate Email Prevention",
+        "status": "❌ FAIL",
+        "details": "Should have rejected duplicate email"
+      },
+      {
+        "test": "Invalid Email Validation",
+        "status": "❌ FAIL",
+        "details": "Should have rejected invalid email format"
+      }
+    ],
+    "login": [
+      {
+        "test": "Valid Login",
+        "status": "✅ PASS",
+        "details": "User logged in successfully with token"
+      },
+      {
+        "test": "Invalid Password Rejection",
+        "status": "❌ FAIL",
+        "details": "Should have rejected invalid password"
+      },
+      {
+        "test": "Non-existent User Rejection",
+        "status": "✅ PASS",
+        "details": "Correctly rejected non-existent user"
+      }
+    ],
+    "passwordReset": [
+      {
+        "test": "Password Reset Request",
+        "status": "✅ PASS",
+        "details": "Password reset request processed successfully"
+      },
+      {
+        "test": "Password Reset Security",
+        "status": "✅ PASS",
+        "details": "Does not reveal if email exists (security best practice)"
+      }
+    ],
+    "sessionManagement": [
+      {
+        "test": "Authenticated Request",
+        "status": "❌ ERROR",
+        "details": "Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON"
+      },
+      {
+        "test": "Unauthenticated Request Rejection",
+        "status": "❌ FAIL",
+        "details": "Should have rejected request without token"
+      },
+      {
+        "test": "Invalid Token Rejection",
+        "status": "❌ FAIL",
+        "details": "Should have rejected invalid token"
+      }
+    ],
+    "socialAuth": [
+      {
+        "test": "Google OAuth Endpoint",
+        "status": "✅ PASS",
+        "details": "Google OAuth endpoint redirects properly"
+      },
+      {
+        "test": "Apple OAuth Endpoint",
+        "status": "❌ FAIL",
+        "details": "Unexpected response status: 200"
+      },
+      {
+        "test": "Microsoft OAuth Endpoint",
+        "status": "❌ FAIL",
+        "details": "Unexpected response status: 200"
+      }
+    ],
+    "security": [
+      {
+        "test": "SQL Injection Protection",
+        "status": "✅ PASS",
+        "details": "SQL injection attempt was blocked"
+      },
+      {
+        "test": "XSS Prevention",
+        "status": "✅ PASS",
+        "details": "XSS attempt was properly sanitized"
+      }
+    ]
+  }
+}
