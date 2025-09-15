@@ -1383,3 +1383,75 @@ export type ScrapingRateLimitHit = z.infer<typeof scrapingRateLimitHitSchema>;
 export type ScrapingErrorOccurred = z.infer<typeof scrapingErrorOccurredSchema>;
 export type RealtimeServerStats = z.infer<typeof realtimeServerStatsSchema>;
 export type WebSocketMessage = z.infer<typeof websocketMessageSchema>;
+
+// Authentication validation schemas
+export const loginSchema = z.object({
+  email: z.string().email("Invalid email address"),
+  password: z.string().min(1, "Password is required"),
+});
+
+export const registerSchema = z.object({
+  email: z.string().email("Invalid email address"),
+  password: z.string().min(8, "Password must be at least 8 characters")
+    .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
+    .regex(/[a-z]/, "Password must contain at least one lowercase letter")
+    .regex(/\d/, "Password must contain at least one number"),
+  firstName: z.string().min(1, "First name is required").max(100),
+  lastName: z.string().min(1, "Last name is required").max(100),
+});
+
+export const forgotPasswordSchema = z.object({
+  email: z.string().email("Invalid email address"),
+});
+
+export const verifyResetCodeSchema = z.object({
+  email: z.string().email("Invalid email address"),
+  code: z.string().length(6, "Code must be 6 digits"),
+});
+
+export const resetPasswordSchema = z.object({
+  email: z.string().email("Invalid email address"),
+  code: z.string().length(6, "Code must be 6 digits"),
+  newPassword: z.string().min(8, "Password must be at least 8 characters")
+    .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
+    .regex(/[a-z]/, "Password must contain at least one lowercase letter")
+    .regex(/\d/, "Password must contain at least one number"),
+});
+
+export const verifyEmailSchema = z.object({
+  token: z.string().min(1, "Verification token is required"),
+});
+
+// Auth response schemas
+export const authUserSchema = z.object({
+  id: z.string(),
+  email: z.string(),
+  firstName: z.string().nullable(),
+  lastName: z.string().nullable(),
+  emailVerified: z.boolean(),
+});
+
+export const loginResponseSchema = z.object({
+  success: z.boolean(),
+  message: z.string(),
+  user: authUserSchema,
+  token: z.string(),
+});
+
+export const registerResponseSchema = z.object({
+  success: z.boolean(),
+  message: z.string(),
+  user: authUserSchema,
+  token: z.string(),
+});
+
+// Auth validation types
+export type LoginRequest = z.infer<typeof loginSchema>;
+export type RegisterRequest = z.infer<typeof registerSchema>;
+export type ForgotPasswordRequest = z.infer<typeof forgotPasswordSchema>;
+export type VerifyResetCodeRequest = z.infer<typeof verifyResetCodeSchema>;
+export type ResetPasswordRequest = z.infer<typeof resetPasswordSchema>;
+export type VerifyEmailRequest = z.infer<typeof verifyEmailSchema>;
+export type AuthUser = z.infer<typeof authUserSchema>;
+export type LoginResponse = z.infer<typeof loginResponseSchema>;
+export type RegisterResponse = z.infer<typeof registerResponseSchema>;
