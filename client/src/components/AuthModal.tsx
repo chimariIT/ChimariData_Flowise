@@ -97,8 +97,10 @@ export function AuthModal({ isOpen, onClose, onSuccess, defaultTab = "login" }: 
           console.log('Authentication token stored successfully');
         }
         
+        // Show personalized welcome message
+        const displayName = result.user?.firstName || result.user?.username || result.user?.email?.split('@')[0] || 'User';
         toast({
-          title: "Welcome back!",
+          title: `Welcome back, ${displayName}!`,
           description: "You've successfully logged in.",
         });
         
@@ -146,9 +148,11 @@ export function AuthModal({ isOpen, onClose, onSuccess, defaultTab = "login" }: 
           console.log('Authentication token stored successfully');
         }
         
+        // Show personalized welcome message for new users
+        const displayName = result.user?.firstName || result.user?.username || result.user?.email?.split('@')[0] || 'User';
         toast({
-          title: "Account created!",
-          description: "Welcome to ChimariData. You're now logged in.",
+          title: `Welcome to ChimariData, ${displayName}!`,
+          description: "Your account has been created successfully.",
         });
         
         // Trigger authentication state refresh

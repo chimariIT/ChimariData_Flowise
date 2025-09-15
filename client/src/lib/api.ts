@@ -95,7 +95,19 @@ export class APIClient {
   }
 
   async getPricing(): Promise<any> {
-    const response = await fetch(`${API_BASE}/api/pricing`);
+    // Add authentication headers
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/pricing`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
 
     if (!response.ok) {
       throw new Error(`Failed to fetch pricing: ${response.status}`);
@@ -105,12 +117,21 @@ export class APIClient {
   }
 
   async calculatePrice(features: string[]): Promise<any> {
+    // Add authentication headers
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     const response = await fetch(`${API_BASE}/api/calculate-price`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({ features }),
+      credentials: 'include',
     });
 
     if (!response.ok) {
