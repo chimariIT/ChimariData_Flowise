@@ -87,6 +87,8 @@ const MCPCheckoutForm = () => {
   const [clientSecret, setClientSecret] = useState("");
   const [paymentResult, setPaymentResult] = useState<any>(null);
   const [selectedCard, setSelectedCard] = useState<typeof TEST_CARDS[0] | null>(null);
+  const [webhookEvents, setWebhookEvents] = useState<any[]>([]);
+  const [webhookTesting, setWebhookTesting] = useState(false);
 
   // Create payment intent when amount changes
   useEffect(() => {
@@ -200,6 +202,36 @@ const MCPCheckoutForm = () => {
       title: "Test Card Loaded",
       description: `${testCard.type} - ${testCard.scenario}`,
     });
+  };
+
+  const testWebhook = async (eventType: string, paymentIntentId?: string) => {
+    setWebhookTesting(true);
+    try {
+      const response = await apiRequest("POST", "/api/stripe/test-webhook", {
+        eventType,
+        paymentIntentId: paymentIntentId || paymentResult?.id
+      });
+      
+      const data = await response.json();
+      
+      setWebhookEvents(prev => [{
+        ...data.event,
+        processed_at: new Date().toISOString(),
+        test_mode: true
+      }, ...prev]);
+      
+      toast({
+        title: "Webhook Test Successful",
+        description: `${eventType} event processed`,
+      });
+    } catch (error: any) {
+      toast({
+        title: "Webhook Test Failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+    setWebhookTesting(false);
   };
 
   const cardElementOptions = {
@@ -379,6 +411,66 @@ const MCPCheckoutForm = () => {
         </Card>
       )}
 
+      {/* Webhook Testing */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <TestTube className="h-5 w-5" />
+            Webhook Testing
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-3 gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => testWebhook("payment_intent.succeeded")}
+              disabled={webhookTesting}
+              data-testid="test-webhook-success"
+            >
+              Test Success
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => testWebhook("payment_intent.payment_failed")}
+              disabled={webhookTesting}
+              data-testid="test-webhook-failed"
+            >
+              Test Failed
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => testWebhook("payment_intent.canceled")}
+              disabled={webhookTesting}
+              data-testid="test-webhook-canceled"
+            >
+              Test Canceled
+            </Button>
+          </div>
+          
+          {webhookEvents.length > 0 && (
+            <div className="space-y-2">
+              <h4 className="font-medium">Recent Webhook Events:</h4>
+              <div className="max-h-32 overflow-y-auto space-y-1">
+                {webhookEvents.slice(0, 5).map((event, index) => (
+                  <div key={index} className="text-xs p-2 bg-gray-50 rounded">
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono">{event.type}</span>
+                      <Badge variant="secondary">Test</Badge>
+                    </div>
+                    <div className="text-gray-600">
+                      {new Date(event.processed_at).toLocaleTimeString()}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* MCP Testing Instructions */}
       <Card>
         <CardHeader>
@@ -405,6 +497,9 @@ const MCPCheckoutForm = () => {
           </div>
           <div>
             <strong>Expiry & CVC:</strong> Use any future date (e.g., 12/34) and any 3-digit CVC
+          </div>
+          <div>
+            <strong>Webhooks:</strong> Test webhook events using the buttons above to simulate real Stripe events
           </div>
         </CardContent>
       </Card>

@@ -1,4 +1,5 @@
 import type { Express } from "express";
+import express from "express";
 import { createServer, type Server } from "http";
 import { WebSocketServer } from 'ws';
 import multer from "multer";
@@ -2327,34 +2328,348 @@ Respond with valid JSON only, no additional text.`;
   // Create payment intent
   app.post("/api/create-payment-intent", async (req, res) => {
     try {
-      const { features, projectId } = req.body;
+      const { features, projectId, amount, description, metadata } = req.body;
       
-      // Validate input
-      if (!features || !Array.isArray(features)) {
-        return res.status(400).json({ error: "Features array is required" });
-      }
-
-      const pricing = PricingService.calculatePrice(features);
-      const amount = Math.round(pricing.total * 100); // Convert to cents
-
-      const paymentIntent = await stripe.paymentIntents.create({
-        amount,
-        currency: 'usd',
-        metadata: {
+      let finalAmount: number;
+      let finalMetadata: any = metadata || {};
+      
+      // Handle both feature-based pricing and direct amount
+      if (features && Array.isArray(features)) {
+        // Feature-based pricing (existing flow)
+        const pricing = PricingService.calculatePrice(features);
+        finalAmount = Math.round(pricing.total * 100); // Convert to cents
+        finalMetadata = {
+          ...finalMetadata,
           projectId: projectId || 'no-project',
           features: JSON.stringify(features)
+        };
+      } else if (amount && typeof amount === 'number') {
+        // Direct amount (for testing and simple payments)
+        finalAmount = Math.round(amount * 100); // Convert to cents
+        finalMetadata = {
+          ...finalMetadata,
+          projectId: projectId || 'test-payment',
+          description: description || 'Test payment'
+        };
+      } else {
+        return res.status(400).json({ 
+          error: "Either features array or amount is required" 
+        });
+      }
+
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: finalAmount,
+        currency: 'usd',
+        metadata: finalMetadata,
+        automatic_payment_methods: {
+          enabled: true,
         }
       });
 
       res.json({
         clientSecret: paymentIntent.client_secret,
-        amount: pricing.total,
-        breakdown: pricing
+        amount: finalAmount / 100, // Return in dollars
+        paymentIntentId: paymentIntent.id
       });
     } catch (error: any) {
       console.error("Error creating payment intent:", error);
       res.status(500).json({ error: "Failed to create payment intent" });
     }
+  });
+
+  // Stripe webhook endpoint with signature verification
+  app.post("/api/stripe/webhook", express.raw({ type: 'application/json' }), async (req, res) => {
+    const sig = req.headers['stripe-signature'];
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    
+    let event: any;
+
+    try {
+      if (webhookSecret) {
+        // Verify webhook signature in production
+        event = stripe.webhooks.constructEvent(req.body, sig as string, webhookSecret);
+      } else {
+        // In development/testing, parse the event directly
+        event = JSON.parse(req.body.toString());
+        console.log('⚠️  Webhook signature verification skipped in development mode');
+      }
+    } catch (err: any) {
+      console.error('Webhook signature verification failed:', err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    console.log(`🔔 Received Stripe webhook: ${event.type}`);
+
+    try {
+      // Handle the event
+      switch (event.type) {
+        case 'payment_intent.succeeded':
+          await handlePaymentSucceeded(event.data.object);
+          break;
+        
+        case 'payment_intent.payment_failed':
+          await handlePaymentFailed(event.data.object);
+          break;
+        
+        case 'payment_intent.canceled':
+          await handlePaymentCanceled(event.data.object);
+          break;
+        
+        case 'payment_intent.requires_action':
+          await handlePaymentRequiresAction(event.data.object);
+          break;
+        
+        case 'invoice.payment_succeeded':
+          await handleInvoicePaymentSucceeded(event.data.object);
+          break;
+        
+        case 'invoice.payment_failed':
+          await handleInvoicePaymentFailed(event.data.object);
+          break;
+        
+        case 'customer.subscription.created':
+          await handleSubscriptionCreated(event.data.object);
+          break;
+        
+        case 'customer.subscription.updated':
+          await handleSubscriptionUpdated(event.data.object);
+          break;
+        
+        case 'customer.subscription.deleted':
+          await handleSubscriptionDeleted(event.data.object);
+          break;
+        
+        case 'checkout.session.completed':
+          await handleCheckoutSessionCompleted(event.data.object);
+          break;
+        
+        case 'charge.dispute.created':
+          await handleDisputeCreated(event.data.object);
+          break;
+        
+        default:
+          console.log(`⚠️  Unhandled event type: ${event.type}`);
+      }
+
+      // Log webhook event for monitoring
+      console.log(`✅ Successfully processed webhook: ${event.type} - ${event.id}`);
+      
+      res.json({ received: true, event_type: event.type, event_id: event.id });
+    } catch (error: any) {
+      console.error(`❌ Webhook processing error for ${event.type}:`, error);
+      res.status(500).json({ error: 'Webhook processing failed' });
+    }
+  });
+
+  // Webhook event handlers
+  async function handlePaymentSucceeded(paymentIntent: any) {
+    console.log(`💰 Payment succeeded: ${paymentIntent.id} - $${(paymentIntent.amount / 100).toFixed(2)}`);
+    
+    const { projectId, features, description } = paymentIntent.metadata;
+    
+    if (projectId && projectId !== 'test-payment') {
+      // Update project with payment success
+      const project = await storage.getProject(projectId);
+      if (project) {
+        await storage.updateProject(projectId, {
+          isPaid: true,
+          paymentIntentId: paymentIntent.id,
+          upgradedAt: new Date()
+        });
+        console.log(`✅ Project ${projectId} upgraded to paid`);
+      }
+    }
+    
+    // Send real-time notification
+    const realtimeServer = getRealtimeServer();
+    if (realtimeServer) {
+      await createStreamingEvent({
+        sourceType: 'webhook',
+        sourceId: 'stripe',
+        userId: 'system',
+        eventType: 'payment_succeeded',
+        data: {
+          paymentIntentId: paymentIntent.id,
+          amount: paymentIntent.amount / 100,
+          projectId
+        }
+      });
+    }
+  }
+
+  async function handlePaymentFailed(paymentIntent: any) {
+    console.log(`❌ Payment failed: ${paymentIntent.id} - ${paymentIntent.last_payment_error?.message || 'Unknown error'}`);
+    
+    // Send real-time notification
+    const realtimeServer = getRealtimeServer();
+    if (realtimeServer) {
+      await createStreamingEvent({
+        sourceType: 'webhook',
+        sourceId: 'stripe',
+        userId: 'system',
+        eventType: 'payment_failed',
+        data: {
+          paymentIntentId: paymentIntent.id,
+          error: paymentIntent.last_payment_error?.message || 'Payment declined',
+          projectId: paymentIntent.metadata.projectId
+        }
+      });
+    }
+  }
+
+  async function handlePaymentCanceled(paymentIntent: any) {
+    console.log(`🚫 Payment canceled: ${paymentIntent.id}`);
+    
+    // Send real-time notification
+    const realtimeServer = getRealtimeServer();
+    if (realtimeServer) {
+      await createStreamingEvent({
+        sourceType: 'webhook',
+        sourceId: 'stripe',
+        userId: 'system',
+        eventType: 'payment_canceled',
+        data: {
+          paymentIntentId: paymentIntent.id,
+          projectId: paymentIntent.metadata.projectId
+        }
+      });
+    }
+  }
+
+  async function handlePaymentRequiresAction(paymentIntent: any) {
+    console.log(`🔐 Payment requires action: ${paymentIntent.id} (3D Secure, etc.)`);
+    
+    // Send real-time notification
+    const realtimeServer = getRealtimeServer();
+    if (realtimeServer) {
+      await createStreamingEvent({
+        sourceType: 'webhook',
+        sourceId: 'stripe',
+        userId: 'system',
+        eventType: 'payment_requires_action',
+        data: {
+          paymentIntentId: paymentIntent.id,
+          nextAction: paymentIntent.next_action,
+          projectId: paymentIntent.metadata.projectId
+        }
+      });
+    }
+  }
+
+  async function handleInvoicePaymentSucceeded(invoice: any) {
+    console.log(`📧 Invoice payment succeeded: ${invoice.id}`);
+    
+    // Handle subscription billing success
+    if (invoice.subscription) {
+      console.log(`✅ Subscription ${invoice.subscription} payment processed`);
+    }
+  }
+
+  async function handleInvoicePaymentFailed(invoice: any) {
+    console.log(`❌ Invoice payment failed: ${invoice.id}`);
+    
+    // Handle subscription billing failure
+    if (invoice.subscription) {
+      console.log(`⚠️  Subscription ${invoice.subscription} payment failed`);
+      // Could implement retry logic or account suspension here
+    }
+  }
+
+  async function handleSubscriptionCreated(subscription: any) {
+    console.log(`🆕 Subscription created: ${subscription.id} for customer ${subscription.customer}`);
+  }
+
+  async function handleSubscriptionUpdated(subscription: any) {
+    console.log(`🔄 Subscription updated: ${subscription.id} - Status: ${subscription.status}`);
+  }
+
+  async function handleSubscriptionDeleted(subscription: any) {
+    console.log(`🗑️  Subscription deleted: ${subscription.id}`);
+  }
+
+  async function handleCheckoutSessionCompleted(session: any) {
+    console.log(`🛒 Checkout session completed: ${session.id}`);
+  }
+
+  async function handleDisputeCreated(dispute: any) {
+    console.log(`⚖️  Dispute created: ${dispute.id} for charge ${dispute.charge}`);
+    // Could implement dispute notification system here
+  }
+
+  // Test webhook endpoint (for development/testing)
+  app.post("/api/stripe/test-webhook", async (req, res) => {
+    try {
+      const { eventType, paymentIntentId } = req.body;
+      
+      console.log(`🧪 Testing webhook event: ${eventType}`);
+      
+      // Simulate webhook event
+      const mockEvent = {
+        id: `evt_test_${Date.now()}`,
+        type: eventType,
+        data: {
+          object: {
+            id: paymentIntentId || `pi_test_${Date.now()}`,
+            amount: 2999, // $29.99
+            currency: 'usd',
+            status: eventType.includes('succeeded') ? 'succeeded' : 'failed',
+            metadata: {
+              projectId: 'test-project',
+              description: 'Test webhook event'
+            },
+            last_payment_error: eventType.includes('failed') ? {
+              message: 'Your card was declined.'
+            } : null
+          }
+        }
+      };
+      
+      // Process the mock event
+      switch (eventType) {
+        case 'payment_intent.succeeded':
+          await handlePaymentSucceeded(mockEvent.data.object);
+          break;
+        case 'payment_intent.payment_failed':
+          await handlePaymentFailed(mockEvent.data.object);
+          break;
+        case 'payment_intent.canceled':
+          await handlePaymentCanceled(mockEvent.data.object);
+          break;
+        default:
+          console.log(`⚠️  Test event type not implemented: ${eventType}`);
+      }
+      
+      res.json({
+        success: true,
+        message: `Test webhook ${eventType} processed successfully`,
+        event: mockEvent
+      });
+    } catch (error: any) {
+      console.error('Test webhook error:', error);
+      res.status(500).json({ error: 'Failed to process test webhook' });
+    }
+  });
+
+  // Webhook status endpoint
+  app.get("/api/stripe/webhook-status", (req, res) => {
+    res.json({
+      webhookEndpoint: '/api/stripe/webhook',
+      testEndpoint: '/api/stripe/test-webhook',
+      signatureVerification: !!process.env.STRIPE_WEBHOOK_SECRET,
+      supportedEvents: [
+        'payment_intent.succeeded',
+        'payment_intent.payment_failed', 
+        'payment_intent.canceled',
+        'payment_intent.requires_action',
+        'invoice.payment_succeeded',
+        'invoice.payment_failed',
+        'customer.subscription.created',
+        'customer.subscription.updated',
+        'customer.subscription.deleted',
+        'checkout.session.completed',
+        'charge.dispute.created'
+      ]
+    });
   });
 
   // Handle payment completion and project creation
