@@ -3739,6 +3739,92 @@ This link will expire in 24 hours.
     }
   });
 
+  // Password reset endpoints
+  app.post('/api/auth/forgot-password', async (req, res) => {
+    try {
+      const { email } = req.body;
+      
+      if (!email) {
+        return res.status(400).json({ error: "Email is required" });
+      }
+
+      const result = await PasswordResetService.createResetRequest(email);
+      
+      if (result.success) {
+        res.json({ 
+          success: true, 
+          message: "If an account with this email exists, you will receive a password reset code." 
+        });
+      } else {
+        // Don't reveal whether email exists or not for security
+        res.json({ 
+          success: true, 
+          message: "If an account with this email exists, you will receive a password reset code." 
+        });
+      }
+    } catch (error) {
+      console.error('Forgot password error:', error);
+      res.status(500).json({ error: "Failed to process password reset request" });
+    }
+  });
+
+  app.post('/api/auth/verify-reset-code', async (req, res) => {
+    try {
+      const { email, code } = req.body;
+      
+      if (!email || !code) {
+        return res.status(400).json({ error: "Email and code are required" });
+      }
+
+      const result = await PasswordResetService.verifyResetCode(email, code);
+      
+      if (result.success) {
+        res.json({ success: true, message: "Code verified successfully" });
+      } else {
+        res.status(400).json({ error: result.error || "Invalid or expired code" });
+      }
+    } catch (error) {
+      console.error('Verify reset code error:', error);
+      res.status(500).json({ error: "Failed to verify reset code" });
+    }
+  });
+
+  app.post('/api/auth/reset-password', async (req, res) => {
+    try {
+      const { email, code, newPassword } = req.body;
+      
+      if (!email || !code || !newPassword) {
+        return res.status(400).json({ error: "Email, code, and new password are required" });
+      }
+
+      // Validate password strength
+      if (newPassword.length < 8) {
+        return res.status(400).json({ error: "Password must be at least 8 characters" });
+      }
+      
+      const hasUpperCase = /[A-Z]/.test(newPassword);
+      const hasLowerCase = /[a-z]/.test(newPassword);
+      const hasNumbers = /\d/.test(newPassword);
+      
+      if (!hasUpperCase || !hasLowerCase || !hasNumbers) {
+        return res.status(400).json({ 
+          error: "Password must contain at least one uppercase letter, one lowercase letter, and one number" 
+        });
+      }
+
+      const result = await PasswordResetService.resetPassword(email, code, newPassword);
+      
+      if (result.success) {
+        res.json({ success: true, message: "Password reset successfully" });
+      } else {
+        res.status(400).json({ error: result.error || "Failed to reset password" });
+      }
+    } catch (error) {
+      console.error('Reset password error:', error);
+      res.status(500).json({ error: "Failed to reset password" });
+    }
+  });
+
   // Health check endpoint
   app.get('/api/health', (req, res) => {
     res.json({
