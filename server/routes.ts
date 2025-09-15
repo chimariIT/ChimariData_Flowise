@@ -9,6 +9,7 @@ import { storage } from "./storage";
 import { FileProcessor } from "./file-processor";
 import { PythonProcessor } from "./python-processor";
 import { PricingService } from "./pricing-service";
+import { SecurityUtils } from "./security-utils";
 import { chimaridataAI } from "./chimaridata-ai";
 import { technicalAIAgent, TechnicalQuery } from "./technical-ai-agent";
 import { 
@@ -235,6 +236,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Legacy trial upload endpoint - redirect to unified upload
   app.post("/api/trial-upload", upload.single('file'), async (req, res) => {
     try {
+      // Apply security headers
+      Object.entries(SecurityUtils.getCSPHeaders()).forEach(([key, value]) => {
+        res.setHeader(key, value);
+      });
+
       if (!req.file) {
         return res.status(400).json({ 
           success: false, 
@@ -243,6 +249,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const file = req.file;
+      
+      // Comprehensive file security validation
+      const fileValidation = SecurityUtils.validateFileUpload(file);
+      if (!fileValidation.valid) {
+        return res.status(400).json({
+          success: false,
+          error: fileValidation.error
+        });
+      }
+
       const freeTrialLimit = PricingService.getFreeTrialLimits();
 
       // Check file size limit for free trial
@@ -253,12 +269,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      console.log(`Processing trial file: ${file.originalname} (${file.size} bytes)`);
+      // Sanitize filename for security
+      const sanitizedFilename = fileValidation.sanitizedName || SecurityUtils.sanitizeFilename(file.originalname);
+      console.log(`Processing trial file: ${sanitizedFilename} (${file.size} bytes)`);
 
-      // Process the file
+      // Process the file with sanitized filename
       const processedData = await FileProcessor.processFile(
         file.buffer,
-        file.originalname,
+        sanitizedFilename,
         file.mimetype
       );
 
@@ -2314,13 +2332,32 @@ Respond with valid JSON only, no additional text.`;
   // Calculate pricing for selected features
   app.post("/api/calculate-price", async (req, res) => {
     try {
-      const { features } = req.body;
+      // Apply security headers
+      Object.entries(SecurityUtils.getCSPHeaders()).forEach(([key, value]) => {
+        res.setHeader(key, value);
+      });
+
+      // Sanitize request body
+      const sanitizedBody = SecurityUtils.sanitizeRequestBody(req.body);
+      const { features } = sanitizedBody;
       
-      if (!Array.isArray(features) || features.length === 0) {
+      // Sanitize features array
+      const sanitizedFeatures = SecurityUtils.sanitizeStringArray(features);
+      
+      if (!Array.isArray(sanitizedFeatures) || sanitizedFeatures.length === 0) {
         return res.status(400).json({ error: "Features array is required" });
       }
 
-      const validation = PricingService.validateFeatures(features);
+      // Check for SQL injection patterns in features
+      const hasSqlInjection = sanitizedFeatures.some(feature => 
+        SecurityUtils.containsSQLInjection(feature)
+      );
+      
+      if (hasSqlInjection) {
+        return res.status(400).json({ error: "Invalid characters detected in features" });
+      }
+
+      const validation = PricingService.validateFeatures(sanitizedFeatures);
       if (!validation.valid) {
         return res.status(400).json({ 
           error: "Invalid features", 
@@ -2328,7 +2365,7 @@ Respond with valid JSON only, no additional text.`;
         });
       }
 
-      const pricing = PricingService.calculatePrice(features);
+      const pricing = PricingService.calculatePrice(sanitizedFeatures);
       res.json(pricing);
     } catch (error: any) {
       console.error("Error calculating price:", error);

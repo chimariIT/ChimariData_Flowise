@@ -472,6 +472,73 @@ export class PricingService {
       description: "Free trial includes: data upload (max 10MB), schema detection, descriptive analysis, and basic visualizations"
     };
   }
+
+  /**
+   * Get feature descriptions for pricing display
+   */
+  static getFeatureDescriptions(): Record<string, { name: string; description: string; basePrice: number }> {
+    return {
+      transformation: {
+        name: "Data Transformation",
+        description: "Clean, reshape, and prepare your data for analysis. Includes missing value handling, data type conversion, and custom transformations.",
+        basePrice: 15
+      },
+      analysis: {
+        name: "Advanced Analysis",
+        description: "Comprehensive statistical analysis including descriptive statistics, correlation analysis, hypothesis testing, and regression modeling.",
+        basePrice: 25
+      },
+      visualization: {
+        name: "Interactive Visualizations",
+        description: "Generate professional charts, graphs, and interactive dashboards to explore and present your data insights.",
+        basePrice: 20
+      },
+      ai_insights: {
+        name: "AI-Powered Insights",
+        description: "Get intelligent recommendations, automated pattern detection, and natural language explanations of your data.",
+        basePrice: 35
+      }
+    };
+  }
+
+  /**
+   * Get discount information for pricing display
+   */
+  static getDiscountInfo(): Record<string, { rate: number; description: string }> {
+    return {
+      two_features: {
+        rate: 0.15,
+        description: "15% off when you select 2 features"
+      },
+      three_features: {
+        rate: 0.25,
+        description: "25% off when you select 3 features"
+      },
+      four_plus_features: {
+        rate: 0.35,
+        description: "35% off when you select 4 or more features"
+      }
+    };
+  }
+
+  /**
+   * Validate that all provided features are supported
+   */
+  static validateFeatures(features: string[]): { valid: boolean; invalidFeatures?: string[] } {
+    if (!Array.isArray(features)) {
+      return { valid: false, invalidFeatures: [] };
+    }
+
+    const validFeatures = ['transformation', 'analysis', 'visualization', 'ai_insights'];
+    const invalidFeatures = features.filter(feature => 
+      typeof feature !== 'string' || !validFeatures.includes(feature)
+    );
+
+    return {
+      valid: invalidFeatures.length === 0,
+      invalidFeatures: invalidFeatures.length > 0 ? invalidFeatures : undefined
+    };
+  }
 }
 
 // Export singleton instance

@@ -1,0 +1,11 @@
+id,name,email,phone,age,salary,birth_date,is_active,department,hire_date
+1,John Smith,john.smith@example.com,555-123-4567,32,75000,1991-05-15,true,Engineering,2020-01-15
+2,Sarah Johnson,sarah.j@company.org,555-234-5678,28,68000,1995-11-22,true,Marketing,2021-03-10
+3,Michael Brown,mbrown@test.com,555-345-6789,45,92000,1978-08-03,false,Sales,2019-07-20
+4,Lisa Chen,lisa.chen@email.net,555-456-7890,35,81000,1988-12-10,true,Engineering,2018-11-05
+5,David Wilson,d.wilson@corp.com,555-567-8901,29,72000,1994-02-18,true,HR,2022-01-08
+6,Emma Davis,emma@example.org,555-678-9012,41,89000,1982-06-25,true,Finance,2017-09-12
+7,Robert Taylor,rtaylor@company.com,555-789-0123,38,85000,1985-04-07,false,Engineering,2020-05-20
+8,Jennifer Garcia,j.garcia@test.org,555-890-1234,33,76000,1990-09-14,true,Marketing,2021-08-15
+9,William Martinez,w.martinez@email.com,555-901-2345,42,94000,1981-01-30,true,Sales,2016-12-03
+10,Amanda Rodriguez,amanda.r@corp.org,555-012-3456,26,65000,1997-07-08,true,HR,2023-02-28

@@ -1,0 +1,6 @@
+id,name,script_content,sql_injection
+1,Normal User,normal text,regular value
+2,Script Test,"<script>alert('xss')</script>","'; DROP TABLE users; --"
+3,Path Traversal,"../../../etc/passwd","../../sensitive.txt"
+4,HTML Injection,"<img src=x onerror=alert(1)>","<iframe src=javascript:alert(1)>"
+5,Unicode Bypass,"\u003cscript\u003e","\x27 OR 1=1--"

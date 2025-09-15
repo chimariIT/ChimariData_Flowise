@@ -1,0 +1,34 @@
+{
+  "apiTests": {
+    "health-check": {
+      "success": false,
+      "status": 500
+    },
+    "trial-upload": {
+      "success": true,
+      "status": 200,
+      "responseKeys": [
+        "success",
+        "requiresPIIDecision",
+        "tempFileId",
+        "piiResult",
+        "sampleData",
+        "fileInfo"
+      ]
+    }
+  },
+  "errors": [
+    {
+      "test": "main-upload",
+      "error": "Authentication required"
+    },
+    {
+      "test": "get-projects",
+      "error": "Authentication required"
+    },
+    {
+      "test": "project-upload",
+      "error": "Authentication required"
+    }
+  ]
+}

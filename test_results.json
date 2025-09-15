@@ -1,0 +1,1028 @@
+{
+  "fileProcessor": {
+    "test_dataset_basic.csv": {
+      "success": true,
+      "recordCount": 10,
+      "schemaFields": 10,
+      "previewRows": 10,
+      "processTime": 2,
+      "schema": {
+        "id": {
+          "type": "number",
+          "nullable": false,
+          "sampleValues": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5"
+          ]
+        },
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "sampleValues": [
+            "John Smith",
+            "Sarah Johnson",
+            "Michael Brown",
+            "Lisa Chen",
+            "David Wilson"
+          ]
+        },
+        "email": {
+          "type": "email",
+          "nullable": false,
+          "sampleValues": [
+            "john.smith@example.com",
+            "sarah.j@company.org",
+            "mbrown@test.com",
+            "lisa.chen@email.net",
+            "d.wilson@corp.com"
+          ]
+        },
+        "phone": {
+          "type": "number",
+          "nullable": false,
+          "sampleValues": [
+            "555"
+          ]
+        },
+        "age": {
+          "type": "number",
+          "nullable": false,
+          "sampleValues": [
+            "32",
+            "28",
+            "45",
+            "35",
+            "29"
+          ]
+        },
+        "salary": {
+          "type": "number",
+          "nullable": false,
+          "sampleValues": [
+            "75000",
+            "68000",
+            "92000",
+            "81000",
+            "72000"
+          ]
+        },
+        "birth_date": {
+          "type": "number",
+          "nullable": false,
+          "sampleValues": [
+            "1991",
+            "1995",
+            "1978",
+            "1988",
+            "1994"
+          ]
+        },
+        "is_active": {
+          "type": "text",
+          "nullable": false,
+          "sampleValues": [
+            "true",
+            "false"
+          ]
+        },
+        "department": {
+          "type": "text",
+          "nullable": false,
+          "sampleValues": [
+            "Engineering",
+            "Marketing",
+            "Sales",
+            "HR",
+            "Finance"
+          ]
+        },
+        "hire_date": {
+          "type": "number",
+          "nullable": false,
+          "sampleValues": [
+            "2020",
+            "2021",
+            "2019",
+            "2018",
+            "2022"
+          ]
+        }
+      },
+      "data": [
+        {
+          "id": 1,
+          "name": "John Smith",
+          "email": "john.smith@example.com",
+          "phone": 555,
+          "age": 32,
+          "salary": 75000,
+          "birth_date": 1991,
+          "is_active": "true",
+          "department": "Engineering",
+          "hire_date": 2020
+        },
+        {
+          "id": 2,
+          "name": "Sarah Johnson",
+          "email": "sarah.j@company.org",
+          "phone": 555,
+          "age": 28,
+          "salary": 68000,
+          "birth_date": 1995,
+          "is_active": "true",
+          "department": "Marketing",
+          "hire_date": 2021
+        },
+        {
+          "id": 3,
+          "name": "Michael Brown",
+          "email": "mbrown@test.com",
+          "phone": 555,
+          "age": 45,
+          "salary": 92000,
+          "birth_date": 1978,
+          "is_active": "false",
+          "department": "Sales",
+          "hire_date": 2019
+        },
+        {
+          "id": 4,
+          "name": "Lisa Chen",
+          "email": "lisa.chen@email.net",
+          "phone": 555,
+          "age": 35,
+          "salary": 81000,
+          "birth_date": 1988,
+          "is_active": "true",
+          "department": "Engineering",
+          "hire_date": 2018
+        },
+        {
+          "id": 5,
+          "name": "David Wilson",
+          "email": "d.wilson@corp.com",
+          "phone": 555,
+          "age": 29,
+          "salary": 72000,
+          "birth_date": 1994,
+          "is_active": "true",
+          "department": "HR",
+          "hire_date": 2022
+        },
+        {
+          "id": 6,
+          "name": "Emma Davis",
+          "email": "emma@example.org",
+          "phone": 555,
+          "age": 41,
+          "salary": 89000,
+          "birth_date": 1982,
+          "is_active": "true",
+          "department": "Finance",
+          "hire_date": 2017
+        },
+        {
+          "id": 7,
+          "name": "Robert Taylor",
+          "email": "rtaylor@company.com",
+          "phone": 555,
+          "age": 38,
+          "salary": 85000,
+          "birth_date": 1985,
+          "is_active": "false",
+          "department": "Engineering",
+          "hire_date": 2020
+        },
+        {
+          "id": 8,
+          "name": "Jennifer Garcia",
+          "email": "j.garcia@test.org",
+          "phone": 555,
+          "age": 33,
+          "salary": 76000,
+          "birth_date": 1990,
+          "is_active": "true",
+          "department": "Marketing",
+          "hire_date": 2021
+        },
+        {
+          "id": 9,
+          "name": "William Martinez",
+          "email": "w.martinez@email.com",
+          "phone": 555,
+          "age": 42,
+          "salary": 94000,
+          "birth_date": 1981,
+          "is_active": "true",
+          "department": "Sales",
+          "hire_date": 2016
+        },
+        {
+          "id": 10,
+          "name": "Amanda Rodriguez",
+          "email": "amanda.r@corp.org",
+          "phone": 555,
+          "age": 26,
+          "salary": 65000,
+          "birth_date": 1997,
+          "is_active": "true",
+          "department": "HR",
+          "hire_date": 2023
+        }
+      ]
+    },
+    "test_dataset_pii.csv": {
+      "success": true,
+      "recordCount": 5,
+      "schemaFields": 9,
+      "previewRows": 5,
+      "processTime": 0,
+      "schema": {
+        "ssn": {
+          "type": "number",
+          "nullable": false,
+          "sampleValues": [
+            "123",
+            "987",
+            "456",
+            "321",
+            "654"
+          ]
+        },
+        "credit_card": {
+          "type": "number",
+          "nullable": false,
+          "sampleValues": [
+            "4532",
+            "5555",
+            "4111",
+            "4000",
+            "3530"
+          ]
+        },
+        "full_name": {
+          "type": "text",
+          "nullable": false,
+          "sampleValues": [
+            "John Michael Smith",
+            "Maria Elena Rodriguez",
+            "David Chen Wang",
+            "Sarah Michelle Johnson",
+            "Robert James Brown"
+          ]
+        },
+        "email_address": {
+          "type": "email",
+          "nullable": false,
+          "sampleValues": [
+            "john.smith@personal.com",
+            "maria.rodriguez@email.com",
+            "david.wang@company.org",
+            "s.johnson@personal.net",
+            "r.brown@email.org"
+          ]
+        },
+        "phone_number": {
+          "type": "number",
+          "nullable": false,
+          "sampleValues": [
+            "555"
+          ]
+        },
+        "address": {
+          "type": "number",
+          "nullable": false,
+          "sampleValues": [
+            "123",
+            "456",
+            "789",
+            "321",
+            "654"
+          ]
+        },
+        "date_of_birth": {
+          "type": "text",
+          "nullable": false,
+          "sampleValues": [
+            "Anytown",
+            "Springfield",
+            "Seattle",
+            "Austin",
+            "Denver"
+          ]
+        },
+        "gender": {
+          "type": "text",
+          "nullable": false,
+          "sampleValues": [
+            "NY 12345",
+            "CA 90210",
+            "WA 98101",
+            "TX 73301",
+            "CO 80202"
+          ]
+        },
+        "ethnicity": {
+          "type": "number",
+          "nullable": false,
+          "sampleValues": [
+            "1985",
+            "1992",
+            "1988",
+            "1990",
+            "1975"
+          ]
+        }
+      },
+      "data": [
+        {
+          "ssn": 123,
+          "credit_card": 4532,
+          "full_name": "John Michael Smith",
+          "email_address": "john.smith@personal.com",
+          "phone_number": 555,
+          "address": 123,
+          "date_of_birth": "Anytown",
+          "gender": "NY 12345",
+          "ethnicity": 1985
+        },
+        {
+          "ssn": 987,
+          "credit_card": 5555,
+          "full_name": "Maria Elena Rodriguez",
+          "email_address": "maria.rodriguez@email.com",
+          "phone_number": 555,
+          "address": 456,
+          "date_of_birth": "Springfield",
+          "gender": "CA 90210",
+          "ethnicity": 1992
+        },
+        {
+          "ssn": 456,
+          "credit_card": 4111,
+          "full_name": "David Chen Wang",
+          "email_address": "david.wang@company.org",
+          "phone_number": 555,
+          "address": 789,
+          "date_of_birth": "Seattle",
+          "gender": "WA 98101",
+          "ethnicity": 1988
+        },
+        {
+          "ssn": 321,
+          "credit_card": 4000,
+          "full_name": "Sarah Michelle Johnson",
+          "email_address": "s.johnson@personal.net",
+          "phone_number": 555,
+          "address": 321,
+          "date_of_birth": "Austin",
+          "gender": "TX 73301",
+          "ethnicity": 1990
+        },
+        {
+          "ssn": 654,
+          "credit_card": 3530,
+          "full_name": "Robert James Brown",
+          "email_address": "r.brown@email.org",
+          "phone_number": 555,
+          "address": 654,
+          "date_of_birth": "Denver",
+          "gender": "CO 80202",
+          "ethnicity": 1975
+        }
+      ]
+    },
+    "test_dataset_edge_cases.csv": {
+      "success": true,
+      "recordCount": 13,
+      "schemaFields": 8,
+      "previewRows": 13,
+      "processTime": 1,
+      "schema": {
+        "id": {
+          "type": "number",
+          "nullable": false,
+          "sampleValues": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "break"
+          ]
+        },
+        "name": {
+          "type": "text",
+          "nullable": true,
+          "sampleValues": [
+            "Smith",
+            "O'Connor",
+            "Johnson",
+            "missing",
+            "Very Long Name That Exceeds Normal Limits And Contains Many Words"
+          ]
+        },
+        "score": {
+          "type": "text",
+          "nullable": true,
+          "sampleValues": [
+            "John",
+            "87.2",
+            "75",
+            "-10.5",
+            "NULL"
+          ]
+        },
+        "notes": {
+          "type": "number",
+          "nullable": true,
+          "sampleValues": [
+            "95.5",
+            "Missing name",
+            "Negative score",
+            "Здравствуй мир",
+            "Perfect score"
+          ]
+        },
+        "special_chars": {
+          "type": "text",
+          "nullable": true,
+          "sampleValues": [
+            "Good performance",
+            "<>&'",
+            "\ttab\tchar",
+            "newline",
+            "   spaces   "
+          ]
+        },
+        "empty_field": {
+          "type": "text",
+          "nullable": true,
+          "sampleValues": [
+            "@#$%^&*()",
+            "NULL",
+            "in",
+            "./",
+            "end"
+          ]
+        },
+        "null_value": {
+          "type": "text",
+          "nullable": true,
+          "sampleValues": [
+            "null",
+            "N/A",
+            "field",
+            "مرحبا بالعالم",
+            "end"
+          ]
+        },
+        "unicode_text": {
+          "type": "text",
+          "nullable": true,
+          "sampleValues": [
+            "日本語テスト",
+            "Émilie Noël",
+            "Ñoño niño piña",
+            "Тест кириллицы"
+          ]
+        }
+      },
+      "data": [
+        {
+          "id": 1,
+          "name": "Smith",
+          "score": "John",
+          "notes": 95.5,
+          "special_chars": "Good performance",
+          "empty_field": "@#$%^&*()",
+          "null_value": "",
+          "unicode_text": ""
+        },
+        {
+          "id": 2,
+          "name": "O'Connor",
+          "score": 87.2,
+          "notes": "",
+          "special_chars": "<>&'",
+          "empty_field": "NULL",
+          "null_value": "null",
+          "unicode_text": "日本語テスト"
+        },
+        {
+          "id": 3,
+          "name": "",
+          "score": 75,
+          "notes": "Missing name",
+          "special_chars": "\ttab\tchar",
+          "empty_field": "",
+          "null_value": "N/A",
+          "unicode_text": "Émilie Noël"
+        },
+        {
+          "id": 4,
+          "name": "Johnson",
+          "score": -10.5,
+          "notes": "Negative score",
+          "special_chars": "newline",
+          "empty_field": "",
+          "null_value": "",
+          "unicode_text": ""
+        },
+        {
+          "id": "break",
+          "name": "missing",
+          "score": "NULL",
+          "notes": "Здравствуй мир",
+          "special_chars": "",
+          "empty_field": "",
+          "null_value": "",
+          "unicode_text": ""
+        },
+        {
+          "id": 5,
+          "name": "Very Long Name That Exceeds Normal Limits And Contains Many Words",
+          "score": 100,
+          "notes": "Perfect score",
+          "special_chars": "   spaces   ",
+          "empty_field": "",
+          "null_value": "",
+          "unicode_text": "Ñoño niño piña"
+        },
+        {
+          "id": 6,
+          "name": "NULL",
+          "score": "",
+          "notes": "All empty fields",
+          "special_chars": "",
+          "empty_field": "",
+          "null_value": "",
+          "unicode_text": ""
+        },
+        {
+          "id": 7,
+          "name": "QuoteTest",
+          "score": 0,
+          "notes": "Zero score",
+          "special_chars": "Comma",
+          "empty_field": "in",
+          "null_value": "field",
+          "unicode_text": ""
+        },
+        {
+          "id": 8,
+          "name": "",
+          "score": 50.5,
+          "notes": "Tab character name",
+          "special_chars": "!@#$%^&*()_+{}|:<>?[]\\\\;'",
+          "empty_field": "./",
+          "null_value": "",
+          "unicode_text": ""
+        },
+        {
+          "id": 9,
+          "name": "Multi",
+          "score": "",
+          "notes": "",
+          "special_chars": "",
+          "empty_field": "",
+          "null_value": "",
+          "unicode_text": ""
+        },
+        {
+          "id": "Line",
+          "name": "",
+          "score": "",
+          "notes": "",
+          "special_chars": "",
+          "empty_field": "",
+          "null_value": "",
+          "unicode_text": ""
+        },
+        {
+          "id": "Name",
+          "name": 25.8,
+          "score": "Line breaks in field",
+          "notes": "=+-*/&|^~`",
+          "special_chars": "",
+          "empty_field": "NULL",
+          "null_value": "مرحبا بالعالم",
+          "unicode_text": ""
+        },
+        {
+          "id": 10,
+          "name": "Final Row",
+          "score": 88.9,
+          "notes": "Last entry",
+          "special_chars": " Mixed  Spaces ",
+          "empty_field": "end",
+          "null_value": "end",
+          "unicode_text": "Тест кириллицы"
+        }
+      ]
+    },
+    "test_dataset.json": {
+      "success": true,
+      "recordCount": 3,
+      "schemaFields": 4,
+      "previewRows": 3,
+      "processTime": 0,
+      "schema": {
+        "id": {
+          "type": "number",
+          "nullable": false,
+          "sampleValues": [
+            "1",
+            "2",
+            "3"
+          ]
+        },
+        "profile": {
+          "type": "text",
+          "nullable": false,
+          "sampleValues": [
+            "[object Object]"
+          ]
+        },
+        "work": {
+          "type": "text",
+          "nullable": false,
+          "sampleValues": [
+            "[object Object]"
+          ]
+        },
+        "personal": {
+          "type": "text",
+          "nullable": false,
+          "sampleValues": [
+            "[object Object]"
+          ]
+        }
+      },
+      "data": [
+        {
+          "id": 1,
+          "profile": {
+            "name": "John Smith",
+            "email": "john.smith@example.com",
+            "age": 32,
+            "active": true
+          },
+          "work": {
+            "department": "Engineering",
+            "salary": 75000,
+            "hire_date": "2020-01-15",
+            "skills": [
+              "JavaScript",
+              "Python",
+              "React"
+            ]
+          },
+          "personal": {
+            "phone": "555-123-4567",
+            "address": {
+              "street": "123 Main St",
+              "city": "Anytown",
+              "state": "NY",
+              "zip": "12345"
+            }
+          }
+        },
+        {
+          "id": 2,
+          "profile": {
+            "name": "Sarah Johnson",
+            "email": "sarah.j@company.org",
+            "age": 28,
+            "active": true
+          },
+          "work": {
+            "department": "Marketing",
+            "salary": 68000,
+            "hire_date": "2021-03-10",
+            "skills": [
+              "Adobe Creative Suite",
+              "SEO",
+              "Content Marketing"
+            ]
+          },
+          "personal": {
+            "phone": "555-234-5678",
+            "address": {
+              "street": "456 Oak Ave",
+              "city": "Springfield",
+              "state": "CA",
+              "zip": "90210"
+            }
+          }
+        },
+        {
+          "id": 3,
+          "profile": {
+            "name": "Michael Brown",
+            "email": "mbrown@test.com",
+            "age": 45,
+            "active": false
+          },
+          "work": {
+            "department": "Sales",
+            "salary": 92000,
+            "hire_date": "2019-07-20",
+            "skills": [
+              "CRM",
+              "Negotiation",
+              "Lead Generation"
+            ]
+          },
+          "personal": {
+            "phone": "555-345-6789",
+            "address": {
+              "street": "789 Pine Rd",
+              "city": "Seattle",
+              "state": "WA",
+              "zip": "98101"
+            }
+          }
+        }
+      ]
+    },
+    "edge_cases": {
+      "success": true,
+      "recordCount": 13,
+      "hasSpecialChars": true,
+      "hasNulls": true,
+      "schema": {
+        "id": {
+          "type": "number",
+          "nullable": false,
+          "sampleValues": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "break"
+          ]
+        },
+        "name": {
+          "type": "text",
+          "nullable": true,
+          "sampleValues": [
+            "Smith",
+            "O'Connor",
+            "Johnson",
+            "missing",
+            "Very Long Name That Exceeds Normal Limits And Contains Many Words"
+          ]
+        },
+        "score": {
+          "type": "text",
+          "nullable": true,
+          "sampleValues": [
+            "John",
+            "87.2",
+            "75",
+            "-10.5",
+            "NULL"
+          ]
+        },
+        "notes": {
+          "type": "number",
+          "nullable": true,
+          "sampleValues": [
+            "95.5",
+            "Missing name",
+            "Negative score",
+            "Здравствуй мир",
+            "Perfect score"
+          ]
+        },
+        "special_chars": {
+          "type": "text",
+          "nullable": true,
+          "sampleValues": [
+            "Good performance",
+            "<>&'",
+            "\ttab\tchar",
+            "newline",
+            "   spaces   "
+          ]
+        },
+        "empty_field": {
+          "type": "text",
+          "nullable": true,
+          "sampleValues": [
+            "@#$%^&*()",
+            "NULL",
+            "in",
+            "./",
+            "end"
+          ]
+        },
+        "null_value": {
+          "type": "text",
+          "nullable": true,
+          "sampleValues": [
+            "null",
+            "N/A",
+            "field",
+            "مرحبا بالعالم",
+            "end"
+          ]
+        },
+        "unicode_text": {
+          "type": "text",
+          "nullable": true,
+          "sampleValues": [
+            "日本語テスト",
+            "Émilie Noël",
+            "Ñoño niño piña",
+            "Тест кириллицы"
+          ]
+        }
+      }
+    }
+  },
+  "piiDetection": {
+    "success": true,
+    "detectedPII": 9,
+    "recommendations": 3,
+    "analysis": {
+      "detectedPII": [
+        "ssn",
+        "credit_card",
+        "full_name",
+        "email_address",
+        "phone_number",
+        "address",
+        "date_of_birth",
+        "gender",
+        "ethnicity"
+      ],
+      "columnAnalysis": {
+        "ssn": {
+          "isPII": true,
+          "confidence": 0.6,
+          "type": "ssn"
+        },
+        "credit_card": {
+          "isPII": true,
+          "confidence": 0.6,
+          "type": "credit_card"
+        },
+        "full_name": {
+          "isPII": true,
+          "confidence": 1,
+          "type": "name"
+        },
+        "email_address": {
+          "isPII": true,
+          "confidence": 1,
+          "type": "email"
+        },
+        "phone_number": {
+          "isPII": true,
+          "confidence": 0.6,
+          "type": "phone"
+        },
+        "address": {
+          "isPII": true,
+          "confidence": 0.6,
+          "type": "address"
+        },
+        "date_of_birth": {
+          "isPII": true,
+          "confidence": 1,
+          "type": "name"
+        },
+        "gender": {
+          "isPII": true,
+          "confidence": 0.6,
+          "type": "personal_identifier"
+        },
+        "ethnicity": {
+          "isPII": true,
+          "confidence": 0.6,
+          "type": "personal_identifier"
+        }
+      },
+      "recommendations": [
+        "Found 9 column(s) with potential PII: ssn, credit_card, full_name, email_address, phone_number, address, date_of_birth, gender, ethnicity",
+        "Consider anonymizing or removing PII columns if not necessary for analysis",
+        "Ensure proper data handling compliance (GDPR, CCPA, etc.)"
+      ]
+    }
+  },
+  "schemaDetection": {
+    "accuracy": 70,
+    "correctTypes": 7,
+    "totalFields": 10,
+    "detectedSchema": {
+      "id": {
+        "type": "number",
+        "nullable": false,
+        "sampleValues": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5"
+        ]
+      },
+      "name": {
+        "type": "text",
+        "nullable": false,
+        "sampleValues": [
+          "John Smith",
+          "Sarah Johnson",
+          "Michael Brown",
+          "Lisa Chen",
+          "David Wilson"
+        ]
+      },
+      "email": {
+        "type": "email",
+        "nullable": false,
+        "sampleValues": [
+          "john.smith@example.com",
+          "sarah.j@company.org",
+          "mbrown@test.com",
+          "lisa.chen@email.net",
+          "d.wilson@corp.com"
+        ]
+      },
+      "phone": {
+        "type": "number",
+        "nullable": false,
+        "sampleValues": [
+          "555"
+        ]
+      },
+      "age": {
+        "type": "number",
+        "nullable": false,
+        "sampleValues": [
+          "32",
+          "28",
+          "45",
+          "35",
+          "29"
+        ]
+      },
+      "salary": {
+        "type": "number",
+        "nullable": false,
+        "sampleValues": [
+          "75000",
+          "68000",
+          "92000",
+          "81000",
+          "72000"
+        ]
+      },
+      "birth_date": {
+        "type": "number",
+        "nullable": false,
+        "sampleValues": [
+          "1991",
+          "1995",
+          "1978",
+          "1988",
+          "1994"
+        ]
+      },
+      "is_active": {
+        "type": "text",
+        "nullable": false,
+        "sampleValues": [
+          "true",
+          "false"
+        ]
+      },
+      "department": {
+        "type": "text",
+        "nullable": false,
+        "sampleValues": [
+          "Engineering",
+          "Marketing",
+          "Sales",
+          "HR",
+          "Finance"
+        ]
+      },
+      "hire_date": {
+        "type": "number",
+        "nullable": false,
+        "sampleValues": [
+          "2020",
+          "2021",
+          "2019",
+          "2018",
+          "2022"
+        ]
+      }
+    }
+  },
+  "errors": []
+}
