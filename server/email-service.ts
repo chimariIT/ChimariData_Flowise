@@ -1,11 +1,15 @@
 import { MailService } from '@sendgrid/mail';
 
-if (!process.env.SENDGRID_API_KEY) {
-  throw new Error("SENDGRID_API_KEY environment variable must be set");
-}
+// Initialize SendGrid service only if API key is available
+let mailService: MailService | null = null;
 
-const mailService = new MailService();
-mailService.setApiKey(process.env.SENDGRID_API_KEY);
+if (process.env.SENDGRID_API_KEY) {
+  mailService = new MailService();
+  mailService.setApiKey(process.env.SENDGRID_API_KEY);
+  console.log('✅ SendGrid email service initialized');
+} else {
+  console.warn('⚠️ SENDGRID_API_KEY not found - email service will be disabled');
+}
 
 export interface EmailVerificationParams {
   to: string;
@@ -24,6 +28,11 @@ export class EmailService {
   private static FROM_NAME = 'ChimariData';
 
   static async sendVerificationEmail(params: EmailVerificationParams): Promise<boolean> {
+    if (!mailService) {
+      console.warn('⚠️ Email service not configured - verification email not sent');
+      return false;
+    }
+    
     try {
       const { to, firstName, verificationUrl } = params;
       
@@ -61,6 +70,11 @@ export class EmailService {
   }
 
   static async sendPasswordResetEmail(params: PasswordResetParams): Promise<boolean> {
+    if (!mailService) {
+      console.warn('⚠️ Email service not configured - password reset email not sent');
+      return false;
+    }
+    
     try {
       const { to, firstName, resetUrl } = params;
       
@@ -98,6 +112,11 @@ export class EmailService {
   }
 
   static async sendPasswordResetCode(email: string, code: string, firstName?: string): Promise<boolean> {
+    if (!mailService) {
+      console.warn('⚠️ Email service not configured - password reset code email not sent');
+      return false;
+    }
+    
     try {
       const msg = {
         to: email,
