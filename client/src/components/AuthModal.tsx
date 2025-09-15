@@ -353,6 +353,9 @@ export function AuthModal({ isOpen, onClose, onSuccess, defaultTab = "login" }: 
                           </div>
                         </FormControl>
                         <FormMessage />
+                        <p className="text-xs text-gray-500 mt-1">
+                          8 minimum characters with at least 1 uppercase, 1 numeric or special character
+                        </p>
                       </FormItem>
                     )}
                   />
