@@ -42,6 +42,10 @@ export default function JourneysHub({ user }: JourneysHubProps) {
 
   const handleJourneyStart = (journeyType: string) => {
     if (!user) {
+      // Store intended route before showing auth modal
+      import('@/lib/utils').then(({ routeStorage }) => {
+        routeStorage.setIntendedRoute(`/journeys/${journeyType}/prepare`);
+      });
       setShowAuthModal(true);
       return;
     }
@@ -102,6 +106,16 @@ export default function JourneysHub({ user }: JourneysHubProps) {
       <div className="container mx-auto px-4 py-8">
         {/* Header */}
         <div className="text-center mb-12">
+          {user && (
+            <div className="mb-6 p-4 bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm rounded-lg border border-blue-200 dark:border-blue-700 max-w-2xl mx-auto">
+              <p className="text-lg text-blue-700 dark:text-blue-300 font-medium">
+                Welcome back, {user?.firstName || user?.username || user?.email?.split('@')[0] || 'User'}! 👋
+              </p>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                Ready to continue your data analysis journey?
+              </p>
+            </div>
+          )}
           <h1 className="text-4xl font-bold text-gray-900 dark:text-white mb-4">
             Choose Your Data Analysis Journey
           </h1>

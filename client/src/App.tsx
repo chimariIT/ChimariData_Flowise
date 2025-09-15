@@ -68,13 +68,41 @@ export default function App() {
     if (userData.token) {
       localStorage.setItem('auth_token', userData.token); // Fixed: use same key as AuthModal
     }
-    setLocation('/'); // Redirect to home after login
+    
+    // Check for intended route and redirect there, otherwise go to journeys hub
+    import('@/lib/utils').then(({ routeStorage, userGreetings }) => {
+      const intendedRoute = routeStorage.getAndClearIntendedRoute();
+      if (intendedRoute) {
+        setLocation(intendedRoute);
+      } else {
+        setLocation('/'); // Default to journeys hub
+      }
+      
+      // Store user info for potential goodbye message later
+      userGreetings.storeUserForGoodbye(userData);
+    });
   };
 
   const handleLogout = () => {
-    setUser(null);
-    localStorage.removeItem('auth_token'); // Fixed: use same key as AuthModal
-    setLocation('/');
+    // Get user name for goodbye message before clearing
+    import('@/lib/utils').then(({ userGreetings }) => {
+      const goodbyeName = userGreetings.getAndClearGoodbyeName();
+      
+      setUser(null);
+      localStorage.removeItem('auth_token'); // Fixed: use same key as AuthModal
+      
+      // Show goodbye toast if we have a name
+      if (goodbyeName) {
+        import('@/hooks/use-toast').then(({ toast }) => {
+          toast({
+            title: `Goodbye ${goodbyeName}!`,
+            description: "You've been signed out successfully.",
+          });
+        });
+      }
+      
+      setLocation('/');
+    });
   };
 
   // Show loading while checking authentication
