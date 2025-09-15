@@ -3699,18 +3699,27 @@ This link will expire in 24 hours.
       }
       
       // Check if user is using email/password authentication
-      if (user.provider !== "local") {
+      if (user.provider && user.provider !== "local" && user.provider !== "email" && user.provider !== "credentials") {
         return res.status(400).json({ 
           error: "This account uses social login. Please use the sign-in button.",
           provider: user.provider 
         });
       }
       
+      // Only show "Account password not set" for non-credential users without password
       if (!user.hashedPassword) {
-        return res.status(400).json({ 
-          error: "Account password not set. Please reset your password or contact support.",
-          provider: user.provider 
-        });
+        if (user.provider && user.provider !== "local" && user.provider !== "email" && user.provider !== "credentials") {
+          return res.status(400).json({ 
+            error: "Account password not set. Please reset your password or contact support.",
+            provider: user.provider 
+          });
+        } else {
+          // For credential users, this indicates a data consistency issue
+          return res.status(500).json({ 
+            error: "Authentication error. Please contact support.",
+            provider: user.provider 
+          });
+        }
       }
       
       // Verify password

@@ -173,6 +173,7 @@ export const sessions = pgTable(
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().notNull(),
   email: varchar("email").unique().notNull(),
+  password: varchar("password"), // Legacy field for backward compatibility
   hashedPassword: varchar("hashed_password"), // For email/password auth
   firstName: varchar("first_name"),
   lastName: varchar("last_name"),

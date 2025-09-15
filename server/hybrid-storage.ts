@@ -268,11 +268,18 @@ export class HybridStorage implements IStorage {
         console.error('Failed to load guided analysis orders from database:', error);
       }
 
-      // Populate caches
+      // Populate caches with field mapping
       for (const user of dbUsers) {
-        this.userCache.set(user.id, user);
+        // Map database 'password' field to application 'hashedPassword' field
+        // Note: Drizzle converts database 'hashed_password' column to 'hashedPassword' TypeScript field
+        const mappedUser = {
+          ...user,
+          hashedPassword: user.password || user.hashedPassword, // Handle both legacy and new fields
+          password: undefined, // Clear database password field for security
+        };
+        this.userCache.set(user.id, mappedUser);
         if (user.email) {
-          this.usersByEmail.set(user.email, user);
+          this.usersByEmail.set(user.email, mappedUser);
         }
       }
 
@@ -365,11 +372,11 @@ export class HybridStorage implements IStorage {
     const newUser: User = {
       id: nanoid(),
       email: user.email,
-      hashedPassword: user.hashedPassword, // Store password in hashedPassword field
+      hashedPassword: user.hashedPassword, // Store in hashedPassword field for application
       firstName: user.firstName || null,
       lastName: user.lastName || null,
       profileImageUrl: null,
-      provider: user.provider || "email",
+      provider: user.provider || "local", // Use 'local' instead of 'email' for consistency
       providerId: null,
       emailVerified: user.emailVerified || false,
       emailVerificationToken: user.emailVerificationToken || null,
@@ -393,8 +400,22 @@ export class HybridStorage implements IStorage {
     this.userCache.set(newUser.id, newUser);
     this.usersByEmail.set(user.email, newUser);
 
-    // Queue for async persistence
-    this.writeBackCache.enqueue(`user-${newUser.id}`, 'create-user', newUser);
+    // CRITICAL: Make auth operations synchronous to prevent race conditions
+    // Write immediately to database instead of using write-behind cache
+    try {
+      const dbUser = {
+        ...newUser,
+        password: user.hashedPassword, // Store in database password field (primary field)
+        hashedPassword: undefined, // Clear hashedPassword for database insert
+        hashed_password: undefined // Clear alternative password field
+      };
+      await db.insert(users).values(dbUser);
+    } catch (error) {
+      // Remove from cache if database insert fails
+      this.userCache.delete(newUser.id);
+      this.usersByEmail.delete(user.email);
+      throw error;
+    }
     
     return newUser;
   }
@@ -420,7 +441,7 @@ export class HybridStorage implements IStorage {
     const updatedUser = { 
       ...user, 
       hashedPassword: hashedPassword,
-      password: undefined, // Clear legacy password field
+      password: undefined, // Clear database password field
       updatedAt: new Date() 
     };
     this.userCache.set(userId, updatedUser);
@@ -428,8 +449,9 @@ export class HybridStorage implements IStorage {
       this.usersByEmail.set(user.email, updatedUser);
     }
 
-    // Queue for async persistence
-    this.writeBackCache.enqueue(`user-password-${userId}`, 'update-user-password', { userId, hashedPassword });
+    // CRITICAL: Make auth operations synchronous to prevent race conditions
+    // Write immediately to database instead of using write-behind cache
+    await db.update(users).set({ password: hashedPassword }).where(eq(users.id, userId));
   }
 
   // Project operations
