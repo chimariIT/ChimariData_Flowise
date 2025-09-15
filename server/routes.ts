@@ -49,7 +49,8 @@ import {
   PricingConfirmRequest,
   EligibilityCheckRequest,
   GoalExtractionRequest,
-  GoalExtractionResponse
+  GoalExtractionResponse,
+  ExpressUser
 } from "@shared/schema";
 import { PIIAnalyzer } from './pii-analyzer';
 import { GoogleDriveService } from './google-drive-service';
@@ -110,6 +111,16 @@ const upload = multer({
   }
 });
 
+// Extend Express Request interface for TypeScript
+declare global {
+  namespace Express {
+    interface Request {
+      user?: ExpressUser;
+      userId?: string;
+    }
+  }
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   // Create HTTP server
   const server = createServer(app);
@@ -148,7 +159,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const tokenStore = new Map<string, string>();
   
   // Define ensureAuthenticated middleware within routes scope to access tokenStore
-  const ensureAuthenticated = async (req: any, res: any, next: any) => {
+  const ensureAuthenticated = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
     try {
       // First try OAuth session authentication
       if (req.isAuthenticated && req.isAuthenticated()) {
@@ -178,7 +189,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   };
 
   // Unified auth middleware for both OAuth and token-based authentication
-  const unifiedAuth = async (req: any, res: any, next: any) => {
+  const unifiedAuth = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
     try {
       // First check if already authenticated via OAuth/passport session
       if (req.isAuthenticated && req.isAuthenticated()) {
