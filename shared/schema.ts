@@ -1431,6 +1431,11 @@ export const authUserSchema = z.object({
   emailVerified: z.boolean(),
 });
 
+// Express request user interface (what gets attached to req.user after auth)
+export interface ExpressUser {
+  id: string;
+}
+
 export const loginResponseSchema = z.object({
   success: z.boolean(),
   message: z.string(),

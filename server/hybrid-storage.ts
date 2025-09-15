@@ -365,14 +365,26 @@ export class HybridStorage implements IStorage {
     const newUser: User = {
       id: nanoid(),
       email: user.email,
+      hashedPassword: user.hashedPassword, // Store password in hashedPassword field
       firstName: user.firstName || null,
       lastName: user.lastName || null,
       profileImageUrl: null,
-      password: user.hashedPassword,
-      provider: user.provider || "local",
+      provider: user.provider || "email",
+      providerId: null,
       emailVerified: user.emailVerified || false,
       emailVerificationToken: user.emailVerificationToken || null,
       emailVerificationExpires: user.emailVerificationExpires || null,
+      passwordResetToken: null,
+      passwordResetExpires: null,
+      subscriptionTier: "none",
+      subscriptionStatus: "inactive",
+      stripeCustomerId: null,
+      stripeSubscriptionId: null,
+      subscriptionExpiresAt: null,
+      monthlyUploads: 0,
+      monthlyDataVolume: 0,
+      monthlyAIInsights: 0,
+      usageResetAt: now,
       createdAt: now,
       updatedAt: now,
     };
@@ -391,14 +403,10 @@ export class HybridStorage implements IStorage {
     await this.init();
     
     const user = this.usersByEmail.get(email);
-    if (!user || (!user.password && !user.hashedPassword)) return null;
+    if (!user || !user.hashedPassword) return null;
     
     const bcrypt = await import('bcrypt');
-    // Use hashedPassword field (newer) or fallback to password field (legacy)
-    const storedHash = user.hashedPassword || user.password;
-    if (!storedHash) return null;
-    
-    const isValid = await bcrypt.compare(password, storedHash);
+    const isValid = await bcrypt.compare(password, user.hashedPassword);
     return isValid ? user : null;
   }
 
