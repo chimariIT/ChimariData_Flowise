@@ -1,0 +1,9 @@
+id,name,email,score
+1,"Unclosed quote,test@example.com,95
+2,Missing fields,incomplete
+3,"Extra""quotes""test",email@test.com,88,"extra field"
+4,Normal User,normal@test.com,75
+5,"Embedded
+newline",test@example.com,92
+6,,empty@test.com,85
+7,"Comma,in,field",comma@test.com,90

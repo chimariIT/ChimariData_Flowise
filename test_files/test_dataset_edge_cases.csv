@@ -1,0 +1,14 @@
+id,name,score,notes,special_chars,empty_field,null_value,unicode_text
+1,"Smith, John",95.5,"Good performance","@#$%^&*()",,"",Café résumé
+2,O'Connor,87.2,,"<>&""'",NULL,null,日本語テスト
+3,"",75.0,"Missing name","	tab	char",,"N/A",Émilie Noël
+4,Johnson,-10.5,"Negative score",newline
+break,missing,NULL,Здравствуй мир
+5,"Very Long Name That Exceeds Normal Limits And Contains Many Words",100.0,"Perfect score","   spaces   ",,,"Ñoño niño piña"
+6,NULL,,"All empty fields",,,,
+7,"Quote""Test",0,"Zero score","Comma,in,field",,NULL,
+8,	,50.5,"Tab character name","!@#$%^&*()_+{}|:<>?[]\\;',./",,,"Special chars: áéíóú ñÑ"
+9,"Multi
+Line
+Name",25.8,"Line breaks in field","=+-*/&|^~`",,NULL,"مرحبا بالعالم"
+10,"Final Row",88.9,"Last entry"," Mixed  Spaces ",end,end,"Тест кириллицы"

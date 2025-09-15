@@ -1,0 +1,6 @@
+ssn,credit_card,full_name,email_address,phone_number,address,date_of_birth,gender,ethnicity
+123-45-6789,4532-1234-5678-9012,John Michael Smith,john.smith@personal.com,555-123-4567,"123 Main St, Anytown, NY 12345",1985-03-15,Male,Caucasian
+987-65-4321,5555-4444-3333-2222,Maria Elena Rodriguez,maria.rodriguez@email.com,555-987-6543,"456 Oak Ave, Springfield, CA 90210",1992-07-22,Female,Hispanic
+456-78-9123,4111-1111-1111-1111,David Chen Wang,david.wang@company.org,555-456-7890,"789 Pine Rd, Seattle, WA 98101",1988-11-08,Male,Asian
+321-54-9876,4000-0000-0000-0002,Sarah Michelle Johnson,s.johnson@personal.net,555-321-9876,"321 Elm St, Austin, TX 73301",1990-12-25,Female,African American
+654-32-1098,3530-1113-3333-1111,Robert James Brown,r.brown@email.org,555-654-3210,"654 Cedar Ln, Denver, CO 80202",1975-05-30,Male,Caucasian
