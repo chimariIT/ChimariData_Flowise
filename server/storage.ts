@@ -774,6 +774,14 @@ export class MemStorage implements IStorage {
       ...estimateData,
       id,
       createdAt: new Date(),
+      estimateType: estimateData.estimateType as 'preparation' | 'data_processing' | 'analysis' | 'full_journey',
+      items: estimateData.items as { description: string; quantity: number; unitPrice: number; total: number; }[],
+      discounts: estimateData.discounts ?? 0,
+      taxes: estimateData.taxes ?? 0,
+      currency: estimateData.currency ?? 'USD',
+      approved: estimateData.approved ?? false,
+      approvedAt: estimateData.approvedAt ?? undefined,
+      journeyId: estimateData.journeyId ?? undefined,
     };
     
     this.costEstimates.set(id, estimate);
@@ -821,6 +829,12 @@ export class MemStorage implements IStorage {
       ...checkData,
       id,
       createdAt: new Date(),
+      checkResult: checkData.checkResult as 'allowed' | 'limit_exceeded' | 'tier_required' | 'payment_required',
+      reason: checkData.reason ?? undefined,
+      requiredTier: checkData.requiredTier ?? undefined,
+      currentUsage: checkData.currentUsage as { monthly?: number; total?: number; } | undefined,
+      limits: checkData.limits as { monthly?: number; total?: number; } | undefined,
+      nextResetAt: checkData.nextResetAt ?? undefined,
     };
     
     this.eligibilityChecks.set(id, check);
@@ -1585,7 +1599,17 @@ export class DatabaseStorage implements IStorage {
       })
       .returning();
     
-    return estimate;
+    return {
+      ...estimate,
+      estimateType: estimate.estimateType as 'preparation' | 'data_processing' | 'analysis' | 'full_journey',
+      items: estimate.items as { description: string; quantity: number; unitPrice: number; total: number; }[],
+      discounts: estimate.discounts ?? 0,
+      taxes: estimate.taxes ?? 0,
+      currency: estimate.currency ?? 'USD',
+      approved: estimate.approved ?? false,
+      approvedAt: estimate.approvedAt ?? undefined,
+      journeyId: estimate.journeyId ?? undefined
+    };
   }
 
   async getCostEstimate(id: string): Promise<CostEstimate | undefined> {
@@ -1594,25 +1618,61 @@ export class DatabaseStorage implements IStorage {
       .from(costEstimates)
       .where(eq(costEstimates.id, id));
     
-    return estimate || undefined;
+    if (!estimate) return undefined;
+    
+    return {
+      ...estimate,
+      estimateType: estimate.estimateType as 'preparation' | 'data_processing' | 'analysis' | 'full_journey',
+      items: estimate.items as { description: string; quantity: number; unitPrice: number; total: number; }[],
+      discounts: estimate.discounts ?? 0,
+      taxes: estimate.taxes ?? 0,
+      currency: estimate.currency ?? 'USD',
+      approved: estimate.approved ?? false,
+      approvedAt: estimate.approvedAt ?? undefined,
+      journeyId: estimate.journeyId ?? undefined
+    };
   }
 
   async getCostEstimatesByUser(userId: string): Promise<CostEstimate[]> {
     const { desc } = await import("drizzle-orm");
-    return await db
+    const estimates = await db
       .select()
       .from(costEstimates)
       .where(eq(costEstimates.userId, userId))
       .orderBy(desc(costEstimates.createdAt));
+    
+    return estimates.map(estimate => ({
+      ...estimate,
+      estimateType: estimate.estimateType as 'preparation' | 'data_processing' | 'analysis' | 'full_journey',
+      items: estimate.items as { description: string; quantity: number; unitPrice: number; total: number; }[],
+      discounts: estimate.discounts ?? 0,
+      taxes: estimate.taxes ?? 0,
+      currency: estimate.currency ?? 'USD',
+      approved: estimate.approved ?? false,
+      approvedAt: estimate.approvedAt ?? undefined,
+      journeyId: estimate.journeyId ?? undefined
+    }));
   }
 
   async getCostEstimatesByJourney(journeyId: string): Promise<CostEstimate[]> {
     const { desc } = await import("drizzle-orm");
-    return await db
+    const estimates = await db
       .select()
       .from(costEstimates)
       .where(eq(costEstimates.journeyId, journeyId))
       .orderBy(desc(costEstimates.createdAt));
+    
+    return estimates.map(estimate => ({
+      ...estimate,
+      estimateType: estimate.estimateType as 'preparation' | 'data_processing' | 'analysis' | 'full_journey',
+      items: estimate.items as { description: string; quantity: number; unitPrice: number; total: number; }[],
+      discounts: estimate.discounts ?? 0,
+      taxes: estimate.taxes ?? 0,
+      currency: estimate.currency ?? 'USD',
+      approved: estimate.approved ?? false,
+      approvedAt: estimate.approvedAt ?? undefined,
+      journeyId: estimate.journeyId ?? undefined
+    }));
   }
 
   async updateCostEstimate(id: string, updates: Partial<CostEstimate>): Promise<CostEstimate | undefined> {
@@ -1622,13 +1682,25 @@ export class DatabaseStorage implements IStorage {
       .where(eq(costEstimates.id, id))
       .returning();
     
-    return estimate || undefined;
+    if (!estimate) return undefined;
+    
+    return {
+      ...estimate,
+      estimateType: estimate.estimateType as 'preparation' | 'data_processing' | 'analysis' | 'full_journey',
+      items: estimate.items as { description: string; quantity: number; unitPrice: number; total: number; }[],
+      discounts: estimate.discounts ?? 0,
+      taxes: estimate.taxes ?? 0,
+      currency: estimate.currency ?? 'USD',
+      approved: estimate.approved ?? false,
+      approvedAt: estimate.approvedAt ?? undefined,
+      journeyId: estimate.journeyId ?? undefined
+    };
   }
 
   async getValidCostEstimates(userId: string): Promise<CostEstimate[]> {
-    const { desc, gt } = await import("drizzle-orm");
+    const { desc, gt, and } = await import("drizzle-orm");
     const now = new Date();
-    return await db
+    const estimates = await db
       .select()
       .from(costEstimates)
       .where(
@@ -1638,6 +1710,18 @@ export class DatabaseStorage implements IStorage {
         )
       )
       .orderBy(desc(costEstimates.createdAt));
+    
+    return estimates.map(estimate => ({
+      ...estimate,
+      estimateType: estimate.estimateType as 'preparation' | 'data_processing' | 'analysis' | 'full_journey',
+      items: estimate.items as { description: string; quantity: number; unitPrice: number; total: number; }[],
+      discounts: estimate.discounts ?? 0,
+      taxes: estimate.taxes ?? 0,
+      currency: estimate.currency ?? 'USD',
+      approved: estimate.approved ?? false,
+      approvedAt: estimate.approvedAt ?? undefined,
+      journeyId: estimate.journeyId ?? undefined
+    }));
   }
 
   // Eligibility Checks - DatabaseStorage Implementation
@@ -1650,7 +1734,15 @@ export class DatabaseStorage implements IStorage {
       })
       .returning();
     
-    return check;
+    return {
+      ...check,
+      checkResult: check.checkResult as 'allowed' | 'limit_exceeded' | 'tier_required' | 'payment_required',
+      reason: check.reason ?? undefined,
+      requiredTier: check.requiredTier ?? undefined,
+      currentUsage: check.currentUsage as { monthly?: number; total?: number; } | undefined,
+      limits: check.limits as { monthly?: number; total?: number; } | undefined,
+      nextResetAt: check.nextResetAt ?? undefined
+    };
   }
 
   async getEligibilityCheck(id: string): Promise<EligibilityCheck | undefined> {
@@ -1659,21 +1751,41 @@ export class DatabaseStorage implements IStorage {
       .from(eligibilityChecks)
       .where(eq(eligibilityChecks.id, id));
     
-    return check || undefined;
+    if (!check) return undefined;
+    
+    return {
+      ...check,
+      checkResult: check.checkResult as 'allowed' | 'limit_exceeded' | 'tier_required' | 'payment_required',
+      reason: check.reason ?? undefined,
+      requiredTier: check.requiredTier ?? undefined,
+      currentUsage: check.currentUsage as { monthly?: number; total?: number; } | undefined,
+      limits: check.limits as { monthly?: number; total?: number; } | undefined,
+      nextResetAt: check.nextResetAt ?? undefined
+    };
   }
 
   async getEligibilityChecksByUser(userId: string): Promise<EligibilityCheck[]> {
     const { desc } = await import("drizzle-orm");
-    return await db
+    const checks = await db
       .select()
       .from(eligibilityChecks)
       .where(eq(eligibilityChecks.userId, userId))
       .orderBy(desc(eligibilityChecks.createdAt));
+    
+    return checks.map(check => ({
+      ...check,
+      checkResult: check.checkResult as 'allowed' | 'limit_exceeded' | 'tier_required' | 'payment_required',
+      reason: check.reason ?? undefined,
+      requiredTier: check.requiredTier ?? undefined,
+      currentUsage: check.currentUsage as { monthly?: number; total?: number; } | undefined,
+      limits: check.limits as { monthly?: number; total?: number; } | undefined,
+      nextResetAt: check.nextResetAt ?? undefined
+    }));
   }
 
   async getEligibilityChecksByFeature(userId: string, feature: string): Promise<EligibilityCheck[]> {
-    const { desc } = await import("drizzle-orm");
-    return await db
+    const { desc, and } = await import("drizzle-orm");
+    const checks = await db
       .select()
       .from(eligibilityChecks)
       .where(
@@ -1683,6 +1795,16 @@ export class DatabaseStorage implements IStorage {
         )
       )
       .orderBy(desc(eligibilityChecks.createdAt));
+    
+    return checks.map(check => ({
+      ...check,
+      checkResult: check.checkResult as 'allowed' | 'limit_exceeded' | 'tier_required' | 'payment_required',
+      reason: check.reason ?? undefined,
+      requiredTier: check.requiredTier ?? undefined,
+      currentUsage: check.currentUsage as { monthly?: number; total?: number; } | undefined,
+      limits: check.limits as { monthly?: number; total?: number; } | undefined,
+      nextResetAt: check.nextResetAt ?? undefined
+    }));
   }
 
   async getLatestEligibilityCheck(userId: string, feature: string): Promise<EligibilityCheck | undefined> {
