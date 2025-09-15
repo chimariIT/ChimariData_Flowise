@@ -26,8 +26,6 @@ import { MultiSourceUpload } from "@/components/MultiSourceUpload";
 import SchemaEditor from "@/components/schema-editor";
 import DataTransformation from "@/components/data-transformation";
 import MultiFileJoiner from "@/components/multi-file-joiner";
-import { PricingBanner } from "@/components/PricingBanner";
-import { CostChip } from "@/components/CostChip";
 import { useProjectContext } from "@/hooks/useProjectContext";
 import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/lib/api";
@@ -64,7 +62,6 @@ export default function DataStep({ journeyType, onNext, onPrevious, renderAsCont
     joinedFiles: []
   });
   const [isProcessing, setIsProcessing] = useState(false);
-  const [estimatedCost, setEstimatedCost] = useState<number>(0);
 
   // Data step workflow
   const workflowSteps: WorkflowStep[] = [
@@ -286,40 +283,17 @@ export default function DataStep({ journeyType, onNext, onPrevious, renderAsCont
               </p>
             </div>
 
-            {/* Cost Transparency Section */}
-            <div className="mb-6 space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-4">
-                  <CostChip
-                    journeyType={journeyType as 'guided' | 'business' | 'technical'}
-                    features={['data_preparation', 'schema_validation', 'privacy_check']}
-                    dataSizeMB={Math.round((currentProject?.fileSize || 0) / 1024 / 1024)}
-                    complexityLevel="basic"
-                    expectedQuestions={3}
-                    size="lg"
-                    data-testid="cost-chip-data-step"
-                  />
-                  <Badge variant="secondary" data-testid="badge-data-stage">
-                    Data Preparation • Step 2 of 3
-                  </Badge>
+            {/* Data Preparation Focus */}
+            <div className="mb-6">
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Database className="w-4 h-4 text-blue-600" />
+                  <span className="text-sm font-medium text-blue-900">Data Preparation Phase</span>
                 </div>
+                <p className="text-sm text-blue-700">
+                  Upload and prepare your data for analysis. Features and pricing will be determined later based on your complete requirements.
+                </p>
               </div>
-              
-              <PricingBanner
-                journeyType={journeyType as 'guided' | 'business' | 'technical'}
-                features={['data_preparation', 'schema_validation', 'privacy_check']}
-                dataSizeMB={Math.round((currentProject?.fileSize || 0) / 1024 / 1024)}
-                complexityLevel="basic"
-                expectedQuestions={3}
-                onConfirm={(estimate) => {
-                  toast({
-                    title: "Data Preparation Confirmed",
-                    description: `Proceeding with data preparation for ${formatCurrency(estimate.total)}`,
-                  });
-                }}
-                className="border-blue-200 bg-blue-50"
-                data-testid="pricing-banner-data-step"
-              />
             </div>
           </>
         )}
@@ -691,24 +665,17 @@ export default function DataStep({ journeyType, onNext, onPrevious, renderAsCont
                 </CardContent>
               </Card>
 
-              {/* Cost Estimate */}
-              {estimatedCost > 0 && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-lg">Estimated Cost</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <CostChip 
-                      journeyType={journeyType as 'guided' | 'business' | 'technical'}
-                      features={['data_preparation']}
-                      dataSizeMB={10}
-                      complexityLevel="basic"
-                      expectedQuestions={1}
-                      size="lg"
-                    />
-                  </CardContent>
-                </Card>
-              )}
+              {/* Data Status Info */}
+              <Card className="bg-green-50 border-green-200">
+                <CardHeader>
+                  <CardTitle className="text-lg text-green-900">Data Preparation Progress</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-green-700">
+                    Your data is being prepared for analysis. Pricing will be determined at the end based on your complete analysis requirements.
+                  </p>
+                </CardContent>
+              </Card>
 
               {/* Navigation */}
               <Card>
