@@ -914,55 +914,114 @@ export class DatabaseStorage implements IStorage {
 
   // User operations
   async createUser(userData: Omit<User, 'createdAt' | 'updatedAt'>): Promise<User> {
-    const [user] = await db
+    // Map hashedPassword to database password field for insert
+    const dbUserData = {
+      ...userData,
+      id: userData.id || nanoid(),
+      password: userData.hashedPassword, // Map to database password field
+      hashedPassword: undefined // Clear hashedPassword for database
+    };
+    
+    const [dbUser] = await db
       .insert(users)
-      .values({
-        ...userData,
-        id: userData.id || nanoid(),
-      })
+      .values(dbUserData)
       .returning();
+    
+    // Map database password back to hashedPassword for application use
+    const user = {
+      ...dbUser,
+      hashedPassword: dbUser.password, // Map database password to application hashedPassword
+      password: undefined // Clear database password field for security
+    };
     
     return user;
   }
 
   async getUser(id: string): Promise<User | undefined> {
-    const [user] = await db
+    const [dbUser] = await db
       .select()
       .from(users)
       .where(eq(users.id, id));
     
-    return user || undefined;
+    if (!dbUser) return undefined;
+    
+    // Map database password to application hashedPassword field
+    const user = {
+      ...dbUser,
+      hashedPassword: dbUser.password || dbUser.hashed_password, // Handle both fields for compatibility
+      password: undefined, // Clear database password field for security
+      hashed_password: undefined // Clear alternative password field for security
+    };
+    
+    return user;
   }
 
   async getUserByEmail(email: string): Promise<User | undefined> {
-    const [user] = await db
+    const [dbUser] = await db
       .select()
       .from(users)
       .where(eq(users.email, email));
     
-    return user || undefined;
+    if (!dbUser) return undefined;
+    
+    // Map database password to application hashedPassword field
+    const user = {
+      ...dbUser,
+      hashedPassword: dbUser.password || dbUser.hashed_password, // Handle both fields for compatibility
+      password: undefined, // Clear database password field for security
+      hashed_password: undefined // Clear alternative password field for security
+    };
+    
+    return user;
   }
 
   async getUserByVerificationToken(token: string): Promise<User | undefined> {
-    const [user] = await db
+    const [dbUser] = await db
       .select()
       .from(users)
       .where(eq(users.emailVerificationToken, token));
     
-    return user || undefined;
+    if (!dbUser) return undefined;
+    
+    // Map database password to application hashedPassword field
+    const user = {
+      ...dbUser,
+      hashedPassword: dbUser.password || dbUser.hashed_password, // Handle both fields for compatibility
+      password: undefined, // Clear database password field for security
+      hashed_password: undefined // Clear alternative password field for security
+    };
+    
+    return user;
   }
 
   async updateUser(id: string, updates: Partial<User>): Promise<User | undefined> {
-    const [user] = await db
+    // Map hashedPassword to database password field for update
+    const dbUpdates = {
+      ...updates,
+      updatedAt: new Date(),
+    };
+    
+    if (updates.hashedPassword !== undefined) {
+      dbUpdates.password = updates.hashedPassword; // Map to database password field
+      dbUpdates.hashedPassword = undefined; // Clear hashedPassword for database
+    }
+    
+    const [dbUser] = await db
       .update(users)
-      .set({
-        ...updates,
-        updatedAt: new Date(),
-      })
+      .set(dbUpdates)
       .where(eq(users.id, id))
       .returning();
     
-    return user || undefined;
+    if (!dbUser) return undefined;
+    
+    // Map database password back to hashedPassword for application use
+    const user = {
+      ...dbUser,
+      hashedPassword: dbUser.password, // Map database password to application hashedPassword
+      password: undefined // Clear database password field for security
+    };
+    
+    return user;
   }
 
   async deleteUser(id: string): Promise<boolean> {
@@ -974,11 +1033,36 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAllUsers(): Promise<User[]> {
-    const allUsers = await db
+    const dbUsers = await db
       .select()
       .from(users);
     
-    return allUsers;
+    // Map database password to application hashedPassword field for all users
+    return dbUsers.map(dbUser => ({
+      ...dbUser,
+      hashedPassword: dbUser.password || dbUser.hashed_password, // Handle both fields for compatibility
+      password: undefined, // Clear database password field for security
+      hashed_password: undefined // Clear alternative password field for security
+    }));
+  }
+
+  // Add missing authentication methods for DatabaseStorage
+  async validateUserCredentials(email: string, password: string): Promise<User | null> {
+    const user = await this.getUserByEmail(email);
+    if (!user || !user.hashedPassword) return null;
+    
+    const bcrypt = await import('bcrypt');
+    const isValid = await bcrypt.compare(password, user.hashedPassword);
+    return isValid ? user : null;
+  }
+
+  async updateUserPassword(userId: string, hashedPassword: string): Promise<void> {
+    await db.update(users)
+      .set({ 
+        password: hashedPassword, // Map to database password field
+        updatedAt: new Date() 
+      })
+      .where(eq(users.id, userId));
   }
 
   // Guided analysis storage
