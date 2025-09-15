@@ -338,7 +338,7 @@ export const guidedAnalysisOrders = pgTable("guided_analysis_orders", {
   id: varchar("id").primaryKey().notNull(),
   userId: varchar("user_id"),
   projectId: varchar("project_id"),
-  analysisConfig: jsonb("analysis_config"),
+  configuration: jsonb("configuration"),
   orderData: jsonb("order_data"),
   status: varchar("status").default("pending"),
   createdAt: timestamp("created_at").defaultNow(),
