@@ -1,5 +1,5 @@
-import { DataProject, InsertDataProject, User, Project, InsertProject, EnterpriseInquiry, InsertEnterpriseInquiry, GuidedAnalysisOrder, InsertGuidedAnalysisOrder } from "@shared/schema";
-import { users, projects, enterpriseInquiries, guidedAnalysisOrders } from "@shared/schema";
+import { DataProject, InsertDataProject, User, Project, InsertProject, EnterpriseInquiry, InsertEnterpriseInquiry, GuidedAnalysisOrder, InsertGuidedAnalysisOrder, Dataset, InsertDataset } from "@shared/schema";
+import { users, projects, enterpriseInquiries, guidedAnalysisOrders, datasets } from "@shared/schema";
 import { db } from "./db";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
@@ -90,6 +90,9 @@ export interface IStorage {
   createUser(user: { email: string; hashedPassword: string; firstName?: string; lastName?: string; provider?: string; emailVerified?: boolean; emailVerificationToken?: string; emailVerificationExpires?: Date }): Promise<User>;
   validateUserCredentials(email: string, password: string): Promise<User | null>;
   updateUserPassword(userId: string, hashedPassword: string): Promise<void>;
+  
+  // Dataset operations
+  searchDatasets(ownerId: string, query?: string): Promise<Dataset[]>;
   
   // Project operations
   getProject(id: string): Promise<DataProject | undefined>;
@@ -452,6 +455,29 @@ export class HybridStorage implements IStorage {
     // CRITICAL: Make auth operations synchronous to prevent race conditions
     // Write immediately to database instead of using write-behind cache
     await db.update(users).set({ password: hashedPassword }).where(eq(users.id, userId));
+  }
+
+  // Dataset operations
+  async searchDatasets(ownerId: string, query?: string): Promise<Dataset[]> {
+    await this.init();
+    
+    // Query the database for datasets by owner
+    try {
+      const allDatasets = await db.select().from(datasets).where(eq(datasets.ownerId, ownerId));
+      
+      if (!query) {
+        return allDatasets;
+      }
+      
+      // Filter by query string (search in filename and display name)
+      return allDatasets.filter(dataset => 
+        dataset.originalFileName.toLowerCase().includes(query.toLowerCase()) ||
+        (dataset.displayName && dataset.displayName.toLowerCase().includes(query.toLowerCase()))
+      );
+    } catch (error) {
+      console.error('Error searching datasets:', error);
+      return [];
+    }
   }
 
   // Project operations
