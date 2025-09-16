@@ -7,6 +7,8 @@ import {
   InsertCostEstimate 
 } from '@shared/schema';
 import { nanoid } from 'nanoid';
+import { goalAnalysisEngine, GoalAnalysisResult } from './goal-analysis-engine';
+import { workBreakdownService, WorkBreakdownResult } from './work-breakdown-service';
 
 interface CostItem {
   description: string;
@@ -74,6 +76,254 @@ export class PricingService {
       PricingService.instance = new PricingService();
     }
     return PricingService.instance;
+  }
+
+  /**
+   * Intelligent cost estimation based on journey goals and questions
+   */
+  async calculateIntelligentEstimate(request: {
+    journeyId?: string;
+    goals?: string[];
+    questions?: string[];
+    journeyType: string;
+    dataContext?: {
+      sizeInMB?: number;
+      recordCount?: number;
+      columns?: string[];
+      complexity?: string;
+    };
+  }): Promise<{
+    success: boolean;
+    estimate?: {
+      total: number;
+      currency: string;
+      expiresInMs: number;
+      breakdown: any[];
+      confidence: number;
+      workComponents: any[];
+      recommendations: string[];
+    };
+    error?: string;
+  }> {
+    try {
+      console.log('Calculating intelligent cost estimate for journey goals');
+
+      const { goals = [], questions = [], journeyType, dataContext = {} } = request;
+
+      // If we have a journeyId, fetch the journey data
+      let finalGoals = goals;
+      let finalQuestions = questions;
+      
+      if (request.journeyId && (!goals.length || !questions.length)) {
+        try {
+          const journey = await storage.getJourney(request.journeyId);
+          if (journey) {
+            finalGoals = journey.goals || goals;
+            finalQuestions = journey.questions || questions;
+          }
+        } catch (error) {
+          console.error('Failed to fetch journey data:', error);
+          // Continue with provided data
+        }
+      }
+
+      if (!finalGoals.length && !finalQuestions.length) {
+        return {
+          success: false,
+          error: 'No goals or questions provided for analysis'
+        };
+      }
+
+      // Use work breakdown service for intelligent analysis
+      const workBreakdown = await workBreakdownService.breakdownGoalsToWork(
+        finalGoals,
+        finalQuestions,
+        journeyType,
+        dataContext
+      );
+
+      // Calculate confidence based on goal analysis quality
+      const confidence = this.calculateEstimateConfidence(
+        finalGoals.length,
+        finalQuestions.length,
+        workBreakdown.complexityScore,
+        dataContext
+      );
+
+      // Create detailed breakdown for response
+      const breakdown = workBreakdown.costBreakdowns.map(costBreakdown => ({
+        component: costBreakdown.component.name,
+        description: costBreakdown.component.description,
+        type: costBreakdown.component.type,
+        complexity: costBreakdown.component.complexity,
+        estimatedHours: costBreakdown.component.estimatedHours,
+        baseCost: costBreakdown.baseCost / 100, // Convert to dollars
+        finalCost: costBreakdown.finalCost / 100, // Convert to dollars
+        reasoning: costBreakdown.reasoning
+      }));
+
+      // Generate cache key and store estimate
+      const cacheKey = this.generateIntelligentCacheKey(
+        finalGoals,
+        finalQuestions,
+        journeyType,
+        dataContext
+      );
+
+      const estimate = {
+        total: workBreakdown.totalEstimatedCost,
+        currency: 'USD',
+        expiresInMs: this.ESTIMATE_VALIDITY_MS,
+        breakdown,
+        confidence,
+        workComponents: workBreakdown.workComponents,
+        recommendations: workBreakdown.recommendations,
+        riskAdjustment: workBreakdown.riskAdjustment,
+        estimatedHours: workBreakdown.totalEstimatedHours,
+        complexityScore: workBreakdown.complexityScore
+      };
+
+      // Cache the estimate
+      await this.cacheIntelligentEstimate(cacheKey, estimate);
+
+      return {
+        success: true,
+        estimate
+      };
+
+    } catch (error) {
+      console.error('Intelligent cost estimation failed:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to calculate intelligent estimate'
+      };
+    }
+  }
+
+  /**
+   * Quick intelligent estimate for immediate feedback
+   */
+  async getQuickIntelligentEstimate(
+    goalCount: number,
+    questionCount: number,
+    journeyType: string,
+    complexity: 'basic' | 'intermediate' | 'advanced' = 'intermediate'
+  ): Promise<number> {
+    try {
+      return workBreakdownService.getQuickEstimate(
+        goalCount,
+        questionCount,
+        journeyType,
+        complexity
+      );
+    } catch (error) {
+      console.error('Quick intelligent estimate failed:', error);
+      // Fallback to simple calculation
+      const basePrice = (goalCount * 2500) + (questionCount * 1000);
+      const complexityMultiplier = this.COMPLEXITY_MULTIPLIERS[complexity];
+      const journeyMultiplier = this.JOURNEY_MULTIPLIERS[journeyType as keyof typeof this.JOURNEY_MULTIPLIERS] || 1.0;
+      return Math.round(basePrice * complexityMultiplier * journeyMultiplier);
+    }
+  }
+
+  /**
+   * Calculate confidence score for estimate accuracy
+   */
+  private calculateEstimateConfidence(
+    goalCount: number,
+    questionCount: number,
+    complexityScore: number,
+    dataContext: any
+  ): number {
+    let confidence = 0.5; // Base confidence
+
+    // More goals and questions = higher confidence
+    confidence += Math.min(goalCount * 0.1, 0.3);
+    confidence += Math.min(questionCount * 0.05, 0.2);
+
+    // Data context availability
+    if (dataContext.sizeInMB) confidence += 0.1;
+    if (dataContext.recordCount) confidence += 0.1;
+    if (dataContext.columns?.length) confidence += 0.1;
+
+    // Complexity assessment (medium complexity = higher confidence)
+    if (complexityScore > 0 && complexityScore < 10) {
+      confidence += 0.15; // Sweet spot
+    }
+
+    return Math.min(confidence, 0.95); // Cap at 95%
+  }
+
+  /**
+   * Generate cache key for intelligent estimates
+   */
+  private generateIntelligentCacheKey(
+    goals: string[],
+    questions: string[],
+    journeyType: string,
+    dataContext: any
+  ): string {
+    const canonical = {
+      goals: goals.sort(),
+      questions: questions.sort(),
+      journeyType,
+      dataSize: dataContext.sizeInMB || 0,
+      recordCount: dataContext.recordCount || 0,
+      columnCount: dataContext.columns?.length || 0
+    };
+
+    return crypto
+      .createHash('sha256')
+      .update(JSON.stringify(canonical))
+      .digest('hex');
+  }
+
+  /**
+   * Cache intelligent estimate with metadata
+   */
+  private async cacheIntelligentEstimate(cacheKey: string, estimate: any): Promise<void> {
+    try {
+      // Store in memory cache
+      this.estimateCache.set(cacheKey, {
+        estimate: {
+          id: nanoid(),
+          inputsHash: cacheKey,
+          total: estimate.total,
+          currency: estimate.currency,
+          expiresAt: new Date(Date.now() + this.ESTIMATE_VALIDITY_MS),
+          breakdown: estimate.breakdown,
+          metadata: {
+            confidence: estimate.confidence,
+            riskAdjustment: estimate.riskAdjustment,
+            estimatedHours: estimate.estimatedHours,
+            complexityScore: estimate.complexityScore
+          }
+        },
+        timestamp: Date.now(),
+        ttlMs: this.CACHE_TTL_MS
+      });
+
+      // Store in database for persistence
+      await storage.saveIntelligentEstimate({
+        inputsHash: cacheKey,
+        total: estimate.total,
+        currency: estimate.currency,
+        expiresAt: new Date(Date.now() + this.ESTIMATE_VALIDITY_MS),
+        breakdown: estimate.breakdown,
+        metadata: {
+          confidence: estimate.confidence,
+          recommendations: estimate.recommendations,
+          workComponents: estimate.workComponents,
+          riskAdjustment: estimate.riskAdjustment,
+          estimatedHours: estimate.estimatedHours,
+          complexityScore: estimate.complexityScore
+        }
+      });
+
+    } catch (error) {
+      console.error('Failed to cache intelligent estimate:', error);
+      // Continue without caching
+    }
   }
 
   /**
