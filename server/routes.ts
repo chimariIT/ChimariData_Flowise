@@ -71,6 +71,7 @@ import { SUBSCRIPTION_TIERS, getTierLimits, canUserUpload, canUserRequestAIInsig
 import { PasswordResetService } from './password-reset-service';
 import { pricingService } from './pricing-service';
 import { eligibilityService } from './eligibility-service';
+import { setupOAuth } from './oauth-config';
 import bcrypt from 'bcrypt';
 import fs from 'fs/promises';
 import { VisualizationAPIService, PandasTransformationAPIService } from './visualization-api-service';
@@ -155,6 +156,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   // Initialize MCP AI Service
   MCPAIService.initializeMCPServer().catch(console.error);
+  
+  // Setup OAuth authentication
+  setupOAuth(app);
   
   // Token store for authentication (shared between middleware functions)
   const tokenStore = new Map<string, string>();
