@@ -1153,7 +1153,7 @@ export const eligibilityCheckResponseSchema = z.object({
 // Goal Extraction Request/Response Schemas
 export const goalExtractionRequestSchema = z.object({
   userDescription: z.string().min(10, 'Please provide a detailed description of at least 10 characters'),
-  journeyType: z.enum(['guided', 'business', 'technical']),
+  journeyType: z.enum(['non-tech', 'business', 'technical']),
   context: z.object({
     industry: z.string().optional(),
     businessRole: z.string().optional(),

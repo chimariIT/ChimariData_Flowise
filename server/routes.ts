@@ -1955,7 +1955,7 @@ Respond with valid JSON only, no additional text.`;
 
   function getFallbackGoalExtraction(journeyType: string): any {
     const fallbacks = {
-      guided: {
+      'non-tech': {
         goals: [
           {
             goal: "Understand your data patterns",
@@ -2068,7 +2068,7 @@ Respond with valid JSON only, no additional text.`;
       }
     };
 
-    return fallbacks[journeyType] || fallbacks.guided;
+    return fallbacks[journeyType] || fallbacks['non-tech'];
   }
 
   // Goal extraction endpoint for journey preparation
