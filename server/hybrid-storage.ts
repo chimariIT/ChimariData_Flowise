@@ -1346,6 +1346,50 @@ export class HybridStorage {
   async getLatestEligibilityCheck(userId: string, feature: string): Promise<EligibilityCheck | undefined> {
     return undefined;
   }
+
+  // User Settings - return basic user settings object
+  async getUserSettings(userId: string): Promise<any> {
+    await this.init();
+    
+    const user = this.userCache.get(userId);
+    if (!user) {
+      return null;
+    }
+    
+    // Return basic user settings based on user subscription and preferences
+    return {
+      userId: user.id,
+      subscriptionTier: user.subscriptionTier || 'none',
+      subscriptionStatus: user.subscriptionStatus || 'inactive',
+      monthlyUploads: user.monthlyUploads || 0,
+      monthlyDataVolume: user.monthlyDataVolume || 0,
+      monthlyAIInsights: user.monthlyAIInsights || 0,
+      usageResetAt: user.usageResetAt,
+      emailVerified: user.emailVerified || false,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt
+    };
+  }
+
+  // Journey Settings - return basic journey configuration
+  async getJourneySettings(journeyId: string): Promise<any> {
+    await this.init();
+    
+    // For now, return basic settings since journeys are placeholder
+    // This can be expanded when journey functionality is fully implemented
+    return {
+      journeyId: journeyId,
+      settings: {
+        allowDataExport: true,
+        enableNotifications: true,
+        securityLevel: 'standard'
+      },
+      preferences: {
+        analysisDepth: 'comprehensive',
+        visualizationTypes: ['charts', 'tables', 'insights']
+      }
+    };
+  }
 }
 
 export const storage = new HybridStorage();

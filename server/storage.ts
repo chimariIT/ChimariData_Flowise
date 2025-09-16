@@ -222,6 +222,12 @@ export interface IStorage {
   getEligibilityChecksByUser(userId: string): Promise<EligibilityCheck[]>;
   getEligibilityChecksByFeature(userId: string, feature: string): Promise<EligibilityCheck[]>;
   getLatestEligibilityCheck(userId: string, feature: string): Promise<EligibilityCheck | undefined>;
+  
+  // User Settings (missing method)
+  getUserSettings(userId: string): Promise<any>;
+  
+  // Journey Settings (missing method)
+  getJourneySettings(journeyId: string): Promise<any>;
 }
 
 export class MemStorage implements IStorage {
