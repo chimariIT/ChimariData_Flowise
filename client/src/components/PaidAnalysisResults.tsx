@@ -281,11 +281,11 @@ export function PaidAnalysisResults({
             <CardContent>
               <div className="space-y-4">
                 {[
-                  { priority: "High", action: "Optimize conversion funnel based on identified bottlenecks", impact: "15-20% improvement", timeline: "2-4 weeks" },
-                  { priority: "High", action: "Implement targeted retention strategy for high-value segment", impact: "12% revenue increase", timeline: "1-2 months" },
-                  { priority: "Medium", action: "Adjust pricing strategy for underperforming categories", impact: "8-10% margin improvement", timeline: "3-6 weeks" },
-                  { priority: "Medium", action: "Enhance data collection for improved predictions", impact: "25% model accuracy", timeline: "6-8 weeks" },
-                  { priority: "Low", action: "Automate reporting dashboard for ongoing monitoring", impact: "50% time savings", timeline: "4-6 weeks" }
+                  { priority: "High", action: "Optimize conversion funnel based on identified bottlenecks", impact: "15-20% improvement", costProjection: "$150-300" },
+                  { priority: "High", action: "Implement targeted retention strategy for high-value segment", impact: "12% revenue increase", costProjection: "$200-400" },
+                  { priority: "Medium", action: "Adjust pricing strategy for underperforming categories", impact: "8-10% margin improvement", costProjection: "$100-200" },
+                  { priority: "Medium", action: "Enhance data collection for improved predictions", impact: "25% model accuracy", costProjection: "$250-450" },
+                  { priority: "Low", action: "Automate reporting dashboard for ongoing monitoring", impact: "50% time savings", costProjection: "$75-150" }
                 ].map((rec, index) => (
                   <div key={index} className="p-4 border rounded-lg">
                     <div className="flex items-start justify-between mb-2">
@@ -295,7 +295,7 @@ export function PaidAnalysisResults({
                         </Badge>
                         <Target className="w-4 h-4 text-gray-500" />
                       </div>
-                      <span className="text-sm text-gray-500">{rec.timeline}</span>
+                      <span className="text-sm text-gray-500">{rec.costProjection}</span>
                     </div>
                     <h4 className="font-medium mb-1">{rec.action}</h4>
                     <p className="text-sm text-green-600 font-medium">Expected Impact: {rec.impact}</p>

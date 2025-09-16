@@ -33,7 +33,7 @@ interface AnalysisApproach {
   name: string;
   description: string;
   complexity: "basic" | "intermediate" | "advanced";
-  estimatedTime: string;
+  costProjection: string;
   dataRequirements: string[];
   icon: any;
   confidence: number;
@@ -94,7 +94,7 @@ export default function ProjectSetupStep({ journeyType }: ProjectSetupStepProps)
       name: "Statistical Analysis",
       description: "Correlation analysis, hypothesis testing, and descriptive statistics to identify churn patterns",
       complexity: "basic",
-      estimatedTime: "2-4 hours",
+      costProjection: "$25-40",
       dataRequirements: ["Customer demographics", "Usage history", "Subscription data"],
       icon: BarChart3,
       confidence: 85
@@ -104,7 +104,7 @@ export default function ProjectSetupStep({ journeyType }: ProjectSetupStepProps)
       name: "Machine Learning Model",
       description: "Predictive modeling using classification algorithms to identify at-risk customers",
       complexity: "advanced",
-      estimatedTime: "4-6 hours",
+      costProjection: "$60-90",
       dataRequirements: ["Customer features", "Historical churn data", "Behavioral metrics"],
       icon: Brain,
       confidence: 92
@@ -114,7 +114,7 @@ export default function ProjectSetupStep({ journeyType }: ProjectSetupStepProps)
       name: "Cohort Analysis",
       description: "Time-based analysis to understand customer behavior patterns over time",
       complexity: "intermediate",
-      estimatedTime: "3-5 hours",
+      costProjection: "$45-75",
       dataRequirements: ["Time-series data", "Customer journey data", "Event tracking"],
       icon: Clock,
       confidence: 78
