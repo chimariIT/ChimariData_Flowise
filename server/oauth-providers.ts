@@ -32,8 +32,8 @@ class DynamicGoogleStrategy extends GoogleStrategy {
     // Update callback URL dynamically based on the request
     if (req && req.get('host')) {
       const protocol = req.get('x-forwarded-proto') || (req.secure ? 'https' : 'http');
-      this._callbackURL = `${protocol}://${req.get('host')}/api/auth/google/callback`;
-      console.log('Dynamic OAuth Callback URL:', this._callbackURL);
+      (this as any)._callbackURL = `${protocol}://${req.get('host')}/api/auth/google/callback`;
+      console.log('Dynamic OAuth Callback URL:', (this as any)._callbackURL);
     }
     return super.authenticate(req, options);
   }
@@ -61,14 +61,28 @@ export const googleProvider: OAuthProviderConfig = {
         // Create new user
         const newUser = await storage.createUser({
           id: `google_${profile.id}`,
-          username: email,
-          password: null,
           email: email,
+          password: null,
+          hashedPassword: null,
           firstName: profile.name?.givenName || null,
           lastName: profile.name?.familyName || null,
           profileImageUrl: profile.photos?.[0]?.value || null,
           provider: 'google',
-          providerId: profile.id
+          providerId: profile.id || null,
+          emailVerified: true,
+          emailVerificationToken: null,
+          emailVerificationExpires: null,
+          passwordResetToken: null,
+          passwordResetExpires: null,
+          subscriptionTier: 'none',
+          subscriptionStatus: 'inactive',
+          stripeCustomerId: null,
+          stripeSubscriptionId: null,
+          subscriptionExpiresAt: null,
+          monthlyUploads: 0,
+          monthlyDataVolume: 0,
+          monthlyAIInsights: 0,
+          usageResetAt: new Date()
         });
         return done(null, newUser);
       }

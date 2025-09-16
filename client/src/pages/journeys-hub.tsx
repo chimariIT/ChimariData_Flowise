@@ -13,15 +13,13 @@ import {
   BarChart3,
   Users
 } from "lucide-react";
-import { AuthModal } from "@/components/AuthModal";
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 
 interface JourneysHubProps {
   user?: any;
 }
 
 export default function JourneysHub({ user }: JourneysHubProps) {
-  const [showAuthModal, setShowAuthModal] = useState(false);
   const [, setLocation] = useLocation();
 
   // SEO: Set page title and meta description
@@ -42,11 +40,11 @@ export default function JourneysHub({ user }: JourneysHubProps) {
 
   const handleJourneyStart = (journeyType: string) => {
     if (!user) {
-      // Store intended route before showing auth modal
+      // Store intended route before redirecting to auth page
       import('@/lib/utils').then(({ routeStorage }) => {
         routeStorage.setIntendedRoute(`/journeys/${journeyType}/prepare`);
       });
-      setShowAuthModal(true);
+      setLocation('/auth/register');
       return;
     }
     // Navigate to journey preparation step using SPA navigation
@@ -227,7 +225,7 @@ export default function JourneysHub({ user }: JourneysHubProps) {
               ) : (
                 <Button 
                   variant="outline" 
-                  onClick={() => setShowAuthModal(true)}
+                  onClick={() => setLocation('/auth/login')}
                   data-testid="button-signin"
                 >
                   Sign In
@@ -256,19 +254,6 @@ export default function JourneysHub({ user }: JourneysHubProps) {
         </div>
       </div>
 
-      {/* Auth Modal */}
-      {showAuthModal && (
-        <AuthModal
-          isOpen={showAuthModal}
-          onClose={() => setShowAuthModal(false)}
-          onSuccess={(userData) => {
-            setShowAuthModal(false);
-            // User state will be updated by parent component
-            // No need to reload - SPA will handle state updates
-          }}
-          initialTab="register"
-        />
-      )}
     </div>
   );
 }
