@@ -188,11 +188,12 @@ export const microsoftProvider: OAuthProviderConfig = {
 // GitHub OAuth Provider
 export const githubProvider: OAuthProviderConfig = {
   name: 'github',
-  strategy: new DynamicGitHubStrategy({
-    clientID: process.env.GITHUB_CLIENT_ID || '',
-    clientSecret: process.env.GITHUB_CLIENT_SECRET || '',
-    callbackURL: "/api/auth/github/callback" // Dynamic URL is handled by the DynamicGitHubStrategy
-  }, async (accessToken: string, refreshToken: string, profile: any, done: any) => {
+  strategy: process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET ? 
+    new DynamicGitHubStrategy({
+      clientID: process.env.GITHUB_CLIENT_ID,
+      clientSecret: process.env.GITHUB_CLIENT_SECRET,
+      callbackURL: "/api/auth/github/callback" // Dynamic URL is handled by the DynamicGitHubStrategy
+    }, async (accessToken: string, refreshToken: string, profile: any, done: any) => {
     try {
       const email = profile.emails?.[0]?.value;
       if (!email) {
@@ -236,7 +237,7 @@ export const githubProvider: OAuthProviderConfig = {
     } catch (error) {
       return done(error, null);
     }
-  }),
+  }) : null,
   routes: {
     auth: '/api/auth/github',
     callback: '/api/auth/github/callback'
