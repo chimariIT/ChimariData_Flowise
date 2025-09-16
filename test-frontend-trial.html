@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Trial Upload Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .result { margin: 10px 0; padding: 10px; border-left: 4px solid #4CAF50; background: #f9f9f9; }
+        .error { border-left-color: #f44336; }
+        .loading { border-left-color: #ff9800; }
+        button { padding: 10px 20px; margin: 10px; background: #4CAF50; color: white; border: none; cursor: pointer; }
+        button:hover { background: #45a049; }
+        input[type="file"] { margin: 10px; }
+    </style>
+</head>
+<body>
+    <h1>Free Trial Upload Test</h1>
+    
+    <div>
+        <h2>Step 1: Upload File</h2>
+        <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" />
+        <button onclick="uploadFile()">Upload File</button>
+        <div id="uploadResult"></div>
+    </div>
+    
+    <div>
+        <h2>Step 2: PII Decision (if required)</h2>
+        <button onclick="makePIIDecision()" id="piiButton" disabled>Make PII Decision</button>
+        <div id="piiResult"></div>
+    </div>
+    
+    <script>
+        let tempFileId = null;
+        
+        function showResult(elementId, message, isError = false) {
+            const element = document.getElementById(elementId);
+            element.innerHTML = `<div class="result ${isError ? 'error' : ''}">${message}</div>`;
+        }
+        
+        function showLoading(elementId, message) {
+            const element = document.getElementById(elementId);
+            element.innerHTML = `<div class="result loading">${message}</div>`;
+        }
+        
+        async function uploadFile() {
+            const fileInput = document.getElementById('fileInput');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                showResult('uploadResult', 'Please select a file', true);
+                return;
+            }
+            
+            showLoading('uploadResult', 'Uploading file...');
+            
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                const response = await fetch('/api/trial-upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    if (result.requiresPIIDecision) {
+                        tempFileId = result.tempFileId;
+                        showResult('uploadResult', `File uploaded successfully! PII detected: ${result.piiResult.detectedPII.join(', ')}`);
+                        document.getElementById('piiButton').disabled = false;
+                    } else {
+                        showResult('uploadResult', 'File uploaded and processed successfully (no PII detected)');
+                        if (result.trialResults) {
+                            displayTrialResults(result.trialResults);
+                        }
+                    }
+                } else {
+                    showResult('uploadResult', `Upload failed: ${result.error}`, true);
+                }
+                
+            } catch (error) {
+                showResult('uploadResult', `Upload error: ${error.message}`, true);
+            }
+        }
+        
+        async function makePIIDecision() {
+            if (!tempFileId) {
+                showResult('piiResult', 'No temp file ID available', true);
+                return;
+            }
+            
+            showLoading('piiResult', 'Processing PII decision...');
+            
+            try {
+                const response = await fetch('/api/trial-pii-decision', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        tempFileId: tempFileId,
+                        decision: 'include'
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success && result.trialResults) {
+                    showResult('piiResult', 'PII decision processed successfully!');
+                    displayTrialResults(result.trialResults);
+                } else {
+                    showResult('piiResult', `PII decision failed: ${result.error || 'Unknown error'}`, true);
+                }
+                
+            } catch (error) {
+                showResult('piiResult', `PII decision error: ${error.message}`, true);
+            }
+        }
+        
+        function displayTrialResults(results) {
+            const resultDiv = document.createElement('div');
+            resultDiv.innerHTML = `
+                <h2>Trial Results</h2>
+                <div class="result">
+                    <h3>Schema</h3>
+                    <p>Columns: ${results.schema ? Object.keys(results.schema).join(', ') : 'None'}</p>
+                    
+                    <h3>Analysis</h3>
+                    <p>Record count: ${results.recordCount || 'Unknown'}</p>
+                    <p>Analysis keys: ${results.descriptiveAnalysis ? Object.keys(results.descriptiveAnalysis).join(', ') : 'None'}</p>
+                    
+                    <h3>Visualizations</h3>
+                    <p>Count: ${results.basicVisualizations ? results.basicVisualizations.length : 0}</p>
+                    
+                    <h3>Success!</h3>
+                    <p style="color: green; font-weight: bold;">✅ Free trial workflow completed successfully!</p>
+                </div>
+            `;
+            document.body.appendChild(resultDiv);
+        }
+        
+        // Auto-create test file for easy testing
+        function createTestFile() {
+            const csvContent = "name,age,email,salary\nJohn Doe,30,john@example.com,75000\nJane Smith,25,jane@example.com,65000\nMike Johnson,35,mike@example.com,85000";
+            const blob = new Blob([csvContent], { type: 'text/csv' });
+            const file = new File([blob], 'test_data.csv', { type: 'text/csv' });
+            
+            const dataTransfer = new DataTransfer();
+            dataTransfer.items.add(file);
+            document.getElementById('fileInput').files = dataTransfer.files;
+        }
+        
+        // Add test button
+        document.addEventListener('DOMContentLoaded', function() {
+            const testButton = document.createElement('button');
+            testButton.textContent = 'Load Test File';
+            testButton.onclick = createTestFile;
+            document.body.insertBefore(testButton, document.body.firstChild);
+        });
+    </script>
+</body>
+</html>

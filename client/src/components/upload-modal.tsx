@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -7,9 +8,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { projects } from "@/lib/api";
-import { X, Upload, File, CheckCircle, FileSpreadsheet, AlertCircle, HardDrive } from "lucide-react";
+import { apiClient } from "@/lib/api";
+import { X, Upload, File, CheckCircle, FileSpreadsheet, AlertCircle, HardDrive, Cloud } from "lucide-react";
 import GoogleDriveImport from "./google-drive-import";
+import CloudDataConnector from "./cloud-data-connector";
+import { PIIInterimDialog } from "./PIIInterimDialog";
 
 interface UploadModalProps {
   isOpen: boolean;
@@ -18,10 +21,12 @@ interface UploadModalProps {
 }
 
 export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalProps) {
+  const [, setLocation] = useLocation();
   const [isUploading, setIsUploading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [formData, setFormData] = useState({
     projectName: "",
+    description: "",
     questions: "",
     selectedSheet: "",
     headerRow: "0",
@@ -30,6 +35,8 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
   const [fileType, setFileType] = useState<'csv' | 'excel' | null>(null);
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const [activeTab, setActiveTab] = useState("upload");
+  const [showPIIDialog, setShowPIIDialog] = useState(false);
+  const [tempFileInfo, setTempFileInfo] = useState<any>(null);
   const { toast } = useToast();
 
   if (!isOpen) return null;
@@ -111,7 +118,30 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
         ];
       }
 
-      await projects.upload(selectedFile, formData.projectName, questionsArray);
+      // Use unified upload endpoint for all users
+      const result = await apiClient.uploadFile(selectedFile, {
+        name: formData.projectName,
+        description: formData.description,
+        questions: questionsArray
+      });
+      
+      // Check if PII decision is required
+      if (result.requiresPIIDecision && result.piiResult) {
+        console.log('PII detected - storing temp file info', result);
+        // Store PII detection result and temp file info for handling
+        setTempFileInfo({
+          tempFileId: result.tempFileId,
+          name: result.name || formData.projectName,
+          description: formData.description,
+          questions: questionsArray,
+          piiResult: result.piiResult,
+          sampleData: result.sampleData,
+          file: selectedFile
+        });
+        setShowPIIDialog(true);
+        console.log('PII dialog should be shown now', { showPIIDialog: true });
+        return; // Don't call onSuccess yet
+      }
       
       onSuccess();
       
@@ -119,6 +149,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
       setSelectedFile(null);
       setFormData({
         projectName: "",
+        description: "",
         questions: "",
         selectedSheet: "",
         headerRow: "0",
@@ -129,6 +160,92 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
       toast({
         title: "Upload failed",
         description: error instanceof Error ? error.message : "Failed to upload file",
+        variant: "destructive"
+      });
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handlePIIDecision = async (decision: 'include' | 'exclude' | 'anonymize', anonymizationConfig?: any) => {
+    if (!tempFileInfo) return;
+    
+    try {
+      setIsUploading(true);
+      
+      // Use the unified JSON approach like the free trial uploader
+      const requestData = {
+        tempFileId: tempFileInfo.tempFileId,
+        decision: decision,
+        anonymizationConfig: anonymizationConfig,
+        // Include project metadata for full uploads
+        projectData: {
+          name: tempFileInfo.name,
+          description: tempFileInfo.description,
+          questions: tempFileInfo.questions
+        }
+      };
+
+      // Add authentication headers
+      const token = localStorage.getItem('auth_token');
+      const headers: any = {
+        'Content-Type': 'application/json'
+      };
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      // Use unified PII decision endpoint for all users
+      const response = await fetch('/api/pii-decision', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestData),
+        // Add timeout for long-running anonymization operations
+        signal: AbortSignal.timeout(30000) // 30 second timeout
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      
+      console.log("PII decision result:", result);
+      
+      if (result.success) {
+        // Close PII dialog
+        setShowPIIDialog(false);
+        setTempFileInfo(null);
+        
+        // Navigate to the created project instead of just closing
+        if (result.projectId) {
+          console.log("Navigating to project:", result.projectId);
+          // Show success toast and navigate to project page
+          toast({
+            title: "Upload successful!",
+            description: `Project created with PII decision: ${decision}`,
+          });
+          
+          // Add a small delay to ensure the toast is visible before navigation
+          setTimeout(() => {
+            // Close modal before navigation
+            onClose();
+            // Use React Router to navigate to the project page
+            setLocation(`/project/${result.projectId}`);
+          }, 1000);
+        } else {
+          console.log("No project ID returned, calling onSuccess. Result:", result);
+          onSuccess();
+        }
+      } else {
+        throw new Error(result.error || 'Upload failed');
+      }
+      
+    } catch (error) {
+      toast({
+        title: "Upload failed",
+        description: error instanceof Error ? error.message : "Failed to process PII decision",
         variant: "destructive"
       });
     } finally {
@@ -161,7 +278,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
         
         <CardContent>
           <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="grid w-full grid-cols-2">
+            <TabsList className="grid w-full grid-cols-3">
               <TabsTrigger value="upload" className="flex items-center gap-2">
                 <Upload className="w-4 h-4" />
                 Local Upload
@@ -169,6 +286,10 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
               <TabsTrigger value="drive" className="flex items-center gap-2">
                 <HardDrive className="w-4 h-4" />
                 Google Drive
+              </TabsTrigger>
+              <TabsTrigger value="cloud" className="flex items-center gap-2">
+                <Cloud className="w-4 h-4" />
+                Cloud Storage
               </TabsTrigger>
             </TabsList>
             
@@ -233,6 +354,19 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
               </div>
             </div>
 
+            {/* Dataset Description */}
+            <div>
+              <Label htmlFor="description">Dataset Description (Optional)</Label>
+              <Textarea
+                id="description"
+                name="description"
+                placeholder="Briefly describe your dataset and what it contains.&#10;&#10;Examples:&#10;• Customer transaction records from e-commerce platform&#10;• Marketing campaign performance data from Q4 2024&#10;• Employee survey responses about workplace satisfaction"
+                rows={3}
+                value={formData.description || ""}
+                onChange={handleInputChange}
+              />
+            </div>
+
             {/* Business Questions */}
             <div>
               <Label htmlFor="questions">Business Questions (Optional)</Label>
@@ -273,9 +407,36 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
                 onClose={onClose}
               />
             </TabsContent>
+
+            <TabsContent value="cloud" className="mt-6">
+              <CloudDataConnector onDataImported={(data) => {
+                toast({
+                  title: "Data imported",
+                  description: "Cloud data successfully imported"
+                });
+                onSuccess();
+                onClose();
+              }} />
+            </TabsContent>
           </Tabs>
         </CardContent>
       </Card>
+      
+      {/* PII Detection Dialog */}
+      {showPIIDialog && tempFileInfo && (
+        <PIIInterimDialog
+          isOpen={showPIIDialog}
+          piiData={tempFileInfo.piiResult}
+          sampleData={tempFileInfo.sampleData}
+          onProceed={(decision, anonymizationConfig) => {
+            handlePIIDecision(decision, anonymizationConfig);
+          }}
+          onClose={() => {
+            setShowPIIDialog(false);
+            setTempFileInfo(null);
+          }}
+        />
+      )}
     </div>
   );
 }

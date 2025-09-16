@@ -1,0 +1,9 @@
+{
+    "data": [
+      {"id": 1, "name": "valid"},
+      {"id": 2, "name": "missing_quote},
+      {"id": 3, "extra_comma": true,},
+      {"id": 4, duplicate_key: "value1", "duplicate_key": "value2"}
+    ],
+    "trailing_comma": true,
+  }

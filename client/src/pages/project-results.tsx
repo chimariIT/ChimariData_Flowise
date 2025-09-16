@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
-import { projects, type Project } from "@/lib/api";
-import { ArrowLeft, Download, Share, Database, Lightbulb, BarChart3, PieChart, Calendar, CheckCircle, Settings, CreditCard, Zap, Brain, MessageSquare, Eye } from "lucide-react";
+import { apiClient } from "@/lib/api";
+import { ArrowLeft, Download, Share, Database, Lightbulb, BarChart3, PieChart, Calendar, CheckCircle, Settings, CreditCard, Zap, Brain, MessageSquare, Eye, FileSpreadsheet, FileText, ChevronDown } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart as RechartsPieChart, Cell, Pie } from "recharts";
 import AIChat from "@/components/ai-chat";
 import AIInsightsPanel from "@/components/ai-insights-panel";
@@ -15,14 +16,18 @@ interface ProjectResultsProps {
   onBack: () => void;
   onSettings: () => void;
   onPayForAnalysis?: (projectData: any) => void;
+  onSchemaEdit?: (projectId: string) => void;
 }
 
-export default function ProjectResults({ projectId, onBack, onSettings, onPayForAnalysis }: ProjectResultsProps) {
+export default function ProjectResults({ projectId, onBack, onSettings, onPayForAnalysis, onSchemaEdit }: ProjectResultsProps) {
   const { toast } = useToast();
 
   const { data: project, isLoading } = useQuery({
     queryKey: ["/api/projects", projectId],
-    queryFn: () => projects.get(projectId),
+    queryFn: async () => {
+      const result = await apiClient.getProjects();
+      return result.projects?.find((p: any) => p.id === projectId);
+    },
   });
 
   if (isLoading) {
@@ -41,18 +46,82 @@ export default function ProjectResults({ projectId, onBack, onSettings, onPayFor
     );
   }
 
-  const handleExport = () => {
-    toast({
-      title: "Export started",
-      description: "Your report will be downloaded shortly."
-    });
+  const handleExport = async (format: 'excel' | 'pdf' | 'csv' = 'excel') => {
+    try {
+      toast({
+        title: "Preparing export...",
+        description: `Generating your analysis report in ${format.toUpperCase()} format`
+      });
+      
+      // Call backend to generate export
+      const response = await apiClient.exportProject(projectId, format);
+      
+      if (response.success) {
+        // Create download link
+        const link = document.createElement('a');
+        link.href = response.downloadUrl;
+        link.download = response.filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
+        toast({
+          title: "Export completed",
+          description: `Your analysis report has been downloaded as ${format.toUpperCase()}.`
+        });
+      } else {
+        throw new Error(response.message || 'Export failed');
+      }
+    } catch (error: any) {
+      toast({
+        title: "Export failed",
+        description: error.message || "There was an error exporting your data.",
+        variant: "destructive"
+      });
+    }
   };
 
-  const handleShare = () => {
-    toast({
-      title: "Share link copied",
-      description: "Share link has been copied to clipboard."
-    });
+  const handleShare = async () => {
+    try {
+      const shareUrl = `${window.location.origin}/project/${projectId}`;
+      
+      if (navigator.share) {
+        await navigator.share({
+          title: `Analysis: ${project.name}`,
+          text: `Check out this data analysis for ${project.name}`,
+          url: shareUrl
+        });
+        toast({
+          title: "Shared successfully",
+          description: "Analysis has been shared."
+        });
+      } else if (navigator.clipboard) {
+        await navigator.clipboard.writeText(shareUrl);
+        toast({
+          title: "Link copied",
+          description: "Share link has been copied to clipboard."
+        });
+      } else {
+        // Fallback for older browsers
+        const textArea = document.createElement('textarea');
+        textArea.value = shareUrl;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+        
+        toast({
+          title: "Link copied",
+          description: "Share link has been copied to clipboard."
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Share failed",
+        description: "There was an error sharing the link.",
+        variant: "destructive"
+      });
+    }
   };
 
   // Sample chart data
@@ -107,14 +176,44 @@ export default function ProjectResults({ projectId, onBack, onSettings, onPayFor
                 <Settings className="w-4 h-4 mr-2" />
                 AI Settings
               </Button>
-              <Button variant="outline" onClick={handleExport}>
-                <Download className="w-4 h-4 mr-2" />
-                Export
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline">
+                    <Download className="w-4 h-4 mr-2" />
+                    Export
+                    <ChevronDown className="w-4 h-4 ml-2" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => handleExport('excel')}>
+                    <FileSpreadsheet className="w-4 h-4 mr-2" />
+                    Export to Excel
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleExport('csv')}>
+                    <FileSpreadsheet className="w-4 h-4 mr-2" />
+                    Export to CSV
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleExport('pdf')}>
+                    <FileText className="w-4 h-4 mr-2" />
+                    Export to PDF
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <Button onClick={handleShare}>
                 <Share className="w-4 h-4 mr-2" />
                 Share
               </Button>
+              
+              {onSchemaEdit && (
+                <Button
+                  variant="outline"
+                  onClick={() => onSchemaEdit(projectId)}
+                  className="bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200"
+                >
+                  <Database className="w-4 h-4 mr-2" />
+                  Data Schema
+                </Button>
+              )}
             </div>
           </div>
         </div>
@@ -226,7 +325,20 @@ export default function ProjectResults({ projectId, onBack, onSettings, onPayFor
 
           {/* AI Insights Tab */}
           <TabsContent value="insights">
-            <AIInsightsPanel projectId={projectId} />
+            <AIInsightsPanel 
+              projectId={projectId} 
+              onPaymentRequired={(projectId, type) => {
+                if (onPayForAnalysis) {
+                  onPayForAnalysis({
+                    name: project.name,
+                    recordCount: project.recordCount || 0,
+                    dataSizeMB: Math.max(1, Math.round((project.recordCount || 0) * 0.001)),
+                    schema: project.schema || {},
+                    questions: Array.isArray(project.questions) ? project.questions : []
+                  });
+                }
+              }}
+            />
           </TabsContent>
 
           {/* AI Chat Tab */}
@@ -304,12 +416,25 @@ export default function ProjectResults({ projectId, onBack, onSettings, onPayFor
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3 text-sm">
-                    {Object.entries(project.schema || {}).map(([field, type]) => (
-                      <div key={field} className="flex justify-between items-center py-2 border-b border-slate-100">
-                        <span className="font-medium text-slate-700">{field}</span>
-                        <span className="text-slate-500 bg-slate-100 px-2 py-1 rounded">{String(type)}</span>
-                      </div>
-                    ))}
+                    {Object.entries(project.schema || {}).map(([field, fieldInfo]) => {
+                      // Handle both old string format and new object format
+                      const typeValue = typeof fieldInfo === 'object' ? fieldInfo.type : fieldInfo;
+                      const description = typeof fieldInfo === 'object' ? fieldInfo.description : '';
+                      
+                      return (
+                        <div key={field} className="flex justify-between items-center py-2 border-b border-slate-100">
+                          <div className="flex-1">
+                            <span className="font-medium text-slate-700">{field}</span>
+                            {description && (
+                              <p className="text-xs text-slate-500 mt-1">{description}</p>
+                            )}
+                          </div>
+                          <span className="text-slate-500 bg-slate-100 px-2 py-1 rounded text-xs">
+                            {String(typeValue)}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
                 </CardContent>
               </Card>

@@ -1,0 +1,74 @@
+[
+  {
+    "id": 1,
+    "profile": {
+      "name": "John Smith",
+      "email": "john.smith@example.com",
+      "age": 32,
+      "active": true
+    },
+    "work": {
+      "department": "Engineering", 
+      "salary": 75000,
+      "hire_date": "2020-01-15",
+      "skills": ["JavaScript", "Python", "React"]
+    },
+    "personal": {
+      "phone": "555-123-4567",
+      "address": {
+        "street": "123 Main St",
+        "city": "Anytown",
+        "state": "NY",
+        "zip": "12345"
+      }
+    }
+  },
+  {
+    "id": 2,
+    "profile": {
+      "name": "Sarah Johnson",
+      "email": "sarah.j@company.org",
+      "age": 28,
+      "active": true
+    },
+    "work": {
+      "department": "Marketing",
+      "salary": 68000,
+      "hire_date": "2021-03-10",
+      "skills": ["Adobe Creative Suite", "SEO", "Content Marketing"]
+    },
+    "personal": {
+      "phone": "555-234-5678",
+      "address": {
+        "street": "456 Oak Ave",
+        "city": "Springfield", 
+        "state": "CA",
+        "zip": "90210"
+      }
+    }
+  },
+  {
+    "id": 3,
+    "profile": {
+      "name": "Michael Brown",
+      "email": "mbrown@test.com",
+      "age": 45,
+      "active": false
+    },
+    "work": {
+      "department": "Sales",
+      "salary": 92000,
+      "hire_date": "2019-07-20",
+      "skills": ["CRM", "Negotiation", "Lead Generation"]
+    },
+    "personal": {
+      "phone": "555-345-6789",
+      "address": {
+        "street": "789 Pine Rd",
+        "city": "Seattle",
+        "state": "WA", 
+        "zip": "98101"
+      }
+    }
+  }
+]

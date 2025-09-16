@@ -12,13 +12,15 @@ export async function apiRequest(
   url: string,
   data?: unknown | undefined,
 ): Promise<Response> {
-  const token = localStorage.getItem("token");
+  const token = localStorage.getItem("auth_token");
   const headers: Record<string, string> = {};
   
   if (data) {
     headers["Content-Type"] = "application/json";
   }
   
+  // Only add Authorization header if we have a token (for email-based auth)
+  // Session-based auth (OAuth) relies on cookies with credentials: "include"
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
@@ -27,7 +29,7 @@ export async function apiRequest(
     method,
     headers,
     body: data ? JSON.stringify(data) : undefined,
-    credentials: "include",
+    credentials: "include", // This ensures session cookies are sent for OAuth authentication
   });
 
   await throwIfResNotOk(res);
@@ -40,14 +42,23 @@ export const getQueryFn: <T>(options: {
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
-    const token = localStorage.getItem("token");
+    const token = localStorage.getItem("auth_token");
     const headers: Record<string, string> = {};
     
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
     }
 
-    const res = await fetch(queryKey[0] as string, {
+    // Construct URL from hierarchical query keys
+    // For keys like ['/api/projects', projectId, 'datasets'], join them properly
+    let url = queryKey[0] as string;
+    if (queryKey.length > 1) {
+      // Join non-null query key segments to form the URL
+      const segments = queryKey.filter(segment => segment != null).map(String);
+      url = segments.join('/');
+    }
+
+    const res = await fetch(url, {
       headers,
       credentials: "include",
     });

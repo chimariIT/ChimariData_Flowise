@@ -1,0 +1,1 @@
+{"analysisType": "machine_learning", "targetVariable": "ROI", "features": ["Conversion_Rate", "Acquisition_Cost", "Engagement_Score"], "algorithm": "random_forest", "testSize": 0.3, "crossValidation": 3}

@@ -1,0 +1,72 @@
+{
+  "edgeCases": {
+    "malformed.csv": {
+      "success": true,
+      "recordCount": 8,
+      "schemaFields": 4
+    },
+    "empty.csv": {
+      "success": false,
+      "error": "Empty file",
+      "handled": true
+    },
+    "header_only.csv": {
+      "success": false,
+      "error": "File processing failed: No data found in file",
+      "handled": true
+    },
+    "one_row.csv": {
+      "success": true,
+      "recordCount": 1,
+      "schemaFields": 2
+    },
+    "invalid.json": {
+      "success": false,
+      "error": "File processing failed: Bad control character in string literal in JSON at position 90",
+      "handled": true
+    },
+    "wide_dataset": {
+      "success": true,
+      "recordCount": 2,
+      "columnCount": 100,
+      "expectedColumns": 100,
+      "processTimeMs": 1
+    },
+    "unicode_test": {
+      "success": true,
+      "recordCount": 5,
+      "unicodePreserved": true,
+      "sampleData": {
+        "id": 1,
+        "name": "José García",
+        "description": "Café résumé manager",
+        "unicode_text": "Héllo Wörld"
+      }
+    }
+  },
+  "security": {
+    "suspicious_content": {
+      "success": true,
+      "recordCount": 5,
+      "scriptTagsDetected": true,
+      "sqlInjectionDetected": true,
+      "recommendation": "Content sanitization recommended"
+    }
+  },
+  "performance": {
+    "large_file": {
+      "success": true,
+      "fileSizeMB": 0.56,
+      "recordCount": 10000,
+      "processTimeMs": 46,
+      "recordsPerSecond": 217391
+    },
+    "memory_usage": {
+      "memoryBeforeMB": 24,
+      "memoryAfterMB": 34,
+      "memoryIncreaseMB": 10,
+      "acceptable": true
+    }
+  },
+  "errors": []
+}

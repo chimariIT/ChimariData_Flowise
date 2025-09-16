@@ -7,6 +7,7 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { BarChart3, Mail, Lock, User } from "lucide-react";
 import { FaGoogle, FaMicrosoft, FaApple } from "react-icons/fa";
+import ForgotPasswordModal from "@/components/forgot-password-modal";
 
 interface AuthLoginProps {
   onLogin: (user: { id: number; username: string }) => void;
@@ -22,6 +23,7 @@ export default function AuthLoginPage({ onLogin, onRegister }: AuthLoginProps) {
     confirmPassword: ""
   });
   const [isLoading, setIsLoading] = useState(false);
+  const [isForgotPasswordOpen, setIsForgotPasswordOpen] = useState(false);
   const { toast } = useToast();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -59,9 +61,19 @@ export default function AuthLoginPage({ onLogin, onRegister }: AuthLoginProps) {
           description: isLogin ? "Successfully logged in" : "Your account has been created successfully"
         });
       } else {
+        let description = data.error || "Please check your credentials";
+        
+        // Handle specific error cases
+        if (data.error?.includes("password not set")) {
+          description = "Account password not set. Please reset your password or contact support.";
+          // TODO: Add password reset link here
+        } else if (data.error?.includes("social login")) {
+          description = "This account uses social login. Please use the sign-in button above.";
+        }
+        
         toast({
           title: "Authentication Error",
-          description: data.error || "Please check your credentials",
+          description,
           variant: "destructive"
         });
       }
@@ -76,8 +88,9 @@ export default function AuthLoginPage({ onLogin, onRegister }: AuthLoginProps) {
     }
   };
 
-  const handleOAuthLogin = (provider: string) => {
-    window.location.href = `/auth/${provider}`;
+  const handleOAuthLogin = () => {
+    // Use Replit Auth - supports Google, email, Apple, X, GitHub, etc.
+    window.location.href = "/api/login";
   };
 
   return (
@@ -101,32 +114,19 @@ export default function AuthLoginPage({ onLogin, onRegister }: AuthLoginProps) {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {/* OAuth Providers */}
+            {/* Replit Auth - Multi-Provider Support */}
             <div className="space-y-3">
               <Button
                 variant="outline"
                 className="w-full h-11"
-                onClick={() => handleOAuthLogin("google")}
+                onClick={handleOAuthLogin}
               >
-                <FaGoogle className="w-4 h-4 mr-2" />
-                Continue with Google
+                <BarChart3 className="w-4 h-4 mr-2" />
+                Sign In with Replit
               </Button>
-              <Button
-                variant="outline"
-                className="w-full h-11"
-                onClick={() => handleOAuthLogin("microsoft")}
-              >
-                <FaMicrosoft className="w-4 h-4 mr-2" />
-                Continue with Microsoft
-              </Button>
-              <Button
-                variant="outline"
-                className="w-full h-11"
-                onClick={() => handleOAuthLogin("apple")}
-              >
-                <FaApple className="w-4 h-4 mr-2" />
-                Continue with Apple
-              </Button>
+              <p className="text-xs text-gray-500 text-center">
+                Supports Google, Email, Apple, GitHub, X, and more
+              </p>
             </div>
 
             <div className="relative">
@@ -208,6 +208,20 @@ export default function AuthLoginPage({ onLogin, onRegister }: AuthLoginProps) {
                 </div>
               )}
 
+              {/* Forgot Password Link for Login */}
+              {isLogin && (
+                <div className="text-right">
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="p-0 h-auto text-xs text-primary"
+                    onClick={() => setIsForgotPasswordOpen(true)}
+                  >
+                    Forgot password?
+                  </Button>
+                </div>
+              )}
+
               <Button type="submit" className="w-full h-11" disabled={isLoading}>
                 {isLoading ? "Please wait..." : (isLogin ? "Sign In" : "Create Account")}
               </Button>
@@ -231,6 +245,12 @@ export default function AuthLoginPage({ onLogin, onRegister }: AuthLoginProps) {
         <div className="text-center mt-6 text-xs text-slate-500">
           By continuing, you agree to our Terms of Service and Privacy Policy
         </div>
+
+        {/* Forgot Password Modal */}
+        <ForgotPasswordModal
+          isOpen={isForgotPasswordOpen}
+          onClose={() => setIsForgotPasswordOpen(false)}
+        />
       </div>
     </div>
   );

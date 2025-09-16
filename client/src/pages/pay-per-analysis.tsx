@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ServiceWorkflow } from "@/components/ServiceWorkflow";
 import { 
   ArrowLeft, 
   CheckCircle, 
@@ -32,6 +33,7 @@ interface PayPerAnalysisProps {
 
 export default function PayPerAnalysis({ onBack }: PayPerAnalysisProps) {
   const [currentStep, setCurrentStep] = useState(1);
+  const [showWorkflow, setShowWorkflow] = useState(false);
   const [showCalculator, setShowCalculator] = useState(false);
   const [showProviderSelection, setShowProviderSelection] = useState(false);
   
@@ -268,6 +270,20 @@ export default function PayPerAnalysis({ onBack }: PayPerAnalysisProps) {
     { feature: "Cost", freetrial: "Free", payper: "$25 one-time", starter: "$5/month", basic: "$15/month" }
   ];
 
+  // Show workflow if user clicked start analysis
+  if (showWorkflow) {
+    return (
+      <ServiceWorkflow
+        serviceType="pay_per_analysis"
+        onComplete={(result) => {
+          console.log('Analysis complete:', result);
+          setShowWorkflow(false);
+        }}
+        onBack={() => setShowWorkflow(false)}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
       {/* Header */}
@@ -340,7 +356,7 @@ export default function PayPerAnalysis({ onBack }: PayPerAnalysisProps) {
                 <Button 
                   size="lg"
                   className="w-full bg-orange-600 hover:bg-orange-700 text-white px-8 py-4"
-                  onClick={() => setCurrentStep(1)}
+                  onClick={() => setShowWorkflow(true)}
                 >
                   Start Analysis Now (Quick)
                   <ArrowRight className="w-5 h-5 ml-2" />

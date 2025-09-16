@@ -1,0 +1,1 @@
+{"analysisType":"machine_learning","targetVariable":null,"features":["age","department"],"algorithm":"random_forest","testSize":0.2,"crossValidation":5,"metrics":["accuracy","f1_score"],"mlParams":{}}

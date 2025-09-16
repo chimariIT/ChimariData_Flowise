@@ -1,164 +1,254 @@
 import { useState, useEffect } from "react";
 import { Switch, Route, useLocation } from "wouter";
-import { queryClient } from "./lib/queryClient";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import { auth } from "./lib/api";
-import LandingPage from "./pages/landing";
-import AuthPage from "./pages/auth";
-import Dashboard from "./pages/dashboard";
-import ProjectResults from "./pages/project-results";
-import SettingsPage from "./pages/settings";
-import PricingPage from "./pages/pricing";
-import SubscribePage from "./pages/subscribe";
-import AnalysisPaymentPage from "./pages/analysis-payment";
-import MLAnalysisPage from "./pages/ml-analysis";
-import PayPerAnalysis from "./pages/pay-per-analysis";
-import ExpertConsultation from "./pages/expert-consultation";
-import FreeTrial from "./pages/free-trial";
-import EnterpriseContact from "./pages/enterprise-contact";
-import ComingSoon from "./pages/coming-soon";
-import AnimatedDemo from "./components/animated-demo";
-import NotFound from "@/pages/not-found";
+import { JourneyWizard } from "@/components/JourneyWizard";
+import HomePage from "@/pages/home-page";
+import JourneysHub from "@/pages/journeys-hub";
+import ProjectPage from "@/pages/project-page";
+import DescriptiveStatsPage from "@/pages/descriptive-stats-page";
+import VisualizationPage from "@/pages/visualization-page";
+import AuthPage from "@/pages/auth";
+import GuidedAnalysisCheckout from "@/pages/checkout";
+import GuidedAnalysisResults from "@/pages/guided-analysis-results";
+import ExpertConsultation from "@/pages/expert-consultation";
+import DemosPage from "@/pages/demos";
+import AskQuestionPage from "@/pages/ask-question-page";
+import PayPerAnalysis from "@/pages/pay-per-analysis";
+import TemplateAnalysis from "@/pages/template-analysis";
+import PricingPage from "@/pages/pricing";
+import StripeTest from "@/pages/stripe-test";
+import { apiClient } from "@/lib/api";
+import { ProjectProvider } from "@/hooks/useProjectContext";
+import "./index.css";
 
-function App() {
-  const [user, setUser] = useState<{ id: number; username: string } | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [location, setLocation] = useLocation();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: 1,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
 
+export default function App() {
+  const [user, setUser] = useState<any>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [, setLocation] = useLocation();
+
+  // Check for existing authentication on app load
   useEffect(() => {
-    // Check if user is already logged in
-    const token = auth.getToken();
-    if (token) {
-      const storedUser = localStorage.getItem("user");
-      if (storedUser) {
-        try {
-          setUser(JSON.parse(storedUser));
-        } catch {
-          localStorage.removeItem("token");
-          localStorage.removeItem("user");
+    const checkAuthStatus = async () => {
+      try {
+        const token = localStorage.getItem('auth_token');
+        if (token) {
+          const userData = await apiClient.getCurrentUser();
+          if (userData && userData.user) {
+            setUser(userData.user);
+          } else {
+            // Invalid user data - clear token
+            localStorage.removeItem('auth_token');
+          }
         }
+      } catch (error) {
+        // Clear invalid token
+        localStorage.removeItem('auth_token');
+        console.log('No valid authentication found, cleared invalid token');
+      } finally {
+        setAuthLoading(false);
       }
-    }
-    setIsLoading(false);
+    };
+
+    checkAuthStatus();
   }, []);
 
-  const handleLogin = (userData: { id: number; username: string }) => {
+  const handleLogin = (userData: any) => {
     setUser(userData);
-    localStorage.setItem("user", JSON.stringify(userData));
-    setLocation("/dashboard");
+    // Store token if provided
+    if (userData.token) {
+      localStorage.setItem('auth_token', userData.token); // Fixed: use same key as AuthModal
+    }
+    
+    // Check for intended route and redirect there, otherwise go to journeys hub
+    import('@/lib/utils').then(({ routeStorage, userGreetings }) => {
+      const intendedRoute = routeStorage.getAndClearIntendedRoute();
+      if (intendedRoute) {
+        setLocation(intendedRoute);
+      } else {
+        setLocation('/'); // Default to journeys hub
+      }
+      
+      // Store user info for potential goodbye message later
+      userGreetings.storeUserForGoodbye(userData);
+    });
   };
 
   const handleLogout = () => {
-    setUser(null);
-    localStorage.removeItem("user");
-    auth.logout();
-    setLocation("/");
+    // Get user name for goodbye message before clearing
+    import('@/lib/utils').then(({ userGreetings }) => {
+      const goodbyeName = userGreetings.getAndClearGoodbyeName();
+      
+      setUser(null);
+      localStorage.removeItem('auth_token'); // Fixed: use same key as AuthModal
+      
+      // Show goodbye toast if we have a name
+      if (goodbyeName) {
+        import('@/hooks/use-toast').then(({ toast }) => {
+          toast({
+            title: `Goodbye ${goodbyeName}!`,
+            description: "You've been signed out successfully.",
+          });
+        });
+      }
+      
+      setLocation('/');
+    });
   };
 
-  if (isLoading) {
+  // Show loading while checking authentication
+  if (authLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <p className="text-slate-600">Loading...</p>
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading...</p>
+        </div>
       </div>
     );
   }
 
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
+      <ProjectProvider>
+        <div className="min-h-screen bg-gray-50">
+        <Switch>
+          {/* Primary Journeys Hub landing page */}
+          <Route path="/journeys">
+            {() => <JourneysHub user={user} />}
+          </Route>
+          
+          {/* Journey wizard routes */}
+          <Route path="/journeys/:type/prepare">
+            {(params) => (
+              <JourneyWizard 
+                journeyType={params.type} 
+                currentStage="prepare"
+              />
+            )}
+          </Route>
+          <Route path="/journeys/:type/data">
+            {(params) => (
+              <JourneyWizard 
+                journeyType={params.type} 
+                currentStage="data"
+              />
+            )}
+          </Route>
+          <Route path="/journeys/:type/project-setup">
+            {(params) => (
+              <JourneyWizard 
+                journeyType={params.type} 
+                currentStage="project-setup"
+              />
+            )}
+          </Route>
+          <Route path="/journeys/:type/execute">
+            {(params) => (
+              <JourneyWizard 
+                journeyType={params.type} 
+                currentStage="execute"
+              />
+            )}
+          </Route>
+          <Route path="/journeys/:type/pricing">
+            {(params) => (
+              <JourneyWizard 
+                journeyType={params.type} 
+                currentStage="pricing"
+              />
+            )}
+          </Route>
+          <Route path="/journeys/:type/results">
+            {(params) => (
+              <JourneyWizard 
+                journeyType={params.type} 
+                currentStage="results"
+              />
+            )}
+          </Route>
+          
+          {/* Redirect home to journeys hub */}
+          <Route path="/">
+            {() => <JourneysHub user={user} />}
+          </Route>
+          
+          {/* Legacy home route for compatibility */}
+          <Route path="/home">
+            {() => <HomePage user={user} onLogout={handleLogout} />}
+          </Route>
+          <Route path="/projects">
+            {() => <HomePage user={user} onLogout={handleLogout} />}
+          </Route>
+          <Route path="/auth/login">
+            {() => <AuthPage onLogin={handleLogin} />}
+          </Route>
+          <Route path="/auth/register">
+            {() => <AuthPage onLogin={handleLogin} />}
+          </Route>
+          <Route path="/project/:id">
+            {(params) => <ProjectPage projectId={params.id} />}
+          </Route>
+          <Route path="/stats/:id">
+            {(params) => <DescriptiveStatsPage />}
+          </Route>
+          <Route path="/visualization/:projectId">
+            {(params) => <VisualizationPage />}
+          </Route>
+          <Route path="/checkout">
+            {() => <GuidedAnalysisCheckout />}
+          </Route>
+          <Route path="/guided-analysis-results/:analysisId">
+            {(params) => user ? <GuidedAnalysisResults /> : <AuthPage onLogin={handleLogin} />}
+          </Route>
+          <Route path="/dashboard">
+            {() => user ? <ProjectPage projectId="dashboard" /> : <AuthPage onLogin={handleLogin} />}
+          </Route>
+          <Route path="/expert-consultation">
+            {() => <ExpertConsultation onBack={() => setLocation('/')} />}
+          </Route>
+          <Route path="/ai-guided">
+            {() => user ? <AskQuestionPage onBack={() => setLocation('/')} onPaymentRequired={(projectId, questions) => setLocation(`/checkout?projectId=${projectId}`)} /> : <AuthPage onLogin={handleLogin} />}
+          </Route>
+          <Route path="/self-service">
+            {() => user ? <PayPerAnalysis onBack={() => setLocation('/')} /> : <AuthPage onLogin={handleLogin} />}
+          </Route>
+          <Route path="/template-based">
+            {() => user ? <TemplateAnalysis onBack={() => setLocation('/')} /> : <AuthPage onLogin={handleLogin} />}
+          </Route>
+          <Route path="/demos">
+            {() => <DemosPage />}
+          </Route>
+          <Route path="/pricing">
+            {() => <PricingPage 
+              onGetStarted={() => setLocation('/journeys')} 
+              onBack={() => setLocation('/journeys')}
+            />}
+          </Route>
+          <Route path="/stripe-test">
+            {() => <StripeTest />}
+          </Route>
+          <Route>
+            <div className="flex items-center justify-center min-h-screen">
+              <div className="text-center">
+                <h1 className="text-2xl font-bold text-gray-900 mb-2">Page Not Found</h1>
+                <p className="text-gray-600">The page you're looking for doesn't exist.</p>
+              </div>
+            </div>
+          </Route>
+        </Switch>
+        </div>
         <Toaster />
-        {location === "/" && (
-          <LandingPage 
-            onGetStarted={() => setLocation("/auth")}
-            onPayPerAnalysis={() => setLocation("/pay-per-analysis")}
-            onExpertConsultation={() => setLocation("/expert-consultation")}
-            onDemo={() => setLocation("/demo")}
-            onPricing={() => setLocation("/pricing")}
-            onFreeTrial={() => setLocation("/free-trial")}
-          />
-        )}
-        
-        {location === "/demo" && (
-          <AnimatedDemo onGetStarted={() => setLocation("/auth")} onBackHome={() => setLocation("/")} />
-        )}
-        
-        {location === "/auth" && (
-          <AuthPage onLogin={handleLogin} />
-        )}
-        
-        {location === "/pay-per-analysis" && (
-          <PayPerAnalysis 
-            onBack={() => setLocation("/")} 
-          />
-        )}
-        
-        {location === "/expert-consultation" && (
-          <ExpertConsultation onBack={() => setLocation("/")} />
-        )}
-        
-        {location === "/pricing" && (
-          <PricingPage 
-            onGetStarted={() => setLocation("/auth")}
-            onSubscribe={(tier) => setLocation("/auth")}
-            onBack={() => setLocation("/")}
-            onPayPerAnalysis={() => setLocation("/pay-per-analysis")}
-            onExpertConsultation={() => setLocation("/expert-consultation")}
-          />
-        )}
-        
-        {location === "/free-trial" && (
-          <FreeTrial 
-            onBack={() => setLocation("/")}
-            onSignUp={() => setLocation("/auth")}
-          />
-        )}
-        
-        {location === "/enterprise-contact" && (
-          <EnterpriseContact />
-        )}
-        
-        {location.startsWith("/coming-soon") && (
-          <ComingSoon 
-            onBack={() => setLocation("/")} 
-            pageTitle={new URLSearchParams(location.split('?')[1] || '').get('feature') || 'Feature'}
-          />
-        )}
-        
-        {user && location === "/dashboard" && (
-          <Dashboard 
-            user={user} 
-            onLogout={handleLogout}
-            onProjectSelect={(id) => setLocation(`/project/${id}`)}
-            onSettings={() => setLocation("/settings")}
-          />
-        )}
-        
-        {user && location.startsWith("/project/") && (
-          <ProjectResults 
-            projectId={location.split("/")[2]}
-            onBack={() => setLocation("/dashboard")}
-            onSettings={() => setLocation("/settings")}
-            onPayForAnalysis={() => {}}
-          />
-        )}
-        
-        {user && location === "/settings" && (
-          <SettingsPage 
-            onBack={() => setLocation("/dashboard")}
-            onPricing={() => setLocation("/pricing")}
-          />
-        )}
-        
-        {user && location === "/subscribe" && (
-          <SubscribePage onBack={() => setLocation("/pricing")} />
-        )}
-        
-
-      </TooltipProvider>
+      </ProjectProvider>
     </QueryClientProvider>
   );
 }
-
-export default App;

@@ -1,486 +1,795 @@
-export interface PricingTier {
-  name: string;
-  price: number;
-  priceLabel: string;
-  type?: string;
-  features: string[];
-  limits: {
-    analysesPerMonth: number;
-    maxDataSizeMB: number;
-    maxRecords: number;
-    aiQueries: number;
-    supportLevel: string;
-    customModels: boolean;
-    apiAccess: boolean;
-    teamCollaboration: boolean;
-  };
-  recommended?: boolean;
+import crypto from 'crypto';
+import { storage } from './storage';
+import { 
+  PricingEstimateRequest, 
+  PricingEstimateResponse,
+  CostEstimate,
+  InsertCostEstimate 
+} from '@shared/schema';
+import { nanoid } from 'nanoid';
+import { goalAnalysisEngine, GoalAnalysisResult } from './goal-analysis-engine';
+import { workBreakdownService, WorkBreakdownResult } from './work-breakdown-service';
+
+interface CostItem {
+  description: string;
+  quantity: number;
+  unitPrice: number; // in cents
+  total: number; // in cents
 }
 
-export interface PricingFactors {
-  dataSizeMB: number;
-  recordCount: number;
-  columnCount: number;
-  featureCount: number;
-  questionsCount: number;
-  questionComplexity: 'simple' | 'moderate' | 'complex';
-  analysisType: 'standard' | 'advanced' | 'custom';
-  analysisArtifacts: number;
-  dataComplexity: 'simple' | 'moderate' | 'complex';
-  tier?: 'free' | 'professional' | 'enterprise';
+interface PricingCalculation {
+  items: CostItem[];
+  subtotal: number; // in cents
+  discounts: number; // in cents
+  total: number; // in cents
 }
 
-export interface PricingResult {
-  basePrice: number;
-  dataSizeMultiplier: number;
-  recordCountMultiplier: number;
-  featureCountMultiplier: number;
-  complexityMultiplier: number;
-  questionsMultiplier: number;
-  questionComplexityMultiplier: number;
-  analysisTypeMultiplier: number;
-  analysisArtifactsMultiplier: number;
-  finalPrice: number;
-  priceInCents: number;
-  breakdown: {
-    basePrice: number;
-    dataSizeCharge: number;
-    recordCountCharge: number;
-    featureCountCharge: number;
-    complexityCharge: number;
-    questionsCharge: number;
-    questionComplexityCharge: number;
-    analysisTypeCharge: number;
-    analysisArtifactsCharge: number;
-  };
+interface CacheEntry {
+  estimate: CostEstimate;
+  timestamp: number;
+  ttlMs: number;
 }
 
 export class PricingService {
-  // Six-tier pricing structure with pay-per-analysis option
-  private static readonly PRICING_TIERS: PricingTier[] = [
-    {
-      name: "Free Trial",
-      price: 0,
-      priceLabel: "Free",
-      features: [
-        "1 file upload (no sign-in required)",
-        "1 simple data summarization",
-        "1 AI question",
-        "Basic visualizations",
-        "Community support"
-      ],
-      limits: {
-        analysesPerMonth: 1,
-        maxDataSizeMB: 10,
-        maxRecords: 1000,
-        aiQueries: 1,
-        supportLevel: "community",
-        customModels: false,
-        apiAccess: false,
-        teamCollaboration: false
-      }
-    },
-    {
-      name: "Starter",
-      price: 5,
-      priceLabel: "$5/month",
-      features: [
-        "Single file uploads up to 10MB",
-        "5 simple analyses per month",
-        "Basic visualizations",
-        "Email support",
-        "Export capabilities"
-      ],
-      limits: {
-        analysesPerMonth: 5,
-        maxDataSizeMB: 10,
-        maxRecords: 10000,
-        aiQueries: 0,
-        supportLevel: "email",
-        customModels: false,
-        apiAccess: false,
-        teamCollaboration: false
-      }
-    },
-    {
-      name: "Basic",
-      price: 15,
-      priceLabel: "$15/month",
-      features: [
-        "File uploads up to 15MB",
-        "10 simple analyses per month",
-        "5 AI queries",
-        "Advanced visualizations",
-        "Priority email support"
-      ],
-      limits: {
-        analysesPerMonth: 10,
-        maxDataSizeMB: 15,
-        maxRecords: 25000,
-        aiQueries: 5,
-        supportLevel: "email",
-        customModels: false,
-        apiAccess: false,
-        teamCollaboration: false
-      },
-      recommended: true
-    },
-    {
-      name: "Professional",
-      price: 20,
-      priceLabel: "$20/month",
-      features: [
-        "Up to 10 files, 40MB each",
-        "10 simple to medium analyses",
-        "10 AI queries",
-        "Advanced visualizations",
-        "Custom dashboards",
-        "Priority support"
-      ],
-      limits: {
-        analysesPerMonth: 10,
-        maxDataSizeMB: 40,
-        maxRecords: 100000,
-        aiQueries: 10,
-        supportLevel: "email",
-        customModels: true,
-        apiAccess: false,
-        teamCollaboration: false
-      }
-    },
-    {
-      name: "Premium",
-      price: 50,
-      priceLabel: "$50/month",
-      features: [
-        "Unlimited data uploads",
-        "Complex analysis capabilities",
-        "50 AI queries per month",
-        "Premium AI models",
-        "Advanced visualizations",
-        "API access",
-        "Priority support"
-      ],
-      limits: {
-        analysesPerMonth: -1, // unlimited
-        maxDataSizeMB: -1, // unlimited
-        maxRecords: -1, // unlimited
-        aiQueries: 50,
-        supportLevel: "email",
-        customModels: true,
-        apiAccess: true,
-        teamCollaboration: false
-      }
-    },
-    {
-      name: "Enterprise",
-      price: -1, // contact for quote
-      priceLabel: "Contact Us",
-      features: [
-        "Everything in Premium",
-        "Custom AI model training",
-        "24/7 phone & email support",
-        "Team collaboration tools",
-        "Dedicated account manager",
-        "SLA guarantee",
-        "Custom integrations"
-      ],
-      limits: {
-        analysesPerMonth: -1, // unlimited
-        maxDataSizeMB: -1, // unlimited
-        maxRecords: -1, // unlimited
-        aiQueries: -1, // unlimited
-        supportLevel: "phone",
-        customModels: true,
-        apiAccess: true,
-        teamCollaboration: true
-      }
-    },
-    {
-      name: "Pay-Per-Analysis",
-      price: 25,
-      priceLabel: "From $25",
-      type: "pay-per-use",
-      features: [
-        "No monthly commitment",
-        "Pay only for what you use",
-        "Professional-grade analysis",
-        "AI-powered insights",
-        "Full data visualization",
-        "Export all results"
-      ],
-      limits: {
-        analysesPerMonth: -1, // pay per use
-        maxDataSizeMB: 50,
-        maxRecords: 100000,
-        aiQueries: 5,
-        supportLevel: "email",
-        customModels: false,
-        apiAccess: false,
-        teamCollaboration: false
-      }
+  private static instance: PricingService;
+  private estimateCache = new Map<string, CacheEntry>();
+  private readonly CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+  private readonly ESTIMATE_VALIDITY_MS = 15 * 60 * 1000; // 15 minutes
+  private readonly SECRET_KEY = process.env.PRICING_SECRET_KEY || 'dev-pricing-secret-key-change-in-production';
+
+  // Base pricing in cents (divide by 100 for dollars)
+  private readonly BASE_PRICES = {
+    preparation: 500, // $5.00
+    data_processing: 1000, // $10.00
+    analysis: 1500, // $15.00
+    visualization: 1200, // $12.00
+    ai_insights: 2000, // $20.00
+  };
+
+  // Journey type multipliers
+  private readonly JOURNEY_MULTIPLIERS = {
+    guided: 1.0,
+    business: 1.25,
+    technical: 1.5,
+  };
+
+  // Complexity multipliers
+  private readonly COMPLEXITY_MULTIPLIERS = {
+    basic: 1.0,
+    intermediate: 1.3,
+    advanced: 1.6,
+  };
+
+  // Data size pricing per MB (in cents)
+  private readonly DATA_SIZE_RATE = 10; // $0.10 per MB
+
+  // Progressive discounts for multiple features
+  private readonly MULTI_FEATURE_DISCOUNTS = {
+    2: 0.10, // 10% off for 2 features
+    3: 0.20, // 20% off for 3 features
+    4: 0.25, // 25% off for 4 features
+    5: 0.30, // 30% off for 5+ features
+  };
+
+  public static getInstance(): PricingService {
+    if (!PricingService.instance) {
+      PricingService.instance = new PricingService();
     }
-  ];
+    return PricingService.instance;
+  }
 
-  private static readonly BASE_PRICE = 5.00; // $5 base price for pay-per-use
-  private static readonly PRICE_PER_MB = 0.10; // $0.10 per MB
-  private static readonly PRICE_PER_1K_RECORDS = 0.05; // $0.05 per 1K records
-  private static readonly PRICE_PER_FEATURE = 0.25; // $0.25 per feature beyond 10
-  private static readonly PRICE_PER_QUESTION = 1.00; // $1 per question beyond first 3
-  private static readonly PRICE_PER_ARTIFACT = 0.50; // $0.50 per analysis artifact
-  
-  private static readonly ANALYSIS_TYPE_MULTIPLIERS = {
-    standard: 1.0,
-    advanced: 1.5,
-    custom: 2.0
-  };
-  
-  private static readonly COMPLEXITY_MULTIPLIERS = {
-    simple: 1.0,
-    moderate: 1.3,
-    complex: 1.6
-  };
+  /**
+   * Intelligent cost estimation based on journey goals and questions
+   */
+  async calculateIntelligentEstimate(request: {
+    journeyId?: string;
+    goals?: string[];
+    questions?: string[];
+    journeyType: string;
+    dataContext?: {
+      sizeInMB?: number;
+      recordCount?: number;
+      columns?: string[];
+      complexity?: string;
+    };
+  }): Promise<{
+    success: boolean;
+    estimate?: {
+      total: number;
+      currency: string;
+      expiresInMs: number;
+      breakdown: any[];
+      confidence: number;
+      workComponents: any[];
+      recommendations: string[];
+    };
+    error?: string;
+  }> {
+    try {
+      console.log('Calculating intelligent cost estimate for journey goals');
 
-  private static readonly QUESTION_COMPLEXITY_MULTIPLIERS = {
-    simple: 1.0,
-    moderate: 1.2,
-    complex: 1.5
-  };
+      const { goals = [], questions = [], journeyType, dataContext = {} } = request;
 
-  static calculatePrice(factors: PricingFactors): PricingResult {
-    const basePrice = this.BASE_PRICE;
+      // If we have a journeyId, fetch the journey data
+      let finalGoals = goals;
+      let finalQuestions = questions;
+      
+      if (request.journeyId && (!goals.length || !questions.length)) {
+        try {
+          const journey = await storage.getJourney(request.journeyId);
+          if (journey) {
+            finalGoals = journey.goals || goals;
+            finalQuestions = journey.questions || questions;
+          }
+        } catch (error) {
+          console.error('Failed to fetch journey data:', error);
+          // Continue with provided data
+        }
+      }
+
+      if (!finalGoals.length && !finalQuestions.length) {
+        return {
+          success: false,
+          error: 'No goals or questions provided for analysis'
+        };
+      }
+
+      // Use work breakdown service for intelligent analysis
+      const workBreakdown = await workBreakdownService.breakdownGoalsToWork(
+        finalGoals,
+        finalQuestions,
+        journeyType,
+        dataContext
+      );
+
+      // Calculate confidence based on goal analysis quality
+      const confidence = this.calculateEstimateConfidence(
+        finalGoals.length,
+        finalQuestions.length,
+        workBreakdown.complexityScore,
+        dataContext
+      );
+
+      // Create detailed breakdown for response
+      const breakdown = workBreakdown.costBreakdowns.map(costBreakdown => ({
+        component: costBreakdown.component.name,
+        description: costBreakdown.component.description,
+        type: costBreakdown.component.type,
+        complexity: costBreakdown.component.complexity,
+        estimatedHours: costBreakdown.component.estimatedHours,
+        baseCost: costBreakdown.baseCost / 100, // Convert to dollars
+        finalCost: costBreakdown.finalCost / 100, // Convert to dollars
+        reasoning: costBreakdown.reasoning
+      }));
+
+      // Generate cache key and store estimate
+      const cacheKey = this.generateIntelligentCacheKey(
+        finalGoals,
+        finalQuestions,
+        journeyType,
+        dataContext
+      );
+
+      const estimate = {
+        total: workBreakdown.totalEstimatedCost,
+        currency: 'USD',
+        expiresInMs: this.ESTIMATE_VALIDITY_MS,
+        breakdown,
+        confidence,
+        workComponents: workBreakdown.workComponents,
+        recommendations: workBreakdown.recommendations,
+        riskAdjustment: workBreakdown.riskAdjustment,
+        estimatedHours: workBreakdown.totalEstimatedHours,
+        complexityScore: workBreakdown.complexityScore
+      };
+
+      // Cache the estimate
+      await this.cacheIntelligentEstimate(cacheKey, estimate);
+
+      return {
+        success: true,
+        estimate
+      };
+
+    } catch (error) {
+      console.error('Intelligent cost estimation failed:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to calculate intelligent estimate'
+      };
+    }
+  }
+
+  /**
+   * Quick intelligent estimate for immediate feedback
+   */
+  async getQuickIntelligentEstimate(
+    goalCount: number,
+    questionCount: number,
+    journeyType: string,
+    complexity: 'basic' | 'intermediate' | 'advanced' = 'intermediate'
+  ): Promise<number> {
+    try {
+      return workBreakdownService.getQuickEstimate(
+        goalCount,
+        questionCount,
+        journeyType,
+        complexity
+      );
+    } catch (error) {
+      console.error('Quick intelligent estimate failed:', error);
+      // Fallback to simple calculation
+      const basePrice = (goalCount * 2500) + (questionCount * 1000);
+      const complexityMultiplier = this.COMPLEXITY_MULTIPLIERS[complexity];
+      const journeyMultiplier = this.JOURNEY_MULTIPLIERS[journeyType as keyof typeof this.JOURNEY_MULTIPLIERS] || 1.0;
+      return Math.round(basePrice * complexityMultiplier * journeyMultiplier);
+    }
+  }
+
+  /**
+   * Calculate confidence score for estimate accuracy
+   */
+  private calculateEstimateConfidence(
+    goalCount: number,
+    questionCount: number,
+    complexityScore: number,
+    dataContext: any
+  ): number {
+    let confidence = 0.5; // Base confidence
+
+    // More goals and questions = higher confidence
+    confidence += Math.min(goalCount * 0.1, 0.3);
+    confidence += Math.min(questionCount * 0.05, 0.2);
+
+    // Data context availability
+    if (dataContext.sizeInMB) confidence += 0.1;
+    if (dataContext.recordCount) confidence += 0.1;
+    if (dataContext.columns?.length) confidence += 0.1;
+
+    // Complexity assessment (medium complexity = higher confidence)
+    if (complexityScore > 0 && complexityScore < 10) {
+      confidence += 0.15; // Sweet spot
+    }
+
+    return Math.min(confidence, 0.95); // Cap at 95%
+  }
+
+  /**
+   * Generate cache key for intelligent estimates
+   */
+  private generateIntelligentCacheKey(
+    goals: string[],
+    questions: string[],
+    journeyType: string,
+    dataContext: any
+  ): string {
+    const canonical = {
+      goals: goals.sort(),
+      questions: questions.sort(),
+      journeyType,
+      dataSize: dataContext.sizeInMB || 0,
+      recordCount: dataContext.recordCount || 0,
+      columnCount: dataContext.columns?.length || 0
+    };
+
+    return crypto
+      .createHash('sha256')
+      .update(JSON.stringify(canonical))
+      .digest('hex');
+  }
+
+  /**
+   * Cache intelligent estimate with metadata
+   */
+  private async cacheIntelligentEstimate(cacheKey: string, estimate: any): Promise<void> {
+    try {
+      // Store in memory cache
+      this.estimateCache.set(cacheKey, {
+        estimate: {
+          id: nanoid(),
+          inputsHash: cacheKey,
+          total: estimate.total,
+          currency: estimate.currency,
+          expiresAt: new Date(Date.now() + this.ESTIMATE_VALIDITY_MS),
+          breakdown: estimate.breakdown,
+          metadata: {
+            confidence: estimate.confidence,
+            riskAdjustment: estimate.riskAdjustment,
+            estimatedHours: estimate.estimatedHours,
+            complexityScore: estimate.complexityScore
+          }
+        },
+        timestamp: Date.now(),
+        ttlMs: this.CACHE_TTL_MS
+      });
+
+      // Store in database for persistence
+      await storage.saveIntelligentEstimate({
+        inputsHash: cacheKey,
+        total: estimate.total,
+        currency: estimate.currency,
+        expiresAt: new Date(Date.now() + this.ESTIMATE_VALIDITY_MS),
+        breakdown: estimate.breakdown,
+        metadata: {
+          confidence: estimate.confidence,
+          recommendations: estimate.recommendations,
+          workComponents: estimate.workComponents,
+          riskAdjustment: estimate.riskAdjustment,
+          estimatedHours: estimate.estimatedHours,
+          complexityScore: estimate.complexityScore
+        }
+      });
+
+    } catch (error) {
+      console.error('Failed to cache intelligent estimate:', error);
+      // Continue without caching
+    }
+  }
+
+  /**
+   * Generate a hash of the pricing inputs for caching
+   */
+  private generateInputsHash(request: PricingEstimateRequest): string {
+    const canonical = {
+      journeyType: request.journeyType,
+      features: request.features.sort(), // Sort for consistency
+      dataSizeMB: request.dataSizeMB,
+      complexityLevel: request.complexityLevel,
+      expectedQuestions: request.expectedQuestions,
+    };
     
-    // Calculate individual charges
-    const dataSizeCharge = factors.dataSizeMB * this.PRICE_PER_MB;
-    const recordCountCharge = Math.max(0, factors.recordCount - 1000) / 1000 * this.PRICE_PER_1K_RECORDS;
-    const featureCountCharge = Math.max(0, factors.featureCount - 10) * this.PRICE_PER_FEATURE;
-    const questionsCharge = Math.max(0, factors.questionsCount - 3) * this.PRICE_PER_QUESTION;
-    const analysisArtifactsCharge = factors.analysisArtifacts * this.PRICE_PER_ARTIFACT;
+    return crypto
+      .createHash('sha256')
+      .update(JSON.stringify(canonical))
+      .digest('hex');
+  }
+
+  /**
+   * Calculate pricing based on request parameters
+   */
+  private calculatePricing(request: PricingEstimateRequest): PricingCalculation {
+    const items: CostItem[] = [];
+    let subtotal = 0;
+
+    // Journey type multiplier
+    const journeyMultiplier = this.JOURNEY_MULTIPLIERS[request.journeyType];
     
-    // Apply complexity multipliers
-    const complexityMultiplier = this.COMPLEXITY_MULTIPLIERS[factors.dataComplexity];
-    const questionComplexityMultiplier = this.QUESTION_COMPLEXITY_MULTIPLIERS[factors.questionComplexity];
-    const analysisTypeMultiplier = this.ANALYSIS_TYPE_MULTIPLIERS[factors.analysisType];
-    
-    // Calculate subtotal before multipliers
-    const subtotal = basePrice + dataSizeCharge + recordCountCharge + featureCountCharge + 
-                    questionsCharge + analysisArtifactsCharge;
-    
-    // Apply all multipliers to get final price
-    const finalPrice = subtotal * complexityMultiplier * questionComplexityMultiplier * analysisTypeMultiplier;
-    
+    // Complexity multiplier
+    const complexityMultiplier = this.COMPLEXITY_MULTIPLIERS[request.complexityLevel];
+
+    // Feature-based pricing
+    for (const feature of request.features) {
+      const basePrice = this.BASE_PRICES[feature as keyof typeof this.BASE_PRICES];
+      if (!basePrice) continue;
+
+      const adjustedPrice = Math.round(basePrice * journeyMultiplier * complexityMultiplier);
+      
+      items.push({
+        description: `${feature.replace('_', ' ').toUpperCase()} (${request.journeyType} journey, ${request.complexityLevel} complexity)`,
+        quantity: 1,
+        unitPrice: adjustedPrice,
+        total: adjustedPrice,
+      });
+      
+      subtotal += adjustedPrice;
+    }
+
+    // Data size pricing
+    if (request.dataSizeMB > 0) {
+      const dataSizeCost = Math.round(request.dataSizeMB * this.DATA_SIZE_RATE);
+      items.push({
+        description: `Data processing (${request.dataSizeMB} MB)`,
+        quantity: request.dataSizeMB,
+        unitPrice: this.DATA_SIZE_RATE,
+        total: dataSizeCost,
+      });
+      subtotal += dataSizeCost;
+    }
+
+    // Questions complexity pricing
+    if (request.expectedQuestions > 5) {
+      const additionalQuestions = request.expectedQuestions - 5;
+      const questionCost = additionalQuestions * 200; // $2.00 per additional question
+      items.push({
+        description: `Additional analysis questions (${additionalQuestions} extra)`,
+        quantity: additionalQuestions,
+        unitPrice: 200,
+        total: questionCost,
+      });
+      subtotal += questionCost;
+    }
+
+    // Calculate progressive discounts
+    let discounts = 0;
+    const featureCount = request.features.length;
+    if (featureCount >= 2) {
+      const discountRate = this.MULTI_FEATURE_DISCOUNTS[Math.min(featureCount, 5) as keyof typeof this.MULTI_FEATURE_DISCOUNTS];
+      discounts = Math.round(subtotal * discountRate);
+    }
+
+    const total = subtotal - discounts;
+
     return {
-      basePrice,
-      dataSizeMultiplier: dataSizeCharge,
-      recordCountMultiplier: recordCountCharge,
-      featureCountMultiplier: featureCountCharge,
-      complexityMultiplier,
-      questionsMultiplier: questionsCharge,
-      questionComplexityMultiplier,
-      analysisTypeMultiplier,
-      analysisArtifactsMultiplier: analysisArtifactsCharge,
-      finalPrice: Math.round(finalPrice * 100) / 100,
-      priceInCents: Math.round(finalPrice * 100),
-      breakdown: {
-        basePrice,
-        dataSizeCharge,
-        recordCountCharge,
-        featureCountCharge,
-        complexityCharge: subtotal * (complexityMultiplier - 1),
-        questionsCharge,
-        questionComplexityCharge: subtotal * complexityMultiplier * (questionComplexityMultiplier - 1),
-        analysisTypeCharge: subtotal * complexityMultiplier * questionComplexityMultiplier * (analysisTypeMultiplier - 1),
-        analysisArtifactsCharge
+      items,
+      subtotal,
+      discounts,
+      total,
+    };
+  }
+
+  /**
+   * Generate HMAC signature for cost estimate
+   */
+  private generateSignature(payload: object): string {
+    const canonicalPayload = JSON.stringify(payload);
+    return crypto
+      .createHmac('sha256', this.SECRET_KEY)
+      .update(canonicalPayload)
+      .digest('hex');
+  }
+
+  /**
+   * Verify HMAC signature
+   */
+  public verifySignature(payload: object, signature: string): boolean {
+    try {
+      const expectedSignature = this.generateSignature(payload);
+      return crypto.timingSafeEqual(
+        Buffer.from(signature, 'hex'),
+        Buffer.from(expectedSignature, 'hex')
+      );
+    } catch (error) {
+      console.error('Signature verification error:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Clean expired cache entries
+   */
+  private cleanExpiredCache(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.estimateCache.entries()) {
+      if (now - entry.timestamp > entry.ttlMs) {
+        this.estimateCache.delete(key);
       }
-    };
-  }
-
-  static assessDataComplexity(schema: any, recordCount: number): 'simple' | 'moderate' | 'complex' {
-    if (!schema || typeof schema !== 'object') return 'simple';
-    
-    const columnCount = Object.keys(schema).length;
-    const hasComplexTypes = Object.values(schema).some(type => 
-      typeof type === 'string' && ['json', 'array', 'object'].includes(type.toLowerCase())
-    );
-    
-    // Simple: Few columns, small dataset
-    if (columnCount <= 5 && recordCount <= 1000 && !hasComplexTypes) {
-      return 'simple';
     }
-    
-    // Complex: Many columns, large dataset, or complex data types
-    if (columnCount > 15 || recordCount > 10000 || hasComplexTypes) {
-      return 'complex';
+  }
+
+  /**
+   * Generate a signed cost estimate
+   */
+  public async generateEstimate(
+    request: PricingEstimateRequest, 
+    userId: string
+  ): Promise<PricingEstimateResponse> {
+    try {
+      // Check cache first
+      const inputsHash = this.generateInputsHash(request);
+      this.cleanExpiredCache();
+      
+      const cached = this.estimateCache.get(inputsHash);
+      if (cached && Date.now() - cached.timestamp < cached.ttlMs) {
+        const expiresInMs = cached.estimate.validUntil.getTime() - Date.now();
+        return {
+          success: true,
+          estimateId: cached.estimate.id,
+          items: cached.estimate.items as any,
+          subtotal: cached.estimate.subtotal,
+          discounts: cached.estimate.discounts,
+          total: cached.estimate.total,
+          currency: cached.estimate.currency,
+          signature: cached.estimate.signature,
+          validUntil: cached.estimate.validUntil,
+          expiresInMs: Math.max(0, expiresInMs),
+        };
+      }
+
+      // Calculate new pricing
+      const calculation = this.calculatePricing(request);
+      const estimateId = nanoid();
+      const validUntil = new Date(Date.now() + this.ESTIMATE_VALIDITY_MS);
+      const nonce = nanoid();
+
+      // Create signable payload
+      const signablePayload = {
+        estimateId,
+        userId,
+        journeyType: request.journeyType,
+        features: request.features.sort(),
+        subtotal: calculation.subtotal,
+        discounts: calculation.discounts,
+        total: calculation.total,
+        expiresAt: validUntil.toISOString(),
+        nonce,
+      };
+
+      const signature = this.generateSignature(signablePayload);
+
+      // Store in database
+      const estimateData: InsertCostEstimate = {
+        journeyId: request.journeyId || null,
+        userId,
+        estimateType: 'full_journey',
+        items: calculation.items,
+        subtotal: calculation.subtotal,
+        discounts: calculation.discounts,
+        taxes: 0, // No taxes for now
+        total: calculation.total,
+        currency: 'USD',
+        signature,
+        validUntil,
+        approved: false,
+      };
+
+      const estimate = await storage.createCostEstimate(estimateData);
+
+      // Cache the result
+      this.estimateCache.set(inputsHash, {
+        estimate,
+        timestamp: Date.now(),
+        ttlMs: this.CACHE_TTL_MS,
+      });
+
+      const expiresInMs = validUntil.getTime() - Date.now();
+
+      return {
+        success: true,
+        estimateId: estimate.id,
+        items: calculation.items,
+        subtotal: calculation.subtotal,
+        discounts: calculation.discounts,
+        total: calculation.total,
+        currency: 'USD',
+        signature,
+        validUntil,
+        expiresInMs,
+      };
+
+    } catch (error) {
+      console.error('Error generating pricing estimate:', error);
+      return {
+        success: false,
+        estimateId: '',
+        items: [],
+        subtotal: 0,
+        discounts: 0,
+        total: 0,
+        currency: 'USD',
+        signature: '',
+        validUntil: new Date(),
+        expiresInMs: 0,
+        error: 'Failed to generate pricing estimate',
+      };
     }
-    
-    // Moderate: Everything else
-    return 'moderate';
   }
 
-  static getEstimatedPrice(dataSizeMB: number, questionsCount: number, analysisType: 'standard' | 'advanced' | 'custom' = 'standard'): string {
-    const estimatedRecords = Math.max(100, dataSizeMB * 1000);
-    const estimatedFeatures = Math.max(5, Math.min(20, Math.floor(estimatedRecords / 100)));
-    
-    const factors: PricingFactors = {
-      dataSizeMB,
-      recordCount: estimatedRecords,
-      columnCount: estimatedFeatures + 2,
-      featureCount: estimatedFeatures,
-      questionsCount,
-      questionComplexity: this.assessQuestionComplexity([]),
-      analysisType,
-      analysisArtifacts: this.estimateAnalysisArtifacts(analysisType, estimatedRecords, estimatedFeatures),
-      dataComplexity: 'moderate'
+  /**
+   * Verify a cost estimate signature and expiry
+   */
+  public async verifyEstimate(estimateId: string, signature: string): Promise<{
+    valid: boolean;
+    estimate?: CostEstimate;
+    error?: string;
+  }> {
+    try {
+      const estimate = await storage.getCostEstimate(estimateId);
+      if (!estimate) {
+        return { valid: false, error: 'Estimate not found' };
+      }
+
+      // Check expiry
+      if (new Date() > estimate.validUntil) {
+        return { valid: false, error: 'Estimate has expired' };
+      }
+
+      // Verify signature matches stored signature
+      if (estimate.signature !== signature) {
+        return { valid: false, error: 'Invalid signature' };
+      }
+
+      return { valid: true, estimate };
+
+    } catch (error) {
+      console.error('Error verifying estimate:', error);
+      return { valid: false, error: 'Verification failed' };
+    }
+  }
+
+  /**
+   * Confirm an estimate and mark it as approved
+   */
+  public async confirmEstimate(
+    estimateId: string, 
+    signature: string, 
+    journeyId: string
+  ): Promise<{
+    success: boolean;
+    estimate?: CostEstimate;
+    error?: string;
+  }> {
+    try {
+      // First verify the estimate
+      const verification = await this.verifyEstimate(estimateId, signature);
+      if (!verification.valid || !verification.estimate) {
+        return { 
+          success: false, 
+          error: verification.error || 'Invalid estimate' 
+        };
+      }
+
+      // Mark as approved and associate with journey
+      const updatedEstimate = await storage.updateCostEstimate(estimateId, {
+        approved: true,
+        approvedAt: new Date(),
+        journeyId,
+      });
+
+      if (!updatedEstimate) {
+        return { success: false, error: 'Failed to confirm estimate' };
+      }
+
+      return { success: true, estimate: updatedEstimate };
+
+    } catch (error) {
+      console.error('Error confirming estimate:', error);
+      return { success: false, error: 'Confirmation failed' };
+    }
+  }
+
+  /**
+   * Get estimate summary for display purposes (without sensitive data)
+   */
+  public async getEstimateSummary(estimateId: string): Promise<{
+    found: boolean;
+    total?: number;
+    currency?: string;
+    valid?: boolean;
+    error?: string;
+  }> {
+    try {
+      const estimate = await storage.getCostEstimate(estimateId);
+      if (!estimate) {
+        return { found: false, error: 'Estimate not found' };
+      }
+
+      const isValid = new Date() <= estimate.validUntil;
+
+      return {
+        found: true,
+        total: estimate.total,
+        currency: estimate.currency,
+        valid: isValid,
+      };
+
+    } catch (error) {
+      console.error('Error getting estimate summary:', error);
+      return { found: false, error: 'Failed to retrieve estimate' };
+    }
+  }
+
+  // Legacy methods for backward compatibility
+  static calculatePrice(features: string[]): {
+    subtotal: number;
+    discount: number;
+    total: number;
+    breakdown: Record<string, number>;
+  } {
+    const basePrices = {
+      transformation: 15,
+      analysis: 25,
+      visualization: 20,
+      ai_insights: 35,
     };
-    
-    const pricing = this.calculatePrice(factors);
-    return `$${pricing.finalPrice.toFixed(2)}`;
-  }
 
-  static assessQuestionComplexity(questions: string[]): 'simple' | 'moderate' | 'complex' {
-    if (!questions || questions.length === 0) return 'simple';
-    
-    const complexPatterns = [
-      /correlation|relationship|predict|forecast|model|algorithm/i,
-      /optimization|maximize|minimize|efficiency/i,
-      /segmentation|clustering|classification|categorization/i,
-      /anomaly|outlier|unusual|abnormal/i,
-      /time.?series|temporal|seasonal|trend/i,
-      /multi.?variate|interaction|causation/i
-    ];
-    
-    const moderatePatterns = [
-      /compare|contrast|difference|versus/i,
-      /distribution|pattern|behavior/i,
-      /impact|effect|influence|factor/i,
-      /performance|metric|kpi|indicator/i
-    ];
-    
-    let complexScore = 0;
-    let moderateScore = 0;
-    
-    questions.forEach(question => {
-      if (complexPatterns.some(pattern => pattern.test(question))) {
-        complexScore++;
-      } else if (moderatePatterns.some(pattern => pattern.test(question))) {
-        moderateScore++;
+    const featureCount = features.length;
+    let subtotal = 0;
+    const breakdown: Record<string, number> = {};
+
+    // Calculate subtotal
+    features.forEach(feature => {
+      const price = basePrices[feature as keyof typeof basePrices];
+      if (typeof price === 'number' && price > 0) {
+        subtotal += price;
+        breakdown[feature] = price;
       }
     });
-    
-    if (complexScore > 0 || questions.length > 5) return 'complex';
-    if (moderateScore > 0 || questions.length > 2) return 'moderate';
-    return 'simple';
+
+    // Calculate discount
+    let discountRate = 0;
+    if (featureCount === 2) {
+      discountRate = 0.15;
+    } else if (featureCount === 3) {
+      discountRate = 0.25;
+    } else if (featureCount >= 4) {
+      discountRate = 0.35;
+    }
+
+    const discount = subtotal * discountRate;
+    const total = subtotal - discount;
+
+    return {
+      subtotal,
+      discount,
+      total,
+      breakdown
+    };
   }
 
-  static estimateAnalysisArtifacts(analysisType: string, recordCount: number, featureCount: number): number {
-    let baseArtifacts = 2; // Basic summary + data quality report
-    
-    if (analysisType === 'advanced') baseArtifacts += 2;
-    if (analysisType === 'custom') baseArtifacts += 4;
-    
-    // Add artifacts based on data complexity
-    if (recordCount > 10000) baseArtifacts += 1;
-    if (featureCount > 20) baseArtifacts += 1;
-    
-    return Math.min(baseArtifacts, 8); // Cap at 8 artifacts
+  static getFreeTrialLimits(): { maxFileSize: number; description: string } {
+    return {
+      maxFileSize: 10 * 1024 * 1024, // 10MB
+      description: "Free trial includes: data upload (max 10MB), schema detection, descriptive analysis, and basic visualizations"
+    };
   }
 
-  // New methods for three-tier pricing system
-  static getPricingTiers(): PricingTier[] {
-    return this.PRICING_TIERS;
-  }
-
-  static getTierByName(tierName: 'free' | 'professional' | 'enterprise'): PricingTier | null {
-    return this.PRICING_TIERS.find(tier => tier.name.toLowerCase() === tierName) || null;
-  }
-
-  static validateUserLimits(
-    userTier: 'free' | 'professional' | 'enterprise',
-    request: {
-      dataSizeMB: number;
-      recordCount: number;
-      currentMonthAnalyses?: number;
-    }
-  ): { valid: boolean; errors: string[]; upgradeSuggestion?: string } {
-    const tier = this.getTierByName(userTier);
-    if (!tier) {
-      return { valid: false, errors: ['Invalid tier'] };
-    }
-
-    const errors: string[] = [];
-
-    // Check data size limits
-    if (tier.limits.maxDataSizeMB !== -1 && request.dataSizeMB > tier.limits.maxDataSizeMB) {
-      errors.push(`Data size ${request.dataSizeMB}MB exceeds ${tier.name} limit of ${tier.limits.maxDataSizeMB}MB`);
-    }
-
-    // Check record count limits
-    if (tier.limits.maxRecords !== -1 && request.recordCount > tier.limits.maxRecords) {
-      errors.push(`Record count ${request.recordCount} exceeds ${tier.name} limit of ${tier.limits.maxRecords.toLocaleString()}`);
-    }
-
-    // Check monthly analysis limits
-    if (tier.limits.analysesPerMonth !== -1 && request.currentMonthAnalyses && 
-        request.currentMonthAnalyses >= tier.limits.analysesPerMonth) {
-      errors.push(`Monthly analysis limit of ${tier.limits.analysesPerMonth} reached`);
-    }
-
-    const valid = errors.length === 0;
-    let upgradeSuggestion: string | undefined;
-
-    if (!valid) {
-      if (userTier === 'free') {
-        upgradeSuggestion = 'professional';
-      } else if (userTier === 'professional') {
-        upgradeSuggestion = 'enterprise';
+  /**
+   * Get feature descriptions for pricing display
+   */
+  static getFeatureDescriptions(): Record<string, { name: string; description: string; basePrice: number }> {
+    return {
+      transformation: {
+        name: "Data Transformation",
+        description: "Clean, reshape, and prepare your data for analysis. Includes missing value handling, data type conversion, and custom transformations.",
+        basePrice: 15
+      },
+      analysis: {
+        name: "Advanced Analysis",
+        description: "Comprehensive statistical analysis including descriptive statistics, correlation analysis, hypothesis testing, and regression modeling.",
+        basePrice: 25
+      },
+      visualization: {
+        name: "Interactive Visualizations",
+        description: "Generate professional charts, graphs, and interactive dashboards to explore and present your data insights.",
+        basePrice: 20
+      },
+      ai_insights: {
+        name: "AI-Powered Insights",
+        description: "Get intelligent recommendations, automated pattern detection, and natural language explanations of your data.",
+        basePrice: 35
       }
-    }
-
-    return { valid, errors, upgradeSuggestion };
+    };
   }
 
-  static getRecommendedTier(dataSizeMB: number, recordCount: number, analysesPerMonth: number): PricingTier {
-    // If data requirements exceed free tier limits
-    if (dataSizeMB > 10 || recordCount > 5000 || analysesPerMonth > 3) {
-      // If data requirements exceed professional tier limits
-      if (dataSizeMB > 500 || recordCount > 100000 || analysesPerMonth > 50) {
-        return this.PRICING_TIERS[2]; // Enterprise
+  /**
+   * Get discount information for pricing display
+   */
+  static getDiscountInfo(): Record<string, { rate: number; description: string }> {
+    return {
+      two_features: {
+        rate: 0.15,
+        description: "15% off when you select 2 features"
+      },
+      three_features: {
+        rate: 0.25,
+        description: "25% off when you select 3 features"
+      },
+      four_plus_features: {
+        rate: 0.35,
+        description: "35% off when you select 4 or more features"
       }
-      return this.PRICING_TIERS[1]; // Professional
-    }
-    return this.PRICING_TIERS[0]; // Free
+    };
   }
 
-  static calculateOverageCharges(
-    userTier: 'free' | 'professional' | 'enterprise',
-    usage: {
-      dataSizeMB: number;
-      recordCount: number;
-      analysesThisMonth: number;
-    }
-  ): { overageCharges: number; breakdown: string[] } {
-    const tier = this.getTierByName(userTier);
-    if (!tier) return { overageCharges: 0, breakdown: [] };
-
-    let overageCharges = 0;
-    const breakdown: string[] = [];
-
-    // Data size overage (only for tiers with limits)
-    if (tier.limits.maxDataSizeMB !== -1 && usage.dataSizeMB > tier.limits.maxDataSizeMB) {
-      const excessMB = usage.dataSizeMB - tier.limits.maxDataSizeMB;
-      const charge = excessMB * 0.50; // $0.50 per MB overage
-      overageCharges += charge;
-      breakdown.push(`Data overage: ${excessMB}MB × $0.50 = $${charge.toFixed(2)}`);
+  /**
+   * Validate that all provided features are supported
+   */
+  static validateFeatures(features: string[]): { valid: boolean; invalidFeatures?: string[] } {
+    if (!Array.isArray(features)) {
+      return { valid: false, invalidFeatures: [] };
     }
 
-    // Analysis overage (only for free tier)
-    if (userTier === 'free' && usage.analysesThisMonth > tier.limits.analysesPerMonth) {
-      const excessAnalyses = usage.analysesThisMonth - tier.limits.analysesPerMonth;
-      const charge = excessAnalyses * 5.00; // $5 per analysis overage
-      overageCharges += charge;
-      breakdown.push(`Analysis overage: ${excessAnalyses} × $5.00 = $${charge.toFixed(2)}`);
-    }
+    const validFeatures = ['transformation', 'analysis', 'visualization', 'ai_insights'];
+    const invalidFeatures = features.filter(feature => 
+      typeof feature !== 'string' || !validFeatures.includes(feature)
+    );
 
-    return { overageCharges, breakdown };
+    return {
+      valid: invalidFeatures.length === 0,
+      invalidFeatures: invalidFeatures.length > 0 ? invalidFeatures : undefined
+    };
   }
 }
+
+// Export singleton instance
+export const pricingService = PricingService.getInstance();

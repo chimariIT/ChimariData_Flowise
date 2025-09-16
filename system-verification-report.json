@@ -1,0 +1,134 @@
+{
+  "system_overview": {
+    "platform_name": "ChimariData+AI",
+    "verification_date": "2025-07-05T16:38:59.090Z",
+    "system_health_score": "94%",
+    "deployment_status": "MINOR_ISSUES_REVIEW_RECOMMENDED"
+  },
+  "component_status": {
+    "operational": 17,
+    "partial_issues": 0,
+    "failed": 1,
+    "total_components": 18
+  },
+  "feature_implementation": {
+    "six_tier_pricing": "Fully Operational",
+    "free_trial_no_signup": "Fully Operational",
+    "pay_per_analysis": "Fully Operational",
+    "expert_consultation": "Fully Operational",
+    "enterprise_contact": "Fully Operational",
+    "ai_integration": "Fully Operational",
+    "authentication_system": "Not Operational",
+    "page_navigation": "Fully Operational"
+  },
+  "detailed_results": [
+    {
+      "component": "Server Health",
+      "status": "OPERATIONAL",
+      "details": "Core server responding",
+      "timestamp": "2025-07-05T16:38:58.927Z"
+    },
+    {
+      "component": "Database",
+      "status": "OPERATIONAL",
+      "details": "Connected - 7 pricing tiers configured",
+      "timestamp": "2025-07-05T16:38:58.937Z"
+    },
+    {
+      "component": "AI Integration",
+      "status": "OPERATIONAL",
+      "details": "5 AI providers configured",
+      "timestamp": "2025-07-05T16:38:58.942Z"
+    },
+    {
+      "component": "User Registration",
+      "status": "OPERATIONAL",
+      "details": "User registration working",
+      "timestamp": "2025-07-05T16:38:58.981Z"
+    },
+    {
+      "component": "User Login",
+      "status": "FAIL",
+      "details": "Login or token generation failed",
+      "timestamp": "2025-07-05T16:38:58.993Z"
+    },
+    {
+      "component": "Free Trial Upload",
+      "status": "OPERATIONAL",
+      "details": "Endpoint responding correctly",
+      "timestamp": "2025-07-05T16:38:59.000Z"
+    },
+    {
+      "component": "Enterprise Contact",
+      "status": "OPERATIONAL",
+      "details": "Endpoint responding correctly",
+      "timestamp": "2025-07-05T16:38:59.008Z"
+    },
+    {
+      "component": "Pricing API",
+      "status": "OPERATIONAL",
+      "details": "Endpoint responding correctly",
+      "timestamp": "2025-07-05T16:38:59.013Z"
+    },
+    {
+      "component": "Landing Page",
+      "status": "OPERATIONAL",
+      "details": "Page accessible, React app loading",
+      "timestamp": "2025-07-05T16:38:59.020Z"
+    },
+    {
+      "component": "Pay-Per-Analysis Service",
+      "status": "OPERATIONAL",
+      "details": "Page accessible, React app loading",
+      "timestamp": "2025-07-05T16:38:59.028Z"
+    },
+    {
+      "component": "Expert Consultation Service",
+      "status": "OPERATIONAL",
+      "details": "Page accessible, React app loading",
+      "timestamp": "2025-07-05T16:38:59.035Z"
+    },
+    {
+      "component": "Pricing Page",
+      "status": "OPERATIONAL",
+      "details": "Page accessible, React app loading",
+      "timestamp": "2025-07-05T16:38:59.047Z"
+    },
+    {
+      "component": "Free Trial Page",
+      "status": "OPERATIONAL",
+      "details": "Page accessible, React app loading",
+      "timestamp": "2025-07-05T16:38:59.056Z"
+    },
+    {
+      "component": "Demo Page",
+      "status": "OPERATIONAL",
+      "details": "Page accessible, React app loading",
+      "timestamp": "2025-07-05T16:38:59.063Z"
+    },
+    {
+      "component": "Enterprise Contact Page",
+      "status": "OPERATIONAL",
+      "details": "Page accessible, React app loading",
+      "timestamp": "2025-07-05T16:38:59.073Z"
+    },
+    {
+      "component": "Enterprise Contact System",
+      "status": "OPERATIONAL",
+      "details": "Enterprise inquiries being captured successfully",
+      "timestamp": "2025-07-05T16:38:59.084Z"
+    },
+    {
+      "component": "Six-Tier Pricing Structure",
+      "status": "OPERATIONAL",
+      "details": "All 6 pricing tiers configured correctly",
+      "timestamp": "2025-07-05T16:38:59.089Z"
+    },
+    {
+      "component": "Free Trial Tier",
+      "status": "OPERATIONAL",
+      "details": "Free trial (no sign-up) properly configured",
+      "timestamp": "2025-07-05T16:38:59.089Z"
+    }
+  ]
+}

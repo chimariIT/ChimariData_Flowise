@@ -4,25 +4,55 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
-import { projects, auth, type Project } from "@/lib/api";
-import { ChartLine, Folder, FileText, Lightbulb, Plus, Search, Calendar, Database, TrendingUp, Bell, LogOut, Settings } from "lucide-react";
+import { apiClient } from "@/lib/api";
+import { ChartLine, Folder, FileText, Lightbulb, Plus, Search, Calendar, Database, TrendingUp, Bell, LogOut, Settings, BarChart3, Target, Zap, Calculator, Brain, HardDrive } from "lucide-react";
 import UploadModal from "@/components/upload-modal";
+import AdvancedAnalysisModal from "@/components/advanced-analysis-modal";
+import UpgradeDialog from "@/components/upgrade-dialog";
 
 interface DashboardProps {
-  user: { id: number; username: string };
+  user: { id: number; email: string; firstName?: string; lastName?: string; username?: string };
   onLogout: () => void;
   onProjectSelect: (projectId: string) => void;
   onSettings: () => void;
+  onVisualizationPage?: () => void;
+  onAskQuestionPage?: () => void;
 }
 
-export default function Dashboard({ user, onLogout, onProjectSelect, onSettings }: DashboardProps) {
+export default function Dashboard({ user, onLogout, onProjectSelect, onSettings, onVisualizationPage, onAskQuestionPage }: DashboardProps) {
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [isAdvancedAnalysisOpen, setIsAdvancedAnalysisOpen] = useState(false);
+  const [selectedProjectForAnalysis, setSelectedProjectForAnalysis] = useState<any>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [upgradeDialog, setUpgradeDialog] = useState<{
+    isOpen: boolean;
+    reason?: string;
+    details?: any;
+  }>({ isOpen: false });
   const { toast } = useToast();
+
+  // Listen for upgrade dialog events
+  useEffect(() => {
+    const handleUpgradeEvent = (event: CustomEvent) => {
+      setUpgradeDialog({
+        isOpen: true,
+        reason: event.detail.reason,
+        details: event.detail
+      });
+    };
+
+    window.addEventListener('showUpgradeDialog', handleUpgradeEvent as EventListener);
+    return () => {
+      window.removeEventListener('showUpgradeDialog', handleUpgradeEvent as EventListener);
+    };
+  }, []);
 
   const { data: projectsData, isLoading, refetch } = useQuery({
     queryKey: ["/api/projects"],
-    queryFn: projects.list,
+    queryFn: async () => {
+      const result = await apiClient.getProjects();
+      return result;
+    },
   });
 
   const filteredProjects = projectsData?.projects?.filter(project =>
@@ -42,7 +72,8 @@ export default function Dashboard({ user, onLogout, onProjectSelect, onSettings 
 
   const handleLogout = async () => {
     try {
-      await auth.logout();
+      localStorage.removeItem('auth_token');
+      localStorage.removeItem('user');
       onLogout();
     } catch (error) {
       toast({
@@ -66,7 +97,7 @@ export default function Dashboard({ user, onLogout, onProjectSelect, onSettings 
     return new Date(dateString).toLocaleDateString();
   };
 
-  const getProjectStatus = (project: Project) => {
+  const getProjectStatus = (project: any) => {
     if (Object.keys(project.insights || {}).length > 0) {
       return { label: "Complete", color: "bg-emerald-100 text-emerald-700" };
     }
@@ -100,10 +131,15 @@ export default function Dashboard({ user, onLogout, onProjectSelect, onSettings 
               <div className="flex items-center space-x-2">
                 <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center">
                   <span className="text-white text-sm font-medium">
-                    {user.username.substring(0, 2).toUpperCase()}
+                    {(user.firstName || user.email).substring(0, 2).toUpperCase()}
                   </span>
                 </div>
-                <span className="text-slate-700 font-medium">{user.username}</span>
+                <span className="text-slate-700 font-medium">
+                  {user.firstName && user.lastName 
+                    ? `${user.firstName} ${user.lastName}` 
+                    : user.email
+                  }
+                </span>
                 <Button variant="ghost" size="sm" onClick={handleLogout}>
                   <LogOut className="w-4 h-4" />
                 </Button>
@@ -199,17 +235,47 @@ export default function Dashboard({ user, onLogout, onProjectSelect, onSettings 
                   </div>
                 </Button>
                 
-                <Button variant="outline" className="w-full justify-between">
+                <Button 
+                  variant="outline" 
+                  className="w-full justify-between"
+                  onClick={onVisualizationPage}
+                >
                   <div className="flex items-center space-x-3">
                     <ChartLine className="w-4 h-4" />
                     <span>Create Visualization</span>
                   </div>
                 </Button>
                 
-                <Button variant="outline" className="w-full justify-between">
+                <Button 
+                  variant="outline" 
+                  className="w-full justify-between"
+                  onClick={onAskQuestionPage}
+                >
                   <div className="flex items-center space-x-3">
                     <Lightbulb className="w-4 h-4" />
                     <span>Ask Business Question</span>
+                  </div>
+                </Button>
+
+                <Button 
+                  variant="outline" 
+                  className="w-full justify-between"
+                  onClick={() => {
+                    if (filteredProjects.length === 0) {
+                      toast({
+                        title: "No Projects",
+                        description: "Please upload a project first to use advanced analysis",
+                        variant: "destructive"
+                      });
+                      return;
+                    }
+                    setSelectedProjectForAnalysis(filteredProjects[0]);
+                    setIsAdvancedAnalysisOpen(true);
+                  }}
+                >
+                  <div className="flex items-center space-x-3">
+                    <BarChart3 className="w-4 h-4" />
+                    <span>Advanced Analysis</span>
                   </div>
                 </Button>
               </CardContent>
@@ -289,6 +355,27 @@ export default function Dashboard({ user, onLogout, onProjectSelect, onSettings 
         isOpen={isUploadModalOpen}
         onClose={() => setIsUploadModalOpen(false)}
         onSuccess={handleUploadSuccess}
+      />
+
+      {/* Advanced Analysis Modal */}
+      {isAdvancedAnalysisOpen && selectedProjectForAnalysis && (
+        <AdvancedAnalysisModal
+          isOpen={isAdvancedAnalysisOpen}
+          onClose={() => {
+            setIsAdvancedAnalysisOpen(false);
+            setSelectedProjectForAnalysis(null);
+          }}
+          projectId={selectedProjectForAnalysis.id}
+          schema={selectedProjectForAnalysis.schema}
+        />
+      )}
+
+      {/* Upgrade Dialog */}
+      <UpgradeDialog
+        isOpen={upgradeDialog.isOpen}
+        onClose={() => setUpgradeDialog({ isOpen: false })}
+        reason={upgradeDialog.reason}
+        details={upgradeDialog.details}
       />
     </div>
   );

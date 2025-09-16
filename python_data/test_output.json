@@ -1,0 +1,34 @@
+{
+  "success": true,
+  "data": {
+    "analysis_type": "Machine Learning",
+    "task_type": "regression",
+    "algorithm": "random_forest",
+    "target_variable": "ROI",
+    "feature_variables": [
+      "Conversion_Rate",
+      "Acquisition_Cost",
+      "Engagement_Score"
+    ],
+    "metrics": {
+      "mse": 0.00025617999999999756,
+      "r2_score": 0.8627607142857157
+    },
+    "feature_importance": {
+      "Conversion_Rate": 0.32815290383506257,
+      "Acquisition_Cost": 0.41785023090811835,
+      "Engagement_Score": 0.2539968652568191
+    },
+    "cross_validation_scores": [
+      0.49920880000000023,
+      0.991891964285714,
+      0.740295306859208
+    ],
+    "cv_mean": 0.7437986903816407,
+    "cv_std": 0.2011523143701887,
+    "sample_size": 10,
+    "test_size": 0.3,
+    "interpretation": "ML analysis completed using random_forest with 3 features"
+  },
+  "visualizations": []
+}

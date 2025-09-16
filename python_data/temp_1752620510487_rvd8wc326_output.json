@@ -1,0 +1,7 @@
+{
+  "success": true,
+  "data": {
+    "error": "Machine learning analysis failed: Target variable and features required for ML analysis"
+  },
+  "visualizations": []
+}

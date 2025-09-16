@@ -1,133 +1,1230 @@
-import { apiRequest } from "./queryClient";
+const API_BASE = window.location.origin;
 
-const API_BASE = "/api";
-
-export interface AuthResponse {
-  token: string;
-  user: {
-    id: number;
-    username: string;
-  };
-}
-
-export interface Project {
-  id: string;
-  name: string;
-  schema: Record<string, string>;
-  questions: string[];
-  insights: Record<string, string>;
-  createdAt: string;
-  recordCount: number;
-  status: string;
-}
-
-export const auth = {
-  login: async (username: string, password: string): Promise<AuthResponse> => {
-    const res = await apiRequest("POST", `${API_BASE}/auth/login`, { username, password });
-    const data = await res.json();
-    localStorage.setItem("token", data.token);
-    return data;
-  },
-
-  register: async (username: string, password: string): Promise<AuthResponse> => {
-    const res = await apiRequest("POST", `${API_BASE}/auth/register`, { username, password });
-    const data = await res.json();
-    localStorage.setItem("token", data.token);
-    return data;
-  },
-
-  logout: async (): Promise<void> => {
-    const token = localStorage.getItem("token");
-    if (token) {
-      await apiRequest("POST", `${API_BASE}/auth/logout`);
-      localStorage.removeItem("token");
-    }
-  },
-
-  getToken: (): string | null => {
-    return localStorage.getItem("token");
-  }
-};
-
-export const projects = {
-  list: async (): Promise<{ projects: Project[] }> => {
-    const res = await fetch(`${API_BASE}/projects`, {
-      headers: {
-        Authorization: `Bearer ${auth.getToken()}`
-      }
-    });
-    if (!res.ok) throw new Error("Failed to fetch projects");
-    return res.json();
-  },
-
-  get: async (id: string): Promise<Project> => {
-    const res = await fetch(`${API_BASE}/projects/${id}`, {
-      headers: {
-        Authorization: `Bearer ${auth.getToken()}`
-      }
-    });
-    if (!res.ok) throw new Error("Failed to fetch project");
-    return res.json();
-  },
-
-  upload: async (file: File, name: string, questions: string[]): Promise<any> => {
-    // Validate inputs
-    if (!file) {
-      throw new Error("Please select a file to upload");
-    }
-    if (!name.trim()) {
-      throw new Error("Please enter a project name");
-    }
-    if (questions.length === 0) {
-      throw new Error("Please add at least one analysis question");
-    }
-
-    // Check file type
-    const allowedTypes = ['.csv', '.xlsx', '.xls'];
-    const fileExtension = '.' + file.name.split('.').pop()?.toLowerCase();
-    if (!allowedTypes.includes(fileExtension)) {
-      throw new Error(`Unsupported file type. Please upload a CSV or Excel file (${allowedTypes.join(', ')})`);
-    }
-
-    // Check file size (50MB limit)
-    const maxSize = 50 * 1024 * 1024; // 50MB
-    if (file.size > maxSize) {
-      throw new Error("File size must be less than 50MB");
-    }
-
+export class APIClient {
+  async uploadFile(file: File, options: {
+    name?: string;
+    description?: string;
+    questions?: string[];
+    isTrial?: boolean;
+    piiHandled?: boolean;
+    anonymizationApplied?: boolean;
+    selectedColumns?: string[];
+  }): Promise<any> {
     const formData = new FormData();
-    formData.append("file", file);
-    formData.append("name", name.trim());
-    formData.append("questions", JSON.stringify(questions));
-
-    const res = await fetch(`/api/projects/upload`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${auth.getToken()}`
-      },
-      body: formData
-    });
-
-    if (!res.ok) {
-      const errorText = await res.text();
-      let errorMessage = "Upload failed";
-      
-      try {
-        const errorObj = JSON.parse(errorText);
-        errorMessage = errorObj.error || errorObj.message || errorMessage;
-        
-        // Add specific error details if available
-        if (errorObj.details) {
-          errorMessage += `: ${errorObj.details}`;
-        }
-      } catch {
-        // If not JSON, use status text or raw text
-        errorMessage = res.statusText || errorText || `HTTP ${res.status} error`;
-      }
-      
-      throw new Error(errorMessage);
+    formData.append('file', file);
+    
+    if (options.name) {
+      formData.append('name', options.name);
+    }
+    if (options.description) {
+      formData.append('description', options.description);
+    }
+    if (options.questions) {
+      formData.append('questions', JSON.stringify(options.questions));
+    }
+    if (options.isTrial) {
+      formData.append('isTrial', 'true');
+    }
+    if (options.piiHandled) {
+      formData.append('piiHandled', 'true');
+    }
+    if (options.anonymizationApplied) {
+      formData.append('anonymizationApplied', 'true');
+    }
+    if (options.selectedColumns) {
+      formData.append('selectedColumns', JSON.stringify(options.selectedColumns));
     }
 
-    return res.json();
+    const endpoint = '/api/upload'; // Unified endpoint for all users
+    
+    // Add authentication headers
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    const response = await fetch(`${API_BASE}${endpoint}`, {
+      method: 'POST',
+      headers,
+      body: formData,
+      credentials: 'include', // Include session cookies for authentication
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      
+      if (response.status === 401) {
+        // Clear invalid token
+        localStorage.removeItem('auth_token');
+        throw new Error("Authentication required - Please sign in to upload files");
+      }
+      
+      throw new Error(error.error || `Upload failed: ${response.status}`);
+    }
+
+    return await response.json();
   }
-};
+
+  async uploadTrialFile(file: File): Promise<any> {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    // Add authentication headers for consistency
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/trial-upload`, {
+      method: 'POST',
+      headers,
+      body: formData,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Trial upload failed: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async getPricing(): Promise<any> {
+    // Add authentication headers
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/pricing`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch pricing: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async calculatePrice(features: string[]): Promise<any> {
+    // Add authentication headers
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/calculate-price`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ features }),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Price calculation failed: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async createPaymentIntent(features: string[], projectId: string): Promise<any> {
+    const response = await fetch(`${API_BASE}/api/create-payment-intent`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ features, projectId }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Payment intent creation failed: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async processFeatures(projectId: string, features: string[], paymentIntentId?: string): Promise<any> {
+    const response = await fetch(`${API_BASE}/api/process-features`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ projectId, features, paymentIntentId }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Feature processing failed: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async createGuidedAnalysisPayment(analysisConfig: any, pricing: any): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/create-guided-analysis-payment`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ analysisConfig, pricing }),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      console.log('Guided analysis payment failed:', error);
+      throw new Error(error.error || 'Failed to create guided analysis payment');
+    }
+
+    return await response.json();
+  }
+
+  async executeGuidedAnalysis(analysisId: string, paymentIntentId?: string): Promise<any> {
+    const response = await fetch(`${API_BASE}/api/execute-guided-analysis`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ analysisId, paymentIntentId }),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to execute guided analysis');
+    }
+
+    return await response.json();
+  }
+
+  async getGuidedAnalysisResults(analysisId: string): Promise<any> {
+    const response = await fetch(`${API_BASE}/api/guided-analysis/${analysisId}`, {
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to get guided analysis results');
+    }
+
+    return await response.json();
+  }
+
+  async getProjects(): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/projects`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch projects: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  // Dataset management methods
+  async getDatasets(): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/datasets`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch datasets: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async getDataset(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/datasets/${id}`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch dataset: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async createDataset(data: {
+    name: string;
+    description?: string;
+    sourceType: string;
+    sourceUri?: string;
+    schema: any;
+    content?: any;
+    ingestionMetadata?: any;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/datasets`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(data),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to create dataset: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async deleteDataset(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/datasets/${id}`, {
+      method: 'DELETE',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to delete dataset: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async getProject(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/projects/${id}`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch project: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async deleteProject(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/projects/${id}`, {
+      method: 'DELETE',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to delete project: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  // Project-Dataset Association methods
+  async getProjectDatasets(projectId: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/projects/${projectId}/datasets`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch project datasets: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async addDatasetToProject(projectId: string, datasetId: string, role?: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/projects/${projectId}/datasets`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ datasetId, role }),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to add dataset to project: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async removeDatasetFromProject(projectId: string, datasetId: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/projects/${projectId}/datasets/${datasetId}`, {
+      method: 'DELETE',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to remove dataset from project: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  // Project Artifact methods
+  async getProjectArtifacts(projectId: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/projects/${projectId}/artifacts`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch project artifacts: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async createProjectArtifact(projectId: string, data: {
+    type: string;
+    name: string;
+    description?: string;
+    content: any;
+    parentArtifactId?: string;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/projects/${projectId}/artifacts`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(data),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to create project artifact: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async getProjectArtifact(projectId: string, artifactId: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/projects/${projectId}/artifacts/${artifactId}`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch project artifact: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  // Multi-source import methods
+  async importFromUrl(data: {
+    url: string;
+    name?: string;
+    description?: string;
+    format?: string;
+    projectId?: string;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/import/url`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(data),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to import from URL: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async importFromApiEndpoint(data: {
+    url: string;
+    method: string;
+    headers?: Record<string, string>;
+    body?: string;
+    name?: string;
+    description?: string;
+    projectId?: string;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/import/api`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(data),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to import from API: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  // Authentication methods
+  async login(credentials: { email: string; password: string }): Promise<any> {
+    const response = await fetch(`${API_BASE}/api/auth/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(credentials),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Login failed: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async register(userData: {
+    email: string;
+    firstName: string;
+    lastName: string;
+    password: string;
+  }): Promise<any> {
+    const response = await fetch(`${API_BASE}/api/auth/register`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(userData),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Registration failed: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async logout(): Promise<any> {
+    const response = await fetch(`${API_BASE}/api/auth/logout`, {
+      method: 'POST',
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Logout failed: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async getCurrentUser(): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const response = await fetch(`${API_BASE}/api/auth/user`, {
+      method: 'GET',
+      headers: {
+        'Authorization': token ? `Bearer ${token}` : '',
+      },
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to get current user: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async getOAuthProviders(): Promise<any> {
+    const response = await fetch(`${API_BASE}/api/auth/providers`, {
+      method: 'GET',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to get OAuth providers: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  // Streaming Sources API methods
+  async createStreamingSource(config: {
+    name: string;
+    description?: string;
+    datasetId: string;
+    protocol: 'websocket' | 'sse' | 'poll';
+    endpoint: string;
+    headers?: Record<string, string>;
+    parseSpec?: {
+      format?: 'json' | 'text';
+      jsonPath?: string;
+      delimiter?: string;
+      timestampPath?: string;
+      dedupeKeyPath?: string;
+    };
+    batchSize?: number;
+    flushMs?: number;
+    maxBuffer?: number;
+    pollInterval?: number;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/streaming-sources`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(config),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to create streaming source: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async getStreamingSources(filters?: {
+    projectId?: string;
+    datasetId?: string;
+    status?: string;
+    protocol?: string;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const params = new URLSearchParams();
+    if (filters?.projectId) params.set('projectId', filters.projectId);
+    if (filters?.datasetId) params.set('datasetId', filters.datasetId);
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.protocol) params.set('protocol', filters.protocol);
+
+    const response = await fetch(`${API_BASE}/api/streaming-sources?${params}`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch streaming sources: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async getStreamingSource(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/streaming-sources/${id}`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch streaming source: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async updateStreamingSource(id: string, updates: {
+    name?: string;
+    description?: string;
+    endpoint?: string;
+    headers?: Record<string, string>;
+    parseSpec?: any;
+    batchSize?: number;
+    flushMs?: number;
+    maxBuffer?: number;
+    pollInterval?: number;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/streaming-sources/${id}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify(updates),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to update streaming source: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async startStreamingSource(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/streaming-sources/${id}/start`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to start streaming source: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async stopStreamingSource(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/streaming-sources/${id}/stop`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to stop streaming source: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async deleteStreamingSource(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/streaming-sources/${id}`, {
+      method: 'DELETE',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to delete streaming source: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  // Scraping Jobs API methods
+  async createScrapingJob(config: {
+    name: string;
+    description?: string;
+    datasetId: string;
+    strategy: 'http' | 'puppeteer';
+    targetUrl: string;
+    schedule?: string;
+    extractionSpec: {
+      selectors?: Record<string, string>;
+      jsonPath?: string;
+      tableSelector?: string;
+      followPagination?: {
+        enabled: boolean;
+        nextSelector?: string;
+        maxPages?: number;
+        waitTime?: number;
+      };
+    };
+    loginSpec?: {
+      type: 'form' | 'basic' | 'header';
+      usernameSelector?: string;
+      passwordSelector?: string;
+      username?: string;
+      password?: string;
+      headers?: Record<string, string>;
+    };
+    rateLimitRPM?: number;
+    maxConcurrency?: number;
+    respectRobots?: boolean;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/scraping-jobs`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(config),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to create scraping job: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async getScrapingJobs(filters?: {
+    projectId?: string;
+    datasetId?: string;
+    status?: string;
+    strategy?: string;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const params = new URLSearchParams();
+    if (filters?.projectId) params.set('projectId', filters.projectId);
+    if (filters?.datasetId) params.set('datasetId', filters.datasetId);
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.strategy) params.set('strategy', filters.strategy);
+
+    const response = await fetch(`${API_BASE}/api/scraping-jobs?${params}`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch scraping jobs: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async getScrapingJob(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/scraping-jobs/${id}`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch scraping job: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async updateScrapingJob(id: string, updates: {
+    name?: string;
+    description?: string;
+    targetUrl?: string;
+    schedule?: string;
+    extractionSpec?: any;
+    loginSpec?: any;
+    rateLimitRPM?: number;
+    maxConcurrency?: number;
+    respectRobots?: boolean;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/scraping-jobs/${id}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify(updates),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to update scraping job: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async startScrapingJob(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/scraping-jobs/${id}/start`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to start scraping job: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async stopScrapingJob(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/scraping-jobs/${id}/stop`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to stop scraping job: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async runScrapingJobOnce(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/scraping-jobs/${id}/run`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to run scraping job: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async deleteScrapingJob(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/scraping-jobs/${id}`, {
+      method: 'DELETE',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to delete scraping job: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async getScrapingJobRuns(id: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/scraping-jobs/${id}/runs`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch scraping job runs: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  // Live Sources Overview API method
+  async getLiveSourcesOverview(projectId?: string): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const params = new URLSearchParams();
+    if (projectId) params.set('projectId', projectId);
+
+    const response = await fetch(`${API_BASE}/api/live-sources/overview?${params}`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch live sources overview: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  // Test connection methods
+  async testStreamingConnection(config: {
+    protocol: 'websocket' | 'sse' | 'poll';
+    endpoint: string;
+    headers?: Record<string, string>;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/streaming-sources/test-connection`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(config),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Connection test failed: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async testScrapingExtraction(config: {
+    strategy: 'http' | 'puppeteer';
+    targetUrl: string;
+    extractionSpec: any;
+  }): Promise<any> {
+    const token = localStorage.getItem('auth_token');
+    const headers: any = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/api/scraping-jobs/test-extraction`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(config),
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Extraction test failed: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+}
+
+export const apiClient = new APIClient();

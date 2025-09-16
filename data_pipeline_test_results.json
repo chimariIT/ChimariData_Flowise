@@ -1,0 +1,75 @@
+{
+  "timestamp": "2025-09-15T22:34:04.899Z",
+  "summary": {
+    "totalTests": 10,
+    "passedTests": 3,
+    "failedTests": 6,
+    "errorTests": 0,
+    "skippedTests": 0,
+    "successRate": "30.0"
+  },
+  "results": [
+    {
+      "category": "File Upload",
+      "test": "Upload CSV File",
+      "status": "✅ PASS",
+      "details": "File: customer_data.csv | Size: 145 bytes"
+    },
+    {
+      "category": "File Upload",
+      "test": "CSV Response Validation",
+      "status": "❌ FAIL",
+      "details": "Missing required response fields"
+    },
+    {
+      "category": "File Upload",
+      "test": "PII Detection Flag",
+      "status": "✅ PASS",
+      "details": "PII detected correctly"
+    },
+    {
+      "category": "File Upload",
+      "test": "Upload JSON File",
+      "status": "✅ PASS",
+      "details": "File: sales_data.json | Size: 158 bytes"
+    },
+    {
+      "category": "File Upload",
+      "test": "JSON Response Validation",
+      "status": "❌ FAIL",
+      "details": "Missing required response fields"
+    },
+    {
+      "category": "File Upload",
+      "test": "Upload CSV File",
+      "status": "⚠️ EXPECTED",
+      "details": "Upload failed: 500"
+    },
+    {
+      "category": "PII Detection",
+      "test": "PII Analysis API",
+      "status": "❌ FAIL",
+      "details": "API returned HTML instead of JSON (routing issue)"
+    },
+    {
+      "category": "Schema Analysis",
+      "test": "Schema Analysis API",
+      "status": "❌ FAIL",
+      "details": "API returned HTML instead of JSON (routing issue)"
+    },
+    {
+      "category": "Data Transformation",
+      "test": "Data Transformation API",
+      "status": "❌ FAIL",
+      "details": "API returned HTML instead of JSON (routing issue)"
+    },
+    {
+      "category": "Analysis Execution",
+      "test": "Analysis Execution API",
+      "status": "❌ FAIL",
+      "details": "API returned HTML instead of JSON (routing issue)"
+    }
+  ],
+  "routingIssues": 4,
+  "uploadedFiles": 2
+}

@@ -10,7 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Settings, Brain, Key, Info, Crown, BarChart3, AlertTriangle, Check } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
-import { auth } from "@/lib/api";
+import { apiClient } from "@/lib/api";
 
 interface SettingsPageProps {
   onBack: () => void;
@@ -43,7 +43,7 @@ export default function SettingsPage({ onBack, onPricing }: SettingsPageProps) {
     queryKey: ["/api/settings"],
     queryFn: async () => {
       const res = await fetch("/api/settings", {
-        headers: { Authorization: `Bearer ${auth.getToken()}` }
+        headers: { Authorization: `Bearer ${localStorage.getItem('auth_token')}` }
       });
       if (!res.ok) throw new Error("Failed to fetch settings");
       return res.json();

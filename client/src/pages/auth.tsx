@@ -4,18 +4,23 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { auth } from "@/lib/api";
+import { apiClient } from "@/lib/api";
 import { ChartLine, Upload, Brain, BarChart } from "lucide-react";
+import { OAuthProviders } from "@/components/oauth-providers";
+import ForgotPasswordModal from "@/components/forgot-password-modal";
 
 interface AuthPageProps {
-  onLogin: (user: { id: number; username: string }) => void;
+  onLogin: (user: { id: string; email: string; firstName?: string; lastName?: string; username?: string }) => void;
 }
 
 export default function AuthPage({ onLogin }: AuthPageProps) {
   const [isLogin, setIsLogin] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
+  const [isForgotPasswordOpen, setIsForgotPasswordOpen] = useState(false);
   const [formData, setFormData] = useState({
-    username: "",
+    email: "",
+    firstName: "",
+    lastName: "",
     password: "",
     confirmPassword: ""
   });
@@ -31,10 +36,21 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
       }
 
       const result = isLogin 
-        ? await auth.login(formData.username, formData.password)
-        : await auth.register(formData.username, formData.password);
+        ? await apiClient.login({ email: formData.email, password: formData.password })
+        : await apiClient.register({ 
+            email: formData.email, 
+            firstName: formData.firstName,
+            lastName: formData.lastName,
+            password: formData.password 
+          });
 
-      onLogin(result.user);
+      if (result.user) {
+        // Store auth token in localStorage
+        if (result.token) {
+          localStorage.setItem('auth_token', result.token);
+        }
+        onLogin(result.user);
+      }
       
       toast({
         title: "Success",
@@ -126,20 +142,63 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
             <CardContent>
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div>
-                  <Label htmlFor="username">Username</Label>
+                  <Label htmlFor="email">Email</Label>
                   <Input
-                    id="username"
-                    name="username"
-                    type="text"
-                    placeholder={isLogin ? "Enter your username" : "Choose a username"}
-                    value={formData.username}
+                    id="email"
+                    name="email"
+                    type="email"
+                    placeholder="Enter your email address"
+                    value={formData.email}
                     onChange={handleInputChange}
                     required
                   />
                 </div>
                 
+                {!isLogin && (
+                  <>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <Label htmlFor="firstName">First Name</Label>
+                        <Input
+                          id="firstName"
+                          name="firstName"
+                          type="text"
+                          placeholder="First name"
+                          value={formData.firstName}
+                          onChange={handleInputChange}
+                          required
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="lastName">Last Name</Label>
+                        <Input
+                          id="lastName"
+                          name="lastName"
+                          type="text"
+                          placeholder="Last name"
+                          value={formData.lastName}
+                          onChange={handleInputChange}
+                          required
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
+                
                 <div>
-                  <Label htmlFor="password">Password</Label>
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="password">Password</Label>
+                    {isLogin && (
+                      <Button
+                        type="button"
+                        variant="link"
+                        className="p-0 h-auto text-xs text-primary"
+                        onClick={() => setIsForgotPasswordOpen(true)}
+                      >
+                        Forgot password?
+                      </Button>
+                    )}
+                  </div>
                   <Input
                     id="password"
                     name="password"
@@ -149,6 +208,11 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
                     onChange={handleInputChange}
                     required
                   />
+                  {!isLogin && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      At least 8 characters with at least one Large cap and at least alpha character or numeric character.
+                    </p>
+                  )}
                 </div>
 
                 {!isLogin && (
@@ -175,6 +239,17 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
                 </Button>
               </form>
 
+              <div className="relative my-6">
+                <div className="absolute inset-0 flex items-center">
+                  <span className="w-full border-t" />
+                </div>
+                <div className="relative flex justify-center text-xs uppercase">
+                  <span className="bg-background px-2 text-muted-foreground">Or continue with</span>
+                </div>
+              </div>
+
+              <OAuthProviders showTitle={false} />
+
               <div className="text-center mt-6">
                 <p className="text-slate-600">
                   {isLogin ? "Don't have an account? " : "Already have an account? "}
@@ -189,6 +264,12 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
               </div>
             </CardContent>
           </Card>
+
+          {/* Forgot Password Modal */}
+          <ForgotPasswordModal
+            isOpen={isForgotPasswordOpen}
+            onClose={() => setIsForgotPasswordOpen(false)}
+          />
         </div>
       </div>
     </div>

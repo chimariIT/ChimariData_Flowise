@@ -1,0 +1,1 @@
+{"analysisType":"machine_learning","targetVariable":"ROI","features":["Campaign_Type","Duration","Conversion_Rate","Target_Audience","Acquisition_Cost"],"algorithm":"random_forest","testSize":0.2,"crossValidation":5,"metrics":["accuracy","f1_score"]}

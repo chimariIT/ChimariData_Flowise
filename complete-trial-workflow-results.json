@@ -1,0 +1,40 @@
+{
+  "summary": {
+    "passed": 4,
+    "failed": 1,
+    "total": 5
+  },
+  "results": [
+    {
+      "test": "Trial Upload",
+      "status": "PASSED",
+      "message": "Upload successful, PII detected: Name, Age, Email",
+      "timestamp": "2025-07-16T04:24:02.704Z"
+    },
+    {
+      "test": "Descriptive Analysis",
+      "status": "FAILED",
+      "message": "No descriptive analysis found",
+      "timestamp": "2025-07-16T04:24:04.735Z"
+    },
+    {
+      "test": "Basic Visualizations",
+      "status": "PASSED",
+      "message": "Generated 2 visualizations (limited for free trial)",
+      "timestamp": "2025-07-16T04:24:04.735Z"
+    },
+    {
+      "test": "Schema Detection",
+      "status": "PASSED",
+      "message": "Schema detected with 5 columns",
+      "timestamp": "2025-07-16T04:24:04.735Z"
+    },
+    {
+      "test": "Trial Feature Limitation",
+      "status": "PASSED",
+      "message": "Advanced features properly limited for free trial",
+      "timestamp": "2025-07-16T04:24:04.735Z"
+    }
+  ],
+  "timestamp": "2025-07-16T04:24:04.738Z"
+}
