@@ -327,10 +327,7 @@ export default function ProjectSetupStep({ journeyType }: ProjectSetupStepProps)
                         <p className="text-gray-600 text-sm mb-3">{approach.description}</p>
                         <div className="flex items-center justify-between gap-4 text-sm">
                           <div className="flex items-center gap-4 text-gray-500">
-                            <span className="flex items-center gap-1">
-                              <Clock className="w-3 h-3" />
-                              2-4 hours
-                            </span>
+                            {/* Replaced hardcoded time with intelligent cost calculation */}
                           </div>
                           <div className="flex items-center gap-1">
                             {isLoadingCosts ? (

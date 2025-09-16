@@ -1874,7 +1874,7 @@ INSTRUCTIONS: Respond with a JSON object containing:
    - "type": "statistical", "machine_learning", "visualization", "business_intelligence", or "time_series"
    - "description": What this analysis does
    - "complexity": "basic", "intermediate", or "advanced"
-   - "estimatedDuration": Rough time estimate
+   - "costProjection": Estimated cost range (e.g., "$25-45")
    - "expectedOutcomes": Array of what user will learn
    - "requiredFeatures": Array from ["preparation", "data_processing", "analysis", "visualization", "ai_insights"]
    - "confidence": Number 0-100 representing how well this fits the user's needs
