@@ -228,6 +228,9 @@ export interface IStorage {
   
   // Journey Settings (missing method)
   getJourneySettings(journeyId: string): Promise<any>;
+  
+  // Usage Logging (missing method)
+  logUsage(usage: { userId: string; projectId?: string | null; action: string; provider?: string; tokensUsed?: number; cost?: string }): Promise<void>;
 }
 
 export class MemStorage implements IStorage {

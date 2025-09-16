@@ -210,6 +210,15 @@ class WriteBackCache {
           set: { ...data, updatedAt: new Date() }
         });
         break;
+      case 'create-journey':
+        await db.insert(journeys).values(data);
+        break;
+      case 'update-journey':
+        await db.update(journeys).set(data.updates).where(eq(journeys.id, data.id));
+        break;
+      case 'delete-journey':
+        await db.delete(journeys).where(eq(journeys.id, data.id));
+        break;
     }
   }
 }
@@ -1268,24 +1277,87 @@ export class HybridStorage {
   }
 
   async createJourney(journey: InsertJourney): Promise<Journey> {
+    await this.init();
+    
     const id = nanoid();
-    return { ...journey, id, createdAt: new Date(), updatedAt: new Date() };
+    const newJourney: Journey = { 
+      ...journey, 
+      id, 
+      createdAt: new Date(), 
+      updatedAt: new Date() 
+    };
+    
+    // Store in memory immediately for fast access
+    // Note: HybridStorage doesn't seem to have journeyCache, so we'll create journeys on demand
+    
+    // Queue for database persistence
+    this.writeBackCache.enqueue(`journey-${id}`, 'create-journey', newJourney);
+    
+    return newJourney;
   }
 
   async getJourney(id: string): Promise<Journey | undefined> {
-    return undefined;
+    await this.init();
+    
+    // Query database directly since there's no journey cache
+    try {
+      const dbJourneys = await db.select().from(journeys).where(eq(journeys.id, id));
+      return dbJourneys.length > 0 ? dbJourneys[0] : undefined;
+    } catch (error) {
+      console.error('Error fetching journey from database:', error);
+      return undefined;
+    }
   }
 
   async getJourneysByUser(userId: string): Promise<Journey[]> {
-    return [];
+    await this.init();
+    
+    try {
+      return await db.select().from(journeys).where(eq(journeys.userId, userId));
+    } catch (error) {
+      console.error('Error fetching user journeys from database:', error);
+      return [];
+    }
   }
 
   async updateJourney(id: string, updates: Partial<Journey>): Promise<Journey | undefined> {
-    return undefined;
+    await this.init();
+    
+    try {
+      const updatedData = {
+        ...updates,
+        updatedAt: new Date()
+      };
+      
+      // Queue for database persistence
+      this.writeBackCache.enqueue(`journey-update-${id}`, 'update-journey', { id, updates: updatedData });
+      
+      // Return updated journey by fetching it
+      const [updated] = await db.update(journeys)
+        .set(updatedData)
+        .where(eq(journeys.id, id))
+        .returning();
+        
+      return updated || undefined;
+    } catch (error) {
+      console.error('Error updating journey:', error);
+      return undefined;
+    }
   }
 
   async deleteJourney(id: string): Promise<boolean> {
-    return true;
+    await this.init();
+    
+    try {
+      // Queue deletion for persistence
+      this.writeBackCache.enqueue(`journey-delete-${id}`, 'delete-journey', { id });
+      
+      const result = await db.delete(journeys).where(eq(journeys.id, id));
+      return (result.rowCount || 0) > 0;
+    } catch (error) {
+      console.error('Error deleting journey:', error);
+      return false;
+    }
   }
 
   async createJourneyStepProgress(progress: InsertJourneyStepProgress): Promise<JourneyStepProgress> {
@@ -1389,6 +1461,25 @@ export class HybridStorage {
         visualizationTypes: ['charts', 'tables', 'insights']
       }
     };
+  }
+
+  // Usage Logging - track user actions and AI usage
+  async logUsage(usage: { userId: string; projectId?: string | null; action: string; provider?: string; tokensUsed?: number; cost?: string }): Promise<void> {
+    await this.init();
+    
+    // Log to console for now (can be expanded to database later)
+    console.log('Usage logged:', {
+      timestamp: new Date().toISOString(),
+      userId: usage.userId,
+      projectId: usage.projectId,
+      action: usage.action,
+      provider: usage.provider,
+      tokensUsed: usage.tokensUsed,
+      cost: usage.cost
+    });
+    
+    // Could be expanded to store in database for analytics
+    // For now, just console logging to prevent errors
   }
 }
 
