@@ -2377,6 +2377,180 @@ Respond with valid JSON only, no additional text.`;
     }
   });
 
+  // Intelligent cost estimation based on journey goals and analysis requirements
+  app.post("/api/cost-estimates/intelligent", ensureAuthenticated, async (req, res) => {
+    try {
+      // Apply security headers
+      Object.entries(SecurityUtils.getCSPHeaders()).forEach(([key, value]) => {
+        res.setHeader(key, value);
+      });
+
+      // Sanitize request body
+      const sanitizedBody = SecurityUtils.sanitizeRequestBody(req.body);
+      const { 
+        journeyId, 
+        goals = [], 
+        questions = [], 
+        journeyType, 
+        dataContext = {} 
+      } = sanitizedBody;
+
+      // Validate required fields
+      if (!journeyType) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Journey type is required" 
+        });
+      }
+
+      // Sanitize arrays
+      const sanitizedGoals = SecurityUtils.sanitizeStringArray(goals);
+      const sanitizedQuestions = SecurityUtils.sanitizeStringArray(questions);
+
+      // Validate journey type
+      const validJourneyTypes = ['guided', 'business', 'technical'];
+      if (!validJourneyTypes.includes(journeyType)) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid journey type. Must be one of: guided, business, technical" 
+        });
+      }
+
+      // Check for minimum input requirements
+      if (!journeyId && (!sanitizedGoals.length && !sanitizedQuestions.length)) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Either journeyId or goals/questions must be provided" 
+        });
+      }
+
+      // Get user context for personalization
+      const userId = (req.user as any)?.id;
+      const user = await storage.getUser(userId);
+
+      // Enhance data context with user tier information
+      const enhancedDataContext = {
+        ...dataContext,
+        userTier: user?.subscriptionTier || 'none',
+        userId
+      };
+
+      console.log(`Intelligent cost estimation for user ${userId}, journey: ${journeyType}`);
+
+      // Use enhanced pricing service for intelligent estimation
+      const pricingService = PricingService.getInstance();
+      const result = await pricingService.calculateIntelligentEstimate({
+        journeyId,
+        goals: sanitizedGoals,
+        questions: sanitizedQuestions,
+        journeyType,
+        dataContext: enhancedDataContext
+      });
+
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+
+      // Add user-specific adjustments if needed
+      if (result.estimate) {
+        // Apply subscription discounts
+        if (user?.subscriptionTier === 'professional') {
+          result.estimate.total = Math.round(result.estimate.total * 0.9); // 10% discount
+          result.estimate.recommendations.unshift('Professional tier: 10% discount applied');
+        } else if (user?.subscriptionTier === 'enterprise') {
+          result.estimate.total = Math.round(result.estimate.total * 0.8); // 20% discount
+          result.estimate.recommendations.unshift('Enterprise tier: 20% discount applied');
+        }
+
+        // Add user guidance based on experience
+        if (journeyType === 'guided' && result.estimate.complexityScore > 8) {
+          result.estimate.recommendations.push('Consider expert consultation for complex analysis requirements');
+        }
+      }
+
+      res.json(result);
+
+    } catch (error: any) {
+      console.error("Intelligent cost estimation error:", error);
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to calculate intelligent estimate",
+        details: error.message 
+      });
+    }
+  });
+
+  // Quick intelligent cost estimate for immediate feedback (no auth required)
+  app.post("/api/cost-estimates/quick", async (req, res) => {
+    try {
+      // Apply security headers
+      Object.entries(SecurityUtils.getCSPHeaders()).forEach(([key, value]) => {
+        res.setHeader(key, value);
+      });
+
+      // Sanitize request body
+      const sanitizedBody = SecurityUtils.sanitizeRequestBody(req.body);
+      const { goalCount = 0, questionCount = 0, journeyType, complexity = 'intermediate' } = sanitizedBody;
+
+      // Validate inputs
+      if (!journeyType) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Journey type is required" 
+        });
+      }
+
+      const validJourneyTypes = ['guided', 'business', 'technical'];
+      if (!validJourneyTypes.includes(journeyType)) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid journey type" 
+        });
+      }
+
+      const validComplexities = ['basic', 'intermediate', 'advanced'];
+      if (!validComplexities.includes(complexity)) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid complexity level" 
+        });
+      }
+
+      // Validate counts
+      if (goalCount < 0 || goalCount > 50 || questionCount < 0 || questionCount > 100) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid goal or question count" 
+        });
+      }
+
+      const pricingService = PricingService.getInstance();
+      const estimate = await pricingService.getQuickIntelligentEstimate(
+        goalCount,
+        questionCount,
+        journeyType,
+        complexity
+      );
+
+      res.json({
+        success: true,
+        estimate: {
+          total: estimate,
+          currency: 'USD',
+          confidence: 0.7, // Lower confidence for quick estimates
+          type: 'quick_estimate'
+        }
+      });
+
+    } catch (error: any) {
+      console.error("Quick cost estimation error:", error);
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to calculate quick estimate" 
+      });
+    }
+  });
+
   // Create payment intent
   app.post("/api/create-payment-intent", async (req, res) => {
     try {

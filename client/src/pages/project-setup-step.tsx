@@ -19,10 +19,13 @@ import {
   Clock,
   Users,
   Lightbulb,
-  Loader2
+  Loader2,
+  DollarSign,
+  TrendingUp
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+import { useApproachCostEstimates, useIntelligentPricing } from "@/hooks/useIntelligentPricing";
 
 interface ProjectSetupStepProps {
   journeyType: string;
@@ -33,7 +36,6 @@ interface AnalysisApproach {
   name: string;
   description: string;
   complexity: "basic" | "intermediate" | "advanced";
-  costProjection: string;
   dataRequirements: string[];
   icon: any;
   confidence: number;
@@ -94,7 +96,6 @@ export default function ProjectSetupStep({ journeyType }: ProjectSetupStepProps)
       name: "Statistical Analysis",
       description: "Correlation analysis, hypothesis testing, and descriptive statistics to identify churn patterns",
       complexity: "basic",
-      costProjection: "$25-40",
       dataRequirements: ["Customer demographics", "Usage history", "Subscription data"],
       icon: BarChart3,
       confidence: 85
@@ -104,7 +105,6 @@ export default function ProjectSetupStep({ journeyType }: ProjectSetupStepProps)
       name: "Machine Learning Model",
       description: "Predictive modeling using classification algorithms to identify at-risk customers",
       complexity: "advanced",
-      costProjection: "$60-90",
       dataRequirements: ["Customer features", "Historical churn data", "Behavioral metrics"],
       icon: Brain,
       confidence: 92
@@ -114,12 +114,34 @@ export default function ProjectSetupStep({ journeyType }: ProjectSetupStepProps)
       name: "Cohort Analysis",
       description: "Time-based analysis to understand customer behavior patterns over time",
       complexity: "intermediate",
-      costProjection: "$45-75",
       dataRequirements: ["Time-series data", "Customer journey data", "Event tracking"],
       icon: Clock,
       confidence: 78
     }
   ]);
+
+  // Use intelligent pricing for dynamic cost calculations
+  const { 
+    approachCosts, 
+    isLoading: isLoadingCosts, 
+    hasError: hasCostError,
+    formatCurrency 
+  } = useApproachCostEstimates(
+    extractedGoals,
+    businessQuestions,
+    journeyType,
+    suggestedApproaches
+  );
+
+  // Overall project cost estimation
+  const { 
+    getIntelligentEstimate,
+    intelligentEstimate,
+    isLoadingIntelligent,
+    hasError: hasIntelligentError,
+    recommendations,
+    confidence
+  } = useIntelligentPricing();
 
   const [selectedApproaches, setSelectedApproaches] = useState<string[]>(["statistical-analysis"]);
   const [projectCreated, setProjectCreated] = useState(false);
@@ -303,11 +325,36 @@ export default function ProjectSetupStep({ journeyType }: ProjectSetupStepProps)
                           </Badge>
                         </div>
                         <p className="text-gray-600 text-sm mb-3">{approach.description}</p>
-                        <div className="flex items-center gap-4 text-sm text-gray-500">
-                          <span className="flex items-center gap-1">
-                            <Clock className="w-3 h-3" />
-                            {approach.estimatedTime}
-                          </span>
+                        <div className="flex items-center justify-between gap-4 text-sm">
+                          <div className="flex items-center gap-4 text-gray-500">
+                            <span className="flex items-center gap-1">
+                              <Clock className="w-3 h-3" />
+                              2-4 hours
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            {isLoadingCosts ? (
+                              <div className="flex items-center gap-1 text-gray-400">
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                                <span className="text-xs">Calculating...</span>
+                              </div>
+                            ) : hasCostError ? (
+                              <Badge variant="outline" className="text-red-600 border-red-200">
+                                <DollarSign className="w-3 h-3 mr-1" />
+                                Error
+                              </Badge>
+                            ) : approachCosts[approach.id] ? (
+                              <Badge variant="secondary" className="bg-green-100 text-green-800 border-green-200">
+                                <DollarSign className="w-3 h-3 mr-1" />
+                                {formatCurrency(approachCosts[approach.id])}
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-gray-500">
+                                <DollarSign className="w-3 h-3 mr-1" />
+                                N/A
+                              </Badge>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>
