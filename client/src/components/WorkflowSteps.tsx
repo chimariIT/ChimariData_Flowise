@@ -209,7 +209,7 @@ function getServiceExpectations(serviceType: string): string[] {
     case 'pay_per_analysis':
       return [
         'One-time payment of $25+ based on complexity',
-        'Results delivered within 2-5 minutes',
+        'Analysis cost calculated based on data complexity',
         'Downloadable reports in multiple formats',
         'Basic to advanced analysis options available'
       ];
