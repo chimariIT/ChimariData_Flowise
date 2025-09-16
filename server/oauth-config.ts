@@ -44,9 +44,9 @@ export function setupOAuth(app: Express) {
       app.get(provider.routes.auth, (req, res, next) => {
         const protocol = req.get('x-forwarded-proto') || (req.secure ? 'https' : 'http');
         const host = req.get('host');
-        const dynamicCallback = `${protocol}://${host}/api/auth/google/callback`;
-        console.log(`OAuth request from domain: ${protocol}://${host}`);
-        console.log(`Expected callback URL: ${dynamicCallback}`);
+        const dynamicCallback = `${protocol}://${host}/api/auth/${provider.name}/callback`;
+        console.log(`${provider.name.toUpperCase()} OAuth request from domain: ${protocol}://${host}`);
+        console.log(`Expected ${provider.name} callback URL: ${dynamicCallback}`);
         
         passport.authenticate(provider.name, { scope: provider.scopes })(req, res, next);
       });

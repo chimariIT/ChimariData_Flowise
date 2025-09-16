@@ -3529,20 +3529,7 @@ Respond with valid JSON only, no additional text.`;
   });
 
   // Authentication routes
-
-  // OAuth providers endpoint
-  app.get('/api/auth/providers', (req, res) => {
-    // Return available OAuth providers - for now only Google is fully configured
-    const providers = [
-      {
-        name: 'google',
-        authUrl: '/api/auth/google',
-        displayName: 'Google',
-        enabled: !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET)
-      }
-    ];
-    res.json(providers);
-  });
+  // Note: OAuth providers endpoint is handled by oauth-config.ts to avoid conflicts
 
   // Email Authentication Routes
   app.post('/api/auth/register', async (req, res) => {
