@@ -1,0 +1,447 @@
+import { useState } from "react";
+import { Link, useLocation } from "wouter";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { useUserRole, UserRole } from "@/hooks/useUserRole";
+import { RequirePermission, RequireJourney, RequireRole } from "@/components/PermissionGate";
+import {
+  Home,
+  FileText,
+  BarChart3,
+  Settings,
+  Users,
+  Briefcase,
+  Code,
+  MessageSquare,
+  Sparkles,
+  Target,
+  TrendingUp,
+  Database,
+  Wrench,
+  Brain,
+  HelpCircle,
+  Crown,
+  Zap,
+  Calendar,
+  BookOpen,
+  Video
+} from "lucide-react";
+
+interface NavigationItem {
+  id: string;
+  label: string;
+  href: string;
+  icon: React.ElementType;
+  description?: string;
+  badge?: string;
+  permission?: string;
+  journeyType?: string;
+  roles?: UserRole[];
+  subscriptions?: string[];
+}
+
+// Base navigation items available to all users
+const BASE_NAVIGATION: NavigationItem[] = [
+  {
+    id: "dashboard",
+    label: "Dashboard",
+    href: "/dashboard",
+    icon: Home,
+    description: "Overview of your projects and activity"
+  },
+  {
+    id: "projects",
+    label: "My Projects",
+    href: "/projects",
+    icon: FileText,
+    description: "View and manage your analysis projects"
+  }
+];
+
+// Role-specific navigation items
+const ROLE_NAVIGATION: Record<UserRole, NavigationItem[]> = {
+  "non-tech": [
+    {
+      id: "ai-guided",
+      label: "AI-Guided Analysis",
+      href: "/journeys/non-tech",
+      icon: Sparkles,
+      description: "Let AI guide you through data analysis",
+      journeyType: "non-tech"
+    },
+    {
+      id: "simple-upload",
+      label: "Quick Upload",
+      href: "/upload",
+      icon: Database,
+      description: "Upload data and get instant insights"
+    },
+    {
+      id: "results",
+      label: "My Results",
+      href: "/results",
+      icon: TrendingUp,
+      description: "View your analysis results"
+    }
+  ],
+  "business": [
+    {
+      id: "business-templates",
+      label: "Business Templates",
+      href: "/journeys/business",
+      icon: Briefcase,
+      description: "Pre-built analysis templates for business",
+      journeyType: "business"
+    },
+    {
+      id: "kpi-dashboard",
+      label: "KPI Dashboard",
+      href: "/dashboard/kpi",
+      icon: Target,
+      description: "Track key performance indicators",
+      permission: "canAccessAdvancedAnalytics"
+    },
+    {
+      id: "reports",
+      label: "Executive Reports",
+      href: "/reports",
+      icon: FileText,
+      description: "Generate executive-level reports",
+      permission: "canExportResults"
+    },
+    {
+      id: "collaboration",
+      label: "Team Collaboration",
+      href: "/collaboration",
+      icon: Users,
+      description: "Share insights with your team",
+      subscriptions: ["professional", "enterprise"]
+    }
+  ],
+  "technical": [
+    {
+      id: "technical-analysis",
+      label: "Advanced Analysis",
+      href: "/journeys/technical",
+      icon: BarChart3,
+      description: "Full-featured data science tools",
+      journeyType: "technical"
+    },
+    {
+      id: "code-workspace",
+      label: "Code Workspace",
+      href: "/workspace",
+      icon: Code,
+      description: "Python/R code generation and execution",
+      permission: "canGenerateCode"
+    },
+    {
+      id: "api-integrations",
+      label: "API Integrations",
+      href: "/api",
+      icon: Zap,
+      description: "Connect external data sources",
+      permission: "canUseCustomAiKeys"
+    },
+    {
+      id: "raw-data",
+      label: "Raw Data Access",
+      href: "/data",
+      icon: Database,
+      description: "Direct access to your datasets",
+      permission: "canAccessRawData"
+    },
+    {
+      id: "model-tuning",
+      label: "Model Tuning",
+      href: "/models",
+      icon: Wrench,
+      description: "Fine-tune ML model parameters",
+      permission: "canAccessAdvancedAnalytics"
+    }
+  ],
+  "consultation": [
+    {
+      id: "consultation-booking",
+      label: "Book Consultation",
+      href: "/consultation/book",
+      icon: Calendar,
+      description: "Schedule time with data science experts",
+      journeyType: "consultation"
+    },
+    {
+      id: "expert-sessions",
+      label: "My Sessions",
+      href: "/consultation/sessions",
+      icon: Video,
+      description: "View past and upcoming expert sessions"
+    },
+    {
+      id: "collaborative-workspace",
+      label: "Shared Workspace",
+      href: "/consultation/workspace",
+      icon: Users,
+      description: "Work directly with experts on your project"
+    },
+    {
+      id: "consultation-reports",
+      label: "Expert Reports",
+      href: "/consultation/reports",
+      icon: BookOpen,
+      description: "Access reports generated by experts"
+    }
+  ]
+};
+
+// Premium features navigation
+const PREMIUM_NAVIGATION: NavigationItem[] = [
+  {
+    id: "ai-settings",
+    label: "AI Settings",
+    href: "/settings/ai",
+    icon: Brain,
+    description: "Configure AI providers and models",
+    permission: "canUseCustomAiKeys"
+  },
+  {
+    id: "advanced-features",
+    label: "Advanced Features",
+    href: "/advanced",
+    icon: Crown,
+    description: "Access premium analysis tools",
+    subscriptions: ["professional", "enterprise"],
+    badge: "Pro"
+  }
+];
+
+// Settings and help navigation
+const UTILITY_NAVIGATION: NavigationItem[] = [
+  {
+    id: "settings",
+    label: "Settings",
+    href: "/settings",
+    icon: Settings,
+    description: "Account and application settings"
+  },
+  {
+    id: "help",
+    label: "Help & Support",
+    href: "/help",
+    icon: HelpCircle,
+    description: "Get help and view documentation"
+  }
+];
+
+interface RoleBasedNavigationProps {
+  className?: string;
+  compact?: boolean;
+}
+
+export function RoleBasedNavigation({ className = "", compact = false }: RoleBasedNavigationProps) {
+  const [location] = useLocation();
+  const { userRoleData } = useUserRole();
+
+  if (!userRoleData) {
+    return <div className={`p-4 ${className}`}>Loading navigation...</div>;
+  }
+
+  const currentRole = userRoleData.userRole;
+  const roleNavigation = ROLE_NAVIGATION[currentRole] || [];
+
+  const isActive = (href: string) => {
+    return location === href || location.startsWith(href + "/");
+  };
+
+  const renderNavigationItem = (item: NavigationItem) => {
+    const Icon = item.icon;
+    const active = isActive(item.href);
+
+    const navItem = (
+      <Button
+        key={item.id}
+        variant={active ? "secondary" : "ghost"}
+        className={`w-full justify-start h-auto p-3 ${
+          compact ? "flex-col gap-1" : "flex-row gap-3"
+        }`}
+        asChild
+      >
+        <Link href={item.href}>
+          <div className={`${compact ? "flex flex-col items-center" : "flex items-center gap-3 w-full"}`}>
+            <Icon className={`${compact ? "w-5 h-5" : "w-5 h-5"} flex-shrink-0`} />
+            <div className={`${compact ? "text-center" : "flex-1 text-left"}`}>
+              <div className={`flex items-center gap-2 ${compact ? "text-xs" : "text-sm font-medium"}`}>
+                {item.label}
+                {item.badge && (
+                  <Badge variant="secondary" className="text-xs">
+                    {item.badge}
+                  </Badge>
+                )}
+              </div>
+              {!compact && item.description && (
+                <p className="text-xs text-gray-500 mt-1">{item.description}</p>
+              )}
+            </div>
+          </div>
+        </Link>
+      </Button>
+    );
+
+    // Wrap with permission/role checks if needed
+    if (item.permission || item.journeyType || item.roles || item.subscriptions) {
+      return (
+        <RequirePermission
+          key={item.id}
+          permission={item.permission as any}
+          fallback={null}
+        >
+          <RequireJourney
+            journeyType={item.journeyType || ""}
+            fallback={null}
+          >
+            <RequireRole
+              role={item.roles || []}
+              fallback={null}
+            >
+              {navItem}
+            </RequireRole>
+          </RequireJourney>
+        </RequirePermission>
+      );
+    }
+
+    return navItem;
+  };
+
+  const renderNavigationSection = (title: string, items: NavigationItem[]) => {
+    if (items.length === 0) return null;
+
+    return (
+      <div className="space-y-2">
+        {!compact && (
+          <>
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider px-3">
+              {title}
+            </h3>
+          </>
+        )}
+        <div className="space-y-1">
+          {items.map(renderNavigationItem)}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <ScrollArea className={`h-full ${className}`}>
+      <div className={`${compact ? "p-2 space-y-3" : "p-4 space-y-6"}`}>
+        {/* User Role Badge */}
+        {!compact && (
+          <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 rounded-lg">
+            <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+            <div>
+              <p className="text-sm font-medium capitalize">
+                {currentRole.replace("-", " ")} User
+              </p>
+              <p className="text-xs text-gray-500 capitalize">
+                {userRoleData.subscriptionTier} Plan
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Base Navigation */}
+        {renderNavigationSection("Overview", BASE_NAVIGATION)}
+
+        {!compact && <Separator />}
+
+        {/* Role-specific Navigation */}
+        {renderNavigationSection(
+          compact ? "" : `${currentRole.replace("-", " ")} Tools`.replace(/\b\w/g, l => l.toUpperCase()),
+          roleNavigation
+        )}
+
+        {!compact && <Separator />}
+
+        {/* Premium Features */}
+        {renderNavigationSection(compact ? "" : "Premium", PREMIUM_NAVIGATION)}
+
+        {!compact && <Separator />}
+
+        {/* Utility Navigation */}
+        {renderNavigationSection(compact ? "" : "Account", UTILITY_NAVIGATION)}
+
+        {/* Upgrade Prompt for Free Users */}
+        {!compact && userRoleData.subscriptionTier === "none" && (
+          <div className="mt-6 p-4 bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg border">
+            <div className="flex items-center gap-2 mb-2">
+              <Crown className="w-4 h-4 text-purple-600" />
+              <p className="text-sm font-medium text-gray-900">Unlock More Features</p>
+            </div>
+            <p className="text-xs text-gray-600 mb-3">
+              Upgrade to access advanced analysis tools and AI models.
+            </p>
+            <Button size="sm" className="w-full" asChild>
+              <Link href="/pricing">
+                View Plans
+              </Link>
+            </Button>
+          </div>
+        )}
+      </div>
+    </ScrollArea>
+  );
+}
+
+// Quick access toolbar for role-specific actions
+export function RoleBasedQuickActions() {
+  const { userRoleData, getRecommendedJourney } = useUserRole();
+
+  if (!userRoleData) return null;
+
+  const recommendedJourney = getRecommendedJourney();
+
+  const quickActions = {
+    "non-tech": [
+      { label: "Start Analysis", href: "/journeys/non-tech", icon: Sparkles },
+      { label: "Upload Data", href: "/upload", icon: Database }
+    ],
+    "business": [
+      { label: "Business Templates", href: "/journeys/business", icon: Briefcase },
+      { label: "KPI Dashboard", href: "/dashboard/kpi", icon: Target }
+    ],
+    "technical": [
+      { label: "Advanced Analysis", href: "/journeys/technical", icon: BarChart3 },
+      { label: "Code Workspace", href: "/workspace", icon: Code }
+    ],
+    "consultation": [
+      { label: "Book Expert", href: "/consultation/book", icon: Calendar },
+      { label: "My Sessions", href: "/consultation/sessions", icon: Video }
+    ]
+  };
+
+  const actions = quickActions[userRoleData.userRole] || quickActions["non-tech"];
+
+  return (
+    <div className="flex gap-2 p-2 bg-gray-50 border-b">
+      {actions.map((action) => {
+        const Icon = action.icon;
+        return (
+          <Button
+            key={action.label}
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            asChild
+          >
+            <Link href={action.href}>
+              <Icon className="w-4 h-4" />
+              {action.label}
+            </Link>
+          </Button>
+        );
+      })}
+    </div>
+  );
+}

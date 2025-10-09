@@ -1,0 +1,68 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "run-e2e-targeted",
+			"type": "shell",
+			"command": "npm run test -- --grep \"(UI Screens Capture|UI Comprehensive|user-journey-complete)\"",
+			"isBackground": false,
+			"problemMatcher": [
+				"$eslint-stylish"
+			]
+		},
+		{
+			"label": "run-e2e-targeted",
+			"type": "shell",
+			"command": "npm run test -- --grep \"(UI Screens Capture|UI Comprehensive|user-journey-complete)\"",
+			"isBackground": false
+		},
+		{
+			"label": "run-e2e-targeted-escaped",
+			"type": "shell",
+			"command": "npm run test -- --grep \"UI Screens Capture|UI Comprehensive|user-journey-complete\"",
+			"isBackground": false
+		},
+		{
+			"label": "run-e2e-ui-screens",
+			"type": "shell",
+			"command": "npm run test:ui-screens",
+			"isBackground": false
+		},
+		{
+			"label": "run-ui-screens",
+			"type": "shell",
+			"command": "npm run test:ui-screens",
+			"isBackground": false
+		},
+		{
+			"label": "run-ui-screens",
+			"type": "shell",
+			"command": "npm run test:ui-screens",
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "run-ui-screens",
+			"type": "shell",
+			"command": "npm run test:ui-screens",
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "run-ui-screens",
+			"type": "shell",
+			"command": "npm run test:ui-screens --silent",
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			],
+			"group": "build"
+		}
+	]
+}

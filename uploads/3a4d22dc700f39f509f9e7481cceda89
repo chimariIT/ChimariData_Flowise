@@ -1,0 +1,4 @@
+name,email,ssn,phone,address
+John Doe,john@example.com,123-45-6789,555-123-4567,123 Main St New York NY
+Jane Smith,jane@example.com,987-65-4321,555-987-6543,456 Oak Ave Los Angeles CA
+Bob Johnson,bob@example.com,456-78-9012,555-456-7890,789 Pine Rd Chicago IL

@@ -1,0 +1,1917 @@
+import { z } from "zod";
+import {
+  pgTable,
+  text,
+  varchar,
+  timestamp,
+  boolean,
+  integer,
+  jsonb,
+  index,
+  decimal,
+} from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
+
+// User role and permission types
+export const UserRoleEnum = z.enum(["non-tech", "business", "technical", "consultation"]);
+export type UserRole = z.infer<typeof UserRoleEnum>;
+
+export const TechnicalLevelEnum = z.enum(["beginner", "intermediate", "advanced", "expert"]);
+export type TechnicalLevel = z.infer<typeof TechnicalLevelEnum>;
+
+export const JourneyTypeEnum = z.enum(["ai_guided", "template_based", "self_service", "consultation"]);
+export type JourneyType = z.infer<typeof JourneyTypeEnum>;
+
+// User role configuration schema
+export const userRoleConfigSchema = z.object({
+  role: UserRoleEnum,
+  technicalLevel: TechnicalLevelEnum,
+  industry: z.string().optional(),
+  preferredJourney: z.string().optional(),
+  journeyCompletions: z.record(z.any()).optional(),
+});
+
+export type UserRoleConfig = z.infer<typeof userRoleConfigSchema>;
+
+// User permissions schema
+export const userPermissionsSchema = z.object({
+  id: z.string(),
+  userId: z.string(),
+  canAccessNonTechJourney: z.boolean().default(true),
+  canAccessBusinessJourney: z.boolean().default(false),
+  canAccessTechnicalJourney: z.boolean().default(false),
+  canRequestConsultation: z.boolean().default(true),
+  canAccessAdvancedAnalytics: z.boolean().default(false),
+  canUseCustomAiKeys: z.boolean().default(false),
+  canGenerateCode: z.boolean().default(false),
+  canAccessRawData: z.boolean().default(false),
+  canExportResults: z.boolean().default(true),
+  maxConcurrentProjects: z.number().default(1),
+  maxDatasetSizeMB: z.number().default(5),
+  maxAiQueriesPerMonth: z.number().default(10),
+  maxVisualizationsPerProject: z.number().default(3),
+  allowedAiProviders: z.array(z.string()).default(["gemini"]),
+  canUseAdvancedModels: z.boolean().default(false),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
+export type UserPermissions = z.infer<typeof userPermissionsSchema>;
+
+export type TechnicalQueryType = z.infer<typeof TechnicalQuery>;
+
+// Data project schema with advanced capabilities
+export const dataProjectSchema = z.object({
+  id: z.string(),
+  userId: z.string(),
+  name: z.string(),
+  fileName: z.string(),
+  fileSize: z.number(),
+  fileType: z.string(),
+  uploadedAt: z.date(),
+  description: z.string().optional(),
+  isTrial: z.boolean().default(false),
+  schema: z.record(z.object({
+    type: z.string(),
+    nullable: z.boolean().optional(),
+    sampleValues: z.array(z.string()).optional(),
+    description: z.string().optional(),
+    isPII: z.boolean().optional(),
+    isUniqueIdentifier: z.boolean().optional(),
+  })).optional(),
+  recordCount: z.number().optional(),
+  data: z.array(z.record(z.any())).optional(), // Store actual data rows
+  processed: z.boolean().default(false),
+  // Advanced upload capabilities
+  piiAnalysis: z.object({
+    detectedPII: z.array(z.string()).optional(),
+    userConsent: z.boolean().optional(),
+    consentTimestamp: z.date().optional(),
+    userDecision: z.string().optional(), // Added field
+  }).optional(),
+  uniqueIdentifiers: z.array(z.string()).optional(),
+  dataSource: z.enum(["upload", "google_drive", "api"]).default("upload"),
+  sourceMetadata: z.record(z.any()).optional(),
+  // Data transformation capabilities
+  transformations: z.array(z.object({
+    type: z.enum(["join", "outlier_detection", "missing_data", "normality_test"]),
+    config: z.any(),
+    result: z.any().optional(),
+  })).optional(),
+  joinedFiles: z.array(z.string()).optional(),
+  outlierAnalysis: z.object({
+    method: z.string(),
+    threshold: z.number(),
+    outliers: z.array(z.any()).optional(),
+  }).optional(),
+  missingDataAnalysis: z.object({
+    patterns: z.record(z.any()),
+    recommendations: z.array(z.string()),
+  }).optional(),
+  normalityTests: z.record(z.object({
+    test: z.string(),
+    statistic: z.number(),
+    pValue: z.number(),
+    isNormal: z.boolean(),
+  })).optional(),
+  // Advanced analysis capabilities
+  analysisResults: z.any().optional(),
+  stepByStepAnalysis: z.object({
+    question: z.string(),
+    targetVariable: z.string(),
+    multivariateVariables: z.array(z.string()),
+    analysisType: z.enum(["anova", "ancova", "manova", "mancova", "regression", "machine_learning"]),
+    results: z.any().optional(),
+    analysisPath: z.string().optional(), // Added field
+  }).optional(),
+  interactiveSession: z.any().optional(), // For agentic workflow state
+  costEstimation: z.any().optional(), // For pricing and checkout
+  // AI capabilities
+  visualizations: z.array(z.any()).optional(),
+  aiInsights: z.any().optional(),
+  aiRole: z.string().optional(),
+  aiActions: z.array(z.string()).optional(),
+  mcpResources: z.array(z.object({
+    type: z.string(),
+    name: z.string(),
+    config: z.any(),
+  })).optional(),
+  purchasedFeatures: z.array(z.enum(["transformation", "analysis", "visualization", "ai_insights"])).optional(),
+  isPaid: z.boolean().default(false),
+  selectedFeatures: z.array(z.string()).optional(),
+  paymentIntentId: z.string().optional(),
+  upgradedAt: z.date().optional(),
+  transformedData: z.array(z.record(z.any())).optional(), // Added field
+  file_path: z.string().optional(), // Added field
+});
+
+export type DataProject = z.infer<typeof dataProjectSchema>;
+
+// Insert schema (omit auto-generated fields)
+export const insertDataProjectSchema = dataProjectSchema.omit({
+  id: true,
+  uploadedAt: true,
+  processed: true,
+});
+
+export type InsertDataProject = z.infer<typeof insertDataProjectSchema>;
+
+// Pricing tiers
+export const pricingTierSchema = z.object({
+  transformation: z.number().default(15),
+  analysis: z.number().default(25),
+  visualization: z.number().default(20),
+  ai_insights: z.number().default(35),
+  // Progressive discounts
+  twoFeatures: z.number().default(0.15), // 15% off
+  threeFeatures: z.number().default(0.25), // 25% off
+  allFeatures: z.number().default(0.35), // 35% off
+});
+
+export type PricingTier = z.infer<typeof pricingTierSchema>;
+
+// Free trial request
+export const freeTrialRequestSchema = z.object({
+  file: z.any(), // File upload
+  description: z.string().optional(),
+});
+
+export type FreeTrialRequest = z.infer<typeof freeTrialRequestSchema>;
+
+// Progressive feature request
+export const featureRequestSchema = z.object({
+  projectId: z.string(),
+  features: z.array(z.enum(["transformation", "analysis", "visualization", "ai_insights"])),
+  paymentIntentId: z.string().optional(),
+});
+
+export type FeatureRequest = z.infer<typeof featureRequestSchema>;
+
+// File upload response
+export const fileUploadResponseSchema = z.object({
+  success: z.boolean(),
+  projectId: z.string().optional(),
+  project: dataProjectSchema.optional(),
+  error: z.string().optional(),
+  isTrial: z.boolean().optional(),
+  trialResults: z.object({
+    schema: z.any(),
+    descriptiveAnalysis: z.any(),
+    basicVisualizations: z.array(z.any()),
+  }).optional(),
+});
+
+export type FileUploadResponse = z.infer<typeof fileUploadResponseSchema>;
+
+// AI Configuration
+export const aiConfigSchema = z.object({
+  provider: z.enum(["chimaridata", "openai", "anthropic", "gemini"]).default("chimaridata"),
+  customApiKey: z.string().optional(),
+  fallbackEnabled: z.boolean().default(true),
+});
+
+export type AIConfig = z.infer<typeof aiConfigSchema>;
+
+// Database Tables
+// Session storage table (required for Replit Auth)
+export const sessions = pgTable(
+  "sessions",
+  {
+    sid: varchar("sid").primaryKey(),
+    sess: jsonb("sess").notNull(),
+    expire: timestamp("expire").notNull(),
+  },
+  (table) => [index("IDX_session_expire").on(table.expire)],
+);
+
+// User storage table with tiered subscription support
+export const users = pgTable("users", {
+  id: varchar("id").primaryKey().notNull(),
+  email: varchar("email").unique().notNull(),
+  hashedPassword: varchar("hashed_password"), // For email/password auth
+  firstName: varchar("first_name"),
+  lastName: varchar("last_name"),
+  profileImageUrl: varchar("profile_image_url"),
+  provider: varchar("provider").notNull().default("email"), // "email", "google", "github"
+  providerId: varchar("provider_id"), // OAuth provider user ID
+  
+  // Email verification
+  emailVerified: boolean("email_verified").default(false),
+  emailVerificationToken: varchar("email_verification_token"),
+  emailVerificationExpires: timestamp("email_verification_expires"),
+  
+  // Password reset
+  passwordResetToken: varchar("password_reset_token"),
+  passwordResetExpires: timestamp("password_reset_expires"),
+  
+  // Subscription and payment tiers
+  subscriptionTier: varchar("subscription_tier").default("none"), // "none", "trial", "starter", "professional", "enterprise"
+  subscriptionStatus: varchar("subscription_status").default("inactive"), // "active", "inactive", "cancelled", "past_due"
+  stripeCustomerId: varchar("stripe_customer_id"),
+  stripeSubscriptionId: varchar("stripe_subscription_id"),
+  subscriptionExpiresAt: timestamp("subscription_expires_at"),
+  isPaid: boolean("is_paid").default(false), // Added field
+  
+  // Usage tracking for tier limits
+  monthlyUploads: integer("monthly_uploads").default(0),
+  monthlyDataVolume: integer("monthly_data_volume").default(0), // in MB
+  monthlyAIInsights: integer("monthly_ai_insights").default(0),
+  // Keep extended usage metrics for analytics/billing
+  monthlyAnalysisComponents: integer("monthly_analysis_components").default(0),
+  monthlyVisualizations: integer("monthly_visualizations").default(0),
+  // Storage and processing metrics (kept for backward compatibility and reporting)
+  currentStorageGb: decimal("current_storage_gb"),
+  monthlyDataProcessedGb: decimal("monthly_data_processed_gb"),
+  usageResetAt: timestamp("usage_reset_at").defaultNow(),
+
+  // User role and journey preferences
+  userRole: varchar("user_role").default("non-tech"), // "non-tech", "business", "technical", "consultation"
+  technicalLevel: varchar("technical_level").default("beginner"), // "beginner", "intermediate", "advanced", "expert"
+  industry: varchar("industry"), // User's industry/domain
+  preferredJourney: varchar("preferred_journey"), // Last selected journey type
+  journeyCompletions: jsonb("journey_completions"), // Track completed journeys
+  onboardingCompleted: boolean("onboarding_completed").default(false),
+
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Password reset tokens table
+export const passwordResetTokens = pgTable("password_reset_tokens", {
+  id: varchar("id").primaryKey().notNull(),
+  email: varchar("email").notNull(),
+  token: varchar("token").notNull(),
+  code: varchar("code", { length: 6 }).notNull(), // 6-digit verification code
+  expiresAt: timestamp("expires_at").notNull(),
+  used: boolean("used").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  emailIdx: index("password_reset_email_idx").on(table.email),
+  tokenIdx: index("password_reset_token_idx").on(table.token),
+}));
+
+// User permissions table - define role-based access controls
+export const userPermissions = pgTable("user_permissions", {
+  id: varchar("id").primaryKey().notNull(),
+  userId: varchar("user_id").notNull(), // Reference to users.id
+
+  // Journey access permissions
+  canAccessNonTechJourney: boolean("can_access_non_tech_journey").default(true),
+  canAccessBusinessJourney: boolean("can_access_business_journey").default(false),
+  canAccessTechnicalJourney: boolean("can_access_technical_journey").default(false),
+  canRequestConsultation: boolean("can_request_consultation").default(true),
+
+  // Feature permissions
+  canAccessAdvancedAnalytics: boolean("can_access_advanced_analytics").default(false),
+  canUseCustomAiKeys: boolean("can_use_custom_ai_keys").default(false),
+  canGenerateCode: boolean("can_generate_code").default(false),
+  canAccessRawData: boolean("can_access_raw_data").default(false),
+  canExportResults: boolean("can_export_results").default(true),
+
+  // Resource limits
+  maxConcurrentProjects: integer("max_concurrent_projects").default(1),
+  maxDatasetSizeMB: integer("max_dataset_size_mb").default(5), // 5MB for free tier
+  maxAiQueriesPerMonth: integer("max_ai_queries_per_month").default(10),
+  maxVisualizationsPerProject: integer("max_visualizations_per_project").default(3),
+
+  // AI service permissions
+  allowedAiProviders: jsonb("allowed_ai_providers").default(['gemini']), // JSON array of provider names
+  canUseAdvancedModels: boolean("can_use_advanced_models").default(false),
+
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  userPermissionIdx: index("user_permission_idx").on(table.userId),
+}));
+
+// Datasets table - files exist independently of projects
+export const datasets = pgTable("datasets", {
+  id: varchar("id").primaryKey().notNull(),
+  ownerId: varchar("owner_id").notNull(), // Reference to users.id
+  sourceType: varchar("source_type").notNull().default("upload"), // "upload", "google_drive", "web", "api"
+  originalFileName: varchar("original_file_name").notNull(),
+  mimeType: varchar("mime_type").notNull(),
+  fileSize: integer("file_size").notNull(),
+  checksum: varchar("checksum"), // For duplicate detection
+  storageUri: varchar("storage_uri").notNull(), // File storage location
+  dataType: varchar("data_type").default("tabular"), // "tabular", "document", "timeseries"
+  schema: jsonb("schema"), // JSON schema of the data
+  recordCount: integer("record_count"),
+  preview: jsonb("preview"), // Sample rows for preview
+  piiAnalysis: jsonb("pii_analysis"),
+  ingestionMetadata: jsonb("ingestion_metadata"), // Source-specific metadata
+  status: varchar("status").default("ready"), // "processing", "ready", "error"
+  data: jsonb("data"), // To hold data for in-memory provider
+  // New columns for streaming and web scraping capabilities
+  mode: varchar("mode").default("static"), // "static", "stream", "refreshable"
+  retentionDays: integer("retention_days"), // Data retention period in days (nullable)
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Many-to-many relationship between projects and datasets
+export const projectDatasets = pgTable("project_datasets", {
+  id: varchar("id").primaryKey().notNull(),
+  projectId: varchar("project_id").notNull(),
+  datasetId: varchar("dataset_id").notNull(),
+  role: varchar("role").default("primary"), // "primary", "secondary", "joined"
+  alias: varchar("alias"), // Custom name for this dataset in the project
+  addedAt: timestamp("added_at").defaultNow(),
+}, (table) => ({
+  projectDatasetIdx: index("project_dataset_idx").on(table.projectId, table.datasetId),
+}));
+
+// Project artifacts - track entire workflow from ingestion to results
+export const projectArtifacts = pgTable("project_artifacts", {
+  id: varchar("id").primaryKey().notNull(),
+  projectId: varchar("project_id").notNull(),
+  type: varchar("type").notNull(), // "ingestion", "transformation", "analysis", "visualization", "report", "export"
+  status: varchar("status").default("pending"), // "pending", "processing", "completed", "error"
+  inputRefs: jsonb("input_refs"), // Array of datasetIds, artifactIds that were inputs
+  params: jsonb("params"), // Configuration/parameters used
+  metrics: jsonb("metrics"), // Performance metrics, processing time, etc.
+  output: jsonb("output"), // Results data
+  fileRefs: jsonb("file_refs"), // URIs to generated files (PDFs, charts, etc.)
+  parentArtifactId: varchar("parent_artifact_id"), // Chain artifacts together
+  createdBy: varchar("created_by"), // User who created this artifact
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  projectArtifactIdx: index("project_artifact_idx").on(table.projectId),
+  parentArtifactIdx: index("parent_artifact_idx").on(table.parentArtifactId),
+}));
+
+// Updated projects table - now a lightweight container for analysis workflows
+export const projects = pgTable("projects", {
+  id: varchar("id").primaryKey().notNull(),
+  ownerId: varchar("owner_id").notNull(), // Reference to users.id
+  name: varchar("name").notNull(),
+  description: text("description"),
+  status: varchar("status").default("active"), // "active", "completed", "archived"
+  journeyType: varchar("journey_type"), // "ai_guided", "template_based", "self_service", "consultation"
+  lastArtifactId: varchar("last_artifact_id"), // Quick reference to latest artifact
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Enterprise inquiries table
+export const enterpriseInquiries = pgTable("enterprise_inquiries", {
+  id: varchar("id").primaryKey().notNull(),
+  companyName: varchar("company_name").notNull(),
+  contactEmail: varchar("contact_email").notNull(),
+  contactName: varchar("contact_name").notNull(),
+  phone: varchar("phone"),
+  message: text("message"),
+  submittedAt: timestamp("submitted_at").defaultNow(),
+  status: varchar("status").default("pending"),
+});
+
+// Guided analysis orders table
+export const guidedAnalysisOrders = pgTable("guided_analysis_orders", {
+  id: varchar("id").primaryKey().notNull(),
+  userId: varchar("user_id"),
+  projectId: varchar("project_id"),
+  configuration: jsonb("configuration"),
+  orderData: jsonb("order_data"),
+  status: varchar("status").default("pending"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Streaming and Web Scraping Tables
+
+// Configuration for real-time data streams
+export const streamingSources = pgTable("streaming_sources", {
+  id: varchar("id").primaryKey().notNull(),
+  datasetId: varchar("dataset_id").notNull(), // FK to datasets
+  protocol: varchar("protocol").notNull(), // "websocket", "sse", "poll"
+  endpoint: varchar("endpoint").notNull(),
+  headers: jsonb("headers"), // HTTP headers
+  params: jsonb("params"), // Query parameters or connection config
+  parseSpec: jsonb("parse_spec"), // How to parse incoming data
+  batchSize: integer("batch_size").default(1000),
+  flushMs: integer("flush_ms").default(5000), // Flush interval in milliseconds
+  maxBuffer: integer("max_buffer").default(100000), // Maximum buffer size
+  dedupeKeyPath: varchar("dedupe_key_path"), // JSONPath for deduplication key
+  timestampPath: varchar("timestamp_path"), // JSONPath for timestamp extraction
+  status: varchar("status").default("inactive"), // "active", "inactive", "error"
+  lastCheckpoint: varchar("last_checkpoint"), // Last processed position
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  datasetIdIdx: index("streaming_sources_dataset_id_idx").on(table.datasetId),
+  statusIdx: index("streaming_sources_status_idx").on(table.status),
+}));
+
+// Micro-batches of streaming data
+export const streamChunks = pgTable("stream_chunks", {
+  id: varchar("id").primaryKey().notNull(),
+  datasetId: varchar("dataset_id").notNull(), // FK to datasets
+  seq: integer("seq").notNull(), // Sequence number for ordering
+  fromTs: timestamp("from_ts").notNull(), // Start timestamp for this chunk
+  toTs: timestamp("to_ts").notNull(), // End timestamp for this chunk
+  recordCount: integer("record_count").notNull(),
+  storageUri: varchar("storage_uri").notNull(), // Location of chunk data
+  checksum: varchar("checksum"), // Data integrity verification
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  datasetIdIdx: index("stream_chunks_dataset_id_idx").on(table.datasetId),
+  seqIdx: index("stream_chunks_seq_idx").on(table.datasetId, table.seq),
+  timestampIdx: index("stream_chunks_timestamp_idx").on(table.fromTs, table.toTs),
+}));
+
+// Position tracking for streams
+export const streamCheckpoints = pgTable("stream_checkpoints", {
+  id: varchar("id").primaryKey().notNull(),
+  sourceId: varchar("source_id").notNull(), // FK to streaming_sources
+  cursor: text("cursor").notNull(), // Stream position cursor
+  ts: timestamp("ts").defaultNow(), // Checkpoint timestamp
+}, (table) => ({
+  sourceIdIdx: index("stream_checkpoints_source_id_idx").on(table.sourceId),
+}));
+
+// Web scraping job configurations
+export const scrapingJobs = pgTable("scraping_jobs", {
+  id: varchar("id").primaryKey().notNull(),
+  datasetId: varchar("dataset_id").notNull(), // FK to datasets
+  strategy: varchar("strategy").notNull(), // "http", "puppeteer"
+  targetUrl: varchar("target_url").notNull(),
+  schedule: varchar("schedule"), // Cron expression for scheduling
+  extractionSpec: jsonb("extraction_spec"), // Selectors and extraction rules
+  paginationSpec: jsonb("pagination_spec"), // Pagination handling
+  loginSpec: jsonb("login_spec"), // Authentication configuration
+  rateLimitRPM: integer("rate_limit_rpm").default(60), // Requests per minute
+  concurrency: integer("concurrency").default(1), // Concurrent requests
+  respectRobots: boolean("respect_robots").default(true), // Honor robots.txt
+  status: varchar("status").default("inactive"), // "active", "inactive", "running", "error"
+  lastRunAt: timestamp("last_run_at"),
+  nextRunAt: timestamp("next_run_at"),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  datasetIdIdx: index("scraping_jobs_dataset_id_idx").on(table.datasetId),
+  statusIdx: index("scraping_jobs_status_idx").on(table.status),
+  nextRunIdx: index("scraping_jobs_next_run_idx").on(table.nextRunAt),
+}));
+
+// Individual scraping execution records
+export const scrapingRuns = pgTable("scraping_runs", {
+  id: varchar("id").primaryKey().notNull(),
+  jobId: varchar("job_id").notNull(), // FK to scraping_jobs
+  startedAt: timestamp("started_at").defaultNow(),
+  finishedAt: timestamp("finished_at"),
+  status: varchar("status").default("running"), // "running", "completed", "failed"
+  recordCount: integer("record_count"),
+  artifactId: varchar("artifact_id"), // FK to project_artifacts if applicable
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  jobIdIdx: index("scraping_runs_job_id_idx").on(table.jobId),
+  statusIdx: index("scraping_runs_status_idx").on(table.status),
+}));
+
+// Agent checkpoints for project workflow tracking
+export const agentCheckpoints = pgTable("agent_checkpoints", {
+  id: varchar("id").primaryKey().notNull(),
+  projectId: varchar("project_id").notNull(), // FK to projects
+  agentType: varchar("agent_type").notNull(), // project_manager, technical_ai, business
+  stepName: varchar("step_name").notNull(), // Workflow step identifier
+  status: varchar("status").notNull().default("pending"), // pending, in_progress, waiting_approval, approved, completed, rejected
+  message: text("message").notNull(), // Agent message to user
+  data: jsonb("data"), // Additional structured data
+  userFeedback: text("user_feedback"), // User's feedback/response
+  requiresUserInput: boolean("requires_user_input").notNull().default(false),
+  timestamp: timestamp("timestamp").defaultNow(),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  projectIdIdx: index("agent_checkpoints_project_id_idx").on(table.projectId),
+  statusIdx: index("agent_checkpoints_status_idx").on(table.status),
+  agentTypeIdx: index("agent_checkpoints_agent_type_idx").on(table.agentType),
+}));
+
+// Snapshot versioning for datasets
+export const datasetVersions = pgTable("dataset_versions", {
+  id: varchar("id").primaryKey().notNull(),
+  datasetId: varchar("dataset_id").notNull(), // FK to datasets
+  version: integer("version").notNull(), // Version number (incremental)
+  recordCount: integer("record_count").notNull(),
+  schema: jsonb("schema"), // Schema snapshot at this version
+  snapshotUri: varchar("snapshot_uri").notNull(), // Location of versioned data
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  datasetIdIdx: index("dataset_versions_dataset_id_idx").on(table.datasetId),
+  versionIdx: index("dataset_versions_version_idx").on(table.datasetId, table.version),
+}));
+
+// Audience profiles for artifact customization - designed to support executive vs analyst vs SME differentiation
+export const audienceProfiles = pgTable("audience_profiles", {
+  id: varchar("id").primaryKey().notNull(),
+  userId: varchar("user_id").notNull(), // FK to users - which user this profile belongs to
+  name: varchar("name").notNull(), // e.g., "Executive Leadership", "Technical Team", "Business Analysts"
+  description: text("description"),
+  journeyType: varchar("journey_type").notNull(), // non-tech, business, technical, consultation
+  
+  // Core fields for artifact decision-making
+  role: varchar("role").notNull(), // executive, analyst, manager, specialist, sme, consultant
+  industry: varchar("industry"), // healthcare, finance, retail, etc.
+  seniority: varchar("seniority").notNull(), // junior, senior, director, vp, c_suite
+  analyticalMaturity: varchar("analytical_maturity").notNull(), // basic, intermediate, advanced, expert
+  
+  // Artifact preferences - what types of deliverables this audience prefers
+  preferredArtifacts: jsonb("preferred_artifacts").notNull().default('[]'), // ['executive_summary', 'dashboard', 'detailed_report', 'data_export', 'presentation_deck', 'action_plan']
+  
+  // Communication preferences
+  communicationStyle: varchar("communication_style").notNull().default('formal'), // formal, casual, technical, simplified
+  detailLevel: varchar("detail_level").notNull().default('medium'), // high, medium, low
+  technicalProficiency: varchar("technical_proficiency").notNull().default('intermediate'), // beginner, intermediate, advanced, expert
+  
+  // Visualization and reporting preferences
+  visualizationPreferences: jsonb("visualization_preferences").default('{}'), // Chart types, complexity, interactivity preferences
+  reportingFrequency: varchar("reporting_frequency").default('on-demand'), // daily, weekly, monthly, quarterly, on-demand
+  
+  // Business context for better artifact targeting
+  businessContext: text("business_context"), // Specific responsibilities, decision-making authority, team size
+  decisionMakingAuthority: varchar("decision_authority"), // individual, team_lead, department_head, executive
+  primaryUseCases: jsonb("primary_use_cases").default('[]'), // ['strategic_planning', 'operational_monitoring', 'compliance_reporting', 'performance_analysis']
+  
+  // Settings
+  isDefault: boolean("is_default").default(false), // Whether this is the default profile for the user
+  isActive: boolean("is_active").default(true), // Whether this profile is currently active
+  
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  userIdIdx: index("audience_profiles_user_id_idx").on(table.userId),
+  roleIdx: index("audience_profiles_role_idx").on(table.role),
+  seniorityIdx: index("audience_profiles_seniority_idx").on(table.seniority),
+  maturityIdx: index("audience_profiles_maturity_idx").on(table.analyticalMaturity),
+  journeyTypeIdx: index("audience_profiles_journey_type_idx").on(table.journeyType),
+  isDefaultIdx: index("audience_profiles_is_default_idx").on(table.userId, table.isDefault),
+  isActiveIdx: index("audience_profiles_is_active_idx").on(table.isActive),
+}));
+
+// Conversation states for agent communication
+export const conversationStates = pgTable("conversation_states", {
+  id: varchar("id").primaryKey().notNull(),
+  projectId: varchar("project_id"), // FK to projects (optional, might not be linked to project yet)
+  userId: varchar("user_id").notNull(), // FK to users
+  sessionId: varchar("session_id"), // Session identifier used by existing code
+  journeyId: varchar("journey_id"), // Journey identifier used by existing code
+  currentPhase: varchar("current_phase").notNull(), // goal_discovery, analysis, refinement, delivery
+  goalCandidates: jsonb("goal_candidates").notNull(), // Array of GoalCandidate objects
+  conversationHistory: jsonb("conversation_history").notNull(), // Array of ConversationMessage objects
+  contextAccumulation: jsonb("context_accumulation"), // Context data accumulated during conversation
+  nextActions: jsonb("next_actions"), // Suggested next actions
+  lastInteraction: timestamp("last_interaction").defaultNow().notNull(),
+  status: varchar("status").notNull().default("active"), // active, paused, completed, abandoned
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  projectIdIdx: index("conversation_states_project_id_idx").on(table.projectId),
+  userIdIdx: index("conversation_states_user_id_idx").on(table.userId),
+  sessionIdIdx: index("conversation_states_session_id_idx").on(table.sessionId),
+  journeyIdIdx: index("conversation_states_journey_id_idx").on(table.journeyId),
+  phaseIdx: index("conversation_states_phase_idx").on(table.currentPhase),
+  statusIdx: index("conversation_states_status_idx").on(table.status),
+}));
+
+// Default artifact templates for different audience types - helps agents decide what to generate
+export const artifactTemplates = pgTable("artifact_templates", {
+  id: varchar("id").primaryKey().notNull(),
+  name: varchar("name").notNull(), // "Executive Dashboard", "Analyst Deep Dive", "SME Technical Report"
+  description: text("description"),
+  targetRole: varchar("target_role").notNull(), // executive, analyst, manager, specialist, sme
+  targetSeniority: varchar("target_seniority").notNull(), // junior, senior, director, vp, c_suite  
+  targetMaturity: varchar("target_maturity").notNull(), // basic, intermediate, advanced, expert
+  
+  // What artifacts this template generates
+  artifactTypes: jsonb("artifact_types").notNull(), // ['executive_summary', 'kpi_dashboard', 'recommendations']
+  
+  // Template configuration
+  visualizationTypes: jsonb("visualization_types").default('[]'), // ['trend_charts', 'kpi_cards', 'comparison_tables']
+  narrativeStyle: varchar("narrative_style").notNull(), // 'executive', 'analytical', 'technical', 'conversational'
+  contentDepth: varchar("content_depth").notNull(), // 'summary', 'detailed', 'comprehensive'
+  interactivityLevel: varchar("interactivity_level").default('medium'), // low, medium, high
+  
+  // Business context
+  useCases: jsonb("use_cases").default('[]'), // ['decision_making', 'monitoring', 'compliance', 'analysis']
+  deliveryFormat: jsonb("delivery_format").default('[]'), // ['pdf', 'dashboard', 'presentation', 'email']
+  
+  // Template priority and usage
+  priority: integer("priority").default(100), // Higher number = higher priority when multiple templates match
+  isActive: boolean("is_active").default(true),
+  usageCount: integer("usage_count").default(0), // Track how often this template is used
+  
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  roleIdx: index("artifact_templates_role_idx").on(table.targetRole),
+  seniorityIdx: index("artifact_templates_seniority_idx").on(table.targetSeniority),
+  maturityIdx: index("artifact_templates_maturity_idx").on(table.targetMaturity),
+  priorityIdx: index("artifact_templates_priority_idx").on(table.priority),
+  isActiveIdx: index("artifact_templates_is_active_idx").on(table.isActive),
+}));
+
+// Data artifacts for audience-specific data views and exports
+export const dataArtifacts = pgTable("data_artifacts", {
+  id: varchar("id").primaryKey().notNull(),
+  name: varchar("name").notNull(), // "Executive KPI Summary", "Analyst Dataset", "SME Technical Data"
+  description: text("description"),
+  
+  // Audience targeting
+  targetRole: varchar("target_role").notNull(), // executive, analyst, manager, specialist, sme
+  targetSeniority: varchar("target_seniority").notNull(), // junior, senior, director, vp, c_suite
+  targetMaturity: varchar("target_maturity").notNull(), // basic, intermediate, advanced, expert
+  
+  // Data characteristics
+  dataType: varchar("data_type").notNull(), // aggregated, detailed, raw, filtered, transformed
+  aggregationLevel: varchar("aggregation_level").notNull(), // summary, monthly, daily, transaction, individual
+  granularity: varchar("granularity").notNull(), // high_level, medium, detailed, comprehensive
+  
+  // Data content configuration
+  includedColumns: jsonb("included_columns").notNull().default('[]'), // Which columns/fields to include
+  excludedColumns: jsonb("excluded_columns").default('[]'), // Which columns/fields to exclude (PII, technical details, etc.)
+  calculatedFields: jsonb("calculated_fields").default('[]'), // Computed metrics like growth rates, percentages, etc.
+  
+  // Data filtering and segmentation
+  defaultFilters: jsonb("default_filters").default('{}'), // Default data filters (date ranges, categories, etc.)
+  segmentationRules: jsonb("segmentation_rules").default('[]'), // How to segment data (by region, department, etc.)
+  
+  // Export and format preferences  
+  exportFormats: jsonb("export_formats").notNull().default('["csv"]'), // csv, excel, json, pdf, dashboard
+  visualizationHints: jsonb("visualization_hints").default('{}'), // Suggested chart types for this data
+  
+  // Data privacy and security
+  piiHandling: varchar("pii_handling").default('exclude'), // exclude, anonymize, aggregate, include
+  sensitivityLevel: varchar("sensitivity_level").default('public'), // public, internal, confidential, restricted
+  accessControls: jsonb("access_controls").default('{}'), // Role-based access rules
+  
+  // Business context
+  useCases: jsonb("use_cases").default('[]'), // ['performance_monitoring', 'strategic_planning', 'operational_analysis']
+  businessMetrics: jsonb("business_metrics").default('[]'), // Which KPIs/metrics this data supports
+  refreshFrequency: varchar("refresh_frequency").default('on-demand'), // real-time, hourly, daily, weekly, monthly
+  
+  // Template settings
+  priority: integer("priority").default(100), // Higher number = higher priority
+  isActive: boolean("is_active").default(true),
+  usageCount: integer("usage_count").default(0),
+  
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  roleIdx: index("data_artifacts_role_idx").on(table.targetRole),
+  seniorityIdx: index("data_artifacts_seniority_idx").on(table.targetSeniority),
+  maturityIdx: index("data_artifacts_maturity_idx").on(table.targetMaturity),
+  dataTypeIdx: index("data_artifacts_data_type_idx").on(table.dataType),
+  aggregationIdx: index("data_artifacts_aggregation_idx").on(table.aggregationLevel),
+  sensitivityIdx: index("data_artifacts_sensitivity_idx").on(table.sensitivityLevel),
+  priorityIdx: index("data_artifacts_priority_idx").on(table.priority),
+  isActiveIdx: index("data_artifacts_is_active_idx").on(table.isActive),
+}));
+
+// Service workflows table for workflow management
+export const serviceWorkflows = pgTable("service_workflows", {
+  id: varchar("id").primaryKey().notNull(),
+  projectId: varchar("project_id").notNull(),
+  currentStep: varchar("current_step").notNull(),
+  stepData: jsonb("step_data").default('{}'),
+  status: varchar("status").default('pending'),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  projectIdx: index("service_workflows_project_idx").on(table.projectId),
+  statusIdx: index("service_workflows_status_idx").on(table.status),
+}));
+
+// Data uploads table for file upload tracking
+export const dataUploads = pgTable("data_uploads", {
+  id: varchar("id").primaryKey().notNull(),
+  projectId: varchar("project_id").notNull(),
+  fileName: varchar("file_name").notNull(),
+  fileSize: integer("file_size").notNull(),
+  status: varchar("status").default('pending'),
+  uploadPath: varchar("upload_path"),
+  malwareScanResult: jsonb("malware_scan_result").default('{}'),
+  processingStatus: varchar("processing_status").default('pending'),
+  processedAt: timestamp("processed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  projectIdx: index("data_uploads_project_idx").on(table.projectId),
+  statusIdx: index("data_uploads_status_idx").on(table.status),
+  processingStatusIdx: index("data_uploads_processing_status_idx").on(table.processingStatus),
+}));
+
+// Decision audit trail for workflow transparency
+export const decisionAudits = pgTable("decision_audits", {
+  id: varchar("id").primaryKey().notNull(),
+  projectId: varchar("project_id").notNull(), // FK to projects
+  agent: varchar("agent").notNull(), // project_manager, data_scientist, business_agent, system
+  decisionType: varchar("decision_type").notNull(), // analysis_approach, data_processing, visualization_choice, etc.
+  decision: text("decision").notNull(), // The actual decision made
+  reasoning: text("reasoning").notNull(), // Why this decision was made
+  alternatives: jsonb("alternatives").notNull().default('[]'), // Other options considered
+  confidence: integer("confidence").notNull(), // Confidence level 0-100
+  context: jsonb("context").default('{}'), // Additional context data
+  userInput: text("user_input"), // User input that influenced the decision
+  impact: varchar("impact").notNull(), // low, medium, high
+  reversible: boolean("reversible").default(true), // Whether this decision can be undone
+  timestamp: timestamp("timestamp").defaultNow().notNull(),
+}, (table) => ({
+  projectIdIdx: index("decision_audits_project_id_idx").on(table.projectId),
+  agentIdx: index("decision_audits_agent_idx").on(table.agent),
+  decisionTypeIdx: index("decision_audits_decision_type_idx").on(table.decisionType),
+  timestampIdx: index("decision_audits_timestamp_idx").on(table.timestamp),
+}));
+
+// Generated artifacts from the adaptive content engine
+export const generatedArtifacts = pgTable("generated_artifacts", {
+  id: varchar("id").primaryKey().notNull(),
+  projectId: varchar("project_id").notNull(), // FK to projects
+  templateId: varchar("template_id"), // FK to artifactTemplates (optional)
+  audienceProfileId: varchar("audience_profile_id"), // FK to audienceProfiles (optional)
+  type: varchar("type").notNull(), // executive_summary, dashboard, detailed_report, etc.
+  title: varchar("title").notNull(),
+  format: varchar("format").notNull(), // pdf, html, json, dashboard, etc.
+  content: jsonb("content").notNull(), // The actual generated content
+  components: jsonb("components").default('[]'), // Array of artifact components
+  metadata: jsonb("metadata").default('{}'), // Generation metadata, complexity, etc.
+  status: varchar("status").default('generated'), // generated, published, archived
+  workflowId: varchar("workflow_id"), // Optional workflow identifier
+  stepsCompleted: integer("steps_completed"), // Number of workflow steps completed
+  totalDecisions: integer("total_decisions"), // Number of decisions made
+  totalArtifacts: integer("total_artifacts"), // Total artifacts generated
+  completionTime: timestamp("completion_time"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  projectIdIdx: index("generated_artifacts_project_id_idx").on(table.projectId),
+  templateIdIdx: index("generated_artifacts_template_id_idx").on(table.templateId),
+  audienceIdIdx: index("generated_artifacts_audience_id_idx").on(table.audienceProfileId),
+  typeIdx: index("generated_artifacts_type_idx").on(table.type),
+  statusIdx: index("generated_artifacts_status_idx").on(table.status),
+  workflowIdIdx: index("generated_artifacts_workflow_id_idx").on(table.workflowId),
+}));
+
+// Analysis subscriptions for recurring analysis
+export const analysisSubscriptions = pgTable("analysis_subscriptions", {
+  id: varchar("id").primaryKey().notNull(),
+  userId: varchar("user_id").notNull(), // FK to users
+  projectId: varchar("project_id").notNull(), // FK to projects
+  name: varchar("name").notNull(),
+  description: text("description"),
+  mode: jsonb("mode").notNull(), // {type, schedule, triggers} for recurring analysis
+  audienceProfiles: jsonb("audience_profiles").notNull().default('[]'), // Array of audience profile IDs
+  dataConnections: jsonb("data_connections").notNull().default('[]'), // Data source connections
+  analysisConfig: jsonb("analysis_config").default('{}'), // Analysis configuration
+  status: varchar("status").default('active'), // active, paused, stopped, error
+  lastExecution: timestamp("last_execution"),
+  nextExecution: timestamp("next_execution"),
+  executionCount: integer("execution_count").default(0),
+  totalCost: decimal("total_cost", { precision: 10, scale: 2 }).default('0.00'),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  userIdIdx: index("analysis_subscriptions_user_id_idx").on(table.userId),
+  projectIdIdx: index("analysis_subscriptions_project_id_idx").on(table.projectId),
+  statusIdx: index("analysis_subscriptions_status_idx").on(table.status),
+  nextExecutionIdx: index("analysis_subscriptions_next_execution_idx").on(table.nextExecution),
+}));
+
+// Template feedback for continuous improvement
+export const templateFeedback = pgTable("template_feedback", {
+  id: varchar("id").primaryKey().notNull(),
+  templateId: varchar("template_id").notNull(), // FK to artifactTemplates
+  userId: varchar("user_id").notNull(), // FK to users
+  rating: integer("rating").notNull(), // Overall rating 1-5
+  missingMetrics: jsonb("missing_metrics").default('[]'), // Metrics the user felt were missing
+  irrelevantSections: jsonb("irrelevant_sections").default('[]'), // Sections they found irrelevant
+  industryAccuracy: integer("industry_accuracy").notNull(), // How accurate for their industry 1-5
+  additionalComments: text("additional_comments").default(''),
+  processed: boolean("processed").default(false), // Whether feedback has been processed
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  templateIdIdx: index("template_feedback_template_id_idx").on(table.templateId),
+  userIdIdx: index("template_feedback_user_id_idx").on(table.userId),
+  processedIdx: index("template_feedback_processed_idx").on(table.processed),
+  ratingIdx: index("template_feedback_rating_idx").on(table.rating),
+}));
+
+// New insert schemas for new tables
+export const insertDatasetSchema = createInsertSchema(datasets).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertProjectDatasetSchema = createInsertSchema(projectDatasets).omit({
+  id: true,
+  addedAt: true,
+});
+
+export const insertProjectArtifactSchema = createInsertSchema(projectArtifacts).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertAudienceProfileSchema = createInsertSchema(audienceProfiles).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertConversationStateSchema = createInsertSchema(conversationStates).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertArtifactTemplateSchema = createInsertSchema(artifactTemplates).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  usageCount: true,
+});
+
+export const insertDataArtifactSchema = createInsertSchema(dataArtifacts).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  usageCount: true,
+});
+
+export const insertDecisionAuditSchema = createInsertSchema(decisionAudits).omit({
+  id: true,
+  timestamp: true,
+});
+
+export const insertGeneratedArtifactSchema = createInsertSchema(generatedArtifacts).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertAnalysisSubscriptionSchema = createInsertSchema(analysisSubscriptions).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertTemplateFeedbackSchema = createInsertSchema(templateFeedback).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertServiceWorkflowSchema = createInsertSchema(serviceWorkflows).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertDataUploadSchema = createInsertSchema(dataUploads).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+// Updated project insert schema
+export const insertProjectSchema = createInsertSchema(projects).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertUserSchema = createInsertSchema(users).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertEnterpriseInquirySchema = createInsertSchema(enterpriseInquiries).omit({
+  id: true,
+  submittedAt: true,
+});
+
+export const insertGuidedAnalysisOrderSchema = createInsertSchema(guidedAnalysisOrders).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+// Insert schemas for streaming and web scraping tables
+export const insertStreamingSourceSchema = createInsertSchema(streamingSources).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertStreamChunkSchema = createInsertSchema(streamChunks).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertStreamCheckpointSchema = createInsertSchema(streamCheckpoints).omit({
+  id: true,
+});
+
+export const insertScrapingJobSchema = createInsertSchema(scrapingJobs).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertScrapingRunSchema = createInsertSchema(scrapingRuns).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertAgentCheckpointSchema = createInsertSchema(agentCheckpoints).omit({
+  id: true,
+  createdAt: true,
+  timestamp: true,
+});
+
+export const insertDatasetVersionSchema = createInsertSchema(datasetVersions).omit({
+  id: true,
+  createdAt: true,
+});
+
+// In-memory storage class (Singleton Pattern)
+// (Note) In-memory storage lives in server/storage.ts. Any accidental duplicates here were removed to avoid type conflicts.
+
+
+// =====================================================================
+// Comprehensive Zod Validation Schemas for Streaming and Scraping APIs
+// =====================================================================
+
+// Streaming Sources Validation Schemas
+export const createStreamingSourceSchema = z.object({
+  datasetId: z.string().min(1, "Dataset ID is required"),
+  protocol: z.enum(['websocket', 'sse', 'poll'], {
+    errorMap: () => ({ message: "Protocol must be one of: websocket, sse, poll" })
+  }),
+  endpoint: z.string().url("Must be a valid URL"),
+  headers: z.record(z.string()).optional(),
+  params: z.record(z.any()).optional(),
+  parseSpec: z.object({
+    format: z.enum(['json', 'text', 'csv']).default('json'),
+    timestampPath: z.string().optional(),
+    dedupeKeyPath: z.string().optional(),
+    delimiter: z.string().optional(), // For CSV parsing
+    hasHeader: z.boolean().default(true),
+    jsonPath: z.string().optional(), // JSONPath for nested data extraction
+  }),
+  batchSize: z.number().min(1).max(10000).default(1000),
+  flushMs: z.number().min(1000).max(300000).default(5000),
+  maxBuffer: z.number().min(100).max(100000).default(100000),
+  pollInterval: z.number().min(1000).max(3600000).optional(), // For polling protocol
+  retryConfig: z.object({
+    maxRetries: z.number().min(0).max(10).default(3),
+    backoffMs: z.number().min(100).max(30000).default(1000),
+    exponentialBackoff: z.boolean().default(true),
+  }).optional(),
+});
+
+export const updateStreamingSourceSchema = createStreamingSourceSchema.partial().omit({
+  datasetId: true, // Cannot change dataset association
+});
+
+export const streamingSourceStatusQuerySchema = z.object({
+  datasetId: z.string().optional(),
+  status: z.enum(['active', 'inactive', 'error']).optional(),
+  protocol: z.enum(['websocket', 'sse', 'poll']).optional(),
+  limit: z.coerce.number().min(1).max(100).default(20),
+  offset: z.coerce.number().min(0).default(0),
+});
+
+// Scraping Jobs Validation Schemas
+export const createScrapingJobSchema = z.object({
+  datasetId: z.string().min(1, "Dataset ID is required"),
+  strategy: z.enum(['http', 'puppeteer'], {
+    errorMap: () => ({ message: "Strategy must be either 'http' or 'puppeteer'" })
+  }),
+  targetUrl: z.string().url("Must be a valid URL"),
+  schedule: z.string().optional(), // Cron expression - validate with cron parser in route
+  extractionSpec: z.object({
+    // CSS selectors for data extraction
+    selectors: z.record(z.string()).optional(),
+    // JSONPath for API responses
+    jsonPath: z.string().optional(),
+    // Table extraction
+    tableSelector: z.string().optional(),
+    tableHeaders: z.array(z.string()).optional(),
+    // Text content extraction
+    textSelector: z.string().optional(),
+    textProcessor: z.enum(['raw', 'markdown', 'plain']).default('raw'),
+    // Pagination handling
+    followPagination: z.object({
+      nextSelector: z.string(),
+      maxPages: z.number().min(1).max(100),
+      waitMs: z.number().min(100).max(10000).default(1000),
+    }).optional(),
+    // Data transformation
+    transformRules: z.array(z.object({
+      field: z.string(),
+      type: z.enum(['date', 'number', 'boolean', 'string']),
+      format: z.string().optional(),
+    })).optional(),
+  }),
+  // Rate limiting and politeness
+  rateLimitRPM: z.number().min(1).max(300).default(60),
+  respectRobots: z.boolean().default(true),
+  maxConcurrency: z.number().min(1).max(10).default(1),
+  requestTimeout: z.number().min(1000).max(60000).default(30000),
+  // Authentication (optional)
+  loginSpec: z.object({
+    usernameSelector: z.string(),
+    passwordSelector: z.string(),
+    submitSelector: z.string(),
+    credentials: z.object({
+      username: z.string(),
+      password: z.string(),
+    }),
+    loginUrl: z.string().url().optional(),
+    successIndicator: z.string().optional(), // CSS selector to verify login success
+  }).optional(),
+  // Retry configuration
+  retryConfig: z.object({
+    maxRetries: z.number().min(0).max(5).default(3),
+    backoffMs: z.number().min(100).max(10000).default(1000),
+    retryOnStatusCodes: z.array(z.number()).default([429, 500, 502, 503, 504]),
+  }).optional(),
+  // Browser configuration (for Puppeteer strategy)
+  browserConfig: z.object({
+    headless: z.boolean().default(true),
+    viewport: z.object({
+      width: z.number().default(1280),
+      height: z.number().default(720),
+    }).optional(),
+    userAgent: z.string().optional(),
+    blockResources: z.array(z.enum(['images', 'stylesheets', 'fonts', 'scripts'])).optional(),
+  }).optional(),
+});
+
+export const updateScrapingJobSchema = createScrapingJobSchema.partial().omit({
+  datasetId: true, // Cannot change dataset association
+});
+
+export const scrapingJobStatusQuerySchema = z.object({
+  datasetId: z.string().optional(),
+  status: z.enum(['active', 'inactive', 'running', 'error']).optional(),
+  strategy: z.enum(['http', 'puppeteer']).optional(),
+  limit: z.coerce.number().min(1).max(100).default(20),
+  offset: z.coerce.number().min(0).default(0),
+});
+
+export const scrapingRunsQuerySchema = z.object({
+  jobId: z.string(),
+  status: z.enum(['running', 'completed', 'failed']).optional(),
+  limit: z.coerce.number().min(1).max(100).default(20),
+  offset: z.coerce.number().min(0).default(0),
+  dateFrom: z.coerce.date().optional(),
+  dateTo: z.coerce.date().optional(),
+});
+
+// Live Sources Monitoring Schemas
+export const liveSourcesOverviewSchema = z.object({
+  period: z.enum(['1h', '24h', '7d', '30d']).default('24h'),
+  includeInactive: z.boolean().default(false),
+});
+
+export const liveSourcesMetricsSchema = z.object({
+  sourceIds: z.array(z.string()).optional(),
+  timeRange: z.object({
+    from: z.coerce.date(),
+    to: z.coerce.date(),
+  }).optional(),
+  granularity: z.enum(['minute', 'hour', 'day']).default('hour'),
+});
+
+export const liveSourcesActivitySchema = z.object({
+  limit: z.coerce.number().min(1).max(100).default(50),
+  types: z.array(z.enum(['started', 'stopped', 'error', 'data_received', 'run_completed'])).optional(),
+  sourceIds: z.array(z.string()).optional(),
+  since: z.coerce.date().optional(),
+});
+
+// Project Integration Schemas
+export const projectLiveSourcesQuerySchema = z.object({
+  projectId: z.string(),
+  includeInactive: z.boolean().default(false),
+  sourceType: z.enum(['streaming', 'scraping', 'all']).default('all'),
+});
+
+export const addLiveSourceToProjectSchema = z.object({
+  projectId: z.string(),
+  sourceType: z.enum(['streaming', 'scraping']),
+  config: z.union([createStreamingSourceSchema, createScrapingJobSchema]),
+});
+
+// Response Schemas
+export const streamingSourceResponseSchema = z.object({
+  success: z.boolean(),
+  data: z.object({
+    id: z.string(),
+    datasetId: z.string(),
+    protocol: z.string(),
+    endpoint: z.string(),
+    status: z.string(),
+    lastCheckpoint: z.string().optional(),
+    lastError: z.string().optional(),
+    metrics: z.object({
+      recordsReceived: z.number(),
+      lastActivity: z.date().optional(),
+      avgRecordsPerMinute: z.number(),
+      errorRate: z.number(),
+    }).optional(),
+    createdAt: z.date(),
+    updatedAt: z.date(),
+  }).optional(),
+  error: z.string().optional(),
+});
+
+export const scrapingJobResponseSchema = z.object({
+  success: z.boolean(),
+  data: z.object({
+    id: z.string(),
+    datasetId: z.string(),
+    strategy: z.string(),
+    targetUrl: z.string(),
+    status: z.string(),
+    schedule: z.string().optional(),
+    lastRunAt: z.date().optional(),
+    nextRunAt: z.date().optional(),
+    lastError: z.string().optional(),
+    metrics: z.object({
+      totalRuns: z.number(),
+      recordsExtracted: z.number(),
+      avgRunDuration: z.number(),
+      successRate: z.number(),
+    }).optional(),
+    createdAt: z.date(),
+    updatedAt: z.date(),
+  }).optional(),
+  error: z.string().optional(),
+});
+
+export const liveSourcesOverviewResponseSchema = z.object({
+  success: z.boolean(),
+  data: z.object({
+    streaming: z.object({
+      total: z.number(),
+      active: z.number(),
+      inactive: z.number(),
+      error: z.number(),
+    }),
+    scraping: z.object({
+      total: z.number(),
+      active: z.number(),
+      inactive: z.number(),
+      running: z.number(),
+      error: z.number(),
+    }),
+    recentActivity: z.array(z.object({
+      id: z.string(),
+      type: z.string(),
+      sourceType: z.enum(['streaming', 'scraping']),
+      sourceId: z.string(),
+      message: z.string(),
+      timestamp: z.date(),
+      metadata: z.record(z.any()).optional(),
+    })),
+    metrics: z.object({
+      totalDataReceived: z.number(),
+      activeSources: z.number(),
+      errorRate: z.number(),
+    }),
+  }).optional(),
+  error: z.string().optional(),
+});
+
+// Control Action Schemas
+export const sourceControlActionSchema = z.object({
+  action: z.enum(['start', 'stop', 'restart', 'pause', 'resume']),
+  force: z.boolean().default(false),
+  config: z.record(z.any()).optional(), // Override config for this action
+});
+
+export const runOnceRequestSchema = z.object({
+  jobId: z.string(),
+  overrideConfig: z.record(z.any()).optional(),
+  priority: z.enum(['low', 'normal', 'high']).default('normal'),
+});
+
+// Bulk Operations Schemas
+export const bulkSourceActionSchema = z.object({
+  sourceIds: z.array(z.string()).min(1, "At least one source ID required"),
+  action: z.enum(['start', 'stop', 'delete']),
+  force: z.boolean().default(false),
+});
+
+// Error Response Schema
+export const apiErrorResponseSchema = z.object({
+  success: z.literal(false),
+  error: z.string(),
+  details: z.record(z.any()).optional(),
+  code: z.string().optional(),
+  timestamp: z.date().optional(),
+});
+
+// Success Response Schema (Generic)
+export const apiSuccessResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.any().optional(),
+  message: z.string().optional(),
+  timestamp: z.date().optional(),
+});
+
+// Infer types for all new schemas
+export type CreateStreamingSourceRequest = z.infer<typeof createStreamingSourceSchema>;
+export type UpdateStreamingSourceRequest = z.infer<typeof updateStreamingSourceSchema>;
+export type StreamingSourceStatusQuery = z.infer<typeof streamingSourceStatusQuerySchema>;
+export type CreateScrapingJobRequest = z.infer<typeof createScrapingJobSchema>;
+export type UpdateScrapingJobRequest = z.infer<typeof updateScrapingJobSchema>;
+export type ScrapingJobStatusQuery = z.infer<typeof scrapingJobStatusQuerySchema>;
+export type ScrapingRunsQuery = z.infer<typeof scrapingRunsQuerySchema>;
+export type LiveSourcesOverviewQuery = z.infer<typeof liveSourcesOverviewSchema>;
+export type LiveSourcesMetricsQuery = z.infer<typeof liveSourcesMetricsSchema>;
+export type LiveSourcesActivityQuery = z.infer<typeof liveSourcesActivitySchema>;
+export type ProjectLiveSourcesQuery = z.infer<typeof projectLiveSourcesQuerySchema>;
+export type AddLiveSourceToProjectRequest = z.infer<typeof addLiveSourceToProjectSchema>;
+export type StreamingSourceResponse = z.infer<typeof streamingSourceResponseSchema>;
+export type ScrapingJobResponse = z.infer<typeof scrapingJobResponseSchema>;
+export type LiveSourcesOverviewResponse = z.infer<typeof liveSourcesOverviewResponseSchema>;
+export type SourceControlActionRequest = z.infer<typeof sourceControlActionSchema>;
+export type RunOnceRequest = z.infer<typeof runOnceRequestSchema>;
+export type BulkSourceActionRequest = z.infer<typeof bulkSourceActionSchema>;
+export type ApiErrorResponse = z.infer<typeof apiErrorResponseSchema>;
+export type ApiSuccessResponse = z.infer<typeof apiSuccessResponseSchema>;
+
+// New table types
+export type AudienceProfile = typeof audienceProfiles.$inferSelect;
+export type InsertAudienceProfile = z.infer<typeof insertAudienceProfileSchema>;
+export type ConversationState = typeof conversationStates.$inferSelect;
+export type InsertConversationState = z.infer<typeof insertConversationStateSchema>;
+export type ArtifactTemplate = typeof artifactTemplates.$inferSelect;
+export type InsertArtifactTemplate = z.infer<typeof insertArtifactTemplateSchema>;
+export type DataArtifact = typeof dataArtifacts.$inferSelect;
+export type InsertDataArtifact = z.infer<typeof insertDataArtifactSchema>;
+export type DecisionAudit = typeof decisionAudits.$inferSelect;
+export type InsertDecisionAudit = z.infer<typeof insertDecisionAuditSchema>;
+export type GeneratedArtifact = typeof generatedArtifacts.$inferSelect;
+export type InsertGeneratedArtifact = z.infer<typeof insertGeneratedArtifactSchema>;
+export type AnalysisSubscription = typeof analysisSubscriptions.$inferSelect;
+export type InsertAnalysisSubscription = z.infer<typeof insertAnalysisSubscriptionSchema>;
+export type TemplateFeedback = typeof templateFeedback.$inferSelect;
+export type InsertTemplateFeedback = z.infer<typeof insertTemplateFeedbackSchema>;
+export type ServiceWorkflow = typeof serviceWorkflows.$inferSelect;
+export type InsertServiceWorkflow = z.infer<typeof insertServiceWorkflowSchema>;
+export type DataUpload = typeof dataUploads.$inferSelect;
+export type InsertDataUpload = z.infer<typeof insertDataUploadSchema>;
+
+// Journey Tracking Schemas - Added for step-by-step user journey management
+export const journeySchema = z.object({
+  id: z.string(),
+  userId: z.string(),
+  projectId: z.string().optional(),
+  journeyType: z.enum(['non-tech', 'business', 'technical']),
+  currentStep: z.enum(['prepare', 'data', 'execute']),
+  title: z.string().optional(),
+  description: z.string().optional(),
+  goals: z.array(z.string()).optional(),
+  questions: z.array(z.string()).optional(),
+  suggestedPlan: z.object({
+    datasets: z.array(z.string()).optional(),
+    templates: z.array(z.string()).optional(),
+    analysisSteps: z.array(z.string()).optional(),
+    estimatedDuration: z.string().optional(),
+  }).optional(),
+  selectedDatasets: z.array(z.string()).optional(),
+  costEstimateId: z.string().optional(), // Reference to separate CostEstimate table
+  eligibilityCheckId: z.string().optional(), // Reference to separate EligibilityCheck table
+  artifacts: z.array(z.object({
+    id: z.string(),
+    type: z.enum(['report', 'visualization', 'dataset', 'model']),
+    name: z.string(),
+    path: z.string(),
+    createdAt: z.date(),
+  })).optional(),
+  completedAt: z.date().optional(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
+export const journeyStepProgressSchema = z.object({
+  id: z.string(),
+  journeyId: z.string(),
+  step: z.enum(['prepare', 'data', 'execute']),
+  status: z.enum(['pending', 'in_progress', 'completed', 'failed']),
+  startedAt: z.date().optional(),
+  completedAt: z.date().optional(),
+  progress: z.number().min(0).max(100).default(0),
+  stepData: z.any().optional(), // Store step-specific data
+  errors: z.array(z.string()).optional(),
+  costIncurred: z.number().default(0),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
+export const costEstimateSchema = z.object({
+  id: z.string(),
+  journeyId: z.string().optional(),
+  userId: z.string(),
+  estimateType: z.enum(['preparation', 'data_processing', 'analysis', 'full_journey']),
+  items: z.array(z.object({
+    description: z.string(),
+    quantity: z.number(),
+    unitPrice: z.number(),
+    total: z.number(),
+  })),
+  subtotal: z.number(),
+  discounts: z.number().default(0),
+  taxes: z.number().default(0),
+  total: z.number(),
+  currency: z.string().default('USD'),
+  signature: z.string(), // Cryptographic signature to prevent tampering
+  validUntil: z.date(),
+  approved: z.boolean().default(false),
+  approvedAt: z.date().optional(),
+  createdAt: z.date(),
+});
+
+export const eligibilitySchema = z.object({
+  id: z.string(),
+  userId: z.string(),
+  feature: z.string(),
+  allowed: z.boolean(),
+  reason: z.string().optional(),
+  requiredTier: z.string().optional(),
+  currentUsage: z.object({
+    monthly: z.number().optional(),
+    total: z.number().optional(),
+  }).optional(),
+  limits: z.object({
+    monthly: z.number().optional(),
+    total: z.number().optional(),
+  }).optional(),
+  nextResetAt: z.date().optional(),
+  checkResult: z.enum(['allowed', 'limit_exceeded', 'tier_required', 'payment_required']),
+  createdAt: z.date(),
+});
+
+// Database Table Definitions for Journey Tracking
+export const journeys = pgTable(
+  "journeys",
+  {
+    id: varchar("id").primaryKey(),
+    userId: varchar("user_id").notNull(),
+    projectId: varchar("project_id"),
+    journeyType: varchar("journey_type").notNull(),
+    currentStep: varchar("current_step").notNull(),
+    title: text("title"),
+    description: text("description"),
+    goals: jsonb("goals").$type<string[]>(),
+    questions: jsonb("questions").$type<string[]>(),
+    suggestedPlan: jsonb("suggested_plan"),
+    selectedDatasets: jsonb("selected_datasets").$type<string[]>(),
+    costEstimateId: varchar("cost_estimate_id"),
+    eligibilityCheckId: varchar("eligibility_check_id"),
+    artifacts: jsonb("artifacts"),
+    completedAt: timestamp("completed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    userIdIdx: index("journeys_user_id_idx").on(table.userId),
+    projectIdIdx: index("journeys_project_id_idx").on(table.projectId),
+    journeyTypeIdx: index("journeys_journey_type_idx").on(table.journeyType),
+  })
+);
+
+export const journeyStepProgress = pgTable(
+  "journey_step_progress",
+  {
+    id: varchar("id").primaryKey(),
+    journeyId: varchar("journey_id").notNull(),
+    step: varchar("step").notNull(),
+    status: varchar("status").notNull(),
+    startedAt: timestamp("started_at"),
+    completedAt: timestamp("completed_at"),
+    progress: integer("progress").default(0),
+    stepData: jsonb("step_data"),
+    errors: jsonb("errors").$type<string[]>(),
+    costIncurred: integer("cost_incurred").default(0),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    journeyIdIdx: index("journey_step_progress_journey_id_idx").on(table.journeyId),
+    stepIdx: index("journey_step_progress_step_idx").on(table.step),
+  })
+);
+
+export const costEstimates = pgTable(
+  "cost_estimates",
+  {
+    id: varchar("id").primaryKey(),
+    journeyId: varchar("journey_id"),
+    userId: varchar("user_id").notNull(),
+    estimateType: varchar("estimate_type").notNull(),
+    items: jsonb("items").notNull(),
+    subtotal: integer("subtotal").notNull(),
+    discounts: integer("discounts").default(0),
+    taxes: integer("taxes").default(0),
+    total: integer("total").notNull(),
+    currency: varchar("currency").default("USD"),
+    signature: text("signature").notNull(),
+    validUntil: timestamp("valid_until").notNull(),
+    approved: boolean("approved").default(false),
+    approvedAt: timestamp("approved_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    userIdIdx: index("cost_estimates_user_id_idx").on(table.userId),
+    journeyIdIdx: index("cost_estimates_journey_id_idx").on(table.journeyId),
+    validUntilIdx: index("cost_estimates_valid_until_idx").on(table.validUntil),
+  })
+);
+
+export const eligibilityChecks = pgTable(
+  "eligibility_checks",
+  {
+    id: varchar("id").primaryKey(),
+    userId: varchar("user_id").notNull(),
+    feature: varchar("feature").notNull(),
+    allowed: boolean("allowed").notNull(),
+    reason: text("reason"),
+    requiredTier: varchar("required_tier"),
+    currentUsage: jsonb("current_usage"),
+    limits: jsonb("limits"),
+    nextResetAt: timestamp("next_reset_at"),
+    checkResult: varchar("check_result").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    userIdIdx: index("eligibility_checks_user_id_idx").on(table.userId),
+    featureIdx: index("eligibility_checks_feature_idx").on(table.feature),
+    userFeatureIdx: index("eligibility_checks_user_feature_idx").on(table.userId, table.feature),
+  })
+);
+
+// Insert Schemas for Journey Tracking
+export const insertJourneySchema = createInsertSchema(journeys).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertJourneyStepProgressSchema = createInsertSchema(journeyStepProgress).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertCostEstimateSchema = createInsertSchema(costEstimates).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertEligibilityCheckSchema = createInsertSchema(eligibilityChecks).omit({
+  id: true,
+  createdAt: true,
+});
+
+// Pricing Request/Response Schemas
+export const pricingEstimateRequestSchema = z.object({
+  journeyType: z.enum(['non-tech', 'business', 'technical']),
+  features: z.array(z.enum(['preparation', 'data_processing', 'analysis', 'visualization', 'ai_insights'])),
+  dataSizeMB: z.number().min(0).max(1000), // Max 1GB for initial implementation
+  complexityLevel: z.enum(['basic', 'intermediate', 'advanced']).default('basic'),
+  expectedQuestions: z.number().min(1).max(20).default(5),
+  journeyId: z.string().optional(),
+});
+
+export const pricingEstimateResponseSchema = z.object({
+  success: z.boolean(),
+  estimateId: z.string(),
+  items: z.array(z.object({
+    description: z.string(),
+    quantity: z.number(),
+    unitPrice: z.number(),
+    total: z.number(),
+  })),
+  subtotal: z.number(),
+  discounts: z.number(),
+  total: z.number(),
+  currency: z.string(),
+  signature: z.string(),
+  validUntil: z.date(),
+  expiresInMs: z.number(),
+  error: z.string().optional(),
+});
+
+export const pricingVerifyRequestSchema = z.object({
+  estimateId: z.string(),
+  signature: z.string(),
+});
+
+export const pricingConfirmRequestSchema = z.object({
+  estimateId: z.string(),
+  signature: z.string(),
+  journeyId: z.string(),
+});
+
+export const eligibilityCheckRequestSchema = z.object({
+  features: z.array(z.enum(['preparation', 'data_processing', 'analysis', 'visualization', 'ai_insights'])),
+  dataSizeMB: z.number().min(0),
+  journeyType: z.enum(['non-tech', 'business', 'technical']),
+});
+
+export const eligibilityCheckResponseSchema = z.object({
+  success: z.boolean(),
+  eligible: z.boolean(),
+  checkId: z.string(),
+  blockedFeatures: z.array(z.object({
+    feature: z.string(),
+    reason: z.string(),
+    requiredTier: z.string().optional(),
+    upgradeRequired: z.boolean(),
+  })),
+  currentTier: z.string(),
+  usage: z.object({
+    monthlyUploads: z.number(),
+    monthlyDataVolume: z.number(),
+    monthlyAIInsights: z.number(),
+  }),
+  limits: z.object({
+    monthlyUploads: z.number(),
+    monthlyDataVolume: z.number(),
+    monthlyAIInsights: z.number(),
+  }),
+  nextResetAt: z.date().optional(),
+  upgradeRecommendation: z.string().optional(),
+  error: z.string().optional(),
+});
+
+// Goal Extraction Request/Response Schemas
+export const goalExtractionRequestSchema = z.object({
+  userDescription: z.string().min(10, 'Please provide a detailed description of at least 10 characters'),
+  journeyType: z.enum(['non-tech', 'business', 'technical']),
+  context: z.object({
+    industry: z.string().optional(),
+    businessRole: z.string().optional(),
+    technicalLevel: z.enum(['basic', 'intermediate', 'advanced']).optional(),
+    dataTypes: z.array(z.string()).optional(),
+    previousAnalysisExperience: z.boolean().optional(),
+  }).optional(),
+  journeyId: z.string().optional(),
+});
+
+export const goalExtractionResponseSchema = z.object({
+  success: z.boolean(),
+  extractionId: z.string(),
+  extractedGoals: z.array(z.object({
+    goal: z.string(),
+    description: z.string(),
+    priority: z.enum(['high', 'medium', 'low']),
+    category: z.enum(['business_insight', 'prediction', 'optimization', 'exploration', 'validation']),
+  })),
+  businessQuestions: z.array(z.object({
+    question: z.string(),
+    type: z.enum(['descriptive', 'diagnostic', 'predictive', 'prescriptive']),
+    complexity: z.enum(['basic', 'intermediate', 'advanced']),
+    dataRequirements: z.array(z.string()),
+  })),
+  suggestedAnalysisPaths: z.array(z.object({
+    name: z.string(),
+    type: z.enum(['statistical', 'machine_learning', 'visualization', 'business_intelligence', 'time_series']),
+    description: z.string(),
+    complexity: z.enum(['basic', 'intermediate', 'advanced']),
+    estimatedDuration: z.string(),
+    expectedOutcomes: z.array(z.string()),
+    requiredFeatures: z.array(z.enum(['preparation', 'data_processing', 'analysis', 'visualization', 'ai_insights'])),
+    confidence: z.number().min(0).max(100),
+  })),
+  dataRequirements: z.object({
+    estimatedColumns: z.number().optional(),
+    estimatedRows: z.number().optional(),
+    requiredDataTypes: z.array(z.string()),
+    qualityRequirements: z.array(z.string()),
+  }),
+  recommendedFeatures: z.array(z.enum(['preparation', 'data_processing', 'analysis', 'visualization', 'ai_insights'])),
+  aiProvider: z.string(),
+  processingTimeMs: z.number(),
+  error: z.string().optional(),
+});
+
+// Type Exports for Journey Tracking
+export type Journey = z.infer<typeof journeySchema>;
+export type JourneyStepProgress = z.infer<typeof journeyStepProgressSchema>;
+export type CostEstimate = z.infer<typeof costEstimateSchema>;
+export type EligibilityCheck = z.infer<typeof eligibilitySchema>;
+
+// Type Exports for Pricing Requests/Responses
+export type PricingEstimateRequest = z.infer<typeof pricingEstimateRequestSchema>;
+export type PricingEstimateResponse = z.infer<typeof pricingEstimateResponseSchema>;
+export type PricingVerifyRequest = z.infer<typeof pricingVerifyRequestSchema>;
+export type PricingConfirmRequest = z.infer<typeof pricingConfirmRequestSchema>;
+export type EligibilityCheckRequest = z.infer<typeof eligibilityCheckRequestSchema>;
+export type EligibilityCheckResponse = z.infer<typeof eligibilityCheckResponseSchema>;
+export type GoalExtractionRequest = z.infer<typeof goalExtractionRequestSchema>;
+export type GoalExtractionResponse = z.infer<typeof goalExtractionResponseSchema>;
+
+export type InsertJourney = z.infer<typeof insertJourneySchema>;
+export type InsertJourneyStepProgress = z.infer<typeof insertJourneyStepProgressSchema>;
+export type InsertCostEstimate = z.infer<typeof insertCostEstimateSchema>;
+export type InsertEligibilityCheck = z.infer<typeof insertEligibilityCheckSchema>;
+
+export type SelectJourney = typeof journeys.$inferSelect;
+export type SelectJourneyStepProgress = typeof journeyStepProgress.$inferSelect;
+export type SelectCostEstimate = typeof costEstimates.$inferSelect;
+export type SelectEligibilityCheck = typeof eligibilityChecks.$inferSelect;
+
+// Real-time Event Schemas
+export const realtimeEventSchema = z.object({
+  type: z.enum(['status_change', 'metrics_update', 'error', 'progress', 'job_complete', 'connection_test', 'data_received', 'buffer_status']),
+  sourceType: z.enum(['streaming', 'scraping']),
+  sourceId: z.string(),
+  userId: z.string(),
+  projectId: z.string().optional(),
+  timestamp: z.date(),
+  data: z.any(),
+});
+
+export const clientConnectionSchema = z.object({
+  id: z.string(),
+  userId: z.string(),
+  subscriptions: z.array(z.string()),
+  lastActivity: z.date(),
+  metadata: z.object({
+    userAgent: z.string().optional(),
+    ipAddress: z.string().optional(),
+  }),
+});
+
+export const broadcastOptionsSchema = z.object({
+  userId: z.string().optional(),
+  projectId: z.string().optional(),
+  sourceId: z.string().optional(),
+  sourceType: z.enum(['streaming', 'scraping']).optional(),
+  excludeClient: z.string().optional(),
+});
+
+// Streaming Events Data Schemas
+export const streamingConnectionEstablishedSchema = z.object({
+  endpoint: z.string(),
+  protocol: z.string(),
+  timestamp: z.date(),
+});
+
+export const streamingConnectionLostSchema = z.object({
+  endpoint: z.string(),
+  error: z.string(),
+  timestamp: z.date(),
+});
+
+export const streamingDataReceivedSchema = z.object({
+  recordCount: z.number(),
+  batchSize: z.number(),
+  timestamp: z.date(),
+});
+
+export const streamingBufferStatusSchema = z.object({
+  currentSize: z.number(),
+  maxSize: z.number(),
+  flushPending: z.boolean(),
+});
+
+export const streamingErrorOccurredSchema = z.object({
+  error: z.string(),
+  severity: z.enum(['warning', 'error']),
+  timestamp: z.date(),
+});
+
+export const streamingMetricsUpdateSchema = z.object({
+  recordsPerSecond: z.number(),
+  totalRecords: z.number(),
+  avgProcessingTime: z.number(),
+  errorRate: z.number(),
+});
+
+// Scraping Events Data Schemas
+export const scrapingJobStartedSchema = z.object({
+  jobId: z.string(),
+  strategy: z.string(),
+  targetUrl: z.string(),
+  timestamp: z.date(),
+});
+
+export const scrapingJobCompletedSchema = z.object({
+  jobId: z.string(),
+  success: z.boolean(),
+  recordsExtracted: z.number(),
+  duration: z.number(),
+});
+
+export const scrapingPageScrapedSchema = z.object({
+  jobId: z.string(),
+  url: z.string(),
+  recordsFound: z.number(),
+  pageNumber: z.number(),
+});
+
+export const scrapingExtractionProgressSchema = z.object({
+  jobId: z.string(),
+  pagesCompleted: z.number(),
+  totalPages: z.number(),
+  estimatedRemaining: z.number(),
+});
+
+export const scrapingRateLimitHitSchema = z.object({
+  jobId: z.string(),
+  domain: z.string(),
+  nextAllowedTime: z.date(),
+});
+
+export const scrapingErrorOccurredSchema = z.object({
+  jobId: z.string(),
+  url: z.string(),
+  error: z.string(),
+  willRetry: z.boolean(),
+});
+
+// Real-time Server Stats Schema
+export const realtimeServerStatsSchema = z.object({
+  totalConnections: z.number(),
+  connectionsPerUser: z.record(z.number()),
+  totalUsers: z.number(),
+  serverUptime: z.number(),
+});
+
+// WebSocket Message Schemas
+export const websocketSubscribeMessageSchema = z.object({
+  type: z.literal('subscribe'),
+  channels: z.array(z.string()),
+});
+
+export const websocketUnsubscribeMessageSchema = z.object({
+  type: z.literal('unsubscribe'),
+  channels: z.array(z.string()),
+});
+
+export const websocketPingMessageSchema = z.object({
+  type: z.literal('ping'),
+});
+
+export const websocketMessageSchema = z.union([
+  websocketSubscribeMessageSchema,
+  websocketUnsubscribeMessageSchema,
+  websocketPingMessageSchema,
+]);
+
+// Infer types for real-time schemas
+export type RealtimeEvent = z.infer<typeof realtimeEventSchema>;
+export type ClientConnection = z.infer<typeof clientConnectionSchema>;
+export type BroadcastOptions = z.infer<typeof broadcastOptionsSchema>;
+export type StreamingConnectionEstablished = z.infer<typeof streamingConnectionEstablishedSchema>;
+export type StreamingConnectionLost = z.infer<typeof streamingConnectionLostSchema>;
+export type StreamingDataReceived = z.infer<typeof streamingDataReceivedSchema>;
+export type StreamingBufferStatus = z.infer<typeof streamingBufferStatusSchema>;
+export type StreamingErrorOccurred = z.infer<typeof streamingErrorOccurredSchema>;
+export type StreamingMetricsUpdate = z.infer<typeof streamingMetricsUpdateSchema>;
+export type ScrapingJobStarted = z.infer<typeof scrapingJobStartedSchema>;
+export type ScrapingJobCompleted = z.infer<typeof scrapingJobCompletedSchema>;
+export type ScrapingPageScraped = z.infer<typeof scrapingPageScrapedSchema>;
+export type ScrapingExtractionProgress = z.infer<typeof scrapingExtractionProgressSchema>;
+export type ScrapingRateLimitHit = z.infer<typeof scrapingRateLimitHitSchema>;
+export type ScrapingErrorOccurred = z.infer<typeof scrapingErrorOccurredSchema>;
+export type RealtimeServerStats = z.infer<typeof realtimeServerStatsSchema>;
+export type WebSocketMessage = z.infer<typeof websocketMessageSchema>;
+
+// Authentication validation schemas
+export const loginSchema = z.object({
+  email: z.string().email("Invalid email address"),
+  password: z.string().min(1, "Password is required"),
+});
+
+export const registerSchema = z.object({
+  email: z.string().email("Invalid email address"),
+  password: z.string().min(8, "Password must be at least 8 characters")
+    .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
+    .regex(/[a-z]/, "Password must contain at least one lowercase letter")
+    .regex(/\d/, "Password must contain at least one number"),
+  firstName: z.string().min(1, "First name is required").max(100),
+  lastName: z.string().min(1, "Last name is required").max(100),
+});
+
+export const forgotPasswordSchema = z.object({
+  email: z.string().email("Invalid email address"),
+});
+
+export const verifyResetCodeSchema = z.object({
+  email: z.string().email("Invalid email address"),
+  code: z.string().length(6, "Code must be 6 digits"),
+});
+
+export const resetPasswordSchema = z.object({
+  email: z.string().email("Invalid email address"),
+  code: z.string().length(6, "Code must be 6 digits"),
+  newPassword: z.string().min(8, "Password must be at least 8 characters")
+    .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
+    .regex(/[a-z]/, "Password must contain at least one lowercase letter")
+    .regex(/\d/, "Password must contain at least one number"),
+});
+
+export const verifyEmailSchema = z.object({
+  token: z.string().min(1, "Verification token is required"),
+});
+
+// Auth response schemas
+export const authUserSchema = z.object({
+  id: z.string(),
+  email: z.string(),
+  firstName: z.string().nullable(),
+  lastName: z.string().nullable(),
+  emailVerified: z.boolean(),
+});
+
+// Express request user interface (what gets attached to req.user after auth)
+export type ExpressUser = z.infer<typeof authUserSchema>;
+
+export const loginResponseSchema = z.object({
+  success: z.boolean(),
+  message: z.string(),
+  user: authUserSchema,
+  token: z.string(),
+});
+
+export const registerResponseSchema = z.object({
+  success: z.boolean(),
+  message: z.string(),
+  user: authUserSchema,
+  token: z.string(),
+});
+
+export const TechnicalQuery = z.object({
+  type: z.string(),
+  prompt: z.string(),
+  context: z.object({
+    data: z.any().optional(),
+    schema: z.any().optional(),
+    requirements: z.array(z.string()).optional(),
+    code: z.string().optional(),
+    error: z.string().optional(),
+  }).optional(),
+  parameters: z.object({
+    model: z.string().optional(),
+    technicalLevel: z.string().optional(),
+    temperature: z.number().optional(),
+  }).optional(),
+  metadata: z.object({
+    language: z.string().optional(),
+    framework: z.string().optional(),
+    domain: z.string().optional(),
+  }).optional(),
+});
