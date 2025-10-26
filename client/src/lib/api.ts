@@ -82,7 +82,7 @@ export class APIClient {
       formData.append('selectedColumns', JSON.stringify(options.selectedColumns));
     }
 
-    const endpoint = '/api/upload'; // Unified endpoint for all users
+    const endpoint = '/api/projects/upload'; // Correct endpoint path
     
     // Add authentication headers
     const token = localStorage.getItem('auth_token');
@@ -150,7 +150,7 @@ export class APIClient {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await fetch(`${API_BASE}/api/trial-upload`, {
+    const response = await fetch(`${API_BASE}/api/projects/trial-upload`, {
       method: 'POST',
       headers,
       body: formData,
@@ -739,11 +739,22 @@ export class APIClient {
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || `Login failed: ${response.status}`);
+        let errorMessage = `Login failed: ${response.status}`;
+        try {
+          const error = await response.json();
+          errorMessage = error.error || errorMessage;
+        } catch (parseError) {
+          // If response is not JSON, use the status text or default message
+          errorMessage = response.statusText || errorMessage;
+        }
+        throw new Error(errorMessage);
       }
 
-      return await response.json();
+      try {
+        return await response.json();
+      } catch (parseError) {
+        throw new Error('Invalid response format from server');
+      }
     } catch (error: any) {
       clearTimeout(timeoutId);
       if (error?.name === 'AbortError') {
@@ -769,11 +780,22 @@ export class APIClient {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || `Registration failed: ${response.status}`);
+      let errorMessage = `Registration failed: ${response.status}`;
+      try {
+        const error = await response.json();
+        errorMessage = error.error || errorMessage;
+      } catch (parseError) {
+        // If response is not JSON, use the status text or default message
+        errorMessage = response.statusText || errorMessage;
+      }
+      throw new Error(errorMessage);
     }
 
-    return await response.json();
+    try {
+      return await response.json();
+    } catch (parseError) {
+      throw new Error('Invalid response format from server');
+    }
   }
 
   async logout(): Promise<any> {

@@ -9,7 +9,12 @@ import {
   jsonb,
   index,
   decimal,
+  serial,
+  doublePrecision,
+  check,
+  foreignKey,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 
 // User role and permission types
@@ -19,7 +24,7 @@ export type UserRole = z.infer<typeof UserRoleEnum>;
 export const TechnicalLevelEnum = z.enum(["beginner", "intermediate", "advanced", "expert"]);
 export type TechnicalLevel = z.infer<typeof TechnicalLevelEnum>;
 
-export const JourneyTypeEnum = z.enum(["ai_guided", "template_based", "self_service", "consultation"]);
+export const JourneyTypeEnum = z.enum(["ai_guided", "template_based", "self_service", "consultation", "custom"]);
 export type JourneyType = z.infer<typeof JourneyTypeEnum>;
 
 // User role configuration schema
@@ -245,8 +250,8 @@ export const users = pgTable("users", {
   passwordResetExpires: timestamp("password_reset_expires"),
   
   // Subscription and payment tiers
-  subscriptionTier: varchar("subscription_tier").default("none"), // "none", "trial", "starter", "professional", "enterprise"
-  subscriptionStatus: varchar("subscription_status").default("inactive"), // "active", "inactive", "cancelled", "past_due"
+  subscriptionTier: varchar("subscription_tier").notNull().default("none").$type<"none" | "trial" | "starter" | "professional" | "enterprise">(), // Admin-configured tiers tied to Stripe
+  subscriptionStatus: varchar("subscription_status").default("inactive").$type<"active" | "inactive" | "cancelled" | "past_due" | "expired">(), // Stripe subscription status
   stripeCustomerId: varchar("stripe_customer_id"),
   stripeSubscriptionId: varchar("stripe_subscription_id"),
   subscriptionExpiresAt: timestamp("subscription_expires_at"),
@@ -265,16 +270,50 @@ export const users = pgTable("users", {
   usageResetAt: timestamp("usage_reset_at").defaultNow(),
 
   // User role and journey preferences
-  userRole: varchar("user_role").default("non-tech"), // "non-tech", "business", "technical", "consultation"
+  userRole: varchar("user_role").notNull().default("non-tech"), // "non-tech", "business", "technical", "consultation"
   technicalLevel: varchar("technical_level").default("beginner"), // "beginner", "intermediate", "advanced", "expert"
   industry: varchar("industry"), // User's industry/domain
   preferredJourney: varchar("preferred_journey"), // Last selected journey type
   journeyCompletions: jsonb("journey_completions"), // Track completed journeys
   onboardingCompleted: boolean("onboarding_completed").default(false),
 
+  // Legacy columns that exist in database
+  isAdmin: boolean("is_admin").default(false),
+  role: varchar("role"),
+
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+}, (table) => ({
+  // CHECK constraints to enforce admin-configured subscription tiers
+  subscriptionTierCheck: check("subscription_tier_check", 
+    sql`${table.subscriptionTier} IN ('none', 'trial', 'starter', 'professional', 'enterprise')`
+  ),
+  subscriptionStatusCheck: check("subscription_status_check", 
+    sql`${table.subscriptionStatus} IN ('active', 'inactive', 'cancelled', 'past_due', 'expired')`
+  ),
+  userRoleCheck: check("user_role_check", 
+    sql`${table.userRole} IN ('non-tech', 'business', 'technical', 'consultation')`
+  ),
+  technicalLevelCheck: check("technical_level_check", 
+    sql`${table.technicalLevel} IN ('beginner', 'intermediate', 'advanced', 'expert')`
+  ),
+  preferredJourneyCheck: check("preferred_journey_check", 
+    sql`${table.preferredJourney} IS NULL OR ${table.preferredJourney} IN ('ai_guided', 'template_based', 'self_service', 'consultation')`
+  ),
+  // Ensure non-negative usage values
+  monthlyUploadsCheck: check("monthly_uploads_check", 
+    sql`${table.monthlyUploads} >= 0`
+  ),
+  monthlyDataVolumeCheck: check("monthly_data_volume_check", 
+    sql`${table.monthlyDataVolume} >= 0`
+  ),
+  monthlyAIInsightsCheck: check("monthly_ai_insights_check", 
+    sql`${table.monthlyAIInsights} >= 0`
+  ),
+  // Indexes for performance
+  userRoleStatusIdx: index("user_role_status_idx").on(table.userRole, table.subscriptionStatus),
+  subscriptionTierStatusIdx: index("subscription_tier_status_idx").on(table.subscriptionTier, table.subscriptionStatus),
+}));
 
 // Password reset tokens table
 export const passwordResetTokens = pgTable("password_reset_tokens", {
@@ -347,7 +386,19 @@ export const datasets = pgTable("datasets", {
   retentionDays: integer("retention_days"), // Data retention period in days (nullable)
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+}, (table) => ({
+  // Foreign key constraints
+  ownerIdFk: foreignKey({
+    columns: [table.ownerId],
+    foreignColumns: [users.id],
+    name: "datasets_owner_id_fk"
+  }).onDelete("cascade"),
+  // Indexes for performance
+  ownerIdIdx: index("datasets_owner_id_idx").on(table.ownerId),
+  statusIdx: index("datasets_status_idx").on(table.status),
+  createdAtIdx: index("datasets_created_at_idx").on(table.createdAt),
+  checksumIdx: index("datasets_checksum_idx").on(table.checksum), // For duplicate detection
+}));
 
 // Many-to-many relationship between projects and datasets
 export const projectDatasets = pgTable("project_datasets", {
@@ -358,7 +409,20 @@ export const projectDatasets = pgTable("project_datasets", {
   alias: varchar("alias"), // Custom name for this dataset in the project
   addedAt: timestamp("added_at").defaultNow(),
 }, (table) => ({
+  // Foreign key constraints with cascade
+  projectIdFk: foreignKey({
+    columns: [table.projectId],
+    foreignColumns: [projects.id],
+    name: "project_datasets_project_id_fk"
+  }).onDelete("cascade"),
+  datasetIdFk: foreignKey({
+    columns: [table.datasetId],
+    foreignColumns: [datasets.id],
+    name: "project_datasets_dataset_id_fk"
+  }).onDelete("cascade"),
+  // Indexes
   projectDatasetIdx: index("project_dataset_idx").on(table.projectId, table.datasetId),
+  datasetProjectIdx: index("dataset_project_idx").on(table.datasetId, table.projectId),
 }));
 
 // Project artifacts - track entire workflow from ingestion to results
@@ -377,22 +441,95 @@ export const projectArtifacts = pgTable("project_artifacts", {
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => ({
+  // Foreign key constraints with cascade
+  projectIdFk: foreignKey({
+    columns: [table.projectId],
+    foreignColumns: [projects.id],
+    name: "project_artifacts_project_id_fk"
+  }).onDelete("cascade"),
+  createdByFk: foreignKey({
+    columns: [table.createdBy],
+    foreignColumns: [users.id],
+    name: "project_artifacts_created_by_fk"
+  }).onDelete("set null"),
+  // Indexes for performance
   projectArtifactIdx: index("project_artifact_idx").on(table.projectId),
   parentArtifactIdx: index("parent_artifact_idx").on(table.parentArtifactId),
+  typeStatusIdx: index("project_artifacts_type_status_idx").on(table.type, table.status),
+  createdAtIdx: index("project_artifacts_created_at_idx").on(table.createdAt),
 }));
 
 // Updated projects table - now a lightweight container for analysis workflows
 export const projects = pgTable("projects", {
   id: varchar("id").primaryKey().notNull(),
-  ownerId: varchar("owner_id").notNull(), // Reference to users.id
+  userId: varchar("user_id").notNull(), // Reference to users.id (consistent with analysis service)
+  ownerId: varchar("owner_id").notNull(), // Deprecated - use userId instead
   name: varchar("name").notNull(),
   description: text("description"),
-  status: varchar("status").default("active"), // "active", "completed", "archived"
-  journeyType: varchar("journey_type"), // "ai_guided", "template_based", "self_service", "consultation"
+    status: varchar("status").notNull().default("draft"), // "draft", "uploading", "processing", "pii_review", "ready", "analyzing", "checkpoint", "generating", "completed", "error", "cancelled"
+  journeyType: varchar("journey_type").notNull(), // "ai_guided", "template_based", "self_service", "consultation"
   lastArtifactId: varchar("last_artifact_id"), // Quick reference to latest artifact
+  analysisResults: jsonb("analysis_results"), // Store analysis results from analysis-execution service
+  consultationProposalId: varchar("consultation_proposal_id"), // Legacy column that exists in database
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+}, (table) => ({
+    // CHECK constraints for projects table
+    projectStatusCheck: check("project_status_check",
+      sql`${table.status} IN ('draft', 'uploading', 'processing', 'pii_review', 'ready', 'analyzing', 'checkpoint', 'generating', 'completed', 'error', 'cancelled')`
+    ),
+  projectJourneyTypeCheck: check("project_journey_type_check",
+    sql`${table.journeyType} IN ('ai_guided', 'template_based', 'self_service', 'consultation', 'custom')`
+  ),
+  // Foreign key constraints
+  userIdFk: foreignKey({
+    columns: [table.userId],
+    foreignColumns: [users.id],
+    name: "projects_owner_id_fk"
+  }).onDelete("cascade"),
+  // Indexes
+  userIdIdx: index("projects_user_id_idx").on(table.userId),
+  analysisResultsIdx: index("projects_analysis_results_idx").on(table.analysisResults),
+  consultationProposalIdx: index("projects_consultation_proposal_idx").on(table.consultationProposalId),
+  projectOwnerStatusIdx: index("project_owner_status_idx").on(table.userId, table.status),
+}));
+
+// Project sessions - server-side state management for multi-step workflows
+// Prevents client-side tampering and enables cross-device resume
+export const projectSessions = pgTable("project_sessions", {
+  id: varchar("id").primaryKey().notNull(),
+  userId: varchar("user_id").notNull(), // User who owns this session
+  projectId: varchar("project_id"), // Optional: linked project after creation
+  journeyType: varchar("journey_type").notNull(), // "non-tech", "business", "technical", "consultation"
+
+  // Session state data (server-authoritative)
+  currentStep: varchar("current_step").default("prepare"), // "prepare", "data", "execute", "pricing", "results"
+
+  // Step-specific data (replaces localStorage)
+  prepareData: jsonb("prepare_data"), // Analysis goals, business questions, selected templates
+  dataUploadData: jsonb("data_upload_data"), // File metadata, schema info
+  executeData: jsonb("execute_data"), // Selected analyses, execution status, results
+  pricingData: jsonb("pricing_data"), // Pricing calculations, payment intent
+  resultsData: jsonb("results_data"), // Final artifacts, download links
+
+  // Integrity and security
+  dataHash: varchar("data_hash"), // SHA-256 hash of critical data to detect tampering
+  serverValidated: boolean("server_validated").default(false), // Server has validated execution results
+
+  // Session metadata
+  ipAddress: varchar("ip_address"), // Track session origin
+  userAgent: varchar("user_agent"), // Browser fingerprint
+  lastActivity: timestamp("last_activity").defaultNow(), // For session expiry
+  expiresAt: timestamp("expires_at"), // Auto-expire old sessions
+
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  userIdIdx: index("project_sessions_user_id_idx").on(table.userId),
+  projectIdIdx: index("project_sessions_project_id_idx").on(table.projectId),
+  journeyTypeIdx: index("project_sessions_journey_type_idx").on(table.journeyType),
+  expiresAtIdx: index("project_sessions_expires_at_idx").on(table.expiresAt),
+}));
 
 // Enterprise inquiries table
 export const enterpriseInquiries = pgTable("enterprise_inquiries", {
@@ -405,6 +542,84 @@ export const enterpriseInquiries = pgTable("enterprise_inquiries", {
   submittedAt: timestamp("submitted_at").defaultNow(),
   status: varchar("status").default("pending"),
 });
+
+// Consultation requests - for expert consultation journey workflow
+export const consultationRequests = pgTable("consultation_requests", {
+  id: varchar("id").primaryKey().notNull(),
+  userId: varchar("user_id").notNull(), // Customer who requested consultation
+
+  // Request details
+  name: varchar("name").notNull(),
+  email: varchar("email").notNull(),
+  company: varchar("company"),
+  challenge: text("challenge").notNull(), // Description of data challenge
+  analysisGoals: text("analysis_goals"), // What they want to achieve
+  businessQuestions: text("business_questions"), // Specific questions to answer
+
+  // Consultation configuration
+  consultationType: varchar("consultation_type").default("standard"), // standard, strategic, technical, implementation
+  expertLevel: varchar("expert_level").default("senior"), // senior, director, principal
+  duration: integer("duration").default(1), // Hours
+
+  // Quote and approval workflow
+  status: varchar("status").notNull().default("pending_quote"), // pending_quote, awaiting_approval, approved, rejected, ready_for_admin, in_progress, completed, cancelled
+  quoteAmount: integer("quote_amount"), // Amount in cents
+  quoteDetails: jsonb("quote_details"), // Detailed pricing breakdown
+  quotedBy: varchar("quoted_by"), // Admin who created quote
+  quotedAt: timestamp("quoted_at"),
+  approvedAt: timestamp("approved_at"),
+  rejectedAt: timestamp("rejected_at"),
+  rejectionReason: text("rejection_reason"),
+
+  // Payment tracking
+  paymentIntentId: varchar("payment_intent_id"),
+  paymentStatus: varchar("payment_status").default("pending"), // pending, paid, failed
+  paidAt: timestamp("paid_at"),
+
+  // Project creation after approval
+  projectId: varchar("project_id"), // Created after user approves and uploads data
+  dataUploadedAt: timestamp("data_uploaded_at"),
+
+  // Admin assignment
+  assignedAdminId: varchar("assigned_admin_id"), // Admin handling the consultation
+  assignedAt: timestamp("assigned_at"),
+
+  // Consultation session
+  scheduledAt: timestamp("scheduled_at"),
+  completedAt: timestamp("completed_at"),
+  sessionNotes: text("session_notes"),
+  deliverables: jsonb("deliverables"), // Links to reports, dashboards, etc.
+
+  // Metadata
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  userIdIdx: index("consultation_requests_user_id_idx").on(table.userId),
+  statusIdx: index("consultation_requests_status_idx").on(table.status),
+  assignedAdminIdx: index("consultation_requests_assigned_admin_idx").on(table.assignedAdminId),
+  projectIdIdx: index("consultation_requests_project_id_idx").on(table.projectId),
+}));
+
+// Consultation pricing configuration table (admin-managed)
+export const consultationPricing = pgTable("consultation_pricing", {
+  id: varchar("id").primaryKey().notNull(),
+  consultationType: varchar("consultation_type").notNull().unique(), // "standard", "premium", "enterprise", etc.
+  displayName: varchar("display_name").notNull(), // User-friendly name
+  description: text("description"), // Description of this consultation type
+  basePrice: integer("base_price").notNull(), // Price in cents
+  expertLevel: varchar("expert_level").default("senior"), // "junior", "senior", "principal"
+  durationHours: integer("duration_hours").default(1), // Duration in hours
+  features: jsonb("features"), // Array of feature strings
+  isActive: boolean("is_active").default(true), // Can be temporarily disabled
+  sortOrder: integer("sort_order").default(0), // Display order
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+  createdBy: varchar("created_by"), // Admin user ID who created this
+  updatedBy: varchar("updated_by"), // Admin user ID who last updated this
+}, (table) => ({
+  consultationTypeIdx: index("consultation_pricing_type_idx").on(table.consultationType),
+  activeIdx: index("consultation_pricing_active_idx").on(table.isActive),
+}));
 
 // Guided analysis orders table
 export const guidedAnalysisOrders = pgTable("guided_analysis_orders", {
@@ -1500,6 +1715,33 @@ export const eligibilityChecks = pgTable(
   })
 );
 
+// ML/LLM Usage Log Table
+export const mlUsageLog = pgTable(
+  "ml_llm_usage_log",
+  {
+    id: serial("id").primaryKey(),
+    userId: varchar("user_id").notNull().references(() => users.id),
+    projectId: varchar("project_id").references(() => projects.id),
+    toolName: text("tool_name").notNull(),
+    modelType: text("model_type"), // 'traditional_ml' | 'llm'
+    libraryUsed: text("library_used"),
+    datasetSize: integer("dataset_size"),
+    executionTimeMs: integer("execution_time_ms"),
+    billingUnits: doublePrecision("billing_units").notNull(),
+    success: boolean("success").notNull(),
+    error: text("error"),
+    metadata: jsonb("metadata"),
+    timestamp: timestamp("timestamp").notNull().defaultNow()
+  },
+  (table) => ({
+    userIdIdx: index("ml_llm_usage_log_user_id_idx").on(table.userId),
+    projectIdIdx: index("ml_llm_usage_log_project_id_idx").on(table.projectId),
+    timestampIdx: index("ml_llm_usage_log_timestamp_idx").on(table.timestamp),
+    toolNameIdx: index("ml_llm_usage_log_tool_name_idx").on(table.toolName),
+    userTimestampIdx: index("ml_llm_usage_log_user_timestamp_idx").on(table.userId, table.timestamp),
+  })
+);
+
 // Insert Schemas for Journey Tracking
 export const insertJourneySchema = createInsertSchema(journeys).omit({
   id: true,
@@ -1521,6 +1763,11 @@ export const insertCostEstimateSchema = createInsertSchema(costEstimates).omit({
 export const insertEligibilityCheckSchema = createInsertSchema(eligibilityChecks).omit({
   id: true,
   createdAt: true,
+});
+
+export const insertMLUsageLogSchema = createInsertSchema(mlUsageLog).omit({
+  id: true,
+  timestamp: true,
 });
 
 // Pricing Request/Response Schemas

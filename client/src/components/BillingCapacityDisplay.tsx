@@ -117,55 +117,80 @@ export default function BillingCapacityDisplay({
     }
   };
 
+  // Safely access breakdown properties with fallbacks
+  const capacityUsed = breakdown?.capacityUsed || {
+    dataVolumeMB: 0,
+    aiInsights: 0,
+    analysisComponents: 0,
+    visualizations: 0,
+    fileUploads: 0
+  };
+
+  const capacityRemaining = breakdown?.capacityRemaining || {
+    dataVolumeMB: 0,
+    aiInsights: 0,
+    analysisComponents: 0,
+    visualizations: 0,
+    fileUploads: 0
+  };
+
+  const utilizationPercentage = breakdown?.utilizationPercentage || {
+    dataVolume: 0,
+    aiInsights: 0,
+    analysisComponents: 0,
+    visualizations: 0,
+    fileUploads: 0
+  };
+
   const capacityItems = [
     {
       key: 'dataVolume',
       label: 'Data Volume',
       icon: <Database className="h-4 w-4" />,
-      used: breakdown.capacityUsed.dataVolumeMB,
-      remaining: breakdown.capacityRemaining.dataVolumeMB,
-      limit: breakdown.capacityUsed.dataVolumeMB + breakdown.capacityRemaining.dataVolumeMB,
-      percentage: breakdown.utilizationPercentage.dataVolume,
+      used: capacityUsed.dataVolumeMB,
+      remaining: capacityRemaining.dataVolumeMB,
+      limit: capacityUsed.dataVolumeMB + capacityRemaining.dataVolumeMB,
+      percentage: utilizationPercentage.dataVolume,
       format: formatBytes,
     },
     {
       key: 'aiInsights',
       label: 'AI Insights',
       icon: <Brain className="h-4 w-4" />,
-      used: breakdown.capacityUsed.aiInsights,
-      remaining: breakdown.capacityRemaining.aiInsights,
-      limit: breakdown.capacityUsed.aiInsights + breakdown.capacityRemaining.aiInsights,
-      percentage: breakdown.utilizationPercentage.aiInsights,
+      used: capacityUsed.aiInsights,
+      remaining: capacityRemaining.aiInsights,
+      limit: capacityUsed.aiInsights + capacityRemaining.aiInsights,
+      percentage: utilizationPercentage.aiInsights,
       format: (value: number) => value === -1 ? 'Unlimited' : value.toString(),
     },
     {
       key: 'analysisComponents',
       label: 'Analysis Components',
       icon: <BarChart3 className="h-4 w-4" />,
-      used: breakdown.capacityUsed.analysisComponents,
-      remaining: breakdown.capacityRemaining.analysisComponents,
-      limit: breakdown.capacityUsed.analysisComponents + breakdown.capacityRemaining.analysisComponents,
-      percentage: breakdown.utilizationPercentage.analysisComponents,
+      used: capacityUsed.analysisComponents,
+      remaining: capacityRemaining.analysisComponents,
+      limit: capacityUsed.analysisComponents + capacityRemaining.analysisComponents,
+      percentage: utilizationPercentage.analysisComponents,
       format: (value: number) => value === -1 ? 'Unlimited' : value.toString(),
     },
     {
       key: 'visualizations',
       label: 'Visualizations',
       icon: <Image className="h-4 w-4" />,
-      used: breakdown.capacityUsed.visualizations,
-      remaining: breakdown.capacityRemaining.visualizations,
-      limit: breakdown.capacityUsed.visualizations + breakdown.capacityRemaining.visualizations,
-      percentage: breakdown.utilizationPercentage.visualizations,
+      used: capacityUsed.visualizations,
+      remaining: capacityRemaining.visualizations,
+      limit: capacityUsed.visualizations + capacityRemaining.visualizations,
+      percentage: utilizationPercentage.visualizations,
       format: (value: number) => value === -1 ? 'Unlimited' : value.toString(),
     },
     {
       key: 'fileUploads',
       label: 'File Uploads',
       icon: <Upload className="h-4 w-4" />,
-      used: breakdown.capacityUsed.fileUploads,
-      remaining: breakdown.capacityRemaining.fileUploads,
-      limit: breakdown.capacityUsed.fileUploads + breakdown.capacityRemaining.fileUploads,
-      percentage: breakdown.utilizationPercentage.fileUploads,
+      used: capacityUsed.fileUploads,
+      remaining: capacityRemaining.fileUploads,
+      limit: capacityUsed.fileUploads + capacityRemaining.fileUploads,
+      percentage: utilizationPercentage.fileUploads,
       format: (value: number) => value === -1 ? 'Unlimited' : value.toString(),
     },
   ];
@@ -218,7 +243,9 @@ export default function BillingCapacityDisplay({
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="text-center">
               <div className="text-2xl font-bold text-blue-600">
-                {breakdown.journeyType.charAt(0).toUpperCase() + breakdown.journeyType.slice(1)}
+                {breakdown.journeyType 
+                  ? breakdown.journeyType.charAt(0).toUpperCase() + breakdown.journeyType.slice(1)
+                  : 'Standard'}
               </div>
               <div className="text-sm text-gray-500">Journey Type</div>
             </div>
@@ -408,5 +435,18 @@ export default function BillingCapacityDisplay({
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 

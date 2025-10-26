@@ -3,6 +3,7 @@ import { IncomingMessage } from 'http';
 import { URL } from 'url';
 import jwt from 'jsonwebtoken';
 import { EventEmitter } from 'events';
+import { WebSocketLifecycleManager, ConnectionHealth } from './services/websocket-lifecycle';
 
 // Real-time event types
 export interface RealtimeEvent {
@@ -40,9 +41,29 @@ export class RealtimeServer extends EventEmitter {
   private userClients: Map<string, Set<string>> = new Map();
   private pingInterval: NodeJS.Timeout | null = null;
   private cleanupInterval: NodeJS.Timeout | null = null;
+  private lifecycleManager: WebSocketLifecycleManager;
 
   constructor(private wss: WebSocketServer) {
     super();
+    
+    // Initialize enhanced lifecycle manager
+    this.lifecycleManager = new WebSocketLifecycleManager(
+      {
+        maxAttempts: 3,
+        baseDelay: 2000,
+        maxDelay: 30000,
+        backoffMultiplier: 2,
+        jitterFactor: 0.3
+      },
+      {
+        pingInterval: 25000,      // 25 seconds (more frequent than before)
+        pongTimeout: 8000,        // 8 seconds timeout
+        maxFailures: 2,           // Reduced tolerance for faster detection
+        degradedThreshold: 800,   // 800ms for degraded status
+        criticalThreshold: 3000   // 3 seconds for critical status
+      }
+    );
+    
     this.setupWebSocketServer();
     this.startHeartbeat();
     this.startCleanup();
@@ -94,6 +115,9 @@ export class RealtimeServer extends EventEmitter {
       // Setup client event handlers
       this.setupClientHandlers(client);
 
+      // Initialize lifecycle management for this client
+      this.lifecycleManager.initializeConnection(clientId);
+
       // Send connection confirmation
       this.sendToClient(clientId, {
         type: 'connection_established',
@@ -104,7 +128,7 @@ export class RealtimeServer extends EventEmitter {
         data: {
           clientId,
           serverId: process.env.SERVER_ID || 'unknown',
-          capabilities: ['streaming', 'scraping', 'metrics', 'notifications']
+          capabilities: ['streaming', 'scraping', 'metrics', 'notifications', 'enhanced_lifecycle']
         }
       });
 
@@ -192,6 +216,8 @@ export class RealtimeServer extends EventEmitter {
 
     websocket.on('pong', () => {
       client.lastActivity = new Date();
+      // Notify lifecycle manager about pong response
+      this.lifecycleManager.handlePongReceived(clientId);
     });
   }
 
@@ -261,6 +287,9 @@ export class RealtimeServer extends EventEmitter {
   private handleClientDisconnect(clientId: string, code: number, reason: string): void {
     const client = this.clients.get(clientId);
     if (!client) return;
+
+    // Clean up lifecycle management for this client
+    this.lifecycleManager.cleanupConnection(clientId);
 
     // Remove from clients map
     this.clients.delete(clientId);
@@ -449,9 +478,80 @@ export class RealtimeServer extends EventEmitter {
       .filter(client => client !== undefined) as ClientConnection[];
   }
 
+  // Enhanced monitoring methods using lifecycle manager
+  
+  /**
+   * Get connection health for a specific client
+   */
+  public getConnectionHealth(clientId: string): ConnectionHealth | null {
+    return this.lifecycleManager.getConnectionHealth(clientId);
+  }
+
+  /**
+   * Get health status for all connections
+   */
+  public getAllConnectionHealth(): Map<string, ConnectionHealth> {
+    return this.lifecycleManager.getAllConnectionHealth();
+  }
+
+  /**
+   * Get lifecycle metrics
+   */
+  public getLifecycleMetrics() {
+    return this.lifecycleManager.getMetrics();
+  }
+
+  /**
+   * Get comprehensive health summary
+   */
+  public getHealthSummary() {
+    return this.lifecycleManager.getHealthSummary();
+  }
+
+  /**
+   * Get enhanced statistics including lifecycle data
+   */
+  public getEnhancedStats(): {
+    basic: any;
+    lifecycle: any;
+    health: any;
+  } {
+    const basicStats = this.getStats();
+    const lifecycleMetrics = this.getLifecycleMetrics();
+    const healthSummary = this.getHealthSummary();
+
+    return {
+      basic: basicStats,
+      lifecycle: lifecycleMetrics,
+      health: healthSummary
+    };
+  }
+
+  /**
+   * Force disconnect a client (for admin/testing purposes)
+   */
+  public forceDisconnect(clientId: string, reason: string = 'Admin requested'): boolean {
+    const client = this.clients.get(clientId);
+    if (!client) return false;
+
+    this.lifecycleManager.forceDisconnect(clientId, reason);
+    this.handleClientDisconnect(clientId, 1008, reason);
+    return true;
+  }
+
+  /**
+   * Reset lifecycle metrics (for testing/maintenance)
+   */
+  public resetLifecycleMetrics(): void {
+    this.lifecycleManager.resetMetrics();
+  }
+
   // Graceful shutdown
   public async shutdown(): Promise<void> {
     console.log('Shutting down real-time server...');
+
+    // Shutdown lifecycle manager
+    this.lifecycleManager.shutdown();
 
     // Clear intervals
     if (this.pingInterval) {

@@ -9,6 +9,11 @@ import { TechnicalAIAgent } from './technical-ai-agent';
 import { BusinessAgent } from './business-agent';
 import { ProjectManagerAgent } from './project-manager-agent';
 
+// Singleton state to prevent duplicate initialization
+let agentsInitialized = false;
+let initializationPromise: Promise<any> | null = null;
+const registeredAgentIds = new Set<string>();
+
 export class AgentInitializationService {
   private registry: AgentRegistry;
   private router: CommunicationRouter;
@@ -21,27 +26,118 @@ export class AgentInitializationService {
 
   /**
    * Initialize all agents and register them with the dynamic registry
+   * Implements singleton pattern to prevent duplicate initialization
    */
-  async initializeAllAgents(): Promise<void> {
+  async initializeAllAgents(): Promise<{
+    successCount: number;
+    registered: Array<{ name: string; capabilities: string[] }>;
+    failed: Array<{ name: string; error: string }>;
+  }> {
+    // Check if already initialized
+    if (agentsInitialized) {
+      console.log('⏭️  Agents already initialized, skipping...');
+      return {
+        successCount: registeredAgentIds.size,
+        registered: [],
+        failed: []
+      };
+    }
+
+    // If initialization in progress, wait for it
+    if (initializationPromise) {
+      console.log('⏳ Agent initialization already in progress, waiting...');
+      return initializationPromise;
+    }
+
+    // Start initialization
     console.log('🚀 Initializing ChimariData Agent Ecosystem...');
+    initializationPromise = this.doInitialization();
+
+    try {
+      const result = await initializationPromise;
+      agentsInitialized = true;
+      return result;
+    } finally {
+      initializationPromise = null;
+    }
+  }
+
+  /**
+   * Internal method that performs the actual initialization
+   */
+  private async doInitialization(): Promise<{
+    successCount: number;
+    registered: Array<{ name: string; capabilities: string[] }>;
+    failed: Array<{ name: string; error: string }>;
+  }> {
+
+    const registered: Array<{ name: string; capabilities: string[] }> = [];
+    const failed: Array<{ name: string; error: string }> = [];
 
     try {
       // Initialize new dynamic agents
-      await this.initializeDataEngineerAgent();
-      await this.initializeCustomerSupportAgent();
+      try {
+        if (!registeredAgentIds.has('data_engineer')) {
+          await this.initializeDataEngineerAgent();
+          registeredAgentIds.add('data_engineer');
+          registered.push({ name: 'Data Engineer', capabilities: ['ETL', 'Data Quality', 'Pipeline Engineering'] });
+        }
+      } catch (error) {
+        failed.push({ name: 'Data Engineer', error: String(error) });
+      }
+
+      try {
+        if (!registeredAgentIds.has('customer_support')) {
+          await this.initializeCustomerSupportAgent();
+          registeredAgentIds.add('customer_support');
+          registered.push({ name: 'Customer Support', capabilities: ['Customer Service', 'Troubleshooting', 'Escalation Management'] });
+        }
+      } catch (error) {
+        failed.push({ name: 'Customer Support', error: String(error) });
+      }
 
       // Initialize existing agents (adapting them to the new system)
-      await this.initializeExistingAgents();
+      try {
+        await this.initializeExistingAgents();
+        if (!registeredAgentIds.has('technical_agent')) {
+          registeredAgentIds.add('technical_agent');
+          registered.push({ name: 'Technical AI Agent', capabilities: ['Code Generation', 'Technical Analysis'] });
+        }
+        if (!registeredAgentIds.has('business_agent')) {
+          registeredAgentIds.add('business_agent');
+          registered.push({ name: 'Business Agent', capabilities: ['Business Intelligence', 'Reporting'] });
+        }
+        if (!registeredAgentIds.has('project_manager')) {
+          registeredAgentIds.add('project_manager');
+          registered.push({ name: 'Project Manager', capabilities: ['Orchestration', 'Task Management'] });
+        }
+      } catch (error) {
+        failed.push({ name: 'Existing Agents', error: String(error) });
+      }
 
       // Set up inter-agent communication routes
-      await this.setupCommunicationRoutes();
+      try {
+        await this.setupCommunicationRoutes();
+      } catch (error) {
+        console.warn('⚠️  Failed to setup communication routes:', error);
+      }
 
-      console.log('✅ Agent ecosystem initialization completed successfully');
-      console.log(`📊 Total registered agents: ${this.registry.getRegisteredAgents().length}`);
+      console.log('✅ Agent ecosystem initialization completed');
+      console.log(`📊 Total registered agents: ${this.registry.getAgents().length}`);
+      
+      return {
+        successCount: registered.length,
+        registered,
+        failed
+      };
       
     } catch (error) {
       console.error('❌ Agent initialization failed:', error);
-      throw error;
+      return {
+        successCount: registered.length,
+        registered,
+        failed: [...failed, { name: 'System', error: String(error) }]
+      };
     }
   }
 
@@ -490,7 +586,7 @@ export class AgentInitializationService {
    * Get system status and metrics
    */
   async getSystemStatus(): Promise<any> {
-    const registeredAgents = this.registry.getRegisteredAgents();
+    const registeredAgents = this.registry.getAgents();
     const systemMetrics = await this.registry.getSystemMetrics();
     
     const agentStatuses = await Promise.all(
@@ -619,3 +715,12 @@ export class AgentInitializationService {
 
 // Export singleton instance
 export const agentSystem = new AgentInitializationService();
+
+// Export convenience function for initialization
+export async function initializeAgents(): Promise<{
+  successCount: number;
+  registered: Array<{ name: string; capabilities: string[] }>;
+  failed: Array<{ name: string; error: string }>;
+}> {
+  return await agentSystem.initializeAllAgents();
+}

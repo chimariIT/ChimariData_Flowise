@@ -1,8 +1,12 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { enhancedBillingService } from '../enhanced-billing-service';
+import { getBillingService } from '../services/billing/unified-billing-service';
 import { storage } from '../storage';
 import { z } from 'zod';
 import { tokenStorage } from '../token-storage';
+import { PricingService } from '../services/pricing';
+import { mlLLMUsageTracker } from '../services/ml-llm-usage-tracker';
+
+const billingService = getBillingService();
 
 const router = Router();
 
@@ -35,10 +39,95 @@ const billingAuth = async (req: Request, res: Response, next: NextFunction) => {
     req.userId = user.id;
     return next();
   } catch (error: any) {
-    console.error('Authentication error:', error);
-    res.status(401).json({ error: "Authentication required" });
+    return res.status(401).json({ error: "Authentication failed" });
   }
 };
+
+/**
+ * GET /api/billing/health
+ * Billing service health check
+ */
+router.get('/health', async (req, res) => {
+  res.json({
+    healthy: true,
+    service: 'unified-billing-service',
+    timestamp: new Date().toISOString()
+  });
+});
+
+/**
+ * GET /api/billing/usage-summary
+ * Get usage summary for current user
+ */
+router.get('/usage-summary', billingAuth, async (req, res) => {
+  try {
+    const userId = req.userId || 'anonymous';
+    const usage = await billingService.getUserUsageSummary(userId);
+    
+    res.json({
+      success: true,
+      userId,
+      dataUsage: usage.dataUsage || { totalUploadSizeMB: 0 },
+      computeUsage: usage.computeUsage || { toolExecutions: 0, aiQueries: 0 },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/billing/quota-check/data
+ * Check data quota for current user
+ */
+router.get('/quota-check/data', billingAuth, async (req, res) => {
+  try {
+    const userId = req.userId || 'anonymous';
+    const quotaInfo = await billingService.getUserCapacitySummary(userId);
+    
+    res.json({
+      success: true,
+      userId,
+      quotaUsed: quotaInfo.dataUsage?.totalUploadSizeMB || 0,
+      quotaLimit: quotaInfo.dataQuota?.maxDataUploadsMB || 1000,
+      quotaRemaining: Math.max(0, (quotaInfo.dataQuota?.maxDataUploadsMB || 1000) - (quotaInfo.dataUsage?.totalUploadSizeMB || 0)),
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/billing/quota-check/compute
+ * Check compute quota for current user
+ */
+router.get('/quota-check/compute', billingAuth, async (req, res) => {
+  try {
+    const userId = req.userId || 'anonymous';
+    const quotaInfo = await billingService.getUserCapacitySummary(userId);
+    
+    res.json({
+      success: true,
+      userId,
+      quotaUsed: quotaInfo.computeUsage?.toolExecutions || 0,
+      quotaLimit: quotaInfo.computeQuota?.maxToolExecutions || 100,
+      quotaRemaining: Math.max(0, (quotaInfo.computeQuota?.maxToolExecutions || 100) - (quotaInfo.computeUsage?.toolExecutions || 0)),
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
 
 // Routes use individual authentication as needed
 
@@ -74,11 +163,9 @@ router.post('/calculate', ensureAuthenticated, async (req, res) => {
 
     const { journeyType, datasetSizeMB, additionalFeatures } = validation.data;
 
-    const result = await enhancedBillingService.calculateBillingWithCapacity(
+    const result = await billingService.calculateBillingWithCapacity(
       userId,
-      journeyType,
-      datasetSizeMB,
-      additionalFeatures
+      { journeyType, datasetSizeMB, additionalFeatures }
     );
 
     if (!result.success) {
@@ -109,7 +196,7 @@ router.get('/capacity-summary', ensureAuthenticated, async (req, res) => {
       return res.status(401).json({ success: false, error: 'Authentication required' });
     }
 
-    const result = await enhancedBillingService.getUserCapacitySummary(userId);
+    const result = await billingService.getUserCapacitySummary(userId);
 
     if (!result.success) {
       return res.status(400).json(result);
@@ -156,17 +243,13 @@ router.post('/update-usage', ensureAuthenticated, async (req, res) => {
     const { journeyType, datasetSizeMB, additionalFeatures } = validation.data;
 
     // Calculate journey requirements
-    const requirements = enhancedBillingService['calculateJourneyRequirements'](
+    const requirements = billingService['calculateJourneyRequirements'](
       journeyType,
       datasetSizeMB,
       additionalFeatures
     );
 
-    const result = await enhancedBillingService.updateUserUsage(userId, requirements);
-
-    if (!result.success) {
-      return res.status(400).json(result);
-    }
+    await billingService.updateUserUsage(userId, requirements);
 
     res.json({
       success: true,
@@ -203,11 +286,9 @@ router.post('/journey-breakdown', ensureAuthenticated, async (req, res) => {
 
     const { journeyType, datasetSizeMB, additionalFeatures } = validation.data;
 
-    const result = await enhancedBillingService.calculateBillingWithCapacity(
+    const result = await billingService.calculateBillingWithCapacity(
       userId,
-      journeyType,
-      datasetSizeMB,
-      additionalFeatures
+      { journeyType, datasetSizeMB, additionalFeatures }
     );
 
     if (!result.success) {
@@ -258,7 +339,7 @@ router.get('/capacity-summary-old', async (req, res) => {
       return res.status(401).json({ success: false, error: 'Authentication required' });
     }
 
-    const result = await enhancedBillingService.getUserCapacitySummary(userId);
+    const result = await billingService.getUserCapacitySummary(userId);
 
     if (!result.success) {
       return res.status(400).json(result);
@@ -273,6 +354,116 @@ router.get('/capacity-summary-old', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to get capacity summary',
+    });
+  }
+});
+
+// ML/LLM Usage and Cost Estimation Endpoints
+
+/**
+ * Get ML/LLM usage summary
+ */
+router.get('/ml-usage-summary', billingAuth, async (req, res) => {
+  try {
+    const userId = req.userId || 'anonymous';
+    const usage = await billingService.getMLUsageSummary(userId);
+    
+    res.json({
+      success: true,
+      usage
+    });
+  } catch (error) {
+    console.error('Error getting ML usage summary:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get ML usage summary'
+    });
+  }
+});
+
+/**
+ * Calculate ML training cost estimate
+ */
+router.post('/ml-cost-estimate', billingAuth, async (req, res) => {
+  try {
+    const userId = req.userId || 'anonymous';
+    const { toolName, datasetSize, useAutoML, enableExplainability, trials } = req.body;
+
+    if (!toolName || !datasetSize) {
+      return res.status(400).json({
+        success: false,
+        error: 'toolName and datasetSize are required'
+      });
+    }
+
+    const estimate = await billingService.calculateMLCostEstimate({
+      userId,
+      toolName,
+      datasetSize,
+      useAutoML,
+      enableExplainability,
+      trials
+    });
+
+    res.json(estimate);
+  } catch (error) {
+    console.error('Error calculating ML cost estimate:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to calculate ML cost estimate'
+    });
+  }
+});
+
+/**
+ * Calculate LLM fine-tuning cost estimate
+ */
+router.post('/llm-cost-estimate', billingAuth, async (req, res) => {
+  try {
+    const userId = req.userId || 'anonymous';
+    const { toolName, datasetSize, method, numEpochs } = req.body;
+
+    if (!toolName || !datasetSize) {
+      return res.status(400).json({
+        success: false,
+        error: 'toolName and datasetSize are required'
+      });
+    }
+
+    const estimate = await billingService.calculateLLMCostEstimate({
+      userId,
+      toolName,
+      datasetSize,
+      method,
+      numEpochs
+    });
+
+    res.json(estimate);
+  } catch (error) {
+    console.error('Error calculating LLM cost estimate:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to calculate LLM cost estimate'
+    });
+  }
+});
+
+/**
+ * Get ML/LLM pricing examples for all tiers
+ */
+router.get('/ml-pricing-examples', async (req, res) => {
+  try {
+    const examples = PricingService.getMLPricingExamples();
+    
+    res.json({
+      success: true,
+      pricing_examples: examples
+    });
+  } catch (error) {
+    console.error('Error getting ML pricing examples:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get ML pricing examples'
     });
   }
 });

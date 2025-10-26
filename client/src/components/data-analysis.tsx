@@ -9,6 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { AdvancedAnalysisModalLazy, TimeSeriesAnalysisLazy } from "./LazyComponents";
 import AnonymizationToolkit from "./AnonymizationToolkit";
 import CloudDataConnector from "./cloud-data-connector";
+import { AudienceFormattedResults } from './audience-formatted-results';
 
 interface DataAnalysisProps {
   project: any;
@@ -60,6 +61,8 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
   const [isCreatingVisualization, setIsCreatingVisualization] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [visualizationResults, setVisualizationResults] = useState<any[]>([]);
+  const [showAudienceResults, setShowAudienceResults] = useState(false);
+  const [currentAnalysisId, setCurrentAnalysisId] = useState<string | null>(null);
 
   const schema = project.schema || {};
   const numericFields = Object.entries(schema)
@@ -209,17 +212,20 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
 
       const analysisResults = await response.json();
       
-      setResults({
-        type: selectedAnalysis,
-        summary: `Analysis completed for ${selectedAnalysis}`,
-        data: analysisResults.data || generateMockData(selectedAnalysis),
-        timestamp: new Date().toISOString()
-      });
-      
-      toast({
-        title: "Analysis complete",
-        description: "Your data analysis has been successfully completed",
-      });
+      if (analysisResults.success) {
+        // Store the analysis ID for later retrieval
+        setCurrentAnalysisId(analysisResults.metadata?.analysisId || `analysis_${project.id}_${Date.now()}`);
+        
+        // Show audience-formatted results instead of raw results
+        setShowAudienceResults(true);
+        
+        toast({
+          title: "Analysis complete",
+          description: "Your data analysis has been successfully completed with audience-specific formatting",
+        });
+      } else {
+        throw new Error(analysisResults.error || 'Analysis failed');
+      }
     } catch (error: any) {
       console.error('Analysis error:', error);
       
@@ -243,16 +249,18 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
   };
 
   const generateMockData = (type: string) => {
+    // TODO: Replace with real API calls to analyze actual project data
+    // For now, return empty data to show real analysis would happen
     switch (type) {
       case "descriptive":
         return {
           statistics: numericFields.map(field => ({
             field,
-            mean: (Math.random() * 100).toFixed(2),
-            median: (Math.random() * 100).toFixed(2),
-            std: (Math.random() * 20).toFixed(2),
-            min: (Math.random() * 10).toFixed(2),
-            max: (Math.random() * 200).toFixed(2)
+            mean: "0.00",
+            median: "0.00", 
+            std: "0.00",
+            min: "0.00",
+            max: "0.00"
           }))
         };
       case "distribution":
@@ -260,37 +268,23 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
           distributions: (analysisConfig.fields || [...numericFields, ...categoricalFields]).map((field: string) => ({
             field,
             type: numericFields.includes(field) ? 'numeric' : 'categorical',
-            histogram: numericFields.includes(field) ? 
-              Array.from({ length: 10 }, (_, i) => ({
-                bin: `${i * 10}-${(i + 1) * 10}`,
-                count: Math.floor(Math.random() * 100)
-              })) :
-              Array.from({ length: 5 }, (_, i) => ({
-                category: `Category ${i + 1}`,
-                count: Math.floor(Math.random() * 100)
-              })),
+            histogram: numericFields.includes(field) ? [] : [],
             statistics: numericFields.includes(field) ? {
-              mean: (Math.random() * 100).toFixed(2),
-              median: (Math.random() * 100).toFixed(2),
-              mode: (Math.random() * 100).toFixed(2),
-              std: (Math.random() * 20).toFixed(2),
-              skewness: ((Math.random() - 0.5) * 4).toFixed(2),
-              kurtosis: ((Math.random() - 0.5) * 4).toFixed(2)
+              mean: "0.00",
+              median: "0.00",
+              mode: "0.00",
+              std: "0.00",
+              skewness: "0.00",
+              kurtosis: "0.00"
             } : {
-              mode: `Category ${Math.floor(Math.random() * 5) + 1}`,
-              uniqueValues: Math.floor(Math.random() * 10) + 2
+              mode: "N/A",
+              uniqueValues: 0
             }
           }))
         };
       case "correlation":
         return {
-          correlations: (analysisConfig.fields || numericFields).map((field1: string, i: number) => 
-            (analysisConfig.fields || numericFields).slice(i + 1).map((field2: string) => ({
-              field1,
-              field2,
-              correlation: ((Math.random() - 0.5) * 2).toFixed(3)
-            }))
-          ).flat()
+          correlations: []
         };
       case "categorical":
         return {
@@ -1813,6 +1807,15 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
         piiColumns={project.piiColumns || []}
         schema={project.schema}
       />
+
+      {/* Audience-Formatted Results */}
+      {showAudienceResults && (
+        <AudienceFormattedResults
+          projectId={project.id}
+          analysisId={currentAnalysisId || undefined}
+          onBack={() => setShowAudienceResults(false)}
+        />
+      )}
     </div>
   );
 }

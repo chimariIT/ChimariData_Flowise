@@ -1,12 +1,60 @@
 import { TechnicalQueryType } from "../../shared/schema";
 import { PricingService, AnalysisCost } from './pricing';
-import { SparkProcessor } from './spark-processor'; // Import the SparkProcessor
+import { SparkProcessor } from './spark-processor';
+import { intelligentLibrarySelector, DatasetCharacteristics, VisualizationRequirements, AnalysisRequirements } from './intelligent-library-selector';
+import { mlLLMUsageTracker } from './ml-llm-usage-tracker';
 
 export class TechnicalAIAgent {
     private sparkProcessor: SparkProcessor; // Add a private member for the SparkProcessor
 
     constructor() {
         this.sparkProcessor = new SparkProcessor(); // Instantiate the SparkProcessor
+    }
+
+    /**
+     * Process task from message broker for real-time agent coordination
+     */
+    async processTask(task: any, projectId: string): Promise<any> {
+        const { stepName, dependency, project, previousResults } = task;
+        
+        console.log(`Technical Agent processing task: ${stepName} for project ${projectId}`);
+        
+        try {
+            switch (stepName) {
+                case 'data_preprocessing':
+                    return await this.preprocessData(project.data, project.schema);
+
+                case 'statistical_analysis':
+                    return await this.performStatisticalAnalysis(
+                        previousResults.data_preprocessing?.cleanedData || project.data,
+                        dependency.metadata
+                    );
+
+                case 'feature_engineering':
+                    return await this.engineerFeatures(
+                        previousResults.data_preprocessing?.cleanedData || project.data,
+                        dependency.metadata
+                    );
+
+                case 'model_training':
+                    return await this.trainModel(
+                        previousResults.feature_engineering?.features,
+                        dependency.metadata
+                    );
+
+                case 'visualization_generation':
+                    return await this.generateVisualizations(
+                        previousResults,
+                        dependency.metadata
+                    );
+
+                default:
+                    throw new Error(`Technical Agent cannot handle step: ${stepName}`);
+            }
+        } catch (error) {
+            console.error(`Technical Agent task ${stepName} failed:`, error);
+            throw error;
+        }
     }
 
     getAvailableModels() {
@@ -39,6 +87,12 @@ export class TechnicalAIAgent {
             console.log("Delegating to SparkProcessor due to data size or analysis type.");
             const sparkResult = await this.sparkProcessor.performAnalysis(query.context?.data ?? [], query.type, query.parameters);
 
+            // CRITICAL: Validate no mock data in production
+            if (process.env.NODE_ENV === 'production' && sparkResult.mock === true) {
+                console.error('🔴 CRITICAL: Mock data detected in production environment!');
+                throw new Error('PRODUCTION_ERROR: Mock data detected. Real analysis unavailable. Please check Spark cluster configuration.');
+            }
+
             return {
                 success: true,
                 result: sparkResult,
@@ -48,17 +102,266 @@ export class TechnicalAIAgent {
             };
         }
 
-        // Mock processing delay for non-Spark processing
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        // REAL IMPLEMENTATION: Use Tool Registry for analysis
+        console.log(`Routing ${query.type} analysis to Tool Registry...`);
 
-        return {
-            success: true,
-            result: `This is a mock result for a '${query.type}' analysis.`,
-            engine: 'in-memory',
-            model: "chimari-analyzer-v1",
-            tokensUsed: recordCount * 2, // Dummy token calculation
-            cost: cost.totalCost,
+        try {
+            // Import tool execution function
+            const { executeTool } = require('./mcp-tool-registry');
+
+            const data = query.context?.data || [];
+            const parameters = query.parameters || {};
+
+            let toolName: string;
+            let toolInput: any;
+
+            // Map query type to appropriate tool with intelligent library selection
+            if (query.type === 'statistical_analysis' || query.type === 'descriptive_stats' ||
+                query.type === 'hypothesis_testing' || query.type === 'anova' ||
+                query.type === 'regression' || query.type === 'correlation') {
+                // Use statistical analyzer tool with intelligent library selection
+                toolName = 'statistical_analyzer';
+                
+                // Analyze dataset characteristics for intelligent library selection
+                const datasetCharacteristics = this.analyzeDatasetCharacteristics(data);
+                const analysisRequirements = this.extractAnalysisRequirements(query, parameters);
+                
+                // Get intelligent library recommendations
+                const libraryRecommendations = intelligentLibrarySelector.selectStatisticalLibrary(
+                    datasetCharacteristics,
+                    analysisRequirements
+                );
+                
+                const selectedLibrary = libraryRecommendations[0];
+                console.log(`🔬 Technical Agent selected statistical library: ${selectedLibrary.library} (confidence: ${selectedLibrary.confidence})`);
+                
+                toolInput = {
+                    data,
+                    config: {
+                        analysisType: this.mapQueryTypeToAnalysisType(query.type),
+                        targetVariable: parameters.targetVariable,
+                        multivariateVariables: parameters.features || parameters.variables,
+                        covariates: parameters.covariates,
+                        // Enhanced config with intelligent library selection
+                        library: selectedLibrary.library,
+                        libraryConfidence: selectedLibrary.confidence,
+                        libraryReasoning: selectedLibrary.reasoning,
+                        alternatives: libraryRecommendations.slice(1).map(rec => ({
+                            library: rec.library,
+                            confidence: rec.confidence,
+                            reasoning: rec.reasoning
+                        })),
+                        // Performance optimizations based on library
+                        performancePriority: parameters.performancePriority || 'balanced',
+                        realTime: parameters.realTime || false,
+                        interactive: parameters.interactive || false,
+                        ...parameters
+                    }
+                };
+            } else if (query.type === 'machine_learning' || query.type === 'classification' ||
+                       query.type === 'clustering' || query.type === 'time_series' ||
+                       query.type === 'anomaly_detection') {
+                // Use comprehensive ML pipeline tool with intelligent library selection
+                toolName = 'comprehensive_ml_pipeline';
+                
+                // Analyze dataset characteristics for ML library selection
+                const datasetCharacteristics = this.analyzeDatasetCharacteristics(data);
+                
+                toolInput = {
+                    data,
+                    config: {
+                        analysisType: this.mapQueryTypeToMLType(query.type),
+                        targetColumn: parameters.targetVariable || parameters.targetColumn,
+                        features: parameters.features,
+                        parameters: parameters.mlParams || {},
+                        // Enhanced config with intelligent ML library selection
+                        datasetCharacteristics,
+                        useAutoML: parameters.useAutoML || false,
+                        enableExplainability: parameters.enableExplainability || false,
+                        performancePriority: parameters.performancePriority || 'balanced',
+                        ...parameters
+                    }
+                };
+            } else if (query.type === 'visualization' || query.type === 'dashboard') {
+                // Use visualization engine tool with intelligent library selection
+                toolName = 'visualization_engine';
+                
+                // Analyze dataset characteristics for visualization library selection
+                const datasetCharacteristics = this.analyzeDatasetCharacteristics(data);
+                const visualizationRequirements = this.extractVisualizationRequirements(query, parameters);
+                
+                // Get intelligent library recommendations
+                const libraryRecommendations = intelligentLibrarySelector.selectVisualizationLibrary(
+                    datasetCharacteristics,
+                    visualizationRequirements
+                );
+                
+                const selectedLibrary = libraryRecommendations[0];
+                console.log(`🎨 Technical Agent selected visualization library: ${selectedLibrary.library} (confidence: ${selectedLibrary.confidence})`);
+                
+                toolInput = {
+                    data,
+                    config: {
+                        type: parameters.chartType || 'bar',
+                        title: parameters.title,
+                        xAxis: parameters.xAxis,
+                        yAxis: parameters.yAxis,
+                        // Enhanced config with intelligent library selection
+                        library: selectedLibrary.library,
+                        libraryConfidence: selectedLibrary.confidence,
+                        libraryReasoning: selectedLibrary.reasoning,
+                        alternatives: libraryRecommendations.slice(1).map(rec => ({
+                            library: rec.library,
+                            confidence: rec.confidence,
+                            reasoning: rec.reasoning
+                        })),
+                        // Visualization-specific optimizations
+                        interactive: parameters.interactive !== false, // Default to true
+                        styling: parameters.styling || 'professional',
+                        exportFormats: parameters.exportFormats || ['png', 'svg'],
+                        performancePriority: parameters.performancePriority || 'balanced',
+                        ...parameters
+                    }
+                };
+            } else {
+                // Default to statistical analyzer for unknown types
+                toolName = 'statistical_analyzer';
+                toolInput = {
+                    data,
+                    config: {
+                        analysisType: 'descriptive',
+                        library: 'pandas', // Default library for exploratory analysis
+                        performancePriority: 'balanced',
+                        ...parameters
+                    }
+                };
+            }
+
+            // Execute tool via Tool Registry
+            const toolResult = await executeTool(
+                toolName,
+                'technical_ai_agent',
+                toolInput,
+                {
+                    userId: query.context?.userId,
+                    projectId: query.context?.projectId
+                }
+            );
+
+            // CRITICAL: Validate no mock data in production
+            if (process.env.NODE_ENV === 'production') {
+                if (toolResult.result?.mock === true || toolResult.result?.simulated === true) {
+                    console.error('🔴 CRITICAL: Mock data detected in tool result in production!');
+                    throw new Error('PRODUCTION_ERROR: Mock data detected in analysis. Real analysis unavailable. Please check Python/tool configuration.');
+                }
+            }
+
+            // Enhanced billing integration with ML/LLM usage tracking
+            const finalCost = toolResult.metrics?.cost || cost.totalCost;
+            const libraryUsed = toolResult.result?.librarySelection?.selectedLibrary || toolInput.config?.library || 'unknown';
+            
+            // Log usage for billing and analytics
+            if (query.context?.userId && toolResult.status === 'success') {
+                try {
+                    if (toolName === 'comprehensive_ml_pipeline' || toolName === 'automl_optimizer') {
+                        // Log ML usage
+                        await mlLLMUsageTracker.logUsage({
+                            userId: query.context.userId,
+                            projectId: query.context.projectId,
+                            toolName,
+                            modelType: 'traditional_ml',
+                            libraryUsed,
+                            datasetSize: recordCount,
+                            executionTimeMs: toolResult.metrics?.duration || 0,
+                            billingUnits: mlLLMUsageTracker.calculateMLBillingUnits(
+                                toolName,
+                                recordCount,
+                                toolInput.config?.useAutoML,
+                                toolInput.config?.trials
+                            ),
+                            success: true,
+                            metadata: {
+                                analysisType: toolInput.config?.analysisType,
+                                libraryConfidence: toolResult.result?.librarySelection?.confidence,
+                                performancePriority: toolInput.config?.performancePriority
+                            }
+                        });
+                    }
+                } catch (billingError) {
+                    console.warn('Failed to log usage for billing:', billingError);
+                }
+            }
+
+            // Return enhanced result with library selection and billing info
+            return {
+                success: toolResult.status === 'success',
+                result: {
+                    ...toolResult.result,
+                    // Include library selection information
+                    librarySelection: toolResult.result?.librarySelection || {
+                        selectedLibrary: libraryUsed,
+                        confidence: toolInput.config?.libraryConfidence || 0.8,
+                        reasoning: toolInput.config?.libraryReasoning || 'Default selection',
+                        alternatives: toolInput.config?.alternatives || []
+                    }
+                },
+                engine: 'tool-registry',
+                tool: toolName,
+                model: "chimari-analyzer-v1",
+                tokensUsed: recordCount * 2,
+                cost: finalCost,
+                billing: {
+                    baseCost: cost.totalCost,
+                    libraryCost: finalCost - cost.totalCost,
+                    libraryUsed,
+                    billingUnits: toolResult.metrics?.billingUnits || Math.ceil(finalCost * 100),
+                    usageLogged: query.context?.userId ? true : false
+                },
+                metrics: {
+                    ...toolResult.metrics,
+                    librarySelection: {
+                        selected: libraryUsed,
+                        confidence: toolResult.result?.librarySelection?.confidence || 0.8,
+                        reasoning: toolResult.result?.librarySelection?.reasoning || 'Default selection'
+                    }
+                },
+                error: toolResult.error
+            };
+
+        } catch (error) {
+            console.error('Tool execution failed:', error);
+            return {
+                success: false,
+                result: null,
+                engine: 'tool-registry',
+                model: "chimari-analyzer-v1",
+                cost: cost.totalCost,
+                error: `Analysis failed: ${(error as Error).message || String(error)}`
+            };
+        }
+    }
+
+    private mapQueryTypeToAnalysisType(queryType: string): string {
+        const mapping: Record<string, string> = {
+            'statistical_analysis': 'descriptive',
+            'descriptive_stats': 'descriptive',
+            'hypothesis_testing': 'anova',
+            'anova': 'anova',
+            'regression': 'regression',
+            'correlation': 'descriptive'
         };
+        return mapping[queryType] || 'descriptive';
+    }
+
+    private mapQueryTypeToMLType(queryType: string): string {
+        const mapping: Record<string, string> = {
+            'machine_learning': 'classification',
+            'classification': 'classification',
+            'clustering': 'clustering',
+            'time_series': 'timeseries',
+            'anomaly_detection': 'anomaly'
+        };
+        return mapping[queryType] || 'classification';
     }
 
     // Advanced Data Science Methods
@@ -229,108 +532,322 @@ export class TechnicalAIAgent {
     async trainModel(features: any, metadata: any): Promise<any> {
         console.log('Training ML model with advanced algorithms...');
 
-        const model = {
-            type: metadata.modelType || 'auto',
-            performance: {},
-            parameters: {},
-            predictions: {},
-            featureImportance: {},
-            crossValidation: {}
-        };
+        try {
+            // Import tool execution function
+            const { executeTool } = require('./mcp-tool-registry');
 
-        // Simulate model training based on data characteristics
-        const { engineered } = features;
-        const targetColumn = this.detectTargetColumn(engineered);
+            const { engineered } = features;
+            const targetColumn = this.detectTargetColumn(engineered) || metadata.targetColumn;
 
-        if (targetColumn) {
-            // Classification or regression based on target variable
+            if (!targetColumn) {
+                // Unsupervised learning - use clustering
+                const toolInput = {
+                    data: engineered,
+                    config: {
+                        analysisType: 'clustering',
+                        features: Object.keys(engineered[0] || {}),
+                        parameters: {
+                            nClusters: metadata.nClusters || 3,
+                            method: metadata.clusteringMethod || 'kmeans'
+                        }
+                    }
+                };
+
+                const toolResult = await executeTool(
+                    'ml_pipeline',
+                    'technical_ai_agent',
+                    toolInput,
+                    {
+                        userId: metadata.userId,
+                        projectId: metadata.projectId
+                    }
+                );
+
+                return {
+                    type: 'clustering',
+                    performance: toolResult.result?.results?.modelPerformance || {},
+                    parameters: metadata,
+                    predictions: {},
+                    featureImportance: {},
+                    crossValidation: {},
+                    realAnalysis: true
+                };
+            }
+
+            // Supervised learning - classification or regression
             const isClassification = this.isClassificationTask(engineered, targetColumn);
+            const analysisType = isClassification ? 'classification' : 'regression';
 
-            model.type = isClassification ? 'classification' : 'regression';
-            model.performance = isClassification
-                ? this.simulateClassificationMetrics()
-                : this.simulateRegressionMetrics();
+            const toolInput = {
+                data: engineered,
+                config: {
+                    analysisType,
+                    targetColumn,
+                    features: Object.keys(engineered[0] || {}).filter(col => col !== targetColumn),
+                    parameters: {
+                        modelType: metadata.modelType || 'auto',
+                        testSize: metadata.testSize || 0.2,
+                        crossValidation: metadata.crossValidation || 5
+                    }
+                }
+            };
 
-            model.featureImportance = this.calculateFeatureImportance(engineered, targetColumn);
-            model.crossValidation = this.performCrossValidation(engineered, targetColumn);
-        } else {
-            // Unsupervised learning
-            model.type = 'clustering';
-            model.performance = this.simulateClusteringMetrics();
+            const toolResult = await executeTool(
+                'ml_pipeline',
+                'technical_ai_agent',
+                toolInput,
+                {
+                    userId: metadata.userId,
+                    projectId: metadata.projectId
+                }
+            );
+
+            // Extract results from real ML analysis
+            const mlResult = toolResult.result?.results || {};
+
+            return {
+                type: analysisType,
+                performance: mlResult.modelPerformance || {},
+                parameters: metadata,
+                predictions: mlResult.predictions || {},
+                featureImportance: mlResult.featureImportance || {},
+                crossValidation: mlResult.crossValidation || {},
+                realAnalysis: true
+            };
+
+        } catch (error) {
+            console.error('ML model training via tools failed:', error);
+
+            // Fallback: return error info instead of mock data
+            return {
+                type: 'error',
+                performance: {},
+                parameters: metadata,
+                predictions: {},
+                featureImportance: {},
+                crossValidation: {},
+                error: `Model training failed: ${(error as Error).message || String(error)}`,
+                realAnalysis: false
+            };
         }
-
-        return model;
     }
 
     async generateVisualizations(results: any, metadata: any): Promise<any> {
         console.log('Generating comprehensive visualizations...');
 
-        const visualizations: { charts: any[]; recommendations: string[]; interactiveElements: any[] } = {
-            charts: [] as any[],
-            recommendations: [] as string[],
-            interactiveElements: [] as any[]
-        };
+        try {
+            // Import tool execution function
+            const { executeTool } = require('./mcp-tool-registry');
 
-        // Statistical visualizations
-        if (results.statistical_analysis) {
-            const stats = results.statistical_analysis;
+            const visualizations: { charts: any[]; recommendations: string[]; interactiveElements: any[]; realVisualizations: boolean } = {
+                charts: [] as any[],
+                recommendations: [] as string[],
+                interactiveElements: [] as any[],
+                realVisualizations: true
+            };
 
-            // Distribution plots for each numeric variable
-            for (const [column, stat] of Object.entries(stats.descriptiveStats)) {
-                visualizations.charts.push({
-                    type: 'histogram',
-                    title: `Distribution of ${column}`,
-                    data: {
-                        column,
-                        bins: 20,
-                        mean: (stat as any).mean,
-                        median: (stat as any).median
-                    },
-                    insights: this.generateDistributionInsights(stat as any)
-                });
+            // Statistical visualizations
+            if (results.statistical_analysis) {
+                const stats = results.statistical_analysis;
+
+                // Distribution plots for each numeric variable using real viz tool
+                for (const [column, stat] of Object.entries(stats.descriptiveStats)) {
+                    try {
+                        const vizInput = {
+                            data: results.data_preprocessing?.cleanedData || [],
+                            config: {
+                                type: 'histogram',
+                                title: `Distribution of ${column}`,
+                                xAxis: column,
+                                bins: 20
+                            }
+                        };
+
+                        const vizResult = await executeTool(
+                            'visualization_engine',
+                            'technical_ai_agent',
+                            vizInput,
+                            {
+                                userId: metadata.userId,
+                                projectId: metadata.projectId
+                            }
+                        );
+
+                        visualizations.charts.push({
+                            type: 'histogram',
+                            title: `Distribution of ${column}`,
+                            data: vizResult.result,
+                            insights: this.generateDistributionInsights(stat as any),
+                            fromTool: true
+                        });
+                    } catch (error) {
+                        console.error(`Visualization generation failed for ${column}:`, error);
+                    }
+                }
+
+                // Correlation heatmap
+                if (stats.correlations && Object.keys(stats.correlations).length > 0) {
+                    try {
+                        const vizInput = {
+                            data: this.formatCorrelationForHeatmap(stats.correlations),
+                            config: {
+                                type: 'heatmap',
+                                title: 'Correlation Matrix'
+                            }
+                        };
+
+                        const vizResult = await executeTool(
+                            'visualization_engine',
+                            'technical_ai_agent',
+                            vizInput,
+                            {
+                                userId: metadata.userId,
+                                projectId: metadata.projectId
+                            }
+                        );
+
+                        visualizations.charts.push({
+                            type: 'heatmap',
+                            title: 'Correlation Matrix',
+                            data: vizResult.result,
+                            insights: this.generateCorrelationInsights(stats.correlations),
+                            fromTool: true
+                        });
+                    } catch (error) {
+                        console.error('Correlation heatmap generation failed:', error);
+                    }
+                }
             }
 
-            // Correlation heatmap
-            if (stats.correlations && Object.keys(stats.correlations).length > 0) {
-                visualizations.charts.push({
-                    type: 'heatmap',
-                    title: 'Correlation Matrix',
-                    data: stats.correlations,
-                    insights: this.generateCorrelationInsights(stats.correlations)
+            // ML model visualizations
+            if (results.model_training) {
+                const model = results.model_training;
+
+                if (model.type === 'classification' && model.performance) {
+                    visualizations.charts.push({
+                        type: 'confusion_matrix',
+                        title: 'Model Performance',
+                        data: model.performance,
+                        insights: [`Model achieved ${model.performance.accuracy || 'N/A'}% accuracy`],
+                        fromTool: false // Confusion matrix may need custom rendering
+                    });
+                } else if (model.type === 'regression' && model.predictions) {
+                    try {
+                        const vizInput = {
+                            data: this.formatPredictionsForScatter(model.predictions),
+                            config: {
+                                type: 'scatter',
+                                title: 'Actual vs Predicted',
+                                xAxis: 'actual',
+                                yAxis: 'predicted'
+                            }
+                        };
+
+                        const vizResult = await executeTool(
+                            'visualization_engine',
+                            'technical_ai_agent',
+                            vizInput,
+                            {
+                                userId: metadata.userId,
+                                projectId: metadata.projectId
+                            }
+                        );
+
+                        visualizations.charts.push({
+                            type: 'scatter',
+                            title: 'Actual vs Predicted',
+                            data: vizResult.result,
+                            insights: [`Model R² score: ${model.performance.r2 || 'N/A'}`],
+                            fromTool: true
+                        });
+                    } catch (error) {
+                        console.error('Scatter plot generation failed:', error);
+                    }
+                }
+
+                // Feature importance chart
+                if (model.featureImportance && Object.keys(model.featureImportance).length > 0) {
+                    try {
+                        const vizInput = {
+                            data: this.formatFeatureImportanceForBar(model.featureImportance),
+                            config: {
+                                type: 'bar',
+                                title: 'Feature Importance',
+                                xAxis: 'feature',
+                                yAxis: 'importance'
+                            }
+                        };
+
+                        const vizResult = await executeTool(
+                            'visualization_engine',
+                            'technical_ai_agent',
+                            vizInput,
+                            {
+                                userId: metadata.userId,
+                                projectId: metadata.projectId
+                            }
+                        );
+
+                        visualizations.charts.push({
+                            type: 'bar',
+                            title: 'Feature Importance',
+                            data: vizResult.result,
+                            insights: this.generateFeatureImportanceInsights(model.featureImportance),
+                            fromTool: true
+                        });
+                    } catch (error) {
+                        console.error('Feature importance bar chart generation failed:', error);
+                    }
+                }
+            }
+
+            return visualizations;
+
+        } catch (error) {
+            console.error('Visualization generation via tools failed:', error);
+
+            // Return error instead of mock visualizations
+            return {
+                charts: [],
+                recommendations: [],
+                interactiveElements: [],
+                realVisualizations: false,
+                error: `Visualization generation failed: ${(error as Error).message || String(error)}`
+            };
+        }
+    }
+
+    // Helper methods for data formatting
+    private formatCorrelationForHeatmap(correlations: any): any[] {
+        const data: any[] = [];
+        for (const [col1, row] of Object.entries(correlations)) {
+            for (const [col2, value] of Object.entries(row as any)) {
+                data.push({
+                    x: col1,
+                    y: col2,
+                    value: value
                 });
             }
         }
+        return data;
+    }
 
-        // ML model visualizations
-        if (results.model_training) {
-            const model = results.model_training;
-
-            if (model.type === 'classification') {
-                visualizations.charts.push({
-                    type: 'confusion_matrix',
-                    title: 'Model Performance',
-                    data: model.performance,
-                    insights: [`Model achieved ${model.performance.accuracy}% accuracy`]
-                });
-            } else if (model.type === 'regression') {
-                visualizations.charts.push({
-                    type: 'scatter',
-                    title: 'Actual vs Predicted',
-                    data: model.predictions,
-                    insights: [`Model R² score: ${model.performance.r2}`]
-                });
-            }
-
-            // Feature importance chart
-            visualizations.charts.push({
-                type: 'bar',
-                title: 'Feature Importance',
-                data: model.featureImportance,
-                insights: this.generateFeatureImportanceInsights(model.featureImportance)
-            });
+    private formatPredictionsForScatter(predictions: any): any[] {
+        if (Array.isArray(predictions)) {
+            return predictions;
         }
+        // Convert object format to array if needed
+        return Object.entries(predictions).map(([key, value]) => ({
+            actual: key,
+            predicted: value
+        }));
+    }
 
-        return visualizations;
+    private formatFeatureImportanceForBar(featureImportance: any): any[] {
+        return Object.entries(featureImportance).map(([feature, importance]) => ({
+            feature,
+            importance
+        }));
     }
 
     // Helper methods for calculations
@@ -533,60 +1050,9 @@ export class TechnicalAIAgent {
         return uniqueValues.size < 20; // Heuristic: < 20 unique values = classification
     }
 
-    private simulateClassificationMetrics(): any {
-        return {
-            accuracy: Math.round((0.75 + Math.random() * 0.2) * 100) / 100,
-            precision: Math.round((0.70 + Math.random() * 0.25) * 100) / 100,
-            recall: Math.round((0.70 + Math.random() * 0.25) * 100) / 100,
-            f1Score: Math.round((0.70 + Math.random() * 0.25) * 100) / 100
-        };
-    }
-
-    private simulateRegressionMetrics(): any {
-        return {
-            r2: Math.round((0.60 + Math.random() * 0.35) * 100) / 100,
-            mse: Math.round((Math.random() * 10) * 100) / 100,
-            rmse: Math.round((Math.random() * 3) * 100) / 100,
-            mae: Math.round((Math.random() * 2) * 100) / 100
-        };
-    }
-
-    private simulateClusteringMetrics(): any {
-        return {
-            silhouetteScore: Math.round((0.3 + Math.random() * 0.4) * 100) / 100,
-            numberOfClusters: Math.floor(3 + Math.random() * 5),
-            inertia: Math.round((Math.random() * 1000) * 100) / 100
-        };
-    }
-
-    private calculateFeatureImportance(data: any[], targetColumn: string): any {
-        const features = Object.keys(data[0] || {}).filter(col => col !== targetColumn);
-        const importance: any = {};
-
-        for (const feature of features) {
-            importance[feature] = Math.round(Math.random() * 100) / 100;
-        }
-
-        return importance;
-    }
-
-    private performCrossValidation(data: any[], targetColumn: string): any {
-        const folds = 5;
-        const results = [];
-
-        for (let i = 0; i < folds; i++) {
-            results.push({
-                fold: i + 1,
-                accuracy: Math.round((0.70 + Math.random() * 0.25) * 100) / 100
-            });
-        }
-
-        return {
-            folds,
-            results,
-            meanAccuracy: Math.round(results.reduce((sum, r) => sum + r.accuracy, 0) / folds * 100) / 100
-        };
-    }
+    // REMOVED: Dead simulation code (lines 911-964)
+    // These methods were never called after refactoring to use Tool Registry.
+    // All ML metrics now come from real scikit-learn via MLPipelineHandler.
 
     private generateDistributionInsights(stats: any): string[] {
         const insights = [];
@@ -628,5 +1094,164 @@ export class TechnicalAIAgent {
         }
 
         return insights;
+    }
+
+    /**
+     * Analyze dataset characteristics for intelligent library selection
+     * Dedicated method for comprehensive dataset analysis
+     */
+    private analyzeDatasetCharacteristics(data: any[]): DatasetCharacteristics {
+        if (!data || data.length === 0) {
+            return {
+                size: 0,
+                columns: 0,
+                dataTypes: { numeric: 0, categorical: 0, datetime: 0, text: 0, boolean: 0 },
+                memoryFootprint: 0,
+                sparsity: 0,
+                cardinality: {}
+            };
+        }
+
+        const sample = data.slice(0, Math.min(1000, data.length));
+        const columns = Object.keys(sample[0]);
+        
+        let numeric = 0, categorical = 0, datetime = 0, text = 0, boolean = 0;
+        const cardinality: Record<string, number> = {};
+
+        columns.forEach(col => {
+            const values = sample.map(row => row[col]).filter(val => val !== null && val !== undefined);
+            const uniqueValues = new Set(values).size;
+            cardinality[col] = uniqueValues;
+
+            // Comprehensive data type detection for library selection
+            const firstValue = values[0];
+            if (typeof firstValue === 'number' && !isNaN(firstValue)) {
+                numeric++;
+            } else if (typeof firstValue === 'boolean') {
+                boolean++;
+            } else if (typeof firstValue === 'string') {
+                // Enhanced string type detection
+                if (uniqueValues < 20) {
+                    categorical++;
+                } else if (this.isDateString(firstValue)) {
+                    datetime++;
+                } else {
+                    text++;
+                }
+            } else if (firstValue instanceof Date) {
+                datetime++;
+            } else {
+                // Fallback classification
+                categorical++;
+            }
+        });
+
+        // Calculate sparsity
+        const totalCells = data.length * columns.length;
+        const nullCells = data.reduce((count, row) => 
+            count + columns.reduce((colCount, col) => 
+                colCount + (row[col] === null || row[col] === undefined ? 1 : 0), 0), 0);
+        const sparsity = totalCells > 0 ? (nullCells / totalCells) * 100 : 0;
+
+        return {
+            size: data.length,
+            columns: columns.length,
+            dataTypes: { numeric, categorical, datetime, text, boolean },
+            memoryFootprint: JSON.stringify(data).length / 1024 / 1024, // MB estimate
+            sparsity,
+            cardinality
+        };
+    }
+
+    /**
+     * Helper method to detect if a string is a date
+     */
+    private isDateString(str: string): boolean {
+        const datePatterns = [
+            /^\d{4}-\d{2}-\d{2}$/, // YYYY-MM-DD
+            /^\d{2}\/\d{2}\/\d{4}$/, // MM/DD/YYYY
+            /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/, // ISO datetime
+        ];
+        return datePatterns.some(pattern => pattern.test(str)) || !isNaN(Date.parse(str));
+    }
+
+    /**
+     * Extract analysis requirements from query and parameters
+     */
+    private extractAnalysisRequirements(query: TechnicalQueryType, parameters: any): AnalysisRequirements {
+        const analysisType = query.type;
+        
+        return {
+            type: this.mapAnalysisTypeToRequirement(analysisType),
+            complexity: this.determineComplexity(query, parameters),
+            realTime: parameters.realTime || false,
+            interactive: parameters.interactive || false,
+            exportFormats: parameters.exportFormats || ['json', 'csv'],
+            performancePriority: parameters.performancePriority || 'balanced'
+        };
+    }
+
+    /**
+     * Extract visualization requirements from query and parameters
+     */
+    private extractVisualizationRequirements(query: TechnicalQueryType, parameters: any): VisualizationRequirements {
+        const chartType = parameters.chartType || 'bar';
+        const dataSize = this.getDataSizeCategory(parameters.dataSize);
+        
+        return {
+            chartTypes: [chartType],
+            interactivity: parameters.interactive ? 'interactive' : 'static',
+            dataSize: dataSize as 'small' | 'medium' | 'large' | 'massive',
+            styling: parameters.styling || 'professional',
+            exportFormats: parameters.exportFormats || ['png', 'svg'],
+            performancePriority: parameters.performancePriority || 'balanced'
+        };
+    }
+
+    /**
+     * Map analysis type to requirement type for intelligent library selection
+     * Dedicated method for library selection requirements
+     */
+    private mapAnalysisTypeToRequirement(analysisType: string): 'descriptive' | 'inferential' | 'predictive' | 'exploratory' {
+        // Comprehensive mapping for library selection
+        if (['anova', 'ancova', 'manova', 'mancova', 'regression', 'hypothesis_testing', 't_test', 'chi_square'].includes(analysisType)) {
+            return 'inferential';
+        } else if (['machine_learning', 'classification', 'clustering', 'time_series', 'anomaly_detection', 'neural_networks'].includes(analysisType)) {
+            return 'predictive';
+        } else if (['descriptive_stats', 'correlation', 'summary_statistics'].includes(analysisType)) {
+            return 'descriptive';
+        } else {
+            return 'exploratory';
+        }
+    }
+
+    /**
+     * Determine analysis complexity
+     */
+    private determineComplexity(query: TechnicalQueryType, parameters: any): 'simple' | 'moderate' | 'complex' {
+        const analysisType = query.type;
+        
+        if (['descriptive_stats', 'correlation'].includes(analysisType)) {
+            return 'simple';
+        } else if (['anova', 'ancova', 'regression', 'hypothesis_testing'].includes(analysisType)) {
+            return 'moderate';
+        } else if (['manova', 'mancova', 'machine_learning', 'classification', 'clustering', 'time_series'].includes(analysisType)) {
+            return 'complex';
+        } else {
+            return 'moderate';
+        }
+    }
+
+    /**
+     * Get data size category
+     */
+    private getDataSizeCategory(dataSize?: string | number): string {
+        if (typeof dataSize === 'number') {
+            if (dataSize < 1000) return 'small';
+            if (dataSize < 10000) return 'medium';
+            if (dataSize < 100000) return 'large';
+            return 'massive';
+        }
+        return dataSize || 'medium';
     }
 }

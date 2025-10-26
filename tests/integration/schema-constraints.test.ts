@@ -52,10 +52,11 @@ describe.skipIf(skipTests)('Schema Constraints - Users Table', () => {
     });
 
     test('rejects invalid subscription tier values', async () => {
+      const uniqueUserId = randomUUID();
       await expect(
         db.insert(users).values({
-          id: testUserId,
-          email: 'test@example.com',
+          id: uniqueUserId,
+          email: `test-invalid-tier-${uniqueUserId}@example.com`,
           subscriptionTier: 'invalid_tier' as any,
         })
       ).rejects.toThrow(/subscription_tier_check|violates check constraint/);
@@ -82,10 +83,11 @@ describe.skipIf(skipTests)('Schema Constraints - Users Table', () => {
     });
 
     test('rejects invalid subscription status values', async () => {
+      const uniqueUserId = randomUUID();
       await expect(
         db.insert(users).values({
-          id: testUserId,
-          email: 'test@example.com',
+          id: uniqueUserId,
+          email: `test-invalid-status-${uniqueUserId}@example.com`,
           subscriptionStatus: 'invalid_status' as any,
         })
       ).rejects.toThrow(/subscription_status_check|violates check constraint/);
@@ -112,10 +114,11 @@ describe.skipIf(skipTests)('Schema Constraints - Users Table', () => {
     });
 
     test('rejects invalid user role values', async () => {
+      const uniqueUserId = randomUUID();
       await expect(
         db.insert(users).values({
-          id: testUserId,
-          email: 'test@example.com',
+          id: uniqueUserId,
+          email: `test-invalid-role-${uniqueUserId}@example.com`,
           userRole: 'invalid_role' as any,
         })
       ).rejects.toThrow(/user_role_check|violates check constraint/);
@@ -142,10 +145,11 @@ describe.skipIf(skipTests)('Schema Constraints - Users Table', () => {
     });
 
     test('rejects invalid technical level values', async () => {
+      const uniqueUserId = randomUUID();
       await expect(
         db.insert(users).values({
-          id: testUserId,
-          email: 'test@example.com',
+          id: uniqueUserId,
+          email: `test-invalid-level-${uniqueUserId}@example.com`,
           technicalLevel: 'invalid_level' as any,
         })
       ).rejects.toThrow(/technical_level_check|violates check constraint/);
@@ -172,23 +176,25 @@ describe.skipIf(skipTests)('Schema Constraints - Users Table', () => {
     });
 
     test('accepts NULL preferred journey', async () => {
+      const uniqueUserId = randomUUID();
       await expect(
         db.insert(users).values({
-          id: testUserId,
-          email: 'test@example.com',
+          id: uniqueUserId,
+          email: `test-null-journey-${uniqueUserId}@example.com`,
           preferredJourney: null as any,
         })
       ).resolves.not.toThrow();
 
       // Cleanup
-      await db.delete(users).where(eq(users.id, testUserId));
+      await db.delete(users).where(eq(users.id, uniqueUserId));
     });
 
     test('rejects invalid journey type values', async () => {
+      const uniqueUserId = randomUUID();
       await expect(
         db.insert(users).values({
-          id: testUserId,
-          email: 'test@example.com',
+          id: uniqueUserId,
+          email: `test-invalid-journey-${uniqueUserId}@example.com`,
           preferredJourney: 'invalid_journey' as any,
         })
       ).rejects.toThrow(/preferred_journey_check|violates check constraint/);
@@ -197,10 +203,11 @@ describe.skipIf(skipTests)('Schema Constraints - Users Table', () => {
 
   describe('Usage Non-Negative Constraint', () => {
     test('accepts non-negative usage values', async () => {
+      const uniqueUserId = randomUUID();
       await expect(
         db.insert(users).values({
-          id: testUserId,
-          email: 'test@example.com',
+          id: uniqueUserId,
+          email: `test-usage-${uniqueUserId}@example.com`,
           monthlyUploads: 10,
           monthlyDataVolume: 500,
           monthlyAIInsights: 20,
@@ -208,34 +215,37 @@ describe.skipIf(skipTests)('Schema Constraints - Users Table', () => {
       ).resolves.not.toThrow();
 
       // Cleanup
-      await db.delete(users).where(eq(users.id, testUserId));
+      await db.delete(users).where(eq(users.id, uniqueUserId));
     });
 
     test('rejects negative monthly uploads', async () => {
+      const uniqueUserId = randomUUID();
       await expect(
         db.insert(users).values({
-          id: testUserId,
-          email: 'test@example.com',
+          id: uniqueUserId,
+          email: `test-negative-uploads-${uniqueUserId}@example.com`,
           monthlyUploads: -1,
         })
       ).rejects.toThrow(/usage_non_negative|violates check constraint/);
     });
 
     test('rejects negative monthly data volume', async () => {
+      const uniqueUserId = randomUUID();
       await expect(
         db.insert(users).values({
-          id: testUserId,
-          email: 'test@example.com',
+          id: uniqueUserId,
+          email: `test-negative-volume-${uniqueUserId}@example.com`,
           monthlyDataVolume: -100,
         })
       ).rejects.toThrow(/usage_non_negative|violates check constraint/);
     });
 
     test('rejects negative monthly AI insights', async () => {
+      const uniqueUserId = randomUUID();
       await expect(
         db.insert(users).values({
-          id: testUserId,
-          email: 'test@example.com',
+          id: uniqueUserId,
+          email: `test-negative-insights-${uniqueUserId}@example.com`,
           monthlyAIInsights: -5,
         })
       ).rejects.toThrow(/usage_non_negative|violates check constraint/);
@@ -244,20 +254,22 @@ describe.skipIf(skipTests)('Schema Constraints - Users Table', () => {
 
   describe('NOT NULL Constraints', () => {
     test('subscription tier cannot be NULL', async () => {
+      const uniqueUserId = randomUUID();
       await expect(
         db.insert(users).values({
-          id: testUserId,
-          email: 'test@example.com',
+          id: uniqueUserId,
+          email: `test-null-tier-${uniqueUserId}@example.com`,
           subscriptionTier: null as any,
         })
       ).rejects.toThrow(/null value|not-null constraint/);
     });
 
     test('user role cannot be NULL', async () => {
+      const uniqueUserId = randomUUID();
       await expect(
         db.insert(users).values({
-          id: testUserId,
-          email: 'test@example.com',
+          id: uniqueUserId,
+          email: `test-null-role-${uniqueUserId}@example.com`,
           userRole: null as any,
         })
       ).rejects.toThrow(/null value|not-null constraint/);
@@ -299,6 +311,7 @@ describe.skipIf(skipTests)('Schema Constraints - Projects Table', () => {
         await expect(
           db.insert(projects).values({
             id: projectId,
+            userId: testUserId,
             ownerId: testUserId,
             name: `Test Project ${status}`,
             status: status as any,
@@ -315,6 +328,7 @@ describe.skipIf(skipTests)('Schema Constraints - Projects Table', () => {
       await expect(
         db.insert(projects).values({
           id: testProjectId,
+          userId: testUserId,
           ownerId: testUserId,
           name: 'Test Project',
           status: 'invalid_status' as any,
@@ -333,6 +347,7 @@ describe.skipIf(skipTests)('Schema Constraints - Projects Table', () => {
         await expect(
           db.insert(projects).values({
             id: projectId,
+            userId: testUserId,
             ownerId: testUserId,
             name: `Test Project ${journey}`,
             journeyType: journey as any,
@@ -348,6 +363,7 @@ describe.skipIf(skipTests)('Schema Constraints - Projects Table', () => {
       await expect(
         db.insert(projects).values({
           id: testProjectId,
+          userId: testUserId,
           ownerId: testUserId,
           name: 'Test Project',
           journeyType: 'invalid_journey' as any,
@@ -359,6 +375,7 @@ describe.skipIf(skipTests)('Schema Constraints - Projects Table', () => {
       await expect(
         db.insert(projects).values({
           id: testProjectId,
+          userId: testUserId,
           ownerId: testUserId,
           name: 'Test Project',
           journeyType: null as any,
@@ -374,6 +391,7 @@ describe.skipIf(skipTests)('Schema Constraints - Projects Table', () => {
       await expect(
         db.insert(projects).values({
           id: testProjectId,
+          userId: fakeOwnerId,
           ownerId: fakeOwnerId,
           name: 'Orphaned Project',
           journeyType: 'ai_guided',
@@ -388,11 +406,12 @@ describe.skipIf(skipTests)('Schema Constraints - Projects Table', () => {
 
       await db.insert(users).values({
         id: tempUserId,
-        email: 'temp-cascade@example.com',
+        email: `temp-cascade-${tempUserId}@example.com`,
       });
 
       await db.insert(projects).values({
         id: tempProjectId,
+        userId: tempUserId,
         ownerId: tempUserId,
         name: 'Cascade Test Project',
         journeyType: 'ai_guided',

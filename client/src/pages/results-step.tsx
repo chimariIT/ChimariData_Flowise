@@ -16,7 +16,8 @@ import {
   ArrowRight,
   Share2,
   Star,
-  Loader2
+  Loader2,
+  AlertCircle
 } from "lucide-react";
 
 interface ResultsStepProps {
@@ -30,14 +31,58 @@ export default function ResultsStep({ journeyType, onNext, onPrevious }: Results
   const [isLoading, setIsLoading] = useState(true);
   const [audience, setAudience] = useState<string>('general');
   const [complexity, setComplexity] = useState<'Simple' | 'Intermediate' | 'Advanced'>('Simple');
+  
+  // Real data from backend
+  const [analysisResults, setAnalysisResults] = useState<any>(null);
+  const [insights, setInsights] = useState<any[]>([]);
+  const [recommendations, setRecommendations] = useState<any[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
-  // Simulate loading to prevent timeout issues
+  // Load real analysis results from backend
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setIsLoading(false);
-    }, 1000); // 1 second loading state
+    async function loadResults() {
+      try {
+        const currentProjectId = localStorage.getItem('currentProjectId');
+        
+        if (!currentProjectId) {
+          console.warn('No project ID found, using demo data');
+          setIsLoading(false);
+          return;
+        }
 
-    return () => clearTimeout(timer);
+        console.log(`📖 Loading analysis results for project ${currentProjectId}`);
+
+        const response = await fetch(`/api/analysis-execution/results/${currentProjectId}`, {
+          credentials: 'include'
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to load results: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+
+        if (data.success && data.results) {
+          console.log('✅ Results loaded successfully');
+          console.log(`📊 ${data.results.insights.length} insights, ${data.results.recommendations.length} recommendations`);
+          
+          setAnalysisResults(data.results);
+          setInsights(data.results.insights || []);
+          setRecommendations(data.results.recommendations || []);
+        } else {
+          throw new Error('No results found');
+        }
+
+      } catch (err: any) {
+        console.error('❌ Error loading results:', err);
+        setError(err.message);
+        // Fallback to demo data if no real results available
+      } finally {
+        setIsLoading(false);
+      }
+    }
+
+    loadResults();
   }, []);
 
   const getJourneyTypeInfo = () => {
@@ -83,118 +128,24 @@ export default function ResultsStep({ journeyType, onNext, onPrevious }: Results
   const journeyInfo = getJourneyTypeInfo();
   const Icon = journeyInfo.icon;
 
-  // Mock results data - memoized to prevent re-renders
-  const analysisResults = {
-    projectName: "Customer Behavior Analysis Q4 2024",
-    completionDate: "2024-09-23",
-    totalAnalyses: 4,
-    dataRows: 10000,
-    executionTime: "12 minutes",
-    qualityScore: 92,
-    insightsFound: 8,
-    visualizations: 12,
-    recommendations: 5
-  };
-
-  // Decision framework (business-focused) – mock for now; wire to backend results when available
-  const decisionFramework = {
-    executiveSummary: "Pricing optimization and segment-focused campaigns can drive +5-8% revenue with stable churn, yielding ~160% ROI over 2 quarters.",
-    kpis: ["Revenue", "Gross Margin", "Conversion Rate", "CAC", "LTV"],
+  // Decision framework (business-focused) – will be populated from real analysis results
+  const decisionFramework = analysisResults?.decisionFramework || {
+    executiveSummary: "Analysis in progress. Decision framework will be generated based on your data insights.",
+    kpis: [],
     financialImpact: {
-      revenueImpact: "+5–8%",
-      costImpact: "-2–4% ops cost",
-      roiEstimate: "~160% (2 quarters)",
-      breakEven: "8–12 weeks"
+      revenueImpact: "Calculating...",
+      costImpact: "Calculating...",
+      roiEstimate: "Calculating...",
+      breakEven: "Calculating..."
     },
-    options: [
-      {
-        option: "Optimize pricing tiers",
-        expectedImpact: "+3–5% ARPU with minimal churn impact",
-        kpiMovement: ["ARPU ↑", "Churn ↔/↑ slightly"],
-        risks: ["Price sensitivity in low-value segment"],
-        requiredActions: ["A/B test new tiers", "Cohort analysis weekly"]
-      },
-      {
-        option: "Target high-LTV segments",
-        expectedImpact: "Better conversion and payback period",
-        kpiMovement: ["CAC ↓", "LTV ↑", "Conv. Rate ↑"],
-        risks: ["Narrower reach"],
-        requiredActions: ["Refine audience", "Adjust creatives"]
-      }
-    ],
+    options: [],
     recommendedAction: {
-      action: "Run 4-week pricing experiment for top segments",
-      rationale: "Highest ROI with manageable risk based on historical elasticity",
-      expectedOutcome: "+6% revenue with stable churn",
-      timeline: "30-60-90 plan with phased rollout"
+      action: "Complete analysis to see recommendations",
+      rationale: "Analysis is still processing",
+      expectedOutcome: "Results pending",
+      timeline: "Pending analysis completion"
     }
   };
-
-  const insights = [
-    {
-      id: 1,
-      title: "Customer Segmentation Reveals 3 Distinct Groups",
-      description: "Analysis identified three primary customer segments with different purchasing behaviors and preferences.",
-      impact: "High",
-      confidence: 95,
-      category: "Segmentation"
-    },
-    {
-      id: 2,
-      title: "Sales Performance Correlates with Customer Satisfaction",
-      description: "Strong positive correlation (r=0.78) between customer satisfaction scores and sales performance.",
-      impact: "High",
-      confidence: 88,
-      category: "Correlation"
-    },
-    {
-      id: 3,
-      title: "Seasonal Trends Show 23% Increase in Q4",
-      description: "Time series analysis reveals consistent seasonal patterns with peak performance in Q4.",
-      impact: "Medium",
-      confidence: 82,
-      category: "Trends"
-    },
-    {
-      id: 4,
-      title: "Marketing ROI Varies by Channel",
-      description: "Email marketing shows highest ROI (340%) compared to social media (180%) and paid search (220%).",
-      impact: "High",
-      confidence: 91,
-      category: "ROI"
-    }
-  ];
-
-  const recommendations = [
-    {
-      id: 1,
-      title: "Focus Marketing Efforts on High-Value Segments",
-      description: "Allocate 60% of marketing budget to Segment A customers who show highest lifetime value.",
-      priority: "High",
-      effort: "Medium"
-    },
-    {
-      id: 2,
-      title: "Implement Customer Satisfaction Monitoring",
-      description: "Set up real-time monitoring of customer satisfaction to predict sales performance.",
-      priority: "High",
-      effort: "Low"
-    },
-    {
-      id: 3,
-      title: "Optimize Q4 Marketing Campaigns",
-      description: "Increase marketing investment in Q4 to capitalize on seasonal trends.",
-      priority: "Medium",
-      effort: "Low"
-    },
-    {
-      id: 4,
-      title: "Reallocate Marketing Budget by Channel",
-      description: "Increase email marketing budget by 20% and reduce social media spend by 15%.",
-      priority: "Medium",
-      effort: "Low"
-    }
-  ];
 
   const artifacts = [
     { id: 1, name: "Complete Analysis Report", type: "PDF", size: "2.3 MB", icon: FileText },
@@ -228,8 +179,67 @@ export default function ResultsStep({ journeyType, onNext, onPrevious }: Results
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
           <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-blue-600" />
-          <p className="text-gray-600">Loading analysis results...</p>
+          <p className="text-gray-600">Loading your analysis results...</p>
         </div>
+      </div>
+    );
+  }
+
+  // Show error state
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <Card className="max-w-md">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-yellow-900">
+              <AlertCircle className="w-5 h-5" />
+              Results Not Available
+            </CardTitle>
+            <CardDescription className="text-gray-700">
+              {error}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-gray-600 mb-4">
+              Please make sure you've completed the analysis step. If you just ran the analysis, it may still be processing.
+            </p>
+            <Button onClick={onPrevious} variant="outline" className="w-full">
+              Go Back to Analysis
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Show message if no insights found
+  if (insights.length === 0) {
+    return (
+      <div className="space-y-6">
+        <Card className="border-yellow-200 bg-yellow-50">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-yellow-900">
+              <AlertCircle className="w-5 h-5" />
+              No Analysis Results Yet
+            </CardTitle>
+            <CardDescription className="text-yellow-800">
+              Your analysis hasn't been run yet or is still processing.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-gray-700 mb-4">
+              To see results here, please go back and run the analysis on your data.
+            </p>
+            <div className="flex gap-3">
+              <Button onClick={onPrevious} variant="outline">
+                Go Back to Analysis
+              </Button>
+              <Button onClick={onNext}>
+                Continue to Artifacts
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -269,7 +279,7 @@ export default function ResultsStep({ journeyType, onNext, onPrevious }: Results
             <div>
               <h4 className="font-medium text-gray-900 mb-2">KPIs Impacted</h4>
               <div className="flex flex-wrap gap-2">
-                {decisionFramework.kpis.map((kpi) => (
+                {decisionFramework.kpis.map((kpi: string) => (
                   <Badge key={kpi} variant="secondary" className="bg-emerald-100 text-emerald-900">
                     {kpi}
                   </Badge>
@@ -302,7 +312,7 @@ export default function ResultsStep({ journeyType, onNext, onPrevious }: Results
             <div>
               <h4 className="font-medium text-gray-900 mb-2">Options and Trade-offs</h4>
               <div className="grid gap-3">
-                {decisionFramework.options.map((opt) => (
+                {decisionFramework.options.map((opt: any) => (
                   <div key={opt.option} className="rounded-lg border border-gray-200 bg-white p-3">
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -314,7 +324,7 @@ export default function ResultsStep({ journeyType, onNext, onPrevious }: Results
                       <div>
                         <p className="text-xs uppercase text-gray-500">KPI Movement</p>
                         <div className="flex flex-wrap gap-2 mt-1">
-                          {opt.kpiMovement.map((k) => (
+                          {opt.kpiMovement.map((k: string) => (
                             <Badge key={k} variant="outline">{k}</Badge>
                           ))}
                         </div>
@@ -322,13 +332,13 @@ export default function ResultsStep({ journeyType, onNext, onPrevious }: Results
                       <div>
                         <p className="text-xs uppercase text-gray-500">Risks</p>
                         <ul className="list-disc list-inside text-sm text-gray-700 mt-1">
-                          {opt.risks.map((r) => (<li key={r}>{r}</li>))}
+                          {opt.risks.map((r: string) => (<li key={r}>{r}</li>))}
                         </ul>
                       </div>
                       <div>
                         <p className="text-xs uppercase text-gray-500">Required Actions</p>
                         <ul className="list-disc list-inside text-sm text-gray-700 mt-1">
-                          {opt.requiredActions.map((a) => (<li key={a}>{a}</li>))}
+                          {opt.requiredActions.map((a: string) => (<li key={a}>{a}</li>))}
                         </ul>
                       </div>
                     </div>
@@ -402,32 +412,40 @@ export default function ResultsStep({ journeyType, onNext, onPrevious }: Results
         <CardContent>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
             <div className="text-center">
-              <p className="text-2xl font-bold text-gray-900">{analysisResults.totalAnalyses}</p>
+              <p className="text-2xl font-bold text-gray-900">
+                {analysisResults?.summary?.analysisTypesExecuted || insights.length}
+              </p>
               <p className="text-sm text-gray-600">Analyses Completed</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl font-bold text-gray-900">{analysisResults.insightsFound}</p>
+              <p className="text-2xl font-bold text-gray-900">{insights.length}</p>
               <p className="text-sm text-gray-600">Key Insights</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl font-bold text-gray-900">{analysisResults.visualizations}</p>
+              <p className="text-2xl font-bold text-gray-900">
+                {analysisResults?.summary?.visualizations || 0}
+              </p>
               <p className="text-sm text-gray-600">Visualizations</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl font-bold text-gray-900">{analysisResults.qualityScore}%</p>
+              <p className="text-2xl font-bold text-gray-900">
+                {analysisResults?.summary?.qualityScore || 0}%
+              </p>
               <p className="text-sm text-gray-600">Quality Score</p>
             </div>
           </div>
           
           <div className="flex items-center gap-2">
             <Badge variant="secondary" className="bg-green-100 text-green-800">
-              Completed {analysisResults.completionDate}
+              Completed {analysisResults?.summary?.executedAt 
+                ? new Date(analysisResults.summary.executedAt).toLocaleDateString() 
+                : 'Recently'}
             </Badge>
             <Badge variant="secondary" className="bg-blue-100 text-blue-800">
-              {analysisResults.dataRows.toLocaleString()} rows processed
+              {analysisResults?.summary?.datasetCount || 0} dataset(s) analyzed
             </Badge>
             <Badge variant="secondary" className="bg-purple-100 text-purple-800">
-              {analysisResults.executionTime} execution time
+              {analysisResults?.summary?.executionTime || 'N/A'} execution time
             </Badge>
           </div>
         </CardContent>

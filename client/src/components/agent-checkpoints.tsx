@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 import { apiClient } from '@/lib/api';
+import MultiAgentCheckpoint from './multi-agent-checkpoint';
 
 interface AgentCheckpoint {
   id: string;
@@ -212,6 +213,24 @@ export default function AgentCheckpoints({ projectId }: AgentCheckpointsProps) {
         <ScrollArea className="h-[500px] pr-4">
           <div className="space-y-4">
             {checkpoints.map((checkpoint, index) => {
+              // Check if this is a multi-agent coordination checkpoint
+              if (checkpoint.data?.type === 'multi_agent_coordination' && 
+                  checkpoint.data?.coordinationResult) {
+                return (
+                  <div key={checkpoint.id}>
+                    <MultiAgentCheckpoint
+                      checkpointId={checkpoint.id}
+                      projectId={checkpoint.projectId}
+                      message={checkpoint.message}
+                      coordinationResult={checkpoint.data.coordinationResult}
+                      onFeedback={(feedback, approved) => handleFeedback(checkpoint.id, approved)}
+                      isPending={feedbackMutation.isPending}
+                    />
+                  </div>
+                );
+              }
+
+              // Regular checkpoint rendering (existing logic)
               const agentInfo = getAgentInfo(checkpoint.agentType);
               const statusInfo = statusConfig[checkpoint.status as keyof typeof statusConfig];
               const AgentIcon = agentInfo.icon;

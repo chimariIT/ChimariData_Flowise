@@ -81,7 +81,8 @@ function projectToDataProject(project: Project): DataProject {
 
 function dataProjectToInsertProject(dataProject: InsertDataProject): Omit<InsertProject, 'id'> {
   return {
-    ownerId: dataProject.userId || '',
+    userId: dataProject.userId || '', // PRIMARY user reference (NOT NULL)
+    ownerId: dataProject.userId || '', // Deprecated, kept for backward compatibility
     name: dataProject.name,
     description: dataProject.description || null,
   };

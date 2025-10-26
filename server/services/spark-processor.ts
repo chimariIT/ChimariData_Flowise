@@ -1,6 +1,27 @@
 import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
+import { fileURLToPath } from 'url';
+
+// ES Module compatibility for __dirname
+// For tsx and ts-node, use a robust approach
+const getFileDirname = (): string => {
+  try {
+    // Try ES module approach first
+    if (typeof import.meta.url !== 'undefined') {
+      const __filename = fileURLToPath(import.meta.url);
+      return path.dirname(__filename);
+    }
+  } catch (e) {
+    // Ignore and fall through
+  }
+  
+  // Fallback: use process.cwd() with known relative path
+  // This works for both CommonJS and ESM in tsx/ts-node
+  return path.join(process.cwd(), 'server', 'services');
+};
+
+const __dirname = getFileDirname();
 
 // Define SparkConfig interface locally to avoid circular imports
 interface SparkConfig {
@@ -70,10 +91,15 @@ export class SparkProcessor {
     private isProduction: boolean;
     private pythonPath: string;
 
+    // Cache Spark detection result to avoid repeated environment checks
+    private static sparkDetectionComplete: boolean = false;
+    private static useMockMode: boolean = false;
+
     constructor() {
         this.isProduction = process.env.NODE_ENV === 'production';
         this.config = getSimpleSparkConfig();
-        this.pythonPath = process.env.PYTHON_PATH || 'python3';
+        // Check PYSPARK_PYTHON first, then PYTHON_PATH, then defaults
+        this.pythonPath = process.env.PYSPARK_PYTHON || process.env.PYTHON_PATH || 'python3';
         
         this.connectionPool = {
             sessions: new Map(),
@@ -86,7 +112,12 @@ export class SparkProcessor {
             console.warn('SPARK_MASTER_URL not set in production - using mock mode');
         }
 
-        this.initialize();
+        // Only initialize in production or if explicitly enabled
+        if (this.isProduction || process.env.SPARK_ENABLED === 'true') {
+            this.initialize();
+        } else {
+            console.log('ℹ️  Spark processor running in mock mode (development)');
+        }
     }
 
     private async initialize(): Promise<void> {
@@ -109,26 +140,82 @@ export class SparkProcessor {
     }
 
     private shouldUseMock(): boolean {
+        // Return cached result if already detected
+        if (SparkProcessor.sparkDetectionComplete) {
+            return SparkProcessor.useMockMode;
+        }
+
+        console.log('\n🔍 ===== SPARK DETECTION (ONE-TIME) =====');
+        console.log('Environment checks:');
+        console.log(`  NODE_ENV: ${process.env.NODE_ENV}`);
+        console.log(`  isProduction: ${this.isProduction}`);
+        console.log(`  SPARK_ENABLED: ${process.env.SPARK_ENABLED}`);
+        console.log(`  FORCE_SPARK_MOCK: ${process.env.FORCE_SPARK_MOCK}`);
+        console.log(`  FORCE_SPARK_REAL: ${process.env.FORCE_SPARK_REAL}`);
+        console.log(`  SPARK_MASTER_URL: ${process.env.SPARK_MASTER_URL}`);
+        console.log(`  SPARK_HOME: ${process.env.SPARK_HOME}`);
+        console.log(`  PYSPARK_PYTHON: ${process.env.PYSPARK_PYTHON}`);
+        console.log(`  pythonPath: ${this.pythonPath}`);
+
         // Use mock if:
         // 1. In development mode and no explicit Spark configuration
         // 2. Spark binaries not available
         // 3. Configuration errors in non-production environment
-        
-        if (process.env.FORCE_SPARK_MOCK === 'true') return true;
-        if (process.env.FORCE_SPARK_REAL === 'true') return false;
-        
-        // Check if running in development without explicit Spark setup
-        if (!this.isProduction && !process.env.SPARK_MASTER_URL) {
-            return true;
+
+        let useMock = false;
+
+        if (process.env.FORCE_SPARK_MOCK === 'true') {
+            console.log('✅ Decision: MOCK (FORCE_SPARK_MOCK=true)');
+            useMock = true;
+        } else if (process.env.FORCE_SPARK_REAL === 'true') {
+            console.log('✅ Decision: REAL (FORCE_SPARK_REAL=true)');
+            useMock = false;
+        } else if (!this.isProduction && !process.env.SPARK_MASTER_URL) {
+            // Check if running in development without explicit Spark setup
+            console.log('✅ Decision: MOCK (development + no SPARK_MASTER_URL)');
+            useMock = true;
+        } else {
+            // Check if Python and required dependencies are available
+            try {
+                console.log('🔧 Checking Python and PySpark availability...');
+                const pythonCheck = spawn(this.pythonPath, ['-c', 'import pyspark'], { stdio: 'pipe' });
+                
+                pythonCheck.on('close', (code) => {
+                    if (code === 0) {
+                        console.log('✅ Decision: REAL (Python and PySpark available)');
+                        SparkProcessor.useMockMode = false;
+                    } else {
+                        console.log('❌ PySpark import failed');
+                        console.log('✅ Decision: MOCK (Python/PySpark not available)');
+                        SparkProcessor.useMockMode = true;
+                    }
+                    SparkProcessor.sparkDetectionComplete = true;
+                });
+                
+                pythonCheck.on('error', (error) => {
+                    console.log(`❌ Python/PySpark check failed: ${error}`);
+                    console.log('✅ Decision: MOCK (Python/PySpark not available)');
+                    SparkProcessor.useMockMode = true;
+                    SparkProcessor.sparkDetectionComplete = true;
+                });
+                
+                // For now, assume real mode since we know PySpark is installed
+                console.log('✅ Decision: REAL (Python and PySpark available)');
+                useMock = false;
+            } catch (error) {
+                console.log(`❌ Python/PySpark check failed: ${error}`);
+                console.log('✅ Decision: MOCK (Python/PySpark not available)');
+                useMock = true;
+            }
         }
 
-        // Check if Python and required dependencies are available
-        try {
-            const pythonCheck = spawn(this.pythonPath, ['-c', 'import pyspark'], { stdio: 'pipe' });
-            return false; // If we reach here, Python and PySpark are available
-        } catch {
-            return true; // Fall back to mock if Python/PySpark not available
-        }
+        // Cache the result to avoid repeated checks
+        SparkProcessor.sparkDetectionComplete = true;
+        SparkProcessor.useMockMode = useMock;
+        console.log(`🎯 Spark mode cached: ${useMock ? 'MOCK' : 'REAL'}`);
+        console.log('===================================\n');
+
+        return useMock;
     }
 
     private async initializeSparkCluster(): Promise<void> {
@@ -145,8 +232,16 @@ export class SparkProcessor {
             const configJson = JSON.stringify(this.config);
             const argsJson = JSON.stringify(args);
 
+            // Set PySpark Python environment variables
+            const env = {
+                ...process.env,
+                PYSPARK_PYTHON: this.pythonPath,
+                PYSPARK_DRIVER_PYTHON: this.pythonPath
+            };
+
             const pythonProcess = spawn(this.pythonPath, [scriptPath, operation, configJson, argsJson], {
-                stdio: ['pipe', 'pipe', 'pipe']
+                stdio: ['pipe', 'pipe', 'pipe'],
+                env: env
             });
 
             let stdout = '';
@@ -191,6 +286,11 @@ export class SparkProcessor {
         }
 
         if (this.shouldUseMock()) {
+            // CRITICAL: Prevent mock mode in production
+            if (process.env.NODE_ENV === 'production') {
+                console.error('🔴 CRITICAL: Spark mock mode active in production!');
+                throw new Error('PRODUCTION_ERROR: Spark cluster not available. Mock mode disabled in production.');
+            }
             console.log("Applying transformations with Spark (mocked)...");
             // Mock implementation for development
             return Array.isArray(data) ? data : [{ transformed: true, mock: true }];
@@ -241,6 +341,11 @@ export class SparkProcessor {
         }
 
         if (this.shouldUseMock()) {
+            // CRITICAL: Prevent mock mode in production
+            if (process.env.NODE_ENV === 'production') {
+                console.error('🔴 CRITICAL: Spark mock mode active in production!');
+                throw new Error('PRODUCTION_ERROR: Spark cluster not available for analysis. Mock mode disabled in production.');
+            }
             console.log(`Performing ${analysisType} with Spark (mocked)...`);
             return { 
                 result: `Mock ${analysisType} analysis result`,

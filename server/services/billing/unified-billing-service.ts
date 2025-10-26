@@ -18,6 +18,8 @@
 import Stripe from 'stripe';
 import { db } from '../../db';
 import { users } from '../../../shared/schema';
+import { PricingService } from '../pricing';
+import { mlLLMUsageTracker } from '../ml-llm-usage-tracker';
 import { eq, sql } from 'drizzle-orm';
 import {
   SubscriptionTier,
@@ -27,7 +29,7 @@ import {
   JourneyType,
   UserRole,
 } from '../../../shared/canonical-types';
-import crypto from 'crypto';
+import * as crypto from 'crypto';
 
 // ==========================================
 // CONFIGURATION INTERFACES
@@ -206,7 +208,7 @@ export class UnifiedBillingService {
     webhookSecret: string;
   }) {
     this.stripe = new Stripe(config.stripeSecretKey, {
-      apiVersion: '2024-12-18.acacia',
+      apiVersion: '2025-08-27.basil',
     });
     this.webhookSecret = config.webhookSecret;
 
@@ -503,7 +505,7 @@ export class UnifiedBillingService {
             stripeSubscriptionId: subscription.id,
             subscriptionTier: tier,
             subscriptionStatus: subscription.status as SubscriptionStatus,
-            subscriptionExpiresAt: new Date(subscription.current_period_end * 1000),
+            subscriptionExpiresAt: new Date((subscription as any).current_period_end * 1000),
             subscriptionBalances: this.getInitialBalances(tierConfig),
             isPaid: true,
             updatedAt: new Date(),
@@ -668,7 +670,7 @@ export class UnifiedBillingService {
     await tx.update(users)
       .set({
         subscriptionStatus: subscription.status as SubscriptionStatus,
-        subscriptionExpiresAt: new Date(subscription.current_period_end * 1000),
+        subscriptionExpiresAt: new Date((subscription as any).current_period_end * 1000),
         updatedAt: new Date(),
       })
       .where(eq(users.id, userId));
@@ -1017,6 +1019,334 @@ export class UnifiedBillingService {
 
     return balances;
   }
+
+  /**
+   * Calculate billing with capacity tracking (for compatibility)
+   */
+  async calculateBillingWithCapacity(userId: string, usage: any): Promise<any> {
+    const userTier = await this.getUserTier(userId);
+    const usageMetrics = await this.getUsageMetricsSimple(userId);
+    
+    return {
+      userId,
+      tier: userTier,
+      usage: usageMetrics,
+      cost: 0, // Simplified for now
+      capacityUsed: (usageMetrics as any)?.totalDataUsageMB || 0,
+      capacityLimit: this.getTierConfig(userTier)?.quotas.maxDataUploadsMB || 0
+    };
+  }
+
+  /**
+   * Get user capacity summary (for compatibility)
+   */
+  async getUserCapacitySummary(userId: string): Promise<any> {
+    const userTier = await this.getUserTier(userId);
+    const usageMetrics = await this.getUsageMetricsSimple(userId);
+    const tierConfig = this.getTierConfig(userTier);
+    
+    return {
+      userId,
+      tier: userTier,
+      capacityUsed: (usageMetrics as any)?.totalDataUsageMB || 0,
+      capacityLimit: tierConfig?.quotas.maxDataUploadsMB || 0,
+      percentageUsed: tierConfig ? 
+        (((usageMetrics as any)?.totalDataUsageMB || 0) / tierConfig.quotas.maxDataUploadsMB) * 100 : 0
+    };
+  }
+
+  /**
+   * Calculate journey requirements (for compatibility)
+   */
+  async calculateJourneyRequirements(journeyType: string, datasetSizeMB: number): Promise<any> {
+    return {
+      journeyType,
+      datasetSizeMB,
+      estimatedCost: datasetSizeMB * 0.01, // Simple calculation
+      complexity: datasetSizeMB > 1000 ? 'large' : datasetSizeMB > 100 ? 'medium' : 'small'
+    };
+  }
+
+  /**
+   * Update user usage (for compatibility)
+   */
+  async updateUserUsage(userId: string, usage: any): Promise<void> {
+    await this.trackFeatureUsage(userId, 'data_upload', 'small', usage.dataSizeMB || 0);
+  }
+
+  /**
+   * Get user by ID
+   */
+  async getUser(userId: string): Promise<any> {
+    // This would typically fetch from database
+    // For now, return a mock user
+    return {
+      id: userId,
+      subscriptionTier: 'trial',
+      email: 'user@example.com'
+    };
+  }
+
+  /**
+   * Get user usage by ID
+   */
+  async getUserUsage(userId: string): Promise<any> {
+    // This would typically fetch from database
+    // For now, return mock usage
+    return {
+      dataUploadsMB: 0,
+      toolExecutions: 0,
+      aiQueries: 0
+    };
+  }
+
+  /**
+   * Get user tier
+   */
+  async getUserTier(userId: string): Promise<SubscriptionTier> {
+    const user = await this.getUser(userId);
+    return user?.subscriptionTier || 'trial';
+  }
+
+  /**
+   * Get usage metrics (simple version)
+   */
+  async getUsageMetricsSimple(userId: string): Promise<any> {
+    // This would typically fetch from database
+    // For now, return mock metrics
+    return {
+      totalDataUsageMB: 0,
+      totalToolExecutions: 0,
+      totalAIQueries: 0
+    };
+  }
+
+  /**
+   * Get ML/LLM usage summary for user
+   */
+  async getMLUsageSummary(userId: string): Promise<any> {
+    try {
+      const now = new Date();
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      
+      const mlUsage = await mlLLMUsageTracker.getUserUsage(
+        parseInt(userId), 
+        startOfMonth, 
+        now
+      );
+
+      return {
+        total_billing_units: mlUsage.total_billing_units,
+        total_jobs: mlUsage.total_jobs,
+        successful_jobs: mlUsage.successful_jobs,
+        failed_jobs: mlUsage.failed_jobs,
+        by_tool: mlUsage.by_tool,
+        by_library: mlUsage.by_library,
+        by_model_type: mlUsage.by_model_type,
+        estimated_cost: mlUsage.total_billing_units * 0.10 // $0.10 per billing unit
+      };
+    } catch (error) {
+      console.error('Failed to get ML usage summary:', error);
+      return {
+        total_billing_units: 0,
+        total_jobs: 0,
+        successful_jobs: 0,
+        failed_jobs: 0,
+        by_tool: {},
+        by_library: {},
+        by_model_type: {},
+        estimated_cost: 0
+      };
+    }
+  }
+
+  /**
+   * Calculate ML training cost estimate
+   */
+  async calculateMLCostEstimate(params: {
+    userId: string;
+    toolName: string;
+    datasetSize: number;
+    useAutoML?: boolean;
+    enableExplainability?: boolean;
+    trials?: number;
+  }): Promise<any> {
+    try {
+      const user = await this.getUser(params.userId);
+      const userTier = user?.subscriptionTier || 'trial';
+
+      const cost = PricingService.calculateMLCost({
+        toolName: params.toolName,
+        datasetSize: params.datasetSize,
+        useAutoML: params.useAutoML,
+        enableExplainability: params.enableExplainability,
+        trials: params.trials,
+        userTier
+      });
+
+      return {
+        success: true,
+        cost,
+        userTier,
+        quota_check: await this.checkMLQuota(params.userId, params.toolName, userTier)
+      };
+    } catch (error) {
+      console.error('Failed to calculate ML cost estimate:', error);
+      return {
+        success: false,
+        error: 'Failed to calculate cost estimate'
+      };
+    }
+  }
+
+  /**
+   * Calculate LLM fine-tuning cost estimate
+   */
+  async calculateLLMCostEstimate(params: {
+    userId: string;
+    toolName: string;
+    datasetSize: number;
+    method?: 'full' | 'lora' | 'qlora';
+    numEpochs?: number;
+  }): Promise<any> {
+    try {
+      const user = await this.getUser(params.userId);
+      const userTier = user?.subscriptionTier || 'trial';
+
+      const cost = PricingService.calculateLLMCost({
+        toolName: params.toolName,
+        datasetSize: params.datasetSize,
+        method: params.method,
+        numEpochs: params.numEpochs,
+        userTier
+      });
+
+      return {
+        success: true,
+        cost,
+        userTier,
+        quota_check: await this.checkLLMQuota(params.userId, params.toolName, userTier)
+      };
+    } catch (error) {
+      console.error('Failed to calculate LLM cost estimate:', error);
+      return {
+        success: false,
+        error: 'Failed to calculate cost estimate'
+      };
+    }
+  }
+
+  /**
+   * Check ML quota before execution
+   */
+  private async checkMLQuota(userId: string, toolName: string, userTier: string): Promise<any> {
+    if (toolName === 'comprehensive_ml_pipeline') {
+      return await mlLLMUsageTracker.checkMLTrainingQuota(parseInt(userId), userTier);
+    } else if (toolName === 'automl_optimizer') {
+      return await mlLLMUsageTracker.checkAutoMLQuota(parseInt(userId), userTier);
+    }
+    return { allowed: true };
+  }
+
+  /**
+   * Check LLM quota before execution
+   */
+  private async checkLLMQuota(userId: string, toolName: string, userTier: string): Promise<any> {
+    if (toolName.includes('llm')) {
+      return await mlLLMUsageTracker.checkLLMFineTuningQuota(parseInt(userId), userTier);
+    }
+    return { allowed: true };
+  }
+
+  /**
+   * Log ML/LLM usage for billing
+   */
+  async logMLUsage(event: {
+    userId: string;
+    projectId?: string;
+    toolName: string;
+    modelType?: 'traditional_ml' | 'llm';
+    libraryUsed?: string;
+    datasetSize: number;
+    executionTimeMs: number;
+    success: boolean;
+    error?: string;
+    metadata?: Record<string, any>;
+  }): Promise<void> {
+    try {
+      // Calculate billing units
+      let billingUnits = 0;
+      if (event.toolName.includes('ml')) {
+        billingUnits = mlLLMUsageTracker.calculateMLBillingUnits(
+          event.toolName,
+          event.datasetSize,
+          event.metadata?.useAutoML,
+          event.metadata?.trials
+        );
+      } else if (event.toolName.includes('llm')) {
+        billingUnits = mlLLMUsageTracker.calculateLLMBillingUnits(
+          event.toolName,
+          event.datasetSize,
+          event.metadata?.method,
+          event.metadata?.numEpochs
+        );
+      }
+
+      await mlLLMUsageTracker.logUsage({
+        userId: parseInt(event.userId),
+        projectId: event.projectId ? parseInt(event.projectId) : undefined,
+        toolName: event.toolName,
+        modelType: event.modelType,
+        libraryUsed: event.libraryUsed,
+        datasetSize: event.datasetSize,
+        executionTimeMs: event.executionTimeMs,
+        billingUnits,
+        success: event.success,
+        error: event.error,
+        metadata: event.metadata
+      });
+    } catch (error) {
+      console.error('Failed to log ML usage:', error);
+      // Don't throw - usage logging shouldn't break the main functionality
+    }
+  }
+  /**
+   * Get tier configuration by string
+   */
+  private getTierConfigByString(tier: string): any {
+    const configs = this.getConfigurations();
+    return configs.tiers.find(t => t.tier === tier);
+  }
+
+  /**
+   * Get user usage summary
+   */
+  async getUserUsageSummary(userId: string): Promise<{
+    dataUsage: { totalUploadSizeMB: number };
+    computeUsage: { toolExecutions: number; aiQueries: number };
+  }> {
+    try {
+      const user = await this.getUser(userId);
+      const usage = await this.getUserUsage(userId);
+      
+      return {
+        dataUsage: {
+          totalUploadSizeMB: usage.dataUploadsMB || 0
+        },
+        computeUsage: {
+          toolExecutions: usage.toolExecutions || 0,
+          aiQueries: usage.aiQueries || 0
+        }
+      };
+    } catch (error) {
+      // Return default values if user not found
+      return {
+        dataUsage: { totalUploadSizeMB: 0 },
+        computeUsage: { toolExecutions: 0, aiQueries: 0 }
+      };
+    }
+  }
+
 }
 
 // Singleton instance
@@ -1024,9 +1354,17 @@ let billingService: UnifiedBillingService | null = null;
 
 export function getBillingService(): UnifiedBillingService {
   if (!billingService) {
+    const stripeSecretKey = process.env.STRIPE_SECRET_KEY || 'sk_test_development_key';
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || 'whsec_development_secret';
+    
+    // Log warning if using development keys
+    if (stripeSecretKey === 'sk_test_development_key') {
+      console.warn('⚠️  Using development Stripe key. Set STRIPE_SECRET_KEY for production.');
+    }
+    
     billingService = new UnifiedBillingService({
-      stripeSecretKey: process.env.STRIPE_SECRET_KEY || '',
-      webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || '',
+      stripeSecretKey,
+      webhookSecret,
     });
   }
   return billingService;

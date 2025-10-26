@@ -16,7 +16,9 @@
       "Bash(npm run check:*)",
       "Bash(npm run test:user-journeys:*)",
       "Bash(timeout:*)",
-      "Bash(tasklist)"
+      "Bash(tasklist)",
+      "Bash(npm run test:*)",
+      "Bash(dir \"C:\\Program Files\\Java\")"
     ],
     "deny": [],
     "ask": []

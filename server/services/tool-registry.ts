@@ -830,3 +830,6 @@ export class ToolRegistry extends EventEmitter {
     console.log('🛠️ Tool Registry shutdown completed');
   }
 }
+
+// Export singleton instance for easy import
+export const toolRegistry = new ToolRegistry();

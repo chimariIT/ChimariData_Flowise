@@ -1,3 +1,14 @@
+// DEPRECATED: This file is being migrated to shared/unified-subscription-tiers.ts
+// Import the unified system for new code
+import { 
+  UNIFIED_SUBSCRIPTION_TIERS, 
+  type UnifiedSubscriptionTier,
+  getUnifiedTierLimits,
+  canUserUploadUnified,
+  canUserRequestAIInsightUnified
+} from './unified-subscription-tiers';
+
+// Legacy interface for backward compatibility
 export interface SubscriptionTier {
   id: string;
   name: string;
@@ -21,11 +32,12 @@ export interface SubscriptionTier {
   stripePriceId?: string;
 }
 
+// Legacy export - maps to unified system
 export const SUBSCRIPTION_TIERS: Record<string, SubscriptionTier> = {
   trial: {
     id: 'trial',
     name: 'Trial',
-    price: 5,
+    price: 1,
     description: 'Perfect for testing our platform with basic analytics',
     features: {
       maxFiles: 1,

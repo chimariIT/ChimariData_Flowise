@@ -95,57 +95,21 @@ export function SchemaAnalysis({
     }
 
     // Generate mock schema data (in real implementation, this would come from backend)
-    const mockSchemaData: SchemaData = {
-      columns: [
-        {
-          name: 'customer_id',
-          type: 'integer',
-          sampleValues: ['1001', '1002', '1003', '1004', '1005'],
-          nullCount: 0,
-          uniqueCount: 1000,
-          aiSummary: 'Unique identifier for customers. Sequential numbering starting from 1001.'
-        },
-        {
-          name: 'purchase_date',
-          type: 'date',
-          sampleValues: ['2024-01-15', '2024-01-16', '2024-01-17'],
-          nullCount: 5,
-          uniqueCount: 365,
-          aiSummary: 'Transaction dates spanning the full year 2024. Some missing values likely due to data processing errors.'
-        },
-        {
-          name: 'amount',
-          type: 'decimal',
-          sampleValues: ['29.99', '149.50', '89.99', '199.00'],
-          nullCount: 2,
-          uniqueCount: 756,
-          aiSummary: 'Purchase amounts in USD. Range from $9.99 to $999.99 with typical values around $50-150.'
-        },
-        {
-          name: 'category',
-          type: 'text',
-          sampleValues: ['Electronics', 'Clothing', 'Home & Garden', 'Books'],
-          nullCount: 12,
-          uniqueCount: 8,
-          aiSummary: 'Product categories. 8 main categories with Electronics and Clothing being most frequent.'
-        },
-        {
-          name: 'customer_satisfaction',
-          type: 'integer',
-          sampleValues: ['4', '5', '3', '4', '5'],
-          nullCount: 45,
-          uniqueCount: 5,
-          aiSummary: 'Customer satisfaction scores from 1-5. Average rating is 4.2 with most customers rating 4 or 5.'
-        }
-      ],
-      totalRecords: 1000,
-      completeness: 94.2,
-      quality: 87.5
-    };
-
-    setSchemaData(mockSchemaData);
-    setAnalysisStatus('complete');
-    onComplete(mockSchemaData);
+    // TODO: Replace with real API call to analyze uploaded data
+    // For now, show loading state to indicate real analysis would happen
+    setAnalysisStatus('analyzing');
+    
+    // Simulate real analysis delay
+    setTimeout(() => {
+      // This would be replaced with actual API response
+      setAnalysisStatus('complete');
+      onComplete({
+        columns: [],
+        totalRecords: 0,
+        completeness: 0,
+        quality: 0
+      });
+    }, 3000);
   };
 
   const renderColumnCard = (column: ColumnInfo) => {

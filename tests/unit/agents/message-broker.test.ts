@@ -143,18 +143,24 @@ describe('AgentMessageBroker', () => {
         payload: { action: 'analyze' }
       };
 
-      // Simulate response after 100ms
-      setTimeout(() => {
-        broker.emit('message', {
-          from: 'agent_b',
-          to: 'agent_a',
-          type: 'result',
-          payload: { result: 'success' },
-          correlationId: message.correlationId
-        });
-      }, 100);
+      // Capture the sent message to get correlationId
+      let sentMessage: any = null;
+      broker.once('message_sent', (msg: any) => {
+        sentMessage = msg;
+      });
 
-      const response = await broker.sendAndWait(message, 1000);
+      // Start sendAndWait (will wait for response)
+      const responsePromise = broker.sendAndWait(message, 1000);
+
+      // Wait a bit for message to be sent
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // Simulate response with correct correlationId
+      if (sentMessage?.correlationId) {
+        broker.emit(`response:${sentMessage.correlationId}`, { result: 'success' });
+      }
+
+      const response = await responsePromise;
       expect(response).toEqual({ result: 'success' });
     });
 

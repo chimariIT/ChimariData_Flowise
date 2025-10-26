@@ -25,6 +25,60 @@ export class PythonProcessor {
     return dataDir;
   }
 
+  static async healthCheck(): Promise<{ healthy: boolean; details: any }> {
+    return new Promise((resolve) => {
+      // Windows uses 'python', Linux/Mac uses 'python3'
+      const pythonPath = process.env.PYTHON_PATH || (process.platform === 'win32' ? 'python' : 'python3');
+      
+      // Try to import required libraries
+      const pythonProcess = spawn(pythonPath, [
+        '-c',
+        'import pandas, numpy, scipy, statsmodels, sklearn, matplotlib, plotly, seaborn; print("OK")'
+      ]);
+      
+      let stdout = '';
+      let stderr = '';
+      const timeout = setTimeout(() => {
+        pythonProcess.kill();
+        resolve({
+          healthy: false,
+          details: { error: 'Python health check timed out' }
+        });
+      }, 5000);
+      
+      pythonProcess.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+      
+      pythonProcess.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+      
+      pythonProcess.on('close', (code) => {
+        clearTimeout(timeout);
+        if (code === 0) {
+          resolve({
+            healthy: true,
+            details: { libraries: ['pandas', 'numpy', 'scipy', 'statsmodels', 'sklearn', 'matplotlib', 'plotly', 'seaborn'] }
+          });
+        } else {
+          resolve({
+            healthy: false,
+            details: { error: stderr || 'Python libraries not available' }
+          });
+        }
+      });
+      
+      pythonProcess.on('error', (error) => {
+        clearTimeout(timeout);
+        resolve({
+          healthy: false,
+          details: { error: error.message || 'Python not found' }
+        });
+      });
+    });
+  }
+
   static async processData(options: PythonProcessorOptions): Promise<PythonProcessorResult> {
     const { projectId, operation, data, config } = options;
     const dataDir = this.ensureDataDir();
@@ -87,7 +141,9 @@ export class PythonProcessor {
 
   private static async runPythonScript(scriptPath: string, args: string[]): Promise<{ success: boolean; error?: string }> {
     return new Promise((resolve) => {
-      const pythonProcess = spawn('python3', [scriptPath, ...args]);
+      // Use platform-appropriate Python command
+      const pythonPath = process.env.PYTHON_PATH || (process.platform === 'win32' ? 'python' : 'python3');
+      const pythonProcess = spawn(pythonPath, [scriptPath, ...args]);
       
       let stdout = '';
       let stderr = '';

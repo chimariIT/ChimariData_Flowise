@@ -22,12 +22,16 @@ import {
   UserCog,
   UserCheck,
   ArrowLeft,
-  AlertTriangle
+  AlertTriangle,
+  MessageSquare,
+  Receipt
 } from "lucide-react";
 import AdminDashboard from "./admin-dashboard";
 import AgentManagement from "./agent-management";
 import SubscriptionManagement from "./subscription-management";
 import ToolsManagement from "./tools-management";
+import Consultations from "./consultations";
+import ConsultationPricing from "./consultation-pricing";
 
 interface AdminLayoutProps {
   user?: any;
@@ -185,7 +189,7 @@ export default function AdminLayout({ user }: AdminLayoutProps) {
       {/* Main Content */}
       <div className="container mx-auto px-4 py-6">
         <Tabs value={activeTab} onValueChange={handleTabChange}>
-          <TabsList className="grid w-full grid-cols-4 mb-6">
+          <TabsList className="grid w-full grid-cols-6 mb-6">
             <TabsTrigger value="dashboard" className="flex items-center gap-2">
               <BarChart3 className="w-4 h-4" />
               Dashboard
@@ -193,6 +197,14 @@ export default function AdminLayout({ user }: AdminLayoutProps) {
             <TabsTrigger value="subscription-management" className="flex items-center gap-2">
               <DollarSign className="w-4 h-4" />
               Subscriptions
+            </TabsTrigger>
+            <TabsTrigger value="consultations" className="flex items-center gap-2">
+              <MessageSquare className="w-4 h-4" />
+              Consultations
+            </TabsTrigger>
+            <TabsTrigger value="consultation-pricing" className="flex items-center gap-2">
+              <Receipt className="w-4 h-4" />
+              Pricing
             </TabsTrigger>
             <TabsTrigger value="agent-management" className="flex items-center gap-2">
               <Bot className="w-4 h-4" />
@@ -210,6 +222,14 @@ export default function AdminLayout({ user }: AdminLayoutProps) {
 
           <TabsContent value="subscription-management">
             <SubscriptionManagement />
+          </TabsContent>
+
+          <TabsContent value="consultations">
+            <Consultations />
+          </TabsContent>
+
+          <TabsContent value="consultation-pricing">
+            <ConsultationPricing />
           </TabsContent>
 
           <TabsContent value="agent-management">

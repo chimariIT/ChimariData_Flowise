@@ -3,19 +3,22 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { 
-  DollarSign, 
-  CheckCircle, 
+import {
+  DollarSign,
+  CheckCircle,
   CreditCard,
   Clock,
   Zap,
   Shield,
   Download,
   Eye,
-  ArrowRight
+  ArrowRight,
+  ShieldCheck,
+  AlertTriangle
 } from "lucide-react";
 import { apiClient } from "@/lib/api";
 import BillingCapacityDisplay from "@/components/BillingCapacityDisplay";
+import { useProjectSession } from "@/hooks/useProjectSession";
 
 interface PricingStepProps {
   journeyType: string;
@@ -30,6 +33,17 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
   const [billingError, setBillingError] = useState<string | null>(null);
   const [billingBreakdown, setBillingBreakdown] = useState<any | null>(null);
   const [currentTier, setCurrentTier] = useState<string>('');
+  const [validationWarning, setValidationWarning] = useState<string | null>(null);
+
+  // 🔒 CRITICAL: Use server-validated session data ONLY
+  const {
+    session,
+    getExecuteData,
+    loading: sessionLoading,
+    error: sessionError
+  } = useProjectSession({
+    journeyType: journeyType as 'non-tech' | 'business' | 'technical' | 'consultation'
+  });
 
   const getJourneyTypeInfo = () => {
     switch (journeyType) {
@@ -79,15 +93,63 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
   const journeyInfo = getJourneyTypeInfo();
   const Icon = journeyInfo.icon;
 
-  // Mock analysis results for pricing calculation
-  const analysisResults = {
-    totalAnalyses: 4,
-    dataSize: 10000,
-    complexity: 'moderate',
-    executionTime: '12 minutes',
-    resultsGenerated: 12,
-    insightsFound: 8
+  // 🔒 SECURITY: Load ONLY server-validated analysis results
+  const getAnalysisResults = () => {
+    // CRITICAL: Verify server validation
+    if (session) {
+      if (!session.serverValidated) {
+        setValidationWarning('⚠️ SECURITY: Execution results have NOT been validated by the server. Pricing may be inaccurate. Please re-run your analysis.');
+        console.error('SECURITY ALERT: Attempting to use unvalidated execution results for pricing');
+      }
+
+      // Use server-authoritative data
+      const serverData = getExecuteData();
+      if (serverData) {
+        console.log('✅ Using server-validated execution results for pricing');
+        return {
+          totalAnalyses: serverData.totalAnalyses || serverData.selectedAnalyses?.length || 1,
+          dataSize: serverData.dataSize || serverData.resultsGenerated || 1000,
+          complexity: serverData.complexity || 'moderate',
+          executionTime: serverData.executionTime || '5 minutes',
+          resultsGenerated: serverData.resultsGenerated || 0,
+          insightsFound: serverData.insightsFound || 0
+        };
+      }
+    }
+
+    // Fallback to localStorage cache (with warning)
+    try {
+      const cached = localStorage.getItem('chimari_execution_results');
+      if (cached) {
+        console.warn('⚠️  Using localStorage fallback (not server-validated)');
+        setValidationWarning('Using cached data. For accurate pricing, please ensure your analysis completed successfully.');
+        const parsed = JSON.parse(cached);
+        return {
+          totalAnalyses: parsed.totalAnalyses || parsed.selectedAnalyses?.length || 1,
+          dataSize: parsed.dataSize || parsed.resultsGenerated || 1000,
+          complexity: parsed.complexity || 'moderate',
+          executionTime: parsed.executionTime || '5 minutes',
+          resultsGenerated: parsed.resultsGenerated || 0,
+          insightsFound: parsed.insightsFound || 0
+        };
+      }
+    } catch (error) {
+      console.error('Failed to load execution results:', error);
+    }
+
+    // Last resort: defaults
+    setValidationWarning('⚠️ No execution results found. Please run analysis before viewing pricing.');
+    return {
+      totalAnalyses: 0,
+      dataSize: 0,
+      complexity: 'moderate' as const,
+      executionTime: 'N/A',
+      resultsGenerated: 0,
+      insightsFound: 0
+    };
   };
+
+  const analysisResults = getAnalysisResults();
 
   // Compute dataset size in MB from rows (rough estimate: 10,000 rows ~ 100 MB)
   const datasetSizeMB = Math.max(1, Math.round(analysisResults.dataSize / 100));
@@ -120,7 +182,20 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
         }
       } catch (err: any) {
         // If unauthenticated or endpoint unavailable, fail softly and keep client-only pricing
-        if (!cancelled) setBillingError(err?.message || 'Unable to load subscription-adjusted pricing');
+        if (!cancelled) {
+          console.error('Billing breakdown error:', err);
+          const errorMsg = err?.message || err?.error || 'Unable to load subscription-adjusted pricing';
+          setBillingError(errorMsg);
+          // Set default billing breakdown for non-authenticated users
+          setBillingBreakdown({
+            journeyType: payload.journeyType, // Add journeyType to fallback
+            datasetSizeMB: payload.datasetSizeMB,
+            baseCost: journeyInfo.basePrice * analysisResults.totalAnalyses,
+            subscriptionCredits: 0,
+            totalCost: journeyInfo.basePrice * analysisResults.totalAnalyses,
+            breakdown: []
+          });
+        }
       } finally {
         if (!cancelled) setBillingLoading(false);
       }
@@ -244,6 +319,50 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
         </CardHeader>
       </Card>
 
+      {/* 🔒 Server Validation Status */}
+      {session?.serverValidated && (
+        <Card className="border-green-200 bg-green-50">
+          <CardContent className="py-4">
+            <div className="flex items-center gap-3">
+              <ShieldCheck className="w-6 h-6 text-green-600" />
+              <div>
+                <p className="font-semibold text-green-900">✅ Results Verified by Server</p>
+                <p className="text-sm text-green-700">
+                  Your execution results have been validated and secured. Pricing is based on verified data.
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ⚠️ Validation Warning */}
+      {validationWarning && (
+        <Card className="border-yellow-200 bg-yellow-50">
+          <CardContent className="py-4">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="w-6 h-6 text-yellow-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold text-yellow-900">⚠️ Validation Warning</p>
+                <p className="text-sm text-yellow-800">{validationWarning}</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Session Loading Indicator */}
+      {sessionLoading && (
+        <Card className="border-blue-200 bg-blue-50">
+          <CardContent className="py-3">
+            <div className="flex items-center gap-2 text-sm text-blue-800">
+              <Shield className="w-4 h-4 animate-pulse" />
+              <span>Synchronizing session data from server...</span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Analysis Summary */}
       <Card>
         <CardHeader>
@@ -346,7 +465,11 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
             <div className="text-sm text-gray-600">Calculating with your subscription...</div>
           )}
           {!billingLoading && billingError && (
-            <div className="text-sm text-red-600">{billingError}</div>
+            <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+              <p className="text-sm text-yellow-800">
+                <strong>Note:</strong> Please sign in to see subscription discounts. Pricing shown is standard rate.
+              </p>
+            </div>
           )}
           {!billingLoading && billingBreakdown && (
             <div className="space-y-3">

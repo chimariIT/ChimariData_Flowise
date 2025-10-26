@@ -31,6 +31,79 @@ export default function ProjectSetupStep({ journeyType }: ProjectSetupStepProps)
   const [primaryTemplate, setPrimaryTemplate] = useState<string>("");
   const [loadingTemplates, setLoadingTemplates] = useState(false);
   const [templateError, setTemplateError] = useState<string | null>(null);
+  const [loadingRecommendations, setLoadingRecommendations] = useState(false);
+
+  // Fetch agent recommendations on component mount
+  useEffect(() => {
+    async function fetchAgentRecommendations() {
+      try {
+        // Get user goals and questions from localStorage (saved in prepare step)
+        const savedGoals = localStorage.getItem('chimari_analysis_goals');
+        const savedQuestions = localStorage.getItem('chimari_analysis_questions');
+
+        if (!savedGoals || !savedQuestions) {
+          console.log('No goals/questions found, skipping agent recommendations');
+          return;
+        }
+
+        const goals = JSON.parse(savedGoals);
+        const questions = JSON.parse(savedQuestions);
+
+        if (!goals || !questions || questions.length === 0) {
+          console.log('Goals or questions empty, skipping agent recommendations');
+          return;
+        }
+
+        setLoadingRecommendations(true);
+        console.log('🔮 Fetching agent recommendations...', { goals, questions });
+
+        // Use a dummy project ID or create a temporary project ID for the recommendations request
+        const dummyProjectId = 'temp-' + Date.now();
+        
+        // Call agent recommendations API
+        const token = localStorage.getItem('auth_token');
+        const response = await fetch(`/api/projects/${dummyProjectId}/agent-recommendations`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            goals,
+            questions,
+            dataSource: dataSource || 'upload'
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to fetch recommendations: ${response.statusText}`);
+        }
+
+        const result = await response.json();
+
+        if (result.success && result.recommendations) {
+          console.log('✅ Agent recommendations received:', result.recommendations);
+          
+          // Pre-fill expected rows and analysis complexity
+          if (result.recommendations.expectedDataSize && !expectedRows) {
+            setExpectedRows(result.recommendations.expectedDataSize);
+          }
+          
+          if (result.recommendations.analysisComplexity && !analysisComplexity) {
+            setAnalysisComplexity(result.recommendations.analysisComplexity);
+          }
+        }
+
+      } catch (error: any) {
+        console.error('Failed to fetch agent recommendations:', error);
+        // Don't show error to user - just log it
+      } finally {
+        setLoadingRecommendations(false);
+      }
+    }
+
+    fetchAgentRecommendations();
+  }, []); // Only run once on mount
 
   useEffect(() => {
     if (journeyType !== 'business') return;

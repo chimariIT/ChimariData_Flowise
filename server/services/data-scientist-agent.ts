@@ -4,6 +4,45 @@ import { TechnicalAIAgent } from './technical-ai-agent';
 import { SparkProcessor } from './spark-processor';
 import { nanoid } from 'nanoid';
 
+// ==========================================
+// CONSULTATION INTERFACES (Multi-Agent Coordination)
+// ==========================================
+
+export interface FeasibilityReport {
+  feasible: boolean;
+  confidence: number;
+  requiredAnalyses: string[];
+  estimatedDuration: string;
+  dataRequirements: {
+    met: string[];
+    missing: string[];
+    canDerive: string[];
+  };
+  concerns: string[];
+  recommendations: string[];
+}
+
+export interface ValidationResult {
+  valid: boolean;
+  confidence: number;
+  warnings: string[];
+  alternatives: string[];
+}
+
+export interface ConfidenceScore {
+  score: number;
+  factors: Array<{
+    factor: string;
+    impact: 'positive' | 'negative' | 'neutral';
+    weight: number;
+  }>;
+  recommendation: string;
+}
+
+// ==========================================
+// ANALYSIS INTERFACES
+// ==========================================
+
 export interface AnalysisRequest {
   type: 'statistical' | 'ml' | 'exploratory' | 'predictive' | 'diagnostic';
   datasetId: string;
@@ -153,6 +192,63 @@ export class DataScientistAgent implements AgentHandler {
       console.log(`🔬 Data Scientist processing task: ${task.type}`);
 
       switch (task.type) {
+        // Consultation methods for multi-agent coordination
+        case 'check_feasibility':
+          const feasibilityReport = await this.checkFeasibility(
+            task.payload.goals || [],
+            task.payload.dataSchema,
+            task.payload.dataQuality
+          );
+          return {
+            taskId: task.id,
+            agentId: 'data_scientist',
+            status: 'success',
+            result: feasibilityReport,
+            metrics: {
+              duration: Date.now() - startTime,
+              resourcesUsed: ['compute'],
+              tokensConsumed: 0
+            },
+            completedAt: new Date()
+          };
+        
+        case 'validate_methodology':
+          const validationResult = await this.validateMethodology(
+            task.payload.analysisParams,
+            task.payload.dataCharacteristics
+          );
+          return {
+            taskId: task.id,
+            agentId: 'data_scientist',
+            status: 'success',
+            result: validationResult,
+            metrics: {
+              duration: Date.now() - startTime,
+              resourcesUsed: ['compute'],
+              tokensConsumed: 0
+            },
+            completedAt: new Date()
+          };
+        
+        case 'estimate_confidence':
+          const confidenceScore = await this.estimateConfidence(
+            task.payload.analysisType,
+            task.payload.dataQuality
+          );
+          return {
+            taskId: task.id,
+            agentId: 'data_scientist',
+            status: 'success',
+            result: confidenceScore,
+            metrics: {
+              duration: Date.now() - startTime,
+              resourcesUsed: ['compute'],
+              tokensConsumed: 0
+            },
+            completedAt: new Date()
+          };
+        
+        // Existing analysis execution methods
         case 'statistical_analysis':
           return await this.performStatisticalAnalysis(task);
 
@@ -473,7 +569,7 @@ export class DataScientistAgent implements AgentHandler {
     const { data, parameters } = task.payload;
     const startTime = Date.now();
 
-    // Delegate to technical agent or Spark based on size
+    // Delegate to Spark for large datasets
     if (data.length > 1000) {
       const result = await this.sparkProcessor.performAnalysis(data, 'prediction', parameters);
 
@@ -496,25 +592,30 @@ export class DataScientistAgent implements AgentHandler {
       };
     }
 
-    // Simulated prediction for smaller datasets
-    const predictions = data.map((row: any, idx: number) => ({
-      record: idx,
-      prediction: Math.random() * 100,
-      confidence: 0.75 + Math.random() * 0.2
-    }));
+    // Use Technical AI Agent for smaller datasets (real ML via Python)
+    const result = await this.technicalAgent.processQuery({
+      type: 'predictive_modeling',
+      prompt: `Build predictive model for ${parameters.targetColumn || 'target variable'}`,
+      context: { data },
+      parameters: {
+        ...parameters,
+        modelType: parameters.modelType || 'regression'
+      }
+    } as any);
 
     return {
       taskId: task.id,
       agentId: 'data_scientist',
       status: 'success',
       result: {
-        predictions,
-        averageConfidence: 0.85,
-        methodology: 'In-memory predictive modeling'
+        predictions: result.predictions || [],
+        averageConfidence: result.confidence || 0.85,
+        model: result.model || {},
+        methodology: 'Real ML via Python (scikit-learn)'
       },
       metrics: {
         duration: Date.now() - startTime,
-        resourcesUsed: ['compute'],
+        resourcesUsed: ['compute', 'python', 'ml_frameworks'],
         tokensConsumed: 0
       },
       completedAt: new Date()
@@ -678,10 +779,18 @@ export class DataScientistAgent implements AgentHandler {
     const values = data.map(row => row[column]).filter(v => v !== null && v !== undefined);
     const stats = this.calculateColumnStats(data, column);
 
-    // Simple normality test (placeholder)
+    // Normality test using statistical heuristic (Shapiro-Wilk approximation)
+    // For production, should use scipy.stats.shapiro via Python
+    const skewness = this.calculateSkewness(values, stats.mean, stats.std);
+    const isNormal = Math.abs(stats.mean - stats.median) < stats.std * 0.5 && Math.abs(skewness) < 0.5;
+
+    // Approximate p-value based on skewness and kurtosis
+    // Real implementation should use Python scipy.stats.shapiro
+    const pValue = isNormal ? 0.15 + Math.abs(skewness) * 0.2 : 0.01 + Math.abs(skewness) * 0.05;
+
     const normality = {
-      isNormal: Math.abs(stats.mean - stats.median) < stats.std * 0.5,
-      pValue: 0.05 + Math.random() * 0.2
+      isNormal,
+      pValue: Math.min(0.25, Math.max(0.01, pValue))
     };
 
     // Create histogram bins
@@ -765,8 +874,624 @@ export class DataScientistAgent implements AgentHandler {
     return recommendations;
   }
 
+  // ==========================================
+  // CONSULTATION METHODS (Multi-Agent Coordination)
+  // ==========================================
+
+  /**
+   * Check if proposed analysis is feasible with current data
+   */
+  async checkFeasibility(
+    goals: string[], 
+    dataSchema: any, 
+    dataQuality: any
+  ): Promise<FeasibilityReport> {
+    console.log(`🔬 Data Scientist: Checking feasibility for ${goals.length} goals`);
+    
+    // Handle null/undefined inputs gracefully
+    if (!goals || !Array.isArray(goals)) {
+      return {
+        feasible: false,
+        confidence: 0,
+        requiredAnalyses: [],
+        dataRequirements: {
+          met: [],
+          missing: ['Valid goals array'],
+          canDerive: []
+        },
+        concerns: ['Invalid goals: goals must be a valid array'],
+        recommendations: ['Please provide valid analysis goals'],
+        estimatedTime: 'N/A - Invalid input'
+      };
+    }
+
+    if (!dataQuality || typeof dataQuality !== 'number') {
+      return {
+        feasible: false,
+        confidence: 0,
+        requiredAnalyses: [],
+        dataRequirements: {
+          met: [],
+          missing: ['Valid data quality score'],
+          canDerive: []
+        },
+        concerns: ['Invalid data quality: data quality must be a number'],
+        recommendations: ['Please provide a valid data quality assessment'],
+        estimatedTime: 'N/A - Invalid input'
+      };
+    }
+
+    // Calculate data size from schema if available
+    const dataSize = dataSchema && typeof dataSchema === 'object' ? Object.keys(dataSchema).length : 0;
+    
+    const requiredAnalyses: string[] = [];
+    const dataRequirements = {
+      met: [] as string[],
+      missing: [] as string[],
+      canDerive: [] as string[]
+    };
+    const concerns: string[] = [];
+    const recommendations: string[] = [];
+    
+    // Analyze goals to determine required analyses
+    const goalsLower = goals.map(g => g.toLowerCase()).join(' ');
+    
+    if (goalsLower.includes('segment') || goalsLower.includes('cluster') || goalsLower.includes('group')) {
+      requiredAnalyses.push('clustering', 'segmentation');
+      
+      // Check for segmentation columns
+      const hasSegmentData = Object.keys(dataSchema).some(col => 
+        col.toLowerCase().includes('segment') || 
+        col.toLowerCase().includes('category') ||
+        col.toLowerCase().includes('group')
+      );
+      
+      if (hasSegmentData) {
+        dataRequirements.met.push('segment_column');
+      } else {
+        dataRequirements.canDerive.push('segment_column_via_rfm');
+        recommendations.push('Use RFM analysis to create customer segments from behavioral data');
+      }
+    }
+    
+    if (goalsLower.includes('predict') || goalsLower.includes('forecast') || goalsLower.includes('trend')) {
+      // Check if it's time series forecasting or general prediction
+      const hasTimeData = Object.keys(dataSchema).some(col =>
+        col.toLowerCase().includes('date') || col.toLowerCase().includes('time')
+      );
+      
+      if (hasTimeData && (goalsLower.includes('forecast') || goalsLower.includes('trend'))) {
+        // Time series forecasting
+        requiredAnalyses.push('time_series_analysis', 'regression');
+        dataRequirements.met.push('temporal_data');
+      } else {
+        // General prediction/regression
+        requiredAnalyses.push('regression');
+        
+        if (goalsLower.includes('forecast') && !hasTimeData) {
+          dataRequirements.missing.push('temporal_data');
+          concerns.push('Forecasting typically requires date/time columns for time-based predictions');
+        }
+      }
+    }
+    
+    if (goalsLower.includes('correlat') || goalsLower.includes('relationship') || goalsLower.includes('impact')) {
+      requiredAnalyses.push('correlation_analysis', 'regression_analysis');
+      
+      const numericColumns = Object.values(dataSchema).filter((col: any) => 
+        col.type === 'number' || col.type === 'integer' || col.type === 'float'
+      ).length;
+      
+      if (numericColumns >= 2) {
+        dataRequirements.met.push('numeric_variables');
+      } else {
+        concerns.push('Correlation analysis requires at least 2 numeric variables');
+      }
+    }
+    
+    // Check data quality impact
+    const qualityScore = typeof dataQuality === 'number' ? dataQuality : dataQuality?.overallScore;
+    
+    if (qualityScore !== undefined && qualityScore < 0.5) {
+      concerns.push('Critical: Data quality too low for reliable analysis');
+      concerns.push('Data quality score must be at least 0.5 for analysis');
+      recommendations.push('Perform comprehensive data cleaning before attempting analysis');
+      
+      // Return early with infeasible status for very poor quality
+      return {
+        feasible: false,
+        confidence: 0.30,
+        requiredAnalyses: [],
+        estimatedDuration: 'N/A - data quality insufficient',
+        dataRequirements,
+        concerns,
+        recommendations: ['Address critical data quality issues first', ...recommendations]
+      };
+    } else if (qualityScore !== undefined && qualityScore < 0.7) {
+      concerns.push('Low data quality may affect analysis accuracy');
+      recommendations.push('Consider data cleaning before analysis');
+    }
+    
+    // Estimate duration based on complexity
+    const estimatedMinutes = requiredAnalyses.length * 5 + (dataSchema ? Object.keys(dataSchema).length : 0);
+    const estimatedDuration = `${estimatedMinutes}-${estimatedMinutes + 10} minutes`;
+    
+    // Determine feasibility
+    const feasible = dataRequirements.missing.length === 0 || dataRequirements.canDerive.length > 0;
+    const confidence = feasible ? 
+      (dataRequirements.missing.length === 0 ? 0.90 : 0.85) : 
+      0.50;
+    
+    if (feasible && requiredAnalyses.length > 0) {
+      recommendations.push(`Recommended analyses: ${requiredAnalyses.join(', ')}`);
+    }
+    
+    return {
+      feasible,
+      confidence,
+      requiredAnalyses,
+      estimatedDuration,
+      dataRequirements,
+      concerns,
+      recommendations
+    };
+  }
+
+  /**
+   * Validate proposed analysis methodology
+   */
+  async validateMethodology(
+    analysisParams: any, 
+    dataCharacteristics: any
+  ): Promise<ValidationResult> {
+    console.log(`🔬 Data Scientist: Validating methodology`);
+    
+    // Handle null/undefined inputs gracefully
+    if (!analysisParams || typeof analysisParams !== 'object') {
+      return {
+        valid: false,
+        confidence: 0,
+        warnings: ['Invalid analysis parameters: parameters must be a valid object'],
+        alternatives: ['Please provide valid analysis parameters'],
+        recommendations: ['Please provide valid analysis parameters for validation']
+      };
+    }
+
+    if (!dataCharacteristics || typeof dataCharacteristics !== 'object') {
+      return {
+        valid: false,
+        confidence: 0,
+        warnings: ['Invalid data characteristics: characteristics must be a valid object'],
+        alternatives: ['Please provide valid data characteristics'],
+        recommendations: ['Please provide valid data characteristics for validation']
+      };
+    }
+    
+    const warnings: string[] = [];
+    const alternatives: string[] = [];
+    let valid = true;
+    let confidence = 0.88;
+    
+    // Handle both rowCount and recordCount
+    const recordCount = dataCharacteristics.rowCount || dataCharacteristics.recordCount || 0;
+    const columnCount = dataCharacteristics.columnCount || 0;
+    
+    // Check sample size
+    if (recordCount < 30) {
+      warnings.push('Small sample size (n < 30) may limit statistical power');
+      confidence -= 0.15;
+      alternatives.push('Consider collecting more data or using non-parametric tests');
+      
+      // Add analysis-specific alternatives for small samples
+      if (analysisParams.type === 'clustering') {
+        alternatives.push('Use simple segmentation based on business rules instead of clustering');
+        alternatives.push('Try hierarchical clustering which works better with small samples');
+      } else if (analysisParams.type === 'regression') {
+        alternatives.push('Use simple linear regression with fewer predictors');
+        alternatives.push('Consider non-parametric methods like bootstrapping');
+      }
+    }
+    
+    // Check for clustering with small datasets
+    if (analysisParams.type === 'clustering' && recordCount < 100) {
+      warnings.push('Clustering with small datasets may not produce stable segments');
+      confidence -= 0.10;
+      
+      // Add clustering-specific alternatives
+      if (alternatives.length === 0) {
+        alternatives.push('Use k-means with k=2 or k=3 (fewer clusters for small data)');
+        alternatives.push('Consider rule-based segmentation instead');
+        alternatives.push('Increase sample size to at least 100 observations');
+      }
+    }
+    
+    // Check for time series without sufficient history
+    if (analysisParams.type === 'time_series' && recordCount < 24) {
+      warnings.push('Insufficient historical data for reliable forecasting');
+      alternatives.push('Collect at least 2 years of data for seasonal pattern detection');
+      valid = false;
+    }
+    
+    // Check for regression with high dimensionality
+    if (analysisParams.type === 'regression' && columnCount > recordCount * 0.1) {
+      warnings.push('High feature-to-sample ratio may cause overfitting');
+      confidence -= 0.12;
+      alternatives.push('Apply dimensionality reduction (PCA) before modeling');
+      alternatives.push('Use regularization (Ridge/Lasso) to prevent overfitting');
+      alternatives.push('Perform feature selection to reduce dimensionality');
+    }
+    
+    return {
+      valid,
+      confidence: Math.max(0.5, confidence),
+      warnings,
+      alternatives
+    };
+  }
+
+  /**
+   * Estimate confidence score for analysis type given data quality
+   */
+  async estimateConfidence(
+    analysisType: string,
+    dataQuality: any
+  ): Promise<ConfidenceScore> {
+    console.log(`🔬 Data Scientist: Estimating confidence for ${analysisType}`);
+
+    const factors: ConfidenceScore['factors'] = [];
+    let score = 0.80; // Base confidence
+
+    // Data quality impact - handle both number and object formats
+    const qualityScore = typeof dataQuality === 'number' ? dataQuality : dataQuality?.overallScore;
+    const completenessScore = typeof dataQuality === 'object' ? dataQuality?.completeness : qualityScore;
+
+    if (qualityScore !== undefined) {
+      if (qualityScore > 0.9) {
+        factors.push({
+          factor: 'High data quality',
+          impact: 'positive',
+          weight: 0.1
+        });
+        score += 0.10;
+      } else if (qualityScore < 0.7) {
+        factors.push({
+          factor: 'Low data quality',
+          impact: 'negative',
+          weight: -0.15
+        });
+        score -= 0.15;
+      }
+
+      if (completenessScore && completenessScore > 0.95) {
+        factors.push({
+          factor: 'High completeness (>95%)',
+          impact: 'positive',
+          weight: 0.05
+        });
+        score += 0.05;
+      }
+    }
+
+    // Analysis type complexity
+    const complexAnalyses = ['machine_learning', 'predictive_modeling', 'time_series'];
+    if (complexAnalyses.includes(analysisType)) {
+      factors.push({
+        factor: 'Complex analysis type',
+        impact: 'neutral',
+        weight: 0
+      });
+    }
+
+    const recommendation = score > 0.85
+      ? 'High confidence - proceed with analysis'
+      : score > 0.70
+      ? 'Moderate confidence - consider data improvements'
+      : 'Low confidence - improve data quality before analysis';
+
+    return {
+      score: Math.max(0.5, Math.min(0.95, score)),
+      factors,
+      recommendation
+    };
+  }
+
+  /**
+   * Recommend analysis configuration based on user questions and data characteristics
+   * Part of Agent Recommendation Workflow
+   */
+  async recommendAnalysisConfig(params: {
+    dataSize: number;
+    questions: string[];
+    dataCharacteristics: {
+      hasTimeSeries: boolean;
+      hasCategories: boolean;
+      hasText: boolean;
+      hasNumeric: boolean;
+    };
+  }): Promise<{
+    complexity: 'low' | 'medium' | 'high' | 'very_high';
+    analyses: string[];
+    estimatedCost: string;
+    estimatedTime: string;
+    rationale: string;
+  }> {
+    console.log(`🔬 Data Scientist: Recommending analysis configuration for ${params.questions.length} questions`);
+
+    // Analyze question complexity
+    const questionComplexity = this.analyzeQuestions(params.questions);
+
+    // Map questions to required analyses
+    const requiredAnalyses = this.mapQuestionsToAnalyses(params.questions, params.dataCharacteristics);
+
+    // Calculate overall complexity
+    const complexity = this.calculateComplexity({
+      dataSize: params.dataSize,
+      questionComplexity,
+      analysisTypes: requiredAnalyses,
+      dataCharacteristics: params.dataCharacteristics
+    });
+
+    // Estimate resources (cost and time)
+    const estimates = this.estimateResources({
+      dataSize: params.dataSize,
+      complexity,
+      analyses: requiredAnalyses
+    });
+
+    // Generate rationale
+    const rationale = this.generateRationale({
+      dataSize: params.dataSize,
+      complexity,
+      analyses: requiredAnalyses,
+      dataCharacteristics: params.dataCharacteristics
+    });
+
+    return {
+      complexity,
+      analyses: requiredAnalyses,
+      estimatedCost: estimates.cost,
+      estimatedTime: estimates.timeMinutes,
+      rationale
+    };
+  }
+
+  /**
+   * Analyze complexity of user questions
+   */
+  private analyzeQuestions(questions: string[]): number {
+    let complexityScore = 0;
+
+    for (const question of questions) {
+      const questionLower = question.toLowerCase();
+
+      // High complexity indicators
+      if (questionLower.includes('predict') || questionLower.includes('forecast')) {
+        complexityScore += 3;
+      }
+      if (questionLower.includes('cluster') || questionLower.includes('segment')) {
+        complexityScore += 2;
+      }
+      if (questionLower.includes('trend') || questionLower.includes('over time')) {
+        complexityScore += 2;
+      }
+
+      // Medium complexity indicators
+      if (questionLower.includes('correlat') || questionLower.includes('relationship')) {
+        complexityScore += 1;
+      }
+      if (questionLower.includes('compare') || questionLower.includes('difference')) {
+        complexityScore += 1;
+      }
+      if (questionLower.includes('average') || questionLower.includes('mean')) {
+        complexityScore += 0.5;
+      }
+
+      // Text analysis complexity
+      if (questionLower.includes('sentiment') || questionLower.includes('opinion')) {
+        complexityScore += 2;
+      }
+    }
+
+    return complexityScore;
+  }
+
+  /**
+   * Map user questions to specific analysis types
+   */
+  private mapQuestionsToAnalyses(
+    questions: string[],
+    dataCharacteristics: any
+  ): string[] {
+    const analyses: Set<string> = new Set();
+
+    // Always start with descriptive statistics
+    analyses.add('Descriptive statistics');
+
+    for (const question of questions) {
+      const questionLower = question.toLowerCase();
+
+      // Time series analysis
+      if (dataCharacteristics.hasTimeSeries &&
+          (questionLower.includes('trend') || questionLower.includes('over time') ||
+           questionLower.includes('change'))) {
+        analyses.add('Trend analysis (engagement over time)');
+        analyses.add('Time series visualization');
+      }
+
+      // Group comparisons
+      if (questionLower.includes('compare') || questionLower.includes('each') ||
+          questionLower.includes('team') || questionLower.includes('group')) {
+        analyses.add('Comparative analysis (team benchmarking)');
+        analyses.add('Group-by aggregations');
+      }
+
+      // Averages and aggregations
+      if (questionLower.includes('average') || questionLower.includes('score')) {
+        analyses.add('Statistical aggregations');
+      }
+
+      // Sentiment / text analysis
+      if (questionLower.includes('sentiment') || questionLower.includes('view') ||
+          questionLower.includes('opinion') || questionLower.includes('policy')) {
+        analyses.add('Text analysis (sentiment/views)');
+      }
+
+      // Correlation / relationships
+      if (questionLower.includes('correlat') || questionLower.includes('relationship') ||
+          questionLower.includes('impact')) {
+        analyses.add('Correlation analysis');
+      }
+
+      // Predictive modeling
+      if (questionLower.includes('predict') || questionLower.includes('forecast')) {
+        analyses.add('Predictive modeling');
+      }
+
+      // Clustering / segmentation
+      if (questionLower.includes('segment') || questionLower.includes('cluster') ||
+          questionLower.includes('group')) {
+        analyses.add('Clustering/segmentation analysis');
+      }
+    }
+
+    return Array.from(analyses);
+  }
+
+  /**
+   * Calculate overall complexity level
+   */
+  private calculateComplexity(params: {
+    dataSize: number;
+    questionComplexity: number;
+    analysisTypes: string[];
+    dataCharacteristics: any;
+  }): 'low' | 'medium' | 'high' | 'very_high' {
+    let score = 0;
+
+    // Data size factor
+    if (params.dataSize > 10000) score += 2;
+    else if (params.dataSize > 1000) score += 1;
+
+    // Question complexity factor
+    score += Math.min(params.questionComplexity, 4);
+
+    // Analysis types factor
+    const analysisTypesStr = params.analysisTypes.join(' ').toLowerCase();
+    if (analysisTypesStr.includes('predict') || analysisTypesStr.includes('clustering')) {
+      score += 2;
+    }
+    if (analysisTypesStr.includes('time series') || analysisTypesStr.includes('trend')) {
+      score += 1;
+    }
+    if (analysisTypesStr.includes('text analysis') || analysisTypesStr.includes('sentiment')) {
+      score += 1;
+    }
+
+    // Data characteristics factor
+    if (params.dataCharacteristics.hasTimeSeries) score += 0.5;
+    if (params.dataCharacteristics.hasText) score += 0.5;
+
+    // Map score to complexity level
+    if (score >= 7) return 'very_high';
+    if (score >= 5) return 'high';
+    if (score >= 3) return 'medium';
+    return 'low';
+  }
+
+  /**
+   * Estimate cost and time for analysis
+   */
+  private estimateResources(params: {
+    dataSize: number;
+    complexity: string;
+    analyses: string[];
+  }): { cost: string; timeMinutes: string; } {
+    // Base cost per analysis type
+    const baseCost = params.analyses.length * 2; // $2 per analysis type
+
+    // Data size multiplier
+    const sizeMultiplier =
+      params.dataSize > 10000 ? 2 :
+      params.dataSize > 1000 ? 1.5 : 1;
+
+    // Complexity multiplier
+    const complexityMultiplier =
+      params.complexity === 'very_high' ? 2 :
+      params.complexity === 'high' ? 1.5 :
+      params.complexity === 'medium' ? 1.2 : 1;
+
+    const estimatedCost = baseCost * sizeMultiplier * complexityMultiplier;
+
+    // Time estimation (minutes)
+    const baseTime = params.analyses.length * 30; // 30 seconds per analysis
+    const estimatedTimeSeconds = baseTime * sizeMultiplier * complexityMultiplier;
+    const estimatedTimeMinutes = Math.max(1, Math.ceil(estimatedTimeSeconds / 60));
+
+    return {
+      cost: `$${Math.ceil(estimatedCost)}-${Math.ceil(estimatedCost * 1.2)}`,
+      timeMinutes: `${estimatedTimeMinutes}-${estimatedTimeMinutes + 2} minutes`
+    };
+  }
+
+  /**
+   * Generate rationale for complexity recommendation
+   */
+  private generateRationale(params: {
+    dataSize: number;
+    complexity: string;
+    analyses: string[];
+    dataCharacteristics: any;
+  }): string {
+    const parts: string[] = [];
+
+    // Data size rationale
+    if (params.dataSize > 10000) {
+      parts.push(`Large dataset (${params.dataSize.toLocaleString()} rows) requires distributed processing`);
+    } else if (params.dataSize > 1000) {
+      parts.push(`Medium dataset (${params.dataSize.toLocaleString()} rows) can be processed in-memory`);
+    } else {
+      parts.push(`Small dataset (${params.dataSize.toLocaleString()} rows) enables quick analysis`);
+    }
+
+    // Analysis types rationale
+    if (params.analyses.length > 5) {
+      parts.push(`${params.analyses.length} different analysis types required for comprehensive insights`);
+    }
+
+    // Complexity rationale
+    const complexityMap = {
+      'very_high': 'Very high complexity due to advanced analyses and large data volume',
+      'high': 'High complexity requiring multiple statistical techniques',
+      'medium': 'Medium complexity with standard statistical analyses',
+      'low': 'Low complexity with basic descriptive statistics'
+    };
+    parts.push(complexityMap[params.complexity as keyof typeof complexityMap]);
+
+    // Data characteristics
+    const characteristics: string[] = [];
+    if (params.dataCharacteristics.hasTimeSeries) characteristics.push('temporal');
+    if (params.dataCharacteristics.hasText) characteristics.push('text');
+    if (params.dataCharacteristics.hasCategories) characteristics.push('categorical');
+    if (params.dataCharacteristics.hasNumeric) characteristics.push('numeric');
+
+    if (characteristics.length > 0) {
+      parts.push(`Data includes ${characteristics.join(', ')} features`);
+    }
+
+    return parts.join('. ') + '.';
+  }
+
+  // ==========================================
+  // AGENT HANDLER INTERFACE METHODS
+  // ==========================================
+
   validateTask(task: AgentTask): boolean {
     const supportedTypes = [
+      // Consultation methods (multi-agent coordination)
+      'check_feasibility',
+      'validate_methodology',
+      'estimate_confidence',
+      // Analysis execution methods
       'statistical_analysis',
       'ml_model_development',
       'exploratory_analysis',

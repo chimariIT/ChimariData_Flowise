@@ -104,8 +104,8 @@ export default function TemplateAnalysis({ onBack }: TemplateAnalysisProps) {
   };
 
   return (
-    <div className="h-screen bg-gray-50 flex flex-col">
-      <div className="container mx-auto px-4 py-4 max-w-4xl flex-1 overflow-auto">
+    <div className="min-h-screen bg-gray-50 flex flex-col">
+      <div className="container mx-auto px-4 py-4 max-w-6xl flex-1 overflow-auto">
         {/* Header */}
         <div className="mb-6">
           <Button variant="ghost" size="sm" onClick={onBack} className="mb-3">

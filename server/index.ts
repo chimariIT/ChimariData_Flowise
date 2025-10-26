@@ -11,6 +11,10 @@ import { securityHeaders, apiRateLimit, authRateLimit, uploadRateLimit, corsConf
 import { securityMiddleware } from './middleware/security';
 import { RealtimeServer } from './realtime';
 import { projectAgentOrchestrator } from './services/project-agent-orchestrator';
+import { validateProductionReadiness } from './services/production-validator';
+import { initializeAgents } from './services/agent-initialization';
+import { initializeTools } from './services/tool-initialization';
+import { registerCoreTools } from './services/mcp-tool-registry';
 
 const app = express();
 
@@ -56,12 +60,159 @@ app.use((req, res, next) => {
 let server: Server;
 
 (async () => {
+  // ========================================
+  // PRODUCTION READINESS VALIDATION
+  // ========================================
+  if (process.env.NODE_ENV === 'production') {
+    console.log('🔍 Running production validation checks...');
+    const validation = await validateProductionReadiness();
+
+    if (!validation.ready) {
+      console.error('🔴 PRODUCTION VALIDATION FAILED:');
+      console.error('Critical failures preventing startup:');
+      validation.failures.forEach(failure => console.error(`  ❌ ${failure}`));
+
+      if (validation.warnings.length > 0) {
+        console.warn('\nWarnings:');
+        validation.warnings.forEach(warning => console.warn(`  ⚠️  ${warning}`));
+      }
+
+      console.error('\n🛑 Server startup aborted due to validation failures.');
+      console.error('Please fix the issues above and restart the server.');
+      process.exit(1);
+    }
+
+    console.log('✅ Production validation passed');
+    if (validation.warnings.length > 0) {
+      console.warn('⚠️  Warnings detected:');
+      validation.warnings.forEach(warning => console.warn(`  - ${warning}`));
+    }
+  } else {
+    // In development, still run validation but only show warnings
+    console.log('🔍 Running development environment checks...');
+    const validation = await validateProductionReadiness();
+
+    if (validation.failures.length > 0) {
+      console.warn('⚠️  Issues detected (non-blocking in development):');
+      validation.failures.forEach(failure => console.warn(`  - ${failure}`));
+    }
+
+    if (validation.warnings.length > 0) {
+      console.warn('ℹ️  Development mode warnings:');
+      validation.warnings.forEach(warning => console.warn(`  - ${warning}`));
+    }
+  }
+
+  // ========================================
+  // INITIALIZE AGENTS AND TOOLS
+  // ========================================
+  console.log('🤖 Initializing agents and tools...');
+
+  // Initialize tracking state
+  const initializationState = {
+    toolsInitialized: false,
+    agentsInitialized: false,
+    toolInitializationCalled: false,
+    agentInitializationCalled: false,
+    toolInitializationTime: null as Date | null,
+    agentInitializationTime: null as Date | null,
+    toolCount: 0,
+    agentCount: 0,
+    errors: [] as string[]
+  };
+
+  try {
+    // Initialize agents first
+    initializationState.agentInitializationCalled = true;
+    const agentStartTime = Date.now();
+    
+    const agentResults = await initializeAgents();
+    initializationState.agentsInitialized = true;
+    initializationState.agentInitializationTime = new Date();
+    initializationState.agentCount = agentResults.successCount;
+    
+    console.log(`✅ Initialized ${agentResults.successCount} agents:`);
+    agentResults.registered.forEach(agent => {
+      console.log(`  - ${agent.name} (${agent.capabilities.join(', ')})`);
+    });
+
+    if (agentResults.failed.length > 0) {
+      console.warn(`⚠️  Failed to initialize ${agentResults.failed.length} agents:`);
+      agentResults.failed.forEach(failure => {
+        console.warn(`  - ${failure.name}: ${failure.error}`);
+        initializationState.errors.push(`Agent ${failure.name}: ${failure.error}`);
+      });
+    }
+
+    // Initialize tools
+    initializationState.toolInitializationCalled = true;
+    const toolStartTime = Date.now();
+    
+    // Register core MCP tools first (including ML/LLM tools)
+    console.log('🛠️ Registering core MCP tools...');
+    registerCoreTools();
+    console.log('✅ Core MCP tools registered');
+    
+    const toolResults = await initializeTools();
+    initializationState.toolsInitialized = true;
+    initializationState.toolInitializationTime = new Date();
+    initializationState.toolCount = toolResults.successCount;
+    
+    console.log(`✅ Initialized ${toolResults.successCount} tools in ${toolResults.categories.length} categories`);
+    toolResults.categories.forEach(category => {
+      console.log(`  - ${category.name}: ${category.tools} tools`);
+    });
+
+    if (toolResults.failed.length > 0) {
+      console.warn(`⚠️  Failed to initialize ${toolResults.failed.length} tools:`);
+      toolResults.failed.forEach(failure => {
+        console.warn(`  - ${failure.name}: ${failure.error}`);
+        initializationState.errors.push(`Tool ${failure.name}: ${failure.error}`);
+      });
+    }
+
+    // Initialize billing & analytics MCP resources
+    console.log('💰 Initializing billing & analytics...');
+    try {
+      const { initializeBillingAnalyticsMCP } = await import('./services/mcp-billing-analytics-resource');
+      initializeBillingAnalyticsMCP();
+      console.log('✅ Billing & analytics MCP resources registered');
+    } catch (error) {
+      console.error('❌ Failed to initialize billing & analytics:', error);
+      initializationState.errors.push(`Billing & analytics: ${error}`);
+      if (process.env.NODE_ENV === 'production') {
+        throw error;
+      }
+    }
+
+  } catch (error) {
+    console.error('❌ Failed to initialize agents/tools:', error);
+    initializationState.errors.push(`General initialization: ${error}`);
+    if (process.env.NODE_ENV === 'production') {
+      console.error('🛑 Cannot start server without agent/tool initialization');
+      process.exit(1);
+    } else {
+      console.warn('⚠️  Continuing in development mode without full agent/tool initialization');
+    }
+  }
+
+  // Export initialization state for admin endpoint
+  function getInitializationState() {
+    return initializationState;
+  }
+  
+  // Make it available globally
+  (global as any).getInitializationState = getInitializationState;
+
+  // ========================================
+  // START SERVER
+  // ========================================
   server = createServer(app);
   const wss = new WebSocketServer({ noServer: true });
-  
+
   // Initialize realtime server
   const realtimeServer = new RealtimeServer(wss);
-  
+
   // Initialize agent orchestrator with realtime server
   (projectAgentOrchestrator as any).realtimeServer = realtimeServer;
 

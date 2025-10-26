@@ -1,41 +1,47 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, lazy, Suspense } from "react";
 import { Switch, Route, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { JourneyWizard } from "@/components/JourneyWizard";
 import MainLandingPage from "@/pages/main-landing";
-import UserDashboard from "@/pages/user-dashboard";
-import JourneysHub from "@/pages/journeys-hub";
-import ProjectPage from "@/pages/project-page";
-import DescriptiveStatsPage from "@/pages/descriptive-stats-page";
-import VisualizationPage from "@/pages/visualization-page";
 import AuthPage from "@/pages/auth";
-import GuidedAnalysisCheckout from "@/pages/checkout";
-import GuidedAnalysisResults from "@/pages/guided-analysis-results";
-import ExpertConsultation from "@/pages/expert-consultation";
-import DemosPage from "@/pages/demos";
-import AskQuestionPage from "@/pages/ask-question-page";
-import PayPerAnalysis from "@/pages/pay-per-analysis";
-import TemplateAnalysis from "@/pages/template-analysis";
-import PricingPage from "@/pages/pricing";
-import StripeTest from "@/pages/stripe-test";
 import { apiClient } from "@/lib/api";
 import { ProjectProvider } from "@/hooks/useProjectContext";
 import { UserRoleProvider, useUserRole } from "@/hooks/useUserRole";
 import { UsageMonitoringProvider } from "@/hooks/useUsageMonitoring";
-import SettingsPage from "@/pages/settings";
-import AISettingsPage from "@/pages/ai-settings";
 import "./index.css";
-import { WorkflowTransparencyDashboard } from "@/components/workflow-transparency-dashboard";
-import ResultsStep from "@/pages/results-step";
-import { SubscriptionDashboard } from "@/components/SubscriptionDashboard";
-import NewProjectPage from "@/pages/new-project";
 import { ErrorDisplay } from "@/components/ErrorDisplay";
 import { env } from "@/lib/env";
 import { routeStorage, userGreetings } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
-import AdminLayout from "@/pages/admin";
+import { ConsultantProvider } from "@/contexts/ConsultantContext";
+import { ServiceHealthBanner } from "@/components/ServiceHealthBanner";
+
+// Lazy load heavy pages for better performance
+const UserDashboard = lazy(() => import("@/pages/user-dashboard"));
+const JourneysHub = lazy(() => import("@/pages/journeys-hub"));
+const ProjectPage = lazy(() => import("@/pages/project-page"));
+const DescriptiveStatsPage = lazy(() => import("@/pages/descriptive-stats-page"));
+const VisualizationPage = lazy(() => import("@/pages/visualization-page"));
+const GuidedAnalysisCheckout = lazy(() => import("@/pages/checkout"));
+const GuidedAnalysisResults = lazy(() => import("@/pages/guided-analysis-results"));
+const ExpertConsultation = lazy(() => import("@/pages/expert-consultation"));
+const DemosPage = lazy(() => import("@/pages/demos"));
+const AskQuestionPage = lazy(() => import("@/pages/ask-question-page"));
+const PayPerAnalysis = lazy(() => import("@/pages/pay-per-analysis"));
+const TemplateAnalysis = lazy(() => import("@/pages/template-analysis"));
+const PricingPage = lazy(() => import("@/pages/pricing"));
+const StripeTest = lazy(() => import("@/pages/stripe-test"));
+const SettingsPage = lazy(() => import("@/pages/settings"));
+const AISettingsPage = lazy(() => import("@/pages/ai-settings"));
+const WorkflowTransparencyDashboard = lazy(() => import("@/components/workflow-transparency-dashboard").then(m => ({ default: m.WorkflowTransparencyDashboard })));
+const ResultsStep = lazy(() => import("@/pages/results-step"));
+const SubscriptionDashboard = lazy(() => import("@/components/SubscriptionDashboard").then(m => ({ default: m.SubscriptionDashboard })));
+const NewProjectPage = lazy(() => import("@/pages/new-project"));
+const AdminLayout = lazy(() => import("@/pages/admin"));
+const TemplateSelectionTest = lazy(() => import("@/components/TemplateSelectionTest").then(m => ({ default: m.TemplateSelectionTest })));
+const CustomJourneyBuilder = lazy(() => import("@/pages/custom-journey-builder"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -177,6 +183,16 @@ export default function App() {
           <UsageMonitoringProvider>
             <ProjectProvider>
               <div className="min-h-screen bg-gray-50" data-testid="dashboard-content">
+                {/* Service health banner - shows warnings when services degraded */}
+                <ServiceHealthBanner />
+        <Suspense fallback={
+          <div className="flex items-center justify-center min-h-screen">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+              <p className="text-gray-600">Loading...</p>
+            </div>
+          </div>
+        }>
         <Switch>
           {/* Primary Journeys Hub landing page */}
           
@@ -198,6 +214,14 @@ export default function App() {
               />
             )}
           </Route>
+          <Route path="/journeys/:type/data-verification">
+            {(params) => (
+              <JourneyWizard 
+                journeyType={params.type} 
+                currentStage="data-verification"
+              />
+            )}
+          </Route>
           <Route path="/journeys/:type/project-setup">
             {(params) => (
               <JourneyWizard 
@@ -211,6 +235,14 @@ export default function App() {
               <JourneyWizard 
                 journeyType={params.type} 
                 currentStage="execute"
+              />
+            )}
+          </Route>
+          <Route path="/journeys/:type/preview">
+            {(params) => (
+              <JourneyWizard 
+                journeyType={params.type} 
+                currentStage="preview"
               />
             )}
           </Route>
@@ -255,6 +287,9 @@ export default function App() {
           </Route>
           <Route path="/auth/register">
             {() => <AuthPage onLogin={handleLogin} />}
+          </Route>
+          <Route path="/custom-journey">
+            {() => <CustomJourneyBuilder user={user} />}
           </Route>
           <Route path="/project/:id">
             {(params) => <ProjectPage projectId={params.id} />}
@@ -410,6 +445,9 @@ export default function App() {
           <Route path="/template-based">
             {() => user ? <TemplateAnalysis onBack={() => setLocation('/')} /> : <AuthPage onLogin={handleLogin} />}
           </Route>
+          <Route path="/custom-journey">
+            {() => user ? <CustomJourneyBuilder onBack={() => setLocation('/')} /> : <AuthPage onLogin={handleLogin} />}
+          </Route>
           <Route path="/demos">
             {() => <DemosPage />}
           </Route>
@@ -465,10 +503,15 @@ export default function App() {
           <Route path="/stripe-test">
             {() => <StripeTest />}
           </Route>
+          <Route path="/template-test">
+            {() => <TemplateSelectionTest />}
+          </Route>
           <Route path="/admin/:tab?">
             {() =>
               user ? (
-                <AdminLayout user={user} />
+                <ConsultantProvider>
+                  <AdminLayout user={user} />
+                </ConsultantProvider>
               ) : (
                 <AuthPage onLogin={handleLogin} />
               )
@@ -483,6 +526,7 @@ export default function App() {
             </div>
           </Route>
         </Switch>
+        </Suspense>
               </div>
               <Toaster />
             </ProjectProvider>

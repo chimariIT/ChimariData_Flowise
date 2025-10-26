@@ -49,39 +49,27 @@ export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
 
   const isAdmin = permissions?.role?.id === 'admin' || permissions?.role?.id === 'super_admin';
 
-  // Mock user projects data
-  const userProjects = [
-    {
-      id: '1',
-      name: 'Customer Behavior Analysis Q4 2024',
-      type: 'business',
-      status: 'completed',
-      createdAt: '2024-09-20',
-      lastModified: '2024-09-22',
-      insights: 8,
-      visualizations: 12
+  // Fetch real user projects from API
+  const { data: userProjects = [], isLoading: projectsLoading } = useQuery({
+    queryKey: ['/api/projects', user?.id],
+    queryFn: async () => {
+      try {
+        const response = await fetch('/api/projects', {
+          credentials: 'include',
+        });
+        if (!response.ok) {
+          console.warn('Failed to fetch projects, using empty array');
+          return [];
+        }
+        const result = await response.json();
+        return result.projects || [];
+      } catch (error) {
+        console.error('Error fetching projects:', error);
+        return [];
+      }
     },
-    {
-      id: '2', 
-      name: 'Sales Performance Review',
-      type: 'non-tech',
-      status: 'in-progress',
-      createdAt: '2024-09-21',
-      lastModified: '2024-09-23',
-      insights: 5,
-      visualizations: 8
-    },
-    {
-      id: '3',
-      name: 'Technical Data Pipeline Analysis',
-      type: 'technical',
-      status: 'draft',
-      createdAt: '2024-09-22',
-      lastModified: '2024-09-22',
-      insights: 0,
-      visualizations: 0
-    }
-  ];
+    enabled: !!user?.id,
+  });
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -235,7 +223,14 @@ export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
             </Button>
           </div>
 
-          {userProjects.length > 0 ? (
+          {projectsLoading ? (
+            <Card className="text-center py-12">
+              <CardContent>
+                <div className="animate-spin w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full mx-auto mb-4"></div>
+                <h3 className="text-lg font-medium text-gray-900 mb-2">Loading your projects...</h3>
+              </CardContent>
+            </Card>
+          ) : userProjects.length > 0 ? (
             <div className="grid gap-6">
               {userProjects.map((project) => {
                 const TypeIcon = getTypeIcon(project.type);
@@ -353,6 +348,19 @@ export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -6,15 +6,22 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft, Calculator, Clock, Database, BarChart3, Zap, Crown } from "lucide-react";
+import { ArrowLeft, Calculator, Clock, Database, BarChart3, Zap, Crown, Eye } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+import { ResultsPreview } from '@/components/results-preview';
+import { useProjectSession } from '@/hooks/useProjectSession';
 
-// the newest Anthropic model is "claude-sonnet-4-20250514" which was released May 14, 2025. Use this by default unless user has already selected claude-3-7-sonnet-20250219
-if (!import.meta.env.VITE_STRIPE_PUBLIC_KEY) {
-  throw new Error('Missing required Stripe key: VITE_STRIPE_PUBLIC_KEY');
+// Load Stripe with development fallback
+const stripePublicKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY || 'pk_test_development_key';
+const stripePromise = stripePublicKey && stripePublicKey !== 'pk_test_your_stripe_public_key'
+  ? loadStripe(stripePublicKey)
+  : null;
+
+// Log warning if using development key
+if (stripePublicKey === 'pk_test_development_key') {
+  console.warn('⚠️  Using development Stripe key. Set VITE_STRIPE_PUBLIC_KEY for production.');
 }
-const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLIC_KEY);
 
 interface AnalysisPaymentProps {
   projectId: string;
@@ -152,6 +159,8 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
   const [dataComplexity, setDataComplexity] = useState<string>('');
   const [clientSecret, setClientSecret] = useState("");
   const [isCalculating, setIsCalculating] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
+  const [audienceContext, setAudienceContext] = useState<any>(null);
   const { toast } = useToast();
 
   const analysisOptions = [
@@ -296,9 +305,84 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
 
   useEffect(() => {
     calculatePricing();
+    loadAudienceContext();
   }, [analysisType]);
 
+  const loadAudienceContext = async () => {
+    try {
+      // Try to get audience context from project session
+      const response = await fetch(`/api/project-session/${projectId}`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        }
+      });
+      
+      if (response.ok) {
+        const sessionData = await response.json();
+        if (sessionData?.prepare?.audience) {
+          setAudienceContext({
+            primaryAudience: sessionData.prepare.audience.primaryAudience || 'mixed',
+            secondaryAudiences: sessionData.prepare.audience.secondaryAudiences || [],
+            decisionContext: sessionData.prepare.audience.decisionContext || '',
+            journeyType: 'business'
+          });
+        } else {
+          // Default audience context
+          setAudienceContext({
+            primaryAudience: 'mixed',
+            secondaryAudiences: [],
+            decisionContext: '',
+            journeyType: 'business'
+          });
+        }
+      } else {
+        // Default audience context
+        setAudienceContext({
+          primaryAudience: 'mixed',
+          secondaryAudiences: [],
+          decisionContext: '',
+          journeyType: 'business'
+        });
+      }
+    } catch (error) {
+      console.warn('Could not load audience context, using defaults');
+      setAudienceContext({
+        primaryAudience: 'mixed',
+        secondaryAudiences: [],
+        decisionContext: '',
+        journeyType: 'business'
+      });
+    }
+  };
+
+  const handleShowPreview = () => {
+    setShowPreview(true);
+  };
+
+  const handleProceedToPayment = () => {
+    setShowPreview(false);
+    createPaymentIntent();
+  };
+
   const selectedOption = analysisOptions.find(opt => opt.id === analysisType);
+
+  // Show preview if requested
+  if (showPreview && audienceContext) {
+    return (
+      <ResultsPreview
+        projectId={projectId}
+        analysisType={analysisType}
+        analysisConfig={{
+          questions: projectData.questions,
+          dataSize: projectData.dataSizeMB,
+          recordCount: projectData.recordCount
+        }}
+        audienceContext={audienceContext}
+        onProceedToPayment={handleProceedToPayment}
+        onBack={() => setShowPreview(false)}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
@@ -446,14 +530,25 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
             </Card>
 
             {pricing && !clientSecret && (
-              <Button 
-                onClick={createPaymentIntent} 
-                className="w-full" 
-                size="lg"
-              >
-                <Zap className="w-4 h-4 mr-2" />
-                Proceed to Payment
-              </Button>
+              <div className="space-y-3">
+                <Button 
+                  onClick={handleShowPreview} 
+                  className="w-full" 
+                  size="lg"
+                  variant="outline"
+                >
+                  <Eye className="w-4 h-4 mr-2" />
+                  Preview Results
+                </Button>
+                <Button 
+                  onClick={createPaymentIntent} 
+                  className="w-full" 
+                  size="lg"
+                >
+                  <Zap className="w-4 h-4 mr-2" />
+                  Proceed to Payment
+                </Button>
+              </div>
             )}
 
             {clientSecret && (

@@ -161,25 +161,31 @@ export class ProjectAgentOrchestrator {
   /**
    * Add a new checkpoint for a project
    */
-  private async addCheckpoint(projectId: string, checkpoint: AgentCheckpoint): Promise<void> {
+  /**
+   * Add a checkpoint to a project
+   * Made public to allow external services (like upload endpoint) to create checkpoints
+   */
+  async addCheckpoint(projectId: string, checkpoint: AgentCheckpoint): Promise<void> {
     const checkpoints = this.checkpoints.get(projectId) || [];
     checkpoints.push(checkpoint);
     this.checkpoints.set(projectId, checkpoints);
 
-    // Store in database for persistence
+    // TODO: Store in database for persistence when checkpoint storage is implemented
+    // Currently storing in memory only
     try {
-      await storage.createCheckpoint({
-        id: checkpoint.id,
-        projectId: checkpoint.projectId,
-        agentType: checkpoint.agentType,
-        stepName: checkpoint.stepName,
-        status: checkpoint.status,
-        message: checkpoint.message,
-        data: checkpoint.data ? JSON.stringify(checkpoint.data) : null,
-        userFeedback: checkpoint.userFeedback,
-        requiresUserInput: checkpoint.requiresUserInput,
-        timestamp: checkpoint.timestamp
-      });
+      // await storage.createCheckpoint({
+      //   id: checkpoint.id,
+      //   projectId: checkpoint.projectId,
+      //   agentType: checkpoint.agentType,
+      //   stepName: checkpoint.stepName,
+      //   status: checkpoint.status,
+      //   message: checkpoint.message,
+      //   data: checkpoint.data ? JSON.stringify(checkpoint.data) : null,
+      //   userFeedback: checkpoint.userFeedback,
+      //   requiresUserInput: checkpoint.requiresUserInput,
+      //   timestamp: checkpoint.timestamp
+      // });
+      console.log(`✅ Checkpoint ${checkpoint.id} added to project ${projectId} (in-memory)`);
     } catch (error) {
       console.error('Failed to persist checkpoint:', error);
       // Continue without persistence for now
@@ -237,6 +243,7 @@ export class ProjectAgentOrchestrator {
       'business': 'I\'ll help you create professional business intelligence reports and strategic recommendations.',
       'technical': 'I\'ll assist with detailed statistical analysis, code generation, and technical documentation.',
       'consultation': 'I\'ll provide expert-guided analysis with personalized methodology and peer review.',
+      'custom': 'I\'ll execute your custom-selected capabilities to deliver exactly the analysis you need.',
       'ai_guided': 'I\'ll adapt the approach based on your needs and provide personalized guidance throughout the process.'
     };
     return messages[journeyType as keyof typeof messages] || messages['ai_guided'];
@@ -388,6 +395,10 @@ class ProjectAgentOrchestratorSingleton {
 
   async getProjectCheckpoints(projectId: string): Promise<AgentCheckpoint[]> {
     return this.instance.getProjectCheckpoints(projectId);
+  }
+
+  async addCheckpoint(projectId: string, checkpoint: AgentCheckpoint): Promise<void> {
+    return this.instance.addCheckpoint(projectId, checkpoint);
   }
 
   async cleanupProjectAgents(projectId: string): Promise<void> {

@@ -18,28 +18,71 @@ export class ToolInitializationService {
   /**
    * Initialize all tools and register them with the dynamic registry
    */
-  async initializeAllTools(): Promise<void> {
+  async initializeAllTools(): Promise<{
+    successCount: number;
+    categories: Array<{ name: string; tools: number }>;
+    failed: Array<{ name: string; error: string }>;
+  }> {
     console.log('🛠️ Initializing ChimariData Tool Ecosystem...');
+
+    const categories: Array<{ name: string; tools: number }> = [];
+    const failed: Array<{ name: string; error: string }> = [];
+    let successCount = 0;
 
     try {
       // Initialize data transformation tools
-      await this.initializeDataTransformationTools();
+      try {
+        await this.initializeDataTransformationTools();
+        const dataTools = this.toolRegistry.getAllTools().filter(t => t.category === 'data_transformation');
+        categories.push({ name: 'Data Transformation', tools: dataTools.length });
+        successCount += dataTools.length;
+      } catch (error) {
+        failed.push({ name: 'Data Transformation Tools', error: String(error) });
+      }
 
       // Initialize external integration tools
-      await this.initializeExternalIntegrationTools();
+      try {
+        await this.initializeExternalIntegrationTools();
+        const integrationTools = this.toolRegistry.getAllTools().filter(t => t.category === 'external_integration');
+        categories.push({ name: 'External Integration', tools: integrationTools.length });
+        successCount += integrationTools.length;
+      } catch (error) {
+        failed.push({ name: 'External Integration Tools', error: String(error) });
+      }
 
       // Initialize business logic tools
-      await this.initializeBusinessLogicTools();
+      try {
+        await this.initializeBusinessLogicTools();
+        const businessTools = this.toolRegistry.getAllTools().filter(t => t.category === 'business_logic');
+        categories.push({ name: 'Business Logic', tools: businessTools.length });
+        successCount += businessTools.length;
+      } catch (error) {
+        failed.push({ name: 'Business Logic Tools', error: String(error) });
+      }
 
       // Set up tool dependencies and relationships
-      await this.setupToolRelationships();
+      try {
+        await this.setupToolRelationships();
+      } catch (error) {
+        console.warn('⚠️  Failed to setup tool relationships:', error);
+      }
 
-      console.log('✅ Tool ecosystem initialization completed successfully');
+      console.log('✅ Tool ecosystem initialization completed');
       console.log(`📊 Total registered tools: ${this.toolRegistry.getAllTools().length}`);
+      
+      return {
+        successCount,
+        categories,
+        failed
+      };
       
     } catch (error) {
       console.error('❌ Tool initialization failed:', error);
-      throw error;
+      return {
+        successCount,
+        categories,
+        failed: [...failed, { name: 'System', error: String(error) }]
+      };
     }
   }
 
@@ -532,40 +575,66 @@ export class ToolInitializationService {
 
     const apiDataFetcherHandler = {
       async execute(input: any, context: any) {
-        const { url, method = 'GET', headers = {}, params = {}, auth = {} } = input;
-        
-        // Simulate API call (in real implementation, use axios or fetch)
-        const simulatedResponse = {
-          data: {
-            message: 'Simulated API response',
-            timestamp: new Date().toISOString(),
-            requestedUrl: url,
-            method
-          },
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-          metadata: {
-            requestTime: new Date(),
-            responseSize: 256
-          }
-        };
+        const { url, method = 'GET', headers = {}, params = {}, body, auth, timeout, retries } = input;
 
-        return {
-          executionId: context.executionId,
-          toolId: 'api_data_fetcher',
-          status: 'success',
-          result: simulatedResponse,
-          metrics: {
-            duration: 2000,
-            resourcesUsed: { cpu: 3, memory: 64, storage: 0 },
-            cost: 0.002
-          },
-          artifacts: [{
-            type: 'api_response',
-            data: simulatedResponse.data,
-            metadata: { url, status: simulatedResponse.status }
-          }]
-        };
+        // Use real API data fetcher
+        const { apiDataFetcher } = require('./api-data-fetcher');
+
+        try {
+          const startTime = Date.now();
+
+          const response = await apiDataFetcher.fetch({
+            url,
+            method,
+            headers,
+            params,
+            body,
+            auth,
+            timeout,
+            retries
+          });
+
+          const duration = Date.now() - startTime;
+
+          return {
+            executionId: context.executionId,
+            toolId: 'api_data_fetcher',
+            status: 'success',
+            result: response,
+            metrics: {
+              duration: response.metadata.duration,
+              resourcesUsed: {
+                cpu: 3,
+                memory: response.metadata.responseSize / 1024, // Convert to KB
+                storage: 0
+              },
+              cost: 0.002
+            },
+            artifacts: [{
+              type: 'api_response',
+              data: response.data,
+              metadata: {
+                url,
+                status: response.status,
+                responseTime: response.metadata.responseTime,
+                retryCount: response.metadata.retryCount
+              }
+            }]
+          };
+        } catch (error: any) {
+          return {
+            executionId: context.executionId,
+            toolId: 'api_data_fetcher',
+            status: 'error',
+            result: null,
+            metrics: {
+              duration: Date.now() - Date.now(),
+              resourcesUsed: { cpu: 0, memory: 0, storage: 0 },
+              cost: 0
+            },
+            error: `API fetch failed: ${error.message}`
+          };
+        }
       },
 
       async validate(input: any) {
@@ -1061,3 +1130,11 @@ export class ToolInitializationService {
 
 // Export singleton instance
 export const toolSystem = new ToolInitializationService();
+// Export convenience function for initialization
+export async function initializeTools(): Promise<{
+  successCount: number;
+  categories: Array<{ name: string; tools: number }>;
+  failed: Array<{ name: string; error: string }>;
+}> {
+  return await toolSystem.initializeAllTools();
+}

@@ -14,6 +14,8 @@ interface SubscriptionTierDisplayProps {
   onUpgrade?: () => void;
 }
 
+import { UNIFIED_SUBSCRIPTION_TIERS } from '@shared/unified-subscription-tiers';
+
 const TIER_INFO = {
   none: {
     name: 'No Subscription',
@@ -22,28 +24,28 @@ const TIER_INFO = {
     features: { maxFiles: 0, maxFileSizeMB: 0, totalDataVolumeMB: 0, aiInsights: 0 }
   },
   trial: {
-    name: 'Trial',
-    price: 5,
+    name: UNIFIED_SUBSCRIPTION_TIERS.trial.displayName,
+    price: UNIFIED_SUBSCRIPTION_TIERS.trial.monthlyPrice,
     color: 'blue',
-    features: { maxFiles: 1, maxFileSizeMB: 10, totalDataVolumeMB: 10, aiInsights: 1 }
+    features: UNIFIED_SUBSCRIPTION_TIERS.trial.limits
   },
   starter: {
-    name: 'Starter',
-    price: 10,
+    name: UNIFIED_SUBSCRIPTION_TIERS.starter.displayName,
+    price: UNIFIED_SUBSCRIPTION_TIERS.starter.monthlyPrice,
     color: 'green',
-    features: { maxFiles: 2, maxFileSizeMB: 50, totalDataVolumeMB: 100, aiInsights: 3 }
+    features: UNIFIED_SUBSCRIPTION_TIERS.starter.limits
   },
   professional: {
-    name: 'Professional',
-    price: 20,
+    name: UNIFIED_SUBSCRIPTION_TIERS.professional.displayName,
+    price: UNIFIED_SUBSCRIPTION_TIERS.professional.monthlyPrice,
     color: 'purple',
-    features: { maxFiles: 5, maxFileSizeMB: 100, totalDataVolumeMB: 500, aiInsights: 5 }
+    features: UNIFIED_SUBSCRIPTION_TIERS.professional.limits
   },
   enterprise: {
-    name: 'Enterprise',
-    price: 50,
+    name: UNIFIED_SUBSCRIPTION_TIERS.enterprise.displayName,
+    price: UNIFIED_SUBSCRIPTION_TIERS.enterprise.monthlyPrice,
     color: 'gold',
-    features: { maxFiles: -1, maxFileSizeMB: -1, totalDataVolumeMB: -1, aiInsights: -1 }
+    features: UNIFIED_SUBSCRIPTION_TIERS.enterprise.limits
   }
 };
 

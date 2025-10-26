@@ -3,9 +3,9 @@ import { useLocation } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { 
-  Users, 
-  Briefcase, 
+import {
+  Users,
+  Briefcase,
   Settings,
   ArrowRight,
   Sparkles,
@@ -14,16 +14,17 @@ import {
   Brain,
   Target,
   TrendingUp,
-  CheckCircle
+  CheckCircle,
+  Sliders
 } from "lucide-react";
 
 interface JourneySelectorProps {
   user?: any;
-  onJourneySelect: (journey: 'non-tech' | 'business' | 'technical' | 'consultation', config?: any, skipToast?: boolean) => void;
+  onJourneySelect: (journey: 'non-tech' | 'business' | 'technical' | 'consultation' | 'custom', config?: any, skipToast?: boolean) => void;
 }
 
 interface Journey {
-  id: 'non-tech' | 'business' | 'technical' | 'consultation';
+  id: 'non-tech' | 'business' | 'technical' | 'consultation' | 'custom';
   title: string;
   subtitle: string;
   description: string;
@@ -112,6 +113,25 @@ const JOURNEYS: Journey[] = [
     workflow: 'Expert-Led Consultation',
     buttonText: 'Book Consultation',
     badge: 'Expert Support'
+  },
+  {
+    id: 'custom',
+    title: 'Build Your Own',
+    subtitle: 'Cherry-pick your capabilities',
+    description: 'Maximum flexibility for users who know exactly what they need. Select only the capabilities you want to use.',
+    icon: Sliders,
+    color: 'bg-indigo-50 border-indigo-200 hover:bg-indigo-100',
+    features: [
+      'Choose specific capabilities',
+      'Data cleaning only option',
+      'Flexible analysis selection',
+      'Pay for what you use',
+      'Full control over workflow'
+    ],
+    userType: 'All Users',
+    workflow: 'Custom Capability Selection',
+    buttonText: 'Build Custom Journey',
+    badge: 'Maximum Flexibility'
   }
 ];
 
@@ -124,11 +144,11 @@ export function JourneySelector({ user, onJourneySelect }: JourneySelectorProps)
   useEffect(() => {
     if (hydratedRef.current) return; // Prevent repeated hydration
 
-    const savedJourney = localStorage.getItem('selected_journey') as 'non-tech' | 'business' | 'technical' | 'consultation' | null;
+    const savedJourney = localStorage.getItem('selected_journey') as 'non-tech' | 'business' | 'technical' | 'consultation' | 'custom' | null;
     if (savedJourney && JOURNEYS.find(j => j.id === savedJourney)) {
       setSelectedJourney(savedJourney);
       hydratedRef.current = true;
-      
+
       // Trigger the journey selection for routing (without toast) for all users
       const journey = JOURNEYS.find(j => j.id === savedJourney);
       if (journey) {
@@ -139,14 +159,14 @@ export function JourneySelector({ user, onJourneySelect }: JourneySelectorProps)
         }, true); // skipToast = true for hydration
       }
     }
-  }, [user, onJourneySelect]);
+  }, [user]); // Removed onJourneySelect from dependencies to prevent infinite re-renders
 
   const handleJourneySelect = (journey: Journey) => {
     setSelectedJourney(journey.id);
-    
+
     // Always store journey preference in localStorage, regardless of auth status
     localStorage.setItem('selected_journey', journey.id);
-    
+
     // Store intended route for post-auth redirect
     let intendedRoute = '/';
     switch (journey.id) {
@@ -162,15 +182,18 @@ export function JourneySelector({ user, onJourneySelect }: JourneySelectorProps)
       case 'consultation':
         intendedRoute = '/expert-consultation';
         break;
+      case 'custom':
+        intendedRoute = '/custom-journey';
+        break;
     }
-    
+
     // Store intended route for authentication redirect
     import('@/lib/utils').then(({ routeStorage }) => {
       routeStorage.setIntendedRoute(intendedRoute);
     }).catch(() => {
       // Utils import failed (non-critical)
     });
-    
+
     // Always call the parent handler to show workflow tabs for all users
     // Authentication gating happens at the feature level, not journey selection
     onJourneySelect(journey.id, {
@@ -190,7 +213,7 @@ export function JourneySelector({ user, onJourneySelect }: JourneySelectorProps)
           </span>
         </div>
         <h2 className="text-3xl font-bold text-gray-900 mb-4">
-          Four Ways to Unlock Your Data's Potential
+          Five Ways to Unlock Your Data's Potential
         </h2>
         <p className="text-lg text-gray-600 max-w-3xl mx-auto">
           Whether you're a data novice or expert, we have the perfect path for your analytics needs.
@@ -198,7 +221,7 @@ export function JourneySelector({ user, onJourneySelect }: JourneySelectorProps)
         </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6 mb-8">
         {JOURNEYS.map((journey) => {
           const IconComponent = journey.icon;
           const isSelected = selectedJourney === journey.id;

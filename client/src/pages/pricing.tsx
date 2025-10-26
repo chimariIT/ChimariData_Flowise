@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { CheckCircle, ArrowRight, Sparkles, Users, Shield, Zap, ArrowLeft, User, BarChart3 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { SUBSCRIPTION_TIERS } from "@shared/subscription-tiers";
+import { UNIFIED_SUBSCRIPTION_TIERS, getAllUnifiedTiers } from "@shared/unified-subscription-tiers";
 import { apiClient } from "@/lib/api";
 
 interface PricingTier {
@@ -58,39 +58,42 @@ export default function PricingPage({ onGetStarted, onSubscribe, onBack, onPayPe
     retry: false,
   });
 
-  // Get available subscription tiers from API (V2)
+  // Get available subscription tiers from API
   const { data: pricingData, isLoading: tiersLoading } = useQuery({
-    queryKey: ['/api/pricing-v2/tiers'],
-    queryFn: () => apiClient.get('/api/pricing-v2/tiers'),
+    queryKey: ['/api/pricing/tiers'],
+    queryFn: () => apiClient.get('/api/pricing/tiers'),
   });
 
-  // Use API tiers if available, otherwise fallback to static tiers
-  const tiers = pricingData?.tiers || Object.values(SUBSCRIPTION_TIERS).map(tier => ({
-    name: tier.name,
-    price: tier.price,
-    priceLabel: `$${tier.price}/month`,
+  // Use API tiers if available, otherwise fallback to unified tiers
+  const tiers = pricingData?.tiers || getAllUnifiedTiers().map(tier => ({
+    name: tier.displayName,
+    price: billingCycle === 'yearly' ? tier.yearlyPrice : tier.monthlyPrice,
+    priceLabel: `$${billingCycle === 'yearly' ? tier.yearlyPrice : tier.monthlyPrice}/${billingCycle === 'yearly' ? 'year' : 'month'}`,
     type: tier.id,
     features: [
-      `${tier.features.maxFiles} file${tier.features.maxFiles > 1 ? 's' : ''} per month`,
-      `${tier.features.maxFileSizeMB}MB max file size`,
-      `${tier.features.totalDataVolumeMB}MB total data volume`,
-      `${tier.features.aiInsights === -1 ? 'Unlimited' : tier.features.aiInsights} AI insights`,
-      `${tier.features.maxAnalysisComponents === -1 ? 'Unlimited' : tier.features.maxAnalysisComponents} analysis components`,
-      `${tier.features.maxVisualizations === -1 ? 'Unlimited' : tier.features.maxVisualizations} visualizations`,
-      tier.features.dataTransformation ? 'Data transformation' : null,
-      tier.features.statisticalAnalysis ? 'Statistical analysis' : null,
-      tier.features.advancedInsights ? 'Advanced insights' : null,
-      tier.features.piiDetection ? 'PII detection' : null,
-      `${tier.features.exportOptions.join(', ')} export`,
-      `${tier.features.support} support`
+      `${tier.limits.maxFiles === -1 ? 'Unlimited' : tier.limits.maxFiles} file${tier.limits.maxFiles !== 1 ? 's' : ''} per month`,
+      `${tier.limits.maxFileSizeMB === -1 ? 'Unlimited' : tier.limits.maxFileSizeMB}MB max file size`,
+      `${tier.limits.totalDataVolumeMB === -1 ? 'Unlimited' : tier.limits.totalDataVolumeMB}MB total data volume`,
+      `${tier.limits.aiInsights === -1 ? 'Unlimited' : tier.limits.aiInsights} AI insights`,
+      `${tier.limits.maxAnalysisComponents === -1 ? 'Unlimited' : tier.limits.maxAnalysisComponents} analysis components`,
+      `${tier.limits.maxVisualizations === -1 ? 'Unlimited' : tier.limits.maxVisualizations} visualizations`,
+      tier.limits.dataTransformation ? 'Data transformation' : null,
+      tier.limits.statisticalAnalysis ? 'Statistical analysis' : null,
+      tier.limits.advancedInsights ? 'Advanced insights' : null,
+      tier.limits.piiDetection ? 'PII detection' : null,
+      tier.limits.mlBasic ? 'Basic ML models' : null,
+      tier.limits.mlAdvanced ? 'Advanced ML (AutoML, XGBoost)' : null,
+      tier.limits.llmFineTuning ? 'LLM fine-tuning' : null,
+      `${tier.limits.exportOptions.join(', ')} export`,
+      `${tier.support.level} support`
     ].filter(Boolean),
     limits: {
-      analysesPerMonth: tier.features.maxAnalysisComponents,
-      maxDataSizeMB: tier.features.maxFileSizeMB,
-      maxRecords: tier.features.totalDataVolumeMB * 1000, // Rough estimate
-      aiQueries: tier.features.aiInsights,
-      supportLevel: tier.features.support,
-      customModels: tier.features.advancedInsights,
+      analysesPerMonth: tier.limits.maxAnalysisComponents,
+      maxDataSizeMB: tier.limits.maxFileSizeMB,
+      maxRecords: tier.limits.totalDataVolumeMB * 1000, // Rough estimate
+      aiQueries: tier.limits.aiInsights,
+      supportLevel: tier.support.level,
+      customModels: tier.limits.customMLModels,
       apiAccess: tier.id === 'enterprise',
       teamCollaboration: tier.id !== 'trial'
     },

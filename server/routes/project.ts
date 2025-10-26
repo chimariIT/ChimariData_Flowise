@@ -16,9 +16,18 @@ import { tempStore } from '../services/temp-store';
 import { jsonToCsv } from '../services/csv-export';
 import { exportService } from '../services/export-service';
 import { projectAgentOrchestrator } from '../services/project-agent-orchestrator';
+import { ProjectManagerAgent } from '../services/project-manager-agent';
+import { AgentMessageBroker } from '../services/agents/message-broker';
+import { DataEngineerAgent } from '../services/data-engineer-agent';
+import { DataScientistAgent } from '../services/data-scientist-agent';
 
 const router = Router();
 
+// Initialize Agents for recommendations
+const projectManagerAgent = new ProjectManagerAgent();
+const messageBroker = new AgentMessageBroker();
+const dataEngineerAgent = new DataEngineerAgent();
+const dataScientistAgent = new DataScientistAgent();
 
 // Configure multer for file uploads
 const upload = multer({
@@ -91,6 +100,98 @@ router.post("/", ensureAuthenticated, async (req, res) => {
         res.json({ success: true, project });
     } catch (error: any) {
         res.status(500).json({ success: false, error: error.message || "Failed to create project" });
+    }
+});
+
+/**
+ * Agent Recommendations Endpoint
+ * Analyzes user goals and questions to provide recommendations for:
+ * - Expected data size (from Data Engineer Agent)
+ * - Analysis complexity (from Data Scientist Agent)
+ */
+router.post("/:id/agent-recommendations", ensureAuthenticated, async (req, res) => {
+    try {
+        const { id: projectId } = req.params;
+        const userId = (req.user as any)?.id;
+        
+        if (!userId) {
+            return res.status(401).json({ success: false, error: "User authentication required" });
+        }
+
+        const { goals, questions, dataSource } = req.body;
+
+        if (!goals || !questions || !Array.isArray(questions)) {
+            return res.status(400).json({ 
+                success: false, 
+                error: "Goals and questions are required" 
+            });
+        }
+
+        console.log(`🔮 Getting agent recommendations for project ${projectId}`);
+
+        // For now, return estimated values based on questions
+        // In full implementation, these would come from actual agent analysis
+        
+        // Estimate data size based on question complexity
+        const questionCount = questions.length;
+        const hasComplexAnalysis = questions.some(q => 
+            q.toLowerCase().includes('predict') || 
+            q.toLowerCase().includes('forecast') ||
+            q.toLowerCase().includes('trend') ||
+            q.toLowerCase().includes('over time')
+        );
+
+        // Estimate data size (rows)
+        let estimatedDataSize = 1000; // Default
+        if (hasComplexAnalysis) {
+            estimatedDataSize = 3000;
+        } else if (questionCount > 2) {
+            estimatedDataSize = 2000;
+        }
+
+        // Estimate analysis complexity (matching frontend options: simple, moderate, complex, expert)
+        let complexity = 'moderate';
+        if (hasComplexAnalysis) {
+            complexity = 'complex';
+        } else if (questionCount <= 2) {
+            complexity = 'simple';
+        }
+
+        // Calculate complexity score for recommendation
+        const complexityScore = questions.reduce((score: number, q: string) => {
+            const lowerQ = q.toLowerCase();
+            if (lowerQ.includes('predict') || lowerQ.includes('forecast')) return score + 3;
+            if (lowerQ.includes('trend') || lowerQ.includes('over time')) return score + 2;
+            if (lowerQ.includes('compare') || lowerQ.includes('each')) return score + 1;
+            return score + 0.5;
+        }, 0);
+
+        // Map score to complexity level (matching frontend options: simple, moderate, complex, expert)
+        if (complexityScore >= 5) complexity = 'expert';
+        else if (complexityScore >= 3) complexity = 'complex';
+        else if (complexityScore >= 1.5) complexity = 'moderate';
+        else complexity = 'simple';
+
+        const recommendations = {
+            success: true,
+            recommendations: {
+                expectedDataSize: estimatedDataSize.toString(),
+                analysisComplexity: complexity,
+                rationale: `Based on ${questionCount} questions: ${complexity} complexity analysis recommended for ${estimatedDataSize.toLocaleString()} rows`,
+                confidence: 0.85
+            }
+        };
+
+        console.log(`✅ Agent recommendations: Size=${estimatedDataSize}, Complexity=${complexity}`);
+        
+        res.json(recommendations);
+
+    } catch (error: any) {
+        console.error('Agent recommendations error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message || "Failed to get agent recommendations" 
+        });
     }
 });
 
@@ -209,6 +310,14 @@ router.get("/get-transformed-data/:projectId", unifiedAuth, async (req, res) => 
 // Main project upload endpoint
 router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, res) => {
     try {
+        console.log('🔍 Upload request debug:', {
+            hasFile: !!req.file,
+            hasUser: !!req.user,
+            userId: req.user?.id,
+            reqUserId: req.userId,
+            authHeader: req.headers.authorization?.substring(0, 20) + '...'
+        });
+
         if (!req.file) {
             return res.status(400).json({ success: false, error: "No file uploaded" });
         }
@@ -216,6 +325,15 @@ router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, r
         if (!name || !name.trim()) {
             return res.status(400).json({ success: false, error: "Project name is required" });
         }
+
+        // Ensure we have a valid user ID
+        const userId = req.user?.id || req.userId;
+        if (!userId) {
+            console.error('❌ No user ID found in request:', { reqUser: req.user, reqUserId: req.userId });
+            return res.status(401).json({ success: false, error: "Authentication required" });
+        }
+
+        console.log('✅ Using user ID:', userId);
         const processedData = await FileProcessor.processFile(req.file.buffer, req.file.originalname, req.file.mimetype);
         let parsedQuestions: string[] = [];
         if (questions) {
@@ -248,19 +366,22 @@ router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, r
         }
 
         const project = await storage.createProject({
-            userId: (req.user as any)?.id || 'anonymous',
+            userId: userId,
             name: name.trim(),
             description: description || '',
-            // minimal required project fields for schema consistency
-            isTrial: false,
+            journeyType: req.body.journeyType || 'ai_guided', // Add journeyType
+            fileType: req.file.mimetype,
+            fileName: req.file.originalname,
+            fileSize: req.file.size,
             dataSource: 'upload',
+            isTrial: false,
             isPaid: false,
         } as any);
 
         // Create a dataset and link it
         const dataset = await storage.createDataset({
             id: undefined as any, // will be set by storage impl
-            ownerId: (req.user as any)?.id || 'anonymous',
+            ownerId: userId,
             sourceType: 'upload',
             originalFileName: req.file.originalname,
             mimeType: req.file.mimetype,
@@ -382,6 +503,80 @@ router.post("/:id/upload", ensureAuthenticated, upload.single('file'), async (re
             processed: true,
         });
 
+        // ==========================================
+        // MULTI-AGENT COORDINATION (NON-BLOCKING)
+        // ==========================================
+        // Trigger multi-agent goal analysis in the background after successful file upload
+        // This creates a checkpoint for user review without blocking the upload response
+        setImmediate(async () => {
+            try {
+                console.log(`[project.ts] Starting multi-agent coordination for project ${projectId}`);
+
+                // Extract user goals from project or use default exploratory goals
+                const userGoals = (updatedProject as any).goals || [
+                    'Understand my data',
+                    'Discover patterns and insights',
+                    'Identify key trends'
+                ];
+
+                // Determine industry from project metadata or default to 'general'
+                const industry = (updatedProject as any).industry || 'general';
+
+                // Coordinate goal analysis across all three agents (Data Engineer, Data Scientist, Business Agent)
+                const coordinationResult = await projectManagerAgent.coordinateGoalAnalysis(
+                    projectId,
+                    {
+                        data: processedData.data,
+                        schema: processedData.schema,
+                        qualityMetrics: processedData.qualityMetrics,
+                        rowCount: processedData.recordCount,
+                        type: 'tabular'
+                    },
+                    userGoals,
+                    industry
+                );
+
+                console.log(`[project.ts] Multi-agent coordination complete in ${coordinationResult.totalResponseTime}ms`);
+                console.log(`[project.ts] Overall assessment: ${coordinationResult.synthesis.overallAssessment}`);
+                console.log(`[project.ts] Confidence: ${coordinationResult.synthesis.confidence}`);
+
+                // Store coordination result in project metadata for later retrieval
+                await storage.updateProject(projectId, {
+                    multiAgentCoordination: JSON.stringify(coordinationResult)
+                } as any);
+
+                // Notify project orchestrator to create a checkpoint
+                // This will be picked up by the UI through the existing checkpoint polling mechanism
+                await projectAgentOrchestrator.addCheckpoint(projectId, {
+                    id: coordinationResult.coordinationId,
+                    projectId,
+                    agentType: 'project_manager' as const,
+                    stepName: 'multi_agent_goal_analysis',
+                    status: 'waiting_approval' as const,
+                    message: 'Our team of experts has analyzed your data. Please review their recommendations:',
+                    data: {
+                        type: 'multi_agent_coordination',
+                        coordinationResult,
+                        expertOpinions: coordinationResult.expertOpinions,
+                        synthesis: coordinationResult.synthesis,
+                        overallAssessment: coordinationResult.synthesis.overallAssessment,
+                        confidence: coordinationResult.synthesis.confidence,
+                        keyFindings: coordinationResult.synthesis.keyFindings,
+                        actionableRecommendations: coordinationResult.synthesis.actionableRecommendations
+                    },
+                    timestamp: new Date(),
+                    requiresUserInput: true
+                });
+
+                console.log(`[project.ts] Multi-agent checkpoint created for project ${projectId}`);
+
+            } catch (coordinationError) {
+                console.error(`[project.ts] Multi-agent coordination failed (non-blocking):`, coordinationError);
+                // Don't block upload success, coordination is an enhancement
+                // User can still proceed with analysis using traditional flow
+            }
+        });
+
         res.json({ success: true, project: updatedProject, datasetId: newDataset.id, piiAnalysis });
 
     } catch (error: any) {
@@ -443,6 +638,107 @@ router.post("/:projectId/checkpoints/:checkpointId/feedback", ensureAuthenticate
         res.json({ success: true, message: "Feedback processed successfully" });
     } catch (error: any) {
         res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// AI Question Suggestions for Non-Tech Users (Phase 3 - Task 3.1)
+router.post("/project-manager/suggest-questions", ensureAuthenticated, async (req, res) => {
+    try {
+        const { goal, journeyType } = req.body;
+        const userId = (req.user as any)?.id;
+
+        if (!userId) {
+            return res.status(401).json({ error: "Authentication required" });
+        }
+
+        if (!goal || typeof goal !== 'string' || goal.length < 10) {
+            return res.status(400).json({
+                success: false,
+                error: "Goal must be at least 10 characters long"
+            });
+        }
+
+        // Use AI service to generate question suggestions
+        const { GoogleGenerativeAI } = require('@google/generative-ai');
+        const apiKey = process.env.GOOGLE_AI_API_KEY;
+
+        if (!apiKey) {
+            return res.status(503).json({
+                success: false,
+                error: "AI service not configured"
+            });
+        }
+
+        const genAI = new GoogleGenerativeAI(apiKey);
+        const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+
+        const prompt = `You are an AI assistant helping a non-technical user with data analysis.
+
+User's Analysis Goal: "${goal}"
+
+Based on this goal, generate 3-5 specific, actionable questions that would help guide their data analysis.
+The questions should be:
+- Directly related to their stated goal
+- Easy to understand for non-technical users
+- Specific enough to guide meaningful analysis
+- Focused on business insights rather than technical details
+
+Return ONLY the questions as a JSON array of strings, like this:
+["Question 1", "Question 2", "Question 3"]
+
+No additional text or explanation.`;
+
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        const text = response.text().trim();
+
+        // Parse the AI response
+        let suggestions: string[] = [];
+        try {
+            // Try to extract JSON from the response
+            const jsonMatch = text.match(/\[[\s\S]*\]/);
+            if (jsonMatch) {
+                suggestions = JSON.parse(jsonMatch[0]);
+            } else {
+                // Fallback: split by newlines and clean up
+                suggestions = text
+                    .split('\n')
+                    .filter(line => line.trim().length > 0)
+                    .map(line => line.replace(/^[-*•]\s*/, '').replace(/^["\s]+|["\s]+$/g, ''))
+                    .filter(line => line.length > 10)
+                    .slice(0, 5);
+            }
+        } catch (parseError) {
+            console.error('Failed to parse AI response:', parseError);
+            // Fallback suggestions if AI parsing fails
+            suggestions = [
+                "What are the main patterns or trends in my data?",
+                "Which factors have the strongest impact on my key metrics?",
+                "Are there any unexpected outliers or anomalies?"
+            ];
+        }
+
+        res.json({
+            success: true,
+            suggestions: suggestions.slice(0, 5) // Maximum 5 suggestions
+        });
+    } catch (error: any) {
+        console.error('AI Question Suggestion Error:', error);
+
+        // Provide fallback suggestions if AI service fails
+        const fallbackSuggestions = [
+            "What are the main patterns or trends in my data?",
+            "Which factors have the strongest impact on my key metrics?",
+            "Are there any unexpected outliers or anomalies?",
+            "How do different segments compare to each other?",
+            "What predictions can be made based on historical trends?"
+        ];
+
+        res.json({
+            success: true,
+            suggestions: fallbackSuggestions,
+            fallback: true
+        });
     }
 });
 

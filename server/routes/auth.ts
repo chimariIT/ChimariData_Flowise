@@ -368,18 +368,30 @@ router.post("/login-test", async (req, res) => {
     try {
         const testUserId = 'test-user-e2e';
         let user = await storage.getUser(testUserId);
+
         if (!user) {
-            // Create test user with proper fields matching the schema
-            user = await storage.createUser({
-                id: testUserId,
-                email: 'test-e2e@example.com',
-                firstName: 'Test',
-                lastName: 'User',
-                hashedPassword: 'dummy-password', // Not used for test login
-                provider: 'local',
-                subscriptionTier: 'professional',
-                isPaid: true,
-            });
+            try {
+                // Try to create test user with proper fields matching the schema
+                user = await storage.createUser({
+                    id: testUserId,
+                    email: 'test-e2e@example.com',
+                    firstName: 'Test',
+                    lastName: 'User',
+                    hashedPassword: 'dummy-password', // Not used for test login
+                    provider: 'local',
+                    subscriptionTier: 'professional',
+                    isPaid: true,
+                });
+            } catch (createError: any) {
+                // If user creation fails (e.g., duplicate key), try to get the user again
+                console.warn('Test user creation failed, attempting to retrieve existing user:', createError.message);
+                user = await storage.getUser(testUserId);
+
+                // If still not found, this is a real error
+                if (!user) {
+                    throw new Error(`Failed to create or retrieve test user: ${createError.message}`);
+                }
+            }
         }
 
         const token = tokenStorage.generateToken(user.id, user.email);

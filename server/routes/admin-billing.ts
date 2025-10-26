@@ -1,6 +1,8 @@
 import { Router } from 'express';
-import { enhancedBillingService } from '../services/enhanced-billing-service';
+import { getBillingService } from '../services/billing/unified-billing-service';
 import { ensureAuthenticated } from './auth';
+
+const billingService = getBillingService();
 
 const router = Router();
 
@@ -15,7 +17,7 @@ const ensureAdmin = (req: any, res: any, next: any) => {
 // Get billing overview
 router.get('/overview', ensureAuthenticated, ensureAdmin, async (req, res) => {
     try {
-        const overview = await enhancedBillingService.getAdminBillingOverview();
+        const overview = await billingService.getAdminBillingOverview();
         res.json({ success: true, data: overview });
     } catch (error: any) {
         res.status(500).json({ success: false, error: error.message });
@@ -25,7 +27,7 @@ router.get('/overview', ensureAuthenticated, ensureAdmin, async (req, res) => {
 // Subscription Tier Management
 router.get('/tiers', ensureAuthenticated, ensureAdmin, async (req, res) => {
     try {
-        const config = (enhancedBillingService as any).config;
+        const config = (billingService as any).config;
         res.json({ success: true, tiers: config.tiers });
     } catch (error: any) {
         res.status(500).json({ success: false, error: error.message });
@@ -44,7 +46,7 @@ router.post('/tiers', ensureAuthenticated, ensureAdmin, async (req, res) => {
             });
         }
 
-        const config = (enhancedBillingService as any).config;
+        const config = (billingService as any).config;
         const existingIndex = config.tiers.findIndex((t: any) => t.id === tier.id);
 
         if (existingIndex >= 0) {
@@ -53,7 +55,7 @@ router.post('/tiers', ensureAuthenticated, ensureAdmin, async (req, res) => {
             config.tiers.push(tier);
         }
 
-        await enhancedBillingService.updateBillingConfiguration({ tiers: config.tiers });
+        await billingService.updateBillingConfiguration({ tiers: config.tiers });
 
         res.json({ success: true, message: 'Tier updated successfully' });
     } catch (error: any) {
@@ -64,10 +66,10 @@ router.post('/tiers', ensureAuthenticated, ensureAdmin, async (req, res) => {
 router.delete('/tiers/:tierId', ensureAuthenticated, ensureAdmin, async (req, res) => {
     try {
         const { tierId } = req.params;
-        const config = (enhancedBillingService as any).config;
+        const config = (billingService as any).config;
 
         config.tiers = config.tiers.filter((t: any) => t.id !== tierId);
-        await enhancedBillingService.updateBillingConfiguration({ tiers: config.tiers });
+        await billingService.updateBillingConfiguration({ tiers: config.tiers });
 
         res.json({ success: true, message: 'Tier deleted successfully' });
     } catch (error: any) {
@@ -78,7 +80,7 @@ router.delete('/tiers/:tierId', ensureAuthenticated, ensureAdmin, async (req, re
 // Consumption Rates Management
 router.get('/consumption-rates', ensureAuthenticated, ensureAdmin, async (req, res) => {
     try {
-        const config = (enhancedBillingService as any).config;
+        const config = (billingService as any).config;
         res.json({ success: true, rates: config.consumptionRates });
     } catch (error: any) {
         res.status(500).json({ success: false, error: error.message });
@@ -96,7 +98,7 @@ router.post('/consumption-rates', ensureAuthenticated, ensureAdmin, async (req, 
             });
         }
 
-        const config = (enhancedBillingService as any).config;
+        const config = (billingService as any).config;
         const existingIndex = config.consumptionRates.findIndex((r: any) => r.type === rate.type);
 
         if (existingIndex >= 0) {
@@ -105,7 +107,7 @@ router.post('/consumption-rates', ensureAuthenticated, ensureAdmin, async (req, 
             config.consumptionRates.push(rate);
         }
 
-        await enhancedBillingService.updateBillingConfiguration({ consumptionRates: config.consumptionRates });
+        await billingService.updateBillingConfiguration({ consumptionRates: config.consumptionRates });
 
         res.json({ success: true, message: 'Consumption rate updated successfully' });
     } catch (error: any) {
@@ -116,7 +118,7 @@ router.post('/consumption-rates', ensureAuthenticated, ensureAdmin, async (req, 
 // Campaign Management
 router.get('/campaigns', ensureAuthenticated, ensureAdmin, async (req, res) => {
     try {
-        const config = (enhancedBillingService as any).config;
+        const config = (billingService as any).config;
         res.json({ success: true, campaigns: config.campaigns });
     } catch (error: any) {
         res.status(500).json({ success: false, error: error.message });
@@ -138,7 +140,7 @@ router.post('/campaigns', ensureAuthenticated, ensureAdmin, async (req, res) => 
         campaign.validFrom = new Date(campaign.validFrom);
         campaign.validTo = new Date(campaign.validTo);
 
-        const newCampaign = await enhancedBillingService.createCampaign(campaign);
+        const newCampaign = await billingService.createCampaign(campaign);
 
         res.json({ success: true, campaign: newCampaign });
     } catch (error: any) {
@@ -149,7 +151,7 @@ router.post('/campaigns', ensureAuthenticated, ensureAdmin, async (req, res) => 
 router.put('/campaigns/:campaignId/toggle', ensureAuthenticated, ensureAdmin, async (req, res) => {
     try {
         const { campaignId } = req.params;
-        const config = (enhancedBillingService as any).config;
+        const config = (billingService as any).config;
 
         const campaign = config.campaigns.find((c: any) => c.id === campaignId);
         if (!campaign) {
@@ -157,7 +159,7 @@ router.put('/campaigns/:campaignId/toggle', ensureAuthenticated, ensureAdmin, as
         }
 
         campaign.isActive = !campaign.isActive;
-        await enhancedBillingService.updateBillingConfiguration({ campaigns: config.campaigns });
+        await billingService.updateBillingConfiguration({ campaigns: config.campaigns });
 
         res.json({
             success: true,
@@ -172,7 +174,7 @@ router.put('/campaigns/:campaignId/toggle', ensureAuthenticated, ensureAdmin, as
 // Tax Configuration
 router.get('/tax-config', ensureAuthenticated, ensureAdmin, async (req, res) => {
     try {
-        const config = (enhancedBillingService as any).config;
+        const config = (billingService as any).config;
         res.json({ success: true, taxConfig: config.taxConfig });
     } catch (error: any) {
         res.status(500).json({ success: false, error: error.message });
@@ -183,7 +185,7 @@ router.post('/tax-config', ensureAuthenticated, ensureAdmin, async (req, res) =>
     try {
         const { taxConfig } = req.body;
 
-        await enhancedBillingService.updateBillingConfiguration({ taxConfig });
+        await billingService.updateBillingConfiguration({ taxConfig });
 
         res.json({ success: true, message: 'Tax configuration updated successfully' });
     } catch (error: any) {
@@ -194,7 +196,7 @@ router.post('/tax-config', ensureAuthenticated, ensureAdmin, async (req, res) =>
 // Currency Configuration
 router.get('/currency-config', ensureAuthenticated, ensureAdmin, async (req, res) => {
     try {
-        const config = (enhancedBillingService as any).config;
+        const config = (billingService as any).config;
         res.json({ success: true, currency: config.currency });
     } catch (error: any) {
         res.status(500).json({ success: false, error: error.message });
@@ -208,7 +210,7 @@ router.post('/currency-config', ensureAuthenticated, ensureAdmin, async (req, re
         // Update conversion rates timestamp
         currency.lastUpdated = new Date();
 
-        await enhancedBillingService.updateBillingConfiguration({ currency });
+        await billingService.updateBillingConfiguration({ currency });
 
         res.json({ success: true, message: 'Currency configuration updated successfully' });
     } catch (error: any) {
@@ -228,7 +230,7 @@ router.post('/bulk-operations/tier-pricing-update', ensureAuthenticated, ensureA
             });
         }
 
-        const config = (enhancedBillingService as any).config;
+        const config = (billingService as any).config;
         let updatedCount = 0;
 
         config.tiers.forEach((tier: any) => {
@@ -239,7 +241,7 @@ router.post('/bulk-operations/tier-pricing-update', ensureAuthenticated, ensureA
             }
         });
 
-        await enhancedBillingService.updateBillingConfiguration({ tiers: config.tiers });
+        await billingService.updateBillingConfiguration({ tiers: config.tiers });
 
         res.json({
             success: true,
@@ -262,7 +264,7 @@ router.post('/bulk-operations/consumption-rate-update', ensureAuthenticated, ens
             });
         }
 
-        const config = (enhancedBillingService as any).config;
+        const config = (billingService as any).config;
         let updatedCount = 0;
 
         config.consumptionRates.forEach((rate: any) => {
@@ -272,7 +274,7 @@ router.post('/bulk-operations/consumption-rate-update', ensureAuthenticated, ens
             }
         });
 
-        await enhancedBillingService.updateBillingConfiguration({ consumptionRates: config.consumptionRates });
+        await billingService.updateBillingConfiguration({ consumptionRates: config.consumptionRates });
 
         res.json({
             success: true,
@@ -314,7 +316,7 @@ router.get('/analytics/revenue', ensureAuthenticated, ensureAdmin, async (req, r
 
 router.get('/analytics/campaigns', ensureAuthenticated, ensureAdmin, async (req, res) => {
     try {
-        const config = (enhancedBillingService as any).config;
+        const config = (billingService as any).config;
 
         const campaignAnalytics = config.campaigns.map((campaign: any) => ({
             id: campaign.id,
@@ -340,7 +342,7 @@ router.post('/test/calculate-cost', ensureAuthenticated, ensureAdmin, async (req
     try {
         const { userId, consumptionType, volume, complexity } = req.body;
 
-        const cost = await enhancedBillingService.calculateConsumptionCost(
+        const cost = await billingService.calculateConsumptionCost(
             userId,
             consumptionType,
             volume,
@@ -357,7 +359,7 @@ router.post('/test/apply-campaign', ensureAuthenticated, ensureAdmin, async (req
     try {
         const { userId, campaignCode } = req.body;
 
-        const applied = await enhancedBillingService.applyCampaign(userId, campaignCode);
+        const applied = await billingService.applyCampaign(userId, campaignCode);
 
         res.json({
             success: true,

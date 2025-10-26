@@ -476,6 +476,39 @@ export class AgentRegistry extends EventEmitter {
   }
 
   /**
+   * List all registered agents
+   */
+  listAgents(): AgentMetadata[] {
+    return Array.from(this.agents.values()).map(agent => agent.metadata);
+  }
+
+  /**
+   * Get health status for a specific agent
+   */
+  async getAgentHealth(agentId: string): Promise<{
+    healthy: boolean;
+    lastSeen: Date;
+    tasksCompleted: number;
+    tasksFailed: number;
+  }> {
+    const agent = this.agents.get(agentId);
+    if (!agent) {
+      throw new Error(`Agent ${agentId} not found`);
+    }
+
+    const now = new Date();
+    const timeSinceLastActivity = now.getTime() - agent.metadata.metrics.lastActivity.getTime();
+    const isHealthy = timeSinceLastActivity < 300000 && agent.metadata.status !== 'error'; // 5 minutes
+
+    return {
+      healthy: isHealthy,
+      lastSeen: agent.metadata.health.lastHeartbeat,
+      tasksCompleted: agent.metadata.metrics.successfulTasks,
+      tasksFailed: agent.metadata.metrics.totalTasks - agent.metadata.metrics.successfulTasks
+    };
+  }
+
+  /**
    * Stop the agent registry
    */
   async shutdown(): Promise<void> {

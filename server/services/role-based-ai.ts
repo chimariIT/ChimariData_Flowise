@@ -1,5 +1,8 @@
 import { RolePermissionService } from "./role-permission.js";
 import { UsageTrackingService } from "./usage-tracking.js";
+import { CircuitBreakerRegistry, CircuitBreaker } from "./circuit-breaker";
+import { aiCache, cacheService } from "./enhanced-cache";
+import { errorHandler } from "./enhanced-error-handler";
 import type { UserRole, TechnicalLevel } from "../../shared/schema.js";
 
 export interface AIModelConfig {
@@ -44,6 +47,76 @@ export interface AIResponse {
 }
 
 export class RoleBasedAIService {
+  private static initialized = false;
+
+  // Initialize fallback strategies
+  private static initializeFallbackStrategies(): void {
+    if (this.initialized) return;
+
+    // Fallback strategy for OpenAI failures
+    errorHandler.registerFallback('ai_request_openai', {
+      name: 'gemini_fallback',
+      priority: 10,
+      condition: (error, context) => {
+        return error.message.toLowerCase().includes('openai') || 
+               error.message.toLowerCase().includes('rate limit') ||
+               context.additionalData?.provider === 'openai';
+      },
+      execute: async (context) => {
+        console.log('Using Gemini fallback for OpenAI failure');
+        return await this.callAIProvider(
+          'gemini',
+          'gemini-1.5-flash',
+          'You are a helpful AI assistant.',
+          'Please provide a brief response: The AI service is temporarily unavailable. Please try again in a moment.',
+          { maxTokens: 1024, temperature: 0.7 }
+        );
+      },
+      timeout: 10000
+    });
+
+    // Fallback strategy for Gemini failures
+    errorHandler.registerFallback('ai_request_gemini', {
+      name: 'openai_fallback',
+      priority: 10,
+      condition: (error, context) => {
+        return error.message.toLowerCase().includes('gemini') ||
+               context.additionalData?.provider === 'gemini';
+      },
+      execute: async (context) => {
+        console.log('Using OpenAI fallback for Gemini failure');
+        return await this.callAIProvider(
+          'openai',
+          'gpt-4o-mini',
+          'You are a helpful AI assistant.',
+          'Please provide a brief response: The AI service is temporarily unavailable. Please try again in a moment.',
+          { maxTokens: 1024, temperature: 0.7 }
+        );
+      },
+      timeout: 10000
+    });
+
+    // Generic AI failure fallback
+    errorHandler.registerFallback('ai_request_generic', {
+      name: 'cached_response_fallback',
+      priority: 5,
+      condition: (error, context) => {
+        return error.message.toLowerCase().includes('ai') ||
+               error.message.toLowerCase().includes('timeout');
+      },
+      execute: async (context) => {
+        console.log('Using cached response fallback for AI failure');
+        return {
+          content: "I'm temporarily unable to process your request. The AI service is experiencing issues. Please try again in a few moments.",
+          tokens: 50,
+          confidence: 0.5
+        };
+      }
+    });
+
+    this.initialized = true;
+  }
+
   // AI Model configurations by user role and subscription tier
   private static readonly AI_MODEL_CONFIGS: Record<UserRole, Record<string, AIModelConfig[]>> = {
     "non-tech": {
@@ -455,6 +528,9 @@ Frame recommendations from a senior consultant perspective.`,
     }
   ): Promise<AIResponse> {
     try {
+      // Initialize fallback strategies
+      this.initializeFallbackStrategies();
+
       // Check usage limits first
       const usageCheck = await UsageTrackingService.checkUsageLimit(userId, 'aiQueries');
       if (!usageCheck.allowed) {
@@ -481,16 +557,46 @@ Frame recommendations from a senior consultant perspective.`,
       // Add role-specific system prompt
       const systemPrompt = this.getSystemPrompt(userRole, technicalLevel, modelConfig.responseStyle);
 
-      // Make AI API call (this would integrate with your existing AI service)
+      // Make AI API call with comprehensive error handling
       const startTime = Date.now();
-      const aiResponse = await this.callAIProvider(
-        modelConfig.providerId,
-        modelConfig.modelName,
-        systemPrompt,
-        finalPrompt,
+      const aiResponse = await errorHandler.executeWithHandling(
+        `ai_request_${modelConfig.providerId}`,
+        () => this.callAIProvider(
+          modelConfig.providerId,
+          modelConfig.modelName,
+          systemPrompt,
+          finalPrompt,
+          {
+            maxTokens: modelConfig.maxTokens,
+            temperature: modelConfig.temperature
+          }
+        ),
         {
-          maxTokens: modelConfig.maxTokens,
-          temperature: modelConfig.temperature
+          operation: 'ai_request',
+          userId,
+          additionalData: {
+            provider: modelConfig.providerId,
+            model: modelConfig.modelName,
+            userRole,
+            technicalLevel
+          }
+        },
+        {
+          useCircuitBreaker: true,
+          circuitBreakerConfig: { failureThreshold: 3, timeout: 30000 },
+          retryConfig: {
+            maxAttempts: 2,
+            baseDelay: 1000,
+            retryCondition: (error) => {
+              // Retry on timeout or rate limit errors
+              const message = error.message.toLowerCase();
+              return message.includes('timeout') || 
+                     message.includes('rate limit') || 
+                     message.includes('429') ||
+                     message.includes('503');
+            }
+          },
+          enableFallback: true
         }
       );
       const processingTime = Date.now() - startTime;
@@ -578,13 +684,193 @@ Frame recommendations from a senior consultant perspective.`,
     userPrompt: string,
     options: any
   ): Promise<any> {
-    // This would integrate with your existing AI service
-    // For now, return a mock response
+    // Check cache first for this exact AI request
+    const cachedResponse = await aiCache.getAIResponse(
+      `${providerId}/${modelName}`,
+      userPrompt,
+      { systemPrompt, ...options }
+    );
+    
+    if (cachedResponse) {
+      console.log(`AI cache hit for ${providerId}/${modelName}`);
+      return {
+        ...cachedResponse,
+        fromCache: true,
+        cachedAt: new Date().toISOString()
+      };
+    }
+
+    // Get circuit breaker for this AI provider
+    const circuitBreakerRegistry = CircuitBreakerRegistry.getInstance();
+    const circuitBreaker = circuitBreakerRegistry.getCircuitBreaker(`ai_provider_${providerId}`, {
+      failureThreshold: 3,      // Open after 3 failures for AI services
+      recoveryTimeout: 30000,   // Wait 30 seconds before retry
+      requestTimeout: 25000,    // 25 second timeout for AI calls
+      successThreshold: 2       // Need 2 successes to close
+    });
+
+    try {
+      // Execute AI call with circuit breaker protection
+      const result = await circuitBreaker.execute(async () => {
+        return await this.executeAICall(providerId, modelName, systemPrompt, userPrompt, options);
+      });
+
+      // Cache the successful response
+      await aiCache.cacheAIResponse(
+        `${providerId}/${modelName}`,
+        userPrompt,
+        { systemPrompt, ...options },
+        result,
+        this.getCacheTTLForResponse(result, options)
+      );
+
+      console.log(`AI call to ${providerId}/${modelName} succeeded and cached`);
+      return result;
+
+    } catch (error: any) {
+      console.error(`AI call to ${providerId}/${modelName} failed:`, error.message);
+      
+      // Check if we should fall back to a different provider or cached response
+      const fallbackResponse = await this.handleAIFailure(providerId, modelName, systemPrompt, userPrompt, error);
+      if (fallbackResponse) {
+        return fallbackResponse;
+      }
+      
+      throw error;
+    }
+  }
+
+  /**
+   * Execute the actual AI API call
+   */
+  private static async executeAICall(
+    providerId: string,
+    modelName: string,
+    systemPrompt: string,
+    userPrompt: string,
+    options: any
+  ): Promise<any> {
+    // This would integrate with your existing AI service providers
+    // For now, simulate network delay and potential failures
+    
+    // Simulate network delay
+    await new Promise(resolve => setTimeout(resolve, Math.random() * 2000 + 500));
+    
+    // Simulate occasional failures for testing circuit breaker
+    if (Math.random() < 0.1) { // 10% failure rate for testing
+      throw new Error(`AI Provider ${providerId} temporarily unavailable`);
+    }
+    
+    // Return mock response for now
     return {
-      content: "Mock AI response based on role and model configuration",
-      tokens: 150,
-      confidence: 0.85
+      content: `AI response from ${providerId}/${modelName}: ${userPrompt.substring(0, 100)}...`,
+      tokens: Math.floor(Math.random() * 500) + 100,
+      confidence: Math.random() * 0.3 + 0.7, // 0.7 to 1.0
+      providerId,
+      modelName,
+      systemPrompt: systemPrompt.substring(0, 50) + '...',
+      timestamp: new Date().toISOString()
     };
+  }
+
+  /**
+   * Handle AI service failures with fallback strategies
+   */
+  private static async handleAIFailure(
+    providerId: string,
+    modelName: string,
+    systemPrompt: string,
+    userPrompt: string,
+    error: Error
+  ): Promise<any | null> {
+    console.log(`Attempting fallback for failed AI call to ${providerId}/${modelName}`);
+    
+    // Strategy 1: Try a different provider
+    const alternativeProviders = ['openai', 'anthropic', 'gemini'].filter(p => p !== providerId);
+    
+    if (alternativeProviders.length > 0) {
+      const fallbackProvider = alternativeProviders[0];
+      console.log(`Falling back to provider: ${fallbackProvider}`);
+      
+      try {
+        // Try fallback provider with a simpler circuit breaker config
+        const fallbackCircuitBreaker = CircuitBreakerRegistry.getInstance()
+          .getCircuitBreaker(`ai_provider_${fallbackProvider}_fallback`, {
+            failureThreshold: 2,
+            recoveryTimeout: 15000,
+            requestTimeout: 15000,
+            successThreshold: 1
+          });
+        
+        return await fallbackCircuitBreaker.execute(async () => {
+          return await this.executeAICall(fallbackProvider, 'fallback-model', systemPrompt, userPrompt, {});
+        });
+        
+      } catch (fallbackError) {
+        console.warn(`Fallback provider ${fallbackProvider} also failed:`, fallbackError);
+      }
+    }
+    
+    // Strategy 2: Return cached or simplified response
+    console.log('All AI providers failed, returning simplified response');
+    return {
+      content: "I apologize, but I'm experiencing technical difficulties with AI services. Please try again in a few moments, or contact support if the issue persists.",
+      tokens: 50,
+      confidence: 0.5,
+      providerId: 'fallback',
+      modelName: 'error-handler',
+      isFallback: true,
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  /**
+   * Determine cache TTL based on response characteristics
+   */
+  private static getCacheTTLForResponse(result: any, options: any): number {
+    // Default TTL is 2 hours
+    let ttl = 7200;
+
+    // Shorter TTL for real-time data or dynamic content
+    if (options.category === 'real_time' || result.content?.includes('current')) {
+      ttl = 300; // 5 minutes
+    }
+    // Longer TTL for static analysis or code generation
+    else if (options.category === 'code_generation' || options.category === 'analysis') {
+      ttl = 14400; // 4 hours
+    }
+    // Very long TTL for educational or reference content
+    else if (options.category === 'documentation' || options.category === 'educational') {
+      ttl = 86400; // 24 hours
+    }
+
+    // Adjust based on confidence
+    if (result.confidence && result.confidence < 0.8) {
+      ttl = Math.floor(ttl * 0.5); // Shorter TTL for low confidence responses
+    }
+
+    // Minimum TTL of 1 minute
+    return Math.max(ttl, 60);
+  }
+
+  /**
+   * Get circuit breaker health status for monitoring
+   */
+  static getCircuitBreakerStatus(): Record<string, any> {
+    const registry = CircuitBreakerRegistry.getInstance();
+    return {
+      health: registry.getOverallHealth(),
+      stats: registry.getAllStats()
+    };
+  }
+
+  /**
+   * Reset all circuit breakers (for admin use)
+   */
+  static resetCircuitBreakers(): void {
+    const registry = CircuitBreakerRegistry.getInstance();
+    registry.resetAll();
+    console.log('All AI service circuit breakers have been reset');
   }
 
   private static getQueryType(modelConfig: AIModelConfig): 'simple' | 'advanced' | 'code_generation' {
@@ -624,6 +910,10 @@ Frame recommendations from a senior consultant perspective.`,
       case "consultation":
         formatted.suggestions = this.generateConsultationSuggestions(aiResponse);
         formatted.nextSteps = this.generateConsultationNextSteps(aiResponse);
+        break;
+      case "custom":
+        formatted.suggestions = this.generateTechnicalSuggestions(aiResponse); // Use technical suggestions for custom
+        formatted.nextSteps = this.generateBusinessNextSteps(aiResponse); // Mix of technical + business
         break;
     }
 

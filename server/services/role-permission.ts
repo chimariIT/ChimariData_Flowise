@@ -242,6 +242,7 @@ export class RolePermissionService {
       case "technical":
       case "self_service":
       case "consultation":
+      case "custom":
         return true; // All users can access all journey types
       default:
         return false; // Invalid journey type

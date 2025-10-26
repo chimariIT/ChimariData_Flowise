@@ -18,12 +18,15 @@ import {
   Receipt,
   MessageCircle,
   Lightbulb,
-  Beaker
+  Beaker,
+  Eye
 } from "lucide-react";
 import PrepareStep from "@/pages/prepare-step";
 import ProjectSetupStep from "@/pages/project-setup-step";
 import DataStep from "@/pages/data-step";
+import DataVerificationStep from "@/pages/data-verification-step";
 import ExecuteStep from "@/pages/execute-step";
+import ResultsPreviewStep from "@/pages/results-preview-step";
 import PricingStep from "@/pages/pricing-step";
 import ResultsStep from "@/pages/results-step";
 
@@ -63,10 +66,18 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
     },
     {
       id: 'data',
-      title: 'Data Preparation', 
-      description: 'Upload, validate, and transform your data',
+      title: 'Data Upload', 
+      description: 'Upload your data files',
       route: `/journeys/${journeyType}/data`,
       icon: Database,
+      completed: false
+    },
+    {
+      id: 'data-verification',
+      title: 'Data Verification',
+      description: 'Review data quality, schema, and privacy',
+      route: `/journeys/${journeyType}/data-verification`,
+      icon: CheckCircle,
       completed: false
     },
     {
@@ -75,6 +86,14 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
       description: 'Configure analysis parameters and execute',
       route: `/journeys/${journeyType}/execute`,
       icon: BarChart3,
+      completed: false
+    },
+    {
+      id: 'preview',
+      title: 'Preview Results',
+      description: 'See what you will get before payment',
+      route: `/journeys/${journeyType}/preview`,
+      icon: Eye,
       completed: false
     },
     {
@@ -219,8 +238,10 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
               <p className="text-sm text-blue-700">
                 {currentStage === 'prepare' && 'Define your analysis goals and requirements without worrying about costs'}
                 {currentStage === 'project-setup' && 'Create your project and confirm the analysis approach'}
-                {currentStage === 'data' && 'Upload and prepare your data for analysis'}
+                {currentStage === 'data' && 'Upload your data files to the platform'}
+                {currentStage === 'data-verification' && 'Review data quality, schema, and privacy before analysis'}
                 {currentStage === 'execute' && 'Configure analysis parameters and run the analysis'}
+                {currentStage === 'preview' && 'Preview what you will get before proceeding to payment'}
                 {currentStage === 'pricing' && 'Review final costs based on your completed analysis requirements'}
                 {currentStage === 'results' && 'View your results and download artifacts'}
               </p>
@@ -379,11 +400,29 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
             />
           )}
           
+          {currentStage === 'data-verification' && (
+            <DataVerificationStep 
+              journeyType={journeyType}
+              onNext={handleNext}
+              onPrevious={handlePrevious}
+              renderAsContent={true}
+            />
+          )}
+          
           {currentStage === 'execute' && (
             <ExecuteStep 
               journeyType={journeyType}
               onNext={handleNext}
               onPrevious={handlePrevious}
+            />
+          )}
+
+          {currentStage === 'preview' && (
+            <ResultsPreviewStep 
+              journeyType={journeyType}
+              onNext={handleNext}
+              onPrevious={handlePrevious}
+              renderAsContent={true}
             />
           )}
 

@@ -156,6 +156,196 @@ interface BillingEvent {
   processed: boolean;
 }
 
+// Analytics Dashboard Component
+const AnalyticsDashboard: React.FC = () => {
+  const [revenueData, setRevenueData] = useState<any>(null);
+  const [usageData, setUsageData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [dateRange, setDateRange] = useState<'7d' | '30d' | '90d'>('30d');
+
+  useEffect(() => {
+    const fetchAnalytics = async () => {
+      setLoading(true);
+      try {
+        // Calculate date range
+        const endDate = new Date();
+        const startDate = new Date();
+        startDate.setDate(endDate.getDate() - (dateRange === '7d' ? 7 : dateRange === '30d' ? 30 : 90));
+
+        // Fetch revenue analytics
+        const revenueRes = await fetch(
+          `/api/admin/billing/analytics/revenue?startDate=${startDate.toISOString()}&endDate=${endDate.toISOString()}`
+        );
+        const revenueJson = await revenueRes.json();
+
+        // Fetch usage analytics
+        const usageRes = await fetch(
+          `/api/admin/billing/analytics/usage?startDate=${startDate.toISOString()}&endDate=${endDate.toISOString()}`
+        );
+        const usageJson = await usageRes.json();
+
+        if (revenueJson.success) {
+          setRevenueData(revenueJson.analytics);
+        }
+        if (usageJson.success) {
+          setUsageData(usageJson.analytics);
+        }
+      } catch (error) {
+        console.error('Failed to fetch analytics:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchAnalytics();
+  }, [dateRange]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader className="w-8 h-8 animate-spin text-blue-600" />
+      </div>
+    );
+  }
+
+  const totalRevenue = revenueData?.totalRevenue || 0;
+  const revenueByTier = revenueData?.revenueByTier || {};
+  const revenueByFeature = revenueData?.revenueByFeature || {};
+
+  return (
+    <div className="space-y-6">
+      {/* Date Range Selector */}
+      <div className="flex justify-between items-center">
+        <h3 className="text-lg font-medium text-gray-900">Analytics Dashboard</h3>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setDateRange('7d')}
+            className={`px-3 py-1 rounded ${
+              dateRange === '7d' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'
+            }`}
+          >
+            7 Days
+          </button>
+          <button
+            onClick={() => setDateRange('30d')}
+            className={`px-3 py-1 rounded ${
+              dateRange === '30d' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'
+            }`}
+          >
+            30 Days
+          </button>
+          <button
+            onClick={() => setDateRange('90d')}
+            className={`px-3 py-1 rounded ${
+              dateRange === '90d' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'
+            }`}
+          >
+            90 Days
+          </button>
+        </div>
+      </div>
+
+      {/* Revenue Overview */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600">Total Revenue</p>
+              <p className="text-3xl font-bold text-gray-900 mt-2">
+                ${totalRevenue.toFixed(2)}
+              </p>
+            </div>
+            <DollarSign className="w-12 h-12 text-green-600" />
+          </div>
+        </div>
+
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600">Active Subscriptions</p>
+              <p className="text-3xl font-bold text-gray-900 mt-2">
+                {Object.values(revenueByTier).length}
+              </p>
+            </div>
+            <Users className="w-12 h-12 text-blue-600" />
+          </div>
+        </div>
+
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600">Total Usage</p>
+              <p className="text-3xl font-bold text-gray-900 mt-2">
+                {usageData?.totalUsage?.toFixed(0) || 0} MB
+              </p>
+            </div>
+            <Database className="w-12 h-12 text-purple-600" />
+          </div>
+        </div>
+      </div>
+
+      {/* Revenue by Tier */}
+      <div className="bg-white rounded-lg shadow p-6">
+        <h4 className="text-md font-medium text-gray-900 mb-4">Revenue by Subscription Tier</h4>
+        <div className="space-y-3">
+          {Object.entries(revenueByTier).map(([tier, amount]: [string, any]) => (
+            <div key={tier} className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-3 h-3 rounded-full bg-blue-600"></div>
+                <span className="font-medium capitalize">{tier}</span>
+              </div>
+              <span className="text-gray-900 font-semibold">${amount.toFixed(2)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Revenue by Feature */}
+      <div className="bg-white rounded-lg shadow p-6">
+        <h4 className="text-md font-medium text-gray-900 mb-4">Revenue by Feature</h4>
+        <div className="space-y-3">
+          {Object.entries(revenueByFeature).map(([feature, amount]: [string, any]) => (
+            <div key={feature} className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Zap className="w-4 h-4 text-yellow-600" />
+                <span className="font-medium">{feature}</span>
+              </div>
+              <span className="text-gray-900 font-semibold">${amount.toFixed(2)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Usage Trends */}
+      {usageData && (
+        <div className="bg-white rounded-lg shadow p-6">
+          <h4 className="text-md font-medium text-gray-900 mb-4">Usage Trends</h4>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="text-center">
+              <p className="text-sm text-gray-600">Total Users</p>
+              <p className="text-2xl font-bold text-gray-900">{usageData.totalUsers || 0}</p>
+            </div>
+            <div className="text-center">
+              <p className="text-sm text-gray-600">Total Files</p>
+              <p className="text-2xl font-bold text-gray-900">{usageData.totalFiles || 0}</p>
+            </div>
+            <div className="text-center">
+              <p className="text-sm text-gray-600">Total Analysis</p>
+              <p className="text-2xl font-bold text-gray-900">{usageData.totalAnalyses || 0}</p>
+            </div>
+            <div className="text-center">
+              <p className="text-sm text-gray-600">Avg Cost/User</p>
+              <p className="text-2xl font-bold text-gray-900">
+                ${(usageData.avgCostPerUser || 0).toFixed(2)}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const SubscriptionManagement: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'tiers' | 'alerts' | 'analytics' | 'settings'>('overview');
   const [loading, setLoading] = useState(true);
@@ -174,10 +364,56 @@ const SubscriptionManagement: React.FC = () => {
     const loadData = async () => {
       setLoading(true);
       try {
-        // Simulate API calls
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        
-        // Mock subscription tiers
+        // Fetch real subscription tiers from backend API
+        const response = await fetch('/api/pricing/tiers');
+        const data = await response.json();
+
+        if (data.success && data.tiers) {
+          // Map API response to SubscriptionTier format for admin UI
+          const mappedTiers: SubscriptionTier[] = data.tiers.map((tier: any) => ({
+            id: tier.id,
+            name: tier.id,
+            displayName: tier.name,
+            monthlyPrice: tier.price,
+            yearlyPrice: tier.price * 10, // 10 months pricing
+            description: tier.description,
+            features: tier.features,
+            limits: {
+              maxFilesSizeMB: tier.limits.maxDataSizeMB,
+              maxStorageMB: tier.limits.maxDataSizeMB * 5, // Estimated
+              maxDataProcessingMB: tier.limits.maxDataSizeMB,
+              maxComputeMinutes: tier.limits.analysesPerMonth * 10, // Estimated
+              maxProjects: tier.id === 'trial' ? 3 : tier.id === 'starter' ? 10 : tier.id === 'professional' ? 50 : 100,
+              maxTeamMembers: tier.limits.teamCollaboration ? (tier.id === 'starter' ? 3 : tier.id === 'professional' ? 15 : 50) : 1,
+              maxApiCalls: tier.limits.aiQueries * 100, // Estimated
+              maxAgentInteractions: tier.limits.aiQueries * 10,
+              maxToolExecutions: tier.limits.analysesPerMonth * 2,
+              retentionDays: tier.id === 'trial' ? 30 : tier.id === 'starter' ? 90 : 365
+            },
+            overagePricing: {
+              dataPerMB: tier.id === 'trial' ? 0.01 : tier.id === 'starter' ? 0.008 : tier.id === 'professional' ? 0.005 : 0.003,
+              computePerMinute: tier.id === 'trial' ? 0.05 : tier.id === 'starter' ? 0.04 : tier.id === 'professional' ? 0.03 : 0.02,
+              storagePerMB: tier.id === 'trial' ? 0.002 : tier.id === 'starter' ? 0.0015 : tier.id === 'professional' ? 0.001 : 0.0005,
+              apiCallsPer1000: tier.id === 'trial' ? 0.50 : tier.id === 'starter' ? 0.40 : tier.id === 'professional' ? 0.30 : 0.20,
+              agentInteractionCost: tier.id === 'trial' ? 0.02 : tier.id === 'starter' ? 0.015 : tier.id === 'professional' ? 0.01 : 0.008,
+              toolExecutionCost: tier.id === 'trial' ? 0.01 : tier.id === 'starter' ? 0.008 : tier.id === 'professional' ? 0.005 : 0.003
+            },
+            discounts: {
+              dataProcessingDiscount: tier.id === 'trial' ? 0 : tier.id === 'starter' ? 10 : tier.id === 'professional' ? 20 : 30,
+              agentUsageDiscount: tier.id === 'trial' ? 0 : tier.id === 'starter' ? 5 : tier.id === 'professional' ? 15 : 25,
+              toolUsageDiscount: tier.id === 'trial' ? 0 : tier.id === 'starter' ? 5 : tier.id === 'professional' ? 15 : 25,
+              enterpriseDiscount: tier.id === 'enterprise' ? 10 : 0
+            }
+          }));
+
+          setSubscriptionTiers(mappedTiers);
+        } else {
+          console.error('Failed to load subscription tiers:', data);
+        }
+
+        // Fetch mock usage data and billing history (TODO: Replace with real API)
+        await new Promise(resolve => setTimeout(resolve, 500));
+
         const mockTiers: SubscriptionTier[] = [
           {
             id: 'trial',
@@ -544,17 +780,59 @@ const SubscriptionManagement: React.FC = () => {
     }
   };
 
-  const handleTierSave = () => {
+  const handleTierSave = async () => {
     if (editingTier && editedTierData) {
-      setSubscriptionTiers(prev => 
-        prev.map(tier => 
-          tier.id === editingTier 
-            ? { ...tier, ...editedTierData } as SubscriptionTier
-            : tier
-        )
-      );
-      setEditingTier(null);
-      setEditedTierData({});
+      try {
+        // Send update to backend API
+        const response = await fetch(`/api/pricing/tiers/${editingTier}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            price: editedTierData.monthlyPrice,
+            description: editedTierData.description,
+            features: editedTierData.features,
+            limits: editedTierData.limits,
+            overagePricing: editedTierData.overagePricing,
+            discounts: editedTierData.discounts
+          })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+          // Update local state with saved data
+          setSubscriptionTiers(prev =>
+            prev.map(tier =>
+              tier.id === editingTier
+                ? { ...tier, ...editedTierData } as SubscriptionTier
+                : tier
+            )
+          );
+          setEditingTier(null);
+          setEditedTierData({});
+
+          // Show success message with Stripe sync status
+          const stripeSyncStatus = result.stripeSync?.synced
+            ? `✅ Synced with Stripe (Product: ${result.stripeSync.productId}, Price: ${result.stripeSync.priceId})`
+            : result.stripeSync?.error
+            ? `⚠️ Stripe sync failed: ${result.stripeSync.error}`
+            : '⚠️ Stripe not configured';
+
+          console.log('Subscription tier updated successfully');
+          console.log(stripeSyncStatus);
+
+          // TODO: Add toast notification with Stripe sync status
+          alert(`Tier updated successfully!\n\n${stripeSyncStatus}`);
+        } else {
+          console.error('Failed to update tier:', result.error);
+          alert(`Failed to update tier: ${result.error}`);
+        }
+      } catch (error) {
+        console.error('Error updating subscription tier:', error);
+        alert(`Error updating subscription tier: ${error}`);
+      }
     }
   };
 
@@ -1217,22 +1495,7 @@ const SubscriptionManagement: React.FC = () => {
         )}
 
         {activeTab === 'analytics' && (
-          <div className="space-y-6">
-            <div className="bg-white rounded-lg shadow">
-              <div className="p-6 border-b">
-                <h3 className="text-lg font-medium text-gray-900">Usage Analytics</h3>
-              </div>
-              <div className="p-6">
-                <div className="text-center py-8">
-                  <BarChart3 className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                  <p className="text-gray-500">Advanced analytics dashboard coming soon</p>
-                  <p className="text-sm text-gray-400 mt-2">
-                    This will include usage trends, revenue forecasting, and subscription optimization insights
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
+          <AnalyticsDashboard />
         )}
 
         {activeTab === 'settings' && (

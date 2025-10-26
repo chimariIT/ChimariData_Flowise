@@ -83,3 +83,11 @@ export class TokenStorage {
 
 // Export singleton instance
 export const tokenStorage = new TokenStorage();
+export type { TokenData, TokenStorage };
+export type { TokenData, TokenStorage };
+export type { TokenData, TokenStorage };
+export type { TokenData, TokenStorage };
+export type { TokenData, TokenStorage };
+export type { TokenData, TokenStorage };
+export type { TokenData, TokenStorage };
+export type { TokenData, TokenStorage };

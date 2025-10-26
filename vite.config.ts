@@ -34,8 +34,14 @@ export default defineConfig({
             if (id.includes('lucide-react')) {
               return 'icons';
             }
+            if (id.includes('@radix-ui')) {
+              return 'radix-ui';
+            }
             if (id.includes('zod')) {
               return 'validation';
+            }
+            if (id.includes('date-fns') || id.includes('lodash')) {
+              return 'utilities';
             }
             return 'vendor';
           }
@@ -79,12 +85,12 @@ export default defineConfig({
     host: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:3000',
+        target: 'http://localhost:5000',
         changeOrigin: true,
         secure: false,
       },
       '/ws': {
-        target: 'ws://localhost:3000',
+        target: 'ws://localhost:5000',
         ws: true,
         changeOrigin: true,
       },

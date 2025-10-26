@@ -30,7 +30,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
   const [authModalTab, setAuthModalTab] = useState<'login' | 'register'>('register');
   const [showPIIDialog, setShowPIIDialog] = useState(false);
   const [piiDialogData, setPIIDialogData] = useState<any>(null);
-  const [selectedJourney, setSelectedJourney] = useState<'non-tech' | 'business' | 'technical' | 'consultation' | null>(null);
+  const [selectedJourney, setSelectedJourney] = useState<'non-tech' | 'business' | 'technical' | 'consultation' | 'custom' | null>(null);
   const [journeyConfig, setJourneyConfig] = useState<any>(null);
 
   const { data: projectsData, isLoading, refetch } = useQuery({
@@ -238,7 +238,7 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
     });
   };
 
-  const handleJourneySelect = useCallback((journey: 'non-tech' | 'business' | 'technical' | 'consultation', config?: any, skipToast?: boolean) => {
+  const handleJourneySelect = useCallback((journey: 'non-tech' | 'business' | 'technical' | 'consultation' | 'custom', config?: any, skipToast?: boolean) => {
     setSelectedJourney(journey);
     setJourneyConfig(config);
     
@@ -266,6 +266,13 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
           routePath = "/expert-consultation";
           description = "Routing to expert consultation. Get professional guidance from data science experts.";
           break;
+        case 'custom':
+          routePath = "/custom-journey";
+          description = "Routing to custom journey builder. Select specific capabilities for your analysis.";
+          break;
+        default:
+          console.warn(`Unknown journey type: ${journey}`);
+          return;
       }
       
       toast({
