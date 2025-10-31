@@ -1,7 +1,47 @@
 // server/middleware/rate-limiter.ts
-import rateLimit, { RateLimitRequestHandler } from 'express-rate-limit';
+import rateLimit, { RateLimitRequestHandler, ipKeyGenerator } from 'express-rate-limit';
 import { Request, Response } from 'express';
 import { getConfig } from '../config/environment';
+
+const config = getConfig();
+
+const INTERNAL_REQUEST_HEADER = 'x-chimari-internal';
+const INTERNAL_REQUEST_TOKEN = process.env.INTERNAL_SERVICE_TOKEN;
+const INTERNAL_USER_AGENT_MARKERS = ['ChimariService', 'ChimariInternal', 'Playwright'];
+const INTERNAL_PATH_PREFIXES = [
+  '/api/system/health',
+  '/api/system/status',
+  '/api/health',
+  '/api/realtime/diagnostics',
+  '/api/performance/heartbeat'
+];
+
+const shouldBypassRateLimit = (req: Request): boolean => {
+  const headerRaw = (req.get?.(INTERNAL_REQUEST_HEADER) || '').toString();
+  const headerValue = headerRaw.toLowerCase().trim();
+
+  if (INTERNAL_REQUEST_TOKEN && headerValue === INTERNAL_REQUEST_TOKEN.toLowerCase()) {
+    return true;
+  }
+
+  if (!INTERNAL_REQUEST_TOKEN && config.NODE_ENV === 'development') {
+    if (headerValue === 'true' || headerValue === '1' || headerValue === 'internal') {
+      return true;
+    }
+  }
+
+  const userAgent = (req.get?.('user-agent') || '').toString();
+  if (INTERNAL_USER_AGENT_MARKERS.some(marker => userAgent.includes(marker))) {
+    return true;
+  }
+
+  const path = req.path || req.originalUrl || '';
+  if (typeof path === 'string' && INTERNAL_PATH_PREFIXES.some(prefix => path.startsWith(prefix))) {
+    return true;
+  }
+
+  return false;
+};
 
 /**
  * Rate Limiting Middleware
@@ -12,8 +52,6 @@ import { getConfig } from '../config/environment';
  * - API endpoints (moderate)
  * - Public endpoints (relaxed)
  */
-
-const config = getConfig();
 
 /**
  * Standard rate limiter for API endpoints
@@ -29,11 +67,10 @@ export const apiLimiter: RateLimitRequestHandler = rateLimit({
   standardHeaders: true, // Return rate limit info in `RateLimit-*` headers
   legacyHeaders: false, // Disable `X-RateLimit-*` headers
   skip: (req) => {
-    // Skip rate limiting in development if disabled
     if (config.NODE_ENV === 'development' && !config.ENABLE_RATE_LIMITING) {
       return true;
     }
-    return false;
+    return shouldBypassRateLimit(req as Request);
   },
   handler: (req: Request, res: Response) => {
     console.warn(`[RateLimit] API rate limit exceeded for IP: ${req.ip}`);
@@ -64,7 +101,7 @@ export const authLimiter: RateLimitRequestHandler = rateLimit({
     if (config.NODE_ENV === 'development' && !config.ENABLE_RATE_LIMITING) {
       return true;
     }
-    return false;
+    return shouldBypassRateLimit(req as Request);
   },
   handler: (req: Request, res: Response) => {
     console.warn(`[RateLimit] Auth rate limit exceeded for IP: ${req.ip}`);
@@ -94,7 +131,7 @@ export const registrationLimiter: RateLimitRequestHandler = rateLimit({
     if (config.NODE_ENV === 'development' && !config.ENABLE_RATE_LIMITING) {
       return true;
     }
-    return false;
+    return shouldBypassRateLimit(req as Request);
   },
   handler: (req: Request, res: Response) => {
     console.warn(`[RateLimit] Registration rate limit exceeded for IP: ${req.ip}`);
@@ -124,7 +161,7 @@ export const uploadLimiter: RateLimitRequestHandler = rateLimit({
     if (config.NODE_ENV === 'development' && !config.ENABLE_RATE_LIMITING) {
       return true;
     }
-    return false;
+    return shouldBypassRateLimit(req as Request);
   },
   handler: (req: Request, res: Response) => {
     console.warn(`[RateLimit] Upload rate limit exceeded for IP: ${req.ip}`);
@@ -153,7 +190,7 @@ export const publicLimiter: RateLimitRequestHandler = rateLimit({
     if (config.NODE_ENV === 'development' && !config.ENABLE_RATE_LIMITING) {
       return true;
     }
-    return false;
+    return shouldBypassRateLimit(req as Request);
   },
   handler: (req: Request, res: Response) => {
     console.warn(`[RateLimit] Public rate limit exceeded for IP: ${req.ip}`);
@@ -183,7 +220,7 @@ export const passwordResetLimiter: RateLimitRequestHandler = rateLimit({
     if (config.NODE_ENV === 'development' && !config.ENABLE_RATE_LIMITING) {
       return true;
     }
-    return false;
+    return shouldBypassRateLimit(req as Request);
   },
   handler: (req: Request, res: Response) => {
     console.warn(`[RateLimit] Password reset rate limit exceeded for IP: ${req.ip}`);
@@ -213,7 +250,7 @@ export const paymentLimiter: RateLimitRequestHandler = rateLimit({
     if (config.NODE_ENV === 'development' && !config.ENABLE_RATE_LIMITING) {
       return true;
     }
-    return false;
+    return shouldBypassRateLimit(req as Request);
   },
   handler: (req: Request, res: Response) => {
     console.warn(`[RateLimit] Payment rate limit exceeded for IP: ${req.ip}`);
@@ -242,13 +279,17 @@ export const aiAnalysisLimiter: RateLimitRequestHandler = rateLimit({
   // Key by user ID if authenticated, otherwise by IP
   keyGenerator: (req: Request) => {
     const user = req.user as any;
-    return user?.id ? `user:${user.id}` : `ip:${req.ip}`;
+    if (user?.id) {
+      return `user:${user.id}`;
+    }
+    const ipKey = ipKeyGenerator(typeof req.ip === 'string' ? req.ip : '');
+    return `ip:${ipKey}`;
   },
   skip: (req) => {
     if (config.NODE_ENV === 'development' && !config.ENABLE_RATE_LIMITING) {
       return true;
     }
-    return false;
+    return shouldBypassRateLimit(req as Request);
   },
   handler: (req: Request, res: Response) => {
     console.warn(`[RateLimit] AI analysis rate limit exceeded for user/IP: ${req.ip}`);
@@ -282,7 +323,7 @@ export function createCustomLimiter(options: {
       if (config.NODE_ENV === 'development' && !config.ENABLE_RATE_LIMITING) {
         return true;
       }
-      return false;
+      return shouldBypassRateLimit(req as Request);
     },
     handler: (req: Request, res: Response) => {
       console.warn(`[RateLimit] Custom rate limit exceeded for: ${req.ip}`);

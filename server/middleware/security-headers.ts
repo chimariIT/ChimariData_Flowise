@@ -1,5 +1,44 @@
 import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+
+const INTERNAL_REQUEST_HEADER = 'x-chimari-internal';
+const INTERNAL_REQUEST_TOKEN = process.env.INTERNAL_SERVICE_TOKEN;
+const INTERNAL_USER_AGENT_MARKERS = ['ChimariService', 'ChimariInternal', 'Playwright'];
+const INTERNAL_PATH_PREFIXES = [
+  '/api/system/health',
+  '/api/system/status',
+  '/api/health',
+  '/api/realtime/diagnostics',
+  '/api/performance/heartbeat'
+];
+
+const shouldBypassRateLimit = (req: any): boolean => {
+  const headerRaw = (req.get?.(INTERNAL_REQUEST_HEADER) || '').toString();
+  const headerValue = headerRaw.toLowerCase().trim();
+
+  if (INTERNAL_REQUEST_TOKEN && headerValue === INTERNAL_REQUEST_TOKEN.toLowerCase()) {
+    return true;
+  }
+
+  if (!INTERNAL_REQUEST_TOKEN && process.env.NODE_ENV === 'development') {
+    // Allow opt-in bypass without shared secret while developing
+    if (headerValue === 'true' || headerValue === '1' || headerValue === 'internal') {
+      return true;
+    }
+  }
+
+  const userAgent = (req.get?.('user-agent') || '').toString();
+  if (INTERNAL_USER_AGENT_MARKERS.some(marker => userAgent.includes(marker))) {
+    return true;
+  }
+
+  const path = req.path || req.originalUrl || '';
+  if (typeof path === 'string' && INTERNAL_PATH_PREFIXES.some(prefix => path.startsWith(prefix))) {
+    return true;
+  }
+
+  return false;
+};
 
 /**
  * Security headers middleware using Helmet
@@ -36,7 +75,7 @@ export const securityHeaders = helmet({
     geolocation: [],
     interestCohort: []
   }
-});
+} as any);
 
 /**
  * Rate limiting for API endpoints
@@ -52,6 +91,24 @@ export const apiRateLimit = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: (req) => {
+    const user = (req as any).user;
+    if (user?.id) {
+      return `user:${user.id}`;
+    }
+    const clientId = req.get?.('x-chimari-client-id');
+    if (clientId) {
+      return `client:${clientId}`;
+    }
+    const ipKey = ipKeyGenerator(typeof req.ip === 'string' ? req.ip : '');
+    return `ip:${ipKey}`;
+  },
+  skip: (req) => {
+    if (process.env.NODE_ENV === 'development' && (process.env.ENABLE_RATE_LIMITING || '').toLowerCase() === 'false') {
+      return true;
+    }
+    return shouldBypassRateLimit(req);
+  },
   handler: (req, res) => {
     console.warn('🚨 Rate limit exceeded:', {
       ip: req.ip,
@@ -81,6 +138,13 @@ export const authRateLimit = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  skip: (req) => {
+    if (process.env.NODE_ENV === 'development' && (process.env.ENABLE_RATE_LIMITING || '').toLowerCase() === 'false') {
+      return true;
+    }
+    return shouldBypassRateLimit(req);
+  },
   handler: (req, res) => {
     console.warn('🚨 Auth rate limit exceeded:', {
       ip: req.ip,
@@ -110,6 +174,12 @@ export const uploadRateLimit = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) => {
+    if (process.env.NODE_ENV === 'development' && (process.env.ENABLE_RATE_LIMITING || '').toLowerCase() === 'false') {
+      return true;
+    }
+    return shouldBypassRateLimit(req);
+  },
   handler: (req, res) => {
     console.warn('🚨 Upload rate limit exceeded:', {
       ip: req.ip,
@@ -226,6 +296,12 @@ export const adminRateLimit = rateLimit({
   },
   skip: (req) => {
     // Skip rate limiting for localhost in development
-    return process.env.NODE_ENV === 'development' && req.ip === '127.0.0.1';
+    if (process.env.NODE_ENV === 'development' && req.ip === '127.0.0.1') {
+      return true;
+    }
+    if (process.env.NODE_ENV === 'development' && (process.env.ENABLE_RATE_LIMITING || '').toLowerCase() === 'false') {
+      return true;
+    }
+    return shouldBypassRateLimit(req);
   }
 });
