@@ -1,4 +1,4 @@
-CREATE TABLE "enterprise_inquiries" (
+CREATE TABLE IF NOT EXISTS "enterprise_inquiries" (
 	"id" varchar PRIMARY KEY NOT NULL,
 	"company_name" varchar NOT NULL,
 	"contact_email" varchar NOT NULL,
@@ -9,7 +9,7 @@ CREATE TABLE "enterprise_inquiries" (
 	"status" varchar DEFAULT 'pending'
 );
 --> statement-breakpoint
-CREATE TABLE "guided_analysis_orders" (
+CREATE TABLE IF NOT EXISTS "guided_analysis_orders" (
 	"id" varchar PRIMARY KEY NOT NULL,
 	"user_id" varchar,
 	"project_id" varchar,
@@ -20,7 +20,7 @@ CREATE TABLE "guided_analysis_orders" (
 	"updated_at" timestamp DEFAULT now()
 );
 --> statement-breakpoint
-CREATE TABLE "projects" (
+CREATE TABLE IF NOT EXISTS "projects" (
 	"id" varchar PRIMARY KEY NOT NULL,
 	"name" varchar NOT NULL,
 	"file_name" varchar NOT NULL,
@@ -57,13 +57,13 @@ CREATE TABLE "projects" (
 	"user_id" varchar
 );
 --> statement-breakpoint
-CREATE TABLE "sessions" (
+CREATE TABLE IF NOT EXISTS "sessions" (
 	"sid" varchar PRIMARY KEY NOT NULL,
 	"sess" jsonb NOT NULL,
 	"expire" timestamp NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "users" (
+CREATE TABLE IF NOT EXISTS "users" (
 	"id" varchar PRIMARY KEY NOT NULL,
 	"email" varchar,
 	"first_name" varchar,
@@ -80,4 +80,4 @@ CREATE TABLE "users" (
 	CONSTRAINT "users_email_unique" UNIQUE("email")
 );
 --> statement-breakpoint
-CREATE INDEX "IDX_session_expire" ON "sessions" USING btree ("expire");
+CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "sessions" USING btree ("expire");
