@@ -40,7 +40,7 @@ interface UsageMetrics {
   billingPeriod: {
     start: Date;
     end: Date;
-    status: 'active' | 'completed' | 'overdue';
+  status: 'active' | 'completed' | 'overdue' | 'inactive' | 'cancelled' | 'past_due' | 'expired' | 'trialing' | 'paused' | 'grace_period';
   };
   dataUsage: {
     totalFilesUploaded: number;
@@ -150,7 +150,7 @@ interface BillingEvent {
   description: string;
   amount?: number;
   quantity: number;
-  unit: string;
+  unit?: string;
   metadata: Record<string, any>;
   timestamp: Date;
   processed: boolean;
@@ -358,365 +358,283 @@ const SubscriptionManagement: React.FC = () => {
   const [filterAlertLevel, setFilterAlertLevel] = useState<string>('all');
   const [editingTier, setEditingTier] = useState<string | null>(null);
   const [editedTierData, setEditedTierData] = useState<Partial<SubscriptionTier>>({});
+  const [tierSyncStatus, setTierSyncStatus] = useState<Record<string, { state: 'idle' | 'pending' | 'success' | 'error'; message?: string }>>({});
 
-  // Mock data - in real app, fetch from API
   useEffect(() => {
+    let isMounted = true;
+
+    const makeSafeSetter = <T,>(setter: React.Dispatch<React.SetStateAction<T>>) =>
+      (value: React.SetStateAction<T>) => {
+        if (isMounted) {
+          setter(value);
+        }
+      };
+
+    const setLoadingSafe = makeSafeSetter(setLoading);
+    const setSubscriptionTiersSafe = makeSafeSetter(setSubscriptionTiers);
+    const setUserMetricsSafe = makeSafeSetter(setUserMetrics);
+    const setQuotaAlertsSafe = makeSafeSetter(setQuotaAlerts);
+    const setBillingEventsSafe = makeSafeSetter(setBillingEvents);
+
+    const mapTierResponse = (tier: any): SubscriptionTier => {
+      const tierId = tier.id ?? tier.type ?? 'custom';
+      const resolvedMonthly = typeof tier.monthlyPrice === 'number'
+        ? tier.monthlyPrice
+        : typeof tier.price === 'number'
+          ? tier.price
+          : 0;
+      const resolvedYearly = typeof tier.yearlyPrice === 'number'
+        ? tier.yearlyPrice
+        : resolvedMonthly > 0
+          ? resolvedMonthly * 10
+          : typeof tier.price === 'number'
+            ? tier.price * 10
+            : 0;
+
+      const limits = tier.limits ?? {};
+      const overages = tier.overagePricing ?? {};
+      const discounts = tier.discounts ?? {};
+
+      const defaultProjects = tierId === 'trial' ? 3 : tierId === 'starter' ? 10 : tierId === 'professional' ? 50 : 100;
+      const defaultTeamMembers = tierId === 'trial' ? 1 : tierId === 'starter' ? 3 : tierId === 'professional' ? 15 : 50;
+      const defaultRetention = tierId === 'trial' ? 30 : tierId === 'starter' ? 90 : 365;
+
+      const rawMaxDataSize = limits.maxFileSizeMB ?? limits.maxDataSizeMB ?? 0;
+      const rawMaxDataProcessing = limits.maxDataProcessingMB ?? limits.totalDataVolumeMB ?? rawMaxDataSize;
+      const rawAnalysesPerMonth = limits.analysesPerMonth ?? limits.maxAnalysisComponents ?? 0;
+      const rawAiQueries = limits.aiQueries ?? limits.aiInsights ?? 0;
+      const rawMaxStorage = limits.maxStorageMB ?? limits.totalDataVolumeMB ?? (rawMaxDataSize ? rawMaxDataSize * 5 : 0);
+
+      return {
+        id: tierId,
+        name: tierId,
+        displayName: tier.displayName ?? tier.name ?? tierId,
+        monthlyPrice: resolvedMonthly,
+        yearlyPrice: resolvedYearly,
+        description: tier.description ?? '',
+        features: Array.isArray(tier.features)
+          ? tier.features
+          : Object.values(tier.features ?? {}).filter(Boolean) as string[],
+        limits: {
+          maxFilesSizeMB: Number(rawMaxDataSize),
+          maxStorageMB: Number(rawMaxStorage),
+          maxDataProcessingMB: Number(rawMaxDataProcessing),
+          maxComputeMinutes: Number(limits.maxComputeMinutes ?? rawAnalysesPerMonth * 10),
+          maxProjects: Number(limits.maxProjects ?? defaultProjects),
+          maxTeamMembers: Number(limits.maxTeamMembers ?? (limits.teamCollaboration ? defaultTeamMembers : 1)),
+          maxApiCalls: Number(limits.maxApiCalls ?? rawAiQueries * 100),
+          maxAgentInteractions: Number(limits.maxAgentInteractions ?? rawAiQueries * 10),
+          maxToolExecutions: Number(limits.maxToolExecutions ?? rawAnalysesPerMonth * 2),
+          retentionDays: Number(limits.retentionDays ?? defaultRetention)
+        },
+        overagePricing: {
+          dataPerMB: Number(overages.dataPerMB ?? (tierId === 'trial' ? 0.01 : tierId === 'starter' ? 0.008 : tierId === 'professional' ? 0.005 : 0.003)),
+          computePerMinute: Number(overages.computePerMinute ?? (tierId === 'trial' ? 0.05 : tierId === 'starter' ? 0.04 : tierId === 'professional' ? 0.03 : 0.02)),
+          storagePerMB: Number(overages.storagePerMB ?? (tierId === 'trial' ? 0.002 : tierId === 'starter' ? 0.0015 : tierId === 'professional' ? 0.001 : 0.0005)),
+          apiCallsPer1000: Number(overages.apiCallsPer1000 ?? (tierId === 'trial' ? 0.50 : tierId === 'starter' ? 0.40 : tierId === 'professional' ? 0.30 : 0.20)),
+          agentInteractionCost: Number(overages.agentInteractionCost ?? (tierId === 'trial' ? 0.02 : tierId === 'starter' ? 0.015 : tierId === 'professional' ? 0.01 : 0.008)),
+          toolExecutionCost: Number(overages.toolExecutionCost ?? (tierId === 'trial' ? 0.01 : tierId === 'starter' ? 0.008 : tierId === 'professional' ? 0.005 : 0.003))
+        },
+        discounts: {
+          dataProcessingDiscount: Number(discounts.dataProcessingDiscount ?? (tierId === 'trial' ? 0 : tierId === 'starter' ? 10 : tierId === 'professional' ? 20 : 30)),
+          agentUsageDiscount: Number(discounts.agentUsageDiscount ?? (tierId === 'trial' ? 0 : tierId === 'starter' ? 5 : tierId === 'professional' ? 15 : 25)),
+          toolUsageDiscount: Number(discounts.toolUsageDiscount ?? (tierId === 'trial' ? 0 : tierId === 'starter' ? 5 : tierId === 'professional' ? 15 : 25)),
+          enterpriseDiscount: Number(discounts.enterpriseDiscount ?? (tierId === 'enterprise' ? 10 : 0))
+        }
+      };
+    };
+
+    const mapMetricsFromResponse = (metrics: any): UsageMetrics => {
+  const statusCandidates: UsageMetrics['billingPeriod']['status'][] = ['active', 'completed', 'overdue', 'inactive', 'cancelled', 'past_due', 'expired', 'trialing', 'paused', 'grace_period'];
+      const billingStatus = statusCandidates.includes(metrics?.billingPeriod?.status)
+        ? metrics.billingPeriod.status
+        : 'active';
+
+      return {
+        userId: metrics.userId ?? 'unknown',
+        subscriptionTier: metrics.subscriptionTier ?? 'none',
+        billingPeriod: {
+          start: metrics.billingPeriod?.start ? new Date(metrics.billingPeriod.start) : new Date(),
+          end: metrics.billingPeriod?.end ? new Date(metrics.billingPeriod.end) : new Date(),
+          status: billingStatus
+        },
+        dataUsage: {
+          totalFilesUploaded: Number(metrics.dataUsage?.totalFilesUploaded ?? 0),
+          totalFileSizeMB: Number(metrics.dataUsage?.totalFileSizeMB ?? 0),
+          totalDataProcessedMB: Number(metrics.dataUsage?.totalDataProcessedMB ?? 0),
+          storageUsedMB: Number(metrics.dataUsage?.storageUsedMB ?? 0),
+          maxFileSize: Number(metrics.dataUsage?.maxFileSize ?? 0),
+          fileFormats: metrics.dataUsage?.fileFormats ?? {},
+          dataTransformations: Number(metrics.dataUsage?.dataTransformations ?? 0),
+          dataExports: Number(metrics.dataUsage?.dataExports ?? 0)
+        },
+        computeUsage: {
+          analysisCount: Number(metrics.computeUsage?.analysisCount ?? 0),
+          aiQueryCount: Number(metrics.computeUsage?.aiQueryCount ?? 0),
+          mlModelExecutions: Number(metrics.computeUsage?.mlModelExecutions ?? 0),
+          visualizationCount: Number(metrics.computeUsage?.visualizationCount ?? 0),
+          totalComputeMinutes: Number(metrics.computeUsage?.totalComputeMinutes ?? 0),
+          agentInteractions: Number(metrics.computeUsage?.agentInteractions ?? 0),
+          toolExecutions: Number(metrics.computeUsage?.toolExecutions ?? 0)
+        },
+        storageMetrics: {
+          projectCount: Number(metrics.storageMetrics?.projectCount ?? 0),
+          datasetCount: Number(metrics.storageMetrics?.datasetCount ?? 0),
+          artifactCount: Number(metrics.storageMetrics?.artifactCount ?? 0),
+          totalStorageMB: Number(metrics.storageMetrics?.totalStorageMB ?? 0),
+          archiveStorageMB: Number(metrics.storageMetrics?.archiveStorageMB ?? 0),
+          temporaryStorageMB: Number(metrics.storageMetrics?.temporaryStorageMB ?? 0),
+          retentionDays: Number(metrics.storageMetrics?.retentionDays ?? 0)
+        },
+        costBreakdown: {
+          baseSubscription: Number(metrics.costBreakdown?.baseSubscription ?? 0),
+          dataOverage: Number(metrics.costBreakdown?.dataOverage ?? 0),
+          computeOverage: Number(metrics.costBreakdown?.computeOverage ?? 0),
+          storageOverage: Number(metrics.costBreakdown?.storageOverage ?? 0),
+          premiumFeatures: Number(metrics.costBreakdown?.premiumFeatures ?? 0),
+          agentUsage: Number(metrics.costBreakdown?.agentUsage ?? 0),
+          toolUsage: Number(metrics.costBreakdown?.toolUsage ?? 0),
+          totalCost: Number(metrics.costBreakdown?.totalCost ?? 0)
+        },
+        quotaUtilization: {
+          dataQuotaUsed: Number(metrics.quotaUtilization?.dataQuotaUsed ?? 0),
+          dataQuotaLimit: Number(metrics.quotaUtilization?.dataQuotaLimit ?? 0),
+          computeQuotaUsed: Number(metrics.quotaUtilization?.computeQuotaUsed ?? 0),
+          computeQuotaLimit: Number(metrics.quotaUtilization?.computeQuotaLimit ?? 0),
+          storageQuotaUsed: Number(metrics.quotaUtilization?.storageQuotaUsed ?? 0),
+          storageQuotaLimit: Number(metrics.quotaUtilization?.storageQuotaLimit ?? 0),
+          quotaResetDate: metrics.quotaUtilization?.quotaResetDate ? new Date(metrics.quotaUtilization.quotaResetDate) : new Date()
+        }
+      };
+    };
+
     const loadData = async () => {
-      setLoading(true);
+  setLoadingSafe(true);
+
+      const now = new Date();
+      const periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
       try {
-        // Fetch real subscription tiers from backend API
-        const response = await fetch('/api/pricing/tiers');
-        const data = await response.json();
+        const [tiersRes, customersRes, alertsRes, eventsRes] = await Promise.all([
+          fetch('/api/pricing/tiers', { credentials: 'include' }),
+          fetch('/api/admin/customers?limit=10', { credentials: 'include' }),
+          fetch('/api/admin/quota-alerts?level=all', { credentials: 'include' }),
+          fetch('/api/admin/billing-events?limit=100', { credentials: 'include' })
+        ]);
 
-        if (data.success && data.tiers) {
-          // Map API response to SubscriptionTier format for admin UI
-          const mappedTiers: SubscriptionTier[] = data.tiers.map((tier: any) => ({
-            id: tier.id,
-            name: tier.id,
-            displayName: tier.name,
-            monthlyPrice: tier.price,
-            yearlyPrice: tier.price * 10, // 10 months pricing
-            description: tier.description,
-            features: tier.features,
-            limits: {
-              maxFilesSizeMB: tier.limits.maxDataSizeMB,
-              maxStorageMB: tier.limits.maxDataSizeMB * 5, // Estimated
-              maxDataProcessingMB: tier.limits.maxDataSizeMB,
-              maxComputeMinutes: tier.limits.analysesPerMonth * 10, // Estimated
-              maxProjects: tier.id === 'trial' ? 3 : tier.id === 'starter' ? 10 : tier.id === 'professional' ? 50 : 100,
-              maxTeamMembers: tier.limits.teamCollaboration ? (tier.id === 'starter' ? 3 : tier.id === 'professional' ? 15 : 50) : 1,
-              maxApiCalls: tier.limits.aiQueries * 100, // Estimated
-              maxAgentInteractions: tier.limits.aiQueries * 10,
-              maxToolExecutions: tier.limits.analysesPerMonth * 2,
-              retentionDays: tier.id === 'trial' ? 30 : tier.id === 'starter' ? 90 : 365
-            },
-            overagePricing: {
-              dataPerMB: tier.id === 'trial' ? 0.01 : tier.id === 'starter' ? 0.008 : tier.id === 'professional' ? 0.005 : 0.003,
-              computePerMinute: tier.id === 'trial' ? 0.05 : tier.id === 'starter' ? 0.04 : tier.id === 'professional' ? 0.03 : 0.02,
-              storagePerMB: tier.id === 'trial' ? 0.002 : tier.id === 'starter' ? 0.0015 : tier.id === 'professional' ? 0.001 : 0.0005,
-              apiCallsPer1000: tier.id === 'trial' ? 0.50 : tier.id === 'starter' ? 0.40 : tier.id === 'professional' ? 0.30 : 0.20,
-              agentInteractionCost: tier.id === 'trial' ? 0.02 : tier.id === 'starter' ? 0.015 : tier.id === 'professional' ? 0.01 : 0.008,
-              toolExecutionCost: tier.id === 'trial' ? 0.01 : tier.id === 'starter' ? 0.008 : tier.id === 'professional' ? 0.005 : 0.003
-            },
-            discounts: {
-              dataProcessingDiscount: tier.id === 'trial' ? 0 : tier.id === 'starter' ? 10 : tier.id === 'professional' ? 20 : 30,
-              agentUsageDiscount: tier.id === 'trial' ? 0 : tier.id === 'starter' ? 5 : tier.id === 'professional' ? 15 : 25,
-              toolUsageDiscount: tier.id === 'trial' ? 0 : tier.id === 'starter' ? 5 : tier.id === 'professional' ? 15 : 25,
-              enterpriseDiscount: tier.id === 'enterprise' ? 10 : 0
-            }
-          }));
-
-          setSubscriptionTiers(mappedTiers);
+        const tiersJson = await tiersRes.json().catch(() => ({}));
+        if (tiersJson.success && Array.isArray(tiersJson.tiers)) {
+          setSubscriptionTiersSafe(tiersJson.tiers.map(mapTierResponse));
         } else {
-          console.error('Failed to load subscription tiers:', data);
+          setSubscriptionTiersSafe([]);
+          if (!tiersRes.ok) {
+            console.error('Failed to load subscription tiers:', tiersJson?.error || tiersRes.statusText);
+          }
         }
 
-        // Fetch mock usage data and billing history (TODO: Replace with real API)
-        await new Promise(resolve => setTimeout(resolve, 500));
+        const customersJson = await customersRes.json().catch(() => ({}));
+        const customers: Array<{ id: string }> = customersJson.success && Array.isArray(customersJson.customers)
+          ? customersJson.customers
+          : [];
 
-        const mockTiers: SubscriptionTier[] = [
-          {
-            id: 'trial',
-            name: 'trial',
-            displayName: 'Free Trial',
-            monthlyPrice: 0,
-            yearlyPrice: 0,
-            description: 'Perfect for getting started with basic data analysis',
-            features: ['Up to 100MB data processing', '500MB storage', 'Basic analysis tools'],
-            limits: {
-              maxFilesSizeMB: 100,
-              maxStorageMB: 500,
-              maxDataProcessingMB: 100,
-              maxComputeMinutes: 60,
-              maxProjects: 3,
-              maxTeamMembers: 1,
-              maxApiCalls: 1000,
-              maxAgentInteractions: 50,
-              maxToolExecutions: 100,
-              retentionDays: 30
-            },
-            overagePricing: {
-              dataPerMB: 0.01,
-              computePerMinute: 0.05,
-              storagePerMB: 0.002,
-              apiCallsPer1000: 0.50,
-              agentInteractionCost: 0.02,
-              toolExecutionCost: 0.01
-            },
-            discounts: {
-              dataProcessingDiscount: 0,
-              agentUsageDiscount: 0,
-              toolUsageDiscount: 0,
-              enterpriseDiscount: 0
-            }
-          },
-          {
-            id: 'starter',
-            name: 'starter',
-            displayName: 'Starter',
-            monthlyPrice: 29,
-            yearlyPrice: 290,
-            description: 'For individuals and small teams starting their data journey',
-            features: ['Up to 5GB data processing', '25GB storage', 'Advanced analysis tools'],
-            limits: {
-              maxFilesSizeMB: 5000,
-              maxStorageMB: 25000,
-              maxDataProcessingMB: 5000,
-              maxComputeMinutes: 500,
-              maxProjects: 10,
-              maxTeamMembers: 3,
-              maxApiCalls: 10000,
-              maxAgentInteractions: 1000,
-              maxToolExecutions: 2000,
-              retentionDays: 90
-            },
-            overagePricing: {
-              dataPerMB: 0.008,
-              computePerMinute: 0.04,
-              storagePerMB: 0.0015,
-              apiCallsPer1000: 0.40,
-              agentInteractionCost: 0.015,
-              toolExecutionCost: 0.008
-            },
-            discounts: {
-              dataProcessingDiscount: 10,
-              agentUsageDiscount: 5,
-              toolUsageDiscount: 5,
-              enterpriseDiscount: 0
-            }
-          },
-          {
-            id: 'professional',
-            name: 'professional',
-            displayName: 'Professional',
-            monthlyPrice: 99,
-            yearlyPrice: 990,
-            description: 'For growing teams with advanced analytics needs',
-            features: ['Up to 50GB data processing', '500GB storage', 'Premium analysis suite'],
-            limits: {
-              maxFilesSizeMB: 50000,
-              maxStorageMB: 500000,
-              maxDataProcessingMB: 50000,
-              maxComputeMinutes: 5000,
-              maxProjects: 50,
-              maxTeamMembers: 15,
-              maxApiCalls: 100000,
-              maxAgentInteractions: 10000,
-              maxToolExecutions: 25000,
-              retentionDays: 365
-            },
-            overagePricing: {
-              dataPerMB: 0.005,
-              computePerMinute: 0.03,
-              storagePerMB: 0.001,
-              apiCallsPer1000: 0.25,
-              agentInteractionCost: 0.01,
-              toolExecutionCost: 0.005
-            },
-            discounts: {
-              dataProcessingDiscount: 20,
-              agentUsageDiscount: 15,
-              toolUsageDiscount: 15,
-              enterpriseDiscount: 5
-            }
-          },
-          {
-            id: 'enterprise',
-            name: 'enterprise',
-            displayName: 'Enterprise',
-            monthlyPrice: 299,
-            yearlyPrice: 2990,
-            description: 'For large organizations with enterprise requirements',
-            features: ['Unlimited data processing', 'Unlimited storage', 'Enterprise analysis suite'],
-            limits: {
-              maxFilesSizeMB: -1,
-              maxStorageMB: -1,
-              maxDataProcessingMB: -1,
-              maxComputeMinutes: -1,
-              maxProjects: -1,
-              maxTeamMembers: -1,
-              maxApiCalls: -1,
-              maxAgentInteractions: -1,
-              maxToolExecutions: -1,
-              retentionDays: -1
-            },
-            overagePricing: {
-              dataPerMB: 0.002,
-              computePerMinute: 0.02,
-              storagePerMB: 0.0005,
-              apiCallsPer1000: 0.10,
-              agentInteractionCost: 0.005,
-              toolExecutionCost: 0.002
-            },
-            discounts: {
-              dataProcessingDiscount: 30,
-              agentUsageDiscount: 25,
-              toolUsageDiscount: 25,
-              enterpriseDiscount: 15
-            }
-          }
-        ];
+        if (!customersRes.ok) {
+          console.error('Failed to load customers:', (customersJson as any)?.error || customersRes.statusText);
+        }
 
-        // Mock user metrics
-        const mockUserMetrics: UsageMetrics[] = [
-          {
-            userId: 'user_1',
-            subscriptionTier: 'professional',
-            billingPeriod: {
-              start: new Date('2024-01-01'),
-              end: new Date('2024-01-31'),
-              status: 'active'
-            },
-            dataUsage: {
-              totalFilesUploaded: 125,
-              totalFileSizeMB: 15750,
-              totalDataProcessedMB: 23400,
-              storageUsedMB: 45600,
-              maxFileSize: 2500,
-              fileFormats: { csv: 45, json: 30, xlsx: 25, xml: 15, txt: 10 },
-              dataTransformations: 89,
-              dataExports: 34
-            },
-            computeUsage: {
-              analysisCount: 156,
-              aiQueryCount: 2340,
-              mlModelExecutions: 45,
-              visualizationCount: 78,
-              totalComputeMinutes: 1250,
-              agentInteractions: 890,
-              toolExecutions: 1567
-            },
-            storageMetrics: {
-              projectCount: 23,
-              datasetCount: 67,
-              artifactCount: 134,
-              totalStorageMB: 45600,
-              archiveStorageMB: 12300,
-              temporaryStorageMB: 890,
-              retentionDays: 365
-            },
-            costBreakdown: {
-              baseSubscription: 99,
-              dataOverage: 0,
-              computeOverage: 0,
-              storageOverage: 0,
-              premiumFeatures: 15,
-              agentUsage: 8.90,
-              toolUsage: 7.84,
-              totalCost: 130.74
-            },
-            quotaUtilization: {
-              dataQuotaUsed: 23400,
-              dataQuotaLimit: 50000,
-              computeQuotaUsed: 1250,
-              computeQuotaLimit: 5000,
-              storageQuotaUsed: 45600,
-              storageQuotaLimit: 500000,
-              quotaResetDate: new Date('2024-02-01')
-            }
-          },
-          {
-            userId: 'user_2',
-            subscriptionTier: 'starter',
-            billingPeriod: {
-              start: new Date('2024-01-01'),
-              end: new Date('2024-01-31'),
-              status: 'active'
-            },
-            dataUsage: {
-              totalFilesUploaded: 67,
-              totalFileSizeMB: 4850,
-              totalDataProcessedMB: 6200,
-              storageUsedMB: 18750,
-              maxFileSize: 850,
-              fileFormats: { csv: 25, json: 20, xlsx: 15, pdf: 7 },
-              dataTransformations: 34,
-              dataExports: 12
-            },
-            computeUsage: {
-              analysisCount: 78,
-              aiQueryCount: 890,
-              mlModelExecutions: 12,
-              visualizationCount: 34,
-              totalComputeMinutes: 425,
-              agentInteractions: 456,
-              toolExecutions: 678
-            },
-            storageMetrics: {
-              projectCount: 8,
-              datasetCount: 23,
-              artifactCount: 45,
-              totalStorageMB: 18750,
-              archiveStorageMB: 5600,
-              temporaryStorageMB: 340,
-              retentionDays: 90
-            },
-            costBreakdown: {
-              baseSubscription: 29,
-              dataOverage: 9.60,
-              computeOverage: 0,
-              storageOverage: 0,
-              premiumFeatures: 0,
-              agentUsage: 6.84,
-              toolUsage: 5.42,
-              totalCost: 50.86
-            },
-            quotaUtilization: {
-              dataQuotaUsed: 6200,
-              dataQuotaLimit: 5000,
-              computeQuotaUsed: 425,
-              computeQuotaLimit: 500,
-              storageQuotaUsed: 18750,
-              storageQuotaLimit: 25000,
-              quotaResetDate: new Date('2024-02-01')
-            }
-          }
-        ];
+        if (customers.length === 0) {
+          setUserMetricsSafe([]);
+        } else {
+          const metricsResults = await Promise.all(
+            customers.map(async (customer) => {
+              try {
+                const metricsRes = await fetch(
+                  `/api/admin/users/${customer.id}/metrics?startDate=${encodeURIComponent(periodStart.toISOString())}&endDate=${encodeURIComponent(periodEnd.toISOString())}`,
+                  { credentials: 'include' }
+                );
 
-        // Mock quota alerts
-        const mockAlerts: QuotaAlert[] = [
-          {
-            id: 'alert_1',
-            userId: 'user_2',
-            quotaType: 'data',
-            currentUsage: 6200,
-            quotaLimit: 5000,
-            utilizationPercent: 124,
-            alertLevel: 'exceeded',
-            message: 'Data usage quota exceeded! You are now incurring overage charges.',
-            actionRequired: true,
-            suggestedActions: ['Consider upgrading to Professional plan', 'Optimize data processing workflows'],
-            timestamp: new Date(),
-            acknowledged: false
-          },
-          {
-            id: 'alert_2',
-            userId: 'user_1',
-            quotaType: 'storage',
-            currentUsage: 45600,
-            quotaLimit: 500000,
-            utilizationPercent: 91.2,
-            alertLevel: 'critical',
-            message: 'Storage usage is at 91.2% of your quota limit. Consider upgrading soon.',
-            actionRequired: false,
-            suggestedActions: ['Archive old projects', 'Clean up temporary files'],
-            timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000),
-            acknowledged: false
-          }
-        ];
+                if (!metricsRes.ok) {
+                  console.warn(`Failed to load metrics for ${customer.id}: ${metricsRes.status}`);
+                  return null;
+                }
 
-        setSubscriptionTiers(mockTiers);
-        setUserMetrics(mockUserMetrics);
-        setQuotaAlerts(mockAlerts);
-        setBillingEvents([]);
+                const metricsJson = await metricsRes.json();
+                if (metricsJson.success && metricsJson.metrics) {
+                  return mapMetricsFromResponse(metricsJson.metrics);
+                }
+
+                return null;
+              } catch (err) {
+                console.error(`Error fetching metrics for ${customer.id}:`, err);
+                return null;
+              }
+            })
+          );
+
+          setUserMetricsSafe(metricsResults.filter(Boolean) as UsageMetrics[]);
+        }
+
+        const alertsJson = await alertsRes.json().catch(() => ({}));
+        if (!alertsRes.ok) {
+          console.error('Failed to load quota alerts:', (alertsJson as any)?.error || alertsRes.statusText);
+        }
+        if (alertsJson.success && Array.isArray(alertsJson.alerts)) {
+          const mappedAlerts: QuotaAlert[] = alertsJson.alerts.map((alert: any) => ({
+            id: alert.id,
+            userId: alert.userId,
+            quotaType: alert.quotaType,
+            currentUsage: alert.currentUsage,
+            quotaLimit: alert.quotaLimit,
+            utilizationPercent: alert.utilizationPercent,
+            alertLevel: alert.alertLevel,
+            message: alert.message,
+            actionRequired: !!alert.actionRequired,
+            suggestedActions: alert.suggestedActions ?? [],
+            timestamp: alert.timestamp ? new Date(alert.timestamp) : new Date(),
+            acknowledged: !!alert.acknowledged
+          }));
+          setQuotaAlertsSafe(mappedAlerts);
+        } else {
+          setQuotaAlertsSafe([]);
+        }
+
+        const eventsJson = await eventsRes.json().catch(() => ({}));
+        if (!eventsRes.ok) {
+          console.error('Failed to load billing events:', (eventsJson as any)?.error || eventsRes.statusText);
+        }
+        if (eventsJson.success && Array.isArray(eventsJson.events)) {
+          const mappedEvents: BillingEvent[] = eventsJson.events.map((event: any) => ({
+            id: event.id,
+            userId: event.userId,
+            type: event.type,
+            category: event.category,
+            description: event.description,
+            amount: typeof event.amount === 'number' ? event.amount : undefined,
+            quantity: event.quantity ?? 1,
+            unit: event.unit ?? undefined,
+            metadata: event.metadata ?? {},
+            timestamp: event.timestamp ? new Date(event.timestamp) : new Date(),
+            processed: !!event.processed
+          }));
+          setBillingEventsSafe(mappedEvents);
+        } else {
+          setBillingEventsSafe([]);
+        }
       } catch (error) {
         console.error('Error loading subscription data:', error);
+        setSubscriptionTiersSafe([]);
+        setUserMetricsSafe([]);
+        setQuotaAlertsSafe([]);
+        setBillingEventsSafe([]);
       } finally {
-        setLoading(false);
+        setLoadingSafe(false);
       }
     };
 
     loadData();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const formatBytes = (bytes: number): string => {
@@ -782,6 +700,7 @@ const SubscriptionManagement: React.FC = () => {
 
   const handleTierSave = async () => {
     if (editingTier && editedTierData) {
+      const tierId = editingTier;
       try {
         // Send update to backend API
         const response = await fetch(`/api/pricing/tiers/${editingTier}`, {
@@ -805,13 +724,20 @@ const SubscriptionManagement: React.FC = () => {
           // Update local state with saved data
           setSubscriptionTiers(prev =>
             prev.map(tier =>
-              tier.id === editingTier
+              tier.id === tierId
                 ? { ...tier, ...editedTierData } as SubscriptionTier
                 : tier
             )
           );
           setEditingTier(null);
           setEditedTierData({});
+          setTierSyncStatus(prev => ({
+            ...prev,
+            [tierId]: {
+              state: 'idle',
+              message: 'Saved locally. Sync to Stripe to push pricing changes.'
+            }
+          }));
 
           // Show success message with Stripe sync status
           const stripeSyncStatus = result.stripeSync?.synced
@@ -839,6 +765,50 @@ const SubscriptionManagement: React.FC = () => {
   const handleTierCancel = () => {
     setEditingTier(null);
     setEditedTierData({});
+  };
+
+  const handleTierStripeSync = async (tierId: string) => {
+    setTierSyncStatus(prev => ({
+      ...prev,
+      [tierId]: {
+        state: 'pending',
+        message: 'Syncing with Stripe...'
+      }
+    }));
+
+    try {
+      const response = await fetch(`/api/pricing/tiers/${tierId}/sync-stripe`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        credentials: 'include'
+      });
+
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'Failed to sync tier with Stripe');
+      }
+
+      setTierSyncStatus(prev => ({
+        ...prev,
+        [tierId]: {
+          state: 'success',
+          message: result.tierSource === 'seeded_from_default'
+            ? 'Synced (seeded from default tier definition)'
+            : 'Synced with Stripe'
+        }
+      }));
+    } catch (error: any) {
+      console.error(`Failed to sync tier ${tierId} with Stripe:`, error);
+      setTierSyncStatus(prev => ({
+        ...prev,
+        [tierId]: {
+          state: 'error',
+          message: error?.message || 'Stripe sync failed'
+        }
+      }));
+    }
   };
 
   if (loading) {
@@ -1104,14 +1074,18 @@ const SubscriptionManagement: React.FC = () => {
                   <tbody className="bg-white divide-y divide-gray-200">
                     {filteredUsers.map(user => {
                       const tier = subscriptionTiers.find(t => t.id === user.subscriptionTier);
-                      const dataUtilization = tier?.limits.maxDataProcessingMB > 0 
-                        ? (user.quotaUtilization.dataQuotaUsed / user.quotaUtilization.dataQuotaLimit) * 100 
+                      const maxDataProcessing = tier?.limits?.maxDataProcessingMB ?? -1;
+                      const maxComputeMinutes = tier?.limits?.maxComputeMinutes ?? -1;
+                      const maxStorageMb = tier?.limits?.maxStorageMB ?? -1;
+
+                      const dataUtilization = maxDataProcessing > 0 && user.quotaUtilization.dataQuotaLimit > 0
+                        ? (user.quotaUtilization.dataQuotaUsed / user.quotaUtilization.dataQuotaLimit) * 100
                         : 0;
-                      const computeUtilization = tier?.limits.maxComputeMinutes > 0 
-                        ? (user.quotaUtilization.computeQuotaUsed / user.quotaUtilization.computeQuotaLimit) * 100 
+                      const computeUtilization = maxComputeMinutes > 0 && user.quotaUtilization.computeQuotaLimit > 0
+                        ? (user.quotaUtilization.computeQuotaUsed / user.quotaUtilization.computeQuotaLimit) * 100
                         : 0;
-                      const storageUtilization = tier?.limits.maxStorageMB > 0 
-                        ? (user.quotaUtilization.storageQuotaUsed / user.quotaUtilization.storageQuotaLimit) * 100 
+                      const storageUtilization = maxStorageMb > 0 && user.quotaUtilization.storageQuotaLimit > 0
+                        ? (user.quotaUtilization.storageQuotaUsed / user.quotaUtilization.storageQuotaLimit) * 100
                         : 0;
 
                       return (
@@ -1206,8 +1180,10 @@ const SubscriptionManagement: React.FC = () => {
 
               <div className="p-6">
                 <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-4 gap-6">
-                  {subscriptionTiers.map(tier => (
-                    <div key={tier.id} className="border rounded-lg p-6 relative">
+                  {subscriptionTiers.map(tier => {
+                    const syncState = tierSyncStatus[tier.id];
+                    return (
+                      <div key={tier.id} className="border rounded-lg p-6 relative">
                       <div className="flex items-center justify-between mb-4">
                         <h4 className="text-lg font-semibold text-gray-900">{tier.displayName}</h4>
                         <div className="flex items-center space-x-2">
@@ -1289,6 +1265,9 @@ const SubscriptionManagement: React.FC = () => {
                               Cancel
                             </button>
                           </div>
+                          {syncState?.message && (
+                            <p className="text-xs text-blue-600">{syncState.message}</p>
+                          )}
                         </div>
                       ) : (
                         <>
@@ -1389,10 +1368,36 @@ const SubscriptionManagement: React.FC = () => {
                               Current Users: {userMetrics.filter(user => user.subscriptionTier === tier.id).length}
                             </div>
                           </div>
+
+                          <div className="mt-4 pt-4 border-t space-y-2">
+                            <button
+                              onClick={() => handleTierStripeSync(tier.id)}
+                              className="w-full px-3 py-2 border border-blue-200 text-blue-700 rounded-lg hover:bg-blue-50 flex items-center justify-center disabled:opacity-60"
+                              disabled={syncState?.state === 'pending'}
+                            >
+                              {syncState?.state === 'pending' ? (
+                                <>
+                                  <Loader className="h-4 w-4 mr-2 animate-spin" />
+                                  Syncing…
+                                </>
+                              ) : (
+                                <>
+                                  <RefreshCw className="h-4 w-4 mr-2" />
+                                  Sync tier to Stripe
+                                </>
+                              )}
+                            </button>
+                            {syncState?.message && (
+                              <p className={`text-xs ${syncState.state === 'error' ? 'text-red-600' : 'text-green-600'}`}>
+                                {syncState.message}
+                              </p>
+                            )}
+                          </div>
                         </>
                       )}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             </div>

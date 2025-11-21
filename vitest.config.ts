@@ -5,14 +5,32 @@ import path from 'path';
 export default defineConfig({
   plugins: [react()],
   test: {
-    environment: 'jsdom',
-    setupFiles: ['vitest.setup.ts'],
     globals: true,
-    include: [
-      'client/src/__tests__/**/*.test.ts',
-      'client/src/__tests__/**/*.test.tsx',
-    ],
   },
+  projects: [
+    {
+      test: {
+        name: 'client',
+        environment: 'jsdom',
+        setupFiles: ['vitest.setup.ts'],
+        globals: true,
+        include: [
+          'client/src/__tests__/**/*.test.ts',
+          'client/src/__tests__/**/*.test.tsx',
+        ],
+      },
+    },
+    {
+      test: {
+        name: 'server',
+        environment: 'node',
+        globals: true,
+        include: [
+          'tests/**/*.test.ts',
+        ],
+      },
+    },
+  ],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'client', 'src'),

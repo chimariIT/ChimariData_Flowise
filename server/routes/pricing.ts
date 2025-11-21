@@ -1,61 +1,164 @@
 import { Router, Request, Response } from 'express';
+import { UNIFIED_SUBSCRIPTION_TIERS, getAllUnifiedTiers, type UnifiedSubscriptionTier } from '@shared/unified-subscription-tiers';
 import { SUBSCRIPTION_TIERS } from '@shared/subscription-tiers';
 import { getStripeSyncService } from '../services/stripe-sync';
+import { resolveTierForStripeSync } from '../services/stripe-tier-sync-helper';
 import { ensureAuthenticated } from './auth';
 import { requirePermission } from '../middleware/rbac';
+import { db } from '../db';
+import { servicePricing, subscriptionTierPricing } from '@shared/schema';
+import { eq } from 'drizzle-orm';
 import fs from 'fs';
 import path from 'path';
 
 const router = Router();
 
+type SubscriptionTierPricingRow = typeof subscriptionTierPricing.$inferSelect;
+type ServicePricingRow = typeof servicePricing.$inferSelect;
+
 /**
- * Get available subscription tiers
+ * Get available subscription tiers - DATABASE BACKED
+ * Returns tiers from database with fallback to code-based tiers
  */
 router.get('/tiers', async (req: Request, res: Response) => {
   try {
-    const tiers = Object.values(SUBSCRIPTION_TIERS).map(tier => ({
-      id: tier.id,
-      name: tier.name,
-      price: tier.price,
-      description: tier.description,
-      features: [
-        `${tier.features.maxFiles} file${tier.features.maxFiles > 1 ? 's' : ''} per month`,
-        `${tier.features.maxFileSizeMB}MB max file size`,
-        `${tier.features.totalDataVolumeMB}MB total data volume`,
-        `${tier.features.aiInsights === -1 ? 'Unlimited' : tier.features.aiInsights} AI insights`,
-        `${tier.features.maxAnalysisComponents === -1 ? 'Unlimited' : tier.features.maxAnalysisComponents} analysis components`,
-        `${tier.features.maxVisualizations === -1 ? 'Unlimited' : tier.features.maxVisualizations} visualizations`,
-        tier.features.dataTransformation ? 'Data transformation' : null,
-        tier.features.statisticalAnalysis ? 'Statistical analysis' : null,
-        tier.features.advancedInsights ? 'Advanced insights' : null,
-        tier.features.piiDetection ? 'PII detection' : null,
-        `${tier.features.exportOptions.join(', ')} export`,
-        `${tier.features.support} support`
-      ].filter(Boolean),
-      limits: {
-        analysesPerMonth: tier.features.maxAnalysisComponents,
-        maxDataSizeMB: tier.features.maxFileSizeMB,
-        maxRecords: tier.features.totalDataVolumeMB * 1000, // Rough estimate
-        aiQueries: tier.features.aiInsights,
-        supportLevel: tier.features.support,
-        customModels: tier.features.advancedInsights,
-        apiAccess: tier.id === 'enterprise',
-        teamCollaboration: tier.id !== 'trial'
-      },
-      recommended: tier.id === 'professional',
-      stripeProductId: tier.stripeProductId,
-      stripePriceId: tier.stripePriceId
-    }));
+    const billingCycle = req.query.cycle as 'monthly' | 'yearly' || 'monthly';
+
+    // Query database for active subscription tiers
+    const dbTiers: SubscriptionTierPricingRow[] = await db
+      .select()
+      .from(subscriptionTierPricing)
+      .where(eq(subscriptionTierPricing.isActive, true));
+
+    // If database has tiers, use them
+    if (dbTiers.length > 0) {
+      const tiers = dbTiers.map((tier: SubscriptionTierPricingRow) => {
+        const limits = (tier.limits as Record<string, any>) || {};
+        const features = (tier.features as Record<string, any>) || {};
+        const journeyPricing = (tier.journeyPricing as Record<string, any>) || {};
+        const overagePricing = (tier.overagePricing as Record<string, any>) || {};
+
+        // Get pricing based on billing cycle (convert cents to dollars)
+        const price = billingCycle === 'yearly'
+          ? (tier.yearlyPriceUsd / 100)
+          : (tier.monthlyPriceUsd / 100);
+
+        // Build features list from database tier
+        const featuresList = [
+          limits.maxFiles === -1 ? 'Unlimited files per month' : limits.maxFiles ? `${limits.maxFiles} file${limits.maxFiles !== 1 ? 's' : ''} per month` : null,
+          limits.maxFileSizeMB === -1 ? 'Unlimited file size' : limits.maxFileSizeMB ? `${limits.maxFileSizeMB}MB max file size` : null,
+          limits.totalDataVolumeMB === -1 ? 'Unlimited data volume' : limits.totalDataVolumeMB ? `${limits.totalDataVolumeMB}MB total data volume` : null,
+          limits.aiInsights === -1 ? 'Unlimited AI insights' : limits.aiInsights ? `${limits.aiInsights} AI insights per month` : null,
+          limits.maxAnalysisComponents === -1 ? 'Unlimited analysis components' : limits.maxAnalysisComponents ? `${limits.maxAnalysisComponents} analysis components` : null,
+          limits.maxVisualizations === -1 ? 'Unlimited visualizations' : limits.maxVisualizations ? `${limits.maxVisualizations} visualizations` : null,
+          features.dataTransformation ? 'Data transformation' : null,
+          features.statisticalAnalysis ? 'Statistical analysis' : null,
+          features.advancedInsights ? 'Advanced insights' : null,
+          features.piiDetection ? 'PII detection' : null,
+        ].filter(Boolean) as string[];
+
+        return {
+          id: tier.id,
+          name: tier.displayName,
+          type: tier.id,
+          description: tier.description || '',
+          price: price,
+          priceLabel: billingCycle === 'yearly' ? `$${price}/year` : `$${price}/month`,
+          features: featuresList,
+          limits: {
+            analysesPerMonth: limits.maxAnalysisComponents || 0,
+            maxDataSizeMB: limits.maxFileSizeMB || 0,
+            maxRecords: (limits.totalDataVolumeMB || 0) * 1000,
+            aiQueries: limits.aiInsights || 0,
+            supportLevel: 'email',
+            customModels: false,
+            apiAccess: tier.id === 'enterprise',
+            teamCollaboration: tier.id !== 'trial'
+          },
+          recommended: tier.id === 'professional',
+          stripeProductId: tier.stripeProductId || undefined,
+          stripePriceId: tier.stripeMonthlyPriceId || tier.stripeYearlyPriceId || undefined,
+          journeyPricing: journeyPricing,
+          monthlyPrice: tier.monthlyPriceUsd / 100,
+          yearlyPrice: tier.yearlyPriceUsd / 100,
+          overagePricing: overagePricing
+        };
+      });
+
+      console.log(`✅ Returning ${tiers.length} tiers from database`);
+
+      return res.json({
+        success: true,
+        tiers,
+        billingCycle,
+        source: 'database'
+      });
+    }
+
+    // Fallback to code-based tiers if database is empty
+    console.warn('⚠️  No tiers in database, falling back to code-based tiers');
+
+    const tiers = getAllUnifiedTiers().map(tier => {
+      const price = billingCycle === 'yearly' ? tier.yearlyPrice : tier.monthlyPrice;
+
+      const features = [
+        tier.limits.maxFiles === -1 ? 'Unlimited files per month' : `${tier.limits.maxFiles} file${tier.limits.maxFiles !== 1 ? 's' : ''} per month`,
+        tier.limits.maxFileSizeMB === -1 ? 'Unlimited file size' : `${tier.limits.maxFileSizeMB}MB max file size`,
+        tier.limits.totalDataVolumeMB === -1 ? 'Unlimited data volume' : `${tier.limits.totalDataVolumeMB}MB total data volume`,
+        tier.limits.aiInsights === -1 ? 'Unlimited AI insights' : `${tier.limits.aiInsights} AI insights per month`,
+        tier.limits.maxAnalysisComponents === -1 ? 'Unlimited analysis components' : `${tier.limits.maxAnalysisComponents} analysis components`,
+        tier.limits.maxVisualizations === -1 ? 'Unlimited visualizations' : `${tier.limits.maxVisualizations} visualizations`,
+        tier.limits.dataTransformation ? 'Data transformation' : null,
+        tier.limits.statisticalAnalysis ? 'Statistical analysis' : null,
+        tier.limits.advancedInsights ? 'Advanced insights' : null,
+        tier.limits.piiDetection ? 'PII detection' : null,
+        tier.limits.mlBasic ? 'Basic ML models' : null,
+        tier.limits.mlAdvanced ? 'Advanced ML (AutoML, XGBoost)' : null,
+        tier.limits.llmFineTuning ? 'LLM fine-tuning' : null,
+        `${tier.limits.exportOptions.join(', ')} export`,
+        `${tier.support.level} support`
+      ].filter(Boolean) as string[];
+
+      return {
+        id: tier.id,
+        name: tier.displayName,
+        type: tier.id,
+        description: tier.description,
+        price: price,
+        priceLabel: billingCycle === 'yearly' ? `$${price}/year` : `$${price}/month`,
+        features,
+        limits: {
+          analysesPerMonth: tier.limits.maxAnalysisComponents,
+          maxDataSizeMB: tier.limits.maxFileSizeMB,
+          maxRecords: tier.limits.totalDataVolumeMB * 1000,
+          aiQueries: tier.limits.aiInsights,
+          supportLevel: tier.support.level,
+          customModels: tier.limits.customMLModels,
+          apiAccess: tier.id === 'enterprise',
+          teamCollaboration: tier.id !== 'trial'
+        },
+        recommended: tier.id === 'professional',
+        stripeProductId: tier.stripeProductId,
+        stripePriceId: tier.stripePriceId,
+        journeyPricing: tier.journeyPricing,
+        monthlyPrice: tier.monthlyPrice,
+        yearlyPrice: tier.yearlyPrice,
+        overagePricing: tier.overagePricing
+      };
+    });
 
     res.json({
       success: true,
-      tiers
+      tiers,
+      billingCycle,
+      source: 'fallback'
     });
   } catch (error: any) {
     console.error('Error getting pricing tiers:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to get pricing tiers'
+      error: 'Failed to get pricing tiers',
+      details: error instanceof Error ? error.message : 'Unknown error'
     });
   }
 });
@@ -69,58 +172,73 @@ router.put('/tiers/:tierId', ensureAuthenticated, requirePermission('subscriptio
     const { tierId } = req.params;
     const { price, description, features, limits, overagePricing, discounts } = req.body;
 
-    // Verify tier exists
-    if (!SUBSCRIPTION_TIERS[tierId]) {
+    // Verify tier exists in unified tiers
+    if (!UNIFIED_SUBSCRIPTION_TIERS[tierId]) {
       return res.status(404).json({
         success: false,
         error: `Subscription tier '${tierId}' not found`
       });
     }
+    
+    const tier = UNIFIED_SUBSCRIPTION_TIERS[tierId];
 
     // Admin authentication enforced by middleware
 
-    // Build updated tier object
+    // Build updated tier object from unified tier
     const updatedTier = {
-      ...SUBSCRIPTION_TIERS[tierId],
-      price: price !== undefined ? price : SUBSCRIPTION_TIERS[tierId].price,
-      description: description !== undefined ? description : SUBSCRIPTION_TIERS[tierId].description,
+      ...tier,
+      monthlyPrice: price?.monthly !== undefined ? price.monthly : tier.monthlyPrice,
+      yearlyPrice: price?.yearly !== undefined ? price.yearly : tier.yearlyPrice,
+      description: description !== undefined ? description : tier.description,
     };
 
-    // Update features if provided
-    if (features) {
-      updatedTier.features = {
-        ...SUBSCRIPTION_TIERS[tierId].features,
-        maxFiles: limits?.maxFiles !== undefined ? limits.maxFiles : SUBSCRIPTION_TIERS[tierId].features.maxFiles,
-        maxFileSizeMB: limits?.maxFilesSizeMB !== undefined ? limits.maxFilesSizeMB : SUBSCRIPTION_TIERS[tierId].features.maxFileSizeMB,
-        totalDataVolumeMB: limits?.maxDataProcessingMB !== undefined ? limits.maxDataProcessingMB : SUBSCRIPTION_TIERS[tierId].features.totalDataVolumeMB,
-        aiInsights: limits?.maxAgentInteractions !== undefined ? Math.floor(limits.maxAgentInteractions / 10) : SUBSCRIPTION_TIERS[tierId].features.aiInsights,
-        maxAnalysisComponents: limits?.maxToolExecutions !== undefined ? Math.floor(limits.maxToolExecutions / 2) : SUBSCRIPTION_TIERS[tierId].features.maxAnalysisComponents,
-        maxVisualizations: SUBSCRIPTION_TIERS[tierId].features.maxVisualizations,
-        dataTransformation: SUBSCRIPTION_TIERS[tierId].features.dataTransformation,
-        statisticalAnalysis: SUBSCRIPTION_TIERS[tierId].features.statisticalAnalysis,
-        advancedInsights: SUBSCRIPTION_TIERS[tierId].features.advancedInsights,
-        piiDetection: SUBSCRIPTION_TIERS[tierId].features.piiDetection,
-        exportOptions: SUBSCRIPTION_TIERS[tierId].features.exportOptions,
-        support: SUBSCRIPTION_TIERS[tierId].features.support
+    // Update limits if provided
+    if (limits) {
+      updatedTier.limits = {
+        ...tier.limits,
+        maxFiles: limits.maxFiles !== undefined ? limits.maxFiles : tier.limits.maxFiles,
+        maxFileSizeMB: limits.maxFileSizeMB !== undefined ? limits.maxFileSizeMB : tier.limits.maxFileSizeMB,
+        totalDataVolumeMB: limits.totalDataVolumeMB !== undefined ? limits.totalDataVolumeMB : tier.limits.totalDataVolumeMB,
+        aiInsights: limits.aiInsights !== undefined ? limits.aiInsights : tier.limits.aiInsights,
+        maxAnalysisComponents: limits.maxAnalysisComponents !== undefined ? limits.maxAnalysisComponents : tier.limits.maxAnalysisComponents,
+        maxVisualizations: limits.maxVisualizations !== undefined ? limits.maxVisualizations : tier.limits.maxVisualizations,
+        // Update other limits if provided
+        ...(limits.dataTransformation !== undefined && { dataTransformation: limits.dataTransformation }),
+        ...(limits.statisticalAnalysis !== undefined && { statisticalAnalysis: limits.statisticalAnalysis }),
+        ...(limits.advancedInsights !== undefined && { advancedInsights: limits.advancedInsights }),
+        ...(limits.piiDetection !== undefined && { piiDetection: limits.piiDetection }),
+      };
+    }
+    
+    // Update overage pricing if provided
+    if (overagePricing) {
+      updatedTier.overagePricing = {
+        ...tier.overagePricing,
+        ...overagePricing
+      };
+    }
+    
+    // Update discounts if provided
+    if (discounts) {
+      updatedTier.discounts = {
+        ...tier.discounts,
+        ...discounts
       };
     }
 
-    // Sync with Stripe before updating local data
+    // Sync with Stripe if configured
     const stripeSyncService = getStripeSyncService();
-    const stripeSyncResult = await stripeSyncService.syncTierWithStripe(tierId, updatedTier as any);
-
-    // Update Stripe IDs if sync was successful
-    if (stripeSyncResult.success && stripeSyncResult.stripeProductId && stripeSyncResult.stripePriceId) {
-      updatedTier.stripeProductId = stripeSyncResult.stripeProductId;
-      updatedTier.stripePriceId = stripeSyncResult.stripePriceId;
-      console.log(`✅ Synced tier ${tierId} with Stripe: Product ${stripeSyncResult.stripeProductId}, Price ${stripeSyncResult.stripePriceId}`);
+    if (stripeSyncService.isStripeConfigured()) {
+      // TODO: Implement Stripe sync for unified tiers
+      // This would need to sync with Stripe products/prices
+      console.log(`📋 Stripe sync for unified tier ${tierId} - TODO: implement Stripe integration`);
     } else {
-      console.warn(`⚠️  Stripe sync failed for tier ${tierId}: ${stripeSyncResult.error}`);
-      // Continue with local update even if Stripe sync fails
+      console.warn('⚠️  Stripe not configured - skipping sync');
     }
 
-    // Update the in-memory tier data
-    SUBSCRIPTION_TIERS[tierId] = updatedTier as any;
+    // Note: We don't update the hardcoded tier definitions in shared/unified-subscription-tiers.ts
+    // Admin updates to pricing should be made through Stripe directly
+    // This endpoint is here for feature/limit updates
 
     // Write to file for persistence
     const sharedDir = path.join(__dirname, '../../shared');
@@ -215,14 +333,9 @@ export function canUserRequestAIInsight(userTier: string, currentInsights: numbe
 
     res.json({
       success: true,
-      message: `Subscription tier '${tierId}' updated successfully`,
+      message: `Subscription tier '${tierId}' configuration updated (runtime only)`,
       tier: updatedTier,
-      stripeSync: {
-        synced: stripeSyncResult.success,
-        productId: stripeSyncResult.stripeProductId,
-        priceId: stripeSyncResult.stripePriceId,
-        error: stripeSyncResult.error
-      }
+      note: 'To make permanent pricing changes, update them in Stripe or modify shared/unified-subscription-tiers.ts'
     });
 
   } catch (error: any) {
@@ -233,6 +346,67 @@ export function canUserRequestAIInsight(userTier: string, currentInsights: numbe
     });
   }
 });
+
+router.post(
+  '/tiers/:tierId/sync-stripe',
+  ensureAuthenticated,
+  requirePermission('billing', 'manage'),
+  async (req: Request, res: Response) => {
+    try {
+      const { tierId } = req.params;
+      const stripeSyncService = getStripeSyncService();
+
+      if (!stripeSyncService.isStripeConfigured()) {
+        return res.status(503).json({
+          success: false,
+          error: 'Stripe not configured. Set STRIPE_SECRET_KEY to enable syncing.',
+          code: 'STRIPE_NOT_CONFIGURED',
+        });
+      }
+
+      const { source, record } = await resolveTierForStripeSync(tierId);
+
+      const tierLimits = record && typeof record.limits === 'object' ? record.limits : {};
+      const tierFeatures = record && typeof record.features === 'object' ? record.features : tierLimits;
+
+      const tierData = {
+        displayName: record.displayName || record.name || tierId,
+        description: record.description || '',
+        monthlyPriceUsd: record.monthlyPriceUsd,
+        yearlyPriceUsd: record.yearlyPriceUsd,
+        stripeProductId: record.stripeProductId ?? undefined,
+        stripeMonthlyPriceId: record.stripeMonthlyPriceId ?? undefined,
+        stripeYearlyPriceId: record.stripeYearlyPriceId ?? undefined,
+        limits: tierLimits,
+        features: tierFeatures,
+      };
+
+      const syncResult = await stripeSyncService.syncTierWithStripe(tierId, tierData);
+
+      if (!syncResult.success) {
+        return res.status(502).json({
+          success: false,
+          error: syncResult.error || 'Failed to sync Stripe pricing',
+          stripeSync: syncResult,
+        });
+      }
+
+      res.json({
+        success: true,
+        message: `Tier '${tierId}' synced with Stripe`,
+        tierSource: source,
+        stripeSync: syncResult,
+      });
+    } catch (error: any) {
+      console.error('Error syncing tier with Stripe:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to sync tier with Stripe',
+        details: error?.message || 'Unknown error',
+      });
+    }
+  }
+);
 
 /**
  * Create a Stripe subscription for a user
@@ -250,14 +424,14 @@ router.post('/subscription', ensureAuthenticated, async (req: Request, res: Resp
       });
     }
 
-    if (!planType || !SUBSCRIPTION_TIERS[planType]) {
+    if (!planType || !UNIFIED_SUBSCRIPTION_TIERS[planType]) {
       return res.status(400).json({
         success: false,
         error: 'Invalid plan type'
       });
     }
 
-    const tier = SUBSCRIPTION_TIERS[planType];
+    const tier = UNIFIED_SUBSCRIPTION_TIERS[planType];
     const stripeSyncService = getStripeSyncService();
 
     // Check if Stripe is configured
@@ -274,9 +448,23 @@ router.post('/subscription', ensureAuthenticated, async (req: Request, res: Resp
     }
 
     // Ensure tier is synced with Stripe
-    const syncResult = await stripeSyncService.syncTierWithStripe(planType, tier);
+    const tierSyncPayload: Parameters<typeof stripeSyncService.syncTierWithStripe>[1] = {
+      displayName: tier.displayName,
+      description: tier.description,
+      monthlyPriceUsd: Math.round(tier.monthlyPrice * 100),
+      yearlyPriceUsd: Math.round(tier.yearlyPrice * 100),
+      stripeProductId: tier.stripeProductId ?? null,
+      stripeMonthlyPriceId: tier.stripePriceId ?? null,
+      stripeYearlyPriceId: tier.stripePriceId ?? null,
+      limits: tier.limits,
+  features: tier.limits,
+    };
 
-    if (!syncResult.success || !syncResult.stripePriceId) {
+    const syncResult = await stripeSyncService.syncTierWithStripe(planType, tierSyncPayload);
+
+    const priceId = syncResult.stripeMonthlyPriceId ?? syncResult.stripeYearlyPriceId;
+
+    if (!syncResult.success || !priceId) {
       return res.status(500).json({
         success: false,
         error: `Failed to sync subscription tier with Stripe: ${syncResult.error}`
@@ -286,7 +474,7 @@ router.post('/subscription', ensureAuthenticated, async (req: Request, res: Resp
     // Import Stripe and create real PaymentIntent
     const Stripe = require('stripe');
     const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-      apiVersion: '2024-12-18.acacia',
+      apiVersion: '2025-08-27.basil',
     });
 
     // Create or get Stripe customer for this user
@@ -320,17 +508,17 @@ router.post('/subscription', ensureAuthenticated, async (req: Request, res: Resp
 
     // Create PaymentIntent for subscription payment
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: tier.price * 100, // Convert to cents
+      amount: tier.monthlyPrice * 100, // Convert to cents
       currency: 'usd',
       customer: stripeCustomerId,
       metadata: {
         userId: userId,
         planType: planType,
-        priceId: syncResult.stripePriceId,
+        priceId,
         productId: syncResult.stripeProductId || ''
       },
       setup_future_usage: 'off_session', // Save payment method for future charges
-      description: `Subscription: ${tier.name} - $${tier.price}/month`
+      description: `Subscription: ${tier.displayName} - $${tier.monthlyPrice}/month`
     });
 
     console.log(`✅ Created PaymentIntent: ${paymentIntent.id} for ${tier.name} subscription`);
@@ -338,7 +526,7 @@ router.post('/subscription', ensureAuthenticated, async (req: Request, res: Resp
     res.json({
       success: true,
       clientSecret: paymentIntent.client_secret,
-      priceId: syncResult.stripePriceId,
+  priceId,
       productId: syncResult.stripeProductId,
       paymentIntentId: paymentIntent.id
     });
@@ -412,7 +600,7 @@ router.post('/subscription/cancel', ensureAuthenticated, async (req: Request, re
     // Import Stripe and cancel subscription
     const Stripe = require('stripe');
     const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-      apiVersion: '2024-12-18.acacia',
+  apiVersion: '2025-08-27.basil',
     });
 
     // Cancel the subscription at period end
@@ -502,7 +690,7 @@ router.post('/subscription/reactivate', ensureAuthenticated, async (req: Request
     // Import Stripe and reactivate subscription
     const Stripe = require('stripe');
     const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-      apiVersion: '2024-12-18.acacia',
+  apiVersion: '2025-08-27.basil',
     });
 
     // Remove cancellation
@@ -534,6 +722,148 @@ router.post('/subscription/reactivate', ensureAuthenticated, async (req: Request
     res.status(500).json({
       success: false,
       error: 'Failed to reactivate subscription',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/pricing/services
+ * Get active service pricing for one-time services from database
+ */
+router.get('/services', async (req: Request, res: Response) => {
+  try {
+    // Query database for active service pricing
+    const services = await db
+      .select()
+      .from(servicePricing)
+      .where(eq(servicePricing.isActive, true));
+
+    // If no services in database, return defaults
+    if (services.length === 0) {
+      const defaultServices = [
+        {
+          id: 'pay-per-analysis',
+          serviceType: 'pay-per-analysis',
+          displayName: 'Pay-per-Analysis',
+          description: 'Perfect for one-time insights without monthly commitment',
+          basePrice: 2500, // $25 in cents
+          pricingModel: 'fixed',
+          isActive: true
+        },
+        {
+          id: 'expert-consultation',
+          serviceType: 'expert-consultation',
+          displayName: 'Expert Consultation',
+          description: '1-hour session with our data science experts',
+          basePrice: 15000, // $150 in cents
+          pricingModel: 'fixed',
+          isActive: true
+        }
+      ];
+
+      return res.json({
+        success: true,
+        services: defaultServices,
+        note: 'Using default pricing - no services configured in database'
+      });
+    }
+
+    res.json({
+      success: true,
+      services
+    });
+  } catch (error: any) {
+    console.error('Error getting service pricing:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get service pricing',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/pricing/subscription-tiers
+ * Get subscription tier pricing from database
+ */
+router.get('/subscription-tiers', async (req: Request, res: Response) => {
+  try {
+    const billingCycle = req.query.cycle as 'monthly' | 'yearly' || 'monthly';
+    
+    // Query database for active subscription tiers
+    const tiers = await db
+      .select()
+      .from(subscriptionTierPricing)
+      .where(eq(subscriptionTierPricing.isActive, true));
+
+    // If no tiers in database, fall back to code-based tiers
+    if (tiers.length === 0) {
+      const fallbackTiers = getAllUnifiedTiers().map(tier => ({
+        id: tier.id,
+        name: tier.displayName,
+        type: tier.id,
+        description: tier.description,
+        price: billingCycle === 'yearly' ? tier.yearlyPrice : tier.monthlyPrice,
+        priceLabel: billingCycle === 'yearly' ? `$${tier.yearlyPrice}/year` : `$${tier.monthlyPrice}/month`,
+        features: [
+          tier.limits.maxFiles === -1 ? 'Unlimited files per month' : `${tier.limits.maxFiles} files per month`,
+          tier.limits.maxFileSizeMB === -1 ? 'Unlimited file size' : `${tier.limits.maxFileSizeMB}MB max file size`,
+          `${tier.support.level} support`
+        ],
+        limits: {
+          analysesPerMonth: tier.limits.maxAnalysisComponents,
+          maxDataSizeMB: tier.limits.maxFileSizeMB,
+          maxRecords: tier.limits.totalDataVolumeMB * 1000,
+          aiQueries: tier.limits.aiInsights,
+          supportLevel: tier.support.level
+        },
+        recommended: tier.id === 'professional',
+        monthlyPrice: tier.monthlyPrice,
+        yearlyPrice: tier.yearlyPrice
+      }));
+
+      return res.json({
+        success: true,
+        tiers: fallbackTiers,
+        billingCycle,
+        note: 'Using default pricing from code - no tiers configured in database'
+      });
+    }
+
+    // Convert database tiers to API format
+    const formattedTiers = tiers.map((tier: SubscriptionTierPricingRow) => {
+      const limits = (tier.limits as Partial<UnifiedSubscriptionTier['limits']>) || {};
+      const maxFiles = typeof limits.maxFiles === 'number' ? limits.maxFiles : undefined;
+
+      return {
+        id: tier.id,
+        name: tier.displayName,
+        type: tier.id,
+        description: tier.description,
+        price: billingCycle === 'yearly' ? (tier.yearlyPriceUsd / 100) : (tier.monthlyPriceUsd / 100),
+        priceLabel: billingCycle === 'yearly' ? `$${tier.yearlyPriceUsd / 100}/year` : `$${tier.monthlyPriceUsd / 100}/month`,
+        features: maxFiles !== undefined ? [`${maxFiles} files per month`] : [],
+        limits,
+        recommended: tier.id === 'professional',
+        monthlyPrice: tier.monthlyPriceUsd / 100,
+        yearlyPrice: tier.yearlyPriceUsd / 100,
+        stripeProductId: tier.stripeProductId,
+        stripeMonthlyPriceId: tier.stripeMonthlyPriceId,
+        stripeYearlyPriceId: tier.stripeYearlyPriceId
+      };
+    });
+
+    res.json({
+      success: true,
+      tiers: formattedTiers,
+      billingCycle
+    });
+  } catch (error: any) {
+    console.error('Error getting subscription tiers:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get subscription tiers',
       details: error.message
     });
   }
