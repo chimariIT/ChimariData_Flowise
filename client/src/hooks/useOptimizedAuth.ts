@@ -74,8 +74,10 @@ export function useOptimizedAuth() {
           return { user: userData, isAuthenticated: true };
         } catch (error) {
           // Clear invalid token
+          console.error('🔐 [useOptimizedAuth] checkAuth failed, REMOVING TOKEN');
+          console.error('🔐 [useOptimizedAuth] Error was:', error);
           localStorage.removeItem('auth_token');
-          
+
           setAuthState(prev => ({
             ...prev,
             user: null,
@@ -83,7 +85,7 @@ export function useOptimizedAuth() {
             isAuthenticated: false,
             lastCheck: now
           }));
-          
+
           return { user: null, isAuthenticated: false };
         }
       })();
@@ -122,6 +124,7 @@ export function useOptimizedAuth() {
       
       if (result.token) {
         localStorage.setItem('auth_token', result.token);
+        window.dispatchEvent(new Event('auth-token-stored'));
       }
       
       // Force auth check after login
@@ -153,6 +156,7 @@ export function useOptimizedAuth() {
       
       // Clear any pending auth requests
       authRequestCache.clear();
+      window.dispatchEvent(new Event('auth-token-cleared'));
     }
   }, []);
 
@@ -160,6 +164,34 @@ export function useOptimizedAuth() {
   useEffect(() => {
     checkAuth(true);
   }, []);
+
+  // Listen for auth token storage events (triggered after login)
+  useEffect(() => {
+    const handleAuthTokenStored = () => {
+      // Clear cache and force immediate auth check when token is stored
+      authRequestCache.clear();
+      lastRequestTimeRef.current = 0; // Reset throttle
+      checkAuth(true);
+    };
+
+    const handleAuthTokenCleared = () => {
+      authRequestCache.clear();
+      lastRequestTimeRef.current = 0;
+      setAuthState({
+        user: null,
+        loading: false,
+        lastCheck: Date.now(),
+        isAuthenticated: false
+      });
+    };
+
+    window.addEventListener('auth-token-stored', handleAuthTokenStored);
+    window.addEventListener('auth-token-cleared', handleAuthTokenCleared);
+    return () => {
+      window.removeEventListener('auth-token-stored', handleAuthTokenStored);
+      window.removeEventListener('auth-token-cleared', handleAuthTokenCleared);
+    };
+  }, [checkAuth]);
 
   // Set up periodic auth checks (less frequent)
   useEffect(() => {

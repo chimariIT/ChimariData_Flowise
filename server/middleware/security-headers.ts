@@ -225,7 +225,8 @@ export const corsConfig = {
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'authorization', 'X-Forwarded-Authorization', 'x-forwarded-authorization', 'X-Requested-With', 'X-Customer-Context'],
+  exposedHeaders: ['Authorization', 'X-Forwarded-Authorization'],
   maxAge: 86400 // 24 hours
 };
 

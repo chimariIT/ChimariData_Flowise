@@ -2,8 +2,12 @@ import express from 'express';
 import { db } from '../db';
 import { projects, analysisSubscriptions } from '@shared/schema';
 import { eq } from 'drizzle-orm';
+import { ensureAuthenticated } from './auth';
+import { journeyStateManager } from '../services/journey-state-manager';
 
 const router = express.Router();
+
+router.use(ensureAuthenticated);
 
 /**
  * Get current agent activities for a project
@@ -27,49 +31,115 @@ router.get('/activities/:projectId', async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    // Mock agent activities based on project state
+    // Get journey state to determine real agent activities
+    let journeyState = null;
+    try {
+      journeyState = await journeyStateManager.getJourneyState(projectId);
+    } catch (error) {
+      console.warn('Could not fetch journey state for agent activities:', error);
+    }
+
     const activities = [];
 
-    // Project Manager Agent
-    const projectManagerStatus = getProjectManagerStatus(project);
-    activities.push({
-      id: 'pm_agent',
-      agent: 'project_manager',
-      activity: projectManagerStatus.activity,
-      status: projectManagerStatus.status,
-      currentTask: projectManagerStatus.currentTask,
-      progress: projectManagerStatus.progress,
-      estimatedCompletion: new Date(Date.now() + projectManagerStatus.remainingMinutes * 60 * 1000),
-      lastUpdate: new Date()
-    });
+    // Determine agent activities based on journey state if available
+    if (journeyState && journeyState.currentStep) {
+      const currentStep = journeyState.currentStep;
+      const currentStepData = journeyState.steps[currentStep.index];
+      
+      // Get active agent from current step
+      if (currentStepData) {
+        const activeAgent = currentStepData.agent;
+        const completedSteps = journeyState.completedSteps || [];
+        const isCurrentStepCompleted = completedSteps.includes(currentStep.id);
+        
+        // Project Manager - active if coordinating workflow
+        const pmActive = activeAgent === 'project_manager' && !isCurrentStepCompleted;
+        activities.push({
+          id: 'pm_agent',
+          agent: 'project_manager',
+          activity: pmActive ? 'Coordinating workflow' : 'Monitoring progress',
+          status: pmActive ? 'active' : (journeyState.percentComplete >= 100 ? 'idle' : 'waiting'),
+          currentTask: pmActive ? currentStepData.description || 'Managing workflow step' : 'Standby',
+          progress: isCurrentStepCompleted ? 100 : Math.round((journeyState.percentComplete / journeyState.totalSteps) * 100),
+          estimatedCompletion: journeyState.estimatedTimeRemaining 
+            ? new Date(Date.now() + (parseInt(journeyState.estimatedTimeRemaining.split(' ')[0]) || 0) * 60000)
+            : undefined,
+          lastUpdate: new Date()
+        });
 
-    // Data Scientist Agent
-    const dataScientistStatus = getDataScientistStatus(project);
-    activities.push({
-      id: 'ds_agent',
-      agent: 'data_scientist',
-      activity: dataScientistStatus.activity,
-      status: dataScientistStatus.status,
-      currentTask: dataScientistStatus.currentTask,
-      progress: dataScientistStatus.progress,
-      estimatedCompletion: new Date(Date.now() + dataScientistStatus.remainingMinutes * 60 * 1000),
-      lastUpdate: new Date()
-    });
+        // Data Scientist / Technical AI Agent - active if on technical step
+        const dsActive = (activeAgent === 'technical_ai_agent' || activeAgent === 'data_engineer') && !isCurrentStepCompleted;
+        activities.push({
+          id: 'ds_agent',
+          agent: 'data_scientist',
+          activity: dsActive ? currentStepData.description || 'Processing data' : 'Waiting for data',
+          status: dsActive ? 'active' : (journeyState.percentComplete >= 100 ? 'idle' : 'waiting'),
+          currentTask: dsActive ? currentStepData.name : 'Awaiting technical tasks',
+          progress: isCurrentStepCompleted ? 100 : 0,
+          estimatedCompletion: dsActive && currentStepData.estimatedDuration
+            ? new Date(Date.now() + currentStepData.estimatedDuration * 60000)
+            : undefined,
+          lastUpdate: new Date()
+        });
 
-    // Business Agent
-    const businessAgentStatus = getBusinessAgentStatus(project);
-    activities.push({
-      id: 'ba_agent',
-      agent: 'business_agent',
-      activity: businessAgentStatus.activity,
-      status: businessAgentStatus.status,
-      currentTask: businessAgentStatus.currentTask,
-      progress: businessAgentStatus.progress,
-      estimatedCompletion: new Date(Date.now() + businessAgentStatus.remainingMinutes * 60 * 1000),
-      lastUpdate: new Date()
-    });
+        // Business Agent - active if on business step
+        const baActive = activeAgent === 'business_agent' && !isCurrentStepCompleted;
+        activities.push({
+          id: 'ba_agent',
+          agent: 'business_agent',
+          activity: baActive ? currentStepData.description || 'Generating insights' : 'Preparing business context',
+          status: baActive ? 'active' : (journeyState.percentComplete >= 100 ? 'idle' : 'waiting'),
+          currentTask: baActive ? currentStepData.name : 'Awaiting business tasks',
+          progress: isCurrentStepCompleted ? 100 : 0,
+          estimatedCompletion: baActive && currentStepData.estimatedDuration
+            ? new Date(Date.now() + currentStepData.estimatedDuration * 60000)
+            : undefined,
+          lastUpdate: new Date()
+        });
+      }
+    } else {
+      // Fallback to project-based status if no journey state
+      // Project Manager Agent
+      const projectManagerStatus = getProjectManagerStatus(project);
+      activities.push({
+        id: 'pm_agent',
+        agent: 'project_manager',
+        activity: projectManagerStatus.activity,
+        status: projectManagerStatus.status,
+        currentTask: projectManagerStatus.currentTask,
+        progress: projectManagerStatus.progress,
+        estimatedCompletion: new Date(Date.now() + projectManagerStatus.remainingMinutes * 60 * 1000),
+        lastUpdate: new Date()
+      });
 
-    res.json(activities);
+      // Data Scientist Agent
+      const dataScientistStatus = getDataScientistStatus(project);
+      activities.push({
+        id: 'ds_agent',
+        agent: 'data_scientist',
+        activity: dataScientistStatus.activity,
+        status: dataScientistStatus.status,
+        currentTask: dataScientistStatus.currentTask,
+        progress: dataScientistStatus.progress,
+        estimatedCompletion: new Date(Date.now() + dataScientistStatus.remainingMinutes * 60 * 1000),
+        lastUpdate: new Date()
+      });
+
+      // Business Agent
+      const businessAgentStatus = getBusinessAgentStatus(project);
+      activities.push({
+        id: 'ba_agent',
+        agent: 'business_agent',
+        activity: businessAgentStatus.activity,
+        status: businessAgentStatus.status,
+        currentTask: businessAgentStatus.currentTask,
+        progress: businessAgentStatus.progress,
+        estimatedCompletion: new Date(Date.now() + businessAgentStatus.remainingMinutes * 60 * 1000),
+        lastUpdate: new Date()
+      });
+    }
+
+    res.json({ data: activities });
   } catch (error) {
     console.error('Failed to get agent activities:', error);
     const msg = (error as any)?.message || 'Unknown error';

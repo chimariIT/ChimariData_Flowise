@@ -11,6 +11,8 @@ interface PIIDetectionDialogProps {
   isOpen: boolean;
   onClose: () => void;
   onDecision: (requiresPII: boolean, anonymizeData: boolean, selectedColumns: string[]) => void;
+  projectId?: string | null;
+  onToolkitApplied?: () => void;
   piiResult: {
     detectedPII: Array<{
       column: string;
@@ -23,7 +25,7 @@ interface PIIDetectionDialogProps {
   };
 }
 
-export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult }: PIIDetectionDialogProps) {
+export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult, projectId, onToolkitApplied }: PIIDetectionDialogProps) {
   const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
   const [anonymizeData, setAnonymizeData] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
@@ -47,7 +49,8 @@ export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult }: P
     onDecision(false, false, []);
   };
 
-  const getRiskColor = (risk: string) => {
+  const getRiskColor = (risk: string | undefined | null) => {
+    if (!risk) return 'bg-gray-100 text-gray-800';
     switch (risk.toLowerCase()) {
       case 'high': return 'bg-red-100 text-red-800';
       case 'medium': return 'bg-yellow-100 text-yellow-800';
@@ -215,6 +218,7 @@ export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult }: P
             <Button
               variant="outline"
               onClick={() => setShowAnonymizationToolkit(true)}
+              disabled={!projectId}
             >
               <Settings className="h-4 w-4 mr-2" />
               Advanced Anonymization
@@ -230,10 +234,9 @@ export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult }: P
       <AnonymizationToolkit
         isOpen={showAnonymizationToolkit}
         onClose={() => setShowAnonymizationToolkit(false)}
-        projectId=""
-        data={[]}
+        projectId={projectId || ''}
         piiColumns={piiResult.detectedPII.map(pii => pii.column)}
-        schema={{}}
+        onApplied={onToolkitApplied}
       />
     </div>
   );

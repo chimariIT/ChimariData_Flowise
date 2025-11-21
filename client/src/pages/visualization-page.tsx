@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { VisualizationWorkshopLazy } from "@/components/LazyComponents";
+import { apiClient } from "@/lib/api";
 
 export default function VisualizationPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -12,23 +13,9 @@ export default function VisualizationPage() {
   const { data: project, isLoading, error } = useQuery({
     queryKey: ["/api/projects", projectId],
     queryFn: async () => {
-      const token = localStorage.getItem('auth_token');
-      const response = await fetch(`/api/projects/${projectId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      
-      if (response.status === 401) {
-        // Clear invalid token
-        localStorage.removeItem('auth_token');
-        throw new Error('Authentication required');
-      }
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch project: ${response.status}`);
-      }
-      return await response.json();
+      // Use apiClient which automatically includes authentication headers
+      const response = await apiClient.get(`/api/projects/${projectId}`);
+      return response;
     },
     enabled: !!projectId,
     retry: false // Don't retry on auth failures

@@ -1,10 +1,141 @@
 import { spawn } from 'child_process';
-import * as path from 'path';
-import * as fs from 'fs';
 
-// Enhanced PythonProcessor that actually uses Python libraries
-export const PythonProcessor = {
-  async processTrial(trialId: string, data: any): Promise<any> {
+interface PythonCommandResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+}
+
+interface PythonExecutionResult {
+  success: boolean;
+  data?: any;
+  visualizations?: any[];
+  error?: string;
+  libraries?: string[];
+}
+
+const DEFAULT_REQUIRED_LIBRARIES = [
+  'pandas',
+  'numpy',
+  'scipy',
+  'statsmodels',
+  'sklearn',
+  'matplotlib',
+  'plotly',
+  'seaborn',
+  'polars',
+  'tensorflow'
+];
+
+const ML_REQUIRED_LIBRARIES = ['pandas', 'numpy', 'sklearn', 'scipy', 'joblib'];
+
+// Class-based Python processor so tool handlers can instantiate and check health
+export class PythonProcessor {
+  private readonly pythonPath: string;
+  private initialized = false;
+
+  constructor(pythonPath?: string) {
+    const defaultExecutable = process.platform === 'win32' ? 'python' : 'python3';
+    this.pythonPath = pythonPath || process.env.PYTHON_PATH || defaultExecutable;
+  }
+
+  async initialize(): Promise<void> {
+    if (this.initialized) {
+      return;
+    }
+
+    const health = await this.healthCheck();
+    if (!health.healthy) {
+      throw new Error(`Python environment unhealthy: ${health.details?.error || 'unknown error'}`);
+    }
+
+    this.initialized = true;
+  }
+
+  async healthCheck(): Promise<{ healthy: boolean; details: any }> {
+    const script = `
+import json
+import importlib
+import platform
+
+required = ${JSON.stringify(DEFAULT_REQUIRED_LIBRARIES)}
+missing = []
+versions = {}
+
+for module in required:
+    try:
+        mod = __import__(module)
+        versions[module] = getattr(mod, '__version__', 'unknown')
+    except Exception as exc:
+        missing.append({'module': module, 'error': str(exc)})
+
+result = {
+    'healthy': len(missing) == 0,
+    'missing': missing,
+    'versions': versions,
+    'pythonVersion': platform.python_version()
+}
+
+print(json.dumps(result))
+`;
+
+    const commandResult = await this.runPythonCommand(['-c', script], 8000);
+
+    if (commandResult.code !== 0 || commandResult.timedOut) {
+      return {
+        healthy: false,
+        details: {
+          error: commandResult.timedOut ? 'Python health check timed out' : commandResult.stderr || 'Python process failed'
+        }
+      };
+    }
+
+    try {
+      const parsed = JSON.parse(commandResult.stdout);
+      return {
+        healthy: Boolean(parsed.healthy),
+        details: parsed
+      };
+    } catch (error) {
+      return {
+        healthy: false,
+        details: { error: `Failed to parse Python health output: ${(error as Error).message}` }
+      };
+    }
+  }
+
+  async checkMLLibraries(): Promise<boolean> {
+    const script = `
+import json
+import importlib
+
+required = ${JSON.stringify(ML_REQUIRED_LIBRARIES)}
+missing = []
+
+for module in required:
+    if importlib.util.find_spec(module) is None:
+        missing.append(module)
+
+print(json.dumps({'missing': missing}))
+`;
+
+    const commandResult = await this.runPythonCommand(['-c', script], 5000);
+    if (commandResult.code !== 0 || commandResult.timedOut) {
+      console.warn('Python ML library check failed:', commandResult.stderr || 'unknown error');
+      return false;
+    }
+
+    try {
+      const payload = JSON.parse(commandResult.stdout) as { missing: string[] };
+      return Array.isArray(payload.missing) && payload.missing.length === 0;
+    } catch (error) {
+      console.warn('Failed to parse ML library check output:', (error as Error).message);
+      return false;
+    }
+  }
+
+  async processTrial(trialId: string, data: any): Promise<PythonExecutionResult> {
     console.log(`🐍 Processing trial ${trialId} with REAL Python libraries...`);
 
     try {
@@ -13,40 +144,37 @@ export const PythonProcessor = {
       if (!preview || !Array.isArray(preview) || preview.length === 0) {
         return {
           success: false,
-          error: "No data provided for analysis"
+          error: 'No data provided for analysis'
         };
       }
 
-      // Create Python script for real analysis
       const pythonScript = this.generatePythonAnalysisScript(preview, schema, recordCount);
-      
-      // Execute Python script
       const result = await this.executePythonScript(pythonScript);
-      
+
       if (result.success) {
         console.log(`✅ Python analysis completed for trial ${trialId}`);
         return {
           success: true,
           data: result.data,
           visualizations: result.visualizations,
-          libraries: ['pandas', 'numpy', 'scikit-learn', 'matplotlib', 'seaborn', 'plotly', 'polars', 'tensorflow']
+          libraries: DEFAULT_REQUIRED_LIBRARIES
         };
-      } else {
-        console.warn(`⚠️ Python analysis failed, falling back to JavaScript: ${result.error}`);
-        return this.fallbackAnalysis(preview, schema, recordCount);
       }
+
+      console.warn(`⚠️ Python analysis failed, falling back to JavaScript: ${result.error}`);
+      return this.fallbackAnalysis(preview, schema, recordCount);
     } catch (error) {
       console.error('Python processor error:', error);
-      return this.fallbackAnalysis(data.preview, data.schema, data.recordCount);
+      return this.fallbackAnalysis(data?.preview, data?.schema, data?.recordCount);
     }
-  },
+  }
 
-  generatePythonAnalysisScript(preview: any[], schema: any, recordCount: number): string {
+  private generatePythonAnalysisScript(preview: any[], schema: any, recordCount: number): string {
     const columns = Object.keys(schema || {});
-    const numericColumns = columns.filter(col => 
+    const numericColumns = columns.filter(col =>
       schema[col]?.type === 'number' || schema[col]?.type === 'integer'
     );
-    const stringColumns = columns.filter(col => 
+    const stringColumns = columns.filter(col =>
       schema[col]?.type === 'string' || schema[col]?.type === 'text'
     );
 
@@ -65,16 +193,13 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import polars as pl
 
-# Set style for better plots
 plt.style.use('seaborn-v0_8')
-sns.set_palette("husl")
+sns.set_palette('husl')
 
 try:
-    # Convert data to DataFrame
     data = ${JSON.stringify(preview)}
     df = pd.DataFrame(data)
-    
-    # Basic statistics
+
     stats_summary = {
         'total_records': len(df),
         'total_columns': len(df.columns),
@@ -83,11 +208,10 @@ try:
         'missing_values': df.isnull().sum().to_dict(),
         'data_types': df.dtypes.astype(str).to_dict()
     }
-    
-    # Statistical analysis for numeric columns
+
     numeric_stats = {}
-    if len(df.select_dtypes(include=[np.number]).columns) > 0:
-        numeric_df = df.select_dtypes(include=[np.number])
+    numeric_df = df.select_dtypes(include=[np.number])
+    if len(numeric_df.columns) > 0:
         numeric_stats = {
             'mean': numeric_df.mean().to_dict(),
             'median': numeric_df.median().to_dict(),
@@ -96,16 +220,12 @@ try:
             'max': numeric_df.max().to_dict(),
             'correlation_matrix': numeric_df.corr().to_dict()
         }
-    
-    # Data quality assessment
+
     quality_score = 100 - (df.isnull().sum().sum() / (len(df) * len(df.columns)) * 100)
-    
-    # Generate visualizations metadata
+
     visualizations = []
-    
-    # Histogram for numeric columns
     if len(numeric_df.columns) > 0:
-        for col in numeric_df.columns[:3]:  # Limit to first 3 numeric columns
+        for col in numeric_df.columns[:3]:
             visualizations.append({
                 'type': 'histogram',
                 'title': f'Distribution of {col}',
@@ -115,8 +235,7 @@ try:
                 },
                 'library': 'plotly'
             })
-    
-    # Correlation heatmap
+
     if len(numeric_df.columns) > 1:
         visualizations.append({
             'type': 'heatmap',
@@ -127,8 +246,7 @@ try:
             },
             'library': 'plotly'
         })
-    
-    # Box plots for numeric columns
+
     if len(numeric_df.columns) > 0:
         visualizations.append({
             'type': 'box',
@@ -139,28 +257,26 @@ try:
             },
             'library': 'plotly'
         })
-    
-    # Recommendations
+
     recommendations = []
     if quality_score < 80:
-        recommendations.append("Consider data cleaning due to missing values")
+        recommendations.append('Consider data cleaning due to missing values')
     if len(numeric_df.columns) > 0:
-        recommendations.append("Perform correlation analysis on numeric variables")
+        recommendations.append('Perform correlation analysis on numeric variables')
     if len(df.columns) > 10:
-        recommendations.append("Consider dimensionality reduction techniques")
-    
-    # Advanced analysis with Polars for performance
+        recommendations.append('Consider dimensionality reduction techniques')
+
     pl_df = pl.DataFrame(data)
     polars_stats = {
         'shape': pl_df.shape,
         'memory_usage': pl_df.estimated_size(),
         'null_counts': pl_df.null_count().to_dict()
     }
-    
+
     result = {
         'success': True,
         'data': {
-            'summary': f'Analyzed {recordCount} records with {len(df.columns)} columns using Python libraries',
+            'summary': f'Analyzed ${recordCount} records with {len(df.columns)} columns using Python libraries',
             'statisticalSummary': stats_summary,
             'numericAnalysis': numeric_stats,
             'dataQuality': {
@@ -170,79 +286,48 @@ try:
             },
             'recommendations': recommendations,
             'polarsStats': polars_stats,
-            'libraries_used': ['pandas', 'numpy', 'scikit-learn', 'matplotlib', 'seaborn', 'plotly', 'polars']
+            'libraries_used': ${JSON.stringify(DEFAULT_REQUIRED_LIBRARIES)}
         },
         'visualizations': visualizations
     }
-    
+
     print(json.dumps(result))
-    
+
 except Exception as e:
     error_result = {
         'success': False,
-        'error': str(e),
-        'traceback': str(e)
+        'error': str(e)
     }
     print(json.dumps(error_result))
     sys.exit(1)
 `;
-  },
+  }
 
-  async executePythonScript(script: string): Promise<any> {
-    return new Promise((resolve) => {
-      const pythonProcess = spawn('python', ['-c', script], {
-        stdio: ['pipe', 'pipe', 'pipe']
-      });
+  async executePythonScript(script: string, env: NodeJS.ProcessEnv = {}, timeoutMs = 15000): Promise<PythonExecutionResult> {
+    const result = await this.runPythonCommand(['-c', script], timeoutMs, env);
 
-      let stdout = '';
-      let stderr = '';
+    if (result.code !== 0 || result.timedOut) {
+      return {
+        success: false,
+        error: result.timedOut ? 'Python script timed out' : result.stderr || 'Python execution failed'
+      };
+    }
 
-      pythonProcess.stdout.on('data', (data) => {
-        stdout += data.toString();
-      });
+    try {
+      const parsed = JSON.parse(result.stdout);
+      return parsed as PythonExecutionResult;
+    } catch (error) {
+      return {
+        success: false,
+        error: `Failed to parse Python output: ${(error as Error).message}`
+      };
+    }
+  }
 
-      pythonProcess.stderr.on('data', (data) => {
-        stderr += data.toString();
-      });
-
-      pythonProcess.on('close', (code) => {
-        if (code === 0) {
-          try {
-            const result = JSON.parse(stdout);
-            resolve(result);
-          } catch (parseError) {
-            console.error('Failed to parse Python output:', parseError);
-            resolve({
-              success: false,
-              error: 'Failed to parse Python output',
-              stdout: stdout,
-              stderr: stderr
-            });
-          }
-        } else {
-          console.error('Python script failed:', stderr);
-          resolve({
-            success: false,
-            error: stderr || 'Python script execution failed',
-            code: code
-          });
-        }
-      });
-
-      pythonProcess.on('error', (error) => {
-        console.error('Failed to start Python process:', error);
-        resolve({
-          success: false,
-          error: `Failed to start Python: ${error.message}`
-        });
-      });
-    });
-  },
-
-  fallbackAnalysis(preview: any[], schema: any, recordCount: number): any {
+  private fallbackAnalysis(preview: any[] = [], schema: any = {}, recordCount = 0): PythonExecutionResult {
     console.log('🔄 Using JavaScript fallback analysis...');
-    
-    const columns = Object.keys(schema || {});
+
+    const columns = Object.keys(schema);
     const numericColumns = columns.filter(col =>
       schema[col]?.type === 'number' || schema[col]?.type === 'integer'
     );
@@ -257,13 +342,13 @@ except Exception as e:
         statisticalSummary: {
           totalRecords: recordCount,
           totalColumns: columns.length,
-          numericColumns: numericColumns,
-          stringColumns: stringColumns
+          numericColumns,
+          stringColumns
         },
         columnAnalysis: columns.map(col => ({
           name: col,
           type: schema[col]?.type || 'unknown',
-          sampleValues: preview.slice(0, 3).map(row => row[col])
+          sampleValues: preview.slice(0, 3).map(row => row?.[col])
         })),
         dataQuality: {
           score: 85,
@@ -287,4 +372,51 @@ except Exception as e:
       ]
     };
   }
-};
+
+  private runPythonCommand(args: string[], timeoutMs: number, env: NodeJS.ProcessEnv = {}): Promise<PythonCommandResult> {
+    return new Promise((resolve) => {
+      const pythonProcess = spawn(this.pythonPath, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, ...env }
+      });
+
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+
+      const timeout = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          pythonProcess.kill();
+          resolve({ code: -1, stdout, stderr: stderr || 'Process timeout', timedOut: true });
+        }
+      }, timeoutMs);
+
+      pythonProcess.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+
+      pythonProcess.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      pythonProcess.on('close', (code) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        resolve({ code: code ?? 0, stdout, stderr, timedOut: false });
+      });
+
+      pythonProcess.on('error', (error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        resolve({ code: -1, stdout, stderr: error.message, timedOut: false });
+      });
+    });
+  }
+}

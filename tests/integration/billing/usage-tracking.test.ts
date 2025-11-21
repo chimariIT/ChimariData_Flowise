@@ -7,7 +7,7 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { db } from '../../../server/db-flexible';
+import { getFlexibleDatabase } from '../../../server/db-flexible';
 import { users } from '../../../shared/schema';
 import { eq } from 'drizzle-orm';
 import { getBillingService } from '../../../server/services/billing/unified-billing-service';
@@ -20,8 +20,10 @@ const skipTests = !DATABASE_URL;
 describe.skipIf(skipTests)('Usage Tracking Integration', () => {
   let testUserId: string;
   let billingService: ReturnType<typeof getBillingService>;
+  let db: any;
 
   beforeAll(async () => {
+    db = await getFlexibleDatabase();
     billingService = getBillingService();
   });
 

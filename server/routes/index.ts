@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import crypto from 'crypto';
 import authRouter from './auth';
-import projectRouter from './project';
+import projectRouter, { createVisualizationHandler } from './project';
 import dataRouter from './data';
+import datasetsRouter from './datasets';
 import aiRouter from './ai';
 import exportRouter from './export';
 import paymentRouter from './payment';
@@ -18,6 +19,7 @@ import templateRouter from './template';
 import enhancedAnalysisRouter from './enhanced-analysis';
 import analysisExecutionRouter from './analysis-execution';
 import billingRouter from './billing';
+import anonymizationRouter from './anonymization';
 import pricingRouter from './pricing';
 import adminRouter from './admin';
 import adminSecuredRouter from './admin-secured';
@@ -29,20 +31,45 @@ import stripeWebhookTestRouter from './stripe-webhook-test';
 import consultationRouter from './consultation';
 import adminConsultationRouter from './admin-consultation';
 import adminConsultationPricingRouter from './admin-consultation-pricing';
+import adminServicePricingRouter from './admin-service-pricing';
+import adminBillingRouter from './admin-billing';
 import projectSessionRouter from './project-session';
 import customJourneyRouter from './custom-journey';
 import analyzeDataRouter from './analyze-data';
 import audienceFormattingRouter from './audience-formatting';
 import businessTemplateSynthesisRouter from './business-template-synthesis';
 import pmClarificationRouter from './pm-clarification';
+import projectManagerRouter from './project-manager';
+import dataVerificationRouter from './data-verification';
+import dataTransformationRouter from './data-transformation';
+import dataWorkflowRouter from './data-workflow';
+import analysisPlansRouter from './analysis-plans';
+import analysisPaymentRouter from './analysis-payment';
+import templatesRouter from './templates';
+import artifactsRouter from './artifacts';
 import { ensureAuthenticated } from './auth'; // Import authentication middleware
+import { requireOwnership } from '../middleware/rbac';
+import streamingSourcesRouter from './streaming-sources';
+import scrapingJobsRouter from './scraping-jobs';
+import liveSourcesRouter from './live-sources';
 
 const router = Router();
 
 router.use('/auth', authRouter);
 router.use('/system', systemRouter); // System health and monitoring endpoints
-router.use('/projects', projectRouter);
+router.use('/projects', ensureAuthenticated, analysisPlansRouter); // Analysis Plan Step routes - REQUIRES AUTH
+router.post(
+  '/create-visualization/:projectId',
+  ensureAuthenticated,
+  requireOwnership('project'),
+  createVisualizationHandler
+);
+router.use('/projects', dataVerificationRouter, projectRouter); // Data verification routes first (no dataset requirement), then project routes
+router.use('/', dataTransformationRouter); // Transformation endpoints (e.g., /transform-data/:projectId)
+router.use('/data-workflow', dataWorkflowRouter); // Resilient data workflow with interactive clarifications
 router.use('/data', dataRouter);
+router.use('/datasets', ensureAuthenticated, datasetsRouter);
+router.use('/anonymization', ensureAuthenticated, anonymizationRouter);
 router.use('/ai', aiRouter);
 router.use('/export', exportRouter);
 router.use('/payment', paymentRouter);
@@ -52,11 +79,13 @@ router.use('/user', ensureAuthenticated, userRoleRouter); // User role and permi
 router.use('/usage', usageRouter); // Usage tracking and monitoring
 router.use('/ai/payment', aiPaymentRouter); // AI payment and pricing management
 router.use('/conversation', conversationRouter); // Conversational goal refinement
-router.use('/workflow', workflowRouter); // Workflow transparency and audit trail
-router.use('/agents', agentsRouter); // Agent activities and intervention
+router.use('/workflow', ensureAuthenticated, workflowRouter); // Workflow transparency and audit trail - REQUIRES AUTH
+router.use('/agents', ensureAuthenticated, agentsRouter); // Agent activities and intervention - REQUIRES AUTH
 router.use('/template', templateRouter); // Dynamic template generation and management
+router.use('/templates', templatesRouter); // Database-backed template API (Task 2.1)
 router.use('/enhanced-analysis', enhancedAnalysisRouter); // Enhanced analysis with full MCP integration
 router.use('/analysis-execution', analysisExecutionRouter); // Real data analysis execution
+router.use('/', artifactsRouter); // Project artifact listing & downloads
 router.use('/billing', billingRouter); // Enhanced billing with capacity tracking
 router.use('/pricing', pricingRouter); // Pricing tiers and plans
 router.use('/analytics', analyticsRouter); // Tool analytics and system monitoring
@@ -64,16 +93,23 @@ router.use('/template-onboarding', templateOnboardingRouter); // Business templa
 router.use('/consultation', consultationRouter); // Consultation request and workflow management
 router.use('/admin/consultations', adminConsultationRouter); // Admin consultation management
 router.use('/admin/consultation-pricing', adminConsultationPricingRouter); // Admin consultation pricing configuration
+router.use('/admin/service-pricing', adminServicePricingRouter); // Admin service pricing configuration
+router.use('/admin/billing', adminBillingRouter); // Admin billing and pricing management (database-backed)
 router.use('/project-session', projectSessionRouter); // Secure server-side session state management
 router.use('/custom-journey', customJourneyRouter); // Custom "Build Your Own" journey capability selection
 router.use('/analyze-data', ensureAuthenticated, analyzeDataRouter); // Analysis with audience formatting
 router.use('/audience-formatting', ensureAuthenticated, audienceFormattingRouter); // Audience-specific formatting
 router.use('/business-template-synthesis', ensureAuthenticated, businessTemplateSynthesisRouter); // Business template synthesis
-router.use('/project-manager', ensureAuthenticated, pmClarificationRouter); // PM Agent goal clarification
+router.use('/project-manager', pmClarificationRouter); // PM Agent goal clarification (public endpoint for suggestions)
+router.use('/project-manager', ensureAuthenticated, projectManagerRouter); // Auth-required PM agent endpoints (recommendations, coordination)
 router.use('/admin', adminSecuredRouter); // Secured admin routes with RBAC
 router.use('/admin-legacy', adminRouter); // Legacy admin routes for compatibility
 router.use('/webhooks', stripeWebhooksRouter); // Stripe webhook handlers (must be before JSON parsing)
 router.use('/webhooks/stripe-test', stripeWebhookTestRouter); // Stripe webhook testing and diagnostics
+router.use('/analysis-payment', ensureAuthenticated, analysisPaymentRouter); // Pricing and payment for per-analysis flow
+router.use('/streaming-sources', ensureAuthenticated, streamingSourcesRouter);
+router.use('/scraping-jobs', ensureAuthenticated, scrapingJobsRouter);
+router.use('/live-sources', ensureAuthenticated, liveSourcesRouter);
 
 // Direct Stripe payment intent endpoint for testing
 router.post('/create-payment-intent', async (req, res) => {

@@ -91,10 +91,17 @@ export function AuthModal({ isOpen, onClose, onSuccess, defaultTab = "login" }: 
       if (response.ok) {
         const result = await response.json();
         
-        // Store the authentication token
+        // Store the authentication token (real JWT token from backend)
         if (result.token) {
           localStorage.setItem('auth_token', result.token);
-          console.log('Authentication token stored successfully');
+          console.log('✅ Authentication token (JWT) stored successfully');
+          
+          // CRITICAL: Force immediate auth state refresh to recognize user
+          // Clear any auth cache and trigger refresh
+          if (window.dispatchEvent) {
+            // Dispatch custom event to trigger auth refresh in useOptimizedAuth
+            window.dispatchEvent(new CustomEvent('auth-token-stored'));
+          }
         }
         
         // Show personalized welcome message
@@ -104,7 +111,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, defaultTab = "login" }: 
           description: "You've successfully logged in.",
         });
         
-        // Trigger authentication state refresh
+        // Trigger authentication state refresh immediately
         onSuccess();
         onClose();
         

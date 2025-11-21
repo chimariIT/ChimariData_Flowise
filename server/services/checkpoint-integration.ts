@@ -16,6 +16,29 @@ import { AdvancedAnalyzer } from '../advanced-analyzer';
 import { VisualizationAPIService } from '../visualization-api-service';
 import { nanoid } from 'nanoid';
 
+type ProcessedFileResultWithCheckpoints = Awaited<ReturnType<typeof FileProcessor.processFile>> & {
+    requiresCleaning?: boolean;
+    piiHandlingStrategy?: 'anonymize' | 'remove' | 'keep' | 'review';
+};
+
+type TransformationResultWithCheckpoints = Awaited<ReturnType<DataTransformer['transform']>> & {
+    requiresRedo?: boolean;
+};
+
+interface TrainingCheckpointResult {
+    model: string;
+    problemType: string;
+    features: any;
+    performance: {
+        accuracy: number;
+        precision: number;
+        recall: number;
+    };
+    requiresRetraining?: boolean;
+    retrainingReason?: string;
+    deploymentDecision?: string;
+}
+
 // ==========================================
 // CHECKPOINT DEFINITIONS
 // ==========================================
@@ -90,7 +113,17 @@ export class CheckpointWrapper {
 
             // Wait for user response
             const timeout = context.checkpointConfig?.timeout || 300000; // 5 minutes default
-            const response = await this.messageBroker.waitForCheckpointResponse(checkpointId, timeout);
+            const response = await this.messageBroker.waitForCheckpointResponse(checkpointId, timeout, {
+                projectId: context.projectId,
+                agentId: context.agentId,
+                agentName: context.agentId,
+                journeyId: context.journeyType,
+                step,
+                stepId: step,
+                options,
+                question,
+                artifacts,
+            });
 
             this.activeCheckpoints.delete(checkpointId);
             return response;
@@ -118,7 +151,9 @@ export class CheckpointWrapper {
         context: ComponentExecutionContext
     ): Promise<any> {
         // Step 1: Process file
-        const result = await FileProcessor.processFile(buffer, originalname, mimetype);
+        const result: ProcessedFileResultWithCheckpoints = {
+            ...(await FileProcessor.processFile(buffer, originalname, mimetype))
+        };
 
         // Checkpoint 1: Schema Review
         const schemaCheckpoint = await this.createCheckpoint(
@@ -134,7 +169,10 @@ export class CheckpointWrapper {
             [{
                 type: 'schema',
                 data: result.schema,
-                preview: result.preview
+                preview: result.preview,
+                summary: result.datasetSummary,
+                descriptiveStats: result.descriptiveStats,
+                relationships: result.relationships
             }]
         );
 
@@ -145,7 +183,6 @@ export class CheckpointWrapper {
             }
         }
 
-        // Checkpoint 2: Data Quality Review
         const qualityCheckpoint = await this.createCheckpoint(
             context,
             'quality_review',
@@ -158,7 +195,10 @@ export class CheckpointWrapper {
             ],
             [{
                 type: 'quality_metrics',
-                data: result.qualityMetrics
+                data: result.qualityMetrics,
+                datasetSummary: result.datasetSummary,
+                descriptiveStats: result.descriptiveStats,
+                relationships: result.relationships
             }]
         );
 
@@ -185,7 +225,15 @@ export class CheckpointWrapper {
                 }]
             );
 
-            result.piiHandlingStrategy = piiCheckpoint.feedback || 'anonymize';
+            const piiStrategyMap: Record<string, ProcessedFileResultWithCheckpoints['piiHandlingStrategy']> = {
+                'Anonymize automatically': 'anonymize',
+                'Remove PII columns': 'remove',
+                'Keep as-is (I have consent)': 'keep',
+                'Review each field individually': 'review'
+            };
+
+            const selectedStrategy = piiStrategyMap[piiCheckpoint.feedback || ''] || 'anonymize';
+            result.piiHandlingStrategy = selectedStrategy;
         }
 
         return result;
@@ -275,7 +323,9 @@ export class CheckpointWrapper {
         }
 
         // Execute transformation
-        const result = await transformer.transform(data, config);
+        const result: TransformationResultWithCheckpoints = {
+            ...(await transformer.transform(data, config))
+        };
 
         // Checkpoint 3: Review transformation results
         const reviewCheckpoint = await this.createCheckpoint(
@@ -353,7 +403,7 @@ export class CheckpointWrapper {
                                   featureCheckpoint.feedback || 'auto';
 
         // Step 1: Train model (this would integrate with actual ML training)
-        const trainingResult = {
+        const trainingResult: TrainingCheckpointResult = {
             model: 'trained_model_placeholder',
             problemType,
             features: config.featureSelection,
@@ -438,8 +488,7 @@ export class CheckpointWrapper {
         config.analysisType = analysisCheckpoint.feedback || 'comprehensive';
 
         // Execute analysis
-        const analyzer = new AdvancedAnalyzer();
-        const result = await analyzer.performStepByStepAnalysis(data, config);
+    const result = await AdvancedAnalyzer.performStepByStepAnalysis(data, config) as Record<string, any>;
 
         // Checkpoint 2: Results Interpretation
         const interpretationCheckpoint = await this.createCheckpoint(
@@ -488,18 +537,17 @@ export class CheckpointWrapper {
             }]
         );
 
-        const vizService = new VisualizationAPIService();
         const results = [];
 
         if (chartCheckpoint.feedback?.includes('Auto-generate')) {
             // Auto-generate charts
-            const recommendedCharts = vizService.getRecommendedCharts?.(data) || ['histogram', 'scatter', 'bar'];
+            const recommendedCharts = this.getRecommendedCharts(data);
 
             for (const chartType of recommendedCharts) {
-                const viz = await vizService.generateChart({
+                const viz = await VisualizationAPIService.createVisualization(data, {
+                    ...config,
                     type: chartType,
-                    data,
-                    config: {}
+                    autoGenerated: true
                 });
                 results.push(viz);
             }
@@ -553,6 +601,37 @@ export class CheckpointWrapper {
             }
         }
     }
+
+        private getRecommendedCharts(data: any[]): string[] {
+            if (!Array.isArray(data) || data.length === 0) {
+                return ['table'];
+            }
+
+            const sample = data[0] || {};
+            const numericColumns = Object.entries(sample)
+                .filter(([, value]) => typeof value === 'number')
+                .map(([key]) => key);
+            const categoricalColumns = Object.entries(sample)
+                .filter(([, value]) => typeof value === 'string')
+                .map(([key]) => key);
+
+            const recommendations = new Set<string>();
+
+            if (numericColumns.length > 0) {
+                recommendations.add('histogram');
+                recommendations.add('line');
+            }
+
+            if (numericColumns.length > 1) {
+                recommendations.add('scatter');
+            }
+
+            if (categoricalColumns.length > 0) {
+                recommendations.add('bar');
+            }
+
+            return recommendations.size > 0 ? Array.from(recommendations) : ['table'];
+        }
 }
 
 // ==========================================

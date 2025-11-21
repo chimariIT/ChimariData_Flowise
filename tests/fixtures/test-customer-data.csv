@@ -1,0 +1,21 @@
+customer_id,name,email,age,purchase_amount,last_purchase_date,segment
+1,John Doe,john@example.com,34,1250.50,2024-01-15,premium
+2,Jane Smith,jane@example.com,28,890.25,2024-01-10,standard
+3,Bob Johnson,bob@example.com,45,2100.00,2024-01-12,premium
+4,Alice Williams,alice@example.com,31,450.75,2024-01-08,basic
+5,Charlie Brown,charlie@example.com,52,1800.30,2024-01-14,premium
+6,Diana Prince,diana@example.com,29,680.00,2024-01-09,standard
+7,Evan Davis,evan@example.com,38,1420.50,2024-01-13,premium
+8,Fiona Green,fiona@example.com,26,320.25,2024-01-07,basic
+9,George Miller,george@example.com,41,1650.75,2024-01-11,premium
+10,Hannah Lee,hannah@example.com,33,920.00,2024-01-06,standard
+11,Ivan Rodriguez,ivan@example.com,47,2300.00,2024-01-16,premium
+12,Julia Martinez,julia@example.com,30,560.50,2024-01-05,standard
+13,Kevin Chen,kevin@example.com,36,1120.75,2024-01-14,premium
+14,Laura Wilson,laura@example.com,27,380.25,2024-01-04,basic
+15,Michael Taylor,michael@example.com,42,1890.00,2024-01-15,premium
+16,Nancy Anderson,nancy@example.com,35,710.50,2024-01-11,standard
+17,Oscar Thomas,oscar@example.com,39,1540.25,2024-01-13,premium
+18,Paula Jackson,paula@example.com,25,290.00,2024-01-03,basic
+19,Quincy White,quincy@example.com,44,1720.50,2024-01-12,premium
+20,Rachel Harris,rachel@example.com,32,840.75,2024-01-10,standard

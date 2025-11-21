@@ -177,14 +177,24 @@ export class AIAccessControlService {
 
         // Extract user information
         const userId = aiReq.user?.id;
-        const userRole = aiReq.user?.role;
-        const subscriptionTier = aiReq.user?.subscriptionTier;
+        // Support both 'role' (from AIAccessRequest) and 'userRole' (from normalizeExpressUser)
+        const userRole = (aiReq.user as any)?.role || (aiReq.user as any)?.userRole || 'non-tech';
+        const subscriptionTier = (aiReq.user as any)?.subscriptionTier || 'trial'; // Default to trial
 
-        if (!userId || !userRole || !subscriptionTier) {
+        if (!userId) {
+          console.error('❌ [AI-ACCESS] Missing userId in request:', { user: aiReq.user });
           return res.status(401).json({
             error: 'Authentication required',
             code: 'AUTH_REQUIRED'
           });
+        }
+
+        // Ensure user has permissions (will auto-create if missing)
+        try {
+          await RolePermissionService.getUserPermissions(userId);
+        } catch (permError) {
+          console.error('❌ [AI-ACCESS] Failed to get/create user permissions:', permError);
+          // Continue anyway - hasPermission will handle missing permissions
         }
 
         // Validate access to this feature
@@ -323,12 +333,44 @@ export class AIAccessControlService {
 
     // Check required permissions
     for (const permission of feature.requiredPermissions) {
-      const hasPermission = await RolePermissionService.hasPermission(userId, permission as any);
-      if (!hasPermission) {
+      try {
+        console.log(`🔍 [AI-ACCESS] Checking permission ${permission} for user ${userId}`);
+        const hasPermission = await RolePermissionService.hasPermission(userId, permission as any);
+        console.log(`🔍 [AI-ACCESS] Permission ${permission} result for user ${userId}: ${hasPermission}`);
+        
+        if (!hasPermission) {
+          // For canUseAI or basic_analysis, always allow as fallback (basic feature available to all users)
+          if (permission === 'canUseAI' || feature.featureId === 'basic_analysis') {
+            console.log(`✅ [AI-ACCESS] ${permission} check returned false for basic_analysis, but allowing as fallback for user ${userId}`);
+            continue;
+          }
+
+          console.error(`❌ [AI-ACCESS] Permission check failed: userId=${userId}, permission=${permission}, hasPermission=${hasPermission}`);
+          return {
+            allowed: false,
+            reason: `This feature requires ${permission} permission`,
+            code: 'INSUFFICIENT_PERMISSIONS',
+            upgradeRecommendation: {
+              missingPermission: permission,
+              featureName: feature.name
+            }
+          };
+        }
+        console.log(`✅ [AI-ACCESS] Permission ${permission} granted for user ${userId}`);
+      } catch (permError) {
+        console.error(`❌ [AI-ACCESS] Permission check error for ${permission}:`, permError);
+        if (permError instanceof Error) {
+          console.error(`❌ [AI-ACCESS] Error stack:`, permError.stack);
+        }
+        // For canUseAI, default to allowing access if check fails (backward compatibility)
+        if (permission === 'canUseAI') {
+          console.log(`✅ [AI-ACCESS] Permission check error for canUseAI, allowing access as fallback for user ${userId}`);
+          continue;
+        }
         return {
           allowed: false,
-          reason: `Missing required permission: ${permission}`,
-          code: 'INSUFFICIENT_PERMISSIONS',
+          reason: `Unable to verify permissions`,
+          code: 'PERMISSION_CHECK_FAILED',
           upgradeRecommendation: {
             missingPermission: permission,
             featureName: feature.name

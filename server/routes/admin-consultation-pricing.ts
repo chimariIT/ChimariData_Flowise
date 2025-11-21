@@ -16,6 +16,8 @@ import { ensureAuthenticated } from './auth';
 
 const router = Router();
 
+type ConsultationPricing = typeof consultationPricing.$inferSelect;
+
 /**
  * Middleware to ensure user is admin
  */
@@ -58,14 +60,14 @@ router.get('/', ensureAuthenticated, ensureAdmin, async (req, res) => {
   try {
     const { includeInactive } = req.query;
 
-    let pricingTiers = await db
+    let pricingTiers: ConsultationPricing[] = await db
       .select()
       .from(consultationPricing)
       .orderBy(consultationPricing.sortOrder, desc(consultationPricing.createdAt));
 
     // Filter out inactive tiers unless requested
     if (includeInactive !== 'true') {
-      pricingTiers = pricingTiers.filter(tier => tier.isActive);
+      pricingTiers = pricingTiers.filter((tier: ConsultationPricing) => tier.isActive);
     }
 
     res.json({

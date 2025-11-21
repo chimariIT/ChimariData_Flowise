@@ -59,14 +59,14 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
         throw error;
       }
     },
-    retry: false, // Don't retry on authentication failures
+    retry: false // Don't retry on authentication failures
   });
 
   const { data: pricingData } = useQuery({
     queryKey: ["/api/pricing"],
     queryFn: async () => {
       return await apiClient.getPricing();
-    },
+    }
   });
 
   const projects = projectsData?.projects || [];
@@ -1160,9 +1160,11 @@ export default function HomePage({ user, onLogout }: HomePageProps) {
         onSuccess={() => {
           toast({
             title: "Welcome!",
-            description: "Account setup complete. You can now choose a subscription plan.",
+            description: "Account setup complete. Redirecting you to your dashboard...",
           });
-          window.location.reload(); // Refresh to update auth state
+          setShowAuthModal(false);
+          refetch();
+          setLocation('/dashboard');
         }}
   defaultTab={authModalTab}
       />

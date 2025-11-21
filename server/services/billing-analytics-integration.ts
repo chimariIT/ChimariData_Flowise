@@ -232,7 +232,7 @@ export class BillingAnalyticsIntegrationService {
    * Sync analytics costs with billing system
    * Should be called periodically (e.g., daily) to ensure analytics and billing are in sync
    */
-  async syncAnalyticsWithBilling(userId: number): Promise<{
+  async syncAnalyticsWithBilling(userId: string): Promise<{
     success: boolean;
     totalCost: number;
     itemsSynced: number;
@@ -240,7 +240,7 @@ export class BillingAnalyticsIntegrationService {
   }> {
     try {
       // Get user cost breakdown from analytics
-      const costBreakdown = await toolAnalyticsService.getUserCostBreakdown(userId);
+  const costBreakdown = await toolAnalyticsService.getUserCostBreakdown(userId);
 
       const errors: string[] = [];
       let itemsSynced = 0;
@@ -259,7 +259,7 @@ export class BillingAnalyticsIntegrationService {
         const billingComplexity: FeatureComplexity = 'medium';
 
         const result = await this.billingService.trackFeatureUsage(
-          userId.toString(),
+          userId,
           mapping.featureId,
           billingComplexity,
           toolData.count
@@ -292,7 +292,7 @@ export class BillingAnalyticsIntegrationService {
   /**
    * Get comprehensive usage and billing report for a user
    */
-  async getUserUsageAndBillingReport(userId: number, period?: { start: Date; end: Date }): Promise<{
+  async getUserUsageAndBillingReport(userId: string, period?: { start: Date; end: Date }): Promise<{
     analytics: {
       totalCost: number;
       executionCount: number;
@@ -315,7 +315,7 @@ export class BillingAnalyticsIntegrationService {
       );
 
       // Get billing usage metrics
-      const billingData = await this.billingService.getUsageMetrics(userId.toString(), period);
+      const billingData = await this.billingService.getUsageMetrics(userId, period);
 
       const discrepancies: string[] = [];
 

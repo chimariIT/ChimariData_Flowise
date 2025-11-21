@@ -391,11 +391,12 @@ export class AIRouterService {
    * Get appropriate error response for user role
    */
   private static getErrorResponse(context: AIRequestContext, error: any): string {
-    const roleResponses = {
+    const roleResponses: Record<UserRole, string> = {
       'non-tech': 'I apologize, but I encountered an issue processing your request. Please try again or contact support for assistance.',
       'business': 'There was a technical issue with your analysis request. Our team has been notified and you can retry or contact support.',
       'technical': `Processing error occurred: ${error.message || 'Unknown error'}. Please check your request parameters and try again.`,
-      'consultation': 'I encountered an issue while processing your consultation request. Please provide additional context or contact our expert team directly.'
+      'consultation': 'I encountered an issue while processing your consultation request. Please provide additional context or contact our expert team directly.',
+      'custom': 'A bespoke workflow hit a snag. Review the provided inputs or reach out to the Chimari support team for tailored assistance.'
     };
 
     return roleResponses[context.userRole] || roleResponses['non-tech'];

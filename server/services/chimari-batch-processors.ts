@@ -188,11 +188,18 @@ export class ChimariBatchProcessors {
           
           if (!analysis) {
             // Generate AI analysis
-            const response = await RoleBasedAIService.generateResponse(
-              analysisPrompt + JSON.stringify(item),
-              userRole as any,
-              subscriptionTier as any,
-              'analysis'
+            const response = await RoleBasedAIService.processAIRequest(
+              ((options as any)?.userId) || 'system',
+              {
+                prompt: `${analysisPrompt}${JSON.stringify(item)}`,
+                category: 'analysis',
+                context: {
+                  item,
+                  userRole,
+                  subscriptionTier,
+                  batchIndex
+                }
+              }
             );
             
             analysis = response.content;

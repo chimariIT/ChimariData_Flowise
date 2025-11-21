@@ -74,11 +74,11 @@ export class CSVToJSONConverter implements ToolHandler {
     
     try {
       const { filePath, options = {} } = input;
-      const { delimiter = ',', headers = true, encoding = 'utf8' } = options;
+  const { delimiter = ',', headers = true, encoding = 'utf8' } = options;
 
       // Read CSV file
-      const csvContent = await fs.readFile(filePath, encoding);
-      const lines = csvContent.split('\n').filter(line => line.trim());
+  const csvContent = await fs.readFile(filePath, { encoding: encoding as BufferEncoding });
+  const lines = csvContent.split('\n').filter((line: string) => line.trim());
       
       if (lines.length === 0) {
         throw new Error('CSV file is empty');

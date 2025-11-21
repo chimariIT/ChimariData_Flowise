@@ -9,6 +9,7 @@ import { QuestionCollection } from "./QuestionCollection";
 import { MultiSourceUpload } from "./MultiSourceUpload";
 import { SecurityScan } from "./SecurityScan";
 import { SchemaAnalysisLazy } from "./LazyComponents";
+import type { SchemaData } from "./SchemaAnalysis";
 import { 
   ArrowLeft, 
   CheckCircle, 
@@ -42,7 +43,7 @@ interface WorkflowState {
     analysisType?: string;
     uploadInfo?: any;
     scanResult?: any;
-    schemaData?: any;
+  schemaData?: SchemaData;
   };
 }
 
@@ -185,7 +186,7 @@ export function ServiceWorkflow({
           <SchemaAnalysisLazy
             uploadId={data.uploadInfo?.id ?? 0}
             filename={data.uploadInfo?.filename || 'uploaded_file.csv'}
-            onComplete={(schemaData) => {
+            onComplete={(schemaData: SchemaData) => {
               updateWorkflowStep('schema', { schemaData });
             }}
             isAnalyzing={true}

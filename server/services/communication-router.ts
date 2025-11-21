@@ -823,12 +823,18 @@ class IntentClassifier {
     estimatedComplexity: 'low' | 'medium' | 'high';
   }> {
     const lowerText = text.toLowerCase();
-    let bestMatch = {
+    let bestMatch: {
+      category: string;
+      confidence: number;
+      requiredCapabilities: string[];
+      priority: number;
+      estimatedComplexity: 'low' | 'medium' | 'high';
+    } = {
       category: 'general_inquiry',
       confidence: 0.3,
       requiredCapabilities: ['customer_service'],
       priority: 5,
-      estimatedComplexity: 'medium' as const
+      estimatedComplexity: 'medium'
     };
 
     for (const [category, pattern] of Object.entries(this.intentPatterns)) {

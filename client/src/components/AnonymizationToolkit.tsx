@@ -10,6 +10,8 @@ import { Switch } from '@/components/ui/switch';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Separator } from '@/components/ui/separator';
 import { Progress } from '@/components/ui/progress';
+import { apiClient } from '@/lib/api';
+import { useToast } from '@/hooks/use-toast';
 import { 
   Shield, 
   Eye, 
@@ -60,18 +62,16 @@ interface AnonymizationToolkitProps {
   isOpen: boolean;
   onClose: () => void;
   projectId: string;
-  data: any[];
   piiColumns: string[];
-  schema: any;
+  onApplied?: () => void;
 }
 
 export default function AnonymizationToolkit({ 
   isOpen, 
   onClose, 
   projectId, 
-  data, 
-  piiColumns, 
-  schema 
+  piiColumns,
+  onApplied
 }: AnonymizationToolkitProps) {
   const [techniques, setTechniques] = useState<AnonymizationTechnique[]>([]);
   const [columnMappings, setColumnMappings] = useState<Record<string, AnonymizationOptions>>({});
@@ -83,6 +83,8 @@ export default function AnonymizationToolkit({
   const [generalizationLevel, setGeneralizationLevel] = useState(1);
   const [preserveFormat, setPreserveFormat] = useState(true);
   const [preserveLength, setPreserveLength] = useState(true);
+  const [recordEstimate, setRecordEstimate] = useState(0);
+  const { toast } = useToast();
 
   useEffect(() => {
     if (isOpen) {
@@ -93,11 +95,15 @@ export default function AnonymizationToolkit({
 
   const loadTechniques = async () => {
     try {
-      const response = await fetch('/api/anonymization/techniques');
-      const data = await response.json();
-      setTechniques(data.techniques);
+      const data = await apiClient.get('/api/anonymization/techniques');
+      setTechniques(Array.isArray(data.techniques) ? data.techniques : []);
     } catch (error) {
       console.error('Error loading techniques:', error);
+      toast({
+        title: 'Unable to load anonymization techniques',
+        description: error instanceof Error ? error.message : 'Please try again later',
+        variant: 'destructive'
+      });
     }
   };
 
@@ -148,23 +154,25 @@ export default function AnonymizationToolkit({
 
     setIsProcessing(true);
     try {
-      const response = await fetch('/api/anonymization/preview', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          projectId,
-          columnMappings,
-          sampleSize: 5
-        })
+      const result = await apiClient.post('/api/anonymization/preview', {
+        projectId,
+        columnMappings,
+        sampleSize: 5
       });
-
-      const result = await response.json();
       setPreview(result);
+      if (typeof result?.totalRecords === 'number') {
+        setRecordEstimate(result.totalRecords);
+      } else if (Array.isArray(result?.preview)) {
+        setRecordEstimate(result.preview.length);
+      }
       setShowPreview(true);
     } catch (error) {
       console.error('Error generating preview:', error);
+      toast({
+        title: 'Preview failed',
+        description: error instanceof Error ? error.message : 'Unable to generate anonymization preview',
+        variant: 'destructive'
+      });
     } finally {
       setIsProcessing(false);
     }
@@ -175,26 +183,29 @@ export default function AnonymizationToolkit({
 
     setIsProcessing(true);
     try {
-      const response = await fetch('/api/anonymization/apply', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          projectId,
-          columnMappings
-        })
+      const result = await apiClient.post('/api/anonymization/apply', {
+        projectId,
+        columnMappings
       });
 
-      const result = await response.json();
-      if (result.success) {
-        // Show success message and close
+      if (result?.success) {
+        toast({
+          title: 'Anonymization applied',
+          description: 'Sensitive columns have been anonymized successfully.'
+        });
+        onApplied?.();
         onClose();
-        // Trigger data refresh in parent component
-        window.location.reload();
+        return;
       }
+
+      throw new Error(result?.error || 'Failed to apply anonymization');
     } catch (error) {
       console.error('Error applying anonymization:', error);
+      toast({
+        title: 'Anonymization failed',
+        description: error instanceof Error ? error.message : 'Unable to apply anonymization',
+        variant: 'destructive'
+      });
     } finally {
       setIsProcessing(false);
     }
@@ -245,7 +256,7 @@ export default function AnonymizationToolkit({
               <Alert>
                 <AlertTriangle className="h-4 w-4" />
                 <AlertDescription>
-                  Configure anonymization techniques for each PII column. Changes will be applied to all {data.length} records.
+                  Configure anonymization techniques for each PII column. Changes will be applied to all records in this project.
                 </AlertDescription>
               </Alert>
 
@@ -262,7 +273,7 @@ export default function AnonymizationToolkit({
                       <div key={column} className="border rounded-lg p-4">
                         <div className="flex items-center justify-between mb-3">
                           <h4 className="font-medium">{column}</h4>
-                          <Badge variant="outline">{schema[column]?.type || 'text'}</Badge>
+                          <Badge variant="outline">text</Badge>
                         </div>
                         
                         <div className="space-y-3">
@@ -412,7 +423,7 @@ export default function AnonymizationToolkit({
                           <div className="text-sm text-gray-600">Different Techniques</div>
                         </div>
                         <div className="text-center">
-                          <div className="text-2xl font-bold text-orange-600">{data.length}</div>
+                          <div className="text-2xl font-bold text-orange-600">{recordEstimate || '—'}</div>
                           <div className="text-sm text-gray-600">Total Records</div>
                         </div>
                       </div>
@@ -436,13 +447,13 @@ export default function AnonymizationToolkit({
                           </thead>
                           <tbody>
                             {preview.preview.map((row, rowIndex) => (
-                              Object.entries(row).map(([column, data]: [string, any]) => (
+                              Object.entries(row).map(([column, cell]: [string, any]) => (
                                 <tr key={`${rowIndex}-${column}`} className={rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                                   <td className="border border-gray-300 px-4 py-2 font-medium">{column}</td>
-                                  <td className="border border-gray-300 px-4 py-2">{data.original}</td>
-                                  <td className="border border-gray-300 px-4 py-2 font-mono">{data.anonymized}</td>
+                                  <td className="border border-gray-300 px-4 py-2">{cell.original}</td>
+                                  <td className="border border-gray-300 px-4 py-2 font-mono">{cell.anonymized}</td>
                                   <td className="border border-gray-300 px-4 py-2">
-                                    <Badge variant="outline">{data.technique}</Badge>
+                                    <Badge variant="outline">{cell.technique}</Badge>
                                   </td>
                                 </tr>
                               ))
@@ -482,7 +493,7 @@ export default function AnonymizationToolkit({
                       <div className="grid grid-cols-2 gap-4">
                         <div>
                           <Label>Total Records to Process</Label>
-                          <div className="text-2xl font-bold">{data.length}</div>
+                          <div className="text-2xl font-bold">{recordEstimate || '—'}</div>
                         </div>
                         <div>
                           <Label>Columns to Anonymize</Label>
@@ -516,7 +527,7 @@ export default function AnonymizationToolkit({
                       <div className="flex items-center space-x-4">
                         <Button 
                           onClick={applyAnonymization} 
-                          disabled={isProcessing}
+                          disabled={isProcessing || !projectId}
                           className="bg-red-600 hover:bg-red-700"
                         >
                           {isProcessing ? 'Processing...' : 'Apply Anonymization'}

@@ -1,0 +1,17 @@
+{
+  "projectId": "dGI4vVYYt5_4gLtJDsSu8",
+  "timestamp": "2025-11-18T21:18:56.123Z",
+  "results": [
+    {
+      "id": 1,
+      "title": "Analysis Completed: undefined",
+      "description": "Successfully analyzed dataset.  Additional insights may require more specific analysis types.",
+      "impact": "Low",
+      "confidence": 50,
+      "category": "Summary"
+    }
+  ],
+  "metadata": {
+    "engine": "python-spark-hybrid"
+  }
+}

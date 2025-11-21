@@ -1,13 +1,29 @@
-import { Router } from 'express';
-import { authenticateAdmin } from '../middleware/auth';
-import { db } from '../db-flexible';
+import { Router, type Request, type Response, type NextFunction } from 'express';
+import { ensureAuthenticated } from './auth';
+import { getFlexibleDatabaseIfAvailable } from '../db-flexible';
 import { users, projects } from '../../shared/schema';
 import { PerformanceMonitor } from '../utils/performance-monitor';
 
 const router = Router();
 
+const authenticateAdmin = async (req: Request, res: Response, next: NextFunction) => {
+  await ensureAuthenticated(req, res, async () => {
+    const role = (req.user as any)?.userRole || (req.user as any)?.role;
+    if (role !== 'admin') {
+      res.status(403).json({ error: 'Admin access required' });
+      return;
+    }
+    next();
+  });
+};
+
 // Get system status
-router.get('/system-status', authenticateAdmin, async (req, res) => {
+router.get('/system-status', ensureAuthenticated, async (req, res) => {
+  // Check for admin role
+  const userRole = (req.user as any)?.userRole || (req.user as any)?.role;
+  if (userRole !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
   try {
     const performanceMonitor = PerformanceMonitor.getInstance();
     const performanceStats = performanceMonitor.getAllStats();
@@ -59,7 +75,7 @@ router.get('/system-status', authenticateAdmin, async (req, res) => {
     };
 
     res.json(systemStatus);
-  } catch (error) {
+  } catch (error: any) {
     console.error('Failed to get system status:', error);
     res.status(500).json({ error: 'Failed to get system status' });
   }
@@ -69,7 +85,16 @@ router.get('/system-status', authenticateAdmin, async (req, res) => {
 async function checkDatabaseStatus() {
   try {
     const start = Date.now();
-    await db.select().from(users).limit(1);
+    const database = await getFlexibleDatabaseIfAvailable();
+    if (!database) {
+      return {
+        status: 'down',
+        lastCheck: new Date().toISOString(),
+        uptime: '0%'
+      };
+    }
+
+    await database.select().from(users).limit(1);
     const responseTime = Date.now() - start;
     
     return {
@@ -139,7 +164,7 @@ router.get('/agent-activity', authenticateAdmin, async (req, res) => {
   try {
     const activity = await getRealTimeAgentActivity();
     res.json(activity);
-  } catch (error) {
+  } catch (error: any) {
     console.error('Failed to get agent activity:', error);
     res.status(500).json({ error: 'Failed to get agent activity' });
   }
@@ -186,7 +211,7 @@ router.get('/health', async (req, res) => {
     };
 
     res.json(health);
-  } catch (error) {
+  } catch (error: any) {
     res.status(500).json({
       status: 'unhealthy',
       timestamp: new Date().toISOString(),

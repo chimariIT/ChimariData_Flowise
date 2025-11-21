@@ -1,102 +1,24 @@
 # Copilot Instructions for ChimariData Platform
-
-## Project Overview
-- **ChimariData** is a multi-agent, AI-driven data science platform for non-tech, business, and technical users.
-- Core architecture: React frontend (`client/`), Express/TypeScript backend (`server/`), PostgreSQL (Drizzle ORM), Apache Spark for big data, and shared Zod schemas (`shared/`).
-- Three main agents: Analytics Project Manager, Data Scientist, and Business Agent. See `server/services/` for agent logic and `shared/schema.ts` for shared types.
-
-## Key Workflows
-- **Development**: Use `npm run dev` (dev server), `npm run build` (production), `npm run start` (prod server).
-- **Database**: Edit schemas in `shared/schema.ts` (Zod), then run `npm run db:push` to sync with PostgreSQL. Config in `drizzle.config.ts`.
-- **Testing**: Playwright for E2E (`npm run test`, `npm run test:user-journeys`), Vitest for unit tests (`npm run test:unit`). User journey tests are critical for regression.
-- **AI Services**: All AI routing and prompt templating is in `server/services/role-based-ai.ts`. Multi-provider support (Gemini, OpenAI, Anthropic).
-- **Big Data**: Heavy processing is auto-delegated to Spark via `server/services/spark-processor.ts`.
-- **Real-time**: WebSocket coordination in `server/realtime.ts`.
-
-## Authentication & Security
-- **Authentication Types**: Two methods - Email/password authentication and OAuth providers (Google primary, Microsoft/Apple ready).
-- **Email Services**: Password reset and email verification managed through SendGrid integration.
-- **OAuth Providers**: Google (primary), Microsoft/Apple ready. Config in `server/oauth-config.ts` and `server/oauth-providers.ts`.
-- **Session Management**: Passport.js with PostgreSQL session store (`server/oauth-config.ts`).
-- **Security Patterns**: JWT tokens, CSRF protection, secure cookies. PII detection in `server/unified-pii-processor.ts`.
-- **User Flow**: Registration → email verification → role-based access → protected routes.
-
-## User-Projects-Data Relationships
-- **Core Schema**: Users (1) → Projects (n) → Datasets (n), with many-to-many project-dataset relationships in `shared/schema.ts`.
-- **User Types**: System supports both subscription users (with tier-based quotas and discounts) and non-subscription users (pay-per-use model).
-- **Data Flow**: Upload → PII scan → schema detection → transformation → analysis → artifacts.
-- **Project Types**: Journey-based (non-tech, business, technical, consultation) with role-specific features.
-- **Artifact Tracking**: Versioned outputs (reports, models, charts) linked to projects and source datasets.
-
-## User Journey Artifacts & Deliverables
-- **Non-Tech Journey**: AI-guided analysis producing executive summaries, plain-language insights, visual dashboards, and simplified PDF reports. Focus on actionable business recommendations without technical jargon.
-- **Business Journey**: Professional business intelligence reports, industry benchmarks, regulatory compliance insights, ROI analysis, presentation-ready charts, and strategic recommendations. Templates tailored to business domains.
-- **Technical Journey**: Code generation (Python/R), statistical test results, ML model artifacts, technical documentation, data pipeline specifications, and reproducible analysis scripts. Full access to raw outputs and methodologies.
-- **Consultation Journey**: Expert-guided analysis with personalized consultation reports, custom methodology design, peer review insights, and strategic advisory documents. Highest level of customization and expert involvement.
-
-## Dashboards & Project Overview
-- **User Dashboard**: `client/src/pages/dashboard.tsx` - project cards, quick actions, recent activity.
-- **Project Page**: `client/src/pages/project-page.tsx` - tabs for data, analysis, visualizations, artifacts.
-- **Project Management**: Create, share, archive projects. Real-time collaboration via WebSocket.
-- **Navigation**: Role-based UI with contextual features and permissions.
-
-## Pricing & Billing System
-- **Billing Service**: `server/services/enhanced-billing-service.ts` - capacity tracking, subscription management.
-- **User Categories**: System handles both subscription users (with quotas/discounts) and non-subscription users (pay-per-use pricing).
-- **Subscription Tiers**: Trial, Starter, Professional, Enterprise with usage quotas in `shared/subscription-tiers.ts`.
-- **Payment Flow**: Stripe integration in `client/src/pages/checkout.tsx` and `server/routes/billing.ts`.
-- **Usage Tracking**: Real-time monitoring of data volume, AI queries, analysis components, visualizations.
-- **Cost Estimation**: Dynamic pricing based on journey type, data size, features in `server/services/pricing.ts`.
-- **Subscription-Aware Pricing**: User journeys check subscription eligibility and current usage against quotas. Remaining quota used first (free), then overage charges apply. Dynamic pricing adjusts based on subscription tier discounts and available capacity in `server/services/enhanced-billing-service.ts`.
-
-## AI Agents & MCP Communication
-- **Project Manager Agent**: `server/services/project-manager-agent.ts` - orchestration, dependency management.
-- **Data Scientist Agent**: `server/services/technical-ai-agent.ts` - ML pipeline, statistical analysis, code generation.
-- **Business Agent**: `server/services/business-agent.ts` - industry knowledge, regulatory compliance, templates.
-- **MCP Server**: `server/services/mcpai.ts` and `server/enhanced-mcp-service.ts` - unified AI access, tool orchestration.
-- **Agent Coordination**: Shared state via database, real-time sync via WebSocket, decision audit trails.
-- **Tools & Resources**: Data processing, visualization, analysis tools with role-based permissions.
-- **Step-by-Step Workflow**: Agents present artifacts at each step requiring user review and feedback before proceeding. Users must approve/modify outputs like schema definitions, analysis plans, visualizations, and insights. Interactive workflow managed through `server/realtime.ts` with UI feedback components in project pages.
-
-## Statistical Analysis Components
-- **Advanced Analytics**: ANOVA, ANCOVA, MANOVA, MANCOVA, regression, time series in `server/advanced-analyzer.ts`.
-- **ML Pipeline**: Classification, clustering, feature importance in `server/ml-service.ts` and `python/ml-analysis.py`.
-- **Statistical UI**: `client/src/components/advanced-analysis-modal.tsx` - guided analysis configuration.
-- **Python Integration**: Statistical computing via `python_scripts/data_analyzer.py` with JSON I/O.
-- **Analysis Types**: Descriptive, correlation, regression, hypothesis testing with parameter configuration.
-
-## Project-Specific Patterns
-- **Service-Oriented**: All backend logic is in `server/services/` (AI, data, business, orchestration, pricing, permissions).
-- **Agent Communication**: Agents share state via DB and `shared/schema.ts`. Real-time sync via WebSocket.
-- **Role-Based Access**: Permissions in `server/services/role-permission.ts`. Four user roles: non-tech, business, technical, consultation.
-- **Artifact Management**: Artifacts (reports, models, charts) are versioned and tracked in `shared/schema.ts`.
-- **Data Ingestion**: File upload, PII detection, and schema profiling in `server/file-processor.ts` and `server/unified-pii-processor.ts`.
-- **Visualization Engine**: 8 chart types with interactive configuration in `server/visualization-api-service.ts`.
-
-## Conventions & Integration
-- **Frontend**: Vite + React 18 + Tailwind. Aliases: `@`, `@shared`, `@assets` (see `vite.config.ts`).
-- **Backend**: Express, TypeScript, Drizzle ORM. All DB schema/types in `shared/schema.ts`.
-- **Environment**: Copy `.env.example` to `.env` and fill required vars (DB, AI keys, OAuth, Stripe, etc).
-- **Testing**: E2E config in `playwright.config.ts`. Run user journey tests before major changes.
-- **Adding Agents**: Define interface in `server/types.ts`, implement in `server/services/`, register in `mcpai.ts`, set permissions, update orchestration.
-- **Extending Analysis**: Add statistical methods in `server/advanced-analyzer.ts`, update UI in analysis modals.
-
-## Critical Notes
-- Always run `npm run db:push` after editing `shared/schema.ts`.
-- User journey tests (`npm run test:user-journeys`) are required for major changes.
-- All AI/ML/analytics flows are agent-driven and coordinated via shared state and WebSocket.
-- Artifacts and datasets are reusable and versioned for traceability.
-- Billing calculations must consider subscription quotas and usage tracking.
-
-## References
-- `README.md` – Quick start, features, and deployment
-- `CLAUDE.md` – Detailed agentic architecture, workflows, and service map
-- `shared/schema.ts` – Core DB schema and types
-- `server/services/` – All backend logic and agent implementations
-- `server/realtime.ts` – Real-time agent coordination
-- `drizzle.config.ts` – DB config
-- `.env.example` – Required environment variables
-
----
-
-For unclear or missing patterns, consult `CLAUDE.md` and `README.md` for architecture and workflow details. Ask for clarification if a workflow or integration is ambiguous.
+- **Mission**: Deliver multi-agent analytics journeys; every agent output pauses for user approval before advancing the workflow.
+- **Primary references**: `CLAUDE.md` covers architecture and workflows; `README.md` and `docs/` outline setup; keep `.env` in sync with `.env.example` before running agents.
+- **Runtime shape**: `client/` React 18 + TypeScript UI, `server/` Express + TypeScript services, `shared/` Zod + Drizzle schemas, `python_scripts/` analytics routines invoked through the Python bridge.
+- **Dev startup**: `npm run dev` launches Vite + Express; fallback to `npm run dev:server-only` or `npm run dev:client` when isolating layers; production build via `npm run build` then `npm run start`.
+- **Type & lint gates**: `npm run check` (all TS) and `npm run check:client`; add schema fields in `shared/schema.ts` then run `npm run db:push` to sync Drizzle migrations.
+- **Data contracts**: `shared/schema.ts` + `shared/subscription-tiers.ts` drive API payloads; keep Zod schemas and Drizzle table definitions aligned with agent expectations before exposing endpoints.
+- **Critical tests**: Always execute `npm run test:user-journeys` before merging; supplement with `npm run test:backend` (Vitest), `npm run test:unit`, `npm run test:e2e-tools`, and targeted suites like `npm run test:auth` or `npm run test:dashboard` when touching those flows.
+- **Agent locations**: Project Manager, Data Scientist, Business, Data Engineer, Template Research, and Support agents live in `server/services/*-agent.ts`; PM helpers reside in `server/services/project-manager/`.
+- **Agent coordination**: Route handlers in `server/routes/project.ts` orchestrate agents via `AgentMessageBroker`; publish events only after agent calls and rely on WebSocket fan-out (`server/realtime.ts` → `client/src/lib/realtime.ts`).
+- **Tool registry contract**: All agent capabilities go through `server/services/mcp-tool-registry.ts` (`executeTool`) which gates permissions and dispatches to `server/services/real-tool-handlers.ts`; add metadata + handler wiring for any new tool.
+- **MCP integration**: `server/services/mcpai.ts` and `server/enhanced-mcp-service.ts` form the MCP entrypoint—extend capabilities through the registry rather than calling downstream services directly.
+- **Python bridge**: Long-running analytics route through `server/services/python-processor.ts`, which shells into `python_scripts/` (e.g., `data_analyzer.py`); maintain JSON request/response parity with shared schemas.
+- **Spark delegation**: Heavy jobs use `server/services/spark-processor.ts`; ensure idempotent payloads and normalized responses so agents can replay or resume work.
+- **HTTP surface**: Keep Express handlers in `server/routes/` thin—validate input with shared Zod schemas, hand off to `server/services/**`, and broadcast outcomes via the message broker when workflows matter.
+- **File ingestion**: `server/services/file-processor.ts` and `server/services/unified-upload-service.ts` normalize uploads; client-side upload flows live under `client/src/components/upload/`.
+- **Journey persistence**: Project + artifact records persist via Drizzle models in `shared/schema.ts`; cache-friendly selectors live in `client/src/hooks/projects/`.
+- **Billing & pricing**: Capacity and pricing logic lives in `server/services/enhanced-billing-service.ts` and `server/services/pricing.ts`; corresponding checkout UI sits in `client/src/pages/checkout.tsx`.
+- **Security surfaces**: OAuth + Passport configuration in `server/oauth-config.ts` and `server/oauth-providers.ts`; PII scanning routed through `server/unified-pii-processor.ts` and `server/file-processor.ts`.
+- **Frontend conventions**: Routing is Wouter-based in `client/src/App.tsx`; network access funnels through `client/src/lib/api.ts` + `client/src/lib/queryClient.ts`; Tailwind tokens configured in `tailwind.config.ts`; use Vite aliases `@`, `@shared`, `@assets` defined in `vite.config.ts`.
+- **Real-time UX**: `client/src/pages/dashboard.tsx` and `client/src/pages/project-page.tsx` listen for `agent:message`, `project:update`, `analysis:progress`, and `checkpoint:*` events from `client/src/lib/realtime.ts`.
+- **Templates & journeys**: Journey templates and planning live under `server/services/project-manager/` with shared artifacts persisted via `shared/schema.ts`; journey UI modules render from `client/src/pages/project-page.tsx`.
+- **Testing artifacts**: Playwright configuration in `playwright.config.ts`; targeted UI capture flows run through `npm run test:ui-screens` and `capture-screenshots.mjs`.
+- **Docs trail**: `ADMIN_*`, `PLAN_*`, and `docs/` capture historical decisions; review before restructuring workflows or billing logic.

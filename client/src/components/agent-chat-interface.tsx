@@ -97,6 +97,9 @@ export function AgentChatInterface({
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
+  // Check if user is authenticated
+  const isAuthenticated = !!localStorage.getItem('auth_token');
+
   // Fetch conversation messages
   const { data: conversation, isLoading } = useQuery({
     queryKey: ['conversation', conversationId],
@@ -105,7 +108,7 @@ export function AgentChatInterface({
       const response = await apiClient.get(`/api/conversation/${conversationId}`);
       return response.data;
     },
-    enabled: !!conversationId,
+    enabled: isAuthenticated && !!conversationId, // Only fetch if authenticated and conversationId exists
     refetchInterval: 2000 // Check for new messages every 2 seconds
   });
 

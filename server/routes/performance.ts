@@ -1,11 +1,16 @@
 import { Router } from 'express';
 import { PerformanceMonitor } from '../utils/performance-monitor';
-import { authenticateAdmin } from '../middleware/auth';
+import { ensureAuthenticated } from './auth';
 
 const router = Router();
 
 // Get performance statistics
-router.get('/performance-stats', authenticateAdmin, async (req, res) => {
+router.get('/performance-stats', ensureAuthenticated, async (req, res) => {
+  // Check for admin role
+  const userRole = (req.user as any)?.userRole || (req.user as any)?.role;
+  if (userRole !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
   try {
     const performanceMonitor = PerformanceMonitor.getInstance();
     const stats = performanceMonitor.getAllStats();
@@ -18,11 +23,16 @@ router.get('/performance-stats', authenticateAdmin, async (req, res) => {
 });
 
 // Get performance report
-router.get('/performance-report', authenticateAdmin, async (req, res) => {
+router.get('/performance-report', ensureAuthenticated, async (req, res) => {
+  // Check for admin role
+  const userRole = (req.user as any)?.userRole || (req.user as any)?.role;
+  if (userRole !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
   try {
     const performanceMonitor = PerformanceMonitor.getInstance();
     const report = performanceMonitor.generateReport();
-    
+
     res.setHeader('Content-Type', 'text/plain');
     res.send(report);
   } catch (error) {
@@ -32,11 +42,16 @@ router.get('/performance-report', authenticateAdmin, async (req, res) => {
 });
 
 // Export performance metrics
-router.get('/performance-export', authenticateAdmin, async (req, res) => {
+router.get('/performance-export', ensureAuthenticated, async (req, res) => {
+  // Check for admin role
+  const userRole = (req.user as any)?.userRole || (req.user as any)?.role;
+  if (userRole !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
   try {
     const performanceMonitor = PerformanceMonitor.getInstance();
     const metrics = performanceMonitor.exportMetrics();
-    
+
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Content-Disposition', 'attachment; filename=performance-metrics.json');
     res.json(metrics);
@@ -47,11 +62,16 @@ router.get('/performance-export', authenticateAdmin, async (req, res) => {
 });
 
 // Clear performance metrics
-router.post('/performance-clear', authenticateAdmin, async (req, res) => {
+router.post('/performance-clear', ensureAuthenticated, async (req, res) => {
+  // Check for admin role
+  const userRole = (req.user as any)?.userRole || (req.user as any)?.role;
+  if (userRole !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
   try {
     const performanceMonitor = PerformanceMonitor.getInstance();
     performanceMonitor.clearMetrics();
-    
+
     console.info('Performance metrics cleared by admin');
     res.json({ message: 'Performance metrics cleared successfully' });
   } catch (error) {
@@ -61,19 +81,24 @@ router.post('/performance-clear', authenticateAdmin, async (req, res) => {
 });
 
 // Update performance thresholds
-router.post('/performance-thresholds', authenticateAdmin, async (req, res) => {
+router.post('/performance-thresholds', ensureAuthenticated, async (req, res) => {
+  // Check for admin role
+  const userRole = (req.user as any)?.userRole || (req.user as any)?.role;
+  if (userRole !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
   try {
     const { operation, threshold } = req.body;
-    
+
     if (!operation || typeof threshold !== 'number' || threshold <= 0) {
-      return res.status(400).json({ 
-        error: 'Invalid operation or threshold. Threshold must be a positive number.' 
+      return res.status(400).json({
+        error: 'Invalid operation or threshold. Threshold must be a positive number.'
       });
     }
-    
+
     const performanceMonitor = PerformanceMonitor.getInstance();
     performanceMonitor.setThreshold(operation, threshold);
-    
+
     console.info(`Performance threshold updated for ${operation}: ${threshold}ms`);
     res.json({ message: 'Threshold updated successfully' });
   } catch (error) {
@@ -83,11 +108,16 @@ router.post('/performance-thresholds', authenticateAdmin, async (req, res) => {
 });
 
 // Get current thresholds
-router.get('/performance-thresholds', authenticateAdmin, async (req, res) => {
+router.get('/performance-thresholds', ensureAuthenticated, async (req, res) => {
+  // Check for admin role
+  const userRole = (req.user as any)?.userRole || (req.user as any)?.role;
+  if (userRole !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
   try {
     const performanceMonitor = PerformanceMonitor.getInstance();
     const thresholds = performanceMonitor.getThresholds();
-    
+
     res.json(thresholds);
   } catch (error) {
     console.error('Failed to get performance thresholds:', error);
@@ -96,12 +126,17 @@ router.get('/performance-thresholds', authenticateAdmin, async (req, res) => {
 });
 
 // Get recent metrics
-router.get('/performance-recent', authenticateAdmin, async (req, res) => {
+router.get('/performance-recent', ensureAuthenticated, async (req, res) => {
+  // Check for admin role
+  const userRole = (req.user as any)?.userRole || (req.user as any)?.role;
+  if (userRole !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
   try {
     const minutes = parseInt(req.query.minutes as string) || 5;
     const performanceMonitor = PerformanceMonitor.getInstance();
     const recentMetrics = performanceMonitor.getRecentMetrics(minutes);
-    
+
     res.json(recentMetrics);
   } catch (error) {
     console.error('Failed to get recent performance metrics:', error);

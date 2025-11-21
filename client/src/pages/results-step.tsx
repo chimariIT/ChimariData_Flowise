@@ -1,8 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useProjectSession } from "@/hooks/useProjectSession";
+import { apiClient } from "@/lib/api";
+import { useToast } from "@/hooks/use-toast";
 import { 
   Receipt, 
   Download, 
@@ -27,45 +30,42 @@ interface ResultsStepProps {
 }
 
 export default function ResultsStep({ journeyType, onNext, onPrevious }: ResultsStepProps) {
+  const { session } = useProjectSession(); // ✅ Use server-validated session
+  const { toast } = useToast();
   const [activeTab, setActiveTab] = useState('overview');
   const [isLoading, setIsLoading] = useState(true);
   const [audience, setAudience] = useState<string>('general');
   const [complexity, setComplexity] = useState<'Simple' | 'Intermediate' | 'Advanced'>('Simple');
-  
+
   // Real data from backend
   const [analysisResults, setAnalysisResults] = useState<any>(null);
   const [insights, setInsights] = useState<any[]>([]);
   const [recommendations, setRecommendations] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [artifacts, setArtifacts] = useState<any[]>([]);
+  const [artifactsLoading, setArtifactsLoading] = useState(true);
+  const [artifactsError, setArtifactsError] = useState<string | null>(null);
 
   // Load real analysis results from backend
   useEffect(() => {
     async function loadResults() {
       try {
-        const currentProjectId = localStorage.getItem('currentProjectId');
-        
-        if (!currentProjectId) {
-          console.warn('No project ID found, using demo data');
-          setIsLoading(false);
-          return;
+        // ✅ Use validated projectId from session context
+        const projectId = session?.projectId;
+
+        if (!projectId) {
+          throw new Error('No valid project session found');
         }
 
-        console.log(`📖 Loading analysis results for project ${currentProjectId}`);
+        console.log(`📖 Loading analysis results for project ${projectId}`);
 
-        const response = await fetch(`/api/analysis-execution/results/${currentProjectId}`, {
-          credentials: 'include'
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to load results: ${response.statusText}`);
-        }
-
-        const data = await response.json();
+        // ✅ Use apiClient which includes auth headers
+        const data = await apiClient.get(`/api/analysis-execution/results/${projectId}`);
 
         if (data.success && data.results) {
           console.log('✅ Results loaded successfully');
-          console.log(`📊 ${data.results.insights.length} insights, ${data.results.recommendations.length} recommendations`);
-          
+          console.log(`📊 ${data.results.insights?.length || 0} insights, ${data.results.recommendations?.length || 0} recommendations`);
+
           setAnalysisResults(data.results);
           setInsights(data.results.insights || []);
           setRecommendations(data.results.recommendations || []);
@@ -82,8 +82,60 @@ export default function ResultsStep({ journeyType, onNext, onPrevious }: Results
       }
     }
 
-    loadResults();
-  }, []);
+    if (session?.projectId) { // ✅ Only load if valid session
+      loadResults();
+    } else {
+      setIsLoading(false);
+    }
+  }, [session?.projectId]);
+
+  useEffect(() => {
+    const projectId = session?.projectId;
+    if (!projectId) {
+      setArtifacts([]);
+      setArtifactsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    async function loadArtifacts() {
+      setArtifactsLoading(true);
+      setArtifactsError(null);
+      try {
+        const response = await apiClient.getProjectArtifacts(projectId);
+        if (cancelled) return;
+        const normalized = (response?.artifacts || []).map((artifact: any, index: number) => {
+          const primaryRef = artifact.fileRefs?.find((ref: any) => ref?.url || ref?.signedUrl) || artifact.fileRefs?.[0];
+          const sizeLabel = primaryRef?.sizeMB
+            ? `${Number(primaryRef.sizeMB).toFixed(1)} MB`
+            : primaryRef?.size
+              ? primaryRef.size
+              : '—';
+          return {
+            id: artifact.id || `artifact-${index}`,
+            name: artifact.name || artifact.type || `Artifact ${index + 1}`,
+            type: (primaryRef?.type || artifact.type || 'file').toUpperCase(),
+            size: sizeLabel,
+            url: primaryRef?.url || primaryRef?.signedUrl || null,
+            createdAt: artifact.createdAt,
+          };
+        });
+        setArtifacts(normalized);
+      } catch (err: any) {
+        if (cancelled) return;
+        console.error('Failed to load artifacts:', err);
+        setArtifacts([]);
+        setArtifactsError(err?.message || 'Artifacts are still generating. Please check back shortly.');
+      } finally {
+        if (!cancelled) setArtifactsLoading(false);
+      }
+    }
+
+    loadArtifacts();
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.projectId, analysisResults?.metadata?.executedAt]);
 
   const getJourneyTypeInfo = () => {
     switch (journeyType) {
@@ -128,6 +180,29 @@ export default function ResultsStep({ journeyType, onNext, onPrevious }: Results
   const journeyInfo = getJourneyTypeInfo();
   const Icon = journeyInfo.icon;
 
+  const analysisSummary = useMemo(() => {
+    if (!analysisResults) {
+      return {
+        totalAnalyses: 0,
+        executionTime: '—',
+        qualityScore: 0,
+        datasetCount: 0,
+        confidence: null as number | null,
+        dataRowsProcessed: 0,
+      };
+    }
+    const summary = analysisResults.summary || {};
+    return {
+      totalAnalyses: summary.totalAnalyses ?? analysisResults.analysisTypes?.length ?? insights.length ?? 0,
+      executionTime: summary.executionTime
+        ?? (summary.executionTimeSeconds ? `${summary.executionTimeSeconds}s` : '—'),
+      qualityScore: summary.qualityScore ?? 0,
+      datasetCount: summary.datasetCount ?? analysisResults.metadata?.datasetCount ?? 0,
+      confidence: summary.confidence ?? summary.averageConfidence ?? null,
+      dataRowsProcessed: summary.dataRowsProcessed ?? 0,
+    };
+  }, [analysisResults, insights.length]);
+
   // Decision framework (business-focused) – will be populated from real analysis results
   const decisionFramework = analysisResults?.decisionFramework || {
     executiveSummary: "Analysis in progress. Decision framework will be generated based on your data insights.",
@@ -147,13 +222,26 @@ export default function ResultsStep({ journeyType, onNext, onPrevious }: Results
     }
   };
 
-  const artifacts = [
-    { id: 1, name: "Complete Analysis Report", type: "PDF", size: "2.3 MB", icon: FileText },
-    { id: 2, name: "Data Visualizations", type: "PNG", size: "5.1 MB", icon: Image },
-    { id: 3, name: "Raw Data Export", type: "CSV", size: "1.8 MB", icon: FileText },
-    { id: 4, name: "Statistical Summary", type: "Excel", size: "0.9 MB", icon: BarChart3 },
-    { id: 5, name: "Insights Dashboard", type: "HTML", size: "1.2 MB", icon: Eye }
-  ];
+  const getArtifactIcon = (type: string) => {
+    const normalized = type?.toUpperCase() || '';
+    if (normalized.includes('PDF')) return FileText;
+    if (normalized.includes('PNG') || normalized.includes('JPG') || normalized.includes('HTML')) return Image;
+    if (normalized.includes('CSV') || normalized.includes('EXCEL') || normalized.includes('XLS')) return BarChart3;
+    if (normalized.includes('DASHBOARD')) return Eye;
+    return Download;
+  };
+
+  const handleArtifactDownload = (artifact: any) => {
+    if (!artifact?.url) {
+      toast({
+        title: "Artifact not ready",
+        description: "This artifact is still generating. Please check back shortly.",
+        variant: "destructive"
+      });
+      return;
+    }
+    window.open(artifact.url, '_blank', 'noopener,noreferrer');
+  };
 
   const getImpactColor = (impact: string) => {
     switch (impact) {
@@ -212,8 +300,8 @@ export default function ResultsStep({ journeyType, onNext, onPrevious }: Results
     );
   }
 
-  // Show message if no insights found
-  if (insights.length === 0) {
+  // Show message if no results yet
+  if (!analysisResults) {
     return (
       <div className="space-y-6">
         <Card className="border-yellow-200 bg-yellow-50">
@@ -413,23 +501,25 @@ export default function ResultsStep({ journeyType, onNext, onPrevious }: Results
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
             <div className="text-center">
               <p className="text-2xl font-bold text-gray-900">
-                {analysisResults?.summary?.analysisTypesExecuted || insights.length}
+                {analysisSummary.totalAnalyses}
               </p>
               <p className="text-sm text-gray-600">Analyses Completed</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl font-bold text-gray-900">{insights.length}</p>
-              <p className="text-sm text-gray-600">Key Insights</p>
-            </div>
-            <div className="text-center">
               <p className="text-2xl font-bold text-gray-900">
-                {analysisResults?.summary?.visualizations || 0}
+                {analysisSummary.dataRowsProcessed.toLocaleString()}
               </p>
-              <p className="text-sm text-gray-600">Visualizations</p>
+              <p className="text-sm text-gray-600">Rows Processed</p>
             </div>
             <div className="text-center">
               <p className="text-2xl font-bold text-gray-900">
-                {analysisResults?.summary?.qualityScore || 0}%
+                {recommendations.length}
+              </p>
+              <p className="text-sm text-gray-600">Recommendations</p>
+            </div>
+            <div className="text-center">
+              <p className="text-2xl font-bold text-gray-900">
+                {analysisSummary.qualityScore}%
               </p>
               <p className="text-sm text-gray-600">Quality Score</p>
             </div>
@@ -437,16 +527,21 @@ export default function ResultsStep({ journeyType, onNext, onPrevious }: Results
           
           <div className="flex items-center gap-2">
             <Badge variant="secondary" className="bg-green-100 text-green-800">
-              Completed {analysisResults?.summary?.executedAt 
-                ? new Date(analysisResults.summary.executedAt).toLocaleDateString() 
+              Completed {analysisResults?.metadata?.executedAt 
+                ? new Date(analysisResults.metadata.executedAt).toLocaleDateString() 
                 : 'Recently'}
             </Badge>
             <Badge variant="secondary" className="bg-blue-100 text-blue-800">
-              {analysisResults?.summary?.datasetCount || 0} dataset(s) analyzed
+              {analysisSummary.datasetCount} dataset(s) analyzed
             </Badge>
             <Badge variant="secondary" className="bg-purple-100 text-purple-800">
-              {analysisResults?.summary?.executionTime || 'N/A'} execution time
+              {analysisSummary.executionTime} execution time
             </Badge>
+            {analysisSummary.confidence !== null && (
+              <Badge variant="secondary" className="bg-indigo-100 text-indigo-800">
+                {analysisSummary.confidence}% confidence
+              </Badge>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -472,27 +567,38 @@ export default function ResultsStep({ journeyType, onNext, onPrevious }: Results
               <div className="space-y-4">
                 <div>
                   <h4 className="font-medium text-gray-900 mb-2">Project Details</h4>
-                  <p className="text-gray-600">{analysisResults.projectName}</p>
-                  <p className="text-sm text-gray-500 mt-1">Completed on {analysisResults.completionDate}</p>
+                  <p className="text-gray-600">
+                    {analysisResults?.metadata?.projectName || `Project ${session?.projectId ?? ''}`}
+                  </p>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Completed on {analysisResults?.metadata?.executedAt
+                      ? new Date(analysisResults.metadata.executedAt).toLocaleString()
+                      : '—'}
+                  </p>
                 </div>
                 
                 <div>
                   <h4 className="font-medium text-gray-900 mb-2">Analysis Scope</h4>
                   <ul className="text-sm text-gray-600 space-y-1">
-                    <li>• Descriptive statistics and data profiling</li>
-                    <li>• Customer segmentation analysis</li>
-                    <li>• Correlation analysis between key metrics</li>
-                    <li>• Time series analysis for trend identification</li>
+                    {(analysisResults?.analysisTypes || []).map((analysis: string) => (
+                      <li key={analysis}>• {analysis}</li>
+                    ))}
+                    {(!analysisResults?.analysisTypes || analysisResults.analysisTypes.length === 0) && (
+                      <li>• Analysis configuration details were not provided.</li>
+                    )}
                   </ul>
                 </div>
                 
                 <div>
                   <h4 className="font-medium text-gray-900 mb-2">Key Findings</h4>
-                  <p className="text-gray-600">
-                    The analysis revealed significant patterns in customer behavior, with three distinct 
-                    customer segments identified. Strong correlations were found between customer satisfaction 
-                    and sales performance, and seasonal trends showed consistent Q4 performance peaks.
-                  </p>
+                  <ul className="list-disc list-inside text-gray-600 space-y-1">
+                    {insights.slice(0, 3).map((insight) => (
+                      <li key={insight.id || insight.title}>{insight.title || insight.description}</li>
+                    ))}
+                    {insights.length === 0 && (
+                      <li>Results are available, but no formal insights were returned.</li>
+                    )}
+                  </ul>
                 </div>
               </div>
             </CardContent>
@@ -566,33 +672,75 @@ export default function ResultsStep({ journeyType, onNext, onPrevious }: Results
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="grid gap-3">
-                {artifacts.map((artifact) => (
-                  <div
-                    key={artifact.id}
-                    className="flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50"
-                  >
-                    <div className="flex items-center gap-3">
-                      <artifact.icon className="w-5 h-5 text-gray-600" />
-                      <div>
-                        <h4 className="font-medium text-gray-900">{artifact.name}</h4>
-                        <p className="text-sm text-gray-600">{artifact.type} • {artifact.size}</p>
-                      </div>
-                    </div>
-                    <Button variant="outline" size="sm">
+              {artifactsLoading ? (
+                <div className="flex items-center gap-2 text-sm text-blue-700">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Generating artifact list…
+                </div>
+              ) : artifactsError ? (
+                <div className="rounded-md border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-800">
+                  {artifactsError}
+                </div>
+              ) : artifacts.length === 0 ? (
+                <p className="text-sm text-gray-600">
+                  Artifacts are not available yet. Please check back after analysis completes.
+                </p>
+              ) : (
+                <>
+                  <div className="grid gap-3">
+                    {artifacts.map((artifact) => {
+                      const IconComp = getArtifactIcon(artifact.type);
+                      return (
+                        <div
+                          key={artifact.id}
+                          className="flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50"
+                        >
+                          <div className="flex items-center gap-3">
+                            <IconComp className="w-5 h-5 text-gray-600" />
+                            <div>
+                              <h4 className="font-medium text-gray-900">{artifact.name}</h4>
+                              <p className="text-sm text-gray-600">
+                                {artifact.type} • {artifact.size}
+                              </p>
+                            </div>
+                          </div>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleArtifactDownload(artifact)}
+                          >
+                            <Download className="w-4 h-4 mr-2" />
+                            Download
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <Button
+                      className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+                      onClick={() => {
+                        const downloadable = artifacts.filter(a => a.url);
+                        if (downloadable.length === 0) {
+                          toast({
+                            title: "No downloadable artifacts",
+                            description: "Artifacts are still generating. Please try again later.",
+                            variant: "destructive"
+                          });
+                          return;
+                        }
+                        downloadable.forEach((artifact, index) => {
+                          setTimeout(() => window.open(artifact.url, '_blank', 'noopener,noreferrer'), index * 200);
+                        });
+                      }}
+                    >
                       <Download className="w-4 h-4 mr-2" />
-                      Download
+                      Download All Artifacts
                     </Button>
                   </div>
-                ))}
-              </div>
-              
-              <div className="mt-4 pt-4 border-t border-gray-200">
-                <Button className="w-full bg-blue-600 hover:bg-blue-700 text-white">
-                  <Download className="w-4 h-4 mr-2" />
-                  Download All Artifacts
-                </Button>
-              </div>
+                </>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

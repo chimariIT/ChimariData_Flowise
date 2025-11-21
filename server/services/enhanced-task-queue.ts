@@ -175,12 +175,17 @@ export class EnhancedTaskQueue extends EventEmitter {
       throw new Error('Queue capacity exceeded');
     }
 
+    if (!task.metadata.userId) {
+      throw new Error('Task metadata must include userId');
+    }
+
     const taskId = nanoid();
+  const userId = task.metadata.userId!;
     const queuedTask: QueuedTask = {
       ...task,
       id: taskId,
       metadata: {
-        userId: task.metadata.userId,
+        userId,
         projectId: task.metadata.projectId,
         createdAt: new Date(),
         maxRetries: task.metadata.maxRetries ?? this.config.maxRetries!,

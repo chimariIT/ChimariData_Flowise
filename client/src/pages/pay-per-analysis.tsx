@@ -738,7 +738,7 @@ export default function PayPerAnalysis({ onBack }: PayPerAnalysisProps) {
               <thead>
                 <tr className="bg-slate-50">
                   <th className="text-left p-4 font-semibold text-slate-900">Feature</th>
-                  <th className="text-center p-4 font-semibold text-gray-600">Free Trial</th>
+                  <th className="text-center p-4 font-semibold text-gray-600">Trial</th>
                   <th className="text-center p-4 font-semibold text-gray-700">Pay-per-Analysis</th>
                   <th className="text-center p-4 font-semibold text-gray-600">Starter Plan</th>
                   <th className="text-center p-4 font-semibold text-gray-600">Basic Plan</th>

@@ -212,14 +212,14 @@ export class MigrationService {
    */
   private async createDatasetFromProject(project: LegacyProjectData): Promise<Dataset> {
     // CRITICAL: Ensure we have the correct owner ID
-    const ownerId = project.userId || project.ownerId;
-    if (!ownerId) {
+    const userId = project.userId || project.ownerId;
+    if (!userId) {
       throw new Error(`Project ${project.id} missing both userId and ownerId`);
     }
 
     const dataset = await storage.createDataset({
       id: nanoid(),
-      ownerId,
+      userId,
       originalFileName: `${project.name} - Original Data`,
       mimeType: this.inferMimeType(project.fileType, project.fileName),
       fileSize: project.fileSize || 0,

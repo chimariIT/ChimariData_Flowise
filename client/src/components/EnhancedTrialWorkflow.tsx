@@ -152,7 +152,7 @@ export function EnhancedTrialWorkflow() {
               </div>
               <div>
                 <CardTitle className="flex items-center gap-2">
-                  Free Trial Active
+                  Trial Active
                   <Badge variant="secondary">
                     {trialProgress?.timeRemaining || '7 days'} remaining
                   </Badge>

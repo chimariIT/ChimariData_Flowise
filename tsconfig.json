@@ -1,19 +1,20 @@
 {
-  "include": ["client/src/**/*", "shared/**/*", "server/**/*", "custom.d.ts"],
+  "include": ["client/src/**/*", "shared/**/*", "server/**/*", "types/**/*", "custom.d.ts"],
   "exclude": [
     "node_modules",
     "build",
     "dist",
     "**/*.test.ts",
     "**/*.test.tsx",
-    "client/src/__tests__/**"
+    "client/src/__tests__/**",
+    "server/routes/stripe-webhook-test.ts"
   ],
   "compilerOptions": {
     "incremental": true,
     "tsBuildInfoFile": "./node_modules/typescript/tsbuildinfo",
     "noEmit": true,
     "module": "ESNext",
-    "target": "ES2015",
+  "target": "ES2020",
     "strict": true,
     "lib": ["esnext", "dom", "dom.iterable"],
     "jsx": "preserve",
@@ -22,10 +23,11 @@
     "allowImportingTsExtensions": true,
     "moduleResolution": "bundler",
     "baseUrl": ".",
-    "types": ["node", "vite/client"],
+  "types": ["node", "vite/client", "vitest/globals", "@testing-library/jest-dom"],
     "paths": {
       "@/*": ["./client/src/*"],
-      "@shared/*": ["./shared/*"]
+      "@shared/*": ["./shared/*"],
+      "express-rate-limit": ["./types/express-rate-limit"]
     }
   }
 }

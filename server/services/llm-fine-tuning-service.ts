@@ -207,7 +207,7 @@ export class LLMFineTuningService {
         stdout += data.toString();
         // Log progress
         const lines = data.toString().split('\n');
-        lines.forEach(line => {
+        lines.forEach((line: string) => {
           if (line.includes('🚀') || line.includes('✅') || line.includes('🎯')) {
             console.log(line);
           }

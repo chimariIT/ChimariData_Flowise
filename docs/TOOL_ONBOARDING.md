@@ -73,6 +73,14 @@ MCPToolRegistry.registerTool({
 | **business** | Business intelligence | business_templates, report_generator |
 | **utility** | Support functions | project_coordinator, decision_auditor |
 
+### 2025 Registry Hygiene Initiatives
+
+- **Decommission mock handlers**: Audit `tool-initialization.ts` and replace any `mock: true` responses before the December release. Track progress in the Tool Registry Kanban board.
+- **Connector verification**: Re-run validation suites for long-tail ingestion entries (S3, SharePoint, Dynamics CRM) and document pass/fail status in `/docs/current/tool-registry-status.md`.
+- **Permission matrix refresh**: Compare `agentAccess` mappings with the latest role definitions in `shared/agent-roles.ts` to ensure no agent gains unvetted capabilities.
+- **Health check coverage**: Implement the runtime validation helper (`validateToolCallable`) and add Playwright smoke tests that confirm high-traffic tools respond with 200-level statuses.
+- **Registry diff alerts**: Set up a lightweight CI check that flags newly registered tools lacking `inputSchema`/`outputSchema` metadata so documentation stays accurate.
+
 ---
 
 ## Agent Access Control

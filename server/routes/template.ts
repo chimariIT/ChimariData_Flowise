@@ -3,6 +3,7 @@ import { db } from '../db';
 import { artifactTemplates, projects, templateFeedback } from '@shared/schema';
 import { eq } from 'drizzle-orm';
 import { DynamicTemplateEngine } from '../dynamic-template-engine';
+import { BusinessTemplates, type BusinessTemplate } from '../services/business-templates';
 
 const router = express.Router();
 const templateEngine = new DynamicTemplateEngine();
@@ -72,23 +73,32 @@ router.get('/:templateId/config', async (req, res) => {
       .from(artifactTemplates)
       .where(eq(artifactTemplates.id, templateId));
 
-    if (!template) {
+    if (template) {
+      const resolvedTemplateId = template.templateId || template.id;
+      const config = {
+        templateId: resolvedTemplateId,
+        templateName: template.name,
+        recommendedAnalyses: getRecommendedAnalyses(resolvedTemplateId, template),
+        analysisParameters: getAnalysisParameters(resolvedTemplateId, template),
+        workflowSteps: getWorkflowSteps(resolvedTemplateId, template),
+        visualizationPreferences: getVisualizationPreferences(resolvedTemplateId, template)
+      };
+
+      return res.json({
+        success: true,
+        config
+      });
+    }
+
+    const fallbackTemplate = BusinessTemplates.getTemplate(templateId);
+    if (!fallbackTemplate) {
       return res.status(404).json({ error: 'Template not found' });
     }
 
-    // Extract analysis configuration based on template type
-    const config = {
-      templateId: template.id,
-      templateName: template.name,
-      recommendedAnalyses: getRecommendedAnalyses(templateId, template),
-      analysisParameters: getAnalysisParameters(templateId, template),
-      workflowSteps: getWorkflowSteps(templateId, template),
-      visualizationPreferences: getVisualizationPreferences(templateId, template)
-    };
-
+    const fallbackConfig = buildBusinessTemplateConfig(fallbackTemplate);
     res.json({
       success: true,
-      config
+      config: fallbackConfig
     });
 
   } catch (error) {
@@ -115,12 +125,17 @@ router.get('/:templateId', async (req, res) => {
       .from(artifactTemplates)
       .where(eq(artifactTemplates.id, templateId));
 
-    if (!template) {
+    if (template) {
+      return res.json(template);
+    }
+
+    const fallbackTemplate = BusinessTemplates.getTemplate(templateId);
+
+    if (!fallbackTemplate) {
       return res.status(404).json({ error: 'Template not found' });
     }
 
-    // For now, allow access to any template (in production, add access control)
-    res.json(template);
+    return res.json(fallbackTemplate);
 
   } catch (error) {
     console.error('Failed to get template:', error);
@@ -397,6 +412,43 @@ function getAnalysisParameters(templateId: string, template: any): Record<string
   }
 
   return defaultParams;
+}
+
+function buildBusinessTemplateConfig(template: BusinessTemplate) {
+  const recommendedAnalyses = Array.from(new Set([
+    ...(template.workflow || []).flatMap((step: any) => {
+      switch (step.component) {
+        case 'ml_training':
+          return ['classification', 'regression', 'clustering'];
+        case 'statistical_analysis':
+          return ['descriptive', 'correlation'];
+        case 'text_analysis':
+          return ['sentiment', 'descriptive'];
+        case 'visualization':
+          return ['descriptive'];
+        default:
+          return ['descriptive'];
+      }
+    })
+  ].filter(Boolean)));
+
+  return {
+    templateId: template.templateId,
+    templateName: template.name,
+    recommendedAnalyses: recommendedAnalyses.length > 0 ? recommendedAnalyses : ['descriptive', 'correlation'],
+    analysisParameters: getAnalysisParameters(template.templateId || 'default', template),
+    workflowSteps: (template.workflow || []).map((step: any, index: number) => ({
+      id: step.stepId || `step_${index + 1}`,
+      name: step.name,
+      component: step.component,
+      description: step.description || 'Template workflow step',
+      checkpointQuestions: step.checkpointQuestions || []
+    })),
+    visualizationPreferences: {
+      preferredCharts: (template.visualizations || []).map((viz: any) => viz.type),
+      deliverables: (template.deliverables || []).map((deliverable: any) => deliverable.name)
+    }
+  };
 }
 
 function getWorkflowSteps(templateId: string, template: any): Array<{ id: string; name: string; description: string; duration: string }> {

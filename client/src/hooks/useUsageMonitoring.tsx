@@ -64,21 +64,20 @@ export function UsageMonitoringProvider({ children }: { children: ReactNode }) {
       setLoading(true);
       setError(null);
 
-      const response = await apiClient.get("/api/usage/current");
-      if (response.ok) {
-        const data = await response.json();
-        setCurrentUsage(data.usage);
-        setLimits(data.limits);
+      // apiClient.get() returns parsed JSON directly, not a Response object
+      const data = await apiClient.get("/api/usage/current");
+      setCurrentUsage(data.usage);
+      setLimits(data.limits);
 
-        // Generate warnings based on usage
-        const newWarnings = generateUsageWarnings(data.usage, data.limits);
-        setWarnings(newWarnings);
-      } else {
-        throw new Error("Failed to fetch usage data");
-      }
+      // Generate warnings based on usage
+      const newWarnings = generateUsageWarnings(data.usage, data.limits);
+      setWarnings(newWarnings);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
       console.error("Error fetching usage data:", err);
+      // Don't block the app if usage monitoring fails
+      setCurrentUsage(null);
+      setLimits(null);
     } finally {
       setLoading(false);
     }
@@ -140,17 +139,13 @@ export function UsageMonitoringProvider({ children }: { children: ReactNode }) {
 
   const checkCanPerformAction = async (action: string, amount: number = 1): Promise<boolean> => {
     try {
-      const response = await apiClient.post("/api/usage/check", {
+      // apiClient.post() returns parsed JSON directly
+      const data = await apiClient.post("/api/usage/check", {
         action,
         amount
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        return data.allowed;
-      }
-
-      return false;
+      return data.allowed || false;
     } catch (err) {
       console.error("Error checking action permission:", err);
       return false;
@@ -159,23 +154,22 @@ export function UsageMonitoringProvider({ children }: { children: ReactNode }) {
 
   const trackAction = async (action: string, metadata: any = {}): Promise<void> => {
     try {
-      const response = await apiClient.post("/api/usage/track", {
+      // apiClient.post() returns parsed JSON directly
+      await apiClient.post("/api/usage/track", {
         action,
         metadata
       });
 
-      if (response.ok) {
-        // Refresh usage data after tracking
-        await fetchUsageData();
+      // Refresh usage data after tracking
+      await fetchUsageData();
 
-        // Check for new warnings and show notifications
-        if (warnings.some(w => w.type === 'critical')) {
-          toast({
-            title: "Usage Limit Critical",
-            description: "You're approaching your plan limits. Consider upgrading.",
-            variant: "destructive"
-          });
-        }
+      // Check for new warnings and show notifications
+      if (warnings.some(w => w.type === 'critical')) {
+        toast({
+          title: "Usage Limit Critical",
+          description: "You're approaching your plan limits. Consider upgrading.",
+          variant: "destructive"
+        });
       }
     } catch (err) {
       console.error("Error tracking action:", err);

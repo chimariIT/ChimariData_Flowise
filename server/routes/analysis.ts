@@ -47,26 +47,128 @@ router.post('/:projectId/transform', ensureAuthenticated, async (req, res) => {
         }
 
         const dataset = await storage.getDatasetForProject(projectId);
-        if (!dataset || !dataset.data) {
+        const sourceRows = extractRowsForTransformation(dataset, project);
+
+        if (sourceRows.length === 0) {
             return res.status(400).json({ error: 'Project has no data to transform.' });
         }
 
-        const dataRows = (dataset.data as any[]) || [];
+        const originalSchema = dataset?.schema ?? (project as any)?.schema;
+        const baseWarnings: string[] = [];
 
-        // Use Spark for large datasets
-        const transformedData = dataRows.length > 1000 
-            ? await sparkProcessor.applyTransformations(dataRows, transformations)
-            : await DataTransformationService.applyTransformations(dataRows, transformations);
+        const joinCache = new Map<string, { rows: any[]; projectName?: string }>();
+        const joinResolver = async (targetProjectId: string) => {
+            if (joinCache.has(targetProjectId)) {
+                return joinCache.get(targetProjectId)!;
+            }
 
-        // Here, we could either save the transformed data back to the project
-        // or return it directly. For now, let's return a preview.
-        const preview = transformedData.slice(0, 100);
+            const relatedProject = await storage.getProject(targetProjectId);
+            if (!relatedProject) {
+                throw new Error('Join project not found.');
+            }
+
+            const relatedOwner = (relatedProject as any)?.ownerId ?? (relatedProject as any)?.userId;
+            if (relatedOwner !== userId) {
+                throw new Error('Access denied for join project.');
+            }
+
+            const relatedDataset = await storage.getDatasetForProject(targetProjectId);
+            const relatedRows = extractRowsForTransformation(relatedDataset, relatedProject);
+
+            if (relatedRows.length === 0) {
+                throw new Error('Join dataset has no rows.');
+            }
+
+            const payload = {
+                rows: relatedRows,
+                projectName: relatedProject?.name ?? targetProjectId,
+            };
+
+            joinCache.set(targetProjectId, payload);
+            return payload;
+        };
+
+        const sanitizedSteps = transformations.map((step) => {
+            if (!step || typeof step !== 'object') {
+                baseWarnings.push('Skipped invalid transformation step.');
+                return null;
+            }
+
+            const normalizedType = typeof step.type === 'string' ? step.type : null;
+            if (!normalizedType) {
+                baseWarnings.push('Skipped transformation without a type.');
+                return null;
+            }
+
+            const normalizedConfig = step.config && typeof step.config === 'object' ? { ...step.config } : {};
+            return { type: normalizedType, config: normalizedConfig };
+        }).filter(Boolean) as Array<{ type: string; config: Record<string, any> }>;
+
+        const hasJoinStep = sanitizedSteps.some(step => step.type === 'join');
+        const useSpark = sourceRows.length > 1000 && !hasJoinStep;
+
+        let transformationResult;
+
+        if (useSpark) {
+            const sparkRows = await sparkProcessor.applyTransformations(sourceRows, sanitizedSteps);
+            const rowsArray = Array.isArray(sparkRows) ? sparkRows : [];
+            const warningsSet = new Set<string>(baseWarnings);
+
+            if (!Array.isArray(sparkRows)) {
+                warningsSet.add('Spark processor returned an unexpected result.');
+            }
+
+            let operations;
+            const sampleRows = sourceRows.slice(0, Math.min(sourceRows.length, 1000));
+            if (sampleRows.length > 0) {
+                try {
+                    const sampleResult = await DataTransformationService.applyTransformations(
+                        sampleRows,
+                        sanitizedSteps,
+                        {
+                            originalSchema,
+                            warnings: baseWarnings,
+                            joinResolver,
+                        },
+                    );
+
+                    for (const warning of sampleResult.warnings) {
+                        warningsSet.add(warning);
+                    }
+                    operations = sampleResult.summary.operations;
+                } catch (sampleError) {
+                    const message = sampleError instanceof Error ? sampleError.message : 'Failed to build transformation summary.';
+                    warningsSet.add(`Summary limited: ${message}`);
+                }
+            }
+
+            transformationResult = DataTransformationService.buildResponse(rowsArray, {
+                originalRowCount: sourceRows.length,
+                originalSchema,
+                warnings: Array.from(warningsSet),
+                operations,
+            });
+        } else {
+            transformationResult = await DataTransformationService.applyTransformations(
+                sourceRows,
+                sanitizedSteps,
+                {
+                    originalSchema,
+                    warnings: baseWarnings,
+                    joinResolver,
+                },
+            );
+        }
 
         res.json({
             success: true,
             message: 'Transformations applied successfully.',
-            preview,
-            rowCount: transformedData.length
+            preview: transformationResult.preview,
+            rowCount: transformationResult.rowCount,
+            originalRowCount: transformationResult.originalRowCount,
+            columns: transformationResult.columns,
+            warnings: transformationResult.warnings,
+            summary: transformationResult.summary,
         });
 
     } catch (error: any) {
@@ -134,5 +236,39 @@ router.post('/suggest-scenarios', ensureAuthenticated, async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+
+function extractRowsForTransformation(dataset: any, project: any): any[] {
+    const datasetData = Array.isArray(dataset?.data) ? dataset.data : undefined;
+    if (datasetData && datasetData.length > 0) {
+        return datasetData;
+    }
+
+    const transformedData = Array.isArray(project?.transformedData) ? project.transformedData : undefined;
+    if (transformedData && transformedData.length > 0) {
+        return transformedData;
+    }
+
+    const datasetPreview = Array.isArray(dataset?.preview) ? dataset.preview : undefined;
+    if (datasetPreview && datasetPreview.length > 0) {
+        return datasetPreview;
+    }
+
+    const projectData = Array.isArray(project?.data) ? project.data : undefined;
+    if (projectData && projectData.length > 0) {
+        return projectData;
+    }
+
+    const datasetSample = Array.isArray(dataset?.sampleData) ? dataset.sampleData : undefined;
+    if (datasetSample && datasetSample.length > 0) {
+        return datasetSample;
+    }
+
+    const projectSample = Array.isArray(project?.sampleData) ? project.sampleData : undefined;
+    if (projectSample && projectSample.length > 0) {
+        return projectSample;
+    }
+
+    return [];
+}
 
 export default router;

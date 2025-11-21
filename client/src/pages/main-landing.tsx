@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { 
+import {
   ArrowRight,
   Play,
   Database,
@@ -13,14 +13,16 @@ import {
   Zap,
   CheckCircle,
   Settings,
-  Users
+  Users,
+  LogOut
 } from "lucide-react";
 
 interface MainLandingPageProps {
   user?: any;
+  onLogout?: () => void;
 }
 
-export default function MainLandingPage({ user }: MainLandingPageProps) {
+export default function MainLandingPage({ user, onLogout }: MainLandingPageProps) {
   const [, setLocation] = useLocation();
 
   // SEO: Set page title and meta description
@@ -86,8 +88,8 @@ export default function MainLandingPage({ user }: MainLandingPageProps) {
           {user ? (
             // Authenticated user navigation
             <>
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 onClick={() => setLocation('/dashboard')}
                 className="border-gray-300 text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
               >
@@ -98,6 +100,14 @@ export default function MainLandingPage({ user }: MainLandingPageProps) {
                 className="bg-gray-300 hover:bg-gray-400 text-gray-800"
               >
                 Choose Journey
+              </Button>
+              <Button
+                variant="outline"
+                onClick={onLogout}
+                className="border-gray-300 text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+              >
+                <LogOut className="w-4 h-4 mr-2" />
+                Sign Out
               </Button>
             </>
           ) : (

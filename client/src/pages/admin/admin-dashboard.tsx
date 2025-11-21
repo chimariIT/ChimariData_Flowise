@@ -31,6 +31,20 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
 
   const adminSections = [
     {
+      title: "Pricing & Billing",
+      description: "Manage subscription tiers, service pricing, and billing configuration",
+      icon: DollarSign,
+      path: "/admin/pricing-billing",
+      color: "text-green-600"
+    },
+    {
+      title: "Service Pricing",
+      description: "Configure pricing for one-time services (pay-per-analysis, consultation)",
+      icon: Settings,
+      path: "/admin/pricing-services",
+      color: "text-blue-600"
+    },
+    {
       title: "Subscription Management",
       description: "Manage user subscriptions, tiers, and billing",
       icon: DollarSign,

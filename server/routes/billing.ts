@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { tokenStorage } from '../token-storage';
 import { PricingService } from '../services/pricing';
 import { mlLLMUsageTracker } from '../services/ml-llm-usage-tracker';
+import { getAuthHeader } from '../utils/auth-headers';
 
 const billingService = getBillingService();
 
@@ -16,30 +17,34 @@ import { ensureAuthenticated } from './auth';
 // Custom authentication middleware for billing routes that optionally allows unauthenticated access
 const billingAuth = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    const authHeader = getAuthHeader(req);
+    if (!authHeader) {
       // For billing routes that don't require auth (like capacity summary without user), continue
       return next();
     }
 
-    const token = authHeader.substring(7);
+    const [scheme, token] = authHeader.split(' ');
+    if (!token || scheme?.toLowerCase() !== 'bearer') {
+      return next();
+    }
+
     const tokenData = tokenStorage.validateToken(token);
-    
+
     if (!tokenData) {
-      return res.status(401).json({ error: "Invalid token" });
+      return res.status(401).json({ error: 'Invalid token' });
     }
 
     const user = await storage.getUser(tokenData.userId);
-    
+
     if (!user) {
-      return res.status(401).json({ error: "User not found" });
+      return res.status(401).json({ error: 'User not found' });
     }
 
-    req.user = user;
+    req.user = { ...user, role: user.role ?? undefined } as any;
     req.userId = user.id;
     return next();
   } catch (error: any) {
-    return res.status(401).json({ error: "Authentication failed" });
+    return res.status(401).json({ error: 'Authentication failed' });
   }
 };
 
@@ -196,15 +201,11 @@ router.get('/capacity-summary', ensureAuthenticated, async (req, res) => {
       return res.status(401).json({ success: false, error: 'Authentication required' });
     }
 
-    const result = await billingService.getUserCapacitySummary(userId);
-
-    if (!result.success) {
-      return res.status(400).json(result);
-    }
+    const summary = await billingService.getUserCapacitySummary(userId);
 
     res.json({
       success: true,
-      summary: result.summary,
+      summary: summary,
     });
 
   } catch (error) {
@@ -243,10 +244,9 @@ router.post('/update-usage', ensureAuthenticated, async (req, res) => {
     const { journeyType, datasetSizeMB, additionalFeatures } = validation.data;
 
     // Calculate journey requirements
-    const requirements = billingService['calculateJourneyRequirements'](
+    const requirements = await billingService.calculateJourneyRequirements(
       journeyType,
-      datasetSizeMB,
-      additionalFeatures
+      datasetSizeMB
     );
 
     await billingService.updateUserUsage(userId, requirements);
@@ -296,6 +296,17 @@ router.post('/journey-breakdown', ensureAuthenticated, async (req, res) => {
     }
 
     // Format response for UI display
+    type BillingBreakdownItem = {
+      item: string;
+      cost: number;
+      capacityUsed?: number;
+      capacityRemaining?: number;
+    };
+
+    const breakdownItems: BillingBreakdownItem[] = Array.isArray(result.billing?.breakdown)
+      ? (result.billing!.breakdown as BillingBreakdownItem[])
+      : [];
+
     const formattedBreakdown = {
       journeyType,
       datasetSizeMB,
@@ -305,7 +316,7 @@ router.post('/journey-breakdown', ensureAuthenticated, async (req, res) => {
       capacityUsed: result.billing!.capacityUsed,
       capacityRemaining: result.billing!.capacityRemaining,
       utilizationPercentage: result.billing!.utilizationPercentage,
-      breakdown: result.billing!.breakdown.map(item => ({
+      breakdown: breakdownItems.map(item => ({
         description: item.item,
         cost: item.cost,
         capacityImpact: {

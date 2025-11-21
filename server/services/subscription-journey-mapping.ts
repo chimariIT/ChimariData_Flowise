@@ -22,7 +22,7 @@ export interface JourneySubscriptionMapping {
 
 export class SubscriptionJourneyMappingService {
   // Journey-specific subscription mappings
-  private static readonly JOURNEY_SUBSCRIPTION_MAPPING: Record<UserRole, JourneySubscriptionMapping> = {
+  private static readonly JOURNEY_SUBSCRIPTION_MAPPING = {
     "non-tech": {
       free: {
         maxProjects: 1,
@@ -211,14 +211,56 @@ export class SubscriptionJourneyMappingService {
         collaborationFeatures: true,
       },
     },
-  };
+    "custom": {
+      free: {
+        maxProjects: 2,
+        maxDataSizeMB: 50,
+        aiQueries: 40,
+        visualizations: 20,
+        canUseAdvancedAI: true,
+        canExportData: true,
+        canUseCustomAI: false,
+        prioritySupport: true,
+        collaborationFeatures: true,
+      },
+      starter: {
+        maxProjects: 8,
+        maxDataSizeMB: 250,
+        aiQueries: 400,
+        visualizations: 120,
+        canUseAdvancedAI: true,
+        canExportData: true,
+        canUseCustomAI: true,
+        prioritySupport: true,
+        collaborationFeatures: true,
+      },
+      professional: {
+        maxProjects: 40,
+        maxDataSizeMB: 1000,
+        aiQueries: 2500,
+        visualizations: 400,
+        canUseAdvancedAI: true,
+        canExportData: true,
+        canUseCustomAI: true,
+        prioritySupport: true,
+        collaborationFeatures: true,
+      },
+      enterprise: {
+        maxProjects: 80,
+        maxDataSizeMB: 3000,
+        aiQueries: 6000,
+        visualizations: 800,
+        canUseAdvancedAI: true,
+        canExportData: true,
+        canUseCustomAI: true,
+        prioritySupport: true,
+        collaborationFeatures: true,
+      },
+    },
+  } satisfies Record<UserRole, JourneySubscriptionMapping>;
 
   // Subscription tier pricing by journey type
-  private static readonly JOURNEY_PRICING: Record<UserRole, {
-    starter: number;
-    professional: number;
-    enterprise: number;
-  }> = {
+  private static readonly JOURNEY_PRICING = {
     "non-tech": {
       starter: 19,    // Simplified AI-guided journey
       professional: 49,
@@ -239,7 +281,16 @@ export class SubscriptionJourneyMappingService {
       professional: 299,
       enterprise: 999,
     },
-  };
+    "custom": {
+      starter: 189,   // Hybrid bespoke orchestration
+      professional: 399,
+      enterprise: 1299,
+    },
+  } satisfies Record<UserRole, {
+    starter: number;
+    professional: number;
+    enterprise: number;
+  }>;
 
   /**
    * Get subscription features for a specific user role and tier

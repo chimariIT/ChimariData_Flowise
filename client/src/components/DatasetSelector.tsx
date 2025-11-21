@@ -68,12 +68,31 @@ export function DatasetSelector({
   // Fetch available datasets
   const { data: datasets = [], isLoading, error } = useQuery({
     queryKey: ['/api/datasets'],
+    queryFn: async () => {
+      try {
+        const result = await apiClient.getDatasets();
+        return result.datasets || result || [];
+      } catch (error) {
+        console.error('Failed to fetch datasets:', error);
+        return [];
+      }
+    },
     enabled: true
   });
 
   // Fetch project datasets if projectId is provided
   const { data: projectDatasets = [] } = useQuery({
     queryKey: ['/api/projects', projectId, 'datasets'],
+    queryFn: async () => {
+      if (!projectId) return [];
+      try {
+        const result = await apiClient.getProjectDatasets(projectId);
+        return result.datasets || result || [];
+      } catch (error) {
+        console.error('Failed to fetch project datasets:', error);
+        return [];
+      }
+    },
     enabled: !!projectId
   });
 

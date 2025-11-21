@@ -1,6 +1,13 @@
 // server/services/agent-initialization.ts
-import { AgentRegistry } from './agent-registry';
-import { CommunicationRouter } from './communication-router';
+import {
+  AgentHandler,
+  AgentRegistry,
+  AgentResult,
+  AgentStatus,
+  AgentTask,
+  agentRegistry,
+} from './agent-registry';
+import { CommunicationRouter, RoutingRule } from './communication-router';
 import { DataEngineerAgent } from './data-engineer-agent';
 import { CustomerSupportAgent } from './customer-support-agent';
 
@@ -8,11 +15,101 @@ import { CustomerSupportAgent } from './customer-support-agent';
 import { TechnicalAIAgent } from './technical-ai-agent';
 import { BusinessAgent } from './business-agent';
 import { ProjectManagerAgent } from './project-manager-agent';
+import { TechnicalQueryType } from '../../shared/schema';
 
 // Singleton state to prevent duplicate initialization
 let agentsInitialized = false;
 let initializationPromise: Promise<any> | null = null;
 const registeredAgentIds = new Set<string>();
+
+type AgentAdapterState = {
+  activeTasks: number;
+  lastActivity: Date;
+  queuedTasks: number;
+};
+
+function createSuccessResult(
+  task: AgentTask,
+  agentId: string,
+  result: any,
+  durationMs: number,
+  resourcesUsed: string[]
+): AgentResult {
+  return {
+    taskId: task.id,
+    agentId,
+    status: 'success',
+    result,
+    metrics: {
+      duration: durationMs,
+      resourcesUsed,
+      tokensConsumed: typeof result?.tokenUsage === 'number' ? result.tokenUsage : undefined,
+    },
+    completedAt: new Date(),
+  };
+}
+
+function createFailureResult(
+  task: AgentTask,
+  agentId: string,
+  error: unknown,
+  durationMs: number,
+  resourcesUsed: string[]
+): AgentResult {
+  return {
+    taskId: task.id,
+    agentId,
+    status: 'failure',
+    result: null,
+    error: error instanceof Error ? error.message : String(error),
+    metrics: {
+      duration: durationMs,
+      resourcesUsed,
+    },
+    completedAt: new Date(),
+  };
+}
+
+function mapPriorityToLabel(priority?: number): 'low' | 'normal' | 'high' | 'urgent' | 'critical' {
+  if (priority === undefined || priority <= 3) return 'low';
+  if (priority <= 5) return 'normal';
+  if (priority <= 7) return 'high';
+  if (priority <= 9) return 'urgent';
+  return 'critical';
+}
+
+function mapIntentToTechnicalQueryType(intent?: string): TechnicalQueryType['type'] {
+  switch (intent) {
+    case 'ml_request':
+      return 'machine_learning';
+    case 'data_analysis':
+      return 'statistical_analysis';
+    case 'data_transformation':
+      return 'statistical_analysis';
+    default:
+      return 'statistical_analysis';
+  }
+}
+
+function deriveGoals(payload: any, fallback: string): string[] {
+  if (Array.isArray(payload?.goals) && payload.goals.length > 0) {
+    return payload.goals.map((goal: any) => String(goal));
+  }
+
+  if (typeof payload?.userInput === 'string' && payload.userInput.trim().length > 0) {
+    return [payload.userInput.trim()];
+  }
+
+  return [fallback];
+}
+
+function toStringArray(value: any): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value.map((entry) => String(entry));
+}
 
 export class AgentInitializationService {
   private registry: AgentRegistry;
@@ -20,8 +117,8 @@ export class AgentInitializationService {
   private initializedAgents: Map<string, any> = new Map();
 
   constructor() {
-    this.registry = new AgentRegistry();
-    this.router = new CommunicationRouter(this.registry);
+    this.registry = agentRegistry;
+    this.router = new CommunicationRouter();
   }
 
   /**
@@ -143,7 +240,7 @@ export class AgentInitializationService {
 
   private async initializeDataEngineerAgent(): Promise<void> {
     const dataEngineer = new DataEngineerAgent();
-    
+
     const agentMetadata = {
       id: 'data_engineer',
       name: 'Data Engineer',
@@ -168,12 +265,6 @@ export class AgentInitializationService {
         escalationPath: ['technical_specialist', 'project_manager'],
         responseTime: '5-15 minutes',
         expertise: ['ETL', 'Data Quality', 'Pipeline Engineering']
-      },
-      metrics: {
-        tasksCompleted: 0,
-        averageResponseTime: 0,
-        successRate: 100,
-        errorRate: 0
       }
     };
 
@@ -287,37 +378,80 @@ export class AgentInitializationService {
         }
       };
 
-      // Create adapter for existing agent
-      const techAgentAdapter = {
-        async execute(task: any) {
-          // Adapt the existing agent's execute method
-          return await techAgent.execute?.(task) || {
-            taskId: task.id,
-            agentId: 'technical_ai',
-            status: 'success',
-            result: { message: 'Task completed by Technical AI Agent' },
-            metrics: {
-              duration: 5000,
-              resourcesUsed: ['compute', 'ai_models'],
-              tokensConsumed: 150
+      const techAgentState: AgentAdapterState = {
+        activeTasks: 0,
+        lastActivity: new Date(),
+        queuedTasks: 0,
+      };
+
+      const techAgentAdapter: AgentHandler = {
+        validateTask: () => true,
+        async execute(task: AgentTask): Promise<AgentResult> {
+          techAgentState.activeTasks++;
+          const startedAt = Date.now();
+
+          try {
+            const payload = task.payload ?? {};
+            const projectId = payload.projectId ?? task.context.projectId ?? 'unknown_project';
+            let resultData: any;
+
+            if (payload.stepName || payload.dependency || payload.project || payload.previousResults) {
+              const normalizedTask = {
+                stepName: payload.stepName ?? task.type ?? 'data_preprocessing',
+                dependency: payload.dependency ?? { metadata: payload.metadata ?? {} },
+                project: payload.project ?? {
+                  data: payload.data ?? [],
+                  schema: payload.schema ?? {},
+                },
+                previousResults: payload.previousResults ?? payload.results ?? {},
+                payload,
+              };
+
+              resultData = await techAgent.processTask(normalizedTask, projectId);
+            } else {
+              const query: TechnicalQueryType = {
+                type: mapIntentToTechnicalQueryType(payload.intent?.category ?? task.type),
+                prompt:
+                  typeof payload.userInput === 'string' && payload.userInput.trim().length > 0
+                    ? payload.userInput
+                    : 'Provide technical assistance for the current project.',
+                context: {
+                  data: payload.data,
+                  schema: payload.schema,
+                  projectId,
+                  userId: task.context.userId ?? 'unknown_user',
+                },
+                parameters: {},
+              };
+
+              resultData = await techAgent.processQuery(query);
+            }
+
+            const duration = Date.now() - startedAt;
+            return createSuccessResult(task, 'technical_ai', resultData, duration, ['compute', 'ai_models']);
+          } catch (error) {
+            const duration = Date.now() - startedAt;
+            return createFailureResult(task, 'technical_ai', error, duration, ['compute', 'ai_models']);
+          } finally {
+            techAgentState.activeTasks = Math.max(0, techAgentState.activeTasks - 1);
+            techAgentState.lastActivity = new Date();
+          }
+        },
+        async getStatus(): Promise<AgentStatus> {
+          return {
+            status: techAgentState.activeTasks > 0 ? 'busy' : 'active',
+            currentTasks: techAgentState.activeTasks,
+            queuedTasks: techAgentState.queuedTasks,
+            lastActivity: techAgentState.lastActivity,
+            resourceUsage: {
+              cpu: techAgentState.activeTasks > 0 ? 32 : 12,
+              memory: 1024,
+              storage: 35,
             },
-            completedAt: new Date()
           };
         },
-        validateTask: (task: any) => true,
-        getStatus: async () => ({
-          status: 'active' as const,
-          currentTasks: 0,
-          queuedTasks: 0,
-          lastActivity: new Date(),
-          resourceUsage: {
-            cpu: 15.5,
-            memory: 512.0,
-            storage: 25.6
-          }
-        }),
         configure: async (config: any) => console.log('Technical AI configured:', config),
-        shutdown: async () => console.log('Technical AI shutting down...')
+        shutdown: async () => console.log('Technical AI shutting down...'),
       };
 
       await this.registry.registerAgent(techMetadata, techAgentAdapter);
@@ -371,35 +505,94 @@ export class AgentInitializationService {
         }
       };
 
-      const businessAgentAdapter = {
-        async execute(task: any) {
-          return await businessAgent.execute?.(task) || {
-            taskId: task.id,
-            agentId: 'business_agent',
-            status: 'success',
-            result: { message: 'Task completed by Business Agent' },
-            metrics: {
-              duration: 8000,
-              resourcesUsed: ['compute', 'business_intelligence'],
-              tokensConsumed: 200
+      const businessAgentState: AgentAdapterState = {
+        activeTasks: 0,
+        lastActivity: new Date(),
+        queuedTasks: 0,
+      };
+
+      const businessAgentAdapter: AgentHandler = {
+        validateTask: () => true,
+        async execute(task: AgentTask): Promise<AgentResult> {
+          businessAgentState.activeTasks++;
+          const startedAt = Date.now();
+
+          try {
+            const payload = task.payload ?? {};
+            const projectId = payload.projectId ?? task.context.projectId ?? 'unknown_project';
+            let resultData: any;
+
+            if (payload.stepName || payload.dependency || payload.project || payload.previousResults) {
+              const normalizedTask = {
+                stepName: payload.stepName ?? task.type ?? 'business_analysis',
+                dependency: payload.dependency ?? { metadata: payload.metadata ?? {} },
+                project: payload.project ?? {},
+                previousResults: payload.previousResults ?? {},
+                payload,
+              };
+
+              resultData = await businessAgent.processTask(normalizedTask, projectId);
+            } else {
+              const intentCategory = payload.intent?.category ?? 'business_analysis';
+
+              switch (intentCategory) {
+                case 'business_analysis':
+                  resultData = await businessAgent.generateBusinessKPIs(
+                    payload.industry ?? 'general',
+                    payload.analysisType ?? 'business_analysis'
+                  );
+                  break;
+
+                case 'data_analysis':
+                case 'ml_request':
+                  resultData = await businessAgent.assessBusinessImpact(
+                    deriveGoals(payload, 'Understand business performance'),
+                    payload.proposedApproach ?? { method: 'standard_analysis' },
+                    payload.industry ?? 'general'
+                  );
+                  break;
+
+                default:
+                  resultData = {
+                    acknowledgement: 'Business agent received the request.',
+                    summary:
+                      typeof payload.userInput === 'string' && payload.userInput.trim().length > 0
+                        ? payload.userInput
+                        : 'No detailed business context provided.',
+                    nextSteps: [
+                      'Share industry context to unlock tailored benchmarks',
+                      'Provide explicit business goals to refine analysis options',
+                    ],
+                  };
+                  break;
+              }
+            }
+
+            const duration = Date.now() - startedAt;
+            return createSuccessResult(task, 'business_agent', resultData, duration, ['business_intelligence']);
+          } catch (error) {
+            const duration = Date.now() - startedAt;
+            return createFailureResult(task, 'business_agent', error, duration, ['business_intelligence']);
+          } finally {
+            businessAgentState.activeTasks = Math.max(0, businessAgentState.activeTasks - 1);
+            businessAgentState.lastActivity = new Date();
+          }
+        },
+        async getStatus(): Promise<AgentStatus> {
+          return {
+            status: businessAgentState.activeTasks > 0 ? 'busy' : 'active',
+            currentTasks: businessAgentState.activeTasks,
+            queuedTasks: businessAgentState.queuedTasks,
+            lastActivity: businessAgentState.lastActivity,
+            resourceUsage: {
+              cpu: businessAgentState.activeTasks > 0 ? 18 : 6,
+              memory: 512,
+              storage: 24,
             },
-            completedAt: new Date()
           };
         },
-        validateTask: (task: any) => true,
-        getStatus: async () => ({
-          status: 'active' as const,
-          currentTasks: 0,
-          queuedTasks: 0,
-          lastActivity: new Date(),
-          resourceUsage: {
-            cpu: 8.2,
-            memory: 256.0,
-            storage: 15.3
-          }
-        }),
         configure: async (config: any) => console.log('Business Agent configured:', config),
-        shutdown: async () => console.log('Business Agent shutting down...')
+        shutdown: async () => console.log('Business Agent shutting down...'),
       };
 
       await this.registry.registerAgent(businessMetadata, businessAgentAdapter);
@@ -453,35 +646,112 @@ export class AgentInitializationService {
         }
       };
 
-      const pmAgentAdapter = {
-        async execute(task: any) {
-          return await projectManager.execute?.(task) || {
-            taskId: task.id,
-            agentId: 'project_manager',
-            status: 'success',
-            result: { message: 'Task completed by Project Manager Agent' },
-            metrics: {
-              duration: 3000,
-              resourcesUsed: ['compute', 'orchestration'],
-              tokensConsumed: 100
+      const pmAgentState: AgentAdapterState = {
+        activeTasks: 0,
+        lastActivity: new Date(),
+        queuedTasks: 0,
+      };
+
+      const pmAgentAdapter: AgentHandler = {
+        validateTask: () => true,
+        async execute(task: AgentTask): Promise<AgentResult> {
+          pmAgentState.activeTasks++;
+          const startedAt = Date.now();
+
+          try {
+            const payload = task.payload ?? {};
+            const projectId = payload.projectId ?? task.context.projectId ?? payload.project?.id ?? 'unknown_project';
+            let resultData: any;
+
+            if (payload.command === 'queue_task' || payload.stepName) {
+              if (!projectId) {
+                throw new Error('Project ID is required to queue a project manager task');
+              }
+
+              const queueInput = {
+                type: (payload.type ?? payload.stepName ?? task.type ?? 'project_task') as string,
+                priority: payload.priorityLabel ?? mapPriorityToLabel(task.priority),
+                payload: {
+                  ...(payload.taskData ?? {}),
+                  ...(payload.payload ?? {}),
+                  projectId,
+                  userId: task.context.userId ?? 'system',
+                  originalPayload: payload,
+                },
+                requiredCapabilities:
+                  toStringArray(payload.requiredCapabilities) ?? task.requiredCapabilities ?? [],
+                userId: task.context.userId ?? 'system',
+                projectId,
+                preferredAgents: toStringArray(payload.preferredAgents),
+                excludeAgents: toStringArray(payload.excludeAgents),
+                estimatedDuration: payload.estimatedDuration,
+                dependencies:
+                  toStringArray(payload.dependencies) ?? toStringArray(payload.dependsOn),
+                maxRetries: payload.maxRetries,
+                timeoutMs: payload.timeoutMs,
+              };
+
+              resultData = await projectManager.queueTask(queueInput);
+            } else if ((payload.command === 'queue_workflow' || Array.isArray(payload.tasks)) && projectId) {
+              resultData = await projectManager.queueWorkflowTasks(projectId, payload.tasks);
+            } else if (
+              (payload.command === 'coordinate_goal_analysis' || payload.operation === 'coordinate_goal_analysis') &&
+              projectId
+            ) {
+              resultData = await projectManager.coordinateGoalAnalysis(
+                projectId,
+                payload.uploadedData ?? payload.data ?? {},
+                Array.isArray(payload.userGoals) ? payload.userGoals : deriveGoals(payload, 'Clarify project goals'),
+                payload.industry ?? 'general'
+              );
+            } else if (payload.dataCharacteristics) {
+              resultData = await projectManager.generateTransformationRecommendations(
+                payload.dataCharacteristics,
+                payload.journeyType ?? 'ai_guided'
+              );
+            } else if (Array.isArray(payload.transformations)) {
+              resultData = await projectManager.coordinateTransformationExecution({
+                projectId,
+                transformations: payload.transformations,
+                userGoals: Array.isArray(payload.userGoals) ? payload.userGoals : [],
+                audienceContext: payload.audienceContext ?? {},
+              });
+            } else if (payload.request === 'get_transformation_checkpoint' && projectId) {
+              resultData = await projectManager.getTransformationCheckpoint(projectId);
+            } else if (payload.request === 'artifacts' && projectId) {
+              resultData = await projectManager.getProjectArtifacts(projectId);
+            } else {
+              resultData = {
+                acknowledgement: 'Project manager received the request.',
+                guidance: 'Provide a project command, workflow, or transformation payload to continue.',
+              };
+            }
+
+            const duration = Date.now() - startedAt;
+            return createSuccessResult(task, 'project_manager', resultData, duration, ['orchestration']);
+          } catch (error) {
+            const duration = Date.now() - startedAt;
+            return createFailureResult(task, 'project_manager', error, duration, ['orchestration']);
+          } finally {
+            pmAgentState.activeTasks = Math.max(0, pmAgentState.activeTasks - 1);
+            pmAgentState.lastActivity = new Date();
+          }
+        },
+        async getStatus(): Promise<AgentStatus> {
+          return {
+            status: pmAgentState.activeTasks > 0 ? 'busy' : 'active',
+            currentTasks: pmAgentState.activeTasks,
+            queuedTasks: pmAgentState.queuedTasks,
+            lastActivity: pmAgentState.lastActivity,
+            resourceUsage: {
+              cpu: pmAgentState.activeTasks > 0 ? 20 : 8,
+              memory: 768,
+              storage: 30,
             },
-            completedAt: new Date()
           };
         },
-        validateTask: (task: any) => true,
-        getStatus: async () => ({
-          status: 'active' as const,
-          currentTasks: 0,
-          queuedTasks: 0,
-          lastActivity: new Date(),
-          resourceUsage: {
-            cpu: 12.8,
-            memory: 384.0,
-            storage: 20.1
-          }
-        }),
         configure: async (config: any) => console.log('Project Manager configured:', config),
-        shutdown: async () => console.log('Project Manager shutting down...')
+        shutdown: async () => console.log('Project Manager shutting down...'),
       };
 
       await this.registry.registerAgent(pmMetadata, pmAgentAdapter);
@@ -494,63 +764,79 @@ export class AgentInitializationService {
     console.log('🔗 Setting up inter-agent communication routes...');
 
     // Define routing rules for different scenarios
-    const routingRules = [
+  const routingRules: Array<Omit<RoutingRule, 'id' | 'createdAt'>> = [
       {
-        id: 'customer_to_support',
         name: 'Customer Inquiry Routing',
+        priority: 5,
         conditions: {
-          messageType: 'user_inquiry',
-          intent: ['support', 'question', 'help']
+          intent: ['simple_question', 'greeting', 'general_inquiry'],
         },
-        targetAgent: 'customer_support',
-        priority: 1,
-        fallbackAgents: ['project_manager']
+        actions: {
+          preferredAgentTypes: ['service'],
+          requiredCapabilities: ['customer_service'],
+          maxWaitTime: 60000,
+          escalationPath: ['coordinator'],
+          autoResponse: 'Thanks for reaching out! A support specialist is on the way.',
+        },
+        enabled: true,
       },
       {
-        id: 'technical_escalation',
-        name: 'Technical Issue Escalation',
+        name: 'Technical Analysis Routing',
+        priority: 8,
         conditions: {
-          messageType: 'escalation',
-          category: 'technical',
-          severity: ['high', 'urgent']
+          intent: ['data_analysis', 'ml_request'],
+          complexity: ['medium', 'high'] as Array<'low' | 'medium' | 'high'>,
         },
-        targetAgent: 'technical_ai',
-        priority: 1,
-        fallbackAgents: ['data_engineer', 'project_manager']
+        actions: {
+          preferredAgentTypes: ['ai_specialist'],
+          requiredCapabilities: ['statistical_analysis'],
+          maxWaitTime: 120000,
+          escalationPath: ['specialist', 'coordinator'],
+        },
+        enabled: true,
       },
       {
-        id: 'data_processing_request',
         name: 'Data Processing Routing',
+        priority: 6,
         conditions: {
-          messageType: 'task_request',
-          capabilities: ['data_transformation', 'etl_processing', 'data_cleaning']
+          intent: ['data_transformation'],
         },
-        targetAgent: 'data_engineer',
-        priority: 2,
-        fallbackAgents: ['technical_ai']
+        actions: {
+          preferredAgentTypes: ['specialist'],
+          requiredCapabilities: ['data_transformation'],
+          maxWaitTime: 180000,
+          escalationPath: ['ai_specialist'],
+        },
+        enabled: true,
       },
       {
-        id: 'business_analysis_request',
         name: 'Business Analysis Routing',
+        priority: 6,
         conditions: {
-          messageType: 'task_request',
-          capabilities: ['business_analysis', 'strategic_insights']
+          intent: ['business_analysis'],
         },
-        targetAgent: 'business_agent',
-        priority: 2,
-        fallbackAgents: ['project_manager']
+        actions: {
+          preferredAgentTypes: ['business_specialist'],
+          requiredCapabilities: ['business_analysis'],
+          maxWaitTime: 90000,
+          escalationPath: ['coordinator'],
+        },
+        enabled: true,
       },
       {
-        id: 'project_coordination',
         name: 'Project Coordination Routing',
+        priority: 7,
         conditions: {
-          messageType: 'coordination_request',
-          requiresOrchestration: true
+          keywords: ['workflow', 'coordination', 'timeline', 'plan'],
         },
-        targetAgent: 'project_manager',
-        priority: 1,
-        fallbackAgents: ['customer_support']
-      }
+        actions: {
+          preferredAgentTypes: ['coordinator'],
+          requiredCapabilities: ['project_orchestration'],
+          maxWaitTime: 120000,
+          escalationPath: ['service'],
+        },
+        enabled: true,
+      },
     ];
 
     // Register routing rules
@@ -590,18 +876,23 @@ export class AgentInitializationService {
     const systemMetrics = await this.registry.getSystemMetrics();
     
     const agentStatuses = await Promise.all(
-      registeredAgents.map(async (agent) => ({
-        id: agent.id,
-        name: agent.name,
-        status: await this.registry.getAgentStatus(agent.id),
-        lastHealth: agent.lastHealthCheck,
-        taskCount: agent.currentTasks
-      }))
+      registeredAgents.map(async (agent) => {
+        const runtimeStatus = await this.registry.getAgentStatus(agent.id);
+
+        return {
+          id: agent.id,
+          name: agent.name,
+          status: runtimeStatus?.status ?? agent.status,
+          lastHealth: agent.health?.lastHeartbeat ?? null,
+          taskCount: runtimeStatus?.currentTasks ?? agent.currentTasks,
+          queuedTasks: runtimeStatus?.queuedTasks ?? 0,
+        };
+      })
     );
 
     return {
       totalAgents: registeredAgents.length,
-      activeAgents: agentStatuses.filter(a => a.status?.status === 'active').length,
+      activeAgents: agentStatuses.filter(a => a.status === 'active').length,
       systemMetrics,
       agentStatuses,
       communicationRoutes: this.router.getRoutingRules().length,
@@ -636,7 +927,7 @@ export class AgentInitializationService {
     console.log('🎯 Demonstrating dynamic agent registration...');
 
     // Example: Register a temporary specialized agent
-    const tempAgentMetadata = {
+  const tempAgentMetadata = {
       id: 'demo_specialist',
       name: 'Demo Specialist Agent',
       description: 'Temporary agent for demonstration purposes',
@@ -648,7 +939,7 @@ export class AgentInitializationService {
           description: 'Perform demonstration tasks',
           inputTypes: ['any'],
           outputTypes: ['demo_result'],
-          complexity: 'low',
+          complexity: 'low' as const,
           estimatedDuration: 30,
           requiredResources: ['compute'],
           tags: ['demo', 'test']
@@ -656,6 +947,7 @@ export class AgentInitializationService {
       ],
       priority: 5,
       maxConcurrentTasks: 1,
+      status: 'active' as const,
       healthCheck: {
         endpoint: '/health/demo',
         interval: 60000,
@@ -666,16 +958,10 @@ export class AgentInitializationService {
         escalationPath: [],
         responseTime: '1 minute',
         expertise: ['Demo Operations']
-      },
-      metrics: {
-        tasksCompleted: 0,
-        averageResponseTime: 0,
-        successRate: 100,
-        errorRate: 0
       }
     };
 
-    const tempAgent = {
+    const tempAgent: AgentHandler = {
       async execute(task: any) {
         return {
           taskId: task.id,

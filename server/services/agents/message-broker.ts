@@ -52,6 +52,52 @@ export interface AgentStatus {
   activeConnections: number;
 }
 
+export interface BrokerEventPayload<T = any> {
+  event: string;
+  data: T;
+  timestamp: string;
+}
+
+export interface BrokerEventTelemetry {
+  event: string;
+  listenerCount: number;
+  totalEmitted: number;
+  lastEmittedAt?: number;
+  lastEmittedArgsCount?: number;
+  lastSubscribedAt?: number;
+  lastUnsubscribedAt?: number;
+  totalUncaughtErrors?: number;
+}
+
+export interface PendingCheckpointInfo {
+  checkpointId: string;
+  projectId?: string | null;
+  agentName?: string | null;
+  agentId?: string | null;
+  stepId?: string | null;
+  step?: string | null;
+  journeyId?: string | null;
+  question?: string | null;
+  options?: string[];
+  artifacts?: any[];
+  createdAt: number;
+  requestedAt: number;
+  timeoutAt?: number | null;
+  timeoutMs?: number | null;
+  resolvedAt?: number;
+  timedOutAt?: number;
+  status?: 'pending' | 'resolved' | 'timeout';
+  response?: {
+    approved: boolean;
+    feedback?: string;
+    modifications?: any;
+  };
+}
+
+interface PendingCheckpointRecord extends PendingCheckpointInfo {
+  timer: NodeJS.Timeout;
+}
+
 // ==========================================
 // MESSAGE BROKER
 // ==========================================
@@ -61,9 +107,14 @@ export class AgentMessageBroker extends EventEmitter {
   private subscriber: Redis | null = null;
   private agentChannels: Map<string, string> = new Map();
   private pendingResponses: Map<string, NodeJS.Timeout> = new Map();
+  private pendingCheckpointResponses: Map<string, PendingCheckpointRecord> = new Map();
   private agentStatuses: Map<string, AgentStatus> = new Map();
+  private eventTelemetry: Map<string | symbol, BrokerEventTelemetry> = new Map();
+  private telemetrySubscribers: Array<(payload: BrokerEventTelemetry) => void> = [];
   private redisEnabled: boolean = false;
   private fallbackMode: boolean = false;
+  private readonly uiChannelName = 'agent:user_interface';
+  private uiChannelSubscribed = false;
 
   constructor(redisUrl?: string) {
     super();
@@ -111,6 +162,9 @@ export class AgentMessageBroker extends EventEmitter {
           .then(() => {
             this.redisEnabled = true;
             console.log('✅ Agent Message Broker initialized with Redis');
+            this.subscribeToUiChannel().catch((error) => {
+              console.warn('Failed to subscribe UI channel:', error);
+            });
           })
           .catch((error) => {
             console.warn('⚠️  Redis not available, Agent Message Broker running in fallback mode (in-memory only)');
@@ -126,6 +180,73 @@ export class AgentMessageBroker extends EventEmitter {
       console.log('⚠️  Agent Message Broker running in fallback mode (Redis disabled in development)');
       this.fallbackMode = true;
       this.redisEnabled = false;
+    }
+  }
+
+  private ensureTelemetry(event: string | symbol): BrokerEventTelemetry {
+    const existing = this.eventTelemetry.get(event);
+    if (existing) {
+      return existing;
+    }
+
+    const entry: BrokerEventTelemetry = {
+      event: typeof event === 'string' ? event : event.toString(),
+      listenerCount: this.listenerCount(event),
+      totalEmitted: 0,
+    };
+
+    this.eventTelemetry.set(event, entry);
+    return entry;
+  }
+
+  private trackListenerChange(event: string | symbol, action: 'subscribe' | 'unsubscribe'): void {
+    const now = Date.now();
+    const stats = this.ensureTelemetry(event);
+    stats.listenerCount = this.listenerCount(event);
+    if (action === 'subscribe') {
+      stats.lastSubscribedAt = now;
+    } else {
+      stats.lastUnsubscribedAt = now;
+    }
+
+    const payload = {
+      ...stats,
+    };
+    super.emit('telemetry:listener_change', payload);
+    this.notifyTelemetrySubscribers(payload);
+  }
+
+  private trackEmission(event: string | symbol, argsCount: number): void {
+    const now = Date.now();
+    const stats = this.ensureTelemetry(event);
+    stats.totalEmitted += 1;
+    stats.lastEmittedAt = now;
+    stats.lastEmittedArgsCount = argsCount;
+
+    const payload = {
+      ...stats,
+    };
+    super.emit('telemetry:event_emitted', payload);
+    this.notifyTelemetrySubscribers(payload);
+  }
+
+  private trackError(event: string | symbol): void {
+    const stats = this.ensureTelemetry(event);
+    stats.totalUncaughtErrors = (stats.totalUncaughtErrors ?? 0) + 1;
+    const payload = {
+      ...stats,
+    };
+    super.emit('telemetry:event_error', payload);
+    this.notifyTelemetrySubscribers(payload);
+  }
+
+  private notifyTelemetrySubscribers(payload: BrokerEventTelemetry): void {
+    for (const subscriber of this.telemetrySubscribers) {
+      try {
+        subscriber(payload);
+      } catch (error) {
+        console.warn('Telemetry subscriber failed:', error);
+      }
     }
   }
 
@@ -154,7 +275,23 @@ export class AgentMessageBroker extends EventEmitter {
       console.log('✅ Redis subscriber connected');
       this.redisEnabled = true;
       this.fallbackMode = false;
+      this.subscribeToUiChannel().catch((error) => {
+        console.warn('Failed to subscribe UI channel after reconnect:', error);
+      });
     });
+  }
+
+  private async subscribeToUiChannel(): Promise<void> {
+    if (!this.subscriber || !this.redisEnabled || this.uiChannelSubscribed) {
+      return;
+    }
+
+    try {
+      await this.subscriber.subscribe(this.uiChannelName);
+      this.uiChannelSubscribed = true;
+    } catch (error) {
+      console.warn('Failed to subscribe to UI channel:', error);
+    }
   }
 
   // ==========================================
@@ -190,6 +327,13 @@ export class AgentMessageBroker extends EventEmitter {
 
     console.log(`Agent ${agentId} registered${this.fallbackMode ? ' (fallback mode)' : ''} on channel ${channel}`);
     this.emit('agent_registered', { agentId, channel });
+  }
+
+  /**
+   * Determine if an agent has an active channel registration.
+   */
+  isAgentRegistered(agentId: string): boolean {
+    return this.agentChannels.has(agentId);
   }
 
   /**
@@ -234,6 +378,9 @@ export class AgentMessageBroker extends EventEmitter {
       this.emit(`message:${fullMessage.type}`, fullMessage);
       if (fullMessage.to !== 'broadcast') {
         this.emit(`message:${fullMessage.to}`, fullMessage);
+      }
+      if (fullMessage.correlationId && fullMessage.type !== 'task') {
+        this.emit(`response:${fullMessage.correlationId}`, fullMessage.payload);
       }
       this.updateAgentActivity(message.from);
       this.emit('message_sent', fullMessage);
@@ -310,6 +457,89 @@ export class AgentMessageBroker extends EventEmitter {
   }
 
   // ==========================================
+  // SIMPLE EVENT PUB/SUB (LEGACY COMPAT)
+  // ==========================================
+
+  /**
+   * Lightweight publish helper for legacy code that expects a simple
+   * event bus-style interface (event name + payload).
+   */
+  async publish<T = any>(event: string, data: T): Promise<void> {
+    const payload: BrokerEventPayload<T> = {
+      event,
+      data,
+      timestamp: new Date().toISOString(),
+    };
+
+    // Emit dedicated event listeners and general event stream
+    this.emit(event, payload);
+    this.emit('event', payload);
+  }
+
+  /**
+   * Subscribe to a simple event stream. Returns an unsubscribe function
+   * to mirror common pub/sub interfaces.
+   */
+  subscribe<T = any>(
+    event: string,
+    handler: (payload: BrokerEventPayload<T>) => void
+  ): () => void {
+    this.on(event, handler as (...args: any[]) => void);
+    return () => {
+      this.off(event, handler as (...args: any[]) => void);
+    };
+  }
+
+  public override on(event: string | symbol, listener: (...args: any[]) => void): this {
+    const result = super.on(event, listener);
+    this.trackListenerChange(event, 'subscribe');
+    return result;
+  }
+
+  public override addListener(event: string | symbol, listener: (...args: any[]) => void): this {
+    const result = super.addListener(event, listener);
+    this.trackListenerChange(event, 'subscribe');
+    return result;
+  }
+
+  public override once(event: string | symbol, listener: (...args: any[]) => void): this {
+    const result = super.once(event, listener);
+    this.trackListenerChange(event, 'subscribe');
+    return result;
+  }
+
+  public override off(event: string | symbol, listener: (...args: any[]) => void): this {
+    const result = super.off(event, listener);
+    this.trackListenerChange(event, 'unsubscribe');
+    return result;
+  }
+
+  public override removeListener(event: string | symbol, listener: (...args: any[]) => void): this {
+    const result = super.removeListener(event, listener);
+    this.trackListenerChange(event, 'unsubscribe');
+    return result;
+  }
+
+  public override removeAllListeners(event?: string | symbol): this {
+    const events = event !== undefined ? [event] : this.eventNames();
+    const result = super.removeAllListeners(event as any);
+    for (const evt of events) {
+      this.trackListenerChange(evt, 'unsubscribe');
+    }
+    return result;
+  }
+
+  public override emit(event: string | symbol, ...args: any[]): boolean {
+    this.trackEmission(event, args.length);
+    try {
+      return super.emit(event, ...args);
+    } catch (error) {
+      this.trackError(event);
+      throw error;
+    }
+  }
+
+  // ==========================================
   // CHECKPOINT COMMUNICATION
   // ==========================================
 
@@ -332,19 +562,109 @@ export class AgentMessageBroker extends EventEmitter {
   /**
    * Wait for checkpoint approval from user
    */
-  async waitForCheckpointResponse(checkpointId: string, timeout: number = 300000): Promise<{
+  async waitForCheckpointResponse(
+    checkpointId: string,
+    timeout: number = 300000,
+    metadata?: Partial<PendingCheckpointInfo>
+  ): Promise<{
     approved: boolean;
     feedback?: string;
     modifications?: any;
   }> {
     return new Promise((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
+      if (this.pendingCheckpointResponses.has(checkpointId)) {
+        reject(new Error(`Checkpoint ${checkpointId} already pending`));
+        return;
+      }
+
+      const now = Date.now();
+      const timeoutAt = timeout > 0 ? now + timeout : null;
+      const timer = setTimeout(() => {
         this.off(`checkpoint:${checkpointId}`, responseHandler);
+        const pending = this.pendingCheckpointResponses.get(checkpointId);
+        this.pendingCheckpointResponses.delete(checkpointId);
+        if (pending) {
+          const { timer: _timer, ...info } = pending;
+          const payload: PendingCheckpointInfo = {
+            ...info,
+            status: 'timeout',
+            timedOutAt: Date.now(),
+          };
+          this.emit('checkpoint_timeout', payload);
+        } else {
+          this.emit('checkpoint_timeout', {
+            checkpointId,
+            projectId: metadata?.projectId ?? null,
+            agentName: metadata?.agentName ?? metadata?.agentId ?? null,
+            agentId: metadata?.agentId ?? null,
+            stepId: metadata?.stepId ?? null,
+            step: metadata?.step ?? null,
+            journeyId: metadata?.journeyId ?? null,
+            createdAt: now,
+            requestedAt: now,
+            timeoutAt,
+            timeoutMs: timeout,
+            status: 'timeout',
+            timedOutAt: Date.now(),
+          });
+        }
         reject(new Error(`Checkpoint response timeout after ${timeout}ms`));
       }, timeout);
 
+      const pendingInfo: PendingCheckpointRecord = {
+        checkpointId,
+        projectId: metadata?.projectId ?? null,
+        agentName: metadata?.agentName ?? metadata?.agentId ?? null,
+        agentId: metadata?.agentId ?? null,
+        stepId: metadata?.stepId ?? null,
+        step: metadata?.step ?? metadata?.stepId ?? null,
+        journeyId: metadata?.journeyId ?? null,
+        question: metadata?.question ?? null,
+        options: metadata?.options,
+        artifacts: metadata?.artifacts,
+        createdAt: now,
+        requestedAt: now,
+        timeoutAt,
+        timeoutMs: timeout,
+        status: 'pending',
+        timer,
+      };
+
+      this.pendingCheckpointResponses.set(checkpointId, pendingInfo);
+      const { timer: _timer, ...pendingEmit } = pendingInfo;
+      this.emit('checkpoint_pending', pendingEmit);
+
       const responseHandler = (response: any) => {
-        clearTimeout(timeoutId);
+        const pending = this.pendingCheckpointResponses.get(checkpointId);
+        if (pending) {
+          clearTimeout(pending.timer);
+          this.pendingCheckpointResponses.delete(checkpointId);
+          const { timer: pendingTimer, ...info } = pending;
+          const payload: PendingCheckpointInfo = {
+            ...info,
+            status: 'resolved',
+            resolvedAt: Date.now(),
+            response,
+          };
+          this.emit('checkpoint_resolved', payload);
+        } else {
+          this.emit('checkpoint_resolved', {
+            checkpointId,
+            projectId: metadata?.projectId ?? null,
+            agentName: metadata?.agentName ?? metadata?.agentId ?? null,
+            agentId: metadata?.agentId ?? null,
+            stepId: metadata?.stepId ?? null,
+            step: metadata?.step ?? metadata?.stepId ?? null,
+            journeyId: metadata?.journeyId ?? null,
+            createdAt: now,
+            requestedAt: now,
+            timeoutAt,
+            timeoutMs: timeout,
+            status: 'resolved',
+            resolvedAt: Date.now(),
+            response,
+          });
+        }
         resolve(response);
       };
 
@@ -360,7 +680,16 @@ export class AgentMessageBroker extends EventEmitter {
     feedback?: string;
     modifications?: any;
   }): Promise<void> {
+    const pending = this.pendingCheckpointResponses.get(checkpointId);
     this.emit(`checkpoint:${checkpointId}`, response);
+    if (!pending) {
+      this.emit('checkpoint_resolved', {
+        checkpointId,
+        status: 'resolved',
+        resolvedAt: Date.now(),
+        response,
+      });
+    }
   }
 
   // ==========================================
@@ -420,7 +749,7 @@ export class AgentMessageBroker extends EventEmitter {
       const parsed: AgentMessage = JSON.parse(message);
 
       // Handle correlation responses
-      if (parsed.correlationId) {
+      if (parsed.correlationId && parsed.type !== 'task') {
         this.emit(`response:${parsed.correlationId}`, parsed.payload);
       }
 
@@ -492,6 +821,7 @@ export class AgentMessageBroker extends EventEmitter {
     uptime: number;
     redisEnabled: boolean;
     fallbackMode: boolean;
+    pendingCheckpoints: number;
   } {
     return {
       registeredAgents: this.agentChannels.size,
@@ -500,6 +830,33 @@ export class AgentMessageBroker extends EventEmitter {
       uptime: process.uptime(),
       redisEnabled: this.redisEnabled,
       fallbackMode: this.fallbackMode,
+      pendingCheckpoints: this.pendingCheckpointResponses.size,
+    };
+  }
+
+  getPendingCheckpoints(projectId?: string): PendingCheckpointInfo[] {
+    const all = Array.from(this.pendingCheckpointResponses.values());
+    return all
+      .filter((info) => !projectId || info.projectId === projectId)
+      .map(({ timer: _timer, ...info }) => ({ ...info }));
+  }
+
+  getEventTelemetry(event?: string): BrokerEventTelemetry[] {
+    const telemetry = Array.from(this.eventTelemetry.values());
+    if (!event) {
+      return telemetry.map((entry) => ({ ...entry }));
+    }
+
+    return telemetry.filter((entry) => entry.event === event).map((entry) => ({ ...entry }));
+  }
+
+  onTelemetryUpdate(listener: (payload: BrokerEventTelemetry) => void): () => void {
+    this.telemetrySubscribers.push(listener);
+    return () => {
+      const index = this.telemetrySubscribers.indexOf(listener);
+      if (index >= 0) {
+        this.telemetrySubscribers.splice(index, 1);
+      }
     };
   }
 
@@ -518,6 +875,10 @@ export class AgentMessageBroker extends EventEmitter {
       clearTimeout(timeout);
     }
     this.pendingResponses.clear();
+    for (const pending of this.pendingCheckpointResponses.values()) {
+      clearTimeout(pending.timer);
+    }
+    this.pendingCheckpointResponses.clear();
 
     // Clear all agent tracking maps
     this.agentStatuses.clear();
@@ -540,6 +901,8 @@ export class AgentMessageBroker extends EventEmitter {
         console.warn('Error closing publisher connection:', error);
       }
     }
+
+    this.uiChannelSubscribed = false;
 
     this.removeAllListeners();
 

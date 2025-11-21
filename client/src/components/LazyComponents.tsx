@@ -16,10 +16,14 @@ export const LazyAIInsightsPanel = lazy(() => import('./ai-insights-panel'));
 export const LazyAIChat = lazy(() => import('./ai-chat'));
 export const LazyAdvancedAnalysisModal = lazy(() => import('./advanced-analysis-modal'));
 export const LazyVisualizationWorkshop = lazy(() => import('./visualization-workshop'));
-export const LazyDescriptiveStats = lazy(() => import('./descriptive-stats'));
+export const LazyDescriptiveStats = lazy(() =>
+  import('./descriptive-stats').then(module => ({ default: module.DescriptiveStats }))
+);
 export const LazyTimeSeriesAnalysis = lazy(() => import('./time-series-analysis'));
 export const LazyDataTransformation = lazy(() => import('./data-transformation'));
-export const LazySchemaAnalysis = lazy(() => import('./SchemaAnalysis'));
+export const LazySchemaAnalysis = lazy(() =>
+  import('./SchemaAnalysis').then(module => ({ default: module.SchemaAnalysis }))
+);
 
 // Wrapped lazy components with Suspense
 export const AIInsightsPanelLazy = (props: any) => (

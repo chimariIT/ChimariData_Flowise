@@ -84,14 +84,19 @@ export function WorkflowTransparencyDashboard({
   const [activeTab, setActiveTab] = useState('overview');
   const [showQuestionDialog, setShowQuestionDialog] = useState(false);
 
+  // Check if user is authenticated
+  const isAuthenticated = !!localStorage.getItem('auth_token');
+
   // Fetch workflow data
   const { data: workflowData, isLoading } = useQuery({
     queryKey: ['workflow', projectId],
     queryFn: async () => {
       const response = await apiClient.get(`/api/workflow/transparency/${projectId}`);
-      return response.data;
+      // API returns the workflow object directly, not wrapped in data
+      return response ?? null;
     },
-    refetchInterval: 5000 // Refresh every 5 seconds
+    refetchInterval: 5000, // Refresh every 5 seconds
+    enabled: isAuthenticated && !!projectId // Only fetch if authenticated and projectId exists
   });
 
   // Fetch agent activities
@@ -99,9 +104,16 @@ export function WorkflowTransparencyDashboard({
     queryKey: ['agent-activities', projectId],
     queryFn: async () => {
       const response = await apiClient.get(`/api/agents/activities/${projectId}`);
-      return response.data;
+      if (Array.isArray(response?.data)) {
+        return response.data;
+      }
+      if (Array.isArray(response)) {
+        return response;
+      }
+      return [];
     },
-    refetchInterval: 3000 // More frequent updates for agent activities
+    refetchInterval: 3000, // More frequent updates for agent activities
+    enabled: isAuthenticated && !!projectId // Only fetch if authenticated and projectId exists
   });
 
   // Fetch decision audit trail
@@ -109,31 +121,26 @@ export function WorkflowTransparencyDashboard({
     queryKey: ['decision-audit', projectId],
     queryFn: async () => {
       const response = await apiClient.get(`/api/workflow/decisions/${projectId}`);
-      return response.data;
-    }
+      if (Array.isArray(response)) {
+        return response;
+      }
+      if (Array.isArray(response?.data)) {
+        return response.data;
+      }
+      return [];
+    },
+    enabled: isAuthenticated && !!projectId // Only fetch if authenticated and projectId exists
   });
-  // Fallback demo data to satisfy tests when API has no data
-  const fallbackWorkflow = {
-    completedSteps: 1,
-    totalSteps: 3,
-    estimatedCompletion: 'Soon',
-    currentPhase: 'Initialization',
-    steps: [
-      { id: 's1', title: 'Ingest Data', description: 'Load dataset into project', status: 'completed', agent: 'project_manager', estimatedDuration: 5, actualDuration: 5, decisions: [], artifacts: [], dependencies: [] },
-      { id: 's2', title: 'Analyze', description: 'Run core analysis', status: 'in_progress', agent: 'data_scientist', estimatedDuration: 10, actualDuration: 4, decisions: [], artifacts: [], dependencies: ['s1'] },
-      { id: 's3', title: 'Report', description: 'Generate insights', status: 'pending', agent: 'business_agent', estimatedDuration: 5, decisions: [], artifacts: [], dependencies: ['s2'] }
-    ] as WorkflowStep[]
-  };
+  // Use real data only - don't show hard-coded fallbacks
+  const workflowDataSafe = workflowData && (workflowData.steps?.length || 0) > 0 ? workflowData : null;
+  const agentActivitiesSafe: AgentActivity[] = agentActivities && agentActivities.length > 0 ? agentActivities : [];
+  const decisionAuditSafe: DecisionAudit[] = Array.isArray(decisionAudit) ? decisionAudit : [];
 
-  const workflowDataSafe = (workflowData && (workflowData.steps?.length || 0) > 0) ? workflowData : fallbackWorkflow;
-  const agentActivitiesSafe: AgentActivity[] = (agentActivities && agentActivities.length > 0) ? agentActivities : [
-    { id: 'pm', agent: 'project_manager', activity: 'Coordinating workflow', status: 'active', currentTask: 'Validating schema', progress: 60, estimatedCompletion: new Date(), lastUpdate: new Date() },
-    { id: 'ds', agent: 'data_scientist', activity: 'Running regression', status: 'active', currentTask: 'Fitting model', progress: 40, estimatedCompletion: new Date(), lastUpdate: new Date() },
-    { id: 'ba', agent: 'business_agent', activity: 'Drafting summary', status: 'idle', currentTask: 'Awaiting results', progress: 0, estimatedCompletion: new Date(), lastUpdate: new Date() }
-  ];
-  const decisionAuditSafe: DecisionAudit[] = (decisionAudit && decisionAudit.length > 0) ? decisionAudit : [
-    { id: 'd1', agent: 'project_manager', decisionType: 'scope', decision: 'Focus on Q4 cohort', reasoning: 'Highest variance; most impact', alternatives: ['All months', 'Q3+Q4'], confidence: 85, context: {}, impact: 'high', reversible: true, timestamp: new Date() }
-  ];
+  useEffect(() => {
+    if (selectedDecision && !decisionAuditSafe.some((decision) => decision.id === selectedDecision.id)) {
+      setSelectedDecision(null);
+    }
+  }, [decisionAuditSafe, selectedDecision]);
 
   const getStepIcon = (step: WorkflowStep) => {
     switch (step.status) {
@@ -228,16 +235,20 @@ export function WorkflowTransparencyDashboard({
                   </span>
                 </div>
                 <Progress
-                  value={(workflowDataSafe.completedSteps / workflowDataSafe.totalSteps) * 100 || 0}
+                  value={workflowDataSafe ? (workflowDataSafe.completedSteps / workflowDataSafe.totalSteps) * 100 : 0}
                   className="h-2"
                   data-testid="workflow-progress"
                 />
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-gray-500">
-                    Estimated completion: {workflowData?.estimatedCompletion || 'Calculating...'}
+                    Estimated completion: {
+                      workflowDataSafe?.estimatedCompletion 
+                        ? workflowDataSafe.estimatedCompletion 
+                        : 'Not available - workflow not started'
+                    }
                   </span>
                   <span className="text-gray-500">
-                    {workflowData?.currentPhase || 'Initializing'}
+                    {workflowDataSafe?.currentPhase || 'No active workflow'}
                   </span>
                 </div>
               </div>
@@ -253,123 +264,147 @@ export function WorkflowTransparencyDashboard({
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <ScrollArea className="h-96">
-                <div className="space-y-4">
-                    {workflowDataSafe?.steps?.map((step: WorkflowStep, index: number) => (
-                    <div
-                      key={step.id}
-                      className={`p-4 border rounded-lg cursor-pointer transition-colors ${
-                        selectedStep?.id === step.id
-                          ? 'border-blue-500 bg-blue-50'
-                          : 'border-gray-200 hover:border-gray-300'
-                      }`}
-                      onClick={() => setSelectedStep(step)}
-                      data-testid="workflow-step"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-3">
-                          {getStepIcon(step)}
-                          <div>
-                            <h4 className="font-medium">{step.title}</h4>
-                            <p className="text-sm text-gray-600">{step.description}</p>
+              {workflowDataSafe?.steps && workflowDataSafe.steps.length > 0 ? (
+                <ScrollArea className="h-96">
+                  <div className="space-y-4">
+                    {workflowDataSafe.steps.map((step: WorkflowStep, index: number) => (
+                      <div
+                        key={step.id}
+                        className={`p-4 border rounded-lg cursor-pointer transition-colors ${
+                          selectedStep?.id === step.id
+                            ? 'border-blue-500 bg-blue-50'
+                            : 'border-gray-200 hover:border-gray-300'
+                        }`}
+                        onClick={() => setSelectedStep(step)}
+                        data-testid="workflow-step"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-3">
+                            {getStepIcon(step)}
+                            <div>
+                              <h4 className="font-medium">{step.title}</h4>
+                              <p className="text-sm text-gray-600">{step.description}</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <Badge variant="outline">{step.agent}</Badge>
+                            <ChevronRight className="w-4 h-4 text-gray-400" />
                           </div>
                         </div>
-                        <div className="flex items-center space-x-2">
-                          <Badge variant="outline">{step.agent}</Badge>
-                          <ChevronRight className="w-4 h-4 text-gray-400" />
-                        </div>
-                      </div>
 
-                      {step.status === 'in_progress' && (
-                        <div className="mt-3">
-                          <div className="flex items-center justify-between text-sm mb-1">
-                            <span>Progress</span>
-                            <span>{Math.round(((step.actualDuration || 0) / step.estimatedDuration) * 100)}%</span>
+                        {step.status === 'in_progress' && (
+                          <div className="mt-3">
+                            <div className="flex items-center justify-between text-sm mb-1">
+                              <span>Progress</span>
+                              <span>{Math.round(((step.actualDuration || 0) / step.estimatedDuration) * 100)}%</span>
+                            </div>
+                            <Progress
+                              value={((step.actualDuration || 0) / step.estimatedDuration) * 100}
+                              className="h-1"
+                            />
                           </div>
-                          <Progress
-                            value={((step.actualDuration || 0) / step.estimatedDuration) * 100}
-                            className="h-1"
-                          />
-                        </div>
-                      )}
+                        )}
 
-                      {step.decisions.length > 0 && (
-                        <div className="mt-3 flex items-center space-x-2">
-                          <Badge variant="secondary" className="text-xs">
-                            {step.decisions.length} decisions
-                          </Badge>
-                          {step.artifacts.length > 0 && (
+                        {step.decisions.length > 0 && (
+                          <div className="mt-3 flex items-center space-x-2">
                             <Badge variant="secondary" className="text-xs">
-                              {step.artifacts.length} artifacts
+                              {step.decisions.length} decisions
                             </Badge>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                            {step.artifacts.length > 0 && (
+                              <Badge variant="secondary" className="text-xs">
+                                {step.artifacts.length} artifacts
+                              </Badge>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+              ) : (
+                <div className="py-8 text-center text-gray-500">
+                  <p>No workflow steps available yet.</p>
+                  <p className="text-sm mt-2">Workflow steps will appear here once the journey is initialized.</p>
                 </div>
-              </ScrollArea>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
 
         {/* Agent Activities Tab */}
         <TabsContent value="agents" className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {agentActivitiesSafe?.map((agent: AgentActivity) => {
-              const nameMap: Record<string, string> = {
-                project_manager: 'project-manager',
-                data_scientist: 'data-scientist',
-                business_agent: 'business-agent'
-              };
-              const testId = `agent-card-${nameMap[agent.agent] || agent.agent}`;
-              return (
-              <Card key={agent.id} data-testid={testId}>
-                <CardHeader className="pb-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-2">
-                      {getAgentIcon(agent.agent)}
-                      <CardTitle className="text-lg capitalize">
-                        {agent.agent.replace('_', ' ')}
-                      </CardTitle>
-                    </div>
-                    <Badge
-                      variant={agent.status === 'active' ? 'default' : 'secondary'}
-                      className="capitalize"
-                      data-testid="activity-status"
-                    >
-                      {agent.status.replace('_', ' ')}
-                    </Badge>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    <div>
-                      <h4 className="font-medium mb-1">Current Activity</h4>
-                      <p className="text-sm text-gray-600" data-testid="current-task">{agent.activity}</p>
-                    </div>
-
-                    <div>
-                      <h4 className="font-medium mb-1">Current Task</h4>
-                      <p className="text-sm text-gray-600">{agent.currentTask}</p>
-                    </div>
-
-                    <div>
-                      <div className="flex items-center justify-between text-sm mb-1">
-                        <span>Task Progress</span>
-                        <span>{agent.progress}%</span>
+          {agentActivitiesSafe.length === 0 ? (
+            <Card>
+              <CardContent className="py-8 text-center text-gray-500">
+                <p>No agent activities available yet.</p>
+                <p className="text-sm mt-2">Agent activities will appear here once the journey progresses.</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {agentActivitiesSafe.map((agent: AgentActivity) => {
+                const nameMap: Record<string, string> = {
+                  project_manager: 'project-manager',
+                  data_scientist: 'data-scientist',
+                  business_agent: 'business-agent'
+                };
+                const testId = `agent-card-${nameMap[agent.agent] || agent.agent}`;
+                return (
+                  <Card key={agent.id} data-testid={testId}>
+                    <CardHeader className="pb-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2">
+                          {getAgentIcon(agent.agent)}
+                          <CardTitle className="text-lg capitalize">
+                            {agent.agent.replace('_', ' ')}
+                          </CardTitle>
+                        </div>
+                        <Badge
+                          variant={agent.status === 'active' ? 'default' : 'secondary'}
+                          className="capitalize"
+                          data-testid="activity-status"
+                        >
+                          {agent.status.replace('_', ' ')}
+                        </Badge>
                       </div>
-                      <Progress value={agent.progress} className="h-1" data-testid="task-progress" />
-                    </div>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-4">
+                        <div>
+                          <h4 className="font-medium mb-1">Current Activity</h4>
+                          <p className="text-sm text-gray-600" data-testid="current-task">{agent.activity}</p>
+                        </div>
 
-                    <div className="text-xs text-gray-500">
-                      Estimated completion: {new Date(agent.estimatedCompletion).toLocaleTimeString()}
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            )})}
-          </div>
+                        <div>
+                          <h4 className="font-medium mb-1">Current Task</h4>
+                          <p className="text-sm text-gray-600">{agent.currentTask}</p>
+                        </div>
+
+                        <div>
+                          <div className="flex items-center justify-between text-sm mb-1">
+                            <span>Task Progress</span>
+                            <span>{agent.progress ?? 0}%</span>
+                          </div>
+                          <Progress value={agent.progress ?? 0} className="h-1" data-testid="task-progress" />
+                        </div>
+
+                        {agent.estimatedCompletion && (
+                          <div className="text-xs text-gray-500">
+                            Estimated completion: {new Date(agent.estimatedCompletion).toLocaleTimeString()}
+                          </div>
+                        )}
+                        {!agent.estimatedCompletion && agent.status === 'active' && (
+                          <div className="text-xs text-gray-400 italic">
+                            Calculating completion time...
+                          </div>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
         </TabsContent>
 
         {/* Decision Trail Tab */}
@@ -385,79 +420,86 @@ export function WorkflowTransparencyDashboard({
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <ScrollArea className="h-96">
-                <div className="space-y-4">
-                  {decisionAuditSafe?.map((decision: DecisionAudit) => (
-                    <div
-                      key={decision.id}
-                      className={`p-4 border rounded-lg cursor-pointer transition-colors ${
-                        selectedDecision?.id === decision.id
-                          ? 'border-blue-500 bg-blue-50'
-                          : 'border-gray-200 hover:border-gray-300'
-                      }`}
-                      onClick={() => setSelectedDecision(decision)}
-                      data-testid="decision-entry"
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-start space-x-3">
-                          {getAgentIcon(decision.agent)}
-                          <div className="flex-1">
-                            <div className="flex items-center space-x-2">
-                              <h4 className="font-medium" data-testid="decision-text">{decision.decision}</h4>
-                              <Badge
-                                variant="outline"
-                                className={getImpactColor(decision.impact)}
-                              >
-                                {decision.impact} impact
-                              </Badge>
-                            </div>
-                            <p className="text-sm text-gray-600 mt-1" data-testid="decision-reasoning">
-                              {decision.reasoning}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-xs text-gray-500">
-                            {new Date(decision.timestamp).toLocaleString()}
-                          </div>
-                          <div className="text-xs text-gray-600 mt-1" data-testid="decision-confidence">
-                            {decision.confidence}% confidence
-                          </div>
-                        </div>
-                      </div>
-
-                      {decision.alternatives.length > 0 && (
-                        <div className="mt-3 pt-3 border-t border-gray-100">
-                          <p className="text-xs font-medium text-gray-700 mb-1">
-                            Alternatives Considered:
-                          </p>
-                          <div className="flex flex-wrap gap-1">
-                            {decision.alternatives.map((alt, index) => (
-                              <Badge key={index} variant="outline" className="text-xs">
-                                {alt}
-                              </Badge>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {decision.reversible && (
-                        <div className="mt-2">
-                          <Button variant="ghost" size="sm" className="text-xs" onClick={() => setShowQuestionDialog(true)}>
-                            <MessageCircle className="w-3 h-3 icon-gap" />
-                            Question this decision
-                          </Button>
-                          {showQuestionDialog && (
-                            <div data-testid="question-decision-dialog" className="mt-2 p-2 border rounded bg-gray-50 text-sm">
-                              Tell us why you are questioning this decision.
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  ))}
+              {decisionAuditSafe.length === 0 ? (
+                <div className="py-8 text-center text-gray-500">
+                  <p>No decisions recorded yet.</p>
+                  <p className="text-sm mt-2">Agents will log decisions as the workflow progresses.</p>
                 </div>
-              </ScrollArea>
+              ) : (
+                <ScrollArea className="h-96">
+                  <div className="space-y-4">
+                    {decisionAuditSafe.map((decision: DecisionAudit) => (
+                      <div
+                        key={decision.id}
+                        className={`p-4 border rounded-lg cursor-pointer transition-colors ${
+                          selectedDecision?.id === decision.id
+                            ? 'border-blue-500 bg-blue-50'
+                            : 'border-gray-200 hover:border-gray-300'
+                        }`}
+                        onClick={() => setSelectedDecision(decision)}
+                        data-testid="decision-entry"
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex items-start space-x-3">
+                            {getAgentIcon(decision.agent)}
+                            <div className="flex-1">
+                              <div className="flex items-center space-x-2">
+                                <h4 className="font-medium" data-testid="decision-text">{decision.decision}</h4>
+                                <Badge
+                                  variant="outline"
+                                  className={getImpactColor(decision.impact)}
+                                >
+                                  {decision.impact} impact
+                                </Badge>
+                              </div>
+                              <p className="text-sm text-gray-600 mt-1" data-testid="decision-reasoning">
+                                {decision.reasoning}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-xs text-gray-500">
+                              {new Date(decision.timestamp).toLocaleString()}
+                            </div>
+                            <div className="text-xs text-gray-600 mt-1" data-testid="decision-confidence">
+                              {decision.confidence}% confidence
+                            </div>
+                          </div>
+                        </div>
+
+                        {decision.alternatives.length > 0 && (
+                          <div className="mt-3 pt-3 border-t border-gray-100">
+                            <p className="text-xs font-medium text-gray-700 mb-1">
+                              Alternatives Considered:
+                            </p>
+                            <div className="flex flex-wrap gap-1">
+                              {decision.alternatives.map((alt, index) => (
+                                <Badge key={index} variant="outline" className="text-xs">
+                                  {alt}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {decision.reversible && (
+                          <div className="mt-2">
+                            <Button variant="ghost" size="sm" className="text-xs" onClick={() => setShowQuestionDialog(true)}>
+                              <MessageCircle className="w-3 h-3 icon-gap" />
+                              Question this decision
+                            </Button>
+                            {showQuestionDialog && (
+                              <div data-testid="question-decision-dialog" className="mt-2 p-2 border rounded bg-gray-50 text-sm">
+                                Tell us why you are questioning this decision.
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

@@ -14,7 +14,6 @@ export interface Permission {
   action: 'create' | 'read' | 'update' | 'delete' | 'manage';
 }
 
-// Define role hierarchy and permissions
 export const ROLES: Record<string, UserRole> = {
   USER: {
     id: 'user',
@@ -51,54 +50,91 @@ export const ROLES: Record<string, UserRole> = {
     id: 'super_admin',
     name: 'Super Admin',
     permissions: [
-      '*:*' // All permissions
+      '*:*'
     ]
   }
 };
 
-// Permission patterns for different resources
 export const PERMISSION_PATTERNS = {
-  // User management
   'users:create': 'Create new users',
   'users:read': 'View user information',
   'users:update': 'Modify user data',
   'users:delete': 'Delete users',
   'users:manage': 'Full user management',
-
-  // Project management
   'projects:create': 'Create new projects',
   'projects:read': 'View projects',
   'projects:update': 'Modify projects',
   'projects:delete': 'Delete projects',
   'projects:manage': 'Full project management',
-
-  // Agent management
   'agents:interact': 'Interact with AI agents',
   'agents:configure': 'Configure agent settings',
   'agents:manage': 'Full agent management',
-
-  // Billing and subscriptions
   'billing:read': 'View billing information',
   'billing:update': 'Modify billing settings',
   'billing:manage': 'Full billing management',
   'subscriptions:manage': 'Manage subscriptions',
-
-  // System administration
   'system:manage': 'System administration',
   'analytics:read': 'View system analytics',
-  'tools:manage': 'Manage MCP tools',
+  'tools:manage': 'Manage MCP tools'
 };
 
-/**
- * Get user role from database or default to USER
- */
+const CHIMARI_ADMIN_DOMAIN = '@chimaridata.com';
+
+export function isChimariEmail(email: unknown): boolean {
+  if (typeof email !== 'string') {
+    return false;
+  }
+
+  return email.trim().toLowerCase().endsWith(CHIMARI_ADMIN_DOMAIN);
+}
+
+export function isUserAdmin(user: any): boolean {
+  if (!user) {
+    return false;
+  }
+
+  const normalizedRole = typeof user.role === 'string' ? user.role.toLowerCase() : '';
+  const hasAdminFlag =
+    user.isAdmin === true ||
+    normalizedRole === 'admin' ||
+    normalizedRole === 'super_admin' ||
+    normalizedRole === 'superadmin';
+
+  if (!hasAdminFlag) {
+    return false;
+  }
+
+  if (!isChimariEmail(user.email)) {
+    console.warn(`[RBAC] User ${user.email ?? '<unknown>'} flagged as admin but lacks @chimaridata.com email`);
+    return false;
+  }
+
+  return true;
+}
+
 async function getUserRole(userId: string): Promise<UserRole> {
   try {
     const user = await storage.getUser(userId);
-    const userRole = (user as any)?.role || 'user';
-    
-    // Map database role to our role system
-    switch (userRole.toLowerCase()) {
+
+    if (!user) {
+      return ROLES.USER;
+    }
+
+    if (isUserAdmin(user)) {
+      const normalizedRole =
+        typeof (user as any).role === 'string' ? (user as any).role.toLowerCase() : 'admin';
+
+      if (normalizedRole === 'super_admin' || normalizedRole === 'superadmin') {
+        return ROLES.SUPER_ADMIN;
+      }
+
+      return ROLES.ADMIN;
+    }
+
+    const userRole =
+      typeof (user as any).role === 'string' ? (user as any).role.toLowerCase() : 'user';
+
+    switch (userRole) {
       case 'admin':
         return ROLES.ADMIN;
       case 'super_admin':
@@ -109,38 +145,28 @@ async function getUserRole(userId: string): Promise<UserRole> {
     }
   } catch (error) {
     console.error('Error fetching user role:', error);
-    return ROLES.USER; // Default to user role
+    return ROLES.USER;
   }
 }
 
-/**
- * Check if a role has a specific permission
- */
 function hasPermission(role: UserRole, resource: string, action: string): boolean {
   const permission = `${resource}:${action}`;
-  
-  // Super admin wildcard
+
   if (role.permissions.includes('*:*')) {
     return true;
   }
-  
-  // Exact permission match
+
   if (role.permissions.includes(permission)) {
     return true;
   }
-  
-  // Resource wildcard (e.g., "projects:manage" includes "projects:read")
-  const resourceWildcard = `${resource}:manage`;
-  if (role.permissions.includes(resourceWildcard)) {
+
+  if (role.permissions.includes(`${resource}:manage`)) {
     return true;
   }
-  
+
   return false;
 }
 
-/**
- * Middleware to require authentication
- */
 export const requireAuth = (req: Request, res: Response, next: NextFunction) => {
   if (!req.user) {
     return res.status(401).json({
@@ -152,9 +178,6 @@ export const requireAuth = (req: Request, res: Response, next: NextFunction) => 
   next();
 };
 
-/**
- * Middleware to require specific permission
- */
 export const requirePermission = (resource: string, action: string) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -168,7 +191,7 @@ export const requirePermission = (resource: string, action: string) => {
 
       const userId = (req.user as any).id;
       const userRole = await getUserRole(userId);
-      
+
       if (!hasPermission(userRole, resource, action)) {
         return res.status(403).json({
           success: false,
@@ -179,10 +202,9 @@ export const requirePermission = (resource: string, action: string) => {
         });
       }
 
-      // Add role and permissions to request for further use
       (req as any).userRole = userRole;
       next();
-    } catch (error: any) {
+    } catch (error) {
       console.error('Permission check error:', error);
       res.status(500).json({
         success: false,
@@ -193,14 +215,50 @@ export const requirePermission = (resource: string, action: string) => {
   };
 };
 
-/**
- * Middleware to require admin role
- */
-export const requireAdmin = requirePermission('system', 'manage');
+export const requireAdmin = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        error: 'Authentication required',
+        code: 'AUTH_REQUIRED'
+      });
+    }
 
-/**
- * Middleware to require super admin role
- */
+    if (!isUserAdmin(req.user)) {
+      const userEmail = (req.user as any)?.email;
+      console.warn(`[RBAC] Admin access denied for user: ${userEmail ?? '<unknown>'}`);
+      return res.status(403).json({
+        success: false,
+        error: 'Admin privileges required',
+        code: 'ADMIN_REQUIRED'
+      });
+    }
+
+    const userId = (req.user as any).id;
+    const userRole = await getUserRole(userId);
+
+    if (!hasPermission(userRole, 'system', 'manage')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Admin privileges required',
+        code: 'ADMIN_REQUIRED',
+        user_role: userRole.name
+      });
+    }
+
+    (req as any).userRole = userRole;
+    next();
+  } catch (error) {
+    console.error('Admin check error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error during admin check',
+      code: 'ADMIN_CHECK_ERROR'
+    });
+  }
+};
+
 export const requireSuperAdmin = async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!req.user) {
@@ -213,7 +271,7 @@ export const requireSuperAdmin = async (req: Request, res: Response, next: NextF
 
     const userId = (req.user as any).id;
     const userRole = await getUserRole(userId);
-    
+
     if (userRole.id !== 'super_admin') {
       return res.status(403).json({
         success: false,
@@ -225,7 +283,7 @@ export const requireSuperAdmin = async (req: Request, res: Response, next: NextF
 
     (req as any).userRole = userRole;
     next();
-  } catch (error: any) {
+  } catch (error) {
     console.error('Super admin check error:', error);
     res.status(500).json({
       success: false,
@@ -235,9 +293,6 @@ export const requireSuperAdmin = async (req: Request, res: Response, next: NextF
   }
 };
 
-/**
- * Middleware to check resource ownership
- */
 export const requireOwnership = (resourceType: 'project' | 'dataset') => {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -250,8 +305,9 @@ export const requireOwnership = (resourceType: 'project' | 'dataset') => {
       }
 
       const userId = (req.user as any).id;
-      const resourceId = req.params.id || req.params.projectId || req.params.datasetId;
-      
+      const resourceId =
+        req.params.id ?? req.params.projectId ?? req.params.datasetId;
+
       if (!resourceId) {
         return res.status(400).json({
           success: false,
@@ -260,21 +316,25 @@ export const requireOwnership = (resourceType: 'project' | 'dataset') => {
         });
       }
 
-      // Check if user is admin (bypass ownership check)
+      const user = await storage.getUser(userId);
       const userRole = await getUserRole(userId);
-      if (hasPermission(userRole, resourceType + 's', 'manage')) {
+
+      if (isUserAdmin(user) || hasPermission(userRole, `${resourceType}s`, 'manage')) {
         (req as any).userRole = userRole;
         return next();
       }
 
-      // Check ownership
       let isOwner = false;
+
       if (resourceType === 'project') {
         const project = await storage.getProject(resourceId);
-        const ownerId = (project as any)?.ownerId || (project as any)?.userId;
-        isOwner = ownerId === userId;
+        const ownerId = (project as any)?.ownerId ?? (project as any)?.userId;
+        isOwner = !!project && ownerId === userId;
+      } else if (resourceType === 'dataset') {
+        const dataset = await (storage as any).getDataset?.(resourceId);
+        const ownerId = dataset ? (dataset as any).ownerId ?? (dataset as any).userId : undefined;
+        isOwner = !!dataset && ownerId === userId;
       }
-      // Add other resource types as needed
 
       if (!isOwner) {
         return res.status(403).json({
@@ -286,7 +346,7 @@ export const requireOwnership = (resourceType: 'project' | 'dataset') => {
 
       (req as any).userRole = userRole;
       next();
-    } catch (error: any) {
+    } catch (error) {
       console.error('Ownership check error:', error);
       res.status(500).json({
         success: false,
@@ -297,9 +357,6 @@ export const requireOwnership = (resourceType: 'project' | 'dataset') => {
   };
 };
 
-/**
- * Helper function to get user permissions for frontend
- */
 export async function getUserPermissions(userId: string): Promise<{
   role: UserRole;
   permissions: string[];

@@ -21,11 +21,15 @@ router.get('/health', async (req, res) => {
             environment: process.env.NODE_ENV || 'development'
         });
     } catch (error) {
-        console.error('Error checking service health:', error);
-        res.status(500).json({
+        console.error('⚠️ Health check degraded:', error);
+        // Return 200 with degraded status instead of 500 to prevent UI errors
+        res.status(200).json({
             allServicesOperational: false,
-            error: 'Failed to check service health',
-            details: error instanceof Error ? error.message : String(error)
+            degraded: true,
+            error: error instanceof Error ? error.message : 'Unknown error',
+            details: error instanceof Error ? error.message : String(error),
+            timestamp: new Date().toISOString(),
+            environment: process.env.NODE_ENV || 'development'
         });
     }
 });
@@ -66,7 +70,7 @@ router.get('/status', async (req, res) => {
             },
             agents: {
                 registered: agents.length,
-                active: agents.filter(a => a.status === 'ready').length,
+                active: agents.filter(a => a.status === 'active').length,
                 list: agents.map(a => ({
                     id: a.id,
                     name: a.name,

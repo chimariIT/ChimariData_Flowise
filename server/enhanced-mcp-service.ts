@@ -702,7 +702,15 @@ export class EnhancedMCPService extends MCPAIService {
           analysisResults: previousOutputs,
           businessContext: context.businessContext,
           industryContext: context.industryContext,
-          template: template ? { id: template.id, name: template.name, kpis: template.kpis, sections: template.sections } : undefined
+          template: template
+            ? {
+                id: template.templateId,
+                name: template.name,
+                goals: template.goals,
+                workflow: template.workflow,
+                deliverables: template.deliverables
+              }
+            : undefined
         },
         resourcesNeeded: ['gemini-2.5-flash', 'business_templates']
       }],
@@ -726,7 +734,7 @@ export class EnhancedMCPService extends MCPAIService {
       outputs: {
         insights: {
           ...(insightResult.results[0] || {}),
-          templateUsed: template?.id || null
+          templateUsed: template?.templateId || null
         },
         recommendations: insightResult.results[0].recommendations || [],
         businessImpact: insightResult.results[0].businessImpact || 'Medium'

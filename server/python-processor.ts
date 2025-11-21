@@ -191,7 +191,7 @@ export class PythonProcessor {
     });
   }
 
-  // Free trial processing
+  // Trial processing
   static async processTrial(projectId: string, data: any): Promise<PythonProcessorResult> {
     return this.processData({
       projectId,

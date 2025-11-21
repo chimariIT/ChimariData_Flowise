@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -20,7 +20,11 @@ import { PIIDetectionDialog } from "@/components/PIIDetectionDialog";
 import AgentCheckpoints from "@/components/agent-checkpoints";
 import { SchemaAnalysis } from "@/components/SchemaAnalysis";
 import { AgentRecommendationDialog } from "@/components/AgentRecommendationDialog";
+import { DataTransformationUI } from "@/components/data-transformation-ui";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
+import { apiClient } from "@/lib/api";
+import { startClientMetric, type ClientMetricHandle } from "@/lib/performanceTracker";
 
 interface DataStepProps {
   journeyType: string;
@@ -35,7 +39,15 @@ export default function DataStep({ journeyType, onNext, onPrevious, renderAsCont
   const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'processing' | 'completed' | 'error'>('idle');
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
   const [dataPreview, setDataPreview] = useState<Record<string, any[]>>({});
-  const [dataValidation, setDataValidation] = useState<any>(null);
+  interface ValidationStats {
+    totalRows: number;
+    totalColumns: number;
+    missingValues: number;
+    duplicateRows: number;
+    qualityScore: number;
+  }
+
+  const [dataValidation, setDataValidation] = useState<Record<string, ValidationStats>>({});
   const [linkedSchema, setLinkedSchema] = useState<{ [table: string]: { columns: Record<string, string>, primaryKey?: string, foreignKeys?: Array<{ column: string, references: string }> } }>({});
   const [editingRelations, setEditingRelations] = useState(false);
   const [pendingRelations, setPendingRelations] = useState<{ [table: string]: { primaryKey?: string, foreignKeys: Array<{ column: string, references: string }> } }>({});
@@ -47,12 +59,118 @@ export default function DataStep({ journeyType, onNext, onPrevious, renderAsCont
   const [piiReviewCompleted, setPiiReviewCompleted] = useState(false);
   const [dataQualityApproved, setDataQualityApproved] = useState(false);
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
+  const [excludedColumns, setExcludedColumns] = useState<string[]>([]);
+  const [isRefreshingPreview, setIsRefreshingPreview] = useState(false);
 
   // Agent recommendation state
   const [agentRecommendation, setAgentRecommendation] = useState<any | null>(null);
   const [showRecommendationDialog, setShowRecommendationDialog] = useState(false);
   const [isLoadingRecommendation, setIsLoadingRecommendation] = useState(false);
   const [uploadedFileIds, setUploadedFileIds] = useState<string[]>([]);
+
+  // Data transformation state
+  const [showDataTransformation, setShowDataTransformation] = useState(false);
+  const [project, setProject] = useState<any>(null);
+
+  const aggregatedValidation = useMemo(() => {
+    const entries = Object.values(dataValidation);
+    if (!entries.length) return null;
+
+    return entries.reduce(
+      (acc, stats, idx) => {
+        acc.totalRows += stats.totalRows || 0;
+        acc.totalColumns = Math.max(acc.totalColumns, stats.totalColumns || 0);
+        acc.missingValues += stats.missingValues || 0;
+        acc.duplicateRows += stats.duplicateRows || 0;
+        acc.qualityScoreSum += stats.qualityScore || 0;
+        acc.datasets = idx + 1;
+        return acc;
+      },
+      {
+        totalRows: 0,
+        totalColumns: 0,
+        missingValues: 0,
+        duplicateRows: 0,
+        qualityScoreSum: 0,
+        datasets: 0,
+      }
+    );
+  }, [dataValidation]);
+
+  const aggregatedQualityScore = aggregatedValidation
+    ? Math.round(aggregatedValidation.qualityScoreSum / aggregatedValidation.datasets)
+    : 0;
+
+  const filterDataPreviewColumns = useCallback((columnsToRemove: string[]) => {
+    if (!columnsToRemove.length) {
+      return;
+    }
+
+    setDataPreview((prev) => {
+      const next: Record<string, any[]> = {};
+      Object.entries(prev).forEach(([name, rows]) => {
+        next[name] = rows.map((row) => {
+          const filtered: Record<string, any> = {};
+          Object.entries(row).forEach(([key, value]) => {
+            if (!columnsToRemove.includes(key)) {
+              filtered[key] = value;
+            }
+          });
+          return filtered;
+        });
+      });
+      return next;
+    });
+
+    setLinkedSchema((prev) => {
+      const next = { ...prev };
+      Object.keys(next).forEach((table) => {
+        const existing = next[table];
+        if (!existing) return;
+        const updatedColumns = { ...existing.columns };
+        columnsToRemove.forEach((column) => {
+          delete updatedColumns[column];
+        });
+        next[table] = { ...existing, columns: updatedColumns };
+      });
+      return next;
+    });
+  }, []);
+
+  const refreshProjectPreview = useCallback(async () => {
+    if (!currentProjectId) {
+      return;
+    }
+    try {
+      setIsRefreshingPreview(true);
+      const response = await apiClient.getProjectDatasets(currentProjectId);
+      const datasetEntry = response?.datasets?.[0]?.dataset;
+      if (datasetEntry?.preview && Array.isArray(datasetEntry.preview)) {
+        const datasetName = datasetEntry.originalFileName || 'Dataset Preview';
+        setDataPreview({ [datasetName]: datasetEntry.preview });
+        if (datasetEntry.schema) {
+          setLinkedSchema((prev) => ({
+            ...prev,
+            [datasetName]: {
+              columns: datasetEntry.schema,
+              primaryKey: prev[datasetName]?.primaryKey,
+              foreignKeys: prev[datasetName]?.foreignKeys || []
+            }
+          }));
+        }
+      }
+    } catch (error) {
+      console.error('Failed to refresh dataset preview', error);
+    } finally {
+      setIsRefreshingPreview(false);
+    }
+  }, [currentProjectId]);
+
+  useEffect(() => {
+    if (currentProjectId) {
+      refreshProjectPreview();
+    }
+  }, [currentProjectId, refreshProjectPreview]);
 
   const getJourneyTypeInfo = () => {
     switch (journeyType) {
@@ -175,27 +293,16 @@ export default function DataStep({ journeyType, onNext, onPrevious, renderAsCont
       const userQuestions = JSON.parse(localStorage.getItem('projectQuestions') || '[]');
       const businessContext = JSON.parse(localStorage.getItem('businessContext') || '{}');
 
-      const token = localStorage.getItem('auth_token');
-      const response = await fetch(`/api/projects/${projectId}/agent-recommendations`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token && { 'Authorization': `Bearer ${token}` })
-        },
-        credentials: 'include',
-        body: JSON.stringify({
-          uploadedFileIds: fileIds,
-          userQuestions: userQuestions.length > 0 ? userQuestions : ['Analyze the uploaded data'],
-          businessContext
-        })
+      // Use apiClient to ensure correct API base URL (localhost:5000)
+      const data = await apiClient.post(`/api/projects/${projectId}/agent-recommendations`, {
+        uploadedFileIds: fileIds,
+        userQuestions: userQuestions.length > 0 ? userQuestions : ['Analyze the uploaded data'],
+        businessContext
       });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => null);
-        throw new Error(errorData?.error || `Failed to get recommendations: ${response.statusText}`);
+      if (!data || !data.success) {
+        throw new Error(data?.error || 'Failed to get recommendations');
       }
-
-      const data = await response.json();
 
       if (data.success && data.recommendation) {
         console.log('✅ Agent recommendations received:', data.recommendation);
@@ -252,254 +359,248 @@ export default function DataStep({ journeyType, onNext, onPrevious, renderAsCont
     const files = Array.from(event.target.files || []);
     if (!files.length) return;
 
-    // Check if user is authenticated
     const token = localStorage.getItem('auth_token');
     if (!token) {
-      alert('Please log in to upload files. Authentication is required.');
+      toast({
+        title: "Authentication Required",
+        description: "Please sign in to upload files. Authentication is required to access data analysis features.",
+        variant: "destructive"
+      });
       setUploadStatus('error');
       return;
     }
 
     setUploadedFiles((prev) => [...prev, ...files]);
     setUploadStatus('uploading');
-    setUploadProgress(0);
+    setUploadProgress(5);
+    setDataQualityApproved(false);
+    setPiiReviewCompleted(false);
+    setPiiDetectionResult(null);
+
+    const newlyUploadedFileIds: string[] = [];
+    let latestProjectId = localStorage.getItem('currentProjectId') || null;
 
     try {
-      // Get or create project
-      let currentProjectId = localStorage.getItem('currentProjectId');
-      
-      if (!currentProjectId) {
-        console.log('Creating new project for file upload...');
-        // We'll create the project with the file upload
-      }
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        const projectName = file.name.replace(/\.[^/.]+$/, "");
+        const progressBase = Math.round((index / files.length) * 100);
 
-      // Upload the first file (for now, handle one at a time)
-      const file = files[0];
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('name', file.name.replace(/\.[^/.]+$/, "")); // Remove extension
-      formData.append('description', `Uploaded file: ${file.name}`);
-      formData.append('questions', JSON.stringify([]));
+        let uploadFlowMetric: ClientMetricHandle | null = null;
+        let uploadNetworkMetric: ClientMetricHandle | null = null;
 
-      console.log(`📤 Uploading file: ${file.name}`);
-      setUploadProgress(30);
+        uploadFlowMetric = startClientMetric('upload_flow_total', {
+          fileName: file.name,
+          fileSize: file.size,
+          journeyType
+        });
 
-      // Get authentication token
-      const token = localStorage.getItem('auth_token');
-      const headers: any = {};
-      
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-        console.log('✓ Auth token found and added to request');
-      } else {
-        console.warn('⚠️ No auth token found in localStorage');
-      }
+        uploadNetworkMetric = startClientMetric('upload_network', {
+          fileName: file.name,
+          fileSize: file.size
+        });
 
-      console.log('📡 Making request to: /api/projects/upload');
+        console.log(`📤 Uploading file: ${file.name} using apiClient`);
+        setUploadProgress(progressBase + 10);
 
-      const response = await fetch('/api/projects/upload', {
-        method: 'POST',
-        headers: headers,
-        credentials: 'include',
-        body: formData
-      });
-
-      console.log(`📥 Response status: ${response.status} ${response.statusText}`);
-      setUploadProgress(60);
-
-      if (!response.ok) {
-        let errorMessage = `Upload failed: ${response.statusText}`;
-        
+        let data: any;
         try {
-          const errorData = await response.json();
-          errorMessage = errorData.error || errorMessage;
-        } catch (e) {
-          // If response is not JSON, use status text
+          data = await apiClient.uploadFile(file, {
+            name: projectName,
+            description: `Uploaded file: ${file.name}`,
+            questions: [],
+            isTrial: false
+          });
+
+          if (!data?.success) {
+            uploadNetworkMetric?.end('error', {
+              message: data?.error || 'Upload failed',
+              responseStatus: data?.status
+            });
+            throw new Error(data?.error || 'Upload failed');
+          }
+
+          uploadNetworkMetric?.end('success', {
+            projectId: data.projectId,
+            requiresPIIDecision: !!data.requiresPIIDecision
+          });
+        } catch (error: any) {
+          uploadNetworkMetric?.end('error', {
+            message: error?.message || 'Upload request failed'
+          });
+          throw error;
         }
-        
-        if (response.status === 401) {
-          errorMessage = 'Authentication required. Please log in to upload files.';
-        } else if (response.status === 403) {
-          errorMessage = 'Permission denied. You do not have access to upload files.';
+
+        console.log(`📥 Upload response received for ${file.name}`);
+        setUploadProgress(progressBase + 40);
+
+        if (data.projectId) {
+          latestProjectId = data.projectId;
+          localStorage.setItem('currentProjectId', data.projectId);
+          setCurrentProjectId(data.projectId);
         }
-        
-        throw new Error(errorMessage);
-      }
 
-      const data = await response.json();
-      
-      if (!data.success) {
-        throw new Error(data.error || 'Upload failed');
-      }
+        setUploadStatus('processing');
 
-      console.log('✅ File uploaded successfully');
-      console.log(`📊 Records: ${data.recordCount || data.project?.preview?.length || 0}`);
+        const preview = data.project?.preview || data.sampleData || [];
+        const recordCount = data.recordCount || preview.length || 0;
 
-      // Store project ID
-      if (data.projectId) {
-        localStorage.setItem('currentProjectId', data.projectId);
-      }
+        const schema: Record<string, string> = {};
+        let columns = 0;
+        let missingValues = 0;
 
-      setUploadProgress(90);
-      setUploadStatus('processing');
+        if (preview.length > 0) {
+          const firstRow = preview[0];
+          columns = Object.keys(firstRow).length;
 
-      // Extract real data from response
-      const preview = data.project?.preview || data.sampleData || [];
-      const recordCount = data.recordCount || preview.length || 0;
-      
-      // Calculate real schema from preview
-      let schema: Record<string, string> = {};
-      let columns = 0;
-      let missingValues = 0;
-      
-      if (preview.length > 0) {
-        const firstRow = preview[0];
-        columns = Object.keys(firstRow).length;
-        
-        // Infer types from data
-        Object.keys(firstRow).forEach(key => {
-          const values = preview.map((row: any) => row[key]);
-          const nonNullValues = values.filter((v: any) => v !== null && v !== undefined && v !== '');
-          missingValues += (values.length - nonNullValues.length);
-          
-          // Simple type inference
-          if (nonNullValues.length > 0) {
-            const sample = nonNullValues[0];
-            if (typeof sample === 'number') {
-              schema[key] = Number.isInteger(sample) ? 'integer' : 'float';
-            } else if (typeof sample === 'boolean') {
-              schema[key] = 'boolean';
-            } else if (sample instanceof Date || /^\d{4}-\d{2}-\d{2}/.test(String(sample))) {
-              schema[key] = 'date';
+          Object.keys(firstRow).forEach(key => {
+            const values = preview.map((row: any) => row[key]);
+            const nonNullValues = values.filter((v: any) => v !== null && v !== undefined && v !== '');
+            missingValues += (values.length - nonNullValues.length);
+
+            if (nonNullValues.length > 0) {
+              const sample = nonNullValues[0];
+              if (typeof sample === 'number') {
+                schema[key] = Number.isInteger(sample) ? 'integer' : 'float';
+              } else if (typeof sample === 'boolean') {
+                schema[key] = 'boolean';
+              } else if (sample instanceof Date || /^\d{4}-\d{2}-\d{2}/.test(String(sample))) {
+                schema[key] = 'date';
+              } else {
+                schema[key] = 'string';
+              }
             } else {
               schema[key] = 'string';
             }
-          } else {
-            schema[key] = 'string';
+          });
+        }
+
+        const previews: Record<string, any[]> = {};
+        previews[file.name] = preview.slice(0, 10);
+        setDataPreview((prev) => ({ ...prev, ...previews }));
+
+        const qualityScore = recordCount && columns
+          ? Math.max(0, Math.round(((recordCount * columns - missingValues) / (recordCount * columns)) * 100))
+          : 0;
+
+        setDataValidation((prev) => ({
+          ...prev,
+          [file.name]: {
+            totalRows: recordCount,
+            totalColumns: columns,
+            missingValues,
+            duplicateRows: 0,
+            qualityScore: qualityScore || 93
+          }
+        }));
+
+        const tables: Record<string, { columns: Record<string, string>; primaryKey?: string; foreignKeys: Array<{ column: string; references: string }> }> = {};
+        const tableNames = new Set<string>();
+
+        Object.keys(schema).forEach(col => {
+          if (col.includes('_id') || col.toLowerCase().includes('id')) {
+            const tableName = col.replace(/_id$|Id$/i, '');
+            if (tableName) tableNames.add(tableName);
           }
         });
-      }
 
-      // Set real data preview
-      const previews: Record<string, any[]> = {};
-      previews[file.name] = preview.slice(0, 10); // Show first 10 rows
-      setDataPreview((prev) => ({ ...prev, ...previews }));
+        const baseTableName = file.name.replace(/\.[^/.]+$/, "").toLowerCase().replace(/[^a-z0-9]/g, '_');
 
-      // Set real validation data
-      const qualityScore = Math.round(((recordCount * columns - missingValues) / (recordCount * columns)) * 100);
-      
-      setDataValidation({
-        totalRows: recordCount,
-        totalColumns: columns,
-        missingValues: missingValues,
-        duplicateRows: 0, // Would need backend calculation
-        qualityScore: qualityScore || 93
-      });
-
-      // Build schema structure for display
-      // Try to detect tables from column patterns
-      const tables: any = {};
-      const tableNames = new Set<string>();
-      
-      // Detect if we have relational structure
-      Object.keys(schema).forEach(col => {
-        if (col.includes('_id') || col.includes('Id')) {
-          // Possible foreign key
-          const tableName = col.replace(/_id$|Id$/i, '');
-          if (tableName) tableNames.add(tableName);
+        if (!tables[baseTableName]) {
+          tables[baseTableName] = {
+            columns: schema,
+            primaryKey: Object.keys(schema).includes('id') ? 'id' : undefined,
+            foreignKeys: []
+          };
         }
-      });
 
-      // If we detected potential tables, create a relational schema
-      if (tableNames.size > 0) {
-        // Main table (detected from file name or default to 'data')
-        const mainTableName = file.name.replace(/\.[^/.]+$/, "").toLowerCase().replace(/[^a-z0-9]/g, '_');
-        tables[mainTableName] = {
-          columns: schema,
-          primaryKey: 'id',
-          foreignKeys: []
-        };
+        if (tableNames.size > 0) {
+          tableNames.forEach(tableName => {
+            if (!tables[tableName]) {
+              tables[tableName] = {
+                columns: {
+                  id: 'integer',
+                  name: 'string'
+                },
+                primaryKey: 'id',
+                foreignKeys: []
+              };
+            }
 
-        // Add detected related tables
-        tableNames.forEach(tableName => {
-          if (tableName !== mainTableName) {
-            tables[tableName] = {
-              columns: {
-                id: 'integer',
-                name: 'string'
-              },
-              primaryKey: 'id'
-            };
-            
-            // Add foreign key relationship
             const fkColumn = `${tableName}_id`;
             if (schema[fkColumn]) {
-              tables[mainTableName].foreignKeys.push({
+              tables[baseTableName].foreignKeys.push({
                 column: fkColumn,
                 references: `${tableName}.id`
               });
             }
-          }
+          });
+        }
+
+        setLinkedSchema((prev) => ({ ...prev, ...tables }));
+
+        console.log('📈 Real data loaded:', {
+          file: file.name,
+          rows: recordCount,
+          columns: columns,
+          quality: qualityScore
         });
-      } else {
-        // Single table
-        const tableName = file.name.replace(/\.[^/.]+$/, "").toLowerCase().replace(/[^a-z0-9]/g, '_');
-        tables[tableName] = {
-          columns: schema,
-          primaryKey: Object.keys(schema).includes('id') ? 'id' : undefined,
-          foreignKeys: []
-        };
+
+        if (data.fileId) {
+          newlyUploadedFileIds.push(data.fileId);
+        }
+
+        await checkForPII(preview, schema);
+
+        const flowStatus: 'success' | 'warning' = data?.requiresPIIDecision ? 'warning' : 'success';
+        uploadFlowMetric?.end(flowStatus, {
+          projectId: data.projectId,
+          recordCount,
+          columnCount: columns,
+          qualityScore: qualityScore || 93
+        });
+
+        const progressAfterFile = Math.round(((index + 1) / files.length) * 100);
+        setUploadProgress(progressAfterFile);
       }
 
-      setLinkedSchema(tables);
-
-      setUploadProgress(100);
       setUploadStatus('completed');
+      setUploadProgress(100);
 
-      console.log('📈 Real data loaded:', {
-        rows: recordCount,
-        columns: columns,
-        quality: qualityScore
-      });
-
-      // Store project ID for checkpoints
-      if (data.projectId) {
-        setCurrentProjectId(data.projectId);
+      if (latestProjectId) {
+        setCurrentProjectId(latestProjectId);
       }
 
-      // Store uploaded file ID for agent recommendations
-      if (data.fileId) {
-        setUploadedFileIds(prev => [...prev, data.fileId]);
+      if (newlyUploadedFileIds.length > 0) {
+        const combinedFileIds = [...uploadedFileIds, ...newlyUploadedFileIds];
+        setUploadedFileIds(combinedFileIds);
+        if (latestProjectId) {
+          await fetchAgentRecommendations(latestProjectId, combinedFileIds);
+        }
       }
-
-      // Trigger PII detection
-      await checkForPII(preview, schema);
-
-      // Trigger agent recommendations after file upload completes
-      if (data.projectId && data.fileId) {
-        await fetchAgentRecommendations(data.projectId, [data.fileId]);
-      }
-
     } catch (error: any) {
       console.error('❌ Upload error:', error);
       console.error('❌ Error details:', {
         message: error.message,
         stack: error.stack
       });
-      
+
       setUploadStatus('error');
       setUploadProgress(0);
-      
-      // Show user-friendly error message
+
       let userMessage = error.message || 'Upload failed';
-      
+
       if (error.message?.includes('Authentication required')) {
         userMessage = 'Please log in to upload files. You need to be authenticated.';
       } else if (error.message?.includes('Not Found')) {
         userMessage = 'Upload endpoint not found. Please check your connection and try again.';
       }
-      
-      alert(`Upload failed: ${userMessage}`);
+
+      toast({
+        title: "Upload failed",
+        description: userMessage,
+        variant: "destructive"
+      });
     }
   };
 
@@ -530,6 +631,52 @@ export default function DataStep({ journeyType, onNext, onPrevious, renderAsCont
       default:
         return 'Ready to upload';
     }
+  };
+
+  const applyQuickAnonymization = async (columns: string[]) => {
+    if (!currentProjectId || columns.length === 0) {
+      return;
+    }
+
+    const columnMappings = columns.reduce<Record<string, any>>((acc, column) => {
+      acc[column] = {
+        technique: 'mask_partial',
+        preserveFormat: true,
+        preserveLength: true
+      };
+      return acc;
+    }, {});
+
+    await apiClient.post('/api/anonymization/apply', {
+      projectId: currentProjectId,
+      columnMappings
+    });
+  };
+
+  const handlePIIDecision = async (requiresPII: boolean, anonymizeData: boolean, selectedColumns: string[]) => {
+    setShowPIIDialog(false);
+
+    if (requiresPII && selectedColumns.length > 0) {
+      setExcludedColumns(selectedColumns);
+      filterDataPreviewColumns(selectedColumns);
+    }
+
+    if (requiresPII && anonymizeData && selectedColumns.length > 0) {
+      try {
+        await applyQuickAnonymization(selectedColumns);
+        await refreshProjectPreview();
+        setExcludedColumns([]);
+      } catch (error) {
+        console.error('Failed to apply anonymization', error);
+        toast({
+          title: "Anonymization failed",
+          description: error instanceof Error ? error.message : "Unable to anonymize selected columns",
+          variant: "destructive"
+        });
+      }
+    }
+
+    setPiiReviewCompleted(true);
   };
 
   const content = (
@@ -609,7 +756,7 @@ export default function DataStep({ journeyType, onNext, onPrevious, renderAsCont
       </Card>
 
       {/* Data Validation Results */}
-      {uploadStatus === 'completed' && dataValidation && (
+      {uploadStatus === 'completed' && aggregatedValidation && (
         <Card className="border-green-200 bg-green-50">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-green-900">
@@ -623,19 +770,19 @@ export default function DataStep({ journeyType, onNext, onPrevious, renderAsCont
           <CardContent>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
               <div className="text-center">
-                <p className="text-2xl font-bold text-green-900">{dataValidation.totalRows}</p>
+                <p className="text-2xl font-bold text-green-900">{aggregatedValidation.totalRows}</p>
                 <p className="text-sm text-green-700">Total Rows</p>
               </div>
               <div className="text-center">
-                <p className="text-2xl font-bold text-green-900">{dataValidation.totalColumns}</p>
+                <p className="text-2xl font-bold text-green-900">{aggregatedValidation.totalColumns}</p>
                 <p className="text-sm text-green-700">Columns</p>
               </div>
               <div className="text-center">
-                <p className="text-2xl font-bold text-green-900">{dataValidation.missingValues}</p>
+                <p className="text-2xl font-bold text-green-900">{aggregatedValidation.missingValues}</p>
                 <p className="text-sm text-green-700">Missing Values</p>
               </div>
               <div className="text-center">
-                <p className="text-2xl font-bold text-green-900">{dataValidation.qualityScore}%</p>
+                <p className="text-2xl font-bold text-green-900">{aggregatedQualityScore}%</p>
                 <p className="text-sm text-green-700">Quality Score</p>
               </div>
             </div>
@@ -781,21 +928,6 @@ export default function DataStep({ journeyType, onNext, onPrevious, renderAsCont
         </Card>
       )}
 
-      {/* PII Detection Dialog */}
-      {showPIIDialog && piiDetectionResult && (
-        <PIIDetectionDialog
-          isOpen={showPIIDialog}
-          onClose={() => setShowPIIDialog(false)}
-          onDecision={(requiresPII, anonymizeData, selectedColumns) => {
-            console.log('PII Decision:', { requiresPII, anonymizeData, selectedColumns });
-            setPiiReviewCompleted(true);
-            setShowPIIDialog(false);
-            // In production, would call API to apply anonymization
-          }}
-          piiResult={piiDetectionResult}
-        />
-      )}
-
       {/* Quality Checkpoint - Agent Approval */}
       {uploadStatus === 'completed' && piiReviewCompleted && currentProjectId && (
         <Card className="border-purple-200 bg-purple-50">
@@ -819,7 +951,7 @@ export default function DataStep({ journeyType, onNext, onPrevious, renderAsCont
                   <div className="space-y-2 text-sm text-gray-700">
                     <div className="flex items-center gap-2">
                       <CheckCircle className="w-4 h-4 text-green-600" />
-                      <span>Data completeness: {dataValidation?.qualityScore || 0}%</span>
+                      <span>Data completeness: {aggregatedQualityScore}%</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <CheckCircle className="w-4 h-4 text-green-600" />
@@ -856,6 +988,21 @@ export default function DataStep({ journeyType, onNext, onPrevious, renderAsCont
         </Card>
       )}
 
+      {/* PII Detection Dialog */}
+      {showPIIDialog && piiDetectionResult && (
+        <PIIDetectionDialog
+          isOpen={showPIIDialog}
+          onClose={() => setShowPIIDialog(false)}
+          onDecision={(requiresPII, anonymizeData, selectedColumns) => {
+            console.log('PII Decision:', { requiresPII, anonymizeData, selectedColumns });
+            setPiiReviewCompleted(true);
+            setShowPIIDialog(false);
+            // In production, would call API to apply anonymization
+          }}
+          piiResult={piiDetectionResult}
+        />
+      )}
+
       {/* Data Preview (multiple files) */}
       {uploadStatus === 'completed' && Object.keys(dataPreview).length > 0 && (
         <Card>
@@ -865,43 +1012,53 @@ export default function DataStep({ journeyType, onNext, onPrevious, renderAsCont
               Data Preview
             </CardTitle>
             <CardDescription>
-              First rows for each uploaded file
+              First rows for each uploaded file (post-PII decisions)
+              {isRefreshingPreview && ' • refreshing...'}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="space-y-6">
-              {Object.entries(dataPreview).map(([name, rows]) => (
-                <div key={name}>
-                  <div className="flex items-center justify-between mb-2">
-                    <h4 className="font-medium text-gray-900">{name}</h4>
-                    <Badge variant="secondary" className="bg-gray-100 text-gray-800">{rows.length} rows shown</Badge>
-                  </div>
-                  <div className="overflow-x-auto">
-                    <table className="w-full border-collapse border border-gray-300">
-                      <thead>
-                        <tr className="bg-gray-50">
-                          {Object.keys(rows[0]).map((column) => (
-                            <th key={column} className="border border-gray-300 px-3 py-2 text-left font-medium">
-                              {column}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {rows.map((row, index) => (
-                          <tr key={index}>
-                            {Object.values(row).map((value, cellIndex) => (
-                              <td key={cellIndex} className="border border-gray-300 px-3 py-2">
-                                {String(value)}
-                              </td>
+              {Object.entries(dataPreview).map(([name, rows]) => {
+                const visibleColumns = rows.length
+                  ? Object.keys(rows[0]).filter(column => !excludedColumns.includes(column))
+                  : [];
+                return (
+                  <div key={name}>
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="font-medium text-gray-900">{name}</h4>
+                      <Badge variant="secondary" className="bg-gray-100 text-gray-800">{rows.length} rows shown</Badge>
+                    </div>
+                    <div className="overflow-x-auto">
+                      {visibleColumns.length === 0 ? (
+                        <p className="text-sm text-gray-600">No columns available after PII filtering.</p>
+                      ) : (
+                        <table className="w-full border-collapse border border-gray-300">
+                          <thead>
+                            <tr className="bg-gray-50">
+                              {visibleColumns.map((column) => (
+                                <th key={column} className="border border-gray-300 px-3 py-2 text-left font-medium">
+                                  {column}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {rows.map((row, index) => (
+                              <tr key={index}>
+                                {visibleColumns.map((column) => (
+                                  <td key={`${column}-${index}`} className="border border-gray-300 px-3 py-2">
+                                    {String(row[column] ?? '')}
+                                  </td>
+                                ))}
+                              </tr>
                             ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </CardContent>
         </Card>
@@ -952,6 +1109,57 @@ export default function DataStep({ journeyType, onNext, onPrevious, renderAsCont
         </Card>
       )}
 
+      {/* Data Transformation (Optional) */}
+      {uploadStatus === 'completed' && currentProjectId && (
+        <Card className="border-blue-200">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-blue-900">
+              <Settings className="w-5 h-5" />
+              Review & Transform Data (Optional)
+            </CardTitle>
+            <CardDescription className="text-blue-700">
+              Before proceeding to analysis, you can optionally review and transform your data (pivot, filter, aggregate, etc.)
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Collapsible open={showDataTransformation} onOpenChange={setShowDataTransformation}>
+              <CollapsibleTrigger asChild>
+                <Button variant="outline" className="w-full justify-between">
+                  {showDataTransformation ? 'Hide' : 'Show'} Data Transformation Tools
+                  <ArrowRight className={`w-4 h-4 ml-2 transition-transform ${showDataTransformation ? 'rotate-90' : ''}`} />
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="mt-4">
+                <div className="border-t pt-4">
+                  <DataTransformationUI
+                    projectId={currentProjectId}
+                    project={project || {
+                      id: currentProjectId,
+                      schema: linkedSchema,
+                      dataPreview: dataPreview
+                    }}
+                    onProjectUpdate={(updatedProject) => {
+                      setProject(updatedProject);
+                      toast({
+                        title: "Data transformed",
+                        description: "Your transformations have been applied successfully.",
+                      });
+                    }}
+                  />
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
+
+            <div className="mt-4 p-3 bg-blue-50 rounded-md border border-blue-200">
+              <p className="text-sm text-blue-800">
+                <strong>💡 Tip:</strong> You can filter rows, pivot columns, aggregate data, and more.
+                Transformations are optional - you can proceed directly to analysis if your data is ready.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Ready for Next Step */}
       {uploadStatus === 'completed' && (
         <Card className="border-green-200 bg-green-50">
@@ -967,15 +1175,15 @@ export default function DataStep({ journeyType, onNext, onPrevious, renderAsCont
             </p>
             <div className="flex items-center gap-2 flex-wrap mb-4">
               <Badge variant="secondary" className="bg-green-100 text-green-800">
-                {dataValidation?.totalRows || 'Unknown'} rows uploaded
+                {aggregatedValidation?.totalRows || 'Unknown'} rows uploaded
               </Badge>
               <Badge variant="secondary" className="bg-green-100 text-green-800">
                 {uploadedFiles.length} file{uploadedFiles.length !== 1 ? 's' : ''}
               </Badge>
             </div>
-            
+
             {onNext && (
-              <Button 
+              <Button
                 onClick={onNext}
                 className="bg-green-600 hover:bg-green-700"
               >
@@ -997,15 +1205,16 @@ export default function DataStep({ journeyType, onNext, onPrevious, renderAsCont
       />
 
       {/* PII Detection Dialog */}
-      <PIIDetectionDialog
-        isOpen={showPIIDialog}
-        onClose={() => setShowPIIDialog(false)}
-        onAccept={() => {
-          setPiiReviewCompleted(true);
-          setShowPIIDialog(false);
-        }}
-        detectionResult={piiDetectionResult}
-      />
+      {piiDetectionResult && (
+        <PIIDetectionDialog
+          isOpen={showPIIDialog}
+          onClose={() => setShowPIIDialog(false)}
+          onDecision={handlePIIDecision}
+          projectId={currentProjectId}
+          onToolkitApplied={refreshProjectPreview}
+          piiResult={piiDetectionResult}
+        />
+      )}
     </div>
   );
 

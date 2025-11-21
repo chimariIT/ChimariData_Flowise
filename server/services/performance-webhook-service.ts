@@ -50,6 +50,11 @@ class PerformanceWebhookService {
     private readonly bufferSize = 1000;
     private readonly batchInterval = 5000; // 5 seconds
     private batchTimer?: NodeJS.Timeout;
+    private readonly defaultSlaTargets: Record<string, number> = {
+        upload_total: 60000,
+        upload_flow_total: 60000,
+        upload_network: 60000
+    };
 
     constructor() {
         this.initializeDefaultEndpoints();
@@ -113,15 +118,16 @@ class PerformanceWebhookService {
             if (!endpoint.enabled) continue;
 
             // Check slow operation threshold
-            if (endpoint.thresholds.slowOperationMs && 
-                metric.duration > endpoint.thresholds.slowOperationMs &&
+            const slowThreshold = endpoint.thresholds.slowOperationMs;
+            if (typeof slowThreshold === 'number' && 
+                metric.duration > slowThreshold &&
                 endpoint.events.includes('slow_operation')) {
                 
                 const alert: PerformanceAlert = {
                     type: 'slow_operation',
-                    severity: this.calculateSeverity(metric.duration, endpoint.thresholds.slowOperationMs),
+                    severity: this.calculateSeverity(metric.duration, slowThreshold),
                     metric,
-                    threshold: endpoint.thresholds.slowOperationMs,
+                    threshold: slowThreshold,
                     message: `Slow operation detected: ${metric.service}.${metric.operation} took ${metric.duration}ms`
                 };
 
@@ -129,9 +135,10 @@ class PerformanceWebhookService {
             }
 
             // Check error rate (requires recent metrics analysis)
-            if (endpoint.thresholds.errorRate && 
+            const errorRateThreshold = endpoint.thresholds.errorRate;
+            if (typeof errorRateThreshold === 'number' && 
                 endpoint.events.includes('high_error_rate')) {
-                await this.checkErrorRate(endpoint, metric);
+                await this.checkErrorRate(endpoint, metric, errorRateThreshold);
             }
         }
     }
@@ -144,7 +151,7 @@ class PerformanceWebhookService {
         return 'low';
     }
 
-    private async checkErrorRate(endpoint: WebhookEndpoint, currentMetric: PerformanceMetric): Promise<void> {
+    private async checkErrorRate(endpoint: WebhookEndpoint, currentMetric: PerformanceMetric, threshold: number): Promise<void> {
         const recentMetrics = this.getRecentMetrics(5 * 60 * 1000); // Last 5 minutes
         const serviceMetrics = recentMetrics.filter(m => 
             m.service === currentMetric.service && m.operation === currentMetric.operation
@@ -155,7 +162,7 @@ class PerformanceWebhookService {
         const errorCount = serviceMetrics.filter(m => m.status === 'error').length;
         const errorRate = errorCount / serviceMetrics.length;
 
-        if (errorRate > (endpoint.thresholds.errorRate || 0.1)) {
+        if (errorRate > threshold) {
             const alertKey = `error_rate_${currentMetric.service}_${currentMetric.operation}`;
             const lastAlert = this.alertHistory.get(alertKey);
             
@@ -165,7 +172,7 @@ class PerformanceWebhookService {
                     type: 'high_error_rate',
                     severity: errorRate > 0.5 ? 'critical' : errorRate > 0.25 ? 'high' : 'medium',
                     metric: currentMetric,
-                    threshold: endpoint.thresholds.errorRate,
+                    threshold,
                     message: `High error rate detected: ${(errorRate * 100).toFixed(1)}% errors in ${currentMetric.service}.${currentMetric.operation}`,
                     aggregation: {
                         count: serviceMetrics.length,
@@ -197,7 +204,8 @@ class PerformanceWebhookService {
     }
 
     private async sendWebhook(endpoint: WebhookEndpoint, payload: any, attempt: number): Promise<void> {
-        try {
+    let timeoutId: NodeJS.Timeout | undefined;
+    try {
             const headers: Record<string, string> = {
                 ...endpoint.headers,
                 'Content-Type': 'application/json'
@@ -213,11 +221,14 @@ class PerformanceWebhookService {
                 headers['X-Chimari-Signature'] = `sha256=${signature}`;
             }
 
+            const controller = new AbortController();
+            timeoutId = setTimeout(() => controller.abort(), 10000);
+
             const response = await fetch(endpoint.url, {
                 method: 'POST',
                 headers,
                 body: JSON.stringify(payload),
-                timeout: 10000 // 10 second timeout
+                signal: controller.signal
             });
 
             if (!response.ok) {
@@ -225,8 +236,9 @@ class PerformanceWebhookService {
             }
 
             console.log(`📡 Webhook sent successfully to ${endpoint.id}: ${response.status}`);
-        } catch (error: any) {
-            console.error(`📡 Webhook failed to ${endpoint.id} (attempt ${attempt + 1}):`, error.message);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(`📡 Webhook failed to ${endpoint.id} (attempt ${attempt + 1}):`, message);
 
             // Retry logic
             if (attempt < endpoint.retrySettings.maxRetries) {
@@ -235,6 +247,10 @@ class PerformanceWebhookService {
                 }, endpoint.retrySettings.retryDelay * Math.pow(2, attempt)); // Exponential backoff
             } else {
                 console.error(`📡 Webhook to ${endpoint.id} failed after ${endpoint.retrySettings.maxRetries} attempts`);
+            }
+        } finally {
+            if (timeoutId) {
+                clearTimeout(timeoutId);
             }
         }
     }
@@ -297,15 +313,37 @@ class PerformanceWebhookService {
 
             service.operations.forEach((opMetrics, operationName) => {
                 const durations = opMetrics.map(m => m.duration);
+                const sortedDurations = [...durations].sort((a, b) => a - b);
                 const errorCount = opMetrics.filter(m => m.status === 'error').length;
+                const count = opMetrics.length;
+                const avgDuration = durations.reduce((sum, d) => sum + d, 0) / durations.length;
+                const minDuration = Math.min(...durations);
+                const maxDuration = Math.max(...durations);
+                const medianDuration = sortedDurations[Math.floor(sortedDurations.length / 2)] ?? 0;
+                const p95Index = Math.min(sortedDurations.length - 1, Math.floor(sortedDurations.length * 0.95));
+                const p95Duration = sortedDurations[p95Index] ?? maxDuration;
+                const slaTargetMs = this.defaultSlaTargets[operationName];
+                const withinTarget = typeof slaTargetMs === 'number'
+                    ? sortedDurations.filter(value => value <= slaTargetMs).length
+                    : undefined;
+                const slaCompliance = typeof withinTarget === 'number'
+                    ? Number(((withinTarget / sortedDurations.length) * 100).toFixed(1))
+                    : undefined;
+                const lastMetric = opMetrics[opMetrics.length - 1];
                 
                 summary.services[serviceName].operations[operationName] = {
-                    count: opMetrics.length,
-                    avgDuration: durations.reduce((sum, d) => sum + d, 0) / durations.length,
-                    minDuration: Math.min(...durations),
-                    maxDuration: Math.max(...durations),
+                    count,
+                    avgDuration,
+                    minDuration,
+                    maxDuration,
+                    medianDuration,
+                    p95Duration,
                     errorRate: errorCount / opMetrics.length,
-                    successRate: (opMetrics.length - errorCount) / opMetrics.length
+                    successRate: (opMetrics.length - errorCount) / opMetrics.length,
+                    slaTargetMs,
+                    slaCompliance,
+                    lastDuration: lastMetric?.duration ?? null,
+                    lastTimestamp: lastMetric?.timestamp ?? null
                 };
             });
         });
@@ -321,6 +359,30 @@ class PerformanceWebhookService {
     getMetricsSummary(timeWindowMs: number = 60000): any {
         const metrics = this.getRecentMetrics(timeWindowMs);
         return this.generateHealthSummary(metrics);
+    }
+
+    getUserMetricsSummary(
+        userId: string,
+        timeWindowMs: number = 60000,
+        options: { services?: string[]; operations?: string[] } = {}
+    ): any {
+        if (!userId) {
+            return this.generateHealthSummary([]);
+        }
+
+        const { services, operations } = options;
+        const metrics = this.getRecentMetrics(timeWindowMs).filter(metric => metric.userId === userId);
+        const filtered = metrics.filter(metric => {
+            const serviceAllowed = Array.isArray(services) && services.length > 0
+                ? services.includes(metric.service)
+                : true;
+            const operationAllowed = Array.isArray(operations) && operations.length > 0
+                ? operations.includes(metric.operation)
+                : true;
+            return serviceAllowed && operationAllowed;
+        });
+
+        return this.generateHealthSummary(filtered);
     }
 
     stop(): void {

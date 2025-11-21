@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { ProjectManagerAgent } from '../services/project-manager-agent';
-import { authenticateUser } from '../middleware/auth';
+import { ensureAuthenticated } from './auth';
 import { db } from '../db';
 import { projectSessions } from '@shared/schema';
 import { eq, and, desc } from 'drizzle-orm';
@@ -10,7 +10,7 @@ const router = Router();
 /**
  * Analyze transformation needs and provide guidance
  */
-router.post('/analyze-transformation-needs', authenticateUser, async (req, res) => {
+router.post('/analyze-transformation-needs', ensureAuthenticated, async (req, res) => {
   try {
     const { projectId, schema, dataSize, journeyType } = req.body;
 
@@ -63,7 +63,7 @@ router.post('/analyze-transformation-needs', authenticateUser, async (req, res) 
 /**
  * Coordinate transformation execution with specialized agents
  */
-router.post('/coordinate-transformation', authenticateUser, async (req, res) => {
+router.post('/coordinate-transformation', ensureAuthenticated, async (req, res) => {
   try {
     const { projectId, transformations, userGoals, audienceContext } = req.body;
 
@@ -106,7 +106,7 @@ router.post('/coordinate-transformation', authenticateUser, async (req, res) => 
 /**
  * Validate transformation configuration
  */
-router.post('/validate-transformation', authenticateUser, async (req, res) => {
+router.post('/validate-transformation', ensureAuthenticated, async (req, res) => {
   try {
     const { projectId, transformation, schema } = req.body;
 
@@ -147,7 +147,7 @@ router.post('/validate-transformation', authenticateUser, async (req, res) => {
 /**
  * Get transformation checkpoint status
  */
-router.get('/transformation-checkpoint/:projectId', authenticateUser, async (req, res) => {
+router.get('/transformation-checkpoint/:projectId', ensureAuthenticated, async (req, res) => {
   try {
     const { projectId } = req.params;
 
@@ -179,7 +179,7 @@ router.get('/transformation-checkpoint/:projectId', authenticateUser, async (req
  * PM Agent Goal Clarification
  * Agent reads user's goal and questions, summarizes understanding, and asks clarifying questions
  */
-router.post('/clarify-goal', authenticateUser, async (req, res) => {
+router.post('/clarify-goal', ensureAuthenticated, async (req, res) => {
   try {
     const userId = (req.user as any)?.id;
     if (!userId) {
@@ -235,7 +235,7 @@ router.post('/clarify-goal', authenticateUser, async (req, res) => {
  * Get dataset recommendations from multi-agent consultation
  * PM Agent coordinates with Business, DE, and DS agents
  */
-router.post('/recommend-datasets', authenticateUser, async (req, res) => {
+router.post('/recommend-datasets', ensureAuthenticated, async (req, res) => {
   try {
     const userId = (req.user as any)?.id;
     if (!userId) {
@@ -290,7 +290,7 @@ router.post('/recommend-datasets', authenticateUser, async (req, res) => {
     // Coordinate with Business, DE, and DS agents
     console.log(`🔄 Coordinating with Business Agent, Data Engineer, and Data Scientist...`);
 
-    const coordination = await pmAgent.coordinateMultiAgentAnalysis(
+    const coordination = await pmAgent.coordinateGoalAnalysis(
       'temp_project_id', // Will be created after data upload
       uploadedData,
       userGoals,
@@ -300,14 +300,14 @@ router.post('/recommend-datasets', authenticateUser, async (req, res) => {
     // Generate natural language advice
     const advice = {
       summary: coordination.synthesis.overallAssessment,
-      recommendedDatasets: extractDatasetRecommendations(coordination),
-      dataRequirements: extractDataRequirements(coordination),
-      qualityExpectations: extractQualityExpectations(coordination),
+      recommendedDatasets: extractDatasetRecommendations(coordination, uploadedData, safeGoals),
+      dataRequirements: extractDataRequirements(coordination, uploadedData, safeGoals),
+      qualityExpectations: extractQualityExpectations(coordination, uploadedData, safeGoals),
       naturalLanguageAdvice: generateNaturalLanguageAdvice(coordination, analysisGoal),
       technicalDetails: {
-        dataEngineerOpinion: coordination.expertOpinions.find(o => o.agentId === 'data_engineer')?.opinion,
-        dataScientistOpinion: coordination.expertOpinions.find(o => o.agentId === 'data_scientist')?.opinion,
-        businessAgentOpinion: coordination.expertOpinions.find(o => o.agentId === 'business_agent')?.opinion
+        dataEngineerOpinion: coordination.expertOpinions.find((o: any) => o.agentId === 'data_engineer')?.opinion,
+        dataScientistOpinion: coordination.expertOpinions.find((o: any) => o.agentId === 'data_scientist')?.opinion,
+        businessAgentOpinion: coordination.expertOpinions.find((o: any) => o.agentId === 'business_agent')?.opinion
       }
     };
 
@@ -331,76 +331,306 @@ router.post('/recommend-datasets', authenticateUser, async (req, res) => {
 });
 
 // Helper functions for dataset recommendations
-function extractDatasetRecommendations(coordination: any): Array<{name: string; description: string; priority: string}> {
-  const synthesis = coordination.synthesis;
-  return [
-    {
-      name: 'Primary Transaction Data',
-      description: 'Core business transactions including timestamps, amounts, and categorical information',
-      priority: 'Required'
-    },
-    {
-      name: 'Customer/User Data',
-      description: 'Demographic and behavioral information to enable segmentation',
-      priority: 'Required'
-    },
-    {
-      name: 'Historical Metrics',
-      description: 'Time-series data for trend analysis and forecasting',
-      priority: 'Recommended'
+type AgentId = 'data_engineer' | 'data_scientist' | 'business_agent';
+
+const REQUIREMENT_LIBRARY: Record<string, { name: string; description: string; priority?: 'Required' | 'Recommended' }> = {
+  segment_column: {
+    name: 'Customer or Segment Attributes',
+    description: 'Categorical columns (e.g., segment, persona, region) that support clustering and comparative analysis.',
+    priority: 'Required'
+  },
+  temporal_data: {
+    name: 'Time Series Context',
+    description: 'Timestamps or date fields that allow forecasting, cohorting, and time-based trend analysis.',
+    priority: 'Required'
+  },
+  numeric_variables: {
+    name: 'Quantitative Performance Metrics',
+    description: 'At least two numeric measures to unlock correlation, regression, and KPI tracking.',
+    priority: 'Required'
+  },
+  segment_column_via_rfm: {
+    name: 'Behavioral RFM Metrics',
+    description: 'Recency, frequency, and monetary values that let us derive customer segments when none exist today.',
+    priority: 'Recommended'
+  },
+  valid_data_quality_score: {
+    name: 'Data Quality Profiling',
+    description: 'A recent profiling output or score so agents can verify readiness before advanced analysis.',
+    priority: 'Recommended'
+  },
+  sample_rows: {
+    name: 'Representative Sample Rows',
+    description: 'A lightweight extract that helps agents validate schema details and automated checks.',
+    priority: 'Required'
+  }
+};
+
+function getAgentOpinion<T = any>(coordination: any, agentId: AgentId): T | undefined {
+  if (!coordination?.expertOpinions) return undefined;
+  const match = coordination.expertOpinions.find((op: any) => op?.agentId === agentId);
+  return match?.opinion as T | undefined;
+}
+
+function normalizeKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
+}
+
+function humanize(value: string): string {
+  const words = value
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean);
+
+  return words.map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+}
+
+function describeRequirement(rawRequirement: string, fallbackPriority: 'Required' | 'Recommended') {
+  const key = normalizeKey(rawRequirement);
+  const libraryEntry = REQUIREMENT_LIBRARY[key];
+  const name = libraryEntry?.name ?? humanize(rawRequirement);
+  const description = libraryEntry?.description ?? `Ensure you can provide ${humanize(rawRequirement).toLowerCase()} so the analysis can proceed.`;
+  const priority = libraryEntry?.priority ?? fallbackPriority;
+
+  return { name, description, priority };
+}
+
+function extractDatasetRecommendations(
+  coordination: any,
+  uploadedData: any,
+  userGoals: string[]
+): Array<{ name: string; description: string; priority: 'Required' | 'Recommended' }> {
+  const recommendations: Array<{ name: string; description: string; priority: 'Required' | 'Recommended' }> = [];
+  const seen = new Set<string>();
+
+  const dataScientistOpinion: any = getAgentOpinion(coordination, 'data_scientist');
+  const dataEngineerOpinion: any = getAgentOpinion(coordination, 'data_engineer');
+
+  const addRecommendation = (name: string, description: string, priority: 'Required' | 'Recommended') => {
+    if (!name || seen.has(name.toLowerCase())) {
+      return;
     }
-  ];
+    recommendations.push({ name, description, priority });
+    seen.add(name.toLowerCase());
+  };
+
+  const missingRequirements: string[] = dataScientistOpinion?.dataRequirements?.missing || [];
+  missingRequirements.forEach(requirement => {
+    const detail = describeRequirement(requirement, 'Required');
+    addRecommendation(detail.name, detail.description, 'Required');
+  });
+
+  const derivableRequirements: string[] = dataScientistOpinion?.dataRequirements?.canDerive || [];
+  derivableRequirements.forEach(requirement => {
+    const detail = describeRequirement(requirement, 'Recommended');
+    addRecommendation(detail.name, detail.description, 'Recommended');
+  });
+
+  const metRequirements: string[] = dataScientistOpinion?.dataRequirements?.met || [];
+  metRequirements.forEach(requirement => {
+    const detail = describeRequirement(requirement, 'Recommended');
+    addRecommendation(detail.name, `${detail.description} (already available in your current data)`, 'Recommended');
+  });
+
+  if (dataEngineerOpinion?.metadata?.rowsAnalyzed && dataEngineerOpinion?.metadata?.columnsAnalyzed) {
+    const summary = `Current upload analyzed ${dataEngineerOpinion.metadata.rowsAnalyzed} rows across ${dataEngineerOpinion.metadata.columnsAnalyzed} columns.`;
+    addRecommendation('Existing Uploaded Dataset', `${summary} The team can build on this dataset once quality issues are addressed.`, 'Recommended');
+  }
+
+  if (recommendations.length === 0) {
+    const primaryGoal = buildPrimaryGoalSummary(uploadedData, userGoals);
+    addRecommendation(
+      `${primaryGoal || 'Goal-Aligned'} Dataset`,
+      primaryGoal
+        ? `Provide the dataset (metrics, identifiers, and time context) required to answer "${primaryGoal}". Include at least two measurable outcomes and the dimensions you care about.`
+        : 'Provide transactional, customer, and contextual data so the agents can tailor the analysis to your goals.',
+      'Required'
+    );
+  }
+
+  return recommendations;
 }
 
-function extractDataRequirements(coordination: any): string[] {
-  return [
-    'Minimum 3 months of historical data for trend analysis',
-    'Unique identifiers for joining datasets',
-    'Timestamp fields for temporal analysis',
-    'Clean categorical variables (no excessive nulls)',
-    'Sufficient sample size (recommend 1000+ records)'
-  ];
+function extractDataRequirements(coordination: any, uploadedData: any, userGoals: string[]): string[] {
+  const requirements = new Set<string>();
+  const dataScientistOpinion: any = getAgentOpinion(coordination, 'data_scientist');
+  const dataEngineerOpinion: any = getAgentOpinion(coordination, 'data_engineer');
+  const businessOpinion: any = getAgentOpinion(coordination, 'business_agent');
+
+  const requirementStrings = (
+    dataScientistOpinion?.dataRequirements?.missing || []
+  ).map((req: string) => {
+    const detail = describeRequirement(req, 'Required');
+    return `Need ${detail.name.toLowerCase()} to keep the analysis on track.`;
+  });
+
+  for (const requirement of requirementStrings) {
+    requirements.add(requirement);
+  }
+
+  (dataScientistOpinion?.dataRequirements?.canDerive || []).forEach((req: string) => {
+    const detail = describeRequirement(req, 'Recommended');
+    requirements.add(`We can derive ${detail.name.toLowerCase()} if you share supporting behavior or transaction metrics.`);
+  });
+
+  if (Array.isArray(dataScientistOpinion?.requiredAnalyses) && dataScientistOpinion.requiredAnalyses.length > 0) {
+    requirements.add(`Planned analyses: ${dataScientistOpinion.requiredAnalyses.join(', ')}.`);
+  }
+
+  if (Array.isArray(dataScientistOpinion?.recommendations)) {
+    dataScientistOpinion.recommendations.slice(0, 3).forEach((tip: string) => requirements.add(tip));
+  }
+
+  if (Array.isArray(dataEngineerOpinion?.recommendations)) {
+    dataEngineerOpinion.recommendations.slice(0, 3).forEach((tip: string) => requirements.add(tip));
+  }
+
+  if (Array.isArray(businessOpinion?.recommendations)) {
+    businessOpinion.recommendations.slice(0, 2).forEach((tip: string) => requirements.add(tip));
+  }
+
+  const nextSteps: string[] = coordination?.synthesis?.nextSteps || [];
+  nextSteps.forEach(step => requirements.add(step));
+
+  if (requirements.size === 0) {
+    const primaryGoal = buildPrimaryGoalSummary(uploadedData, userGoals);
+    requirements.add(
+      primaryGoal
+        ? `Include the columns that let us answer "${primaryGoal}" (the metrics to improve and the segments you want to compare).`
+        : 'Upload at least three months of data with consistent identifiers so we can validate trends and joins.'
+    );
+    requirements.add(
+      'Share the outcome metric, relevant dimensions (persona, cohort, product), and a timestamp so we can align analyses.'
+    );
+  }
+
+  return Array.from(requirements);
 }
 
-function extractQualityExpectations(coordination: any): string[] {
-  return [
-    'Missing values < 20% per column',
-    'No duplicate records on key identifiers',
-    'Consistent date formats',
-    'Valid ranges for numerical fields',
-    'No PII unless properly disclosed'
-  ];
+function extractQualityExpectations(coordination: any, uploadedData: any, userGoals: string[]): string[] {
+  const dataEngineerOpinion: any = getAgentOpinion(coordination, 'data_engineer');
+  const expectations = new Set<string>();
+
+  const issueDetails = Array.isArray(dataEngineerOpinion?.issueDetails) ? dataEngineerOpinion.issueDetails : [];
+  issueDetails.forEach((issue: any) => {
+    if (typeof issue?.message === 'string') {
+      expectations.add(issue.message);
+    } else if (typeof issue?.type === 'string') {
+      expectations.add(`Resolve ${humanize(issue.type).toLowerCase()} before moving forward.`);
+    }
+  });
+
+  const issueMessages = Array.isArray(dataEngineerOpinion?.issueMessages) ? dataEngineerOpinion.issueMessages : [];
+  issueMessages.forEach((message: string) => expectations.add(message));
+
+  const warnings = Array.isArray(dataEngineerOpinion?.warnings) ? dataEngineerOpinion.warnings : [];
+  warnings.forEach((warning: string) => expectations.add(warning));
+
+  if (Array.isArray(dataEngineerOpinion?.recommendations)) {
+    dataEngineerOpinion.recommendations.slice(0, 2).forEach((recommendation: string) => expectations.add(recommendation));
+  }
+
+  if (dataEngineerOpinion?.metadata?.columnsAnalyzed && dataEngineerOpinion?.metadata?.rowsAnalyzed) {
+    expectations.add(`Maintain coverage across ${dataEngineerOpinion.metadata.columnsAnalyzed} columns and ${dataEngineerOpinion.metadata.rowsAnalyzed} rows to keep quality scores stable.`);
+  }
+
+  if (expectations.size === 0) {
+    const primaryGoal = buildPrimaryGoalSummary(uploadedData, userGoals);
+    expectations.add(
+      primaryGoal
+        ? `Make sure the dataset supporting "${primaryGoal}" has unique identifiers, a clean date field, and the metrics needed for comparisons.`
+        : 'Keep missing values under 20% per column and remove duplicate records on key identifiers.'
+    );
+    expectations.add('Ensure timestamps, numeric ranges, and categorical values follow consistent formatting.');
+  }
+
+  return Array.from(expectations);
+}
+
+function buildPrimaryGoalSummary(uploadedData: any, userGoals: string[]): string | undefined {
+  const sanitizedGoals = Array.isArray(userGoals) ? userGoals.filter((goal) => typeof goal === 'string' && goal.trim()) : [];
+  if (sanitizedGoals.length > 0) {
+    return sanitizedGoals[0].trim();
+  }
+
+  if (uploadedData) {
+    if (typeof uploadedData.analysisGoal === 'string' && uploadedData.analysisGoal.trim()) {
+      return uploadedData.analysisGoal.trim();
+    }
+
+    if (Array.isArray(uploadedData.businessQuestions) && uploadedData.businessQuestions.length > 0) {
+      const question = uploadedData.businessQuestions.find((q: any) => typeof q === 'string' && q.trim());
+      if (question) {
+        return String(question).trim();
+      }
+    }
+
+    if (typeof uploadedData.businessQuestions === 'string' && uploadedData.businessQuestions.trim()) {
+      return uploadedData.businessQuestions.split('\n').map((q: string) => q.trim()).filter(Boolean)[0];
+    }
+  }
+
+  return undefined;
+}
+
+function humanizeAssessment(value?: string): string {
+  if (!value) return 'the recommended workflow';
+  const lookup: Record<string, string> = {
+    proceed: 'moving ahead as planned',
+    proceed_with_caution: 'moving ahead with close monitoring',
+    revise_approach: 'revisiting the plan before execution',
+    not_feasible: 'pausing until prerequisites are met'
+  };
+  return lookup[value] ?? humanize(value.toLowerCase());
 }
 
 function generateNaturalLanguageAdvice(coordination: any, analysisGoal: string): string {
-  const synthesis = coordination.synthesis;
+  const synthesis = coordination?.synthesis || {};
+  const consensus = synthesis.expertConsensus;
+  const businessOpinion: any = getAgentOpinion(coordination, 'business_agent');
+  const goalText = typeof analysisGoal === 'string' && analysisGoal.trim().length > 0
+    ? analysisGoal.trim()
+    : 'your stated objectives';
+  const goalSnippet = goalText.length > 120 ? `${goalText.substring(0, 120)}...` : goalText;
 
-  return `Based on your goal to "${analysisGoal.substring(0, 100)}...", here's what our expert team recommends:
+  const summaryLines: string[] = [];
+  summaryLines.push(`Based on your goal "${goalSnippet}", our agents recommend ${humanizeAssessment(synthesis.overallAssessment)}.`);
 
-**Data Strategy**: ${synthesis.keyFindings[0] || 'Focus on collecting comprehensive transactional data with clear timestamps and identifiers.'}
+  if (consensus) {
+    summaryLines.push(
+      `Consensus outlook: data quality is ${consensus.dataQuality}, technical feasibility is ${consensus.technicalFeasibility}, and expected business value is ${consensus.businessValue}.`
+    );
+  }
 
-**What You'll Need**:
-- Core business data showing the metrics you want to analyze
-- Historical records going back at least 3-6 months
-- Customer or entity identifiers to enable segmentation
-- Any contextual data that might explain the patterns (e.g., marketing campaigns, seasonal events)
+  const keyFindings = Array.isArray(synthesis.keyFindings) ? synthesis.keyFindings.filter(Boolean).slice(0, 3) : [];
+  if (keyFindings.length > 0) {
+    summaryLines.push(`Key findings:\n- ${keyFindings.join('\n- ')}`);
+  }
 
-**Quality Expectations**:
-Our data quality analysis will check for completeness, consistency, and accuracy. You'll be able to review and approve any issues before analysis begins.
+  const nextSteps = Array.isArray(synthesis.nextSteps) && synthesis.nextSteps.length > 0
+    ? synthesis.nextSteps
+    : Array.isArray(synthesis.actionableRecommendations) ? synthesis.actionableRecommendations : [];
 
-**Next Steps**:
-1. Gather your data files (CSV, Excel, or JSON formats work best)
-2. Upload them in the next step
-3. We'll automatically analyze schema, detect PII, and assess quality
-4. You'll review and approve everything before we proceed
+  if (nextSteps.length > 0) {
+    const limitedSteps = nextSteps.slice(0, 4);
+    summaryLines.push(`Immediate next steps:\n${limitedSteps.map((step: string, idx: number) => `${idx + 1}. ${step}`).join('\n')}`);
+  }
 
-${synthesis.actionableRecommendations[0] || 'Our agents will guide you through each step of the preparation process.'}`;
+  if (businessOpinion?.expectedROI) {
+    summaryLines.push(`Expected ROI: ${businessOpinion.expectedROI}.`);
+  }
+
+  summaryLines.push('Our agents will stay with you through data upload, quality review, and plan approval so nothing moves forward without your sign-off.');
+
+  return summaryLines.join('\n\n');
 }
 
 /**
  * Update goal after clarification
  */
-router.post('/update-goal-after-clarification', authenticateUser, async (req, res) => {
+router.post('/update-goal-after-clarification', ensureAuthenticated, async (req, res) => {
   try {
     const userId = (req.user as any)?.id;
     if (!userId) {

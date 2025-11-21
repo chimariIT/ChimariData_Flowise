@@ -149,10 +149,11 @@ describe('Data Engineer Agent - Consultation Methods', () => {
       const mediumResult = await agent.estimateDataProcessingTime(dataSize, 'medium');
       const highResult = await agent.estimateDataProcessingTime(dataSize, 'high');
 
-      // Medium should be ~2x low, high should be ~3x low
+      // Medium should be ~1.5x low, high should be ~2x low after pipeline tuning
       expect(mediumResult.estimatedMinutes).toBeGreaterThan(lowResult.estimatedMinutes);
       expect(highResult.estimatedMinutes).toBeGreaterThan(mediumResult.estimatedMinutes);
-      expect(highResult.estimatedMinutes).toBeCloseTo(lowResult.estimatedMinutes * 3, 1);
+      expect(mediumResult.estimatedMinutes).toBeCloseTo(Math.round(lowResult.estimatedMinutes * 1.5), 0);
+      expect(highResult.estimatedMinutes).toBeCloseTo(Math.round(lowResult.estimatedMinutes * 2), 0);
     });
 
     test('includes confidence and factors in estimate', async () => {
@@ -427,14 +428,16 @@ describe('Business Agent - Consultation Methods', () => {
       const result = await agent.suggestBusinessMetrics(industry, goals);
 
       expect(result.primaryMetrics).toBeDefined();
-      const hasClv = result.primaryMetrics.some(m =>
-        m.name.toLowerCase().includes('lifetime value') ||
-        m.name.toLowerCase().includes('clv')
-      );
-      const hasCac = result.primaryMetrics.some(m =>
-        m.name.toLowerCase().includes('acquisition cost') ||
-        m.name.toLowerCase().includes('cac')
-      );
+      const hasClv = result.primaryMetrics.some(m => {
+        const name = (typeof m === 'string' ? m : m?.name) || '';
+        const normalized = name.toLowerCase();
+        return normalized.includes('lifetime value') || normalized.includes('clv');
+      });
+      const hasCac = result.primaryMetrics.some(m => {
+        const name = (typeof m === 'string' ? m : m?.name) || '';
+        const normalized = name.toLowerCase();
+        return normalized.includes('acquisition cost') || normalized.includes('cac');
+      });
       expect(hasClv || hasCac).toBe(true);
     });
 
@@ -444,10 +447,11 @@ describe('Business Agent - Consultation Methods', () => {
 
       const result = await agent.suggestBusinessMetrics(industry, goals);
 
-      const hasMrr = result.primaryMetrics.some(m =>
-        m.name.toLowerCase().includes('mrr') ||
-        m.name.toLowerCase().includes('recurring revenue')
-      );
+      const hasMrr = result.primaryMetrics.some(m => {
+        const name = (typeof m === 'string' ? m : m?.name) || '';
+        const normalized = name.toLowerCase();
+        return normalized.includes('mrr') || normalized.includes('recurring revenue');
+      });
       expect(hasMrr).toBe(true);
     });
 
@@ -457,10 +461,11 @@ describe('Business Agent - Consultation Methods', () => {
 
       const result = await agent.suggestBusinessMetrics(industry, goals);
 
-      const hasAov = result.primaryMetrics.some(m =>
-        m.name.toLowerCase().includes('order value') ||
-        m.name.toLowerCase().includes('aov')
-      );
+      const hasAov = result.primaryMetrics.some(m => {
+        const name = (typeof m === 'string' ? m : m?.name) || '';
+        const normalized = name.toLowerCase();
+        return normalized.includes('order value') || normalized.includes('aov');
+      });
       expect(hasAov).toBe(true);
       expect(result.industry).toBe('retail');
     });

@@ -6,6 +6,9 @@ import { llmFineTuningHandler } from './llm-fine-tuning-handler';
 import { EnhancedVisualizationEngine } from './enhanced-visualization-engine';
 import { intelligentLibrarySelector } from './intelligent-library-selector';
 import { sparkVisualizationHandler, sparkStatisticalHandler } from './spark-services';
+import type { ToolExecutionContext, ToolExecutionResult } from './agent-tool-handlers';
+
+export type { ToolExecutionContext, ToolExecutionResult } from './agent-tool-handlers';
 
 /**
  * Easy Tool Onboarding System for MCP
@@ -13,6 +16,47 @@ import { sparkVisualizationHandler, sparkStatisticalHandler } from './spark-serv
  * This registry makes it simple to add new tools to the MCP server
  * that agents can use. Just define your tool and register it!
  */
+
+export type ToolCategory =
+  | 'data'
+  | 'analysis'
+  | 'visualization'
+  | 'ml'
+  | 'business'
+  | 'utility'
+  | 'ml_advanced'
+  | 'ml_utility'
+  | 'llm'
+  | 'llm_utility'
+  | 'visualization_enhanced'
+  | 'visualization_library'
+  | 'analysis_enhanced'
+  | 'analysis_library'
+  | 'visualization_spark'
+  | 'analysis_spark'
+  | 'ml_spark'
+  | 'data_spark'
+  | 'analysis_spark_streaming'
+  | 'analysis_spark_graph'
+  | 'pm_communication'
+  | 'pm_evaluation'
+  | 'pm_coordination'
+  | 'de_pipeline'
+  | 'de_quality'
+  | 'de_governance'
+  | 'cs_knowledge'
+  | 'cs_diagnostics'
+  | 'cs_billing'
+  | 'cs_support'
+  | 'ba_research'
+  | 'ba_analysis'
+  | 'ba_governance'
+  | 'ra_research'
+  | 'ra_ingestion'
+  | 'ra_templates'
+  | 'ra_analysis'
+  | 'data_ingestion'
+  | 'data_transformation';
 
 export interface ToolDefinition {
   name: string;
@@ -22,7 +66,7 @@ export interface ToolDefinition {
   inputSchema?: any;
   outputSchema?: any;
   examples?: ToolExample[];
-  category?: 'data' | 'analysis' | 'visualization' | 'ml' | 'business' | 'utility';
+  category?: ToolCategory;
   agentAccess?: string[]; // Which agents can use this tool
 }
 
@@ -31,6 +75,27 @@ export interface ToolExample {
   description: string;
   input: any;
   expectedOutput: any;
+}
+
+const AGENT_ROLE_ALIASES: Record<string, string[]> = {
+  technical_ai_agent: ['technical_ai_agent', 'data_scientist', 'analysis_agent'],
+  data_scientist: ['data_scientist'],
+  data_engineer: ['data_engineer'],
+  project_manager: ['project_manager'],
+  business_agent: ['business_agent', 'business_analyst'],
+  customer_support_agent: ['customer_support_agent', 'customer_support', 'support_agent'],
+  support_agent: ['support_agent', 'customer_support'],
+  research_agent: ['research_agent'],
+  template_research_agent: ['template_research_agent', 'research_agent'],
+};
+
+function resolveAgentRoles(agentId: string): string[] {
+  const normalized = agentId?.trim() || '';
+  const aliases = AGENT_ROLE_ALIASES[normalized];
+  if (aliases) {
+    return aliases;
+  }
+  return normalized ? [normalized] : [];
 }
 
 export class MCPToolRegistry {
@@ -112,11 +177,13 @@ export class MCPToolRegistry {
    * GET TOOLS ACCESSIBLE TO AGENT
    */
   static getToolsForAgent(agentId: string): ToolDefinition[] {
-    return this.getAllTools().filter(tool =>
-      !tool.agentAccess ||
-      tool.agentAccess.includes('all') ||
-      tool.agentAccess.includes(agentId)
-    );
+    const allowedRoles = resolveAgentRoles(agentId);
+    return this.getAllTools().filter(tool => {
+      if (!tool.agentAccess || tool.agentAccess.includes('all')) {
+        return true;
+      }
+      return tool.agentAccess.some(role => allowedRoles.includes(role));
+    });
   }
 
   /**
@@ -141,7 +208,8 @@ export class MCPToolRegistry {
       return true;
     }
 
-    return tool.agentAccess.includes(agentId);
+    const allowedRoles = resolveAgentRoles(agentId);
+    return tool.agentAccess.some(role => allowedRoles.includes(role));
   }
 
   /**
@@ -520,6 +588,48 @@ export function registerCoreTools(): void {
       permissions: ['business_analysis', 'customize_outputs', 'create_reports'],
       category: 'business',
       agentAccess: ['business_agent', 'project_manager']
+    },
+    {
+      name: 'presentation_generator',
+      description: 'Generate audience-specific PowerPoint/Google Slides presentations from analysis results with user templates',
+      service: 'PresentationGenerator',
+      permissions: ['generate_presentations', 'use_custom_templates', 'audience_targeting', 'create_artifacts'],
+      category: 'business',
+      agentAccess: ['business_agent', 'project_manager', 'data_scientist'],
+      inputSchema: {
+        type: 'object',
+        required: ['projectId', 'userId', 'audience'],
+        properties: {
+          projectId: { type: 'string', description: 'Project ID for analysis results' },
+          userId: { type: 'string', description: 'User ID for template selection' },
+          audience: {
+            type: 'string',
+            enum: ['non-tech', 'business', 'technical', 'consultation'],
+            description: 'Target audience for presentation'
+          },
+          userTemplateId: { type: 'string', description: 'Optional: User-uploaded template ID' },
+          includeMethodology: { type: 'boolean', description: 'Include technical methodology slides' },
+          includeTechnicalDetails: { type: 'boolean', description: 'Include detailed technical information' },
+          includeModelDiagnostics: { type: 'boolean', description: 'Include ML model performance metrics' }
+        }
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          artifactId: { type: 'string', description: 'Database artifact ID' },
+          filePath: { type: 'string', description: 'Path to generated presentation' },
+          slideCount: { type: 'number', description: 'Number of slides in presentation' },
+          metadata: {
+            type: 'object',
+            properties: {
+              audience: { type: 'string' },
+              template: { type: 'string' },
+              generatedAt: { type: 'string', format: 'date-time' }
+            }
+          }
+        }
+      }
     },
     {
       name: 'project_coordinator',
@@ -1559,7 +1669,7 @@ export function registerCoreTools(): void {
 /**
  * Create placeholder result for tools not yet implemented
  */
-function createPlaceholderResult(executionContext: any, toolName: string): any {
+function createPlaceholderResult(executionContext: ToolExecutionContext, toolName: string): ToolExecutionResult {
   return {
     executionId: executionContext.executionId,
     toolId: toolName,
@@ -1584,8 +1694,8 @@ export async function executeTool(
   toolName: string,
   agentId: string,
   input: any,
-  context?: { userId?: number; projectId?: string }
-): Promise<any> {
+  context?: { userId?: string; projectId?: string }
+): Promise<ToolExecutionResult> {
   // Check if agent can use tool
   if (!MCPToolRegistry.canAgentUseTool(agentId, toolName)) {
     throw new Error(`Agent ${agentId} does not have access to tool ${toolName}`);
@@ -1618,7 +1728,7 @@ export async function executeTool(
   } = require('./real-tool-handlers');
 
   // Create execution context
-  const executionContext = {
+  const executionContext: ToolExecutionContext = {
     executionId: tracking.executionId,
     agentId,
     userId: context?.userId,
@@ -1628,7 +1738,7 @@ export async function executeTool(
 
   // Route to appropriate real handler based on tool name
   try {
-    let result;
+  let result: ToolExecutionResult;
 
     switch (toolName) {
       case 'statistical_analyzer':
@@ -1914,7 +2024,7 @@ export async function executeTool(
   } catch (error) {
     console.error(`❌ Tool ${toolName} execution failed:`, error);
 
-    const errorResult = {
+        const errorResult: ToolExecutionResult = {
       executionId: executionContext.executionId,
       toolId: toolName,
       status: 'error',

@@ -17,7 +17,9 @@ import {
   AlertCircle,
   Users,
   Building,
-  TrendingUp
+  TrendingUp,
+  Database,
+  FileText
 } from "lucide-react";
 import { useProjectSession } from "@/hooks/useProjectSession";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -25,6 +27,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { AgentChatInterface } from "@/components/agent-chat-interface";
 import { AudienceDefinitionSection } from "@/components/AudienceDefinitionSection";
 import { PMAgentClarificationDialog } from "@/components/PMAgentClarificationDialog";
+import { apiClient } from "@/lib/api";
 
 interface PrepareStepProps {
   journeyType: string;
@@ -69,7 +72,7 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
     loading: sessionLoading,
     error: sessionError
   } = useProjectSession({
-    journeyType: journeyType as 'non-tech' | 'business' | 'technical' | 'consultation'
+    journeyType: journeyType as 'non-tech' | 'business' | 'technical' | 'consultation' | 'custom'
   });
 
   // Load existing session data on mount
@@ -337,23 +340,13 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
     try {
       console.log('🔄 Fetching dataset recommendations from multi-agent consultation...');
 
-      const response = await fetch('/api/project-manager/recommend-datasets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          sessionId: session.id,
-          analysisGoal,
-          businessQuestions,
-          clarificationAnswers
-        })
+      // Use apiClient to ensure correct API base URL (localhost:5000)
+      const data = await apiClient.post('/api/project-manager/recommend-datasets', {
+        sessionId: session.id,
+        analysisGoal,
+        businessQuestions,
+        clarificationAnswers
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to get dataset recommendations');
-      }
-
-      const data = await response.json();
 
       if (data.success) {
         setDatasetAdvice(data.advice);
@@ -614,15 +607,39 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
                         })
                       });
 
+                      console.log('PM Clarification Response Status:', response.status, response.statusText);
+
                       if (!response.ok) {
-                        throw new Error('Failed to get clarification');
+                        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+                        console.error('PM Clarification Error Response:', errorData);
+                        throw new Error(errorData.error || `Server returned ${response.status}: ${response.statusText}`);
                       }
 
                       const data = await response.json();
-                      setClarificationData(data.clarification);
+                      console.log('PM Clarification Response Data:', data);
+
+                      if (data.clarification) {
+                        setClarificationData(data.clarification);
+                      } else {
+                        console.warn('No clarification data in response:', data);
+                        // Still show dialog with what we got
+                        setClarificationData({
+                          summary: data.content || 'Clarification received',
+                          suggestedFocus: '',
+                          dataRequirements: [],
+                          estimatedComplexity: 'moderate'
+                        });
+                      }
                     } catch (error: any) {
                       console.error('Clarification failed:', error);
-                      alert('Failed to get PM Agent clarification. Please try again.');
+                      console.error('Error details:', {
+                        message: error.message,
+                        stack: error.stack,
+                        analysisGoal,
+                        businessQuestions,
+                        journeyType
+                      });
+                      alert(`Failed to get PM Agent clarification: ${error.message}\n\nCheck browser console for details.`);
                       setShowClarificationDialog(false);
                     } finally {
                       setLoadingClarification(false);
@@ -647,7 +664,7 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
           ) : (
             <div className="space-y-4">
               <AgentChatInterface
-                projectId={session?.projectId}
+                projectId={session?.projectId ?? undefined}
                 conversationId={conversationId}
                 initialGoals={analysisGoal ? [analysisGoal] : []}
                 onGoalsConfirmed={(goals) => {
@@ -1025,7 +1042,7 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
                 sessionId: session?.id,
                 refinedGoal: refinedGoal || analysisGoal,
                 answersToQuestions: answers,
-                confirmedUnderstanding: clarificationData
+                confirmedUnderstanding: refinedGoal ? refinedGoal : clarificationData
               })
             });
 

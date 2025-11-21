@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Loader2, Users, TrendingUp, BarChart3, FileText, Lightbulb, Target, ArrowRight } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { apiClient } from '@/lib/api';
 
 interface AudienceFormattedResultsProps {
   projectId: string;
@@ -60,32 +61,28 @@ export function AudienceFormattedResults({ projectId, analysisId, onBack }: Audi
       setLoading(true);
       setError(null);
 
-      const response = await fetch(`/api/analyze-data/${projectId}/results${audienceType ? `?audienceType=${audienceType}` : ''}`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        }
+      const data = await apiClient.getAudienceAnalysisResults(projectId, audienceType);
+
+      if (!data?.success) {
+        throw new Error(data?.error || 'Failed to load analysis results');
+      }
+
+      setFormattedResults(data.formattedResults);
+      setMetadata({
+        analysisType: data.analysisType || data.metadata?.analysisType || 'analysis',
+        audienceType: data.audienceContext?.primaryAudience || audienceType || 'mixed',
+        timestamp: data.metadata?.timestamp || data.createdAt || new Date().toISOString(),
+        dataSize: data.metadata?.dataSize || data.metadata?.schema?.totalRows || 0,
+        columnCount: data.metadata?.columns?.length || data.metadata?.schema?.totalColumns || data.metadata?.columnCount || 0,
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to load analysis results');
-      }
-
-      const data = await response.json();
-      
-      if (data.success) {
-        setFormattedResults(data.formattedResults);
-        setMetadata(data.metadata);
-        setAudienceContext(data.audienceContext);
-        setSelectedAudience(data.audienceContext.primaryAudience);
-      } else {
-        throw new Error(data.error || 'Failed to load results');
-      }
+      setAudienceContext(data.audienceContext);
+      setSelectedAudience(data.audienceContext?.primaryAudience || audienceType || 'mixed');
     } catch (err: any) {
       console.error('Failed to load analysis results:', err);
-      setError(err.message);
+      setError(err.message || 'Failed to load analysis results');
       toast({
         title: "Error",
-        description: "Failed to load analysis results",
+        description: err.message || "Failed to load analysis results",
         variant: "destructive"
       });
     } finally {
@@ -158,6 +155,10 @@ export function AudienceFormattedResults({ projectId, analysisId, onBack }: Audi
   }
 
   const AudienceIcon = getAudienceIcon(selectedAudience);
+  const insightCount = formattedResults?.businessInsights?.length ?? 0;
+  const recommendationCount = formattedResults?.actionableRecommendations?.length ?? 0;
+  const visualizationCount = formattedResults?.visualizations?.length ?? 0;
+  const pipelineTimestamp = metadata?.timestamp ? new Date(metadata.timestamp).toLocaleString() : '—';
 
   return (
     <div className="container mx-auto px-4 py-8 max-w-6xl">
@@ -214,6 +215,64 @@ export function AudienceFormattedResults({ projectId, analysisId, onBack }: Audi
           </Badge>
         </div>
       </div>
+
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <TrendingUp className="w-5 h-5 text-blue-600" />
+            Input • Process • Output Snapshot
+          </CardTitle>
+          <CardDescription>
+            Trace what data powered this analysis, how it was processed, and what deliverables were produced.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="p-4 bg-slate-50 rounded-lg border">
+              <p className="text-xs uppercase font-semibold text-slate-500 mb-2">Inputs</p>
+              <ul className="text-sm text-slate-700 space-y-2">
+                <li>
+                  <span className="font-medium">Rows:</span> {(metadata?.dataSize ?? 0).toLocaleString()}
+                </li>
+                <li>
+                  <span className="font-medium">Columns:</span> {metadata?.columnCount ?? metadata?.columns?.length ?? 0}
+                </li>
+                <li>
+                  <span className="font-medium">Audience:</span> {audienceContext?.primaryAudience || selectedAudience}
+                </li>
+              </ul>
+            </div>
+            <div className="p-4 bg-slate-50 rounded-lg border">
+              <p className="text-xs uppercase font-semibold text-slate-500 mb-2">Process</p>
+              <ul className="text-sm text-slate-700 space-y-2">
+                <li>
+                  <span className="font-medium">Analysis:</span> {metadata?.analysisType || 'Unknown'}
+                </li>
+                <li>
+                  <span className="font-medium">Journey:</span> {audienceContext?.journeyType || metadata?.journeyType || 'ai_guided'}
+                </li>
+                <li>
+                  <span className="font-medium">Executed:</span> {pipelineTimestamp}
+                </li>
+              </ul>
+            </div>
+            <div className="p-4 bg-slate-50 rounded-lg border">
+              <p className="text-xs uppercase font-semibold text-slate-500 mb-2">Outputs</p>
+              <ul className="text-sm text-slate-700 space-y-2">
+                <li>
+                  <span className="font-medium">Insights:</span> {insightCount}
+                </li>
+                <li>
+                  <span className="font-medium">Recommendations:</span> {recommendationCount}
+                </li>
+                <li>
+                  <span className="font-medium">Visualizations:</span> {visualizationCount}
+                </li>
+              </ul>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Results Content */}
       <Tabs defaultValue="overview" className="space-y-6">

@@ -8,15 +8,11 @@
  * 4. Storing results in database
  */
 
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import path from 'path';
-import fs from 'fs/promises';
 import { db } from '../db';
-import { projects, datasets, projectDatasets, projectSessions } from '@shared/schema';
+import { projects, datasets, projectDatasets, projectSessions, analysisPlans } from '@shared/schema';
+import type { CostBreakdown } from '@shared/schema';
 import { eq, and, desc } from 'drizzle-orm';
-
-const execAsync = promisify(exec);
+import { PythonProcessor } from '../python-processor';
 
 interface AnalysisRequest {
   projectId: string;
@@ -145,7 +141,6 @@ export class AnalysisExecutionService {
     console.log(`🔬 Starting analysis for project ${request.projectId}`);
     console.log(`📊 Analysis types: ${request.analysisTypes.join(', ')}`);
 
-    // 1. Load project and datasets
     const [project] = await db
       .select()
       .from(projects)
@@ -155,113 +150,218 @@ export class AnalysisExecutionService {
       throw new Error(`Project ${request.projectId} not found`);
     }
 
-    // Verify user owns project
     if (project.userId !== request.userId) {
       throw new Error('Access denied: User does not own this project');
     }
 
-    // *** CRITICAL FIX: Retrieve user's goals and questions from session ***
-    const userContext = await this.getUserContext(request.projectId, request.userId);
+    // ✅ REMOVED BLOCKING REQUIREMENT: Analysis plan approval is now optional
+    // Users can execute analysis directly without going through plan approval step
+    const approvedPlanId = project.approvedPlanId as string | null;
 
-    if (userContext.analysisGoal) {
-      console.log(`📝 User's analysis goal: ${userContext.analysisGoal.substring(0, 100)}...`);
-    }
-    if (userContext.businessQuestions) {
-      console.log(`❓ User's business questions: ${userContext.businessQuestions.substring(0, 100)}...`);
-    }
-    if (userContext.audience) {
-      console.log(`👥 Target audience: ${userContext.audience.primaryAudience}`);
-    }
+    // If there's an approved plan, use it for validation
+    let plan: any = null;
+    if (approvedPlanId) {
+      const planRecords = await db
+        .select()
+        .from(analysisPlans)
+        .where(eq(analysisPlans.id, approvedPlanId))
+        .limit(1);
 
-    // 2. Get datasets for this project via the join table
-    const projectDatasetLinks = await db
-      .select({
-        dataset: datasets
-      })
-      .from(projectDatasets)
-      .innerJoin(datasets, eq(projectDatasets.datasetId, datasets.id))
-      .where(eq(projectDatasets.projectId, request.projectId));
+      if (planRecords.length > 0) {
+        plan = planRecords[0];
 
-    const projectDatasetList = projectDatasetLinks.map((link: any) => link.dataset);
+        if (plan.status === 'executing') {
+          throw new Error('Analysis execution is already in progress for this plan.');
+        }
 
-    if (!projectDatasetList || projectDatasetList.length === 0) {
-      throw new Error('No datasets found for this project');
-    }
-
-    console.log(`📁 Found ${projectDatasetList.length} dataset(s)`);
-
-    // 3. Execute analysis for each dataset
-    const allInsights: AnalysisInsight[] = [];
-    const allRecommendations: AnalysisRecommendation[] = [];
-    const allVisualizations: any[] = [];
-    let totalRows = 0;
-    let totalColumns = 0;
-
-    for (const dataset of projectDatasetList) {
-      console.log(`🔍 Analyzing dataset: ${dataset.originalFileName}`);
-
-      try {
-        const datasetResults = await this.analyzeDataset(
-          dataset,
-          request.analysisTypes,
-          request.projectId,
-          userContext  // *** PASS USER CONTEXT TO ANALYSIS ***
-        );
-
-        allInsights.push(...datasetResults.insights);
-        allRecommendations.push(...datasetResults.recommendations);
-        allVisualizations.push(...datasetResults.visualizations);
-        totalRows += datasetResults.rowCount;
-        totalColumns += datasetResults.columnCount;
-
-      } catch (error: any) {
-        console.error(`❌ Error analyzing dataset ${dataset.originalFileName}:`, error.message);
-        // Continue with other datasets even if one fails
-        allInsights.push({
-          id: Date.now(),
-          title: `Analysis Error: ${dataset.originalFileName}`,
-          description: `Could not complete analysis: ${error.message}`,
-          impact: 'Low',
-          confidence: 0,
-          category: 'Error',
-          dataSource: dataset.originalFileName
-        });
+        if (plan.status === 'completed') {
+          throw new Error('Analysis has already been completed for this plan.');
+        }
       }
     }
 
-    // 4. Generate recommendations based on insights
-    const syntheticRecommendations = this.generateRecommendations(allInsights);
-    allRecommendations.push(...syntheticRecommendations);
+    if (project.analysisExecutedAt) {
+      throw new Error('Analysis has already been executed for this project.');
+    }
 
-    const executionTime = ((Date.now() - startTime) / 1000).toFixed(1);
+    if (project.analysisBilledAt) {
+      throw new Error('Analysis billing has been finalized for this project; execution is locked.');
+    }
 
-    // 5. Build final results
-    const results: AnalysisResults = {
-      projectId: request.projectId,
-      analysisTypes: request.analysisTypes,
-      insights: allInsights,
-      recommendations: allRecommendations,
-      visualizations: allVisualizations,
-      summary: {
-        totalAnalyses: request.analysisTypes.length,
-        dataRowsProcessed: totalRows,
-        columnsAnalyzed: totalColumns,
-        executionTime: `${executionTime} seconds`,
-        qualityScore: this.calculateQualityScore(allInsights)
-      },
-      metadata: {
-        executedAt: new Date(),
-        datasetNames: projectDatasetList.map((d: any) => d.originalFileName),
-        techniques: request.analysisTypes
+    let executionMarked = false;
+    const executionStartTimestamp = new Date();
+
+    try {
+      // Only update plan status if a plan exists
+      if (plan && approvedPlanId) {
+        const transitionResult = await db
+          .update(analysisPlans)
+          .set({
+            status: 'executing',
+            executedAt: executionStartTimestamp,
+            updatedAt: executionStartTimestamp,
+          })
+          .where(eq(analysisPlans.id, approvedPlanId))
+          .returning({ id: analysisPlans.id });
+
+        if (transitionResult.length === 0) {
+          console.warn(`⚠️  Failed to mark plan ${approvedPlanId} as executing, continuing anyway`);
+        } else {
+          executionMarked = true;
+        }
       }
-    };
 
-    // 6. Store results in database
-    await this.storeResults(request.projectId, results);
+      const userContext = await this.getUserContext(request.projectId, request.userId);
 
-    console.log(`✅ Analysis complete: ${allInsights.length} insights, ${allRecommendations.length} recommendations`);
+      if (userContext.analysisGoal) {
+        console.log(`📝 User's analysis goal: ${userContext.analysisGoal.substring(0, 100)}...`);
+      }
+      if (userContext.businessQuestions) {
+        console.log(`❓ User's business questions: ${userContext.businessQuestions.substring(0, 100)}...`);
+      }
+      if (userContext.audience) {
+        console.log(`👥 Target audience: ${userContext.audience.primaryAudience}`);
+      }
 
-    return results;
+      const projectDatasetLinks = await db
+        .select({
+          dataset: datasets
+        })
+        .from(projectDatasets)
+        .innerJoin(datasets, eq(projectDatasets.datasetId, datasets.id))
+        .where(eq(projectDatasets.projectId, request.projectId));
+
+      const projectDatasetList = projectDatasetLinks.map((link: any) => link.dataset);
+
+      if (!projectDatasetList || projectDatasetList.length === 0) {
+        throw new Error('No datasets found for this project');
+      }
+
+      console.log(`📁 Found ${projectDatasetList.length} dataset(s)`);
+
+      const allInsights: AnalysisInsight[] = [];
+      const allRecommendations: AnalysisRecommendation[] = [];
+      const allVisualizations: any[] = [];
+      let totalRows = 0;
+      let totalColumns = 0;
+
+      for (const dataset of projectDatasetList) {
+        console.log(`🔍 Analyzing dataset: ${dataset.originalFileName}`);
+
+        try {
+          const datasetResults = await this.analyzeDataset(
+            dataset,
+            request.analysisTypes,
+            request.projectId,
+            userContext
+          );
+
+          allInsights.push(...datasetResults.insights);
+          allRecommendations.push(...datasetResults.recommendations);
+          allVisualizations.push(...datasetResults.visualizations);
+          totalRows += datasetResults.rowCount;
+          totalColumns += datasetResults.columnCount;
+
+        } catch (error: any) {
+          console.error(`❌ Error analyzing dataset ${dataset.originalFileName}:`, error.message);
+          allInsights.push({
+            id: Date.now(),
+            title: `Analysis Error: ${dataset.originalFileName}`,
+            description: `Could not complete analysis: ${error.message}`,
+            impact: 'Low',
+            confidence: 0,
+            category: 'Error',
+            dataSource: dataset.originalFileName
+          });
+        }
+      }
+
+      const syntheticRecommendations = this.generateRecommendations(allInsights);
+      allRecommendations.push(...syntheticRecommendations);
+
+      const executionTime = ((Date.now() - startTime) / 1000).toFixed(1);
+      const completedAt = new Date();
+
+      const results: AnalysisResults = {
+        projectId: request.projectId,
+        analysisTypes: request.analysisTypes,
+        insights: allInsights,
+        recommendations: allRecommendations,
+        visualizations: allVisualizations,
+        summary: {
+          totalAnalyses: request.analysisTypes.length,
+          dataRowsProcessed: totalRows,
+          columnsAnalyzed: totalColumns,
+          executionTime: `${executionTime} seconds`,
+          qualityScore: this.calculateQualityScore(allInsights)
+        },
+        metadata: {
+          executedAt: completedAt,
+          datasetNames: projectDatasetList.map((d: any) => d.originalFileName),
+          techniques: request.analysisTypes
+        }
+      };
+
+      const planCostBreakdown = (plan?.estimatedCost as CostBreakdown | undefined) ?? { total: 0, breakdown: {} };
+      const projectCostBreakdown = (project.costBreakdown as CostBreakdown | null) ?? planCostBreakdown;
+      const lockedCost = Number(project.lockedCostEstimate ?? planCostBreakdown.total ?? 0);
+      const totalCost = Number.isFinite(lockedCost) && lockedCost > 0
+        ? lockedCost
+        : projectCostBreakdown.total ?? 0;
+      const totalCostString = totalCost.toFixed(2);
+      const actualCost: CostBreakdown = {
+        total: totalCost,
+        breakdown: projectCostBreakdown?.breakdown ?? planCostBreakdown.breakdown ?? {}
+      };
+      const billedAt = totalCost > 0 ? completedAt : null;
+
+      await db.transaction(async (tx: any) => {
+        await tx
+          .update(projects)
+          .set({
+            analysisResults: results as any,
+            analysisExecutedAt: completedAt,
+            analysisBilledAt: billedAt,
+            totalCostIncurred: totalCostString,
+            costBreakdown: actualCost,
+            updatedAt: completedAt,
+          })
+          .where(eq(projects.id, request.projectId));
+
+        // Update plan status if a plan exists
+        if (approvedPlanId) {
+          await tx
+            .update(analysisPlans)
+            .set({
+              status: 'completed',
+              executionCompletedAt: completedAt,
+              actualCost: actualCost,
+              actualDuration: results.summary.executionTime,
+              updatedAt: completedAt,
+            })
+            .where(eq(analysisPlans.id, approvedPlanId));
+        }
+      });
+
+      console.log(`💾 Results stored for project ${request.projectId}`);
+      console.log(`✅ Analysis complete: ${allInsights.length} insights, ${allRecommendations.length} recommendations`);
+
+      return results;
+    } catch (error) {
+      // Roll back plan status if it was marked as executing
+      if (executionMarked && approvedPlanId) {
+        await db
+          .update(analysisPlans)
+          .set({
+            status: 'approved',
+            executedAt: null,
+            updatedAt: new Date(),
+          })
+          .where(eq(analysisPlans.id, approvedPlanId));
+      }
+
+      throw error;
+    }
   }
 
   /**
@@ -280,116 +380,173 @@ export class AnalysisExecutionService {
     columnCount: number;
   }> {
 
-    // Check if dataset has file path or data
-    let dataFilePath: string;
+    const datasetName = dataset.originalFileName || dataset.name || dataset.datasetName || dataset.id;
 
-    if (dataset.filePath) {
-      dataFilePath = dataset.filePath;
-    } else if (dataset.data) {
-      // Data is stored as JSON in database - write to temp file
-      const tempDir = path.join(process.cwd(), 'temp-analysis');
-      await fs.mkdir(tempDir, { recursive: true });
-      dataFilePath = path.join(tempDir, `${dataset.id}.json`);
-      await fs.writeFile(dataFilePath, JSON.stringify(dataset.data));
-    } else {
-      throw new Error(`Dataset ${dataset.name} has no data or file path`);
-    }
-
-    console.log(`📂 Data file: ${dataFilePath}`);
-
-    // Execute Python analysis
-    const pythonResults = await this.runPythonAnalysis(
-      dataFilePath,
+    const pythonResults = await this.runPythonAnalysis({
+      dataset,
       analysisTypes,
-      dataset.id,
-      userContext  // *** PASS USER CONTEXT TO PYTHON ANALYSIS ***
-    );
+      projectId,
+      userContext
+    });
 
     // Parse Python results into insights
-    const insights = this.parseInsights(pythonResults, dataset.name);
+    const insights = this.parseInsights(pythonResults, datasetName);
     const visualizations = pythonResults.visualizations || [];
 
     return {
       insights,
       recommendations: [],
       visualizations,
-      rowCount: pythonResults.rowCount || 0,
-      columnCount: pythonResults.columnCount || 0
+      rowCount: pythonResults.rowCount || dataset.recordCount || 0,
+      columnCount: pythonResults.columnCount || (dataset.schema ? Object.keys(dataset.schema).length : 0)
     };
   }
 
   /**
    * Run Python analysis script
    */
-  private static async runPythonAnalysis(
-    dataFilePath: string,
-    analysisTypes: string[],
-    datasetId: string,
-    userContext: UserContext  // *** ADD USER CONTEXT PARAMETER ***
-  ): Promise<any> {
+  private static async runPythonAnalysis(params: {
+    dataset: any;
+    analysisTypes: string[];
+    projectId: string;
+    userContext: UserContext;
+  }): Promise<any> {
+    const { dataset, analysisTypes, projectId, userContext } = params;
 
-    const pythonScript = path.join(process.cwd(), 'python_scripts', 'data_analyzer.py');
+    const datasetPayload = this.buildDatasetPayload(dataset, projectId);
 
-    // *** BUILD ANALYSIS CONFIG WITH USER CONTEXT ***
     const analysisConfig = {
-      filePath: dataFilePath,
       analysisTypes,
-      datasetId,
-      // Include user context so Python scripts can generate context-aware insights
+      datasetId: dataset.id,
+      datasetName: datasetPayload.dataset?.name || datasetPayload.dataset?.datasetName || dataset.id,
       userContext: {
         analysisGoal: userContext.analysisGoal || null,
         businessQuestions: userContext.businessQuestions || null,
         targetAudience: userContext.audience?.primaryAudience || 'mixed',
         decisionContext: userContext.audience?.decisionContext || null
-      }
+      },
+      requestedAt: new Date().toISOString()
     };
 
-    const configJson = JSON.stringify(analysisConfig).replace(/"/g, '\\"');
-    const pythonCommand = `python "${pythonScript}" '${configJson}'`;
-
     try {
-      console.log(`🐍 Executing Python analysis...`);
-      const { stdout, stderr } = await execAsync(pythonCommand, {
-        maxBuffer: 10 * 1024 * 1024 // 10MB buffer
+      console.log(`🐍 Executing Python analysis via processor for dataset ${dataset.id}...`);
+      const processorResult = await PythonProcessor.processData({
+        projectId,
+        operation: 'analyze',
+        data: datasetPayload,
+        config: analysisConfig
       });
 
-      if (stderr && !stderr.includes('warning')) {
-        console.warn('⚠️  Python stderr:', stderr);
+      if (!processorResult.success || !processorResult.data) {
+        throw new Error(processorResult.error || 'Python processor returned no data');
       }
 
-      // Parse JSON output from Python
-      const results = JSON.parse(stdout);
-      console.log(`✅ Python analysis complete`);
-      
-      return results;
+      if (!processorResult.data.visualizations && processorResult.visualizations) {
+        processorResult.data.visualizations = processorResult.visualizations;
+      }
+
+      console.log(`✅ Python analysis complete for dataset ${dataset.id}`);
+      return processorResult.data;
 
     } catch (error: any) {
-      console.error('❌ Python execution error:', error.message);
-      
-      // Return basic profiling if Python fails
-      return await this.basicDataProfiling(dataFilePath);
+      console.error('❌ Python execution error:', error?.message || error);
+      return await this.basicDataProfilingFromDataset(dataset);
     }
+  }
+
+  private static buildDatasetPayload(dataset: any, projectId: string) {
+    const datasetName = dataset.originalFileName || dataset.name || dataset.datasetName || dataset.id;
+    const rows = this.extractDatasetRows(dataset);
+    const potentialPath = dataset.storageUri || dataset.filePath || dataset.file_path || null;
+    const resolvedPath = potentialPath && typeof potentialPath === 'string' && !potentialPath.startsWith('mem://')
+      ? potentialPath
+      : null;
+
+    return {
+      projectId,
+      dataset: {
+        id: dataset.id,
+        datasetId: dataset.id,
+        name: datasetName,
+        datasetName,
+        filePath: resolvedPath,
+        rows,
+        schema: dataset.schema || null,
+        recordCount: dataset.recordCount || (Array.isArray(rows) ? rows.length : null),
+        preview: dataset.preview || null,
+        metadata: dataset.ingestionMetadata || dataset.metadata || null
+      }
+    };
+  }
+
+  private static extractDatasetRows(dataset: any): any[] | null {
+    const candidates = [
+      dataset.data,
+      dataset.preview,
+      dataset.sampleData,
+      dataset.records
+    ];
+
+    for (const candidate of candidates) {
+      if (!candidate) continue;
+      if (Array.isArray(candidate)) {
+        return candidate;
+      }
+      if (Array.isArray(candidate?.rows)) {
+        return candidate.rows;
+      }
+      if (Array.isArray(candidate?.records)) {
+        return candidate.records;
+      }
+      if (Array.isArray(candidate?.items)) {
+        return candidate.items;
+      }
+    }
+
+    return null;
   }
 
   /**
    * Basic data profiling fallback (without Python)
    */
-  private static async basicDataProfiling(dataFilePath: string): Promise<any> {
-    // Read file and do basic stats
-    const fileContent = await fs.readFile(dataFilePath, 'utf-8');
-    const lines = fileContent.split('\n').filter(l => l.trim());
-    
+  private static async basicDataProfilingFromDataset(dataset: any): Promise<any> {
+    console.warn(`⚠️ Falling back to basic profiling for dataset ${dataset.id}`);
+    const rows = this.extractDatasetRows(dataset) || [];
+    const columns = rows.length > 0
+      ? Object.keys(rows[0])
+      : dataset.schema
+        ? Object.keys(dataset.schema)
+        : [];
+
+    const numericColumns = columns.filter((column) =>
+      rows.some((row: any) => typeof row?.[column] === 'number')
+    );
+
+    const rowCount = rows.length;
+    const columnCount = columns.length;
+    const missingValues = rows.reduce((total: number, row: any) => {
+      return total + columns.reduce((acc, column) => {
+        const value = row?.[column];
+        return acc + (value === null || value === undefined || value === '' ? 1 : 0);
+      }, 0);
+    }, 0);
+
     return {
       success: true,
-      rowCount: lines.length - 1, // Exclude header
-      columnCount: lines[0]?.split(',').length || 0,
-      insights: [
-        {
-          type: 'summary',
-          message: `Dataset contains ${lines.length - 1} rows`,
-          confidence: 100
-        }
-      ],
+      rowCount,
+      columnCount,
+      descriptive: {
+        rowCount,
+        columnCount,
+        numericColumns,
+        missingValues,
+        sampleColumns: columns.slice(0, 5)
+      },
+      correlations: [],
+      regression: null,
+      clustering: null,
+      timeSeries: null,
+      textInsights: [],
       visualizations: []
     };
   }
@@ -475,6 +632,22 @@ export class AnalysisExecutionService {
         category: 'Trends',
         dataSource: datasetName,
         details: ts
+      });
+    }
+
+    // Parse qualitative/text insights
+    if (pythonResults.textInsights && pythonResults.textInsights.length > 0) {
+      pythonResults.textInsights.forEach((textInsight: any) => {
+        insights.push({
+          id: insightId++,
+          title: textInsight.title || `Qualitative Insight${textInsight.column ? `: ${textInsight.column}` : ''}`,
+          description: textInsight.summary || textInsight.description || 'Key qualitative themes detected.',
+          impact: textInsight.impact || 'Medium',
+          confidence: textInsight.confidence || 65,
+          category: textInsight.category || 'Qualitative',
+          dataSource: datasetName,
+          details: textInsight
+        });
       });
     }
 
@@ -566,21 +739,6 @@ export class AnalysisExecutionService {
     const impactBonus = Math.min(highImpactCount * 5, 20);
 
     return Math.min(Math.round(avgConfidence + impactBonus), 100);
-  }
-
-  /**
-   * Store analysis results in database
-   */
-  private static async storeResults(projectId: string, results: AnalysisResults): Promise<void> {
-    await db
-      .update(projects)
-      .set({
-        analysisResults: results as any,
-        updatedAt: new Date()
-      })
-      .where(eq(projects.id, projectId));
-
-    console.log(`💾 Results stored for project ${projectId}`);
   }
 
   /**

@@ -17,7 +17,7 @@ import * as path from 'path';
 export interface ToolExecutionContext {
   executionId: string;
   agentId: string;
-  userId?: number;
+  userId?: string;
   projectId?: string;
   timestamp: Date;
 }
@@ -498,7 +498,19 @@ export class MLPipelineHandler {
       }
 
       const { data, config } = input;
-      const { analysisType, targetColumn, features, parameters = {} } = config;
+      const {
+        analysisType,
+        targetColumn,
+        features,
+        parameters = {}
+      } = config;
+
+      const recordCount = Array.isArray(data)
+        ? data.length
+        : typeof data?.length === 'number'
+          ? data.length
+          : 0;
+      const normalizedAnalysisType = (typeof analysisType === 'string' ? analysisType : 'classification') as 'regression' | 'classification' | 'clustering' | 'timeseries' | 'anomaly' | 'association';
 
       // Save data to temporary file for Python processing
       const tempDir = path.join(process.cwd(), 'temp', 'ml_data');
@@ -512,11 +524,11 @@ export class MLPipelineHandler {
       // Execute ML analysis using real MLService
       const mlResult = await this.mlService.runAnalysis({
         projectId: context.projectId || 'unknown',
-        analysisType: analysisType || 'classification',
+        analysisType: normalizedAnalysisType,
         targetColumn,
         features,
         parameters,
-        userId: context.userId || 0
+        userId: typeof context.userId === 'number' ? context.userId : (typeof context.userId === 'string' ? parseInt(context.userId, 10) : 0)
       }, dataPath);
 
       // Cleanup temp file
@@ -534,20 +546,20 @@ export class MLPipelineHandler {
         metrics: {
           duration,
           resourcesUsed: {
-            cpu: this.estimateCPU(data.length, analysisType),
-            memory: data.length * 0.5, // ML requires more memory
+            cpu: this.estimateCPU(recordCount, normalizedAnalysisType),
+            memory: recordCount * 0.5, // ML requires more memory
             storage: 0
           },
-          cost: this.calculateCost(data.length, analysisType)
+          cost: this.calculateCost(recordCount, normalizedAnalysisType)
         },
         artifacts: [{
           type: 'ml_model',
           data: mlResult,
           metadata: {
-            analysisType,
+            analysisType: normalizedAnalysisType,
             targetColumn,
             features,
-            recordCount: data.length,
+            recordCount,
             timestamp: new Date().toISOString()
           }
         }]

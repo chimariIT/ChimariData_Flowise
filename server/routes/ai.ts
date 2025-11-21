@@ -8,7 +8,8 @@ import {
     ChimaridataAI,
     TechnicalAIAgent,
     TimeSeriesAnalyzer,
-    cloudConnectorService
+    cloudConnectorService,
+    chimaridataAI
 } from '../services';
 import { canUserRequestAIInsight } from '@shared/subscription-tiers';
 import { BusinessAgent, type BusinessContext } from '../services/business-agent';
@@ -21,6 +22,268 @@ const router = Router();
 
 const technicalAIAgent = new TechnicalAIAgent();
 const businessAgent = new BusinessAgent();
+const aiProvider = chimaridataAI || new ChimaridataAI();
+
+const MAX_SAMPLE_ROWS = 12;
+const MAX_SCHEMA_FIELDS = 24;
+const MAX_CELL_LENGTH = 160;
+
+type InsightHighlight = {
+    title: string;
+    description: string;
+    type?: string;
+    confidence?: number;
+};
+
+type StructuredInsights = {
+    summary: string;
+    answer?: string;
+    highlights: InsightHighlight[];
+    recommendations: string[];
+    nextSteps: string[];
+    followUps: string[];
+    warnings: string[];
+};
+
+type InsightRecord = {
+    mode: 'auto' | 'question';
+    question?: string | null;
+    provider: string;
+    generatedAt: string;
+    latencyMs: number;
+    rawText: string;
+    insights: StructuredInsights;
+};
+
+const isObject = (value: unknown): value is Record<string, any> =>
+    value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const ensureArray = <T>(value: unknown): T[] => {
+    if (Array.isArray(value)) {
+        return value as T[];
+    }
+    if (value === undefined || value === null || value === '') {
+        return [];
+    }
+    return [value as T];
+};
+
+const clampConfidence = (value: unknown): number | undefined => {
+    if (typeof value !== 'number' || Number.isNaN(value)) {
+        return undefined;
+    }
+    const clamped = Math.min(Math.max(value, 0), 1);
+    return Math.round(clamped * 100) / 100;
+};
+
+const trimCellValue = (value: unknown): unknown => {
+    if (typeof value === 'string' && value.length > MAX_CELL_LENGTH) {
+        return `${value.slice(0, MAX_CELL_LENGTH)}…`;
+    }
+    return value;
+};
+
+const normalizeRow = (row: unknown): Record<string, unknown> | undefined => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+        return undefined;
+    }
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(row)) {
+        result[key] = trimCellValue(value);
+    }
+    return result;
+};
+
+const coerceJson = (value: unknown): unknown => {
+    if (typeof value === 'string') {
+        try {
+            return JSON.parse(value);
+        } catch {
+            return value;
+        }
+    }
+    return value;
+};
+
+const buildSampleRows = (project: any, dataset: any): Record<string, unknown>[] => {
+    const sources: unknown[] = [];
+    if (dataset?.preview) {
+        sources.push(dataset.preview);
+    }
+    if (dataset?.sampleRows) {
+        sources.push(dataset.sampleRows);
+    }
+    if (project?.preview) {
+        sources.push(project.preview);
+    }
+    if (project?.sampleData) {
+        sources.push(project.sampleData);
+    }
+    if (project?.data) {
+        sources.push(project.data);
+    }
+
+    for (const candidate of sources) {
+        const parsed = coerceJson(candidate);
+        if (Array.isArray(parsed) && parsed.length) {
+            const normalized = parsed
+                .map(normalizeRow)
+                .filter((row): row is Record<string, unknown> => !!row)
+                .slice(0, MAX_SAMPLE_ROWS);
+            if (normalized.length) {
+                return normalized;
+            }
+        }
+    }
+
+    return [];
+};
+
+const limitSchema = (schema: any) => {
+    if (!isObject(schema)) {
+        return undefined;
+    }
+    const entries = Object.entries(schema).slice(0, MAX_SCHEMA_FIELDS);
+    return Object.fromEntries(entries);
+};
+
+const extractJsonSnippet = (text: string): any => {
+    const trimmed = text.trim();
+    const fencedMatch = trimmed.match(/```json\s*([\s\S]*?)```/i);
+    const maybeJson = fencedMatch ? fencedMatch[1] : trimmed;
+    try {
+        return JSON.parse(maybeJson);
+    } catch {
+        const firstBrace = maybeJson.indexOf('{');
+        const lastBrace = maybeJson.lastIndexOf('}');
+        if (firstBrace >= 0 && lastBrace > firstBrace) {
+            const slice = maybeJson.slice(firstBrace, lastBrace + 1);
+            try {
+                return JSON.parse(slice);
+            } catch {
+                return undefined;
+            }
+        }
+        return undefined;
+    }
+};
+
+const normalizeStructuredInsights = (payload: any, fallbackSummary: string): StructuredInsights => {
+    const summary = typeof payload?.summary === 'string' && payload.summary.trim().length
+        ? payload.summary.trim()
+        : fallbackSummary;
+    const answer = typeof payload?.answer === 'string' && payload.answer.trim().length
+        ? payload.answer.trim()
+        : undefined;
+
+    const highlightsSource = ensureArray<any>(payload?.highlights || payload?.insights || payload?.cards);
+    const highlights: InsightHighlight[] = highlightsSource
+        .map((item: any) => {
+            if (!isObject(item)) {
+                if (typeof item === 'string') {
+                    return {
+                        title: item.slice(0, 96),
+                        description: item,
+                    };
+                }
+                return undefined;
+            }
+            const title = typeof item.title === 'string' ? item.title.trim() : undefined;
+            const description = typeof item.description === 'string'
+                ? item.description.trim()
+                : typeof item.detail === 'string'
+                    ? item.detail.trim()
+                    : typeof item.summary === 'string'
+                        ? item.summary.trim()
+                        : undefined;
+            if (!title && !description) {
+                return undefined;
+            }
+            return {
+                title: title || (description ? description.slice(0, 96) : 'Insight'),
+                description: description || title || 'Insight highlight',
+                type: typeof item.type === 'string' ? item.type.toLowerCase() : undefined,
+                confidence: clampConfidence(item.confidence ?? item.score ?? item.weight),
+            };
+        })
+        .filter((value): value is InsightHighlight => !!value);
+
+    const recommendations = ensureArray<string>(payload?.recommendations)
+        .map(rec => (typeof rec === 'string' ? rec.trim() : ''))
+        .filter(Boolean);
+    const nextSteps = ensureArray<string>(payload?.nextSteps || payload?.actions)
+        .map(step => (typeof step === 'string' ? step.trim() : ''))
+        .filter(Boolean);
+    const followUps = ensureArray<string>(payload?.followUps || payload?.followups || payload?.followupQuestions)
+        .map(item => (typeof item === 'string' ? item.trim() : ''))
+        .filter(Boolean);
+    const warnings = ensureArray<string>(payload?.warnings || payload?.risks)
+        .map(item => (typeof item === 'string' ? item.trim() : ''))
+        .filter(Boolean);
+
+    return {
+        summary,
+        answer,
+        highlights,
+        recommendations,
+        nextSteps,
+        followUps,
+        warnings,
+    };
+};
+
+const buildInsightPrompt = (options: {
+    role: string;
+    question?: string;
+    instructions?: string;
+    recordCount?: number;
+    schema: any;
+    sampleRows: Record<string, unknown>[];
+    summaryStats?: any;
+    focusAreas: string[];
+}): string => {
+    const { role, question, instructions, recordCount, schema, sampleRows, summaryStats, focusAreas } = options;
+    const schemaPreview = limitSchema(schema);
+    const schemaNote = schemaPreview ? JSON.stringify(schemaPreview, null, 2) : 'Schema unavailable';
+    const sampleNote = sampleRows.length ? JSON.stringify(sampleRows, null, 2) : 'No sample rows available';
+    const statsNote = summaryStats ? JSON.stringify(summaryStats, null, 2) : 'No summary statistics available';
+    const focusNote = focusAreas.length ? focusAreas.join(', ') : 'General overview';
+
+    const requirement = `Respond with a single JSON object only (no markdown code fences) using this shape:
+{
+  "summary": string,
+  "answer": string | null,
+  "highlights": [
+    {
+      "title": string,
+      "description": string,
+      "type": "pattern" | "anomaly" | "quality" | "recommendation" | "risk" | "trend" | "other",
+      "confidence": number // 0-1 with two decimal precision
+    }
+  ],
+  "recommendations": string[],
+  "nextSteps": string[],
+  "followUps": string[],
+  "warnings": string[]
+}`;
+
+    return [
+        `Act as a ${role} providing concise, decision-ready insights.`,
+        question ? `Address this question directly: ${question}` : 'No direct question provided; surface the three most impactful insights.',
+        instructions ? `Additional instructions: ${instructions}` : undefined,
+        `Dataset size: ${recordCount ?? 'Unknown'} records. Focus areas: ${focusNote}.`,
+        `Schema preview:
+${schemaNote}`,
+        `Sample rows (${sampleRows.length}):
+${sampleNote}`,
+        `Summary statistics:
+${statsNote}`,
+        requirement,
+        'If data is insufficient, explain the limitation under warnings and propose what is needed.',
+    ]
+        .filter(Boolean)
+        .join('\n\n');
+};
 
 // Advanced analysis endpoints
 router.post("/step-by-step-analysis",
@@ -89,7 +352,7 @@ router.post("/ai-insights",
     AIAccessControlService.trackAIFeatureUsage('basic_analysis'),
     async (req: Request, res: Response) => {
     try {
-        const { projectId, role, questions, instructions } = req.body;
+        const { projectId } = req.body;
         if (!projectId) {
             return res.status(400).json({ error: "Project ID is required" });
         }
@@ -97,27 +360,137 @@ router.post("/ai-insights",
         if (!project) {
             return res.status(404).json({ error: "Project not found" });
         }
-        const mockInsights = {
-            role: role || 'data_analyst',
-            insights: [
-                `Based on the ${role || 'data analyst'} perspective, here are key insights:`,
-                `The dataset contains ${project.recordCount || 0} records with ${Object.keys(project.schema || {}).length} variables.`,
-                `Recommended analysis approaches: ${questions?.join(', ') || 'descriptive statistics, correlation analysis'}.`,
-                `Data quality appears good with structured fields and appropriate data types.`
-            ],
-            recommendations: [
-                'Consider performing correlation analysis to identify relationships',
-                'Run descriptive statistics to understand data distribution',
-                'Check for outliers that might affect analysis results'
-            ],
-            nextSteps: instructions ? [instructions] : [
-                'Define specific research questions',
-                'Select appropriate analysis methods',
-                'Validate findings with domain experts'
-            ]
+        const dataset = await storage.getDatasetForProject(projectId);
+
+        const role = typeof req.body.role === 'string' && req.body.role.trim().length
+            ? req.body.role.trim()
+            : 'data analyst';
+        const question = typeof req.body.question === 'string' && req.body.question.trim().length
+            ? req.body.question.trim()
+            : undefined;
+        const instructions = typeof req.body.instructions === 'string' && req.body.instructions.trim().length
+            ? req.body.instructions.trim()
+            : undefined;
+        const focusInput = req.body.focusAreas ?? req.body.questions ?? [];
+        const focusAreas = ensureArray<any>(focusInput)
+            .map(item => {
+                if (typeof item === 'string') {
+                    return item.trim();
+                }
+                if (item === undefined || item === null) {
+                    return '';
+                }
+                if (typeof item === 'object') {
+                    return JSON.stringify(item);
+                }
+                return String(item);
+            })
+            .filter(Boolean);
+
+        const sampleRows = buildSampleRows(project, dataset);
+        const schema = coerceJson(project.schema ?? dataset?.schema);
+    const analysisResults = coerceJson((project as any).analysisResults ?? (dataset as any)?.analysisResults);
+        const summaryStats = isObject(analysisResults) && analysisResults.summary ? analysisResults.summary : analysisResults;
+        const recordCount = typeof project.recordCount === 'number'
+            ? project.recordCount
+            : typeof dataset?.recordCount === 'number'
+                ? dataset.recordCount
+                : sampleRows.length || undefined;
+
+        const prompt = buildInsightPrompt({
+            role,
+            question,
+            instructions,
+            recordCount,
+            schema,
+            sampleRows,
+            summaryStats,
+            focusAreas,
+        });
+
+        const aiStart = Date.now();
+        const aiResult = await aiProvider.generateInsights(
+            {
+                recordCount,
+                schema,
+                sampleRows,
+                summaryStats,
+                focusAreas,
+                projectName: project.name,
+                journeyType: (project as any).journeyType,
+            },
+            question ? 'guided_question' : 'auto_overview',
+            prompt
+        );
+
+        if (!aiResult.success) {
+            return res.status(502).json({
+                success: false,
+                projectId,
+                provider: aiResult.provider,
+                error: aiResult.error || 'Unable to generate insights with available providers',
+            });
+        }
+
+        const parsed = extractJsonSnippet(aiResult.insights);
+        const structured = normalizeStructuredInsights(parsed, aiResult.insights.trim());
+        if (question && !structured.answer) {
+            structured.answer = structured.summary;
+        }
+        structured.highlights = structured.highlights.slice(0, 6);
+        structured.recommendations = structured.recommendations.slice(0, 6);
+        structured.nextSteps = structured.nextSteps.slice(0, 5);
+        structured.followUps = structured.followUps.slice(0, 5);
+        structured.warnings = structured.warnings.slice(0, 5);
+
+        const latencyMs = Date.now() - aiStart;
+        const generatedAt = new Date().toISOString();
+        const mode: 'auto' | 'question' = question ? 'question' : 'auto';
+
+        const record: InsightRecord = {
+            mode,
+            question: question ?? null,
+            provider: aiResult.provider,
+            generatedAt,
+            latencyMs,
+            rawText: aiResult.insights,
+            insights: structured,
         };
-        res.json({ success: true, projectId, insights: mockInsights });
+
+        const existingState = isObject((project as any).aiInsights) ? ((project as any).aiInsights as Record<string, any>) : {};
+        const existingHistory = Array.isArray(existingState.history)
+            ? existingState.history.filter((entry: unknown) => isObject(entry)) as InsightRecord[]
+            : [];
+        const nextHistory = mode === 'question'
+            ? [record, ...existingHistory].slice(0, 15)
+            : existingHistory;
+        const nextState: Record<string, unknown> = {
+            ...existingState,
+            lastUpdated: generatedAt,
+            provider: aiResult.provider,
+            history: nextHistory,
+        };
+        if (mode === 'auto') {
+            nextState.auto = record;
+        } else if (existingState.auto) {
+            nextState.auto = existingState.auto;
+        }
+
+        await storage.updateProject(projectId, { aiInsights: nextState });
+
+        res.json({
+            success: true,
+            projectId,
+            mode,
+            provider: aiResult.provider,
+            question: question ?? null,
+            insights: structured,
+            rawText: aiResult.insights,
+            latencyMs,
+            generatedAt,
+        });
     } catch (error: any) {
+        console.error('Failed to generate AI insights', error);
         res.status(500).json({ error: 'Failed to generate AI insights' });
     }
 });

@@ -169,6 +169,42 @@ let server: Server;
         console.warn(`  - ${failure.name}: ${failure.error}`);
         initializationState.errors.push(`Tool ${failure.name}: ${failure.error}`);
       });
+      
+      // ✅ Fail fast in production if critical tools failed
+      // Critical tools required for core analysis functionality
+      const criticalTools = [
+        'statistical_analyzer',      // Core statistical analysis
+        'enhanced_statistical_analyzer', // Enhanced analysis (if available)
+        'spark_data_processor',      // Large-scale data processing
+        'visualization_engine'       // Visualization generation
+      ];
+      
+      // Check for critical tool failures
+      const criticalFailures = toolResults.failed.filter(f => 
+        criticalTools.some(ct => {
+          const toolName = f.name.toLowerCase();
+          const criticalName = ct.toLowerCase();
+          // Match exact name or partial match (e.g., "statistical_analyzer" matches "Statistical Analyzer")
+          return toolName === criticalName || toolName.includes(criticalName.replace(/_/g, ' '));
+        })
+      );
+      
+      // Also check if any critical tools are missing from registered tools
+      const registeredToolNames = toolResults.categories
+        .flatMap(cat => {
+          // Tool names might not be directly available, check initialization results
+          return [];
+        });
+      
+      if (criticalFailures.length > 0 && process.env.NODE_ENV === 'production') {
+        console.error(`🔴 CRITICAL: Failed to initialize ${criticalFailures.length} critical tool(s):`);
+        criticalFailures.forEach(failure => {
+          console.error(`  - ${failure.name}: ${failure.error}`);
+        });
+        console.error('🛑 Cannot start server without critical tools in production');
+        console.error(`Required critical tools: ${criticalTools.join(', ')}`);
+        process.exit(1);
+      }
     }
 
     // Initialize billing & analytics MCP resources
@@ -235,11 +271,17 @@ let server: Server;
   // Setup OAuth configuration
   setupOAuth(app);
 
-  // Apply rate limiting to API routes
-  app.use('/api', apiRateLimit);
-  app.use('/api/auth', authRateLimit);
-  app.use('/api/projects/upload', uploadRateLimit);
-  app.use('/api/trial-upload', uploadRateLimit);
+  const enableRateLimiting = (process.env.ENABLE_RATE_LIMITING || '').toLowerCase() !== 'false';
+
+  if (enableRateLimiting) {
+    // Apply rate limiting to API routes when enabled
+    app.use('/api', apiRateLimit);
+    app.use('/api/auth', authRateLimit);
+    app.use('/api/projects/upload', uploadRateLimit);
+    app.use('/api/trial-upload', uploadRateLimit);
+  } else {
+    console.warn('⚠️  Rate limiting disabled via ENABLE_RATE_LIMITING=false');
+  }
 
   // Apply security middleware to critical endpoints
   app.use('/api/projects', ...securityMiddleware);
@@ -253,14 +295,22 @@ let server: Server;
   const performanceWebhooks = await import('./routes/performance-webhooks.js');
   app.use('/api/performance', performanceWebhooks.default);
 
-  // Register health check routes
-  const healthRoutes = await import('./routes/health.js');
-  app.use('/api', healthRoutes.default);
-
-  // Legacy health check endpoint for backwards compatibility
-  app.get('/api/health', (req, res) => {
-    res.status(200).json({ status: 'ok' });
-  });
+  // Register health check routes with dynamic import to maintain lazy loading pattern
+  // Health.ts uses lazy loading internally for SparkProcessor, PythonProcessor, and Redis
+  // to avoid initialization issues if services aren't available. Dynamic import here
+  // prevents any potential circular dependencies and matches the performance-webhooks pattern.
+  try {
+    // Use TypeScript-friendly import without .js extension in development
+    const healthRoutes = await import('./routes/health');
+    if (healthRoutes && healthRoutes.default) {
+      app.use('/api', healthRoutes.default);
+    } else {
+      console.error('⚠️  Health routes default export is undefined');
+      console.error('Health routes module keys:', healthRoutes ? Object.keys(healthRoutes) : 'module is null');
+    }
+  } catch (error) {
+    console.error('⚠️  Failed to import health routes:', error instanceof Error ? error.message : String(error));
+  }
 
   // Serve static files and setup frontend routing AFTER API routes
   if (app.get("env") === "development" && !process.env.VITE_SEPARATED) {
@@ -282,11 +332,16 @@ let server: Server;
   });
 
   if (process.env.NODE_ENV !== 'test') {
-    const port = process.env.PORT ? parseInt(process.env.PORT) : 3000;
-    const host = '127.0.0.1';
-    server.listen(port, host, () => {
-      log(`serving on ${host}:${port}`);
-    });
+    const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+    const rawHost = process.env.HOST;
+    const host = rawHost && rawHost !== 'localhost' ? rawHost : '::';
+
+    const onListen = () => {
+      const boundHost = host || '::';
+      log(`serving on ${boundHost}:${port}`);
+    };
+
+    server.listen({ port, host, ipv6Only: false }, onListen);
   }
 })();
 

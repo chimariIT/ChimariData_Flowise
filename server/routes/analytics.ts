@@ -121,7 +121,7 @@ router.get('/users/:userId/costs', requireAuth, async (req, res) => {
 
     // Check if user is requesting their own data or is admin
     const requestingUser = req.user as any;
-    if (requestingUser.id !== parseInt(userId) && !requestingUser.email?.includes('@admin.com')) {
+  if (requestingUser.id !== userId && !requestingUser.email?.includes('@admin.com')) {
       return res.status(403).json({
         success: false,
         error: 'Unauthorized: You can only view your own cost data'
@@ -131,11 +131,7 @@ router.get('/users/:userId/costs', requireAuth, async (req, res) => {
     const startDate = start ? new Date(start as string) : undefined;
     const endDate = end ? new Date(end as string) : undefined;
 
-    const breakdown = await toolAnalyticsService.getUserCostBreakdown(
-      parseInt(userId),
-      startDate,
-      endDate
-    );
+    const breakdown = await toolAnalyticsService.getUserCostBreakdown(userId, startDate, endDate);
 
     res.json({
       success: true,

@@ -489,10 +489,14 @@ Return a complete IndustryResearchResult JSON object with all required fields.`;
     industryResearch: IndustryResearchResult
   ): Promise<any[]> {
     // Search existing templates
-    const existingTemplates = await db
+    const existingTemplatesRaw = await db
       .select()
       .from(artifactTemplates)
       .where(eq(artifactTemplates.isActive, true));
+
+    const existingTemplates = Array.isArray(existingTemplatesRaw)
+      ? existingTemplatesRaw
+      : [];
 
     // Use AI to find semantic similarities
     const similarityPrompt = `Find templates similar to this industry context:

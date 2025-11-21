@@ -1,12 +1,16 @@
 import jwt from 'jsonwebtoken';
+import { nanoid } from 'nanoid';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'chimari-dev-secret-key-change-in-production-2024';
+const DEFAULT_JWT_SECRET = 'chimari-dev-secret-key-change-in-production-2024';
+
+const resolveJwtSecret = (): string => process.env.JWT_SECRET || DEFAULT_JWT_SECRET;
 
 export interface TokenData {
   userId: string;
   email: string;
   iat?: number;
   exp?: number;
+  jti?: string;
 }
 
 export class TokenStorage {
@@ -14,14 +18,16 @@ export class TokenStorage {
    * Generate a JWT token for a user
    */
   generateToken(userId: string, email: string): string {
-    const payload: TokenData = {
-      userId,
-      email,
-      iat: Math.floor(Date.now() / 1000),
-      exp: Math.floor(Date.now() / 1000) + (24 * 60 * 60) // 24 hours
-    };
-    
-    return jwt.sign(payload, JWT_SECRET);
+    const secret = resolveJwtSecret();
+
+    return jwt.sign(
+      { userId, email },
+      secret,
+      {
+        expiresIn: '24h',
+        jwtid: nanoid(),
+      }
+    );
   }
 
   /**
@@ -42,7 +48,7 @@ export class TokenStorage {
         return null;
       }
 
-      const decoded = jwt.verify(token, JWT_SECRET) as TokenData;
+      const decoded = jwt.verify(token, resolveJwtSecret()) as TokenData;
 
       // Verify decoded token has required fields
       if (!decoded.userId || !decoded.email) {
@@ -62,7 +68,7 @@ export class TokenStorage {
    */
   isTokenExpired(token: string): boolean {
     try {
-      const decoded = jwt.verify(token, JWT_SECRET) as TokenData;
+      const decoded = jwt.verify(token, resolveJwtSecret()) as TokenData;
       if (!decoded.exp) return true;
       return Date.now() >= decoded.exp * 1000;
     } catch (error) {
@@ -79,15 +85,28 @@ export class TokenStorage {
     
     return this.generateToken(decoded.userId, decoded.email);
   }
+
+  /**
+   * Extract a bearer token from an Authorization header string
+   */
+  extractTokenFromHeader(header: string | null | undefined): string | null {
+    if (!header || typeof header !== 'string') {
+      return null;
+    }
+
+    const trimmed = header.trim();
+    if (trimmed.length === 0) {
+      return null;
+    }
+
+    const match = /^Bearer\s+(\S+)$/i.exec(trimmed);
+    if (!match) {
+      return null;
+    }
+
+    return match[1] || null;
+  }
 }
 
 // Export singleton instance
 export const tokenStorage = new TokenStorage();
-export type { TokenData, TokenStorage };
-export type { TokenData, TokenStorage };
-export type { TokenData, TokenStorage };
-export type { TokenData, TokenStorage };
-export type { TokenData, TokenStorage };
-export type { TokenData, TokenStorage };
-export type { TokenData, TokenStorage };
-export type { TokenData, TokenStorage };

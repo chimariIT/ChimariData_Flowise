@@ -238,18 +238,24 @@ export class DataQualityMonitor {
       const type = this.detectColumnType(nonNullValues);
 
       // Calculate statistics based on type
-      let min, max, mean, median, mode, stdDev;
+      let min: number | undefined;
+      let max: number | undefined;
+      let mean: number | undefined;
+      let median: number | undefined;
+      let mode: any;
+      let stdDev: number | undefined;
       if (type === 'number') {
         const numbers = nonNullValues.filter(v => typeof v === 'number');
         if (numbers.length > 0) {
           min = Math.min(...numbers);
           max = Math.max(...numbers);
-          mean = numbers.reduce((a, b) => a + b, 0) / numbers.length;
+          const computedMean = numbers.reduce((a, b) => a + b, 0) / numbers.length;
+          mean = computedMean;
 
           const sorted = [...numbers].sort((a, b) => a - b);
           median = sorted[Math.floor(sorted.length / 2)];
 
-          const variance = numbers.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / numbers.length;
+          const variance = numbers.reduce((sum, val) => sum + Math.pow(val - computedMean, 2), 0) / numbers.length;
           stdDev = Math.sqrt(variance);
         }
       }
@@ -282,10 +288,10 @@ export class DataQualityMonitor {
         uniquePercentage: Number(uniquePercentage.toFixed(2)),
         min,
         max,
-        mean: mean ? Number(mean.toFixed(2)) : undefined,
+        mean: typeof mean === 'number' ? Number(mean.toFixed(2)) : undefined,
         median,
         mode,
-        stdDev: stdDev ? Number(stdDev.toFixed(2)) : undefined,
+        stdDev: typeof stdDev === 'number' ? Number(stdDev.toFixed(2)) : undefined,
         topValues
       };
     });

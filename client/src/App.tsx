@@ -1,12 +1,13 @@
 import { useState, useEffect, lazy, Suspense } from "react";
 import { Switch, Route, useLocation } from "wouter";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { JourneyWizard } from "@/components/JourneyWizard";
 import MainLandingPage from "@/pages/main-landing";
 import AuthPage from "@/pages/auth";
 import { apiClient } from "@/lib/api";
+import { queryClient } from "@/lib/queryClient";
 import { ProjectProvider } from "@/hooks/useProjectContext";
 import { UserRoleProvider, useUserRole } from "@/hooks/useUserRole";
 import { UsageMonitoringProvider } from "@/hooks/useUsageMonitoring";
@@ -42,15 +43,7 @@ const NewProjectPage = lazy(() => import("@/pages/new-project"));
 const AdminLayout = lazy(() => import("@/pages/admin"));
 const TemplateSelectionTest = lazy(() => import("@/components/TemplateSelectionTest").then(m => ({ default: m.TemplateSelectionTest })));
 const CustomJourneyBuilder = lazy(() => import("@/pages/custom-journey-builder"));
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: 1,
-      refetchOnWindowFocus: false,
-    },
-  },
-});
+const VerifyEmailPage = lazy(() => import("@/pages/verify-email"));
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
@@ -90,32 +83,18 @@ export default function App() {
 
         // Fallback to token-based auth for regular login
         const token = localStorage.getItem('auth_token');
-        if (token) {
-          // Try server first
-          const tokenUserData = await apiClient.getCurrentUser();
-          if (tokenUserData && tokenUserData.user) {
-            setUser(tokenUserData.user);
-          } else {
-            // Fallback to locally stored user (used by tests)
-            const localUser = localStorage.getItem('user');
-            if (localUser) {
-              try { setUser(JSON.parse(localUser)); } catch {}
-            }
-          }
-        } else {
-          // Last-resort: if tests populated user only
-          const localUser = localStorage.getItem('user');
-          if (localUser) {
-            try { setUser(JSON.parse(localUser)); } catch {}
-          }
+        if (token && userData) {
+          // Token exists and userData returned successfully
+          setUser(userData);
+        } else if (token && !userData) {
+          // Token exists but invalid/expired - clear it
+          localStorage.removeItem('auth_token');
+          console.log('Token expired or invalid, cleared from storage');
         }
+        
       } catch (error) {
-        // Don't clear token in tests; attempt local fallback
-        const localUser = localStorage.getItem('user');
-        if (localUser) {
-          try { setUser(JSON.parse(localUser)); } catch {}
-        }
-        console.log('No valid authentication from API, using local fallback if available');
+        console.warn('Authentication check failed:', error instanceof Error ? error.message : error);
+        setUser(null);
       } finally {
         setAuthLoading(false);
       }
@@ -136,10 +115,10 @@ export default function App() {
 
     // Check for intended route and redirect there, otherwise go to journeys hub
     const intendedRoute = routeStorage.getAndClearIntendedRoute();
-    if (intendedRoute) {
+    if (intendedRoute && intendedRoute !== '/auth' && intendedRoute !== '/auth/login' && intendedRoute !== '/auth/register') {
       setLocation(intendedRoute);
     } else {
-      setLocation('/'); // Default to journeys hub
+      setLocation('/dashboard'); // Default to dashboard after login
     }
 
     // Store user info for potential goodbye message later
@@ -197,79 +176,141 @@ export default function App() {
           {/* Primary Journeys Hub landing page */}
           
           
-          {/* Journey wizard routes */}
+          {/* Journey wizard routes - require authentication */}
           <Route path="/journeys/:type/prepare">
-            {(params) => (
-              <JourneyWizard 
-                journeyType={params.type} 
-                currentStage="prepare"
-              />
-            )}
+            {(params) => {
+              if (user) {
+                return (
+                  <JourneyWizard
+                    journeyType={params.type}
+                    currentStage="prepare"
+                  />
+                );
+              }
+              routeStorage.setIntendedRoute(`/journeys/${params.type}/prepare`);
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           <Route path="/journeys/:type/data">
-            {(params) => (
-              <JourneyWizard 
-                journeyType={params.type} 
-                currentStage="data"
-              />
-            )}
+            {(params) => {
+              if (user) {
+                return (
+                  <JourneyWizard
+                    journeyType={params.type}
+                    currentStage="data"
+                  />
+                );
+              }
+              routeStorage.setIntendedRoute(`/journeys/${params.type}/data`);
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           <Route path="/journeys/:type/data-verification">
-            {(params) => (
-              <JourneyWizard 
-                journeyType={params.type} 
-                currentStage="data-verification"
-              />
-            )}
+            {(params) => {
+              if (user) {
+                return (
+                  <JourneyWizard
+                    journeyType={params.type}
+                    currentStage="data-verification"
+                  />
+                );
+              }
+              routeStorage.setIntendedRoute(`/journeys/${params.type}/data-verification`);
+              return <AuthPage onLogin={handleLogin} />;
+            }}
+          </Route>
+          <Route path="/journeys/:type/plan">
+            {(params) => {
+              if (user) {
+                return (
+                  <JourneyWizard
+                    journeyType={params.type}
+                    currentStage="plan"
+                  />
+                );
+              }
+              routeStorage.setIntendedRoute(`/journeys/${params.type}/plan`);
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           <Route path="/journeys/:type/project-setup">
-            {(params) => (
-              <JourneyWizard 
-                journeyType={params.type} 
-                currentStage="project-setup"
-              />
-            )}
+            {(params) => {
+              if (user) {
+                return (
+                  <JourneyWizard
+                    journeyType={params.type}
+                    currentStage="project-setup"
+                  />
+                );
+              }
+              routeStorage.setIntendedRoute(`/journeys/${params.type}/project-setup`);
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           <Route path="/journeys/:type/execute">
-            {(params) => (
-              <JourneyWizard 
-                journeyType={params.type} 
-                currentStage="execute"
-              />
-            )}
+            {(params) => {
+              if (user) {
+                return (
+                  <JourneyWizard
+                    journeyType={params.type}
+                    currentStage="execute"
+                  />
+                );
+              }
+              routeStorage.setIntendedRoute(`/journeys/${params.type}/execute`);
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           <Route path="/journeys/:type/preview">
-            {(params) => (
-              <JourneyWizard 
-                journeyType={params.type} 
-                currentStage="preview"
-              />
-            )}
+            {(params) => {
+              if (user) {
+                return (
+                  <JourneyWizard
+                    journeyType={params.type}
+                    currentStage="preview"
+                  />
+                );
+              }
+              routeStorage.setIntendedRoute(`/journeys/${params.type}/preview`);
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           <Route path="/journeys/:type/pricing">
-            {(params) => (
-              <JourneyWizard 
-                journeyType={params.type} 
-                currentStage="pricing"
-              />
-            )}
+            {(params) => {
+              if (user) {
+                return (
+                  <JourneyWizard
+                    journeyType={params.type}
+                    currentStage="pricing"
+                  />
+                );
+              }
+              routeStorage.setIntendedRoute(`/journeys/${params.type}/pricing`);
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           <Route path="/journeys/:type/results">
-            {(params) => (
-              <JourneyWizard 
-                journeyType={params.type} 
-                currentStage="results"
-              />
-            )}
+            {(params) => {
+              if (user) {
+                return (
+                  <JourneyWizard
+                    journeyType={params.type}
+                    currentStage="results"
+                  />
+                );
+              }
+              routeStorage.setIntendedRoute(`/journeys/${params.type}/results`);
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           
           {/* Redirect home to journeys hub */}
           <Route path="/">
-            {() => <MainLandingPage user={user} />}
+            {() => <MainLandingPage user={user} onLogout={handleLogout} />}
           </Route>
           {/* Legacy alias for older tests/routes */}
           <Route path="/home">
-            {() => <MainLandingPage user={user} />}
+            {() => <MainLandingPage user={user} onLogout={handleLogout} />}
           </Route>
           
           <Route path="/journeys">
@@ -288,26 +329,81 @@ export default function App() {
           <Route path="/auth/register">
             {() => <AuthPage onLogin={handleLogin} />}
           </Route>
+          <Route path="/verify-email">
+            {() => <VerifyEmailPage />}
+          </Route>
           <Route path="/custom-journey">
-            {() => <CustomJourneyBuilder user={user} />}
+            {() => {
+              if (user) {
+                return <CustomJourneyBuilder user={user} />;
+              }
+              routeStorage.setIntendedRoute('/custom-journey');
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           <Route path="/project/:id">
-            {(params) => <ProjectPage projectId={params.id} />}
+            {(params) => {
+              if (user) {
+                return <ProjectPage projectId={params.id} />;
+              }
+              routeStorage.setIntendedRoute(`/project/${params.id}`);
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           <Route path="/stats/:id">
-            {(params) => <DescriptiveStatsPage />}
+            {(params) => {
+              if (user) {
+                return <DescriptiveStatsPage />;
+              }
+              routeStorage.setIntendedRoute(`/stats/${params.id}`);
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           <Route path="/visualization/:projectId">
-            {(params) => <VisualizationPage />}
+            {(params) => {
+              if (user) {
+                return <VisualizationPage />;
+              }
+              routeStorage.setIntendedRoute(`/visualization/${params.projectId}`);
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           <Route path="/checkout">
-            {() => <GuidedAnalysisCheckout />}
+            {() => {
+              if (user) {
+                return <GuidedAnalysisCheckout />;
+              }
+              routeStorage.setIntendedRoute('/checkout');
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           <Route path="/guided-analysis-results/:analysisId">
-            {(params) => user ? <GuidedAnalysisResults /> : <AuthPage onLogin={handleLogin} />}
+            {(params) => {
+              if (user) {
+                return <GuidedAnalysisResults />;
+              }
+              routeStorage.setIntendedRoute(`/guided-analysis-results/${params.analysisId}`);
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           <Route path="/dashboard">
-            {() => <UserDashboard user={user} onLogout={handleLogout} />}
+            {() => {
+              if (user) {
+                return <UserDashboard user={user} onLogout={handleLogout} />;
+              }
+              routeStorage.setIntendedRoute('/dashboard');
+              return <AuthPage onLogin={handleLogin} />;
+            }}
+          </Route>
+          {/* Projects list page */}
+          <Route path="/projects">
+            {() => {
+              if (user) {
+                return <UserDashboard user={user} onLogout={handleLogout} />;
+              }
+              routeStorage.setIntendedRoute('/projects');
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           {/* New Project creation route used by tests */}
           {env.TEST_MODE && (
@@ -321,80 +417,110 @@ export default function App() {
           )}
           {/* Minimal routes to satisfy enhanced-features tests */}
           <Route path="/projects/:id/workflow">
-            {(params) => (
-              <div className="p-4">
-                <WorkflowTransparencyDashboard projectId={params.id} />
-              </div>
-            )}
+            {(params) => {
+              if (user) {
+                return (
+                  <div className="p-4">
+                    <WorkflowTransparencyDashboard projectId={params.id} />
+                  </div>
+                );
+              }
+              routeStorage.setIntendedRoute(`/projects/${params.id}/workflow`);
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           {/* Minimal project view for tests expecting /projects/:id */}
           <Route path="/projects/:id">
-            {(params) => (
-              <div className="p-4">
-                <div className="flex gap-2 mb-4">
-                  <button data-testid="workflow-tab" className="px-3 py-1 border rounded">Overview</button>
-                  <button data-testid="agents-tab" className="px-3 py-1 border rounded">Agents</button>
-                  <button data-testid="decisions-tab" className="px-3 py-1 border rounded">Decisions</button>
-                  <button data-testid="artifacts-tab" className="px-3 py-1 border rounded">Artifacts</button>
-                </div>
-                <WorkflowTransparencyDashboard projectId={params.id} />
-              </div>
-            )}
+            {(params) => {
+              if (user) {
+                return (
+                  <div className="p-4">
+                    <div className="flex gap-2 mb-4">
+                      <button data-testid="workflow-tab" className="px-3 py-1 border rounded">Overview</button>
+                      <button data-testid="agents-tab" className="px-3 py-1 border rounded">Agents</button>
+                      <button data-testid="decisions-tab" className="px-3 py-1 border rounded">Decisions</button>
+                      <button data-testid="artifacts-tab" className="px-3 py-1 border rounded">Artifacts</button>
+                    </div>
+                    <WorkflowTransparencyDashboard projectId={params.id} />
+                  </div>
+                );
+              }
+              routeStorage.setIntendedRoute(`/projects/${params.id}`);
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           <Route path="/projects/:id/results">
-            {(params) => (
-              <div className="p-4">
-                <ResultsStep journeyType="business" />
-              </div>
-            )}
+            {(params) => {
+              if (user) {
+                return (
+                  <div className="p-4">
+                    <ResultsStep journeyType="business" />
+                  </div>
+                );
+              }
+              routeStorage.setIntendedRoute(`/projects/${params.id}/results`);
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           <Route path="/projects/:id/payment">
-            {(params) => (
-              <div className="p-4">
-                <GuidedAnalysisCheckout />
-              </div>
-            )}
+            {(params) => {
+              if (user) {
+                return (
+                  <div className="p-4">
+                    <GuidedAnalysisCheckout />
+                  </div>
+                );
+              }
+              routeStorage.setIntendedRoute(`/projects/${params.id}/payment`);
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           <Route path="/projects/:id/continuous">
-            {() => (
-              <div className="p-4">
-                {/* Provide a basic form with data-testid="subscription-form" to satisfy tests */}
-                <div data-testid="subscription-form" className="space-y-4">
-                  <div>
-                    <label className="block text-sm">Name</label>
-                    <input name="name" className="border rounded px-2 py-1 w-full" />
+            {(params) => {
+              if (user) {
+                return (
+                  <div className="p-4">
+                    {/* Provide a basic form with data-testid="subscription-form" to satisfy tests */}
+                    <div data-testid="subscription-form" className="space-y-4">
+                      <div>
+                        <label className="block text-sm">Name</label>
+                        <input name="name" className="border rounded px-2 py-1 w-full" />
+                      </div>
+                      <div>
+                        <label className="block text-sm">Frequency</label>
+                        <select name="frequency" className="border rounded px-2 py-1 w-full">
+                          <option value="daily">Daily</option>
+                          <option value="weekly">Weekly</option>
+                          <option value="monthly">Monthly</option>
+                        </select>
+                      </div>
+                      {/* Role select required by tests */}
+                      <div>
+                        <label className="block text-sm">Audience Role</label>
+                        <select name="role" className="border rounded px-2 py-1 w-full">
+                          <option value="sales_manager">Sales Manager</option>
+                          <option value="marketing_executive">Marketing Executive</option>
+                          <option value="cfo">CFO</option>
+                        </select>
+                      </div>
+                      <button type="button" className="px-3 py-1 border rounded" onClick={(e) => {
+                        const form = (e.currentTarget as HTMLButtonElement).closest('[data-testid="subscription-form"]')! as HTMLElement;
+                        const select = form.querySelector('select[name="role"]') as HTMLSelectElement;
+                        if (select) select.value = 'sales_manager';
+                      }}>Add Audience</button>
+                      <button type="submit" className="px-3 py-1 bg-blue-600 text-white rounded" onClick={(e) => {
+                        e.preventDefault();
+                        const success = (e.currentTarget as HTMLButtonElement).parentElement!.querySelector('[data-testid="subscription-success"]') as HTMLElement;
+                        if (success) success.classList.remove('hidden');
+                      }}>Create</button>
+                      <div data-testid="subscription-success" className="hidden">Subscription created</div>
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-sm">Frequency</label>
-                    <select name="frequency" className="border rounded px-2 py-1 w-full">
-                      <option value="daily">Daily</option>
-                      <option value="weekly">Weekly</option>
-                      <option value="monthly">Monthly</option>
-                    </select>
-                  </div>
-                  {/* Role select required by tests */}
-                  <div>
-                    <label className="block text-sm">Audience Role</label>
-                    <select name="role" className="border rounded px-2 py-1 w-full">
-                      <option value="sales_manager">Sales Manager</option>
-                      <option value="marketing_executive">Marketing Executive</option>
-                      <option value="cfo">CFO</option>
-                    </select>
-                  </div>
-                  <button type="button" className="px-3 py-1 border rounded" onClick={(e) => {
-                    const form = (e.currentTarget as HTMLButtonElement).closest('[data-testid="subscription-form"]')! as HTMLElement;
-                    const select = form.querySelector('select[name="role"]') as HTMLSelectElement;
-                    if (select) select.value = 'sales_manager';
-                  }}>Add Audience</button>
-                  <button type="submit" className="px-3 py-1 bg-blue-600 text-white rounded" onClick={(e) => {
-                    e.preventDefault();
-                    const success = (e.currentTarget as HTMLButtonElement).parentElement!.querySelector('[data-testid="subscription-success"]') as HTMLElement;
-                    if (success) success.classList.remove('hidden');
-                  }}>Create</button>
-                  <div data-testid="subscription-success" className="hidden">Subscription created</div>
-                </div>
-              </div>
-            )}
+                );
+              }
+              routeStorage.setIntendedRoute(`/projects/${params.id}/continuous`);
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           {/* Conversation error route for tests */}
           {env.TEST_MODE && (
@@ -424,29 +550,65 @@ export default function App() {
           </Route>
           )}
           <Route path="/subscriptions">
-            {() => (
-              <div className="p-4">
-                <SubscriptionDashboard />
-              </div>
-            )}
+            {() => {
+              if (user) {
+                return (
+                  <div className="p-4">
+                    <SubscriptionDashboard />
+                  </div>
+                );
+              }
+              routeStorage.setIntendedRoute('/subscriptions');
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           <Route path="/expert-consultation">
             {() => <ExpertConsultation onBack={() => setLocation('/')} />}
           </Route>
           <Route path="/ai-guided">
-            {() => user ? <AskQuestionPage onBack={() => setLocation('/')} onPaymentRequired={(projectId, questions) => setLocation(`/checkout?projectId=${projectId}`)} /> : <AuthPage onLogin={handleLogin} />}
+            {() => {
+              if (user) {
+                return <AskQuestionPage onBack={() => setLocation('/')} onPaymentRequired={(projectId, _questions) => setLocation(`/checkout?projectId=${projectId}`)} />;
+              }
+              routeStorage.setIntendedRoute('/ai-guided');
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           <Route path="/self-service">
-            {() => user ? <PayPerAnalysis onBack={() => setLocation('/')} /> : <AuthPage onLogin={handleLogin} />}
+            {() => {
+              if (user) {
+                return <PayPerAnalysis onBack={() => setLocation('/')} />;
+              }
+              routeStorage.setIntendedRoute('/self-service');
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           <Route path="/template-analysis">
-            {() => user ? <TemplateAnalysis onBack={() => setLocation('/')} /> : <AuthPage onLogin={handleLogin} />}
+            {() => {
+              if (user) {
+                return <TemplateAnalysis onBack={() => setLocation('/')} />;
+              }
+              routeStorage.setIntendedRoute('/template-analysis');
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           <Route path="/template-based">
-            {() => user ? <TemplateAnalysis onBack={() => setLocation('/')} /> : <AuthPage onLogin={handleLogin} />}
+            {() => {
+              if (user) {
+                return <TemplateAnalysis onBack={() => setLocation('/')} />;
+              }
+              routeStorage.setIntendedRoute('/template-based');
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           <Route path="/custom-journey">
-            {() => user ? <CustomJourneyBuilder onBack={() => setLocation('/')} /> : <AuthPage onLogin={handleLogin} />}
+            {() => {
+              if (user) {
+                return <CustomJourneyBuilder onBack={() => setLocation('/')} />;
+              }
+              routeStorage.setIntendedRoute('/custom-journey');
+              return <AuthPage onLogin={handleLogin} />;
+            }}
           </Route>
           <Route path="/demos">
             {() => <DemosPage />}
@@ -462,7 +624,13 @@ export default function App() {
             {() => { setLocation('/demos'); return <></>; }}
           </Route>
           <Route path="/subscribe">
-            {() => { setLocation('/pricing'); return <></>; }}
+            {() => {
+              // Get the plan from URL and redirect to checkout
+              const urlParams = new URLSearchParams(window.location.search);
+              const plan = urlParams.get('plan') || '';
+              setLocation(plan ? `/checkout?plan=${plan}` : '/checkout');
+              return <></>;
+            }}
           </Route>
           <Route path="/pricing-broken">
             {() => { setLocation('/pricing'); return <></>; }}
@@ -474,9 +642,19 @@ export default function App() {
             {() => { setLocation('/settings'); return <></>; }}
           </Route>
           <Route path="/pricing">
-            {() => <PricingPage 
-              onGetStarted={() => setLocation('/')} 
-              onBack={() => setLocation('/')}
+            {() => <PricingPage
+              onGetStarted={() => {
+                // If user is logged in, go to dashboard, otherwise to home
+                if (user) {
+                  setLocation('/dashboard');
+                } else {
+                  setLocation('/auth/register');
+                }
+              }}
+              onBack={() => user ? setLocation('/dashboard') : setLocation('/')}
+              onSubscribe={(tier) => setLocation(`/subscribe?plan=${tier}`)}
+              onPayPerAnalysis={() => setLocation('/pay-per-analysis')}
+              onExpertConsultation={() => setLocation('/expert-consultation')}
             />}
           </Route>
           <Route path="/settings">

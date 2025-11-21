@@ -114,7 +114,7 @@ export const UNIFIED_SUBSCRIPTION_TIERS: Record<string, UnifiedSubscriptionTier>
   trial: {
     id: 'trial',
     name: 'Trial',
-    displayName: 'Free Trial',
+    displayName: 'Trial',
     description: 'Perfect for testing our platform with basic analytics',
     
     // Pricing: $1 (minimal cost to prevent abuse)

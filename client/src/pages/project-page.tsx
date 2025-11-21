@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { ArrowLeft, Database, FileText, Settings, BarChart3, Brain, Wrench, Target, Layers, Plus, Route, Bot } from "lucide-react";
+import { getResumeRoute } from "@/utils/journey-routing";
+import { ArrowLeft, Database, FileText, Settings, BarChart3, Brain, Wrench, Target, Layers, Route, Bot, Upload, Timer, Activity } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -15,8 +16,11 @@ import GuidedAnalysisWizard from "@/components/GuidedAnalysisWizard";
 import { AdvancedVisualizationWorkshop } from "@/components/advanced-visualization-workshop";
 import { ProjectArtifactTimeline } from "@/components/ProjectArtifactTimeline";
 import { WorkflowTransparencyDashboard } from "@/components/workflow-transparency-dashboard";
+import { JourneyLifecycleIndicator } from "@/components/JourneyLifecycleIndicator";
 import { EnhancedDataWorkflow } from "@/components/EnhancedDataWorkflow";
+import AgentActivityOverview from "@/components/agent-activity-overview";
 import AgentCheckpoints from "@/components/agent-checkpoints";
+import { useJourneyState } from "@/hooks/useJourneyState";
 import { toast } from "@/hooks/use-toast";
 
 interface ProjectPageProps {
@@ -24,9 +28,10 @@ interface ProjectPageProps {
 }
 
 export default function ProjectPage({ projectId }: ProjectPageProps) {
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
   const [activeTab, setActiveTab] = useState("overview");
   const [showGuidedAnalysis, setShowGuidedAnalysis] = useState(false);
+  const hasAutoNavigatedRef = useRef(false);
 
   const { data: project, isLoading, error } = useQuery({
     queryKey: ["/api/projects", projectId],
@@ -34,6 +39,156 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
       return await apiClient.getProject(projectId);
     },
   });
+
+  const enableSlaMetrics = (import.meta.env.VITE_FEATURE_SLA_METRICS ?? 'true') === 'true';
+
+  const { data: uploadMetricsSummary, isLoading: isUploadMetricsLoading } = useQuery({
+    queryKey: ['performance-metrics', projectId],
+    queryFn: async () => {
+      try {
+        const response = await apiClient.get('/api/performance/metrics/my-uploads?timeWindow=3600000');
+        return response?.summary ?? null;
+      } catch (metricsError) {
+        console.warn('Failed to load upload SLA metrics:', metricsError);
+        return null;
+      }
+    },
+    refetchInterval: 60000,
+    enabled: enableSlaMetrics
+  });
+
+  // Get journey state to determine which tabs to show
+  const { data: journeyState } = useJourneyState(projectId, { 
+    enabled: !!projectId && !!project?.journeyType 
+  });
+
+  const resolveArtifactFileRef = useCallback((artifact: any) => {
+    if (!artifact || !Array.isArray(artifact.fileRefs)) {
+      return null;
+    }
+    return (
+      artifact.fileRefs.find((ref: any) => ref?.url || ref?.signedUrl) ||
+      artifact.fileRefs[0] ||
+      null
+    );
+  }, []);
+
+  const handleArtifactPreview = useCallback((artifact: any) => {
+    const ref = resolveArtifactFileRef(artifact);
+    const artifactUrl = ref?.url || ref?.signedUrl;
+    if (!artifactUrl) {
+      toast({
+        title: "Artifact not ready",
+        description: "This artifact is still generating or unavailable.",
+        variant: "destructive",
+      });
+      return;
+    }
+    window.open(artifactUrl, "_blank", "noopener,noreferrer");
+  }, [resolveArtifactFileRef]);
+
+  const handleArtifactDownload = useCallback((artifact: any) => {
+    const ref = resolveArtifactFileRef(artifact);
+    const artifactUrl = ref?.url || ref?.signedUrl;
+    if (!artifactUrl) {
+      toast({
+        title: "Download unavailable",
+        description: "We couldn't find a downloadable file for this artifact yet.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      const link = document.createElement("a");
+      link.href = artifactUrl;
+      link.download = (artifact?.name || ref?.fileName || "chimari-artifact").replace(/\s+/g, "-");
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (error) {
+      console.error("Failed to download artifact:", error);
+      toast({
+        title: "Download failed",
+        description: "Please try again or contact support if the issue persists.",
+        variant: "destructive",
+      });
+    }
+  }, [resolveArtifactFileRef]);
+
+  // Handle resume query parameter
+  const currentSearch = useMemo(() => {
+    const queryIndex = location.indexOf('?');
+    return queryIndex >= 0 ? location.slice(queryIndex + 1) : '';
+  }, [location]);
+
+  useEffect(() => {
+    if (!journeyState || !journeyState.canResume || hasAutoNavigatedRef.current) {
+      return;
+    }
+
+    const params = new URLSearchParams(currentSearch);
+    if (!params.has('resume')) {
+      return;
+    }
+
+    const currentRoute = location;
+
+    getResumeRoute(projectId, journeyState)
+      .then((route) => {
+        if (route && route !== currentRoute) {
+          hasAutoNavigatedRef.current = true;
+          setLocation(route);
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to compute resume route:', error);
+      });
+  }, [journeyState, projectId, location, currentSearch, setLocation]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(currentSearch);
+    const tabParam = params.get('tab');
+    const allowedTabs = new Set([
+      'overview',
+      'agents',
+      'datasets',
+      'timeline',
+      'schema',
+      'transform',
+      'analysis',
+      'insights'
+    ]);
+
+    if (tabParam && allowedTabs.has(tabParam) && tabParam !== activeTab) {
+      setActiveTab(tabParam);
+    }
+  }, [currentSearch, activeTab]);
+
+  const handleTabChange = useCallback((nextTab: string) => {
+    setActiveTab(nextTab);
+
+    const [path, existingQuery = ''] = location.split('?');
+    const params = new URLSearchParams(existingQuery);
+    const previousTab = params.get('tab') ?? 'overview';
+
+    if (previousTab === nextTab) {
+      return;
+    }
+
+    if (nextTab === 'overview') {
+      params.delete('tab');
+    } else {
+      params.set('tab', nextTab);
+    }
+
+    const nextSearch = params.toString();
+    const nextLocation = nextSearch ? `${path}?${nextSearch}` : path;
+
+    if (nextLocation !== location) {
+      setLocation(nextLocation, { replace: true });
+    }
+  }, [location, setLocation]);
 
   if (isLoading) {
     return (
@@ -75,6 +230,17 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
+  const formatDuration = (ms?: number | null) => {
+    if (ms === null || ms === undefined) {
+      return '—';
+    }
+    if (ms >= 1000) {
+      const seconds = ms / 1000;
+      return seconds >= 10 ? `${seconds.toFixed(0)}s` : `${seconds.toFixed(1)}s`;
+    }
+    return `${ms}ms`;
+  };
+
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
       year: 'numeric',
@@ -84,6 +250,20 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
       minute: '2-digit'
     });
   };
+
+  const clientUploadMetrics = uploadMetricsSummary?.services?.client_upload?.operations?.upload_flow_total;
+  const serverUploadMetrics = uploadMetricsSummary?.services?.project_upload?.operations?.upload_total;
+  const totalClientRuns = clientUploadMetrics?.count ?? 0;
+  const targetMs = clientUploadMetrics?.slaTargetMs ?? 60000;
+  const isSlaMet = clientUploadMetrics?.p95Duration != null
+    ? clientUploadMetrics.p95Duration <= targetMs
+    : null;
+  const complianceText = clientUploadMetrics?.slaCompliance != null
+    ? `${clientUploadMetrics.slaCompliance.toFixed(1)}%`
+    : '—';
+  const serverErrorRate = serverUploadMetrics?.errorRate != null
+    ? `${Math.round(serverUploadMetrics.errorRate * 100)}%`
+    : '0%';
 
   return (
     <div className="h-screen bg-gray-50 flex flex-col">
@@ -102,6 +282,14 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
               </div>
             </div>
             <div className="flex items-center space-x-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleTabChange('datasets')}
+              >
+                <Upload className="w-4 h-4 mr-2" />
+                Re-upload Data
+              </Button>
               <Button 
                 variant="outline" 
                 size="sm" 
@@ -120,121 +308,205 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
 
       {/* Content */}
       <div className="container mx-auto px-4 py-4 max-w-6xl flex-1 overflow-auto">
-        {/* Data Journey Options - Moved to top */}
-        <Card className="mb-4">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-lg">Choose Your Data Journey</CardTitle>
-            <CardDescription className="text-sm">
-              Select what you'd like to do with your data
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-5">
-              <Button
-                variant="outline"
-                className="h-20 flex-col space-y-1 border-blue-200 hover:bg-blue-50 text-sm"
-                onClick={() => setLocation('/')}
-                data-testid="button-choose-journey-project"
-              >
-                <Route className="w-6 h-6 text-blue-600" />
-                <div className="text-center">
-                  <div className="font-medium">Choose Journey</div>
-                  <div className="text-xs text-gray-500">Select your analytics path</div>
-                </div>
-              </Button>
+        {/* Only show journey selection options if no active journey */}
+        {!journeyState && (
+          <Card className="mb-4">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-lg">Choose Your Data Journey</CardTitle>
+              <CardDescription className="text-sm">
+                Select what you'd like to do with your data
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-5">
+                <Button
+                  variant="outline"
+                  className="h-20 flex-col space-y-1 border-blue-200 hover:bg-blue-50 text-sm"
+                  onClick={() => setLocation('/')}
+                  data-testid="button-choose-journey-project"
+                >
+                  <Route className="w-6 h-6 text-blue-600" />
+                  <div className="text-center">
+                    <div className="font-medium">Choose Journey</div>
+                    <div className="text-xs text-gray-500">Select your analytics path</div>
+                  </div>
+                </Button>
 
-              <Button
-                variant="outline"
-                className="h-24 flex-col space-y-2"
-                onClick={() => setShowGuidedAnalysis(true)}
-              >
-                <Target className="w-8 h-8" />
-                <div className="text-center">
-                  <div className="font-medium">Guided Analysis</div>
-                  <div className="text-xs text-gray-500">Step-by-step business insights</div>
-                </div>
-              </Button>
-              
-              <Button
-                variant="outline"
-                className="h-24 flex-col space-y-2"
-                onClick={() => setActiveTab("transform")}
-              >
-                <Wrench className="w-8 h-8" />
-                <div className="text-center">
-                  <div className="font-medium">Data Transformation</div>
-                  <div className="text-xs text-gray-500">Clean, filter, and reshape your data</div>
-                </div>
-              </Button>
-              
-              <Button
-                variant="outline"
-                className="h-24 flex-col space-y-2"
-                onClick={() => setActiveTab("analysis")}
-              >
-                <BarChart3 className="w-8 h-8" />
-                <div className="text-center">
-                  <div className="font-medium">Data Analysis</div>
-                  <div className="text-xs text-gray-500">Statistical analysis and visualizations</div>
-                </div>
-              </Button>
-              
-              <Button
-                variant="outline"
-                className="h-24 flex-col space-y-2"
-                onClick={() => setActiveTab("insights")}
-              >
-                <Brain className="w-8 h-8" />
-                <div className="text-center">
-                  <div className="font-medium">AI Insights</div>
-                  <div className="text-xs text-gray-500">Intelligent data interpretation</div>
-                </div>
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+                <Button
+                  variant="outline"
+                  className="h-24 flex-col space-y-2"
+                  onClick={() => setShowGuidedAnalysis(true)}
+                >
+                  <Target className="w-8 h-8" />
+                  <div className="text-center">
+                    <div className="font-medium">Guided Analysis</div>
+                    <div className="text-xs text-gray-500">Step-by-step business insights</div>
+                  </div>
+                </Button>
+                
+                <Button
+                  variant="outline"
+                  className="h-24 flex-col space-y-2"
+                  onClick={() => setActiveTab("transform")}
+                >
+                  <Wrench className="w-8 h-8" />
+                  <div className="text-center">
+                    <div className="font-medium">Data Transformation</div>
+                    <div className="text-xs text-gray-500">Clean, filter, and reshape your data</div>
+                  </div>
+                </Button>
+                
+                <Button
+                  variant="outline"
+                  className="h-24 flex-col space-y-2"
+                  onClick={() => setActiveTab("analysis")}
+                >
+                  <BarChart3 className="w-8 h-8" />
+                  <div className="text-center">
+                    <div className="font-medium">Visualizations</div>
+                    <div className="text-xs text-gray-500">Build charts and explore your data</div>
+                  </div>
+                </Button>
+                
+                <Button
+                  variant="outline"
+                  className="h-24 flex-col space-y-2"
+                  onClick={() => setActiveTab("insights")}
+                >
+                  <Brain className="w-8 h-8" />
+                  <div className="text-center">
+                    <div className="font-medium">AI Insights</div>
+                    <div className="text-xs text-gray-500">Intelligent data interpretation</div>
+                  </div>
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
-          <TabsList className="grid w-full grid-cols-8 mb-3">
+  <Tabs value={activeTab} onValueChange={handleTabChange} className="flex-1 flex flex-col">
+          {/* Show journey-relevant tabs only - hide old navigation when journey is active */}
+    <TabsList className={`grid w-full mb-3 ${journeyState ? 'grid-cols-7' : 'grid-cols-8'}`}>
             <TabsTrigger value="overview" className="flex items-center gap-1 text-xs" data-testid="workflow-tab">
               <Database className="w-3 h-3" />
               Overview
             </TabsTrigger>
-            <TabsTrigger value="agents" className="flex items-center gap-1 text-xs" data-testid="agents-tab">
-              <Bot className="w-3 h-3" />
-              AI Agents
-            </TabsTrigger>
-            <TabsTrigger value="datasets" className="flex items-center gap-1 text-xs">
-              <Layers className="w-3 h-3" />
-              Datasets
-            </TabsTrigger>
-            <TabsTrigger value="timeline" className="flex items-center gap-1 text-xs" data-testid="decisions-tab">
-              <FileText className="w-3 h-3" />
-              Timeline
-            </TabsTrigger>
-            <TabsTrigger value="schema" className="flex items-center gap-1 text-xs" data-testid="artifacts-tab">
-              <Settings className="w-3 h-3" />
-              Schema
-            </TabsTrigger>
-            <TabsTrigger value="transform" className="flex items-center gap-1 text-xs">
-              <Wrench className="w-3 h-3" />
-              Transform
-            </TabsTrigger>
-            <TabsTrigger value="analysis" className="flex items-center gap-1 text-xs">
-              <BarChart3 className="w-3 h-3" />
-              Analysis
-            </TabsTrigger>
-            <TabsTrigger value="insights" className="flex items-center gap-1 text-xs">
-              <Brain className="w-3 h-3" />
-              Insights
-            </TabsTrigger>
+            {journeyState ? (
+              // Journey-specific navigation - show only relevant tabs
+              <>
+                <TabsTrigger value="agents" className="flex items-center gap-1 text-xs" data-testid="agents-tab">
+                  <Bot className="w-3 h-3" />
+                  AI Agents
+                </TabsTrigger>
+                <TabsTrigger value="datasets" className="flex items-center gap-1 text-xs">
+                  <Layers className="w-3 h-3" />
+                  Data
+                </TabsTrigger>
+                <TabsTrigger value="timeline" className="flex items-center gap-1 text-xs" data-testid="decisions-tab">
+                  <FileText className="w-3 h-3" />
+                  Timeline
+                </TabsTrigger>
+                <TabsTrigger value="analysis" className="flex items-center gap-1 text-xs">
+                  <BarChart3 className="w-3 h-3" />
+                  Visualizations
+                </TabsTrigger>
+                <TabsTrigger value="insights" className="flex items-center gap-1 text-xs">
+                  <Brain className="w-3 h-3" />
+                  Insights
+                </TabsTrigger>
+                <TabsTrigger value="schema" className="flex items-center gap-1 text-xs">
+                  <Settings className="w-3 h-3" />
+                  Schema
+                </TabsTrigger>
+              </>
+            ) : (
+              // Legacy navigation - show all tabs when no journey state
+              <>
+                <TabsTrigger value="agents" className="flex items-center gap-1 text-xs" data-testid="agents-tab">
+                  <Bot className="w-3 h-3" />
+                  AI Agents
+                </TabsTrigger>
+                <TabsTrigger value="datasets" className="flex items-center gap-1 text-xs">
+                  <Layers className="w-3 h-3" />
+                  Datasets
+                </TabsTrigger>
+                <TabsTrigger value="timeline" className="flex items-center gap-1 text-xs" data-testid="decisions-tab">
+                  <FileText className="w-3 h-3" />
+                  Timeline
+                </TabsTrigger>
+                <TabsTrigger value="schema" className="flex items-center gap-1 text-xs" data-testid="artifacts-tab">
+                  <Settings className="w-3 h-3" />
+                  Schema
+                </TabsTrigger>
+                <TabsTrigger value="transform" className="flex items-center gap-1 text-xs">
+                  <Wrench className="w-3 h-3" />
+                  Transform
+                </TabsTrigger>
+                <TabsTrigger value="analysis" className="flex items-center gap-1 text-xs">
+                  <BarChart3 className="w-3 h-3" />
+                  Visualizations
+                </TabsTrigger>
+                <TabsTrigger value="insights" className="flex items-center gap-1 text-xs">
+                  <Brain className="w-3 h-3" />
+                  Insights
+                </TabsTrigger>
+              </>
+            )}
           </TabsList>
 
           <TabsContent value="overview" className="mt-6">
-            {/* Embed workflow dashboard so concurrent tab clicks test can still see it */}
-            <div className="mb-6">
+            <div className="mb-6 space-y-6">
+              <JourneyLifecycleIndicator projectId={projectId} />
               <WorkflowTransparencyDashboard projectId={projectId} />
             </div>
+            {enableSlaMetrics && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Timer className="w-5 h-5" />
+                    Upload SLA (preview)
+                  </CardTitle>
+                  <CardDescription>
+                    Tracking the last 60 minutes of your upload activity.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {isUploadMetricsLoading ? (
+                    <p className="text-gray-500">Loading upload metrics...</p>
+                  ) : !clientUploadMetrics && !serverUploadMetrics ? (
+                    <p className="text-gray-500">No recent uploads recorded yet.</p>
+                  ) : (
+                    <div className="grid gap-4 md:grid-cols-3">
+                      <div>
+                        <p className="text-sm text-gray-500 flex items-center gap-2">
+                          <Activity className="w-4 h-4" />
+                          Uploads (60m)
+                        </p>
+                        <p className="text-2xl font-semibold">{totalClientRuns}</p>
+                        <p className="text-xs text-gray-500">Compliance {complianceText}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500 flex items-center gap-2">
+                          Client p95
+                          {isSlaMet !== null && (
+                            <Badge variant={isSlaMet ? 'secondary' : 'destructive'}>
+                              {isSlaMet ? 'On target' : 'Over target'}
+                            </Badge>
+                          )}
+                        </p>
+                        <p className="text-2xl font-semibold">{formatDuration(clientUploadMetrics?.p95Duration)}</p>
+                        <p className="text-xs text-gray-500">Goal ≤ {formatDuration(targetMs)}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500">Server avg duration</p>
+                        <p className="text-2xl font-semibold">{formatDuration(serverUploadMetrics?.avgDuration)}</p>
+                        <p className="text-xs text-gray-500">Error rate {serverErrorRate}</p>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
             <div className="grid gap-6 md:grid-cols-2">
               {/* Project Info */}
               <Card>
@@ -267,12 +539,26 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
                   )}
                   <div className="flex justify-between">
                     <span className="text-gray-600">Records:</span>
-                    <span className="font-medium">{project.recordCount?.toLocaleString()}</span>
+                    <span className="font-medium">
+                      {project.recordCount !== null && project.recordCount !== undefined
+                        ? project.recordCount.toLocaleString()
+                        : 'Not available'}
+                    </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-600">Created:</span>
-                    <span className="font-medium">{formatDate(project.createdAt || project.uploadedAt)}</span>
+                    <span className="font-medium">
+                      {project.createdAt || project.uploadedAt
+                        ? formatDate(project.createdAt || project.uploadedAt)
+                        : 'Not available'}
+                    </span>
                   </div>
+                  {project.journeyType && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Journey Type:</span>
+                      <span className="font-medium capitalize">{project.journeyType.replace('_', ' ')}</span>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
@@ -310,7 +596,12 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
             </div>
           </TabsContent>
 
-          <TabsContent value="agents" className="mt-6">
+          <TabsContent value="agents" className="mt-6 space-y-6">
+            <AgentActivityOverview
+              project={project}
+              journeyState={journeyState}
+              onNavigateToInsights={() => handleTabChange('insights')}
+            />
             <AgentCheckpoints projectId={projectId} />
           </TabsContent>
 
@@ -340,20 +631,8 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
           <TabsContent value="timeline" className="mt-6">
             <ProjectArtifactTimeline
               projectId={projectId}
-              onViewArtifact={(artifact) => {
-                toast({
-                  title: "Viewing Artifact",
-                  description: `Opening ${artifact.name}`
-                });
-                // TODO: Implement artifact viewing modal
-              }}
-              onExportArtifact={(artifact) => {
-                toast({
-                  title: "Exporting Artifact",
-                  description: `Preparing ${artifact.name} for download`
-                });
-                // TODO: Implement artifact export functionality
-              }}
+              onViewArtifact={handleArtifactPreview}
+              onExportArtifact={handleArtifactDownload}
             />
           </TabsContent>
 

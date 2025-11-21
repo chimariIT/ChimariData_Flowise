@@ -10,7 +10,7 @@
  * - Graph analysis
  */
 
-import { PythonProcessor } from './python-processor';
+import { PythonProcessor } from './enhanced-python-processor';
 import { ToolExecutionContext, ToolExecutionResult } from './real-tool-handlers';
 
 export interface SparkJobConfig {
@@ -35,7 +35,7 @@ export class SparkVisualizationEngine {
   private sparkConfig: SparkJobConfig;
 
   constructor() {
-    this.pythonProcessor = PythonProcessor;
+    this.pythonProcessor = new PythonProcessor();
     this.sparkConfig = {
       master: process.env.SPARK_MASTER_URL || 'local[*]',
       appName: 'ChimariData-Visualization',
@@ -77,14 +77,16 @@ export class SparkVisualizationEngine {
       const sparkScript = this.generateSparkVisualizationScript(data, config);
       
       // Execute Spark job
+      await this.pythonProcessor.initialize();
       const result = await this.pythonProcessor.executePythonScript(sparkScript, {
         SPARK_MASTER_URL: this.sparkConfig.master,
         SPARK_APP_NAME: this.sparkConfig.appName,
         SPARK_EXECUTOR_MEMORY: this.sparkConfig.executorMemory,
         SPARK_DRIVER_MEMORY: this.sparkConfig.driverMemory
-      });
+      }, 30000) as Record<string, any>;
 
       const duration = Date.now() - startTime;
+      const partitionsUsed = typeof result.partitions === 'number' ? result.partitions : 1;
 
       return {
         executionId: `spark-viz-${Date.now()}`,
@@ -94,7 +96,7 @@ export class SparkVisualizationEngine {
           ...result,
           sparkOptimized: true,
           dataProcessed: data.length,
-          partitionsUsed: result.partitions || 1,
+          partitionsUsed,
           memoryOptimized: true
         },
         metrics: {
@@ -124,13 +126,13 @@ export class SparkVisualizationEngine {
         executionId: `spark-viz-error-${Date.now()}`,
         toolId: 'spark_visualization_engine',
         status: 'error',
-        result: { error: error.message },
+        result: { error: error instanceof Error ? error.message : String(error) },
         metrics: {
           duration: Date.now() - startTime,
           resourcesUsed: { cpu: 0, memory: 0, storage: 0 },
           cost: 0
         },
-        error: `Spark visualization failed: ${error.message}`
+        error: `Spark visualization failed: ${error instanceof Error ? error.message : String(error)}`
       };
     }
   }
@@ -325,7 +327,7 @@ export class SparkStatisticalAnalyzer {
   private sparkConfig: SparkJobConfig;
 
   constructor() {
-    this.pythonProcessor = PythonProcessor;
+    this.pythonProcessor = new PythonProcessor();
     this.sparkConfig = {
       master: process.env.SPARK_MASTER_URL || 'local[*]',
       appName: 'ChimariData-Statistics',
@@ -363,10 +365,11 @@ export class SparkStatisticalAnalyzer {
       const sparkScript = this.generateSparkAnalysisScript(data, config);
       
       // Execute Spark job
+      await this.pythonProcessor.initialize();
       const result = await this.pythonProcessor.executePythonScript(sparkScript, {
         SPARK_MASTER_URL: this.sparkConfig.master,
         SPARK_APP_NAME: this.sparkConfig.appName
-      });
+      }, 30000) as Record<string, any>;
 
       const duration = Date.now() - startTime;
 
@@ -407,13 +410,13 @@ export class SparkStatisticalAnalyzer {
         executionId: `spark-stats-error-${Date.now()}`,
         toolId: 'spark_statistical_analyzer',
         status: 'error',
-        result: { error: error.message },
+        result: { error: error instanceof Error ? error.message : String(error) },
         metrics: {
           duration: Date.now() - startTime,
           resourcesUsed: { cpu: 0, memory: 0, storage: 0 },
           cost: 0
         },
-        error: `Spark statistical analysis failed: ${error.message}`
+        error: `Spark statistical analysis failed: ${error instanceof Error ? error.message : String(error)}`
       };
     }
   }

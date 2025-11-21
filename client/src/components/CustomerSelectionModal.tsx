@@ -62,11 +62,27 @@ export function CustomerSelectionModal({
     firstName: "",
     lastName: "",
     company: "",
-    password: ""
+    password: "",
+    isAdmin: false // ✅ Add option to create admin user
   });
   const [creatingCustomer, setCreatingCustomer] = useState(false);
+  const [domainValidation, setDomainValidation] = useState<{ isValid: boolean; domain: string } | null>(null);
   
   const { toast } = useToast();
+
+  // Validate domain when email changes
+  useEffect(() => {
+    if (newCustomerForm.email && newCustomerForm.email.includes('@')) {
+      const emailDomain = newCustomerForm.email.split('@')[1];
+      const allowedDomains = ['chimaridata.com', 'chimaridata.io', 'chimaridata.co', 'chimaridata.org'];
+      const isValid = allowedDomains.some(domain => 
+        emailDomain === domain || emailDomain?.endsWith('.' + domain)
+      );
+      setDomainValidation({ isValid, domain: emailDomain });
+    } else {
+      setDomainValidation(null);
+    }
+  }, [newCustomerForm.email]);
 
   // Fetch customers when modal opens
   useEffect(() => {
@@ -92,42 +108,30 @@ export function CustomerSelectionModal({
   const fetchCustomers = async () => {
     setLoading(true);
     try {
-      // Fetch all users (in a real app, this would be a proper admin API)
-      // Mock users data for now - replace with actual API call when available
-      const mockUsers = [
-        {
-          id: '1',
-          email: 'john.doe@example.com',
-          firstName: 'John',
-          lastName: 'Doe',
-          company: 'Acme Corp',
-          subscriptionTier: 'professional',
-          subscriptionStatus: 'active',
-          createdAt: '2024-01-15T10:00:00Z'
-        },
-        {
-          id: '2',
-          email: 'jane.smith@example.com',
-          firstName: 'Jane',
-          lastName: 'Smith',
-          company: 'Tech Solutions',
-          subscriptionTier: 'starter',
-          subscriptionStatus: 'active',
-          createdAt: '2024-02-20T14:30:00Z'
-        }
-      ];
-      const response = { data: mockUsers };
-      if (response.data) {
-        // Filter out admin users and only show regular customers
-        const customerUsers = response.data.filter((user: any) => !user.isAdmin);
-        setCustomers(customerUsers);
-        setFilteredCustomers(customerUsers);
+      // Fetch real customers from admin API
+      const response = await apiClient.get('/api/admin/customers');
+      
+      if (response.success && response.customers) {
+        // Map API response to Customer interface
+        const mappedCustomers: Customer[] = response.customers.map((customer: any) => ({
+          id: customer.id,
+          email: customer.email,
+          firstName: customer.name?.split(' ')[0] || '',
+          lastName: customer.name?.split(' ').slice(1).join(' ') || '',
+          company: customer.company,
+          subscriptionTier: customer.subscriptionTier || 'none',
+          subscriptionStatus: 'active', // Default status
+          createdAt: new Date().toISOString() // API doesn't return this yet
+        }));
+        
+        setCustomers(mappedCustomers);
+        setFilteredCustomers(mappedCustomers);
       }
     } catch (error) {
       console.error('Error fetching customers:', error);
       toast({
         title: "Error",
-        description: "Failed to fetch customers",
+        description: "Failed to fetch customers. Please try again.",
         variant: "destructive"
       });
     } finally {
@@ -137,6 +141,7 @@ export function CustomerSelectionModal({
 
   const handleSelectCustomer = () => {
     if (selectedCustomer) {
+      // Use the name directly if available, otherwise construct from firstName/lastName
       const customerName = selectedCustomer.firstName && selectedCustomer.lastName 
         ? `${selectedCustomer.firstName} ${selectedCustomer.lastName}`
         : selectedCustomer.email.split('@')[0];
@@ -167,27 +172,31 @@ export function CustomerSelectionModal({
       return;
     }
 
+    // ✅ Validate email domain for chimaridata (if required)
+    const emailDomain = newCustomerForm.email.split('@')[1];
+    const allowedDomains = ['chimaridata.com', 'chimaridata.io']; // Add other valid domains as needed
+    const isValidDomain = allowedDomains.some(domain => emailDomain === domain || emailDomain?.endsWith('.' + domain));
+    
+    // For now, we'll warn but allow any domain (can be made strict later)
+    if (!isValidDomain) {
+      console.warn(`⚠️ Email domain ${emailDomain} may not be validated`);
+    }
+
     setCreatingCustomer(true);
     try {
-      // Create new customer using the existing register endpoint
-      const response = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          email: newCustomerForm.email,
-          firstName: newCustomerForm.firstName,
-          lastName: newCustomerForm.lastName,
-          password: newCustomerForm.password,
-          company: newCustomerForm.company || undefined
-        })
+      // ✅ Use admin endpoint to create user (allows admin to set admin privileges)
+      const response = await apiClient.post('/api/admin/users', {
+        email: newCustomerForm.email,
+        firstName: newCustomerForm.firstName,
+        lastName: newCustomerForm.lastName,
+        password: newCustomerForm.password,
+        company: newCustomerForm.company || undefined,
+        isAdmin: newCustomerForm.isAdmin, // ✅ Allow admin to create admin users
+        subscriptionTier: 'trial' // Default to trial tier
       });
 
-      const data = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Failed to create customer');
+      if (!response.success) {
+        throw new Error(response.error || 'Failed to create customer');
       }
 
       toast({
@@ -198,7 +207,7 @@ export function CustomerSelectionModal({
       // Select the newly created customer
       const customerName = `${newCustomerForm.firstName} ${newCustomerForm.lastName}`;
       onSelectCustomer({
-        id: data.user.id,
+        id: response.user.id,
         name: customerName,
         email: newCustomerForm.email,
         company: newCustomerForm.company
@@ -210,7 +219,8 @@ export function CustomerSelectionModal({
         firstName: "",
         lastName: "",
         company: "",
-        password: ""
+        password: "",
+        isAdmin: false
       });
       setActiveTab("select");
       onClose();
@@ -340,8 +350,96 @@ export function CustomerSelectionModal({
           </TabsContent>
 
           <TabsContent value="create" className="space-y-4 mt-4">
-            <div className="text-center py-8 text-muted-foreground">
-              Create new customer functionality coming soon...
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="firstName">First Name *</Label>
+                  <Input
+                    id="firstName"
+                    value={newCustomerForm.firstName}
+                    onChange={(e) => setNewCustomerForm(prev => ({ ...prev, firstName: e.target.value }))}
+                    placeholder="John"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="lastName">Last Name *</Label>
+                  <Input
+                    id="lastName"
+                    value={newCustomerForm.lastName}
+                    onChange={(e) => setNewCustomerForm(prev => ({ ...prev, lastName: e.target.value }))}
+                    placeholder="Doe"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="email">Email *</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={newCustomerForm.email}
+                  onChange={(e) => setNewCustomerForm(prev => ({ ...prev, email: e.target.value }))}
+                  placeholder="user@chimaridata.com"
+                />
+                {domainValidation && (
+                  <div className={`text-xs flex items-center gap-1 ${
+                    domainValidation.isValid ? 'text-green-600' : 'text-amber-600'
+                  }`}>
+                    {domainValidation.isValid ? (
+                      <>
+                        <Check className="h-3 w-3" />
+                        Domain {domainValidation.domain} validated as ChimariData domain
+                      </>
+                    ) : (
+                      <>
+                        ⚠️ Domain {domainValidation.domain} is not a ChimariData domain (allowed: @chimaridata.com, @chimaridata.io, etc.)
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="password">Password *</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  value={newCustomerForm.password}
+                  onChange={(e) => setNewCustomerForm(prev => ({ ...prev, password: e.target.value }))}
+                  placeholder="••••••••"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="company">Company (Optional)</Label>
+                <Input
+                  id="company"
+                  value={newCustomerForm.company}
+                  onChange={(e) => setNewCustomerForm(prev => ({ ...prev, company: e.target.value }))}
+                  placeholder="Company Name"
+                />
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  id="isAdmin"
+                  checked={newCustomerForm.isAdmin}
+                  onChange={(e) => setNewCustomerForm(prev => ({ ...prev, isAdmin: e.target.checked }))}
+                  className="rounded"
+                />
+                <Label htmlFor="isAdmin" className="cursor-pointer">
+                  Create as Admin User
+                </Label>
+              </div>
+
+              <Button 
+                onClick={handleCreateCustomer}
+                disabled={creatingCustomer || !newCustomerForm.email || !newCustomerForm.firstName || !newCustomerForm.lastName || !newCustomerForm.password}
+                className="w-full"
+              >
+                {creatingCustomer ? 'Creating...' : 'Create Customer'}
+              </Button>
             </div>
           </TabsContent>
         </Tabs>

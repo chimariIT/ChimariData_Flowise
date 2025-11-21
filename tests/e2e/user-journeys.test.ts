@@ -2,11 +2,11 @@ import { test, expect } from '@playwright/test';
 import request from 'supertest';
 import app from '../../server';
 
-describe('End-to-End User Journey Tests', () => {
+test.describe('End-to-End User Journey Tests', () => {
   let testUsers: any = {};
   let authTokens: any = {};
 
-  beforeAll(async () => {
+  test.beforeAll(async () => {
     // Create test users for each role
     const userRoles = ['non-tech', 'business', 'technical', 'consultation'];
     const subscriptionTiers = ['none', 'trial', 'starter', 'professional', 'enterprise'];
@@ -34,12 +34,12 @@ describe('End-to-End User Journey Tests', () => {
     }
   });
 
-  afterAll(async () => {
+  test.afterAll(async () => {
     // Cleanup test users
     // In a real test environment, you'd clean up the database
   });
 
-  describe('Role-Based Journey Access', () => {
+  test.describe('Role-Based Journey Access', () => {
     test('Non-tech user can access non-tech journey', async () => {
       const token = authTokens['non-tech-starter'];
 
@@ -97,7 +97,7 @@ describe('End-to-End User Journey Tests', () => {
     });
   });
 
-  describe('AI Service Differentiation', () => {
+  test.describe('AI Service Differentiation', () => {
     test('AI features available based on subscription tier', async () => {
       const noneToken = authTokens['technical-none'];
       const professionalToken = authTokens['technical-professional'];
@@ -183,7 +183,7 @@ describe('End-to-End User Journey Tests', () => {
     });
   });
 
-  describe('Payment System Integration', () => {
+  test.describe('Payment System Integration', () => {
     test('Subscription users get pricing with discounts', async () => {
       const noneToken = authTokens['business-none'];
       const starterToken = authTokens['business-starter'];
@@ -325,7 +325,7 @@ describe('End-to-End User Journey Tests', () => {
     });
   });
 
-  describe('Usage Tracking and Limits', () => {
+  test.describe('Usage Tracking and Limits', () => {
     test('Usage limits enforced correctly', async () => {
       const trialToken = authTokens['non-tech-trial'];
 
@@ -368,7 +368,7 @@ describe('End-to-End User Journey Tests', () => {
     });
   });
 
-  describe('Journey Workflow Integration', () => {
+  test.describe('Journey Workflow Integration', () => {
     test('Complete non-tech user journey', async () => {
       const token = authTokens['non-tech-starter'];
 
@@ -509,7 +509,7 @@ describe('End-to-End User Journey Tests', () => {
     });
   });
 
-  describe('Error Handling and Edge Cases', () => {
+  test.describe('Error Handling and Edge Cases', () => {
     test('Graceful handling of invalid AI requests', async () => {
       const token = authTokens['technical-starter'];
 

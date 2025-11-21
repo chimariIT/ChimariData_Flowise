@@ -5,6 +5,26 @@ server/public
 vite.config.ts.*
 *.tar.gz
 
+# Environment & secrets
+.env
+.env.*
+
+# Local databases & temp data
+dev.db
+temp-analysis/
+temp-test-data/
+console/
+query/
+screenshots/
+test-screenshots/
+
+# Logs & generated artifacts
+*.log
+*.log.*
+
+# Editor settings
+.vscode/
+
 # Playwright
 /test-results/
 /playwright-report/

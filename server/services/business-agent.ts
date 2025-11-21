@@ -1,36 +1,50 @@
 import { ChimaridataAI } from './chimaridata-ai';
+import { KnowledgeGraphService, type KnowledgeTemplate, type RegulationKnowledge } from './knowledge-graph-service';
+import type { BusinessContext as PlanBusinessContext, DataAssessment } from '@shared/schema';
 
 // ==========================================
 // CONSULTATION INTERFACES (Multi-Agent Coordination)
 // ==========================================
 
 export interface BusinessImpactReport {
-  businessValue: 'high' | 'medium' | 'low';
-  confidence: number;
-  alignment: {
-    goals: number;
-    industry: number;
-    bestPractices: number;
-  };
-  benefits: string[];
-  risks: string[];
-  recommendations: string[];
-  expectedROI: string;
+    businessValue: 'high' | 'medium' | 'low';
+    confidence?: number;
+    alignment: number | {
+        goals: number;
+        industry: number;
+        bestPractices: number;
+    };
+    alignmentFactors?: {
+        goals: number;
+        industry: number;
+        bestPractices: number;
+    };
+    benefits: string[];
+    risks: string[];
+    recommendations: string[];
+    expectedROI: string;
+    industryInsights?: string[];
+    complianceConsiderations?: string[];
+}
+
+export interface MetricDefinition {
+    name: string;
+    description: string;
+    calculation: string;
+    businessImpact?: string;
 }
 
 export interface MetricRecommendations {
-  primaryMetrics: Array<{
-    name: string;
-    description: string;
-    calculation: string;
-    businessImpact: string;
-  }>;
-  secondaryMetrics: Array<{
-    name: string;
-    description: string;
-    calculation: string;
-  }>;
-  industry: string;
+    primaryMetrics: Array<MetricDefinition | string>;
+    secondaryMetrics: Array<MetricDefinition | string>;
+    industrySpecific?: string[];
+    warnings?: string[];
+    recommendations?: string[];
+    industry?: string;
+    metrics?: {
+        primary: Array<MetricDefinition | string>;
+        secondary: Array<MetricDefinition | string>;
+    };
 }
 
 export interface AlignmentScore {
@@ -65,9 +79,12 @@ interface IndustryTemplate {
     keyMetrics: string[];
     regulatoryConsiderations: string[];
     analysisTemplates: AnalysisTemplate[];
+    nodeId?: string;
+    summary?: string | null;
 }
 
 interface AnalysisTemplate {
+    id?: string;
     name: string;
     type: string;
     description: string;
@@ -81,6 +98,7 @@ interface RegulatoryFramework {
     description: string;
     requirements: string[];
     applicableIndustries: string[];
+    nodeId?: string;
 }
 
 function buildGoalExtractionPrompt(userDescription: string, journeyType: string, context: BusinessContext): string {
@@ -359,13 +377,11 @@ function getFallbackGoalExtraction(journeyType: string): any {
   }
 export class BusinessAgent {
     private chimaridataAI: ChimaridataAI;
-    private industryTemplates: IndustryTemplate[];
-    private regulatoryFrameworks: RegulatoryFramework[];
+    private knowledgeGraph: KnowledgeGraphService;
 
     constructor() {
         this.chimaridataAI = new ChimaridataAI();
-        this.industryTemplates = this.initializeIndustryTemplates();
-        this.regulatoryFrameworks = this.initializeRegulatoryFrameworks();
+        this.knowledgeGraph = new KnowledgeGraphService();
     }
 
     /**
@@ -466,231 +482,6 @@ export class BusinessAgent {
         };
     }
 
-    private initializeIndustryTemplates(): IndustryTemplate[] {
-        return [
-            {
-                industry: 'Healthcare',
-                commonUseCases: [
-                    'Patient outcome prediction',
-                    'Readmission risk analysis',
-                    'Drug effectiveness studies',
-                    'Resource optimization',
-                    'Clinical trial analysis'
-                ],
-                keyMetrics: [
-                    'Patient satisfaction scores',
-                    'Readmission rates',
-                    'Length of stay',
-                    'Mortality rates',
-                    'Cost per patient',
-                    'Treatment effectiveness'
-                ],
-                regulatoryConsiderations: [
-                    'HIPAA compliance',
-                    'FDA regulations',
-                    'PHI protection',
-                    'Clinical trial protocols'
-                ],
-                analysisTemplates: [
-                    {
-                        name: 'Patient Risk Stratification',
-                        type: 'machine_learning',
-                        description: 'Identify high-risk patients using demographic and clinical data',
-                        requiredColumns: ['age', 'diagnosis', 'vitals', 'medical_history'],
-                        expectedOutcomes: ['Risk scores', 'Intervention recommendations', 'Cost projections'],
-                        businessValue: 'Reduce readmissions by 15-25% and improve patient outcomes'
-                    },
-                    {
-                        name: 'Treatment Effectiveness Analysis',
-                        type: 'statistical',
-                        description: 'Compare treatment outcomes across patient cohorts',
-                        requiredColumns: ['treatment_type', 'outcomes', 'demographics', 'comorbidities'],
-                        expectedOutcomes: ['Efficacy comparisons', 'Side effect profiles', 'Cost-effectiveness'],
-                        businessValue: 'Optimize treatment protocols and reduce costs'
-                    }
-                ]
-            },
-            {
-                industry: 'Finance',
-                commonUseCases: [
-                    'Credit risk assessment',
-                    'Fraud detection',
-                    'Algorithmic trading',
-                    'Portfolio optimization',
-                    'Regulatory compliance'
-                ],
-                keyMetrics: [
-                    'Return on investment',
-                    'Risk-adjusted returns',
-                    'Default rates',
-                    'Sharpe ratio',
-                    'Value at Risk',
-                    'Fraud detection rate'
-                ],
-                regulatoryConsiderations: [
-                    'Basel III compliance',
-                    'GDPR for EU customers',
-                    'Fair Credit Reporting Act',
-                    'Anti-money laundering',
-                    'Model risk management'
-                ],
-                analysisTemplates: [
-                    {
-                        name: 'Credit Scoring Model',
-                        type: 'machine_learning',
-                        description: 'Predict default probability using customer financial data',
-                        requiredColumns: ['credit_history', 'income', 'debt_ratio', 'employment'],
-                        expectedOutcomes: ['Credit scores', 'Default probabilities', 'Risk tiers'],
-                        businessValue: 'Improve approval rates while reducing default risk by 20%'
-                    },
-                    {
-                        name: 'Portfolio Risk Analysis',
-                        type: 'statistical',
-                        description: 'Analyze portfolio risk and performance metrics',
-                        requiredColumns: ['asset_returns', 'volatility', 'correlations', 'exposures'],
-                        expectedOutcomes: ['Risk metrics', 'Optimal allocations', 'Stress test results'],
-                        businessValue: 'Optimize risk-return profile and regulatory compliance'
-                    }
-                ]
-            },
-            {
-                industry: 'Retail',
-                commonUseCases: [
-                    'Customer segmentation',
-                    'Demand forecasting',
-                    'Price optimization',
-                    'Inventory management',
-                    'Churn prediction'
-                ],
-                keyMetrics: [
-                    'Customer lifetime value',
-                    'Conversion rates',
-                    'Average order value',
-                    'Inventory turnover',
-                    'Gross margin',
-                    'Customer acquisition cost'
-                ],
-                regulatoryConsiderations: [
-                    'Consumer privacy laws',
-                    'Price discrimination regulations',
-                    'Product safety standards',
-                    'Advertising standards'
-                ],
-                analysisTemplates: [
-                    {
-                        name: 'Customer Segmentation',
-                        type: 'machine_learning',
-                        description: 'Segment customers based on behavior and demographics',
-                        requiredColumns: ['purchase_history', 'demographics', 'engagement', 'preferences'],
-                        expectedOutcomes: ['Customer segments', 'Persona profiles', 'Targeting strategies'],
-                        businessValue: 'Increase marketing ROI by 30% through targeted campaigns'
-                    },
-                    {
-                        name: 'Demand Forecasting',
-                        type: 'time_series',
-                        description: 'Predict future product demand using historical data',
-                        requiredColumns: ['sales_history', 'seasonality', 'promotions', 'external_factors'],
-                        expectedOutcomes: ['Demand forecasts', 'Inventory recommendations', 'Revenue projections'],
-                        businessValue: 'Reduce stockouts by 25% and optimize inventory costs'
-                    }
-                ]
-            },
-            {
-                industry: 'Manufacturing',
-                commonUseCases: [
-                    'Predictive maintenance',
-                    'Quality control',
-                    'Supply chain optimization',
-                    'Production planning',
-                    'Energy efficiency'
-                ],
-                keyMetrics: [
-                    'Overall equipment effectiveness',
-                    'Defect rates',
-                    'Throughput',
-                    'Downtime',
-                    'Energy consumption',
-                    'Labor productivity'
-                ],
-                regulatoryConsiderations: [
-                    'ISO quality standards',
-                    'Environmental regulations',
-                    'Safety compliance',
-                    'Product liability'
-                ],
-                analysisTemplates: [
-                    {
-                        name: 'Predictive Maintenance',
-                        type: 'machine_learning',
-                        description: 'Predict equipment failures before they occur',
-                        requiredColumns: ['sensor_data', 'maintenance_history', 'operating_conditions', 'failure_modes'],
-                        expectedOutcomes: ['Failure predictions', 'Maintenance schedules', 'Cost savings'],
-                        businessValue: 'Reduce unplanned downtime by 40% and maintenance costs by 25%'
-                    },
-                    {
-                        name: 'Quality Control Analysis',
-                        type: 'statistical',
-                        description: 'Monitor and improve product quality using process data',
-                        requiredColumns: ['process_parameters', 'quality_measurements', 'batch_info', 'environmental_conditions'],
-                        expectedOutcomes: ['Quality trends', 'Process improvements', 'Defect reduction'],
-                        businessValue: 'Improve product quality and reduce defect rates by 30%'
-                    }
-                ]
-            }
-        ];
-    }
-
-    private initializeRegulatoryFrameworks(): RegulatoryFramework[] {
-        return [
-            {
-                name: 'GDPR',
-                description: 'General Data Protection Regulation for EU data privacy',
-                requirements: [
-                    'Explicit consent for data processing',
-                    'Right to data portability',
-                    'Right to be forgotten',
-                    'Data protection by design',
-                    'Privacy impact assessments'
-                ],
-                applicableIndustries: ['All industries operating in EU']
-            },
-            {
-                name: 'HIPAA',
-                description: 'Health Insurance Portability and Accountability Act',
-                requirements: [
-                    'PHI protection',
-                    'Access controls',
-                    'Audit trails',
-                    'Data encryption',
-                    'Business associate agreements'
-                ],
-                applicableIndustries: ['Healthcare', 'Health Insurance']
-            },
-            {
-                name: 'SOX',
-                description: 'Sarbanes-Oxley Act for financial reporting',
-                requirements: [
-                    'Internal controls documentation',
-                    'Management certification',
-                    'Independent auditing',
-                    'Data retention policies'
-                ],
-                applicableIndustries: ['Public Companies', 'Finance']
-            },
-            {
-                name: 'Basel III',
-                description: 'International regulatory framework for banks',
-                requirements: [
-                    'Capital adequacy ratios',
-                    'Liquidity coverage ratio',
-                    'Net stable funding ratio',
-                    'Leverage ratio limits',
-                    'Stress testing'
-                ],
-                applicableIndustries: ['Banking', 'Financial Services']
-            }
-        ];
-    }
 
     async extractGoals(userDescription: string, journeyType: string, context: BusinessContext) {
         const prompt = buildGoalExtractionPrompt(userDescription, journeyType, context);
@@ -750,61 +541,181 @@ export class BusinessAgent {
     async findTemplates(businessArea: string): Promise<any[]> {
         console.log(`Searching for templates related to: ${businessArea}`);
 
-        // Find relevant industry templates
-        const relevantTemplates = [];
+        const searchResults = await this.knowledgeGraph.searchTemplates(businessArea);
+        const groupedResults = new Map<string, any>();
 
-        for (const industryTemplate of this.industryTemplates) {
-            // Check if business area matches industry or use cases
-            if (industryTemplate.industry.toLowerCase().includes(businessArea.toLowerCase()) ||
-                industryTemplate.commonUseCases.some(useCase =>
-                    useCase.toLowerCase().includes(businessArea.toLowerCase()) ||
-                    businessArea.toLowerCase().includes(useCase.toLowerCase())
-                )) {
+        for (const result of searchResults) {
+            const industryName = result.industry.industry;
 
-                relevantTemplates.push({
-                    id: `${industryTemplate.industry.toLowerCase()}_template`,
-                    name: `${industryTemplate.industry} Analysis Template`,
-                    description: `Industry-specific template for ${industryTemplate.industry}`,
-                    industry: industryTemplate.industry,
-                    commonUseCases: industryTemplate.commonUseCases,
-                    keyMetrics: industryTemplate.keyMetrics,
-                    analysisTemplates: industryTemplate.analysisTemplates,
-                    regulatoryConsiderations: industryTemplate.regulatoryConsiderations
+            if (!groupedResults.has(industryName)) {
+                groupedResults.set(industryName, {
+                    id: result.industry.nodeId ?? `${industryName.toLowerCase().replace(/\s+/g, '_')}_template`,
+                    name: `${industryName} Analysis Template`,
+                    description: result.industry.summary ?? `Industry-specific template for ${industryName}`,
+                    industry: industryName,
+                    commonUseCases: result.industry.commonUseCases,
+                    keyMetrics: result.industry.keyMetrics,
+                    analysisTemplates: result.industry.analysisTemplates.map((template) => this.mapKnowledgeTemplate(template)),
+                    regulatoryConsiderations: result.industry.regulatoryConsiderations,
+                    regulations: result.regulations.map((regulation) => regulation.name),
                 });
             }
         }
 
-        // If no specific templates found, return generic template
-        if (relevantTemplates.length === 0) {
-            relevantTemplates.push({
-                id: `${businessArea.toLowerCase().replace(/\s/g, '_')}_template`,
-                name: `${businessArea} Analysis Template`,
-                description: `A general template for analyzing ${businessArea}.`,
-                questions: [
-                    `What are the key metrics for ${businessArea}?`,
-                    `How can we optimize performance in ${businessArea}?`
-                ],
-                analysisTypes: ['descriptive', 'optimization']
-            });
+        if (groupedResults.size === 0) {
+            const fallbackLabel = (businessArea && businessArea.trim().length > 0) ? businessArea.trim() : 'General Business';
+            return [
+                {
+                    id: `${fallbackLabel.toLowerCase().replace(/\s+/g, '_')}_template`,
+                    name: `${fallbackLabel} Analysis Template`,
+                    description: `A general template for analyzing ${fallbackLabel}.`,
+                    questions: [
+                        `What are the key metrics for ${fallbackLabel}?`,
+                        `How can we optimize performance in ${fallbackLabel}?`
+                    ],
+                    analysisTypes: ['descriptive', 'optimization']
+                }
+            ];
         }
 
-        return relevantTemplates;
+        return Array.from(groupedResults.values());
     }
 
     // Industry-Specific Knowledge Methods
-    getIndustryTemplate(industry: string): IndustryTemplate | undefined {
-        return this.industryTemplates.find(template =>
-            template.industry.toLowerCase() === industry.toLowerCase()
-        );
+    async getIndustryTemplate(industry: string): Promise<IndustryTemplate | undefined> {
+        if (!industry) {
+            return undefined;
+        }
+
+        const knowledge = await this.knowledgeGraph.getIndustryKnowledge(industry);
+        if (!knowledge) {
+            return undefined;
+        }
+
+        return {
+            industry: knowledge.industry,
+            commonUseCases: knowledge.commonUseCases,
+            keyMetrics: knowledge.keyMetrics,
+            regulatoryConsiderations: knowledge.regulatoryConsiderations,
+            analysisTemplates: knowledge.analysisTemplates.map((template) => this.mapKnowledgeTemplate(template)),
+            nodeId: knowledge.nodeId,
+            summary: knowledge.summary ?? null,
+        };
     }
 
-    getApplicableRegulations(industry: string): RegulatoryFramework[] {
-        return this.regulatoryFrameworks.filter(framework =>
-            framework.applicableIndustries.some(applicableIndustry =>
-                applicableIndustry.toLowerCase().includes(industry.toLowerCase()) ||
-                industry.toLowerCase().includes(applicableIndustry.toLowerCase())
-            )
+    async getApplicableRegulations(industry: string): Promise<RegulatoryFramework[]> {
+        if (!industry) {
+            return [];
+        }
+
+        const regulations = await this.knowledgeGraph.getRegulationsForIndustry(industry);
+        return regulations.map((regulation) => this.mapRegulation(regulation));
+    }
+
+    async provideBusinessContext(params: {
+        journeyType: string;
+        industry?: string;
+        goals?: string[];
+        analysisTypes?: string[];
+        dataAssessment?: DataAssessment;
+    }): Promise<PlanBusinessContext> {
+        const {
+            journeyType,
+            industry,
+            goals = [],
+            analysisTypes = [],
+            dataAssessment
+        } = params;
+
+        const sanitizedGoals = goals.filter(goal => typeof goal === 'string' && goal.trim().length > 0);
+        const sanitizedAnalysisTypes = analysisTypes.filter(type => typeof type === 'string' && type.trim().length > 0);
+
+    const industryTemplate = industry ? await this.getIndustryTemplate(industry) : undefined;
+    const regulatoryFrameworks = industry ? await this.getApplicableRegulations(industry) : [];
+
+        const metricSuggestions = await this.suggestBusinessMetrics(
+            industry || 'general',
+            sanitizedGoals.length > 0 ? sanitizedGoals : ['Overall performance']
         );
+
+        const benchmarkCandidates = industryTemplate?.keyMetrics?.map(metric => `${metric} benchmark`) || [];
+        const fallbackBenchmarks = sanitizedGoals.length > 0
+            ? sanitizedGoals.map(goal => `Benchmark progress for ${goal}`).slice(0, 4)
+            : ['Benchmark critical KPIs against industry peers', 'Track period-over-period performance trends'];
+
+        const industryBenchmarks = Array.from(new Set([
+            ...benchmarkCandidates.slice(0, 5),
+            ...fallbackBenchmarks
+        ])).slice(0, 5);
+
+        const relevantKPISet = new Set<string>();
+        for (const metric of metricSuggestions.primaryMetrics) {
+            relevantKPISet.add(typeof metric === 'string' ? metric : metric.name);
+        }
+        for (const metric of metricSuggestions.secondaryMetrics) {
+            if (relevantKPISet.size >= 6) break;
+            relevantKPISet.add(typeof metric === 'string' ? metric : metric.name);
+        }
+        if (relevantKPISet.size === 0) {
+            relevantKPISet.add('Revenue growth');
+            relevantKPISet.add('Customer retention');
+        }
+
+        const complianceRequirements = regulatoryFrameworks.flatMap(framework =>
+            framework.requirements.slice(0, 3).map(requirement => `${framework.name}: ${requirement}`)
+        );
+
+        if (complianceRequirements.length === 0) {
+            complianceRequirements.push(
+                'Review data privacy and retention obligations for collected datasets',
+                'Document approval workflow for analysis assets'
+            );
+        }
+
+        const reportingStandards = regulatoryFrameworks.length > 0
+            ? regulatoryFrameworks.map(framework => `${framework.name} reporting standard`)
+            : ['Executive business review packet', 'Operational dashboard cadence'];
+
+        const recommendations = new Set<string>();
+
+        if (dataAssessment) {
+            if (dataAssessment.qualityScore < 70) {
+                recommendations.add('Address identified data quality gaps before presenting findings to stakeholders.');
+            }
+
+            if (dataAssessment.missingData?.length) {
+                const columns = dataAssessment.missingData.slice(0, 3).join(', ');
+                recommendations.add(`Prioritize remediation for missing values across ${columns} to stabilize insights.`);
+            }
+
+            if (dataAssessment.infrastructureNeeds.useSpark) {
+                recommendations.add('Coordinate Spark-enabled processing windows with data engineering when scheduling workloads.');
+            }
+
+            recommendations.add(`Plan stakeholder communication around the ${dataAssessment.estimatedProcessingTime} processing window to manage expectations.`);
+        }
+
+        if (journeyType === 'business') {
+            recommendations.add('Frame insights in terms of financial impact, KPI movement, and operational actions.');
+        } else if (journeyType === 'non-tech') {
+            recommendations.add('Translate analytical findings into plain-language narratives with supporting visuals.');
+        }
+
+        if (sanitizedAnalysisTypes.some(type => /forecast|predict/i.test(type))) {
+            recommendations.add('Align forecasting deliverables with planning and budgeting cycles.');
+        }
+
+        if (recommendations.size === 0) {
+            recommendations.add('Review draft analysis outputs with business stakeholders before final approval.');
+        }
+
+        return {
+            industryBenchmarks,
+            relevantKPIs: Array.from(relevantKPISet),
+            complianceRequirements,
+            reportingStandards,
+            recommendations: Array.from(recommendations)
+        };
     }
 
     async generateIndustryInsights(context: BusinessContext): Promise<any> {
@@ -818,8 +729,8 @@ export class BusinessAgent {
             };
         }
 
-        const industryTemplate = this.getIndustryTemplate(industry);
-        const applicableRegulations = this.getApplicableRegulations(industry);
+    const industryTemplate = await this.getIndustryTemplate(industry);
+    const applicableRegulations = await this.getApplicableRegulations(industry);
 
     const insights: string[] = [];
     const recommendedTemplates: any[] = [];
@@ -868,7 +779,7 @@ export class BusinessAgent {
     }
 
     async validateRegulatoryCompliance(analysis: any, industry: string): Promise<any> {
-        const regulations = this.getApplicableRegulations(industry);
+    const regulations = await this.getApplicableRegulations(industry);
         const complianceReport: {
             overallCompliance: 'compliant' | 'attention_required';
             warnings: string[];
@@ -933,7 +844,7 @@ export class BusinessAgent {
     }
 
     async generateBusinessKPIs(industry: string, analysisType: string): Promise<any> {
-        const industryTemplate = this.getIndustryTemplate(industry);
+    const industryTemplate = await this.getIndustryTemplate(industry);
 
         if (!industryTemplate) {
             return {
@@ -1005,7 +916,7 @@ export class BusinessAgent {
         const { industry, dataSchema } = context;
         const suggestions = [];
 
-        const industryTemplate = this.getIndustryTemplate(industry || '');
+        const industryTemplate = industry ? await this.getIndustryTemplate(industry) : undefined;
 
         if (industryTemplate && dataSchema) {
             const currentColumns = Object.keys(dataSchema).map(col => col.toLowerCase());
@@ -1038,6 +949,28 @@ export class BusinessAgent {
             suggestions,
             estimatedValue: this.calculateEnrichmentValue(suggestions),
             implementationComplexity: this.assessImplementationComplexity(suggestions)
+        };
+    }
+
+    private mapKnowledgeTemplate(template: KnowledgeTemplate): AnalysisTemplate {
+        return {
+            id: template.id,
+            name: template.name,
+            type: template.type ?? 'general',
+            description: template.description ?? '',
+            requiredColumns: Array.isArray(template.requiredColumns) ? template.requiredColumns : [],
+            expectedOutcomes: Array.isArray(template.expectedOutcomes) ? template.expectedOutcomes : [],
+            businessValue: template.businessValue ?? ''
+        };
+    }
+
+    private mapRegulation(regulation: RegulationKnowledge): RegulatoryFramework {
+        return {
+            name: regulation.name,
+            description: regulation.description ?? '',
+            requirements: regulation.requirements,
+            applicableIndustries: regulation.applicableIndustries,
+            nodeId: regulation.nodeId
         };
     }
 
@@ -1113,6 +1046,7 @@ export class BusinessAgent {
         if (!goals || !Array.isArray(goals)) {
             return {
                 businessValue: 'low',
+                alignment: 0,
                 expectedROI: 'Unable to calculate - no goals provided',
                 benefits: ['Please provide clear business goals for analysis'],
                 risks: ['Unclear project objectives'],
@@ -1125,6 +1059,7 @@ export class BusinessAgent {
         if (!industry || typeof industry !== 'string') {
             return {
                 businessValue: 'medium',
+                alignment: 0.4,
                 expectedROI: 'Moderate - industry context missing',
                 benefits: ['Analysis can proceed with general business principles'],
                 risks: ['Industry-specific risks may not be identified'],
@@ -1219,104 +1154,163 @@ export class BusinessAgent {
      * Suggest industry-specific business metrics
      */
     async suggestBusinessMetrics(
-        industry: string,
-        goals: string[]
+        industryOrRequest: string | { industry?: string; goals?: string[] } | undefined,
+        goalsArg?: string[]
     ): Promise<MetricRecommendations> {
-        console.log(`💼 Business Agent: Suggesting metrics for ${industry || 'general'} industry`);
-        
-        // Handle null/undefined inputs gracefully
-        if (!goals || !Array.isArray(goals)) {
-            return {
-                primaryMetrics: ['Customer satisfaction', 'Revenue growth'],
-                secondaryMetrics: ['Market share', 'Customer retention'],
-                industrySpecific: ['General business metrics'],
-                warnings: ['No specific goals provided - using general metrics'],
-                recommendations: ['Define clear business goals for more targeted metrics']
-            };
+        let industry = '';
+        let goals: string[] | undefined = goalsArg;
+
+        if (typeof industryOrRequest === 'string') {
+            industry = industryOrRequest;
+        } else if (industryOrRequest && typeof industryOrRequest === 'object' && !Array.isArray(industryOrRequest)) {
+            industry = industryOrRequest.industry ?? '';
+            goals = industryOrRequest.goals ?? goalsArg;
         }
 
-        if (!industry || typeof industry !== 'string') {
-            return {
-                primaryMetrics: ['Customer satisfaction', 'Revenue growth'],
-                secondaryMetrics: ['Market share', 'Customer retention'],
-                industrySpecific: ['General business metrics'],
-                warnings: ['Industry context missing - using general metrics'],
-                recommendations: ['Provide industry context for industry-specific metrics']
-            };
-        }
-        
+        console.log(`💼 Business Agent: Suggesting metrics for ${industry || 'general'} industry`);
+
+        const hasGoalsArray = Array.isArray(goals);
+        const sanitizedGoals = hasGoalsArray
+            ? (goals as string[]).filter((goal) => typeof goal === 'string' && goal.trim().length > 0)
+            : [];
+        const normalizedIndustry = typeof industry === 'string' ? industry.trim() : '';
+        const knowledgeTemplate = normalizedIndustry ? await this.getIndustryTemplate(normalizedIndustry) : undefined;
+
         const primaryMetrics: MetricRecommendations['primaryMetrics'] = [];
         const secondaryMetrics: MetricRecommendations['secondaryMetrics'] = [];
-        
-        const goalsLower = goals.map(g => g.toLowerCase()).join(' ');
-        const industryLower = (industry || '').toLowerCase();
-        
-        // Customer-focused metrics
+        const seenMetrics = new Set<string>();
+        const warnings: string[] = [];
+        const recommendations: string[] = [];
+
+        const pushMetric = (
+            collection: MetricRecommendations['primaryMetrics'],
+            metric: MetricRecommendations['primaryMetrics'][number]
+        ) => {
+            const identifier = typeof metric === 'string' ? metric.toLowerCase() : metric.name.toLowerCase();
+            if (seenMetrics.has(identifier)) {
+                return;
+            }
+            collection.push(metric);
+            seenMetrics.add(identifier);
+        };
+
+        const genericGoalsProvided = sanitizedGoals.length > 0 && sanitizedGoals.every(goal => /test|sample|demo|placeholder/i.test(goal));
+
+        if (!hasGoalsArray || sanitizedGoals.length === 0 || genericGoalsProvided) {
+            warnings.push('No specific goals provided - using general metrics');
+            recommendations.push('Define clear business goals for more targeted metrics');
+        }
+
+        if (!normalizedIndustry) {
+            warnings.push('Industry context missing - using general metrics');
+            recommendations.push('Provide industry context for industry-specific metrics');
+        }
+
+        if (knowledgeTemplate) {
+            knowledgeTemplate.keyMetrics.forEach((metric, index) => {
+                const targetCollection = index < 3 ? primaryMetrics : secondaryMetrics;
+                pushMetric(targetCollection, metric);
+            });
+        }
+
+        const goalsLower = sanitizedGoals.map((goal) => goal.toLowerCase()).join(' ');
+        const industryLower = normalizedIndustry.toLowerCase();
+
         if (goalsLower.includes('customer') || goalsLower.includes('segment')) {
-            primaryMetrics.push({
+            pushMetric(primaryMetrics, {
                 name: 'Customer Lifetime Value (CLV)',
                 description: 'Predicted revenue from a customer over their entire relationship',
                 calculation: 'Average Purchase Value × Purchase Frequency × Customer Lifespan',
-                businessImpact: 'Identifies most valuable customer segments for targeted investment'
+                businessImpact: 'Identifies the most valuable customer segments for focused investment'
             });
-            
-            secondaryMetrics.push({
+
+            pushMetric(secondaryMetrics, {
                 name: 'Customer Acquisition Cost (CAC)',
                 description: 'Cost to acquire a new customer',
-                calculation: 'Total Marketing & Sales Costs / Number of New Customers'
+                calculation: 'Total Marketing and Sales Costs / Number of New Customers'
             });
         }
-        
-        // Revenue metrics
+
         if (goalsLower.includes('revenue') || goalsLower.includes('sales')) {
-            primaryMetrics.push({
+            pushMetric(primaryMetrics, {
                 name: 'Revenue Growth Rate',
                 description: 'Rate of revenue increase period-over-period',
                 calculation: '(Current Period Revenue - Previous Period Revenue) / Previous Period Revenue',
-                businessImpact: 'Measures business growth trajectory and market expansion'
+                businessImpact: 'Measures growth trajectory and market expansion effectiveness'
             });
         }
-        
-        // Retention metrics
+
         if (goalsLower.includes('churn') || goalsLower.includes('retention')) {
-            primaryMetrics.push({
+            pushMetric(primaryMetrics, {
                 name: 'Customer Retention Rate',
                 description: 'Percentage of customers retained over a period',
                 calculation: '((End Customers - New Customers) / Start Customers) × 100',
-                businessImpact: 'Lower churn increases profitability and reduces acquisition costs'
+                businessImpact: 'Higher retention increases profitability and lifetime value'
             });
         }
-        
-        // Industry-specific metrics
+
         if (industryLower.includes('retail') || industryLower.includes('ecommerce')) {
-            primaryMetrics.push({
+            pushMetric(primaryMetrics, {
                 name: 'Average Order Value (AOV)',
                 description: 'Average amount spent per transaction',
                 calculation: 'Total Revenue / Number of Orders',
-                businessImpact: 'Guides pricing strategy and upselling opportunities'
+                businessImpact: 'Guides merchandising strategy and upsell opportunities'
             });
-            
-            secondaryMetrics.push({
+
+            pushMetric(secondaryMetrics, {
                 name: 'Cart Abandonment Rate',
                 description: 'Percentage of shopping carts abandoned before purchase',
                 calculation: '(1 - (Completed Purchases / Shopping Carts Created)) × 100'
             });
         }
-        
+
         if (industryLower.includes('saas') || industryLower.includes('software')) {
-            primaryMetrics.push({
+            pushMetric(primaryMetrics, {
                 name: 'Monthly Recurring Revenue (MRR)',
                 description: 'Predictable monthly subscription revenue',
                 calculation: 'Number of Subscribers × Average Revenue Per User',
                 businessImpact: 'Core metric for SaaS business health and valuation'
             });
+
+            pushMetric(secondaryMetrics, {
+                name: 'Net Revenue Retention (NRR)',
+                description: 'Growth rate after accounting for upgrades, downgrades, and churn',
+                calculation: '((MRR Start + Expansion - Contraction - Churn) / MRR Start) × 100'
+            });
         }
-        
-        return {
+
+        if (primaryMetrics.length === 0) {
+            pushMetric(primaryMetrics, 'Customer satisfaction');
+            pushMetric(primaryMetrics, 'Revenue growth');
+        }
+
+        if (secondaryMetrics.length === 0) {
+            pushMetric(secondaryMetrics, 'Market share');
+            pushMetric(secondaryMetrics, 'Customer retention');
+        }
+
+        const response: MetricRecommendations = {
             primaryMetrics,
             secondaryMetrics,
-            industry: industry || 'General'
+            industry: normalizedIndustry || 'General'
         };
+
+        response.industrySpecific = knowledgeTemplate ? knowledgeTemplate.keyMetrics : ['General business metrics'];
+
+        if (warnings.length > 0) {
+            response.warnings = warnings;
+        }
+
+        if (recommendations.length > 0) {
+            response.recommendations = recommendations;
+        }
+
+        response.metrics = {
+            primary: [...primaryMetrics],
+            secondary: [...secondaryMetrics]
+        };
+
+        return response;
     }
 
     /**

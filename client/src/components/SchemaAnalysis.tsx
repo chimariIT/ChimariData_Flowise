@@ -26,7 +26,7 @@ interface ColumnInfo {
   aiSummary: string;
 }
 
-interface SchemaData {
+export interface SchemaData {
   columns: ColumnInfo[];
   totalRecords: number;
   completeness: number;

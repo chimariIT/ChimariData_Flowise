@@ -14,6 +14,12 @@ declare module 'express-serve-static-core' {
     // Added by usage/permission middleware for downstream handlers
     userLimits?: any;
     currentUsage?: any;
+    adminUser?: {
+      id?: string;
+      role?: string;
+      permissions?: string[];
+      [key: string]: any;
+    };
   }
 }
 declare module 'recharts';

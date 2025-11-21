@@ -81,12 +81,12 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
     setIsVisible(true);
   }, []);
 
-  // Show free trial workflow if user wants to try without signing up
+  // Show trial workflow if user wants to try without signing up
   if (showFreeTrialWorkflow) {
     return (
       <FreeTrialWorkflow
         onComplete={(result) => {
-          console.log('Free trial complete:', result);
+          console.log('Trial complete:', result);
           setShowFreeTrialWorkflow(false);
         }}
         onBack={() => setShowFreeTrialWorkflow(false)}
@@ -783,7 +783,7 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
           <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-2xl p-8 border border-blue-100 mb-8">
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 text-center">
               <div className="bg-white rounded-lg p-4 shadow-sm border-2 border-green-200">
-                <h3 className="font-bold text-sm text-slate-900 mb-1">Free Trial</h3>
+                <h3 className="font-bold text-sm text-slate-900 mb-1">Trial</h3>
                 <div className="text-xl font-bold text-green-600 mb-1">$0</div>
                 <div className="text-xs text-slate-600">1 analysis • No sign-up</div>
               </div>
@@ -928,7 +928,7 @@ export default function LandingPage({ onGetStarted, onPayPerAnalysis, onExpertCo
               variant="outline"
               className="border-white text-white hover:bg-white hover:text-blue-600 text-lg px-8 py-6 hover:scale-110 transition-all duration-300"
             >
-              Start Free Trial
+              Start Trial
             </Button>
           </div>
 

@@ -148,7 +148,7 @@ export class RealtimeServer extends EventEmitter {
 
       if (!token) {
         // Try to get token from Authorization header
-        const authHeader = request.headers.authorization;
+        const authHeader = request.headers.authorization ?? (request.headers['x-forwarded-authorization'] as string | undefined);
         if (authHeader && authHeader.startsWith('Bearer ')) {
           const bearerToken = authHeader.substring(7);
           return this.validateToken(bearerToken);

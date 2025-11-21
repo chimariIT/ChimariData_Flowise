@@ -24,11 +24,11 @@ export default function FreeTrial({ onBack, onSignUp }: FreeTrialProps) {
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = event.target.files?.[0];
     if (selectedFile) {
-      // Check file size (10MB limit for free trial)
+      // Check file size (10MB limit for trial)
       if (selectedFile.size > 10 * 1024 * 1024) {
         toast({
           title: "File too large",
-          description: "Free trial supports files up to 10MB. Please try a smaller file.",
+          description: "Trial supports files up to 10MB. Please try a smaller file.",
           variant: "destructive",
         });
         return;
@@ -60,7 +60,7 @@ export default function FreeTrial({ onBack, onSignUp }: FreeTrialProps) {
       // Create form data for file upload
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('name', `Free Trial Analysis - ${file.name}`);
+  formData.append('name', `Trial Analysis - ${file.name}`);
       formData.append('questions', JSON.stringify([question]));
       formData.append('isTrial', 'true');
       
@@ -79,7 +79,7 @@ export default function FreeTrial({ onBack, onSignUp }: FreeTrialProps) {
       
       toast({
         title: "Analysis Complete!",
-        description: "Your free trial analysis is ready.",
+        description: "Your trial analysis is ready.",
       });
     } catch (error) {
       toast({
@@ -111,7 +111,7 @@ export default function FreeTrial({ onBack, onSignUp }: FreeTrialProps) {
           <div className="text-center mb-12">
             <Badge variant="outline" className="mb-4 px-4 py-2 bg-green-50 border-green-200">
               <Sparkles className="w-4 h-4 mr-2 text-green-600" />
-              Free Trial - No Sign-up Required
+              Trial - No Sign-up Required
             </Badge>
             
             <h1 className="text-3xl md:text-4xl font-bold text-slate-900 mb-4">
@@ -181,7 +181,7 @@ export default function FreeTrial({ onBack, onSignUp }: FreeTrialProps) {
                 </div>
                 
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                  <h4 className="font-medium text-blue-900 mb-2">Free Trial Includes:</h4>
+                  <h4 className="font-medium text-blue-900 mb-2">Trial Includes:</h4>
                   <ul className="text-sm text-blue-800 space-y-1">
                     <li>• 1 file upload (up to 10MB)</li>
                     <li>• Basic data summarization</li>

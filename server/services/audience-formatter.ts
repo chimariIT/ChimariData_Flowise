@@ -1,10 +1,11 @@
+import { JourneyType } from '@shared/canonical-types';
 import { multiAIService } from '../multi-ai-service';
 
 export interface AudienceContext {
   primaryAudience: 'executive' | 'technical' | 'business_ops' | 'marketing' | 'mixed';
   secondaryAudiences?: string[];
   decisionContext?: string;
-  journeyType: 'non-tech' | 'business' | 'technical' | 'consultation';
+  journeyType: JourneyType;
 }
 
 export interface AnalysisResult {

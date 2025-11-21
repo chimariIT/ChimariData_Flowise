@@ -12,7 +12,8 @@
  * architecture of making all features configurable via admin UI.
  */
 
-import { EnhancedMCPService, MCPResource } from '../enhanced-mcp-service';
+import { EnhancedMCPService } from '../enhanced-mcp-service';
+import { MCPResource } from '../mcp-ai-service';
 import { toolAnalyticsService } from './tool-analytics';
 import { billingAnalyticsIntegration } from './billing-analytics-integration';
 import { getBillingService } from './billing/unified-billing-service';
@@ -261,7 +262,7 @@ export const billingAnalyticHandlers = {
   /**
    * Get user cost breakdown (callable by agents via MCP)
    */
-  async getUserCostBreakdown(params: { userId: number; startDate?: Date; endDate?: Date }) {
+  async getUserCostBreakdown(params: { userId: string; startDate?: Date; endDate?: Date }) {
     return await toolAnalyticsService.getUserCostBreakdown(
       params.userId,
       params.startDate,
@@ -327,7 +328,7 @@ export const billingAnalyticHandlers = {
    * Get comprehensive usage and billing report (callable by agents via MCP)
    */
   async getUserUsageAndBillingReport(params: {
-    userId: number;
+    userId: string;
     period?: { start: Date; end: Date }
   }) {
     return await billingAnalyticsIntegration.getUserUsageAndBillingReport(
@@ -339,7 +340,7 @@ export const billingAnalyticHandlers = {
   /**
    * Sync analytics with billing (callable by agents via MCP)
    */
-  async syncAnalyticsWithBilling(params: { userId: number }) {
+  async syncAnalyticsWithBilling(params: { userId: string }) {
     return await billingAnalyticsIntegration.syncAnalyticsWithBilling(params.userId);
   },
 

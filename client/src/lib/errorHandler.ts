@@ -61,7 +61,7 @@ export class ErrorHandler {
       severity: 'medium',
       recoverable: true,
       suggestedActions: [
-        'Try a smaller file (under 100MB for paid plans, 10MB for free trial)',
+  'Try a smaller file (under 100MB for paid plans, 10MB for trial)',
         'Compress your data or split it into multiple files',
         'Contact support if you need to upload larger files'
       ]

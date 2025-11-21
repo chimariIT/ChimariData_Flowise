@@ -60,20 +60,33 @@ export default function AgentCheckpoints({ projectId }: AgentCheckpointsProps) {
   const [feedbackText, setFeedbackText] = useState<Record<string, string>>({});
   const queryClient = useQueryClient();
 
+  // Check if user is authenticated
+  const isAuthenticated = !!localStorage.getItem('auth_token');
+
   // Query to get checkpoints
-  const { data: checkpoints = [], isLoading, error } = useQuery({
+  const { data: checkpoints = [], isLoading, error } = useQuery<AgentCheckpoint[]>({
     queryKey: ['/api/projects', projectId, 'checkpoints'],
     queryFn: async () => {
+      const token = localStorage.getItem('auth_token');
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       const response = await fetch(`/api/projects/${projectId}/checkpoints`, {
         credentials: 'include',
+        headers,
       });
       if (!response.ok) {
         throw new Error('Failed to fetch checkpoints');
       }
       const result = await response.json();
-      return result.checkpoints || [];
+      return (result.checkpoints || []) as AgentCheckpoint[];
     },
     refetchInterval: 5000, // Poll every 5 seconds for real-time updates
+    enabled: isAuthenticated && !!projectId // Only fetch if authenticated and projectId exists
   });
 
   // Mutation to submit feedback
@@ -83,11 +96,17 @@ export default function AgentCheckpoints({ projectId }: AgentCheckpointsProps) {
       feedback: string; 
       approved: boolean; 
     }) => {
+      const token = localStorage.getItem('auth_token');
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      
       const response = await fetch(`/api/projects/${projectId}/checkpoints/${checkpointId}/feedback`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         credentials: 'include',
         body: JSON.stringify({ feedback, approved }),
       });

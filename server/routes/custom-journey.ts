@@ -82,7 +82,15 @@ router.get('/capabilities', ensureAuthenticated, async (req, res) => {
 router.post('/validate', ensureAuthenticated, async (req, res) => {
   try {
     const { selectedCapabilityIds, datasetInfo } = req.body;
-    const user = req.user;
+    const userId = req.user?.id;
+
+    if (!userId) {
+      res.status(401).json({
+        success: false,
+        error: 'User not authenticated'
+      });
+      return;
+    }
 
     if (!selectedCapabilityIds || !Array.isArray(selectedCapabilityIds)) {
       return res.status(400).json({
@@ -121,7 +129,7 @@ router.post('/validate', ensureAuthenticated, async (req, res) => {
     const complexityLabel = maxComplexity === 3 ? 'advanced' :
                             maxComplexity === 2 ? 'intermediate' : 'basic';
 
-    const eligibility = await billingService.checkEligibility(user!.id, {
+    const eligibility = await billingService.checkEligibility(userId, {
       journeyType: 'custom',
       dataVolume: usageSummary.dataVolume,
       complexity: complexityLabel
@@ -163,7 +171,15 @@ router.post('/validate', ensureAuthenticated, async (req, res) => {
 router.post('/create', ensureAuthenticated, async (req, res) => {
   try {
     const { selectedCapabilityIds, name, description, datasetId } = req.body;
-    const user = req.user;
+    const userId = req.user?.id;
+
+    if (!userId) {
+      res.status(401).json({
+        success: false,
+        error: 'User not authenticated'
+      });
+      return;
+    }
 
     if (!selectedCapabilityIds || !Array.isArray(selectedCapabilityIds) || selectedCapabilityIds.length === 0) {
       return res.status(400).json({
@@ -209,7 +225,7 @@ router.post('/create', ensureAuthenticated, async (req, res) => {
     const complexityLabel = maxComplexity === 3 ? 'advanced' :
                             maxComplexity === 2 ? 'intermediate' : 'basic';
 
-    const eligibility = await billingService.checkEligibility(user!.id, {
+    const eligibility = await billingService.checkEligibility(userId, {
       journeyType: 'custom',
       dataVolume: usageSummary.dataVolume,
       complexity: complexityLabel
@@ -231,8 +247,8 @@ router.post('/create', ensureAuthenticated, async (req, res) => {
 
     await db.insert(projects).values({
       id: projectId,
-      userId: user!.id,
-      ownerId: user!.id,
+  userId: userId,
+  ownerId: userId,
       name: projectName,
       description: projectDescription,
       journeyType: 'custom',
@@ -288,7 +304,15 @@ router.post('/create', ensureAuthenticated, async (req, res) => {
 router.get('/project/:projectId', ensureAuthenticated, async (req, res) => {
   try {
     const { projectId } = req.params;
-    const user = req.user;
+    const userId = req.user?.id;
+
+    if (!userId) {
+      res.status(401).json({
+        success: false,
+        error: 'User not authenticated'
+      });
+      return;
+    }
 
     const project = await db.query.projects.findFirst({
       where: eq(projects.id, projectId)
@@ -301,7 +325,7 @@ router.get('/project/:projectId', ensureAuthenticated, async (req, res) => {
       });
     }
 
-    if (project.userId !== user!.id) {
+  if (project.userId !== userId) {
       return res.status(403).json({
         success: false,
         error: 'Access denied'

@@ -8,6 +8,20 @@ import { ToolExecutionContext, ToolExecutionResult } from './mcp-tool-registry';
  */
 
 export class LLMFineTuningHandler {
+  private buildMetrics(durationMs: number, billingUnits: number): ToolExecutionResult['metrics'] {
+    return {
+      duration: durationMs,
+      resourcesUsed: {
+        cpu: Math.max(0.2, billingUnits * 0.1),
+        memory: Math.max(2, billingUnits * 0.5),
+        storage: Math.max(0.1, billingUnits * 0.05)
+      },
+      cost: billingUnits * 0.02,
+      executionTimeMs: durationMs,
+      billingUnits
+    };
+  }
+
   /**
    * Execute LLM fine-tuning with automatic method selection
    */
@@ -78,11 +92,7 @@ export class LLMFineTuningHandler {
           status: 'error',
           result: null,
           error: result.error || 'Fine-tuning failed',
-          metrics: {
-            executionTimeMs: executionTime,
-            billingUnits: 0
-          },
-          timestamp: new Date().toISOString()
+          metrics: this.buildMetrics(executionTime, 0)
         };
       }
 
@@ -98,15 +108,14 @@ export class LLMFineTuningHandler {
           trainable_params: result.trainable_params,
           job_id: result.job_id
         },
-        metrics: {
-          executionTimeMs: executionTime,
-          billingUnits: this.calculateBillingUnits(
+        metrics: this.buildMetrics(
+          executionTime,
+          this.calculateBillingUnits(
             method as any,
             input.num_epochs || 3,
             result.train_samples || 1000
           )
-        },
-        timestamp: new Date().toISOString()
+        )
       };
 
     } catch (error: any) {
@@ -116,13 +125,9 @@ export class LLMFineTuningHandler {
         executionId: context.executionId,
         toolId: 'llm_fine_tuning',
         status: 'error',
-        result: null,
-        error: error.message || 'Unknown error',
-        metrics: {
-          executionTimeMs: executionTime,
-          billingUnits: 0
-        },
-        timestamp: new Date().toISOString()
+  result: null,
+  error: error.message || 'Unknown error',
+  metrics: this.buildMetrics(executionTime, 0)
       };
     }
   }
@@ -166,11 +171,7 @@ export class LLMFineTuningHandler {
           status: 'error',
           result: null,
           error: result.error || 'LoRA fine-tuning failed',
-          metrics: {
-            executionTimeMs: executionTime,
-            billingUnits: 0
-          },
-          timestamp: new Date().toISOString()
+          metrics: this.buildMetrics(executionTime, 0)
         };
       }
 
@@ -184,11 +185,10 @@ export class LLMFineTuningHandler {
           eval_metrics: result.eval_metrics,
           trainable_params: result.trainable_params
         },
-        metrics: {
-          executionTimeMs: executionTime,
-          billingUnits: this.calculateBillingUnits('lora', input.num_epochs || 3, result.train_samples || 1000)
-        },
-        timestamp: new Date().toISOString()
+        metrics: this.buildMetrics(
+          executionTime,
+          this.calculateBillingUnits('lora', input.num_epochs || 3, result.train_samples || 1000)
+        )
       };
 
     } catch (error: any) {
@@ -199,12 +199,8 @@ export class LLMFineTuningHandler {
         toolId: 'lora_fine_tuning',
         status: 'error',
         result: null,
-        error: error.message || 'Unknown error',
-        metrics: {
-          executionTimeMs: executionTime,
-          billingUnits: 0
-        },
-        timestamp: new Date().toISOString()
+  error: error.message || 'Unknown error',
+  metrics: this.buildMetrics(executionTime, 0)
       };
     }
   }
@@ -237,12 +233,8 @@ export class LLMFineTuningHandler {
         executionId: context.executionId,
         toolId: 'llm_method_recommendation',
         status: 'success',
-        result: recommendation,
-        metrics: {
-          executionTimeMs: executionTime,
-          billingUnits: 0.1 // Minimal cost
-        },
-        timestamp: new Date().toISOString()
+  result: recommendation,
+  metrics: this.buildMetrics(executionTime, 0.1)
       };
 
     } catch (error: any) {
@@ -252,13 +244,9 @@ export class LLMFineTuningHandler {
         executionId: context.executionId,
         toolId: 'llm_method_recommendation',
         status: 'error',
-        result: null,
-        error: error.message || 'Unknown error',
-        metrics: {
-          executionTimeMs: executionTime,
-          billingUnits: 0
-        },
-        timestamp: new Date().toISOString()
+  result: null,
+  error: error.message || 'Unknown error',
+  metrics: this.buildMetrics(executionTime, 0)
       };
     }
   }
@@ -280,12 +268,8 @@ export class LLMFineTuningHandler {
         executionId: context.executionId,
         toolId: 'llm_health_check',
         status: 'success',
-        result: healthStatus,
-        metrics: {
-          executionTimeMs: executionTime,
-          billingUnits: 0
-        },
-        timestamp: new Date().toISOString()
+  result: healthStatus,
+  metrics: this.buildMetrics(executionTime, 0)
       };
 
     } catch (error: any) {
@@ -295,13 +279,9 @@ export class LLMFineTuningHandler {
         executionId: context.executionId,
         toolId: 'llm_health_check',
         status: 'error',
-        result: null,
-        error: error.message || 'Unknown error',
-        metrics: {
-          executionTimeMs: executionTime,
-          billingUnits: 0
-        },
-        timestamp: new Date().toISOString()
+  result: null,
+  error: error.message || 'Unknown error',
+  metrics: this.buildMetrics(executionTime, 0)
       };
     }
   }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -6,8 +6,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
-import { TrendingUp, Calendar, Activity, BarChart3, AlertCircle } from "lucide-react";
+import { TrendingUp, Calendar, Activity, BarChart3, AlertCircle, Zap } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { apiClient } from "@/lib/api";
 
 interface TimeSeriesAnalysisProps {
   project: any;
@@ -48,28 +49,21 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
   const detectTimeSeriesColumns = async () => {
     setIsDetecting(true);
     try {
-      // Try API endpoint first
-      const response = await fetch(`/api/projects/${project.id}/time-series/detect`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+      const data = await apiClient.detectTimeSeriesColumns(project.id);
+      if (data?.success && data.detection) {
+        const detectionPayload = {
+          ...data.detection,
+          suggestions: data.detection.suggestions || []
+        };
+        setDetection(detectionPayload);
+
+        if (detectionPayload.dateColumns.length > 0) {
+          setConfig(prev => ({
+            ...prev,
+            dateColumn: detectionPayload.dateColumns[0]
+          }));
         }
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        
-        if (data.success) {
-          setDetection(data.detection);
-          
-          // Auto-select first date column if available
-          if (data.detection.dateColumns.length > 0) {
-            setConfig(prev => ({
-              ...prev,
-              dateColumn: data.detection.dateColumns[0]
-            }));
-          }
-          return;
-        }
+        return;
       }
       
       // Fallback: analyze project data directly if API isn't available
@@ -98,7 +92,8 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
           dateColumns,
           numericColumns,
           totalRows: project.data.length,
-          fields
+          fields,
+          suggestions: []
         };
         
         setDetection(detection);
@@ -142,25 +137,16 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
 
     setIsAnalyzing(true);
     try {
-      const response = await fetch(`/api/projects/${project.id}/time-series`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        },
-        body: JSON.stringify(config)
-      });
+      const data = await apiClient.runTimeSeriesAnalysis(project.id, config);
 
-      const data = await response.json();
-      
-      if (data.success) {
+      if (data?.success) {
         setResults(data.result);
         toast({
           title: "Analysis complete",
           description: "Time series analysis completed successfully"
         });
       } else {
-        throw new Error(data.error || 'Analysis failed');
+        throw new Error(data?.error || 'Analysis failed');
       }
     } catch (error: any) {
       toast({
@@ -181,6 +167,34 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
         : [...prev.valueColumns, column]
     }));
   };
+
+  const pipelineSummary = useMemo(() => {
+    const datasetName = project?.name || `Project ${project?.id ?? 'dataset'}`;
+    const totalRows = detection?.totalRows ?? project?.recordCount ?? 0;
+    const dateColumn = config.dateColumn || detection?.dateColumns?.[0] || 'Not selected';
+    const valueColumnsCount = config.valueColumns.length;
+    const processStatus = isDetecting
+      ? 'Detecting columns'
+      : isAnalyzing
+        ? 'Running analysis'
+        : results
+          ? 'Forecast ready'
+          : 'Awaiting configuration';
+    const insightsCount = Array.isArray(results?.insights) ? results!.insights.length : 0;
+    const forecastCount = Array.isArray(results?.forecast) ? results!.forecast.length : 0;
+    const mae = results?.metrics?.mae ?? null;
+
+    return {
+      datasetName,
+      totalRows,
+      dateColumn,
+      valueColumnsCount,
+      processStatus,
+      insightsCount,
+      forecastCount,
+      mae
+    };
+  }, [project?.name, project?.id, project?.recordCount, detection?.totalRows, detection?.dateColumns, config.dateColumn, config.valueColumns, isDetecting, isAnalyzing, results]);
 
   if (!project) {
     return (
@@ -259,7 +273,7 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
                 </div>
               </div>
 
-              {detection.suggestions.length > 0 && (
+              {Array.isArray(detection.suggestions) && detection.suggestions.length > 0 && (
                 <div className="p-3 bg-blue-50 rounded-lg">
                   <h4 className="font-medium mb-2 text-blue-900">Suggestions</h4>
                   <ul className="text-sm text-blue-800 space-y-1">
@@ -429,6 +443,70 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
         </Card>
       )}
 
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Zap className="w-5 h-5" />
+            Time Series Pipeline Overview
+          </CardTitle>
+          <CardDescription>
+            Inputs powering the analysis, how the forecast is being generated, and the outputs produced.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="p-4 rounded-lg border bg-slate-50">
+              <p className="text-xs uppercase font-semibold text-slate-500 mb-2">Inputs</p>
+              <ul className="text-sm text-slate-700 space-y-2">
+                <li>
+                  <span className="font-medium">Dataset:</span> {pipelineSummary.datasetName}
+                </li>
+                <li>
+                  <span className="font-medium">Records:</span> {pipelineSummary.totalRows.toLocaleString()}
+                </li>
+                <li>
+                  <span className="font-medium">Date Column:</span> {pipelineSummary.dateColumn}
+                </li>
+                <li>
+                  <span className="font-medium">Value Columns:</span> {pipelineSummary.valueColumnsCount || 'None selected'}
+                </li>
+              </ul>
+            </div>
+            <div className="p-4 rounded-lg border bg-slate-50">
+              <p className="text-xs uppercase font-semibold text-slate-500 mb-2">Process</p>
+              <ul className="text-sm text-slate-700 space-y-2">
+                <li>
+                  <span className="font-medium">Frequency:</span> {config.frequency}
+                </li>
+                <li>
+                  <span className="font-medium">Seasonality:</span> {config.seasonality}
+                </li>
+                <li>
+                  <span className="font-medium">Status:</span> {pipelineSummary.processStatus}
+                </li>
+              </ul>
+            </div>
+            <div className="p-4 rounded-lg border bg-slate-50">
+              <p className="text-xs uppercase font-semibold text-slate-500 mb-2">Outputs</p>
+              <ul className="text-sm text-slate-700 space-y-2">
+                <li>
+                  <span className="font-medium">Insights:</span> {pipelineSummary.insightsCount}
+                </li>
+                <li>
+                  <span className="font-medium">Forecast Horizon:</span> {config.forecastPeriods} periods
+                </li>
+                <li>
+                  <span className="font-medium">Forecast Points:</span> {pipelineSummary.forecastCount}
+                </li>
+                <li>
+                  <span className="font-medium">MAE:</span> {pipelineSummary.mae !== null ? pipelineSummary.mae.toFixed(2) : '—'}
+                </li>
+              </ul>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Results */}
       {results && (
         <Card>
@@ -441,6 +519,7 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
           <CardContent>
             <div className="space-y-6">
               {/* Metrics */}
+              {results.metrics && (
               <div>
                 <h4 className="font-medium mb-3">Model Performance</h4>
                 <div className="grid grid-cols-3 gap-4">
@@ -458,12 +537,13 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
                   </div>
                 </div>
               </div>
+              )}
 
               {/* Insights */}
               <div>
                 <h4 className="font-medium mb-3">Key Insights</h4>
                 <div className="space-y-2">
-                  {results.insights.map((insight: string, index: number) => (
+                  {(results.insights || []).map((insight: string, index: number) => (
                     <div key={index} className="flex items-start gap-2 p-2 bg-gray-50 rounded">
                       <AlertCircle className="w-4 h-4 text-blue-500 mt-0.5 flex-shrink-0" />
                       <span className="text-sm">{insight}</span>
@@ -473,7 +553,7 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
               </div>
 
               {/* Forecast Preview */}
-              {results.forecast && results.forecast.length > 0 && (
+              {Array.isArray(results.forecast) && results.forecast.length > 0 && (
                 <div>
                   <h4 className="font-medium mb-3">Forecast Preview (First 10 periods)</h4>
                   <div className="overflow-x-auto">

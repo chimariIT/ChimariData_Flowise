@@ -56,7 +56,9 @@ export class WebSocketLifecycleManager {
   private reconnectionTimers: Map<string, NodeJS.Timeout> = new Map();
   private heartbeatTimers: Map<string, NodeJS.Timeout> = new Map();
   private metrics: LifecycleMetrics;
-  
+  private reconnectionConfig: ReconnectionConfig;
+  private heartbeatConfig: HeartbeatConfig;
+
   private defaultReconnectionConfig: ReconnectionConfig = {
     maxAttempts: 5,
     baseDelay: 1000,
@@ -64,7 +66,7 @@ export class WebSocketLifecycleManager {
     backoffMultiplier: 2,
     jitterFactor: 0.3
   };
-  
+
   private defaultHeartbeatConfig: HeartbeatConfig = {
     pingInterval: 30000,      // 30 seconds
     pongTimeout: 10000,       // 10 seconds
@@ -74,8 +76,8 @@ export class WebSocketLifecycleManager {
   };
 
   constructor(
-    private reconnectionConfig: Partial<ReconnectionConfig> = {},
-    private heartbeatConfig: Partial<HeartbeatConfig> = {}
+    reconnectionConfig: Partial<ReconnectionConfig> = {},
+    heartbeatConfig: Partial<HeartbeatConfig> = {}
   ) {
     this.reconnectionConfig = { ...this.defaultReconnectionConfig, ...reconnectionConfig };
     this.heartbeatConfig = { ...this.defaultHeartbeatConfig, ...heartbeatConfig };

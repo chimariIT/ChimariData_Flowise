@@ -41,14 +41,17 @@ type InsertGuidedAnalysisOrder = typeof guidedAnalysisOrders.$inferInsert;
 
 // Convert between DataProject and Project types
 function projectToDataProject(project: Project): DataProject {
+  const journeyType = (project.journeyType || "ai_guided") as DataProject["journeyType"];
+
   return {
     id: project.id,
-    userId: project.ownerId || '',
+    userId: project.userId,
+    journeyType,
     name: project.name,
-    fileName: '',
+    fileName: "",
     fileSize: 0,
-    fileType: '',
-    uploadedAt: new Date(),
+    fileType: "",
+    uploadedAt: project.createdAt ?? new Date(),
     description: project.description || undefined,
     isTrial: false,
     schema: undefined,
@@ -79,10 +82,10 @@ function projectToDataProject(project: Project): DataProject {
   };
 }
 
-function dataProjectToInsertProject(dataProject: InsertDataProject): Omit<InsertProject, 'id'> {
+function dataProjectToInsertProject(dataProject: InsertDataProject): Omit<InsertProject, "id"> {
   return {
-    userId: dataProject.userId || '', // PRIMARY user reference (NOT NULL)
-    ownerId: dataProject.userId || '', // Deprecated, kept for backward compatibility
+    userId: dataProject.userId || "",
+    journeyType: dataProject.journeyType || "ai_guided",
     name: dataProject.name,
     description: dataProject.description || null,
   };
@@ -458,7 +461,7 @@ export class HybridStorage {
     const upsertedUser: User = {
       id: user.id,
       email: user.email,
-      hashedPassword: (this.userCache.get(user.id)?.hashedPassword ?? null) as any,
+      hashedPassword: this.userCache.get(user.id)?.hashedPassword ?? null,
       firstName: user.firstName || null,
       lastName: user.lastName || null,
       profileImageUrl: user.profileImageUrl || null,
@@ -474,6 +477,8 @@ export class HybridStorage {
       stripeCustomerId: this.userCache.get(user.id)?.stripeCustomerId ?? null,
       stripeSubscriptionId: this.userCache.get(user.id)?.stripeSubscriptionId ?? null,
       subscriptionExpiresAt: this.userCache.get(user.id)?.subscriptionExpiresAt ?? null,
+        subscriptionBalances: this.userCache.get(user.id)?.subscriptionBalances ?? {},
+  credits: this.userCache.get(user.id)?.credits ?? "0",
       isPaid: this.userCache.get(user.id)?.isPaid ?? false,
       monthlyUploads: this.userCache.get(user.id)?.monthlyUploads ?? 0,
       monthlyDataVolume: this.userCache.get(user.id)?.monthlyDataVolume ?? 0,
@@ -489,6 +494,8 @@ export class HybridStorage {
       journeyCompletions: this.userCache.get(user.id)?.journeyCompletions ?? null as any,
       onboardingCompleted: this.userCache.get(user.id)?.onboardingCompleted ?? false,
       usageResetAt: this.userCache.get(user.id)?.usageResetAt ?? new Date(),
+      role: this.userCache.get(user.id)?.role ?? null,
+      isAdmin: this.userCache.get(user.id)?.isAdmin ?? false,
       createdAt: this.userCache.get(user.id)?.createdAt || now,
       updatedAt: now,
     };
@@ -662,11 +669,11 @@ export class HybridStorage {
     
     // Return cached datasets if database is not available
     if (!db) {
-      return Array.from(this.datasetCache.values()).filter(dataset => dataset.ownerId === ownerId);
+      return Array.from(this.datasetCache.values()).filter(dataset => dataset.userId === ownerId);
     }
     
     try {
-      const allDatasets = await db.select().from(datasets).where(eq(datasets.ownerId, ownerId));
+      const allDatasets = await db.select().from(datasets).where(eq(datasets.userId, ownerId));
       
       // Update cache
       for (const dataset of allDatasets) {
@@ -676,7 +683,7 @@ export class HybridStorage {
       return allDatasets;
     } catch (error) {
       console.error('Error getting datasets by owner:', error);
-      return Array.from(this.datasetCache.values()).filter(dataset => dataset.ownerId === ownerId);
+      return Array.from(this.datasetCache.values()).filter(dataset => dataset.userId === ownerId);
     }
   }
 
@@ -720,7 +727,7 @@ export class HybridStorage {
     
     // Query the database for datasets by owner
     try {
-      const allDatasets = await db.select().from(datasets).where(eq(datasets.ownerId, ownerId));
+      const allDatasets = await db.select().from(datasets).where(eq(datasets.userId, ownerId));
       
       if (!query) {
         return allDatasets;

@@ -134,26 +134,17 @@ export function MultiSourceUpload({
         setUploadProgress(90);
         
         // Create project with uploaded data
-        const projectResponse = await fetch('/api/create-project', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-          },
-          body: JSON.stringify({
-            name: file.name.split('.')[0],
-            fileName: file.name,
-            fileSize: file.size,
-            fileType: file.type,
-            sourceType: selectedSource,
-            schema: result.schema,
-            recordCount: result.recordCount,
-            data: result.data,
-            isTrial: serviceType === 'free_trial'
-          })
+        const projectResponse = await apiClient.createProject({
+          name: file.name.split('.')[0],
+          description: `Uploaded from ${selectedSource}`,
+          journeyType: 'ai_guided'
         });
 
-        const projectData = await projectResponse.json();
+        const projectData = projectResponse?.project ?? projectResponse;
+
+        if (!projectData || !projectData.id) {
+          throw new Error('Project creation failed');
+        }
         
         setUploadProgress(100);
         setUploadStatus('complete');
@@ -161,7 +152,7 @@ export function MultiSourceUpload({
         // Pass complete project data for navigation
         onComplete({
           success: true,
-          projectId: projectData.id,
+          projectId: projectData.projectId ?? projectData.id,
           id: projectData.id,
           name: projectData.name || file.name.split('.')[0],
           sourceType: selectedSource,
@@ -181,11 +172,14 @@ export function MultiSourceUpload({
     } catch (error: any) {
       console.error('Upload error:', error);
       setUploadStatus('error');
-      
+
       // Handle authentication errors specifically
       if (error.message?.includes('Authentication required') || error.message?.includes('401')) {
+        const hasToken = !!localStorage.getItem('auth_token');
         onComplete({
-          error: 'Please sign in to upload files. Authentication is required to access data analysis features.',
+          error: hasToken
+            ? 'Your session has expired. Please refresh the page and try again.'
+            : 'Please sign in to upload files. Authentication is required to access data analysis features.',
           errorType: 'AUTHENTICATION_REQUIRED',
           requiresAuth: true
         });
@@ -555,7 +549,7 @@ export function MultiSourceUpload({
                   <div className="mt-4 p-3 bg-blue-50 rounded-lg">
                     <p className="text-xs text-blue-700">
                       <Gift className="w-4 h-4 inline icon-gap" />
-                      Free trial: Basic analysis with file size limit of {Math.round(maxSize / (1024 * 1024))}MB
+                      Trial: Basic analysis with file size limit of {Math.round(maxSize / (1024 * 1024))}MB
                     </p>
                   </div>
                 )}

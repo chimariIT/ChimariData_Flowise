@@ -83,15 +83,15 @@ export class RealtimeClient {
 
   private getWebSocketUrl(): string {
     if (typeof window === 'undefined') {
-      return 'ws://localhost:3000/ws';
+      // Default to API server port when running outside the browser (tests/node)
+      const override =
+        typeof process !== 'undefined'
+          ? (process.env?.VITE_REALTIME_URL || process.env?.REALTIME_URL)
+          : undefined;
+      return override || 'ws://localhost:5000/ws';
     }
 
-    // In development with separated servers, connect directly to API server
-    if (window.location.port === '5173') {
-      return 'ws://localhost:3000/ws';
-    }
-
-    // Use same-origin for production
+    // Use same-origin so Vite's proxy forwards to the API server during development
     const wsOrigin = window.location.origin.replace(/^http/, 'ws');
     return `${wsOrigin}/ws`;
   }

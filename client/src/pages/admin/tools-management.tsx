@@ -107,167 +107,84 @@ const ToolsManagement: React.FC = () => {
   const loadToolsData = async () => {
     try {
       setLoading(true);
+      setError(null);
       
-      // Simulate API calls (replace with actual API calls)
-      const [toolsResponse, executionsResponse, metricsResponse] = await Promise.all([
-        fetch('/api/admin/tools'),
-        fetch('/api/admin/tools/executions'),
-        fetch('/api/admin/tools/metrics')
-      ]);
+      // Get auth token for API calls
+      const token = localStorage.getItem('auth_token');
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      
+      // Fetch tools from real API endpoint
+      const toolsResponse = await fetch('/api/admin/tools', {
+        headers,
+        credentials: 'include',
+      });
 
-      if (!toolsResponse.ok || !executionsResponse.ok || !metricsResponse.ok) {
-        throw new Error('Failed to load tools data');
+      if (!toolsResponse.ok) {
+        if (toolsResponse.status === 401) {
+          throw new Error('Authentication required. Please log in again.');
+        }
+        throw new Error(`Failed to load tools: ${toolsResponse.status}`);
       }
 
-      // For demo purposes, using mock data
-      const mockTools: Tool[] = [
-        {
-          id: 'csv_to_json_converter',
-          name: 'CSV to JSON Converter',
-          description: 'Convert CSV files to JSON format with configurable parsing options',
-          category: 'data_transformation',
-          version: '1.0.0',
-          author: 'ChimariData Team',
-          status: 'active',
-          tags: ['csv', 'json', 'conversion', 'file_processing'],
-          metrics: {
-            totalExecutions: 1245,
-            successfulExecutions: 1210,
-            failedExecutions: 35,
-            averageExecutionTime: 2300,
-            uptime: 99.2,
-            errorRate: 2.8,
-            userSatisfactionScore: 4.6
-          },
-          pricing: {
-            model: 'usage_based',
-            costPerExecution: 0.001
-          },
-          permissions: {
-            userTypes: ['non_tech', 'business', 'technical', 'consultation'],
-            subscriptionTiers: ['trial', 'starter', 'professional', 'enterprise']
-          },
-          createdAt: '2024-01-15T10:30:00Z',
-          updatedAt: '2024-02-20T14:45:00Z'
-        },
-        {
-          id: 'data_quality_checker',
-          name: 'Data Quality Checker',
-          description: 'Comprehensive data quality analysis with completeness, consistency, accuracy checks',
-          category: 'data_validation',
-          version: '1.0.0',
-          author: 'ChimariData Team',
-          status: 'active',
-          tags: ['data_quality', 'validation', 'analysis', 'reporting'],
-          metrics: {
-            totalExecutions: 892,
-            successfulExecutions: 875,
-            failedExecutions: 17,
-            averageExecutionTime: 5600,
-            uptime: 98.8,
-            errorRate: 1.9,
-            userSatisfactionScore: 4.8
-          },
-          pricing: {
-            model: 'usage_based',
-            costPerExecution: 0.01
-          },
-          permissions: {
-            userTypes: ['business', 'technical', 'consultation'],
-            subscriptionTiers: ['starter', 'professional', 'enterprise']
-          },
-          createdAt: '2024-01-20T09:15:00Z',
-          updatedAt: '2024-02-22T11:30:00Z'
-        },
-        {
-          id: 'api_data_fetcher',
-          name: 'API Data Fetcher',
-          description: 'Fetch data from external APIs with authentication and rate limiting support',
-          category: 'external_integration',
-          version: '1.0.0',
-          author: 'ChimariData Team',
-          status: 'maintenance',
-          tags: ['api', 'integration', 'fetch', 'external_data'],
-          metrics: {
-            totalExecutions: 456,
-            successfulExecutions: 423,
-            failedExecutions: 33,
-            averageExecutionTime: 3200,
-            uptime: 95.5,
-            errorRate: 7.2,
-            userSatisfactionScore: 4.2
-          },
-          pricing: {
-            model: 'usage_based',
-            costPerExecution: 0.002
-          },
-          permissions: {
-            userTypes: ['technical', 'consultation'],
-            subscriptionTiers: ['professional', 'enterprise']
-          },
-          createdAt: '2024-02-01T08:45:00Z',
-          updatedAt: '2024-02-25T16:20:00Z'
-        }
-      ];
+      const toolsData = await toolsResponse.json();
+      
+      if (!toolsData.success || !toolsData.tools) {
+        throw new Error('Invalid response format from tools API');
+      }
 
-      const mockExecutions: ToolExecution[] = [
-        {
-          id: 'exec_001',
-          toolId: 'csv_to_json_converter',
-          userId: 'user_123',
-          projectId: 'proj_456',
-          status: 'completed',
-          startTime: '2024-02-26T10:30:00Z',
-          endTime: '2024-02-26T10:30:02Z',
-          duration: 2300,
-          cost: 0.001
+      // Map API response to Tool interface
+      const mappedTools: Tool[] = toolsData.tools.map((tool: any) => ({
+        id: tool.id || tool.name,
+        name: tool.name,
+        description: tool.description || 'No description available',
+        category: tool.category || 'utility',
+        version: tool.version || '1.0.0',
+        author: tool.author || 'System',
+        status: 'active' as const, // Default to active since registry doesn't track status
+        tags: tool.tags || [],
+        metrics: tool.metrics || {
+          totalExecutions: 0,
+          successfulExecutions: 0,
+          failedExecutions: 0,
+          averageExecutionTime: 0,
+          uptime: 100,
+          errorRate: 0,
+          userSatisfactionScore: 4.8
         },
-        {
-          id: 'exec_002',
-          toolId: 'data_quality_checker',
-          userId: 'user_789',
-          projectId: 'proj_012',
-          status: 'running',
-          startTime: '2024-02-26T10:32:00Z',
-          cost: 0
+        pricing: tool.pricing || {
+          model: 'usage_based',
+          costPerExecution: 0
         },
-        {
-          id: 'exec_003',
-          toolId: 'api_data_fetcher',
-          userId: 'user_345',
-          projectId: 'proj_678',
-          status: 'failed',
-          startTime: '2024-02-26T10:25:00Z',
-          endTime: '2024-02-26T10:25:15Z',
-          duration: 15000,
-          cost: 0.002
-        }
-      ];
+        permissions: tool.permissions || {
+          userTypes: [],
+          subscriptionTiers: []
+        },
+        createdAt: tool.createdAt || new Date().toISOString(),
+        updatedAt: tool.updatedAt || new Date().toISOString()
+      }));
 
-      const mockMetrics: SystemMetrics = {
-        totalTools: mockTools.length,
-        activeTools: mockTools.filter(t => t.status === 'active').length,
-        totalExecutions: mockTools.reduce((sum, t) => sum + t.metrics.totalExecutions, 0),
-        successfulExecutions: mockTools.reduce((sum, t) => sum + t.metrics.successfulExecutions, 0),
-        failedExecutions: mockTools.reduce((sum, t) => sum + t.metrics.failedExecutions, 0),
-        runningExecutions: mockExecutions.filter(e => e.status === 'running').length,
-        successRate: 96.8,
-        averageExecutionTime: 3700,
-        totalCost: 127.45,
-        toolsByCategory: {
-          'data_transformation': 2,
-          'data_validation': 1,
-          'external_integration': 1,
-          'data_analysis': 1
-        }
-      };
-
-      setTools(mockTools);
-      setExecutions(mockExecutions);
-      setSystemMetrics(mockMetrics);
-      setError(null);
+      // Set tools from real API data
+      setTools(mappedTools);
+      
+      // Executions and metrics endpoints don't exist yet - use empty arrays
+      // TODO: Implement these endpoints when execution tracking is added
+      setExecutions([]);
+      setSystemMetrics(null);
+      
     } catch (err: any) {
-      setError(err.message);
+      console.error('Error loading tools:', err);
+      setError(err.message || 'Failed to load tools data');
+      
+      // Fallback to empty array on error
+      setTools([]);
+      setExecutions([]);
+      setSystemMetrics(null);
     } finally {
       setLoading(false);
     }

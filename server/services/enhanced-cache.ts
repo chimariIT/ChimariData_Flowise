@@ -36,6 +36,11 @@ export interface CacheEntry<T = any> {
   };
 }
 
+type SerializedCacheEntry<T> = {
+  data: T | string;
+  metadata: CacheEntry<T>['metadata'];
+};
+
 export interface CacheOptions {
   ttl?: number;           // Time to live in seconds
   tags?: string[];        // Tags for bulk invalidation
@@ -68,6 +73,8 @@ export class EnhancedCacheService {
   private compressionThreshold: number = 1024; // 1KB
   private keyPrefix: string = 'chimari:cache:';
   private metricsInterval: NodeJS.Timeout | null = null;
+  private readonly l1CacheMaxEntries = 1000;
+  private readonly l1CacheMaxBytes = 50 * 1024 * 1024; // 50MB
 
   constructor(redisConfig?: {
     host?: string;
@@ -85,7 +92,6 @@ export class EnhancedCacheService {
         port: redisConfig?.port || parseInt(process.env.REDIS_PORT || '6379'),
         password: redisConfig?.password || process.env.REDIS_PASSWORD,
         db: redisConfig?.db || parseInt(process.env.REDIS_DB || '0'),
-        retryDelayOnFailover: 100,
         enableReadyCheck: true,
         maxRetriesPerRequest: 3,
         lazyConnect: true,
@@ -115,17 +121,22 @@ export class EnhancedCacheService {
     }
 
     // Initialize L1 cache (in-memory)
-    this.l1Cache = new LRUCache({
-      max: 1000,              // Max 1000 items
-      maxSize: 50 * 1024 * 1024, // Max 50MB
-      ttl: 300000,            // 5 minutes TTL
-      sizeCalculation: (value) => {
+    const l1CacheConfig: any = {
+      max: this.l1CacheMaxEntries,
+      maxSize: this.l1CacheMaxBytes,
+      ttl: 300000,            // 5 minutes TTL (used by lru-cache >=7)
+      sizeCalculation: (value: CacheEntry) => {
         return JSON.stringify(value).length;
       },
-      dispose: (value, key) => {
+      dispose: () => {
         this.metrics.evictions++;
       }
-    });
+    };
+
+    // Provide backward compatibility for lru-cache versions that expect maxAge
+    l1CacheConfig.maxAge = 300000;
+
+    this.l1Cache = new LRUCache(l1CacheConfig as any);
 
     this.metrics = this.initializeMetrics();
     this.startMetricsCollection();
@@ -185,9 +196,10 @@ export class EnhancedCacheService {
       this.metrics.memoryUsage = this.l1Cache.calculatedSize || 0;
 
       // Get Redis memory info (only if enabled)
-      if (this.redis && this.redisEnabled) {
+      const redis = this.redis;
+      if (redis && this.redisEnabled) {
         try {
-          const redisInfo = await this.redis.info('memory');
+          const redisInfo = await redis.info('memory');
           const memoryMatch = redisInfo.match(/used_memory:(\d+)/);
           if (memoryMatch) {
             this.metrics.l2CacheSize = parseInt(memoryMatch[1]);
@@ -239,57 +251,61 @@ export class EnhancedCacheService {
       }
 
       // L2 Cache (Redis) lookup (only if enabled)
-      if (this.redis && this.redisEnabled) {
+      const redis = this.redis;
+      if (redis && this.redisEnabled) {
         try {
-          const redisData = await this.redis.get(cacheKey);
+          const redisData = await redis.get(cacheKey);
           if (redisData) {
-        let entry: CacheEntry<T>;
-        
-        try {
-          const parsed = JSON.parse(redisData);
-          
-          // Decompress if needed
-          if (parsed.metadata?.compressed) {
-            const dataToDecompress = typeof parsed.data === 'string' ? parsed.data : JSON.stringify(parsed.data);
-            const decompressed = await gunzipAsync(Buffer.from(dataToDecompress, 'base64'));
-            entry = {
-              data: JSON.parse(decompressed.toString()),
-              metadata: {
+            let entry: CacheEntry<T>;
+
+            try {
+              const parsed: SerializedCacheEntry<T> = JSON.parse(redisData);
+
+              const metadata = {
                 ...parsed.metadata,
                 lastAccessed: Date.now(),
-                accessCount: (parsed.metadata.accessCount || 0) + 1
+                accessCount: (parsed.metadata?.accessCount || 0) + 1
+              };
+
+              if (parsed.metadata?.compressed) {
+                const dataToDecompress = typeof parsed.data === 'string' ? parsed.data : JSON.stringify(parsed.data);
+                const decompressed = await gunzipAsync(Buffer.from(dataToDecompress, 'base64'));
+                entry = {
+                  data: JSON.parse(decompressed.toString()) as T,
+                  metadata
+                };
+              } else {
+                entry = {
+                  data: parsed.data as T,
+                  metadata
+                };
               }
-            };
-          } else {
-            entry = {
-              ...parsed,
-              metadata: {
-                ...parsed.metadata,
-                lastAccessed: Date.now(),
-                accessCount: (parsed.metadata.accessCount || 0) + 1
+
+              // Store in L1 cache for faster future access
+              if (options.l1Cache !== false) {
+                this.l1Cache.set(cacheKey, entry);
               }
-            };
-          }
 
-          // Store in L1 cache for faster future access
-          if (options.l1Cache !== false) {
-            this.l1Cache.set(cacheKey, entry);
-          }
+              // Update access metadata in Redis (preserve compression flag and data)
+              const ttl = await redis.ttl(cacheKey);
+              const refreshedEntry: SerializedCacheEntry<T> = {
+                data: parsed.data,
+                metadata
+              };
 
-          // Update access metadata in Redis
-          await this.redis.setex(
-            cacheKey,
-            await this.redis.ttl(cacheKey) || this.defaultTTL,
-            JSON.stringify(entry)
-          );
+              if (ttl > 0) {
+                await redis.setex(cacheKey, ttl, JSON.stringify(refreshedEntry));
+              } else {
+                await redis.set(cacheKey, JSON.stringify(refreshedEntry));
+              }
 
-          this.metrics.hits++;
-          console.debug(`Cache hit (L2): ${key}`);
-          return entry.data;
-        } catch (parseError) {
-          console.error('Failed to parse cached data:', parseError);
-          await this.redis.del(cacheKey);
-        }
+              this.metrics.hits++;
+              console.debug(`Cache hit (L2): ${key}`);
+              return entry.data;
+            } catch (parseError) {
+              console.error('Failed to parse cached data:', parseError);
+              await redis.del(cacheKey);
+            }
           }
         } catch (redisError) {
           // Redis not available, L1 cache only
@@ -319,12 +335,13 @@ export class EnhancedCacheService {
     const ttl = typeof options.ttl === 'number' ? options.ttl :
                 typeof options.ttl === 'string' ? parseInt(options.ttl, 10) :
                 this.defaultTTL;
+    const redis = this.redis;
 
     try {
       const serializedValue = JSON.stringify(value);
       const originalSize = Buffer.byteLength(serializedValue, 'utf8');
       
-      let finalData = serializedValue;
+      let redisData: T | string = value;
       let compressed = false;
       let compressedSize = originalSize;
 
@@ -337,7 +354,7 @@ export class EnhancedCacheService {
           
           // Only use compression if it actually saves space
           if (compressedSize < originalSize * 0.8) {
-            finalData = base64Compressed;
+            redisData = base64Compressed;
             compressed = true;
             
             // Update compression ratio metric
@@ -350,30 +367,37 @@ export class EnhancedCacheService {
         }
       }
 
-      const entry: CacheEntry<T> = {
-        data: compressed ? finalData : value,
-        metadata: {
-          createdAt: Date.now(),
-          lastAccessed: Date.now(),
-          accessCount: 0,
-          tags: options.tags,
-          compressed,
-          originalSize,
-          compressedSize
-        }
+      const metadata = {
+        createdAt: Date.now(),
+        lastAccessed: Date.now(),
+        accessCount: 0,
+        tags: options.tags,
+        compressed,
+        originalSize,
+        compressedSize
+      };
+
+      const redisEntry: SerializedCacheEntry<T> = {
+        data: redisData,
+        metadata
       };
 
       // Store in Redis (L2) - only if Redis is enabled and connected
-      if (this.redis && this.redisEnabled) {
-        const serializedEntry = JSON.stringify(entry);
-        await this.redis.setex(cacheKey, ttl, serializedEntry);
+      if (redis && this.redisEnabled) {
+        const serializedEntry = JSON.stringify(redisEntry);
+        await redis.setex(cacheKey, ttl, serializedEntry);
       }
 
       // Store in L1 cache if enabled
       if (options.l1Cache !== false) {
         // Ensure TTL is a number in milliseconds for L1 cache
         const l1Ttl = Math.min(ttl * 1000, 300000); // Max 5 min in L1
-        this.l1Cache.set(cacheKey, entry, l1Ttl);
+        const l1Entry: CacheEntry<T> = {
+          data: value,
+          metadata: { ...metadata }
+        };
+  // Maintain compatibility with lru-cache versions that expect numeric maxAge
+  (this.l1Cache as any).set(cacheKey, l1Entry, l1Ttl);
       }
 
       // Store tags for bulk invalidation
@@ -398,13 +422,17 @@ export class EnhancedCacheService {
    */
   async delete(key: string, version?: string): Promise<boolean> {
     const cacheKey = this.generateCacheKey(key, version);
+    const redis = this.redis;
 
     try {
       // Remove from L1 cache
       this.l1Cache.delete(cacheKey);
 
       // Remove from L2 cache
-      const result = await this.redis.del(cacheKey);
+      let result = 0;
+      if (redis && this.redisEnabled) {
+        result = await redis.del(cacheKey);
+      }
       
       this.metrics.deletes++;
       console.debug(`Cache delete: ${key}`);
@@ -419,11 +447,12 @@ export class EnhancedCacheService {
    * Add cache key to tag index for bulk operations
    */
   private async addToTagIndex(tags: string[], cacheKey: string, ttl: number): Promise<void> {
-    if (!this.redis || !this.redisEnabled) {
+    const redis = this.redis;
+    if (!redis || !this.redisEnabled) {
       return; // Skip tag indexing if Redis is not available
     }
     
-    const pipeline = this.redis.pipeline();
+    const pipeline = redis.pipeline();
     
     for (const tag of tags) {
       const tagKey = `${this.keyPrefix}tag:${tag}`;
@@ -439,6 +468,10 @@ export class EnhancedCacheService {
    */
   async invalidateByTags(tags: string[]): Promise<number> {
     if (tags.length === 0) return 0;
+    const redis = this.redis;
+    if (!redis || !this.redisEnabled) {
+      return 0;
+    }
 
     try {
       let keysToDelete = new Set<string>();
@@ -446,7 +479,7 @@ export class EnhancedCacheService {
       // Collect all keys with these tags
       for (const tag of tags) {
         const tagKey = `${this.keyPrefix}tag:${tag}`;
-        const taggedKeys = await this.redis.smembers(tagKey);
+        const taggedKeys = await redis.smembers(tagKey);
         taggedKeys.forEach(key => keysToDelete.add(key));
       }
 
@@ -458,7 +491,7 @@ export class EnhancedCacheService {
       }
 
       // Delete from Redis
-      const pipeline = this.redis.pipeline();
+      const pipeline = redis.pipeline();
       for (const key of keysToDelete) {
         pipeline.del(key);
       }
@@ -504,6 +537,11 @@ export class EnhancedCacheService {
       return cached;
     }
 
+    const redis = this.redis;
+    if (!redis || !this.redisEnabled) {
+      return valueProvider();
+    }
+
     // Use Redis distributed lock for expensive computations
     const lockKey = `${this.keyPrefix}lock:${key}`;
     const lockValue = Date.now().toString();
@@ -511,7 +549,7 @@ export class EnhancedCacheService {
 
     try {
       // Acquire lock
-      const lockAcquired = await this.redis.set(lockKey, lockValue, 'EX', lockTTL, 'NX');
+      const lockAcquired = await redis.set(lockKey, lockValue, 'EX', lockTTL, 'NX');
       
       if (lockAcquired === 'OK') {
         try {
@@ -534,7 +572,7 @@ export class EnhancedCacheService {
               return 0
             end
           `;
-          await this.redis.eval(script, 1, lockKey, lockValue);
+          await redis.eval(script, 1, lockKey, lockValue);
         }
       } else {
         // Wait for lock to be released and try again
@@ -557,12 +595,16 @@ export class EnhancedCacheService {
       this.l1Cache.clear();
 
       // Clear Redis cache (only our keys)
-      const keys = await this.redis.keys(`${this.keyPrefix}*`);
-      if (keys.length > 0) {
-        await this.redis.del(...keys);
+      const redis = this.redis;
+      if (redis && this.redisEnabled) {
+        const keys = await redis.keys(`${this.keyPrefix}*`);
+        if (keys.length > 0) {
+          await redis.del(...keys);
+        }
+        console.log(`Cleared ${keys.length} cache entries`);
+      } else {
+        console.log('Cleared cache entries from L1 only (Redis unavailable)');
       }
-
-      console.log(`Cleared ${keys.length} cache entries`);
     } catch (error) {
       console.error('Cache clear error:', error);
     }
@@ -587,15 +629,20 @@ export class EnhancedCacheService {
   }> {
     try {
       const l1Size = this.l1Cache.calculatedSize || 0;
-      const l1MaxSize = this.l1Cache.max;
+      const l1MaxSize = this.l1CacheMaxBytes;
       const l1ItemCount = this.l1Cache.size;
 
-      const redisInfo = await this.redis.info('memory');
-      const memoryMatch = redisInfo.match(/used_memory:(\d+)/);
-      const redisMemory = memoryMatch ? parseInt(memoryMatch[1]) : 0;
+      let redisMemory = 0;
+      let redisKeyCount = 0;
+      const redis = this.redis;
+      if (redis && this.redisEnabled) {
+        const redisInfo = await redis.info('memory');
+        const memoryMatch = redisInfo.match(/used_memory:(\d+)/);
+        redisMemory = memoryMatch ? parseInt(memoryMatch[1]) : 0;
 
-      const redisKeys = await this.redis.keys(`${this.keyPrefix}*`);
-      const redisKeyCount = redisKeys.length;
+        const redisKeys = await redis.keys(`${this.keyPrefix}*`);
+        redisKeyCount = redisKeys.length;
+      }
 
       return {
         l1Size,
@@ -638,7 +685,10 @@ export class EnhancedCacheService {
     }
 
     this.l1Cache.clear();
-    await this.redis.quit();
+    const redis = this.redis;
+    if (redis) {
+      await redis.quit();
+    }
     
     console.log('Enhanced cache service shutdown complete');
   }

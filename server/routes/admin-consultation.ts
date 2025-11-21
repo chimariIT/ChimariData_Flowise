@@ -12,10 +12,12 @@
 import { Router } from 'express';
 import { db } from '../db';
 import { consultationRequests, users } from '@shared/schema';
-import { eq, and, or, desc, inArray } from 'drizzle-orm';
+import { eq, and, desc, inArray } from 'drizzle-orm';
 import { ensureAuthenticated } from './auth';
 
 const router = Router();
+
+type ConsultationRequest = typeof consultationRequests.$inferSelect;
 
 /**
  * Middleware to ensure user is admin
@@ -201,6 +203,10 @@ router.get('/ready-queue', ensureAuthenticated, ensureAdmin, async (req, res) =>
 router.get('/my-assignments', ensureAuthenticated, ensureAdmin, async (req, res) => {
   try {
     const adminId = req.adminUser?.id;
+
+    if (!adminId) {
+      return res.status(400).json({ error: 'Admin context missing' });
+    }
 
     const assignments = await db
       .select({
@@ -419,20 +425,18 @@ router.get('/all', ensureAuthenticated, ensureAdmin, async (req, res) => {
 
     let query = db.select().from(consultationRequests);
 
-    // Apply filters
-    const conditions = [];
-    if (status) {
-      conditions.push(eq(consultationRequests.status, status as string));
-    }
-    if (assignedTo) {
-      conditions.push(eq(consultationRequests.assignedAdminId, assignedTo as string));
-    }
-
-    if (conditions.length > 0) {
-      query = query.where(and(...conditions)) as any;
+    if (status && assignedTo) {
+      query = query.where(and(
+        eq(consultationRequests.status, status as string),
+        eq(consultationRequests.assignedAdminId, assignedTo as string)
+      ));
+    } else if (status) {
+      query = query.where(eq(consultationRequests.status, status as string));
+    } else if (assignedTo) {
+      query = query.where(eq(consultationRequests.assignedAdminId, assignedTo as string));
     }
 
-    const allRequests = await query.orderBy(desc(consultationRequests.createdAt));
+    const allRequests: ConsultationRequest[] = await query.orderBy(desc(consultationRequests.createdAt));
 
     res.json({
       success: true,
@@ -452,19 +456,24 @@ router.get('/all', ensureAuthenticated, ensureAdmin, async (req, res) => {
  */
 router.get('/stats', ensureAuthenticated, ensureAdmin, async (req, res) => {
   try {
-    const allRequests = await db.select().from(consultationRequests);
+    const allRequests: ConsultationRequest[] = await db.select().from(consultationRequests);
+
+    const filterByStatus = (statusFilter: ConsultationRequest['status']) =>
+      allRequests.filter((request: ConsultationRequest) => request.status === statusFilter).length;
+
+    const totalRevenue = allRequests
+      .filter((request: ConsultationRequest) => request.paymentStatus === 'succeeded')
+      .reduce((sum: number, request: ConsultationRequest) => sum + (request.quoteAmount ?? 0), 0);
 
     const stats = {
       total: allRequests.length,
-      pendingQuote: allRequests.filter(r => r.status === 'pending_quote').length,
-      awaitingApproval: allRequests.filter(r => r.status === 'awaiting_approval').length,
-      readyForAdmin: allRequests.filter(r => r.status === 'ready_for_admin').length,
-      inProgress: allRequests.filter(r => r.status === 'in_progress').length,
-      completed: allRequests.filter(r => r.status === 'completed').length,
-      rejected: allRequests.filter(r => r.status === 'rejected').length,
-      totalRevenue: allRequests
-        .filter(r => r.paymentStatus === 'succeeded')
-        .reduce((sum, r) => sum + (r.quoteAmount || 0), 0),
+      pendingQuote: filterByStatus('pending_quote'),
+      awaitingApproval: filterByStatus('awaiting_approval'),
+      readyForAdmin: filterByStatus('ready_for_admin'),
+      inProgress: filterByStatus('in_progress'),
+      completed: filterByStatus('completed'),
+      rejected: filterByStatus('rejected'),
+      totalRevenue,
     };
 
     res.json({

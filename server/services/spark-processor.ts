@@ -23,6 +23,53 @@ const getFileDirname = (): string => {
 
 const __dirname = getFileDirname();
 
+/**
+ * Ensure PYTHONPATH includes Spark's python directories so that
+ * `import pyspark` works even when the OS PATH isn't configured.
+ */
+const injectSparkPythonPath = (): string[] => {
+    const sparkHome = process.env.SPARK_HOME;
+    if (!sparkHome) {
+        return [];
+    }
+
+    const pythonDir = path.join(sparkHome, 'python');
+    const libDir = path.join(pythonDir, 'lib');
+    const injectedPaths: string[] = [];
+
+    if (fs.existsSync(pythonDir)) {
+        injectedPaths.push(pythonDir);
+    }
+
+    if (fs.existsSync(libDir)) {
+        const py4jZip = fs.readdirSync(libDir).find(file => /^py4j.*\.zip$/i.test(file));
+        if (py4jZip) {
+            injectedPaths.push(path.join(libDir, py4jZip));
+        }
+    }
+
+    if (injectedPaths.length === 0) {
+        return [];
+    }
+
+    const existing = process.env.PYTHONPATH
+        ? process.env.PYTHONPATH.split(path.delimiter).filter(Boolean)
+        : [];
+
+    const newEntries = injectedPaths.filter(p => !existing.includes(p));
+    if (newEntries.length === 0) {
+        return [];
+    }
+
+    process.env.PYTHONPATH = [...newEntries, ...existing].join(path.delimiter);
+    return newEntries;
+};
+
+const sparkPythonInjections = injectSparkPythonPath();
+if (sparkPythonInjections.length > 0) {
+    console.log('[SparkProcessor] Injected Spark python paths from SPARK_HOME:', sparkPythonInjections);
+}
+
 // Define SparkConfig interface locally to avoid circular imports
 interface SparkConfig {
   master: string;
@@ -236,7 +283,8 @@ export class SparkProcessor {
             const env = {
                 ...process.env,
                 PYSPARK_PYTHON: this.pythonPath,
-                PYSPARK_DRIVER_PYTHON: this.pythonPath
+                PYSPARK_DRIVER_PYTHON: this.pythonPath,
+                PYTHONPATH: process.env.PYTHONPATH
             };
 
             const pythonProcess = spawn(this.pythonPath, [scriptPath, operation, configJson, argsJson], {
@@ -378,7 +426,12 @@ export class SparkProcessor {
 
         } catch (error) {
             console.error(`Error in performAnalysis (${analysisType}):`, error);
-            // Fallback to mock behavior
+            // CRITICAL: Never return mock data in production
+            if (process.env.NODE_ENV === 'production') {
+                console.error('🔴 CRITICAL: Spark analysis failed in production!');
+                throw new Error(`PRODUCTION_ERROR: Spark analysis failed for ${analysisType}. Error: ${error instanceof Error ? error.message : String(error)}`);
+            }
+            // Only allow mock fallback in development
             return { 
                 result: `Fallback ${analysisType} analysis result`,
                 error: error instanceof Error ? error.message : String(error),
@@ -512,9 +565,10 @@ export class SparkProcessor {
         try {
             return await this.executeSparkOperation('cluster_status', {});
         } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
             return {
                 status: 'error',
-                error: error.message,
+                error: message,
                 available: false
             };
         }

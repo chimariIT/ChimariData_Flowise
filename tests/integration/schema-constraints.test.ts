@@ -496,7 +496,7 @@ describe.skipIf(skipTests)('Constraint Verification', () => {
   test('foreign key constraint exists on projects.owner_id', async () => {
     const result = await db.execute(sql`
       SELECT conname FROM pg_constraint
-      WHERE conname = 'projects_owner_id_fk' AND conrelid = 'projects'::regclass
+      WHERE conname = 'projects_user_id_fk' AND conrelid = 'projects'::regclass
     `);
 
     expect(result.rows).toHaveLength(1);

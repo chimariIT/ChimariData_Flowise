@@ -1,15 +1,111 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3, PieChart, TrendingUp, Calculator, Play, Download, Brain, Zap, Shield, FileText, Activity, Clock, Cloud, LineChart, ScatterChart, Eye, Grid } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { BarChart3, PieChart, TrendingUp, Calculator, Play, Download, Brain, Zap, Shield, FileText, Activity, Clock, Cloud, LineChart, ScatterChart, Eye, Grid, Users } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { AdvancedAnalysisModalLazy, TimeSeriesAnalysisLazy } from "./LazyComponents";
 import AnonymizationToolkit from "./AnonymizationToolkit";
 import CloudDataConnector from "./cloud-data-connector";
 import { AudienceFormattedResults } from './audience-formatted-results';
+import type { LucideIcon } from "lucide-react";
+import { apiClient } from "@/lib/api";
+
+type AnalysisOption = {
+  value: string;
+  label: string;
+  description: string;
+  icon: LucideIcon;
+  fields: 'numeric' | 'categorical' | 'time_series' | 'any';
+};
+
+const DEFAULT_ANALYSIS_TYPES: AnalysisOption[] = [
+  {
+    value: "descriptive",
+    label: "Descriptive Statistics",
+    description: "Summary statistics, mean, median, mode, etc.",
+    icon: Calculator,
+    fields: "numeric"
+  },
+  {
+    value: "correlation",
+    label: "Correlation Analysis",
+    description: "Relationships between variables",
+    icon: TrendingUp,
+    fields: "numeric"
+  },
+  {
+    value: "time_series",
+    label: "Time Series Analysis",
+    description: "Forecasting, trend analysis, seasonal decomposition",
+    icon: Clock,
+    fields: "time_series"
+  },
+  {
+    value: "regression",
+    label: "Regression Analysis",
+    description: "Linear and multiple regression models",
+    icon: Brain,
+    fields: "numeric"
+  },
+  {
+    value: "clustering",
+    label: "Clustering Analysis",
+    description: "Group data into similar clusters",
+    icon: Brain,
+    fields: "numeric"
+  },
+  {
+    value: "categorical",
+    label: "Categorical Analysis",
+    description: "Frequency counts, cross-tabulations",
+    icon: BarChart3,
+    fields: "categorical"
+  },
+  {
+    value: "segmentation",
+    label: "Segmentation Analysis",
+    description: "Identify distinct audience or customer segments",
+    icon: Users,
+    fields: "any"
+  },
+  {
+    value: "trend_analysis",
+    label: "Trend Analysis",
+    description: "Spot short and long-term changes over time",
+    icon: TrendingUp,
+    fields: "time_series"
+  },
+  {
+    value: "data_quality",
+    label: "Data Quality Review",
+    description: "Assess completeness, duplication, and anomalies",
+    icon: Shield,
+    fields: "any"
+  },
+  {
+    value: "visualization",
+    label: "Visualization Workshop",
+    description: "Launch the interactive visualization workspace",
+    icon: Eye,
+    fields: "any"
+  },
+  {
+    value: "custom",
+    label: "Custom Analysis",
+    description: "Define your own analysis requirements",
+    icon: Calculator,
+    fields: "any"
+  }
+];
+
+const ANALYSIS_TYPE_LOOKUP: Record<string, AnalysisOption> = DEFAULT_ANALYSIS_TYPES.reduce((acc, option) => {
+  acc[option.value] = option;
+  return acc;
+}, {} as Record<string, AnalysisOption>);
 
 interface DataAnalysisProps {
   project: any;
@@ -63,6 +159,55 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
   const [visualizationResults, setVisualizationResults] = useState<any[]>([]);
   const [showAudienceResults, setShowAudienceResults] = useState(false);
   const [currentAnalysisId, setCurrentAnalysisId] = useState<string | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [analysisOptions, setAnalysisOptions] = useState<AnalysisOption[]>(DEFAULT_ANALYSIS_TYPES);
+
+  const resolveAnalysisOption = (value?: string | null) => {
+    if (!value) return undefined;
+    return analysisOptions.find(option => option.value === value) || ANALYSIS_TYPE_LOOKUP[value];
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadAvailableAnalyses() {
+      try {
+        const response = await apiClient.getAudienceAnalysisTypes(project.id);
+        if (!response?.success || !Array.isArray(response.availableTypes)) {
+          return;
+        }
+
+        const mapped: AnalysisOption[] = response.availableTypes.map((typeValue: string) => {
+          const normalized = typeValue as string;
+          const fallback: AnalysisOption = ANALYSIS_TYPE_LOOKUP[normalized] || {
+            value: normalized,
+            label: normalized.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase()),
+            description: "Analysis available for your dataset",
+            icon: BarChart3,
+            fields: "any"
+          };
+          return fallback;
+        });
+
+        const alwaysAvailable = ['custom', 'visualization'];
+        alwaysAvailable.forEach((value) => {
+          if (!mapped.some(option => option.value === value) && ANALYSIS_TYPE_LOOKUP[value]) {
+            mapped.push(ANALYSIS_TYPE_LOOKUP[value]);
+          }
+        });
+
+        if (!cancelled && mapped.length > 0) {
+          setAnalysisOptions(mapped);
+        }
+      } catch (error) {
+        console.warn('Failed to load available analysis types', error);
+      }
+    }
+
+    loadAvailableAnalyses();
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id]);
 
   const schema = project.schema || {};
   const numericFields = Object.entries(schema)
@@ -72,57 +217,23 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
     .filter(([_, info]: [string, any]) => info.type === 'text')
     .map(([name]) => name);
 
-  const analysisTypes = [
-    {
-      value: "descriptive",
-      label: "Descriptive Statistics",
-      description: "Summary statistics, mean, median, mode, etc.",
-      icon: Calculator,
-      fields: "numeric"
-    },
-    {
-      value: "correlation",
-      label: "Correlation Analysis", 
-      description: "Relationships between variables",
-      icon: TrendingUp,
-      fields: "numeric"
-    },
-    {
-      value: "time_series",
-      label: "Time Series Analysis",
-      description: "Forecasting, trend analysis, seasonal decomposition",
-      icon: Clock,
-      fields: "time_series"
-    },
-    {
-      value: "regression",
-      label: "Regression Analysis",
-      description: "Linear and multiple regression models",
-      icon: Brain,
-      fields: "numeric"
-    },
-    {
-      value: "clustering",
-      label: "Clustering Analysis", 
-      description: "Group data into similar clusters",
-      icon: Brain,
-      fields: "numeric"
-    },
-    {
-      value: "categorical",
-      label: "Categorical Analysis",
-      description: "Frequency counts, cross-tabulations",
-      icon: BarChart3,
-      fields: "categorical"
-    },
-    {
-      value: "custom",
-      label: "Custom Analysis",
-      description: "Define your own analysis requirements",
-      icon: Calculator,
-      fields: "any"
-    }
-  ];
+  const resolvedAnalysisOption = resolveAnalysisOption(selectedAnalysis) ?? resolveAnalysisOption(results?.type);
+  const resolvedFields = Array.isArray(analysisConfig.fields)
+    ? analysisConfig.fields
+    : (analysisConfig.field ? [analysisConfig.field] : []);
+  const formattedOutput = results?.formattedResults;
+  const pipelineStatus = isAnalyzing ? 'Running' : results ? 'Completed' : 'Awaiting input';
+  const totalVisualizations = (visualizationResults.length + visualizations.length);
+  const inputDatasetName = project.name || `Project ${project.id}`;
+  const inputFieldLabel = resolvedFields.length
+    ? resolvedFields.join(', ')
+    : resolvedAnalysisOption?.fields === 'numeric'
+      ? (numericFields.slice(0, 3).join(', ') || 'Auto-detected numeric fields')
+      : resolvedAnalysisOption?.fields === 'categorical'
+        ? (categoricalFields.slice(0, 3).join(', ') || 'Auto-detected categorical fields')
+        : 'Auto-detected relevant fields';
+  const outputInsightCount = formattedOutput?.businessInsights?.length ?? 0;
+  const outputRecommendationCount = formattedOutput?.actionableRecommendations?.length ?? 0;
 
   const visualizationTypes = [
     {
@@ -184,145 +295,85 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
   ];
 
   const executeAnalysis = async () => {
-    // Special handling for visualization analysis type
+    if (!selectedAnalysis) {
+      toast({
+        title: "Select an analysis type",
+        description: "Choose the type of analysis you want to run before executing.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     if (selectedAnalysis === 'visualization') {
-      // Navigate to the visualization workshop
       window.location.href = `/visualization/${project.id}`;
       return;
     }
 
     setIsAnalyzing(true);
+    setAnalysisError(null);
     try {
-      const response = await fetch(`/api/analyze-data/${project.id}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        },
-        body: JSON.stringify({
-          analysisType: selectedAnalysis,
-          config: analysisConfig
-        })
+      const payload: Record<string, unknown> = {
+        analysisType: selectedAnalysis,
+        config: analysisConfig,
+      };
+
+      if (project?.audienceContext) {
+        payload.audienceContext = project.audienceContext;
+      }
+
+      const analysisResponse = await apiClient.runAudienceAnalysis(project.id, payload);
+
+      if (!analysisResponse?.success) {
+        throw new Error(analysisResponse?.error || 'Analysis failed');
+      }
+
+      const rawResults = analysisResponse.rawResults || {};
+      const formatted = analysisResponse.formattedResults;
+
+      setCurrentAnalysisId(analysisResponse.analysisId || analysisResponse.metadata?.analysisId || `analysis_${project.id}_${Date.now()}`);
+      setResults({
+        type: analysisResponse.analysisType,
+        data: rawResults?.data || rawResults,
+        rawResults,
+        formattedResults: formatted,
+        summary: analysisResponse.metadata
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Analysis failed');
+      if (Array.isArray(rawResults?.visualizations)) {
+        setVisualizationResults(prev => [...prev, ...rawResults.visualizations]);
       }
-
-      const analysisResults = await response.json();
-      
-      if (analysisResults.success) {
-        // Store the analysis ID for later retrieval
-        setCurrentAnalysisId(analysisResults.metadata?.analysisId || `analysis_${project.id}_${Date.now()}`);
-        
-        // Show audience-formatted results instead of raw results
-        setShowAudienceResults(true);
-        
-        toast({
-          title: "Analysis complete",
-          description: "Your data analysis has been successfully completed with audience-specific formatting",
-        });
-      } else {
-        throw new Error(analysisResults.error || 'Analysis failed');
+      if (analysisResponse.visualizations?.visualization) {
+        setVisualizations(prev => [...prev, analysisResponse.visualizations.visualization]);
       }
+      setShowAudienceResults(true);
+
+      toast({
+        title: "Analysis complete",
+        description: `Generated ${formatted?.businessInsights?.length ?? formatted?.actionableRecommendations?.length ?? 0} insights.`,
+      });
     } catch (error: any) {
       console.error('Analysis error:', error);
-      
-      // Fallback to mock data for demonstration
-      const mockResults = {
-        type: selectedAnalysis,
-        summary: `Analysis completed for ${selectedAnalysis} (demo mode)`,
-        data: generateMockData(selectedAnalysis),
-        timestamp: new Date().toISOString()
-      };
-      
-      setResults(mockResults);
-      
+      const message = error?.message || 'Analysis failed. Please try again.';
+      setAnalysisError(message);
+      setResults(null);
       toast({
-        title: "Analysis complete (demo)",
-        description: "Demo analysis results are displayed",
+        title: "Analysis failed",
+        description: message,
+        variant: "destructive",
       });
     } finally {
       setIsAnalyzing(false);
     }
   };
 
-  const generateMockData = (type: string) => {
-    // TODO: Replace with real API calls to analyze actual project data
-    // For now, return empty data to show real analysis would happen
-    switch (type) {
-      case "descriptive":
-        return {
-          statistics: numericFields.map(field => ({
-            field,
-            mean: "0.00",
-            median: "0.00", 
-            std: "0.00",
-            min: "0.00",
-            max: "0.00"
-          }))
-        };
-      case "distribution":
-        return {
-          distributions: (analysisConfig.fields || [...numericFields, ...categoricalFields]).map((field: string) => ({
-            field,
-            type: numericFields.includes(field) ? 'numeric' : 'categorical',
-            histogram: numericFields.includes(field) ? [] : [],
-            statistics: numericFields.includes(field) ? {
-              mean: "0.00",
-              median: "0.00",
-              mode: "0.00",
-              std: "0.00",
-              skewness: "0.00",
-              kurtosis: "0.00"
-            } : {
-              mode: "N/A",
-              uniqueValues: 0
-            }
-          }))
-        };
-      case "correlation":
-        return {
-          correlations: []
-        };
-      case "categorical":
-        return {
-          frequencies: categoricalFields.map(field => ({
-            field,
-            values: Array.from({ length: 5 }, (_, i) => ({
-              value: `Category ${i + 1}`,
-              count: Math.floor(Math.random() * 1000),
-              percentage: (Math.random() * 100).toFixed(1)
-            }))
-          }))
-        };
-      default:
-        return { message: "Analysis results would appear here" };
-    }
-  };
-
   const createVisualization = async (type: string, selectedColumns?: string[]) => {
     setIsCreatingVisualization(true);
     try {
-      const response = await fetch(`/api/create-visualization/${project.id}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        },
-        body: JSON.stringify({
-          type,
-          fields: selectedColumns || analysisConfig.fields || (type === 'correlation_matrix' ? numericFields : [...numericFields, ...categoricalFields])
-        })
+      const result = await apiClient.createProjectVisualization(project.id, {
+        chartType: type,
+        fields: selectedColumns || analysisConfig.fields || (type === 'correlation_matrix'
+          ? numericFields
+          : [...numericFields, ...categoricalFields]),
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to create visualization');
-      }
-
-      const result = await response.json();
       
       // Enhanced visualization rendering - ensure canvas is always visible
       const canvas = document.getElementById('visualization-canvas') as HTMLCanvasElement;
@@ -556,6 +607,9 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
       }
       
       setVisualizationResults(prev => [...prev, result]);
+      if (result?.visualization) {
+        setVisualizations(prev => [...prev, result.visualization]);
+      }
       
       toast({
         title: "Visualization created",
@@ -1469,7 +1523,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
         </CardHeader>
         <CardContent>
           <div className="grid gap-4 md:grid-cols-2">
-            {analysisTypes.map((analysis) => {
+            {analysisOptions.map((analysis) => {
               const Icon = analysis.icon;
               return (
                 <Button
@@ -1480,6 +1534,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                     setSelectedAnalysis(analysis.value);
                     setAnalysisConfig({});
                     setResults(null);
+                    setAnalysisError(null);
                   }}
                 >
                   <div className="flex items-center space-x-2">
@@ -1549,7 +1604,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
           <CardHeader>
             <CardTitle>Configure Analysis</CardTitle>
             <CardDescription>
-              Set up the parameters for your {analysisTypes.find(t => t.value === selectedAnalysis)?.label}
+              Set up the parameters for your {resolveAnalysisOption(selectedAnalysis)?.label}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -1657,10 +1712,76 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                 <Play className="w-4 h-4 mr-2" />
                 {isAnalyzing ? "Analyzing..." : "Run Analysis"}
               </Button>
+              {analysisError && (
+                <Alert variant="destructive" className="mt-4">
+                  <AlertDescription>{analysisError}</AlertDescription>
+                </Alert>
+              )}
             </div>
           </CardContent>
         </Card>
       )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Zap className="w-4 h-4" />
+            Analysis Pipeline Overview
+          </CardTitle>
+          <CardDescription>
+            Clarity on the data flowing in, the process being executed, and the outputs generated.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="p-4 rounded-lg border bg-slate-50">
+              <p className="text-xs uppercase font-semibold text-slate-500 mb-2">Inputs</p>
+              <ul className="text-sm text-slate-700 space-y-2">
+                <li>
+                  <span className="font-medium">Dataset:</span> {inputDatasetName}
+                </li>
+                <li>
+                  <span className="font-medium">Records:</span>{' '}
+                  {(project.recordCount ?? results?.summary?.dataSize ?? 0).toLocaleString()}
+                </li>
+                <li>
+                  <span className="font-medium">Fields:</span> {inputFieldLabel}
+                </li>
+              </ul>
+            </div>
+            <div className="p-4 rounded-lg border bg-slate-50">
+              <p className="text-xs uppercase font-semibold text-slate-500 mb-2">Process</p>
+              <ul className="text-sm text-slate-700 space-y-2">
+                <li>
+                  <span className="font-medium">Analysis:</span>{' '}
+                  {resolvedAnalysisOption?.label || 'Not selected'}
+                </li>
+                <li>
+                  <span className="font-medium">Audience:</span>{' '}
+                  {project?.audienceContext?.primaryAudience || 'Mixed'}
+                </li>
+                <li>
+                  <span className="font-medium">Status:</span> {pipelineStatus}
+                </li>
+              </ul>
+            </div>
+            <div className="p-4 rounded-lg border bg-slate-50">
+              <p className="text-xs uppercase font-semibold text-slate-500 mb-2">Outputs</p>
+              <ul className="text-sm text-slate-700 space-y-2">
+                <li>
+                  <span className="font-medium">Insights:</span> {outputInsightCount}
+                </li>
+                <li>
+                  <span className="font-medium">Recommendations:</span> {outputRecommendationCount}
+                </li>
+                <li>
+                  <span className="font-medium">Visualizations:</span> {totalVisualizations}
+                </li>
+              </ul>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Results */}
       {/* Visualizations Section */}
@@ -1737,7 +1858,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
               </div>
             </CardTitle>
             <CardDescription>
-              Results from your {analysisTypes.find(t => t.value === results.type)?.label}
+              Results from your {resolveAnalysisOption(results.type)?.label}
             </CardDescription>
           </CardHeader>
           <CardContent>

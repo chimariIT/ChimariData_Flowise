@@ -149,7 +149,10 @@ export default function BillingCapacityDisplay({
       icon: <Database className="h-4 w-4" />,
       used: capacityUsed.dataVolumeMB,
       remaining: capacityRemaining.dataVolumeMB,
-      limit: capacityUsed.dataVolumeMB + capacityRemaining.dataVolumeMB,
+      limit:
+        capacityUsed.dataVolumeMB === -1 || capacityRemaining.dataVolumeMB === -1
+          ? -1
+          : capacityUsed.dataVolumeMB + capacityRemaining.dataVolumeMB,
       percentage: utilizationPercentage.dataVolume,
       format: formatBytes,
     },
@@ -159,7 +162,10 @@ export default function BillingCapacityDisplay({
       icon: <Brain className="h-4 w-4" />,
       used: capacityUsed.aiInsights,
       remaining: capacityRemaining.aiInsights,
-      limit: capacityUsed.aiInsights + capacityRemaining.aiInsights,
+      limit:
+        capacityUsed.aiInsights === -1 || capacityRemaining.aiInsights === -1
+          ? -1
+          : capacityUsed.aiInsights + capacityRemaining.aiInsights,
       percentage: utilizationPercentage.aiInsights,
       format: (value: number) => value === -1 ? 'Unlimited' : value.toString(),
     },
@@ -169,7 +175,10 @@ export default function BillingCapacityDisplay({
       icon: <BarChart3 className="h-4 w-4" />,
       used: capacityUsed.analysisComponents,
       remaining: capacityRemaining.analysisComponents,
-      limit: capacityUsed.analysisComponents + capacityRemaining.analysisComponents,
+      limit:
+        capacityUsed.analysisComponents === -1 || capacityRemaining.analysisComponents === -1
+          ? -1
+          : capacityUsed.analysisComponents + capacityRemaining.analysisComponents,
       percentage: utilizationPercentage.analysisComponents,
       format: (value: number) => value === -1 ? 'Unlimited' : value.toString(),
     },
@@ -179,7 +188,10 @@ export default function BillingCapacityDisplay({
       icon: <Image className="h-4 w-4" />,
       used: capacityUsed.visualizations,
       remaining: capacityRemaining.visualizations,
-      limit: capacityUsed.visualizations + capacityRemaining.visualizations,
+      limit:
+        capacityUsed.visualizations === -1 || capacityRemaining.visualizations === -1
+          ? -1
+          : capacityUsed.visualizations + capacityRemaining.visualizations,
       percentage: utilizationPercentage.visualizations,
       format: (value: number) => value === -1 ? 'Unlimited' : value.toString(),
     },
@@ -189,7 +201,10 @@ export default function BillingCapacityDisplay({
       icon: <Upload className="h-4 w-4" />,
       used: capacityUsed.fileUploads,
       remaining: capacityRemaining.fileUploads,
-      limit: capacityUsed.fileUploads + capacityRemaining.fileUploads,
+      limit:
+        capacityUsed.fileUploads === -1 || capacityRemaining.fileUploads === -1
+          ? -1
+          : capacityUsed.fileUploads + capacityRemaining.fileUploads,
       percentage: utilizationPercentage.fileUploads,
       format: (value: number) => value === -1 ? 'Unlimited' : value.toString(),
     },
@@ -210,7 +225,8 @@ export default function BillingCapacityDisplay({
     let fromQuota = 0;
     let overageUnits = 0;
     let overageCost = 0;
-    for (const item of breakdown.breakdown) {
+    const breakdownEntries = breakdown?.breakdown ?? [];
+    for (const item of breakdownEntries) {
       const used = (item.capacityImpact.used as any)[cat];
       if (!used || used <= 0) continue;
       requested += used;
@@ -223,8 +239,10 @@ export default function BillingCapacityDisplay({
         fromQuota += used;
       }
     }
-    const afterRemaining = (breakdown.capacityRemaining as any)[cat] ?? 0;
-    const limit = ((breakdown.capacityUsed as any)[cat] ?? 0) + afterRemaining;
+    const afterRemaining = (capacityRemaining as any)[cat] ?? 0;
+    const usedTotal = (capacityUsed as any)[cat] ?? 0;
+    const limit =
+      usedTotal === -1 || afterRemaining === -1 ? -1 : usedTotal + afterRemaining;
     const beforeRemaining = limit === -1 ? -1 : afterRemaining + fromQuota;
     return { requested, fromQuota, overageUnits, overageCost, beforeRemaining, afterRemaining, limit };
   };
@@ -243,7 +261,7 @@ export default function BillingCapacityDisplay({
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="text-center">
               <div className="text-2xl font-bold text-blue-600">
-                {breakdown.journeyType 
+                {breakdown?.journeyType 
                   ? breakdown.journeyType.charAt(0).toUpperCase() + breakdown.journeyType.slice(1)
                   : 'Standard'}
               </div>
@@ -251,13 +269,13 @@ export default function BillingCapacityDisplay({
             </div>
             <div className="text-center">
               <div className="text-2xl font-bold text-green-600">
-                {formatBytes(breakdown.datasetSizeMB)}
+                {formatBytes(typeof breakdown?.datasetSizeMB === 'number' ? breakdown.datasetSizeMB : 0)}
               </div>
               <div className="text-sm text-gray-500">Dataset Size</div>
             </div>
             <div className="text-center">
               <div className="text-2xl font-bold text-purple-600">
-                {formatCurrency(breakdown.totalCost)}
+                {formatCurrency(typeof breakdown?.totalCost === 'number' ? breakdown.totalCost : 0)}
               </div>
               <div className="text-sm text-gray-500">Total Cost</div>
             </div>
@@ -274,16 +292,16 @@ export default function BillingCapacityDisplay({
           <div className="space-y-4">
             <div className="flex justify-between items-center">
               <span>Base Cost</span>
-              <span className="font-medium">{formatCurrency(breakdown.baseCost)}</span>
+              <span className="font-medium">{formatCurrency(typeof breakdown?.baseCost === 'number' ? breakdown.baseCost : 0)}</span>
             </div>
             <div className="flex justify-between items-center">
               <span>Subscription Credits ({currentTier})</span>
-              <span className="font-medium text-green-600">-{formatCurrency(breakdown.subscriptionCredits)}</span>
+              <span className="font-medium text-green-600">-{formatCurrency(typeof breakdown?.subscriptionCredits === 'number' ? breakdown.subscriptionCredits : 0)}</span>
             </div>
             <div className="border-t pt-4">
               <div className="flex justify-between items-center text-lg font-bold">
                 <span>Final Cost</span>
-                <span className="text-blue-600">{formatCurrency(breakdown.totalCost)}</span>
+                <span className="text-blue-600">{formatCurrency(typeof breakdown?.totalCost === 'number' ? breakdown.totalCost : 0)}</span>
               </div>
             </div>
           </div>
@@ -435,6 +453,22 @@ export default function BillingCapacityDisplay({
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

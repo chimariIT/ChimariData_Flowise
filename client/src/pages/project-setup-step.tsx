@@ -1,27 +1,70 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { useProjectSession } from "@/hooks/useProjectSession";
+import { apiClient } from "@/lib/api";
 import { 
   FolderOpen, 
   Settings, 
   CheckCircle, 
-  ArrowRight,
   Database,
   BarChart3,
   Brain,
-  Clock,
-  Users
+  Users,
+  AlertCircle
 } from "lucide-react";
+
+type SessionJourney = 'non-tech' | 'business' | 'technical' | 'consultation' | 'custom';
+
+const JOURNEY_NORMALIZATION_MAP: Record<string, SessionJourney> = {
+  'non-tech': 'non-tech',
+  'non_tech': 'non-tech',
+  'ai_guided': 'non-tech',
+  guided: 'non-tech',
+  business: 'business',
+  'template_based': 'business',
+  technical: 'technical',
+  'self_service': 'technical',
+  consultation: 'consultation',
+  custom: 'custom',
+};
+
+const SESSION_TO_PROJECT_JOURNEY: Record<SessionJourney, string> = {
+  'non-tech': 'ai_guided',
+  business: 'template_based',
+  technical: 'self_service',
+  consultation: 'consultation',
+  custom: 'custom',
+};
+
+const DEFAULT_PROJECT_DESCRIPTION = "Project initialized from guided journey setup.";
+
+const normalizeSessionJourney = (value?: string): SessionJourney => {
+  if (!value) return 'non-tech';
+  const key = value.toLowerCase();
+  return JOURNEY_NORMALIZATION_MAP[key] ?? 'non-tech';
+};
 
 interface ProjectSetupStepProps {
   journeyType: string;
 }
 
 export default function ProjectSetupStep({ journeyType }: ProjectSetupStepProps) {
+  const normalizedJourneyType = normalizeSessionJourney(journeyType);
+
+  const {
+    session,
+    linkProject,
+    getPrepareData,
+    loading: sessionLoading,
+  } = useProjectSession({
+    journeyType: normalizedJourneyType
+  });
+
   const [projectName, setProjectName] = useState("");
   const [projectDescription, setProjectDescription] = useState("");
   const [dataSource, setDataSource] = useState("");
@@ -32,78 +75,217 @@ export default function ProjectSetupStep({ journeyType }: ProjectSetupStepProps)
   const [loadingTemplates, setLoadingTemplates] = useState(false);
   const [templateError, setTemplateError] = useState<string | null>(null);
   const [loadingRecommendations, setLoadingRecommendations] = useState(false);
+  const [projectInitializing, setProjectInitializing] = useState(false);
+  const [projectError, setProjectError] = useState<string | null>(null);
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
+  const [savedGoals, setSavedGoals] = useState<string[]>([]);
+  const [savedQuestions, setSavedQuestions] = useState<string[]>([]);
+  const [hasAttemptedProjectInit, setHasAttemptedProjectInit] = useState(false);
 
-  // Fetch agent recommendations on component mount
+  const recommendationSignatureRef = useRef<string | null>(null);
+
+  const normalizedProjectJourney = SESSION_TO_PROJECT_JOURNEY[normalizedJourneyType];
+  const sessionProjectId = session?.projectId ?? null;
+
+  const handleRetryProjectInit = useCallback(() => {
+    setProjectError(null);
+    setHasAttemptedProjectInit(false);
+  }, []);
+
+  // Load saved context from localStorage for agent coordination
   useEffect(() => {
-    async function fetchAgentRecommendations() {
+    try {
+      const storedGoals = JSON.parse(localStorage.getItem('chimari_analysis_goals') || '[]');
+      if (Array.isArray(storedGoals)) {
+        setSavedGoals(storedGoals);
+      }
+    } catch {
+      setSavedGoals([]);
+    }
+
+    try {
+      const storedQuestions = JSON.parse(localStorage.getItem('chimari_analysis_questions') || '[]');
+      if (Array.isArray(storedQuestions)) {
+        setSavedQuestions(storedQuestions);
+      }
+    } catch {
+      setSavedQuestions([]);
+    }
+  }, []);
+
+  // Hydrate from secure session storage if available
+  useEffect(() => {
+    const data = getPrepareData();
+    if (!data) return;
+
+    if (!projectName && typeof data.analysisGoal === 'string' && data.analysisGoal.trim()) {
+      setProjectName(data.analysisGoal.trim());
+    }
+
+    if (!projectDescription && typeof data.businessQuestions === 'string' && data.businessQuestions.trim()) {
+      setProjectDescription(data.businessQuestions.trim());
+    }
+
+    if (!savedGoals.length && typeof data.analysisGoal === 'string' && data.analysisGoal.trim()) {
+      setSavedGoals([data.analysisGoal.trim()]);
+    }
+
+    if (!savedQuestions.length) {
+      if (Array.isArray(data.businessQuestions)) {
+        const filtered = data.businessQuestions
+          .map((q: any) => (typeof q === 'string' ? q.trim() : ''))
+          .filter((q: string) => q.length > 0);
+        if (filtered.length) {
+          setSavedQuestions(filtered);
+        }
+      } else if (typeof data.businessQuestions === 'string') {
+        const extracted = data.businessQuestions
+          .split('\n')
+          .map((q: string) => q.trim())
+          .filter((q: string) => q.length > 0);
+        if (extracted.length) {
+          setSavedQuestions(extracted);
+        }
+      }
+    }
+  }, [getPrepareData, projectName, projectDescription, savedGoals, savedQuestions]);
+
+  // Reflect linked project from session updates
+  useEffect(() => {
+    if (!sessionProjectId) return;
+    setCurrentProjectId(sessionProjectId);
+    setProjectError(null);
+    setHasAttemptedProjectInit(true);
+  }, [sessionProjectId]);
+
+  // Provide sensible defaults for project metadata when context is available
+  useEffect(() => {
+    if (!projectName && savedGoals.length > 0) {
+      setProjectName(savedGoals[0]);
+    }
+  }, [projectName, savedGoals]);
+
+  useEffect(() => {
+    if (!projectDescription && savedQuestions.length > 0) {
+      setProjectDescription(savedQuestions.join('\n'));
+    }
+  }, [projectDescription, savedQuestions]);
+
+  // Ensure each journey session has a persisted project before reaching agent tooling
+  useEffect(() => {
+    if (sessionLoading || !session || sessionProjectId || projectInitializing || hasAttemptedProjectInit) {
+      return;
+    }
+
+    const hasContext = projectName.trim().length > 0 || savedGoals.length > 0;
+    if (!hasContext) {
+      return;
+    }
+
+    const createAndLinkProject = async () => {
       try {
-        // Get user goals and questions from localStorage (saved in prepare step)
-        const savedGoals = localStorage.getItem('chimari_analysis_goals');
-        const savedQuestions = localStorage.getItem('chimari_analysis_questions');
+        setProjectError(null);
+        setProjectInitializing(true);
+        setHasAttemptedProjectInit(true);
 
-        if (!savedGoals || !savedQuestions) {
-          console.log('No goals/questions found, skipping agent recommendations');
-          return;
-        }
+        const fallbackName = (projectName.trim() || savedGoals[0] || `Journey Project ${new Date().toLocaleDateString()}`).slice(0, 80);
+        const fallbackDescription = (projectDescription.trim() || savedQuestions.join('\n') || DEFAULT_PROJECT_DESCRIPTION).slice(0, 400);
 
-        const goals = JSON.parse(savedGoals);
-        const questions = JSON.parse(savedQuestions);
-
-        if (!goals || !questions || questions.length === 0) {
-          console.log('Goals or questions empty, skipping agent recommendations');
-          return;
-        }
-
-        setLoadingRecommendations(true);
-        console.log('🔮 Fetching agent recommendations...', { goals, questions });
-
-        // Use a dummy project ID or create a temporary project ID for the recommendations request
-        const dummyProjectId = 'temp-' + Date.now();
-        
-        // Call agent recommendations API
-        const token = localStorage.getItem('auth_token');
-        const response = await fetch(`/api/projects/${dummyProjectId}/agent-recommendations`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({
-            goals,
-            questions,
-            dataSource: dataSource || 'upload'
-          })
+        const response = await apiClient.createProject({
+          name: fallbackName,
+          description: fallbackDescription,
+          journeyType: normalizedProjectJourney,
         });
 
-        if (!response.ok) {
-          throw new Error(`Failed to fetch recommendations: ${response.statusText}`);
+        const createdProject = response?.project ?? response;
+        const newProjectId = createdProject?.id;
+
+        if (!newProjectId) {
+          throw new Error('Project creation response missing id');
         }
 
-        const result = await response.json();
+        await linkProject(newProjectId);
+        setCurrentProjectId(newProjectId);
 
-        if (result.success && result.recommendations) {
-          console.log('✅ Agent recommendations received:', result.recommendations);
-          
-          // Pre-fill expected rows and analysis complexity
+        if (!projectName) {
+          setProjectName(createdProject?.name || fallbackName);
+        }
+        if (!projectDescription) {
+          setProjectDescription(createdProject?.description || fallbackDescription);
+        }
+      } catch (error: any) {
+        console.error('Failed to initialize project for journey setup:', error);
+        setProjectError(error.message || 'Failed to initialize project');
+      } finally {
+        setProjectInitializing(false);
+      }
+    };
+
+    createAndLinkProject();
+  }, [session, sessionLoading, sessionProjectId, projectInitializing, hasAttemptedProjectInit, projectName, projectDescription, savedGoals, savedQuestions, normalizedProjectJourney, linkProject]);
+
+  // Fetch agent recommendations once a real project is available
+  useEffect(() => {
+    if (!currentProjectId) {
+      return;
+    }
+
+    if (!savedGoals.length || !savedQuestions.length) {
+      return;
+    }
+
+    const signaturePayload = JSON.stringify({
+      projectId: currentProjectId,
+      goals: savedGoals,
+      questions: savedQuestions,
+      dataSource: dataSource || 'upload',
+    });
+
+    if (recommendationSignatureRef.current === signaturePayload) {
+      return;
+    }
+
+    let cancelled = false;
+    recommendationSignatureRef.current = signaturePayload;
+    setLoadingRecommendations(true);
+
+    const fetchRecommendations = async () => {
+      try {
+        const result = await apiClient.post(`/api/projects/${currentProjectId}/agent-recommendations`, {
+          goals: savedGoals,
+          questions: savedQuestions,
+          dataSource: dataSource || 'upload',
+        });
+
+        if (cancelled) return;
+
+        if (result?.success && result.recommendations) {
           if (result.recommendations.expectedDataSize && !expectedRows) {
             setExpectedRows(result.recommendations.expectedDataSize);
           }
-          
+
           if (result.recommendations.analysisComplexity && !analysisComplexity) {
             setAnalysisComplexity(result.recommendations.analysisComplexity);
           }
         }
-
-      } catch (error: any) {
-        console.error('Failed to fetch agent recommendations:', error);
-        // Don't show error to user - just log it
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Failed to fetch agent recommendations:', error);
+          recommendationSignatureRef.current = null;
+        }
       } finally {
-        setLoadingRecommendations(false);
+        if (!cancelled) {
+          setLoadingRecommendations(false);
+        }
       }
-    }
+    };
 
-    fetchAgentRecommendations();
-  }, []); // Only run once on mount
+    fetchRecommendations();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentProjectId, savedGoals, savedQuestions, dataSource]);
 
   useEffect(() => {
     if (journeyType !== 'business') return;
@@ -187,6 +369,36 @@ export default function ProjectSetupStep({ journeyType }: ProjectSetupStepProps)
   const journeyInfo = getJourneyTypeInfo();
   const Icon = journeyInfo.icon;
 
+  const journeyColorClasses: Record<string, { card: string; title: string; description: string; badge: string }> = {
+    blue: {
+      card: "border-blue-200 bg-blue-50",
+      title: "text-blue-900",
+      description: "text-blue-700",
+      badge: "bg-blue-100 text-blue-800",
+    },
+    green: {
+      card: "border-green-200 bg-green-50",
+      title: "text-green-900",
+      description: "text-green-700",
+      badge: "bg-green-100 text-green-800",
+    },
+    purple: {
+      card: "border-purple-200 bg-purple-50",
+      title: "text-purple-900",
+      description: "text-purple-700",
+      badge: "bg-purple-100 text-purple-800",
+    },
+    yellow: {
+      card: "border-yellow-200 bg-yellow-50",
+      title: "text-yellow-900",
+      description: "text-yellow-700",
+      badge: "bg-yellow-100 text-yellow-800",
+    },
+  };
+
+  const journeyColors =
+    journeyColorClasses[journeyInfo.color] ?? journeyColorClasses.blue;
+
   const dataSourceOptions = [
     { value: 'csv', label: 'CSV File', description: 'Upload a CSV file with your data' },
     { value: 'excel', label: 'Excel File', description: 'Upload an Excel spreadsheet' },
@@ -228,20 +440,46 @@ export default function ProjectSetupStep({ journeyType }: ProjectSetupStepProps)
 
   return (
     <div className="space-y-6">
+      {projectError && (
+        <Card className="border-red-200 bg-red-50">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-red-900">
+              <AlertCircle className="w-5 h-5" />
+              Project Setup Warning
+            </CardTitle>
+            <CardDescription className="text-red-700">
+              {projectError}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <p className="text-sm text-red-700">
+              We couldn’t initialize a project for this journey. Make sure your details look correct, then retry.
+            </p>
+            <Button
+              onClick={handleRetryProjectInit}
+              disabled={projectInitializing}
+              variant="outline"
+            >
+              {projectInitializing ? 'Retrying...' : 'Retry project initialization'}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Journey Type Info */}
-      <Card className={`border-${journeyInfo.color}-200 bg-${journeyInfo.color}-50`}>
+      <Card className={journeyColors.card}>
         <CardHeader>
-          <CardTitle className={`flex items-center gap-2 text-${journeyInfo.color}-900`}>
+          <CardTitle className={`flex items-center gap-2 ${journeyColors.title}`}>
             <Icon className="w-5 h-5" />
             {journeyInfo.title}
           </CardTitle>
-          <CardDescription className={`text-${journeyInfo.color}-700`}>
+          <CardDescription className={journeyColors.description}>
             {journeyInfo.description}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex items-center gap-2">
-            <Badge variant="secondary" className={`bg-${journeyInfo.color}-100 text-${journeyInfo.color}-800`}>
+            <Badge variant="secondary" className={journeyColors.badge}>
               {journeyInfo.complexity}
             </Badge>
           </div>
@@ -258,6 +496,11 @@ export default function ProjectSetupStep({ journeyType }: ProjectSetupStepProps)
           <CardDescription>
             Basic information about your analysis project
           </CardDescription>
+          {loadingRecommendations && (
+            <p className="mt-3 text-xs text-blue-600">
+              Gathering agent recommendations; please wait a moment while we pre-fill suggestions.
+            </p>
+          )}
         </CardHeader>
         <CardContent>
           <div className="space-y-4">

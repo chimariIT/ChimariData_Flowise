@@ -3,6 +3,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Check, X, Upload, Database, Brain, Zap } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { apiClient } from "@/lib/api";
 
 interface SubscriptionTierDisplayProps {
   currentTier: string;
@@ -14,47 +16,40 @@ interface SubscriptionTierDisplayProps {
   onUpgrade?: () => void;
 }
 
-import { UNIFIED_SUBSCRIPTION_TIERS } from '@shared/unified-subscription-tiers';
+export default function SubscriptionTierDisplay({
+  currentTier,
+  usage = { uploads: 0, dataVolumeMB: 0, aiInsights: 0 },
+  onUpgrade
+}: SubscriptionTierDisplayProps) {
+  // Fetch tier data from API
+  const { data: pricingData } = useQuery({
+    queryKey: ['/api/pricing/tiers'],
+    queryFn: () => apiClient.get('/api/pricing/tiers'),
+  });
 
-const TIER_INFO = {
-  none: {
+  // Find current tier from API data
+  const apiTier = pricingData?.tiers?.find((t: any) =>
+    t.type === currentTier || t.id === currentTier
+  );
+
+  // Default tier info for 'none' tier
+  const defaultTierInfo = {
     name: 'No Subscription',
     price: 0,
     color: 'gray',
     features: { maxFiles: 0, maxFileSizeMB: 0, totalDataVolumeMB: 0, aiInsights: 0 }
-  },
-  trial: {
-    name: UNIFIED_SUBSCRIPTION_TIERS.trial.displayName,
-    price: UNIFIED_SUBSCRIPTION_TIERS.trial.monthlyPrice,
-    color: 'blue',
-    features: UNIFIED_SUBSCRIPTION_TIERS.trial.limits
-  },
-  starter: {
-    name: UNIFIED_SUBSCRIPTION_TIERS.starter.displayName,
-    price: UNIFIED_SUBSCRIPTION_TIERS.starter.monthlyPrice,
-    color: 'green',
-    features: UNIFIED_SUBSCRIPTION_TIERS.starter.limits
-  },
-  professional: {
-    name: UNIFIED_SUBSCRIPTION_TIERS.professional.displayName,
-    price: UNIFIED_SUBSCRIPTION_TIERS.professional.monthlyPrice,
-    color: 'purple',
-    features: UNIFIED_SUBSCRIPTION_TIERS.professional.limits
-  },
-  enterprise: {
-    name: UNIFIED_SUBSCRIPTION_TIERS.enterprise.displayName,
-    price: UNIFIED_SUBSCRIPTION_TIERS.enterprise.monthlyPrice,
-    color: 'gold',
-    features: UNIFIED_SUBSCRIPTION_TIERS.enterprise.limits
-  }
-};
+  };
 
-export default function SubscriptionTierDisplay({ 
-  currentTier, 
-  usage = { uploads: 0, dataVolumeMB: 0, aiInsights: 0 },
-  onUpgrade 
-}: SubscriptionTierDisplayProps) {
-  const tierInfo = TIER_INFO[currentTier as keyof typeof TIER_INFO] || TIER_INFO.none;
+  // Build tier info from API data or use default
+  const tierInfo = apiTier ? {
+    name: apiTier.name,
+    price: apiTier.price,
+    color: apiTier.type === 'trial' ? 'blue' :
+           apiTier.type === 'starter' ? 'green' :
+           apiTier.type === 'professional' ? 'purple' : 'gold',
+    features: apiTier.limits
+  } : defaultTierInfo;
+
   const { features } = tierInfo;
 
   const getUsagePercentage = (used: number, limit: number) => {

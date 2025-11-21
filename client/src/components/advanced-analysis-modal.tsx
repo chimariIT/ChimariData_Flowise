@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { X, TrendingUp, BarChart3, Zap, Target, Brain, Calculator, Download, FileText } from "lucide-react";
+import { apiClient } from "@/lib/api";
 
 type AnalysisTypeItem = {
   id: string;
@@ -95,6 +96,51 @@ export default function AdvancedAnalysisModal({
   const [isRunning, setIsRunning] = useState(false);
   const [results, setResults] = useState<any>(null);
   const { toast } = useToast();
+
+  const pipelineOverview = useMemo(() => {
+    const question = analysisConfig.question.trim() || 'Not specified';
+    const targetLabel = selectedAnalysisType?.multipleTargets
+      ? `${analysisConfig.targetVariables.length} target(s)`
+      : analysisConfig.targetVariable || 'Not selected';
+    const covariateCount = analysisConfig.covariates.length;
+    const status = isRunning
+      ? 'Running analysis'
+      : results
+        ? 'Analysis complete'
+        : 'Awaiting configuration';
+    const pathLabel = analysisPath === 'statistical'
+      ? 'Statistical'
+      : analysisPath === 'machine_learning'
+        ? 'Machine Learning'
+        : 'Agentic';
+    const outputs = {
+      findings: results?.results?.keyFindings?.length ?? 0,
+      recommendations: results?.results?.recommendations?.length ?? 0,
+      visuals: results?.results?.visualizations?.length ?? 0
+    };
+
+    return {
+      datasetId: projectId,
+      question,
+      pathLabel,
+      analysisName: selectedAnalysisType?.name || 'Not selected',
+      targetLabel,
+      covariateCount,
+      status,
+      outputs
+    };
+  }, [
+    projectId,
+    analysisConfig.question,
+    analysisConfig.targetVariable,
+    analysisConfig.targetVariables,
+    analysisConfig.covariates,
+    analysisPath,
+    selectedAnalysisType?.name,
+    selectedAnalysisType?.multipleTargets,
+    isRunning,
+    results
+  ]);
 
   if (!isOpen) return null;
 
@@ -458,43 +504,23 @@ ${results.results.recommendations.map((rec: string, index: number) => `${index +
     setResults(null);
 
     try {
-      console.log("Starting advanced analysis with project ID:", projectId);
-      console.log("Analysis config:", analysisConfig);
-      
-      // Add authentication headers
-      const token = localStorage.getItem('auth_token');
-      const headers: any = {
-        "Content-Type": "application/json",
+      const payload = {
+        ...analysisConfig,
+        analysisType,
+        analysisPath
       };
-      
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
 
-      const response = await fetch("/api/step-by-step-analysis", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          projectId,
-          config: {
-            ...analysisConfig,
-            analysisType,
-            analysisPath
-          }
-        })
-      });
-
-      const result = await response.json();
+      const result = await apiClient.runStepByStepAnalysis(projectId, payload);
       console.log("API Response:", result);
 
-      if (result.success) {
+      if (result?.success) {
         setResults(result.result);
         toast({
           title: "Analysis Complete",
-          description: `${selectedAnalysisType?.name} analysis completed successfully`
+          description: `${selectedAnalysisType?.name || 'Advanced'} analysis completed successfully`
         });
       } else {
-        throw new Error(result.error || "Analysis failed");
+        throw new Error(result?.error || "Analysis failed");
       }
     } catch (error) {
       console.error("Advanced analysis error:", error);
@@ -1408,6 +1434,68 @@ ${results.results.recommendations.map((rec: string, index: number) => `${index +
               </div>
             </div>
           )}
+
+          {/* Input / Process / Output Snapshot */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Zap className="w-4 h-4" />
+                Analysis Pipeline Overview
+              </CardTitle>
+              <CardDescription>
+                Track the data feeding this analysis, how it will execute, and the outputs produced.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-4 md:grid-cols-3">
+                <div className="p-4 border rounded-lg bg-slate-50">
+                  <p className="text-xs uppercase font-semibold text-slate-500 mb-2">Inputs</p>
+                  <ul className="text-sm text-slate-700 space-y-2">
+                    <li>
+                      <span className="font-medium">Project:</span> {pipelineOverview.datasetId}
+                    </li>
+                    <li>
+                      <span className="font-medium">Question:</span> {pipelineOverview.question}
+                    </li>
+                    <li>
+                      <span className="font-medium">Targets:</span> {pipelineOverview.targetLabel}
+                    </li>
+                    <li>
+                      <span className="font-medium">Covariates:</span> {pipelineOverview.covariateCount}
+                    </li>
+                  </ul>
+                </div>
+                <div className="p-4 border rounded-lg bg-slate-50">
+                  <p className="text-xs uppercase font-semibold text-slate-500 mb-2">Process</p>
+                  <ul className="text-sm text-slate-700 space-y-2">
+                    <li>
+                      <span className="font-medium">Path:</span> {pipelineOverview.pathLabel}
+                    </li>
+                    <li>
+                      <span className="font-medium">Analysis:</span> {pipelineOverview.analysisName}
+                    </li>
+                    <li>
+                      <span className="font-medium">Status:</span> {pipelineOverview.status}
+                    </li>
+                  </ul>
+                </div>
+                <div className="p-4 border rounded-lg bg-slate-50">
+                  <p className="text-xs uppercase font-semibold text-slate-500 mb-2">Outputs</p>
+                  <ul className="text-sm text-slate-700 space-y-2">
+                    <li>
+                      <span className="font-medium">Findings:</span> {pipelineOverview.outputs.findings}
+                    </li>
+                    <li>
+                      <span className="font-medium">Recommendations:</span> {pipelineOverview.outputs.recommendations}
+                    </li>
+                    <li>
+                      <span className="font-medium">Visuals:</span> {pipelineOverview.outputs.visuals}
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
           {/* Results Display */}
           {results && (

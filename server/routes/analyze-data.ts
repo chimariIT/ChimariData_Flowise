@@ -1,11 +1,31 @@
 import { Router } from 'express';
+import { JourneyType, JourneyTypeEnum } from '@shared/canonical-types';
+import { nanoid } from 'nanoid';
 import { ensureAuthenticated } from './auth';
 import { storage } from '../services/storage';
 import { PythonProcessor } from '../python-processor';
 import { audienceFormatter, AudienceContext } from '../services/audience-formatter';
-import { useProjectSession } from '../hooks/useProjectSession';
 
 const router = Router();
+
+const coerceJourneyType = (value: unknown): JourneyType => {
+  if (typeof value === 'string') {
+    const options = JourneyTypeEnum.options as readonly string[];
+    if (options.includes(value)) {
+      return value as JourneyType;
+    }
+  }
+  return 'ai_guided';
+};
+
+const ensureArray = <T>(value: unknown): T[] => (Array.isArray(value) ? value as T[] : []);
+
+const normalizeAudience = (value: unknown): AudienceContext['primaryAudience'] => {
+  const allowed: AudienceContext['primaryAudience'][] = ['executive', 'technical', 'business_ops', 'marketing', 'mixed'];
+  return allowed.includes(value as AudienceContext['primaryAudience'])
+    ? value as AudienceContext['primaryAudience']
+    : 'mixed';
+};
 
 /**
  * Analyze project data with audience-specific formatting
@@ -35,12 +55,22 @@ router.post('/analyze-data/:projectId', ensureAuthenticated, async (req, res) =>
 
     // Get project data
     const dataset = await storage.getDatasetForProject(projectId);
-    if (!dataset || !dataset.data) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Project has no data to analyze' 
+    const rawDatasetData = (dataset as any)?.data;
+    const datasetRows = ensureArray<any>(rawDatasetData);
+    if (!dataset || datasetRows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Project has no data to analyze'
       });
     }
+
+    const datasetSchemaRaw = (dataset as any)?.schema;
+    const datasetSchema = datasetSchemaRaw && typeof datasetSchemaRaw === 'object'
+      ? (datasetSchemaRaw as Record<string, unknown>)
+      : {};
+    const schemaColumns = Object.keys(datasetSchema);
+
+    const projectJourneyType = coerceJourneyType((project as any)?.journeyType);
 
     // Get audience context from session if not provided
     let finalAudienceContext: AudienceContext;
@@ -55,7 +85,7 @@ router.post('/analyze-data/:projectId', ensureAuthenticated, async (req, res) =>
             primaryAudience: sessionData.prepare.audience.primaryAudience || 'mixed',
             secondaryAudiences: sessionData.prepare.audience.secondaryAudiences || [],
             decisionContext: sessionData.prepare.audience.decisionContext || '',
-            journeyType: project.journeyType || 'business'
+            journeyType: projectJourneyType
           };
         } else {
           // Default audience context
@@ -72,7 +102,7 @@ router.post('/analyze-data/:projectId', ensureAuthenticated, async (req, res) =>
           primaryAudience: 'mixed',
           secondaryAudiences: [],
           decisionContext: '',
-          journeyType: project.journeyType || 'business'
+          journeyType: projectJourneyType
         };
       }
     }
@@ -82,7 +112,7 @@ router.post('/analyze-data/:projectId', ensureAuthenticated, async (req, res) =>
     // Perform the analysis
     const analysisResult = await PythonProcessor.analyzeData(
       projectId,
-      dataset.data,
+      datasetRows,
       analysisType,
       config || {}
     );
@@ -94,22 +124,43 @@ router.post('/analyze-data/:projectId', ensureAuthenticated, async (req, res) =>
       });
     }
 
+    const processorPayload = analysisResult.data;
+    const payloadObject = processorPayload && typeof processorPayload === 'object'
+      ? (processorPayload as Record<string, unknown>)
+      : {};
+    const payloadData = Object.prototype.hasOwnProperty.call(payloadObject, 'data')
+      ? (payloadObject as any).data
+      : (processorPayload ?? {});
+    const summary = typeof (payloadObject as any).summary === 'string' ? (payloadObject as any).summary : undefined;
+    const insights = Array.isArray((payloadObject as any).insights) ? (payloadObject as any).insights as string[] : undefined;
+    const recommendations = Array.isArray((payloadObject as any).recommendations)
+      ? (payloadObject as any).recommendations as string[]
+      : undefined;
+    const visualizationList = Array.isArray(analysisResult.visualizations)
+      ? analysisResult.visualizations
+      : Array.isArray((payloadObject as any).visualizations)
+        ? (payloadObject as any).visualizations as any[]
+        : undefined;
+    const metadataFromPayload = (payloadObject as any).metadata;
+    const metadata = {
+      projectId,
+      analysisType,
+      timestamp: new Date().toISOString(),
+      dataSize: datasetRows.length,
+      columns: schemaColumns,
+      ...(metadataFromPayload && typeof metadataFromPayload === 'object' ? metadataFromPayload : {})
+    };
+
     // Format results for the specified audience
     const formattedResult = await audienceFormatter.formatForAudience(
       {
         type: analysisType,
-        data: analysisResult.data,
-        summary: analysisResult.summary,
-        insights: analysisResult.insights,
-        recommendations: analysisResult.recommendations,
-        visualizations: analysisResult.visualizations,
-        metadata: {
-          projectId,
-          analysisType,
-          timestamp: new Date().toISOString(),
-          dataSize: dataset.data.length,
-          columns: Object.keys(dataset.schema || {})
-        }
+        data: payloadData,
+        summary,
+        insights,
+        recommendations,
+        visualizations: visualizationList,
+        metadata
       },
       finalAudienceContext
     );
@@ -117,25 +168,22 @@ router.post('/analyze-data/:projectId', ensureAuthenticated, async (req, res) =>
     // Save analysis results as project artifact
     try {
       await storage.createArtifact({
-        id: `analysis_${projectId}_${Date.now()}`,
+        id: nanoid(),
         projectId,
         type: 'analysis',
-        title: `${analysisType} Analysis Results`,
-        description: `Analysis results formatted for ${finalAudienceContext.primaryAudience} audience`,
-        content: {
+        status: 'completed',
+        params: {
+          analysisType,
+          audience: finalAudienceContext.primaryAudience,
+          journeyType: finalAudienceContext.journeyType
+        },
+        output: {
           analysisType,
           audienceContext: finalAudienceContext,
-          rawResults: analysisResult.data,
-          formattedResults: formattedResult
-        },
-        metadata: {
-          analysisType,
-          audienceType: finalAudienceContext.primaryAudience,
-          dataSize: dataset.data.length,
-          columnCount: Object.keys(dataset.schema || {}).length
-        },
-        createdAt: new Date(),
-        updatedAt: new Date()
+          rawResults: processorPayload,
+          formattedResults: formattedResult,
+          metadata
+        }
       });
     } catch (artifactError) {
       console.warn('Failed to save analysis artifact:', artifactError);
@@ -146,16 +194,9 @@ router.post('/analyze-data/:projectId', ensureAuthenticated, async (req, res) =>
       success: true,
       analysisType,
       audienceContext: finalAudienceContext,
-      rawResults: analysisResult.data,
+      rawResults: processorPayload,
       formattedResults: formattedResult,
-      metadata: {
-        projectId,
-        analysisType,
-        audienceType: finalAudienceContext.primaryAudience,
-        timestamp: new Date().toISOString(),
-        dataSize: dataset.data.length,
-        columnCount: Object.keys(dataset.schema || {}).length
-      }
+      metadata
     });
 
   } catch (error: any) {
@@ -173,7 +214,8 @@ router.post('/analyze-data/:projectId', ensureAuthenticated, async (req, res) =>
 router.get('/analyze-data/:projectId/results', ensureAuthenticated, async (req, res) => {
   try {
     const { projectId } = req.params;
-    const { audienceType = 'mixed' } = req.query;
+  const { audienceType = 'mixed' } = req.query;
+  const requestedAudience = normalizeAudience(audienceType);
     const userId = (req.user as any)?.id;
 
     // Get project and verify ownership
@@ -186,6 +228,8 @@ router.get('/analyze-data/:projectId/results', ensureAuthenticated, async (req, 
       });
     }
 
+    const projectJourneyType = coerceJourneyType((project as any)?.journeyType);
+
     // Get analysis artifacts for this project
     const artifacts = await storage.getProjectArtifacts(projectId, 'analysis');
     
@@ -197,8 +241,9 @@ router.get('/analyze-data/:projectId/results', ensureAuthenticated, async (req, 
     }
 
     // Get the most recent analysis
+    const getTimestamp = (value: Date | string | null | undefined) => value ? new Date(value).getTime() : 0;
     const latestAnalysis = artifacts.sort((a, b) => 
-      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      getTimestamp(b.createdAt) - getTimestamp(a.createdAt)
     )[0];
 
     // Get audience context from session
@@ -207,32 +252,34 @@ router.get('/analyze-data/:projectId/results', ensureAuthenticated, async (req, 
       const sessionData = await storage.getProjectSession(projectId);
       if (sessionData?.prepare?.audience) {
         audienceContext = {
-          primaryAudience: audienceType as any || sessionData.prepare.audience.primaryAudience || 'mixed',
+          primaryAudience: requestedAudience || sessionData.prepare.audience.primaryAudience || 'mixed',
           secondaryAudiences: sessionData.prepare.audience.secondaryAudiences || [],
           decisionContext: sessionData.prepare.audience.decisionContext || '',
-          journeyType: project.journeyType || 'business'
+          journeyType: projectJourneyType
         };
       } else {
         audienceContext = {
-          primaryAudience: audienceType as any || 'mixed',
+          primaryAudience: requestedAudience || 'mixed',
           secondaryAudiences: [],
           decisionContext: '',
-          journeyType: project.journeyType || 'business'
+          journeyType: projectJourneyType
         };
       }
     } catch (error) {
       audienceContext = {
-        primaryAudience: audienceType as any || 'mixed',
+  primaryAudience: requestedAudience || 'mixed',
         secondaryAudiences: [],
         decisionContext: '',
-        journeyType: project.journeyType || 'business'
+        journeyType: projectJourneyType
       };
     }
 
     // Re-format results for the requested audience if different
-    const artifactContent = latestAnalysis.content as any;
-    if (artifactContent?.formattedResults && 
-        artifactContent?.audienceContext?.primaryAudience === audienceType) {
+    const artifactContent = (latestAnalysis.output ?? {}) as any;
+    const artifactMetadata = artifactContent?.metadata || {};
+
+  if (artifactContent?.formattedResults &&
+    artifactContent?.audienceContext?.primaryAudience === requestedAudience) {
       // Use existing formatted results
       res.json({
         success: true,
@@ -240,7 +287,7 @@ router.get('/analyze-data/:projectId/results', ensureAuthenticated, async (req, 
         analysisType: artifactContent.analysisType,
         audienceContext,
         formattedResults: artifactContent.formattedResults,
-        metadata: latestAnalysis.metadata,
+        metadata: artifactMetadata,
         createdAt: latestAnalysis.createdAt
       });
     } else {
@@ -253,7 +300,7 @@ router.get('/analyze-data/:projectId/results', ensureAuthenticated, async (req, 
           insights: artifactContent?.insights,
           recommendations: artifactContent?.recommendations,
           visualizations: artifactContent?.visualizations,
-          metadata: latestAnalysis.metadata
+          metadata: artifactMetadata
         },
         audienceContext
       );
@@ -264,7 +311,7 @@ router.get('/analyze-data/:projectId/results', ensureAuthenticated, async (req, 
         analysisType: artifactContent?.analysisType || 'analysis',
         audienceContext,
         formattedResults: formattedResult,
-        metadata: latestAnalysis.metadata,
+        metadata: artifactMetadata,
         createdAt: latestAnalysis.createdAt
       });
     }
@@ -298,15 +345,19 @@ router.get('/analyze-data/:projectId/types', ensureAuthenticated, async (req, re
 
     // Get dataset schema to determine available analysis types
     const dataset = await storage.getDatasetForProject(projectId);
-    if (!dataset || !dataset.schema) {
+    const datasetSchemaRaw = (dataset as any)?.schema;
+    const datasetSchema = datasetSchemaRaw && typeof datasetSchemaRaw === 'object'
+      ? (datasetSchemaRaw as Record<string, { type?: string }>)
+      : {};
+    if (!dataset || Object.keys(datasetSchema).length === 0) {
       return res.status(400).json({
         success: false,
         error: 'Project has no data schema'
       });
     }
 
-    const schema = dataset.schema;
-    const columnTypes = Object.values(schema).map((col: any) => col.type);
+    const columnTypes = Object.values(datasetSchema).map((col) => (col as any)?.type);
+    const datasetRows = ensureArray<any>((dataset as any)?.data);
     
     // Determine available analysis types based on data types
     const availableTypes = [];
@@ -330,10 +381,10 @@ router.get('/analyze-data/:projectId/types', ensureAuthenticated, async (req, re
       success: true,
       availableTypes,
       schema: {
-        columns: Object.keys(schema),
-        columnTypes: Object.values(schema),
-        totalColumns: Object.keys(schema).length,
-        totalRows: dataset.data?.length || 0
+        columns: Object.keys(datasetSchema),
+        columnTypes,
+        totalColumns: Object.keys(datasetSchema).length,
+        totalRows: datasetRows.length
       }
     });
 

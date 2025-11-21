@@ -1,13 +1,13 @@
 import { Router } from 'express';
 import { audienceFormatter, AudienceContext } from '../services/audience-formatter';
-import { authenticateUser } from '../middleware/auth';
+import { ensureAuthenticated } from './auth';
 
 const router = Router();
 
 /**
  * Format analysis results for specific audience
  */
-router.post('/format-results', authenticateUser, async (req, res) => {
+router.post('/format-results', ensureAuthenticated, async (req, res) => {
   try {
     const { analysisResult, audienceContext, projectId } = req.body;
 
@@ -56,7 +56,7 @@ router.post('/format-results', authenticateUser, async (req, res) => {
 /**
  * Get audience-specific analysis preview
  */
-router.post('/preview-analysis', authenticateUser, async (req, res) => {
+router.post('/preview-analysis', ensureAuthenticated, async (req, res) => {
   try {
     const { projectId, analysisType, audienceContext } = req.body;
 
@@ -108,7 +108,8 @@ Keep it concise and audience-appropriate.`;
       }
     };
 
-    const preview = audiencePreviews[audienceContext.primaryAudience as keyof typeof audiencePreviews] || audiencePreviews.mixed;
+  const primaryAudience = (audienceContext.primaryAudience || 'mixed') as keyof typeof audiencePreviews;
+  const preview = audiencePreviews[primaryAudience] || audiencePreviews.mixed;
 
     res.json({
       success: true,
@@ -124,7 +125,7 @@ Keep it concise and audience-appropriate.`;
         business_ops: 'Operational efficiency and process improvements',
         marketing: 'Customer insights and campaign optimization',
         mixed: 'Comprehensive multi-stakeholder value'
-      }[audienceContext.primaryAudience] || 'General business value',
+      }[primaryAudience] || 'General business value',
       timestamp: new Date().toISOString()
     });
 
@@ -140,7 +141,7 @@ Keep it concise and audience-appropriate.`;
 /**
  * Get audience formatting templates
  */
-router.get('/templates', authenticateUser, async (req, res) => {
+router.get('/templates', ensureAuthenticated, async (req, res) => {
   try {
     const templates = {
       executive: {

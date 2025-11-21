@@ -49,6 +49,7 @@ interface CapabilityCategory {
 
 interface CustomJourneyBuilderProps {
   user?: any;
+  onBack?: () => void;
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -61,7 +62,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   big_data: 'Big Data Processing'
 };
 
-export default function CustomJourneyBuilder({ user }: CustomJourneyBuilderProps) {
+export default function CustomJourneyBuilder({ user, onBack }: CustomJourneyBuilderProps) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [selectedCapabilities, setSelectedCapabilities] = useState<string[]>([]);
@@ -201,7 +202,14 @@ export default function CustomJourneyBuilder({ user }: CustomJourneyBuilderProps
   }
 
   return (
-    <div className="container mx-auto px-4 py-8">
+    <div className="container mx-auto px-4 py-8 space-y-6">
+      {onBack && (
+        <div>
+          <Button variant="ghost" onClick={onBack} className="px-0">
+            ← Back to journeys
+          </Button>
+        </div>
+      )}
       {/* Header */}
       <div className="mb-8">
         <div className="inline-block bg-indigo-50 px-4 py-2 rounded-full mb-4">

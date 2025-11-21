@@ -76,7 +76,7 @@ export default function FreeTrialUploader() {
       if (file.size > 10 * 1024 * 1024) { // 10MB limit
         toast({
           title: "File too large",
-          description: "Free trial is limited to 10MB files",
+          description: "Trial is limited to 10MB files",
           variant: "destructive",
         });
         return;
@@ -488,7 +488,7 @@ export default function FreeTrialUploader() {
                 Drag & drop a file here, or click to select
               </p>
               <p className="text-sm text-gray-500">
-                Free trial: Up to 10MB • Excel, CSV, JSON, text files
+                Trial: Up to 10MB • Excel, CSV, JSON, text files
               </p>
               <Badge variant="outline" className="mt-2">
                 No signup required
@@ -538,7 +538,7 @@ export default function FreeTrialUploader() {
         </div>
       )}
       
-      {/* Free Trial PII Warning Dialog */}
+  {/* Trial PII Warning Dialog */}
       {showPIIDialog && piiDialogData && (
         <FreeTrialPIIDialog
           isOpen={showPIIDialog}

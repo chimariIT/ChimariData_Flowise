@@ -8,6 +8,20 @@ import { ToolExecutionContext, ToolExecutionResult } from './mcp-tool-registry';
  */
 
 export class ComprehensiveMLHandler {
+  private buildMetrics(durationMs: number, billingUnits: number): ToolExecutionResult['metrics'] {
+    return {
+      duration: durationMs,
+      resourcesUsed: {
+        cpu: Math.max(0.1, billingUnits * 0.05),
+        memory: Math.max(1, billingUnits * 0.1),
+        storage: 0.1
+      },
+      cost: billingUnits * 0.01,
+      executionTimeMs: durationMs,
+      billingUnits
+    };
+  }
+
   /**
    * Execute comprehensive ML pipeline with AutoML
    */
@@ -59,11 +73,7 @@ export class ComprehensiveMLHandler {
           status: 'error',
           result: null,
           error: result.error || 'ML pipeline failed',
-          metrics: {
-            executionTimeMs: executionTime,
-            billingUnits: 0
-          },
-          timestamp: new Date().toISOString()
+          metrics: this.buildMetrics(executionTime, 0)
         };
       }
 
@@ -84,11 +94,10 @@ export class ComprehensiveMLHandler {
             problem_type: input.problemType
           }
         },
-        metrics: {
-          executionTimeMs: executionTime,
-          billingUnits: this.calculateBillingUnits(input.data.length, input.useAutoML || false)
-        },
-        timestamp: new Date().toISOString()
+        metrics: this.buildMetrics(
+          executionTime,
+          this.calculateBillingUnits(input.data.length, input.useAutoML || false)
+        )
       };
 
     } catch (error: any) {
@@ -99,12 +108,8 @@ export class ComprehensiveMLHandler {
         toolId: 'comprehensive_ml_pipeline',
         status: 'error',
         result: null,
-        error: error.message || 'Unknown error',
-        metrics: {
-          executionTimeMs: executionTime,
-          billingUnits: 0
-        },
-        timestamp: new Date().toISOString()
+  error: error.message || 'Unknown error',
+  metrics: this.buildMetrics(executionTime, 0)
       };
     }
   }
@@ -144,11 +149,7 @@ export class ComprehensiveMLHandler {
           status: 'error',
           result: null,
           error: result.error || 'AutoML optimization failed',
-          metrics: {
-            executionTimeMs: executionTime,
-            billingUnits: 0
-          },
-          timestamp: new Date().toISOString()
+          metrics: this.buildMetrics(executionTime, 0)
         };
       }
 
@@ -163,11 +164,10 @@ export class ComprehensiveMLHandler {
           optimization_results: result.automl_results,
           trials_completed: input.trials || 50
         },
-        metrics: {
-          executionTimeMs: executionTime,
-          billingUnits: this.calculateAutoMLBillingUnits(input.trials || 50)
-        },
-        timestamp: new Date().toISOString()
+        metrics: this.buildMetrics(
+          executionTime,
+          this.calculateAutoMLBillingUnits(input.trials || 50)
+        )
       };
 
     } catch (error: any) {
@@ -178,12 +178,8 @@ export class ComprehensiveMLHandler {
         toolId: 'automl_optimizer',
         status: 'error',
         result: null,
-        error: error.message || 'Unknown error',
-        metrics: {
-          executionTimeMs: executionTime,
-          billingUnits: 0
-        },
-        timestamp: new Date().toISOString()
+  error: error.message || 'Unknown error',
+  metrics: this.buildMetrics(executionTime, 0)
       };
     }
   }
@@ -214,12 +210,8 @@ export class ComprehensiveMLHandler {
         executionId: context.executionId,
         toolId: 'ml_library_selector',
         status: 'success',
-        result: recommendation,
-        metrics: {
-          executionTimeMs: executionTime,
-          billingUnits: 0.1 // Minimal cost for recommendation
-        },
-        timestamp: new Date().toISOString()
+  result: recommendation,
+  metrics: this.buildMetrics(executionTime, 0.1)
       };
 
     } catch (error: any) {
@@ -229,13 +221,9 @@ export class ComprehensiveMLHandler {
         executionId: context.executionId,
         toolId: 'ml_library_selector',
         status: 'error',
-        result: null,
-        error: error.message || 'Unknown error',
-        metrics: {
-          executionTimeMs: executionTime,
-          billingUnits: 0
-        },
-        timestamp: new Date().toISOString()
+  result: null,
+  error: error.message || 'Unknown error',
+  metrics: this.buildMetrics(executionTime, 0)
       };
     }
   }
@@ -257,12 +245,8 @@ export class ComprehensiveMLHandler {
         executionId: context.executionId,
         toolId: 'ml_health_check',
         status: 'success',
-        result: healthStatus,
-        metrics: {
-          executionTimeMs: executionTime,
-          billingUnits: 0
-        },
-        timestamp: new Date().toISOString()
+  result: healthStatus,
+  metrics: this.buildMetrics(executionTime, 0)
       };
 
     } catch (error: any) {
@@ -272,13 +256,9 @@ export class ComprehensiveMLHandler {
         executionId: context.executionId,
         toolId: 'ml_health_check',
         status: 'error',
-        result: null,
-        error: error.message || 'Unknown error',
-        metrics: {
-          executionTimeMs: executionTime,
-          billingUnits: 0
-        },
-        timestamp: new Date().toISOString()
+  result: null,
+  error: error.message || 'Unknown error',
+  metrics: this.buildMetrics(executionTime, 0)
       };
     }
   }

@@ -1,52 +1,301 @@
-const API_BASE = window.location.origin;
+// IMPORTANT: Direct backend connection to preserve Authorization headers
+// Vite proxy strips headers, so we connect directly in development
+const API_BASE = import.meta.env.DEV ? 'http://localhost:5000' : window.location.origin;
+const RETRYABLE_STATUS_CODES = [429, 502, 503, 504];
+const DEFAULT_RETRY_COUNT = 2;
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+type RequestOptions = {
+  parseJson?: boolean;
+  retries?: number;
+  retryStatuses?: number[];
+  backoffMs?: number;
+  autoRefresh?: boolean;
+  treat404AsNull?: boolean;
+  rawResponse?: boolean;
+  signal?: AbortSignal;
+};
 
 export class APIClient {
+  private refreshPromise: Promise<boolean> | null = null;
+
   private buildAuthHeaders(base: Record<string, string> = {}) {
     const token = localStorage.getItem('auth_token');
     if (token) {
       base['Authorization'] = `Bearer ${token}`;
+      base['X-Forwarded-Authorization'] = `Bearer ${token}`;
     }
+
+    // Add customer context header if in consultant mode
+    const consultantMode = localStorage.getItem('consultant_mode');
+    const consultantCustomer = localStorage.getItem('consultant_customer');
+    if (consultantMode === 'true' && consultantCustomer) {
+      try {
+        const customer = JSON.parse(consultantCustomer);
+        base['X-Customer-Context'] = JSON.stringify({
+          userId: customer.id,
+          customerName: customer.name,
+          customerEmail: customer.email
+        });
+      } catch (error) {
+        console.warn('Failed to parse consultant customer context:', error);
+      }
+    }
+
     return base;
   }
 
+  private dispatchAuthEvent(eventName: 'auth-token-stored' | 'auth-token-cleared') {
+    try {
+      window.dispatchEvent(new Event(eventName));
+    } catch (error) {
+      console.warn('Failed to dispatch auth event', error);
+    }
+  }
 
-  async post<T = any>(url: string, body?: any, options: { headers?: Record<string, string> } = {}): Promise<T> {
-    const headers = this.buildAuthHeaders({ 'Content-Type': 'application/json', ...(options.headers || {}) });
-    const response = await fetch(`${API_BASE}${url}`, {
+  private async refreshAuthToken(): Promise<boolean> {
+    if (this.refreshPromise) {
+      return this.refreshPromise;
+    }
+
+    const token = localStorage.getItem('auth_token');
+    if (!token) {
+      return false;
+    }
+
+    this.refreshPromise = (async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/auth/refresh`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          credentials: 'include'
+        });
+
+        if (!response.ok) {
+          if (response.status === 401) {
+            localStorage.removeItem('auth_token');
+            this.dispatchAuthEvent('auth-token-cleared');
+          }
+          return false;
+        }
+
+        const data = await response.json().catch(() => null);
+        if (data?.token) {
+          localStorage.setItem('auth_token', data.token);
+          this.dispatchAuthEvent('auth-token-stored');
+          return true;
+        }
+
+        return false;
+      } catch (error) {
+        console.error('Token refresh failed:', error);
+        return false;
+      } finally {
+        this.refreshPromise = null;
+      }
+    })();
+
+    return this.refreshPromise;
+  }
+
+  private async request<T>(url: string, init: RequestInit = {}, options: RequestOptions = {}): Promise<T> {
+    const {
+      parseJson = true,
+      retries = DEFAULT_RETRY_COUNT,
+      retryStatuses = RETRYABLE_STATUS_CODES,
+      backoffMs = 1000,
+      autoRefresh = true,
+      treat404AsNull = false,
+      rawResponse = false,
+      signal
+    } = options;
+
+    let attempt = 0;
+    let refreshedThisRequest = false;
+    let lastError: unknown;
+
+    while (attempt <= retries) {
+      // Check if body is FormData - special handling needed
+      const isFormData = init.body instanceof FormData;
+      const headersInit = init.headers as HeadersInit | undefined;
+      const initialHeaders = headersInit ? new Headers(headersInit) : new Headers();
+      
+      // Build auth headers (always include Authorization)
+      const mergedHeaders = this.buildAuthHeaders(Object.fromEntries(initialHeaders.entries()));
+
+      // Debug: Log headers for upload requests
+      if (url.includes('/upload')) {
+        console.log('🔍 Building headers for upload:', {
+          isFormData,
+          hasAuthInMerged: !!mergedHeaders['Authorization'],
+          authPreview: mergedHeaders['Authorization']?.substring(0, 30),
+          allHeaderKeys: Object.keys(mergedHeaders)
+        });
+      }
+
+      // For FormData, don't manually set Content-Type - browser sets it automatically with boundary
+      // But we still need to include Authorization and other headers
+      const finalHeaders = new Headers();
+      let hasHeaders = false;
+      Object.entries(mergedHeaders).forEach(([key, value]) => {
+        // Skip Content-Type for FormData - browser will set it automatically with boundary
+        if (isFormData && key.toLowerCase() === 'content-type') {
+          return;
+        }
+        finalHeaders.set(key, value);
+        hasHeaders = true;
+      });
+
+      const isDevCrossOrigin = import.meta.env.DEV && API_BASE !== window.location.origin;
+
+      // In dev we call the API directly (cross-origin). Keep credentials included so browsers treat
+      // the Authorization header as a credentialed request and preserve it during CORS.
+      const finalInit: RequestInit = {
+        ...init,
+        mode: init.mode ?? 'cors',
+        credentials: init.credentials ?? 'include',
+        signal
+      };
+
+      // Always set headers if we have any (Authorization is critical for authenticated requests)
+      // For FormData, browser will automatically set Content-Type with boundary even if we set other headers
+      if (hasHeaders) {
+        finalInit.headers = finalHeaders;
+      }
+
+      // Debug: Log request details including Authorization header
+      const hasAuth = finalHeaders.has('Authorization');
+      const authPreview = hasAuth ? finalHeaders.get('Authorization')?.substring(0, 20) + '...' : 'none';
+      console.log(`🌐 [REQUEST] ${finalInit.method || 'GET'} ${url} - Auth: ${authPreview}`);
+
+      try {
+        const response = await fetch(`${API_BASE}${url}`, finalInit);
+
+        if (response.status === 401 && autoRefresh && !refreshedThisRequest && localStorage.getItem('auth_token')) {
+          const refreshed = await this.refreshAuthToken();
+          if (refreshed) {
+            refreshedThisRequest = true;
+            attempt++;
+            continue;
+          }
+        }
+
+        if (retryStatuses.includes(response.status) && attempt < retries) {
+          await sleep(backoffMs * (attempt + 1));
+          attempt++;
+          continue;
+        }
+
+        if (response.status === 401 && autoRefresh) {
+          console.error('🔐 [AUTH] 401 response - REMOVING TOKEN from localStorage');
+          console.error('🔐 [AUTH] Request was:', finalInit.method || 'GET', url);
+          localStorage.removeItem('auth_token');
+          this.dispatchAuthEvent('auth-token-cleared');
+          console.error('🔐 [AUTH] Token cleared event dispatched');
+        }
+
+        if (response.status === 404 && treat404AsNull) {
+          return null as T;
+        }
+
+        if (!response.ok) {
+          let errorMessage = `Request to ${url} failed with status ${response.status}`;
+          let errorBody: any = null;
+          try {
+            errorBody = await response.json();
+            errorMessage = errorBody.error || errorBody.message || errorMessage;
+          } catch {
+            // ignore parse errors
+          }
+          const error: any = new Error(errorMessage);
+          error.status = response.status;
+          if (errorBody) {
+            error.details = errorBody;
+          }
+          throw error;
+        }
+
+        if (rawResponse) {
+          return response as unknown as T;
+        }
+
+        if (!parseJson) {
+          return undefined as T;
+        }
+
+        if (response.status === 204) {
+          return undefined as T;
+        }
+
+        const contentType = response.headers.get('Content-Type') || '';
+        if (!contentType.includes('application/json')) {
+          return undefined as T;
+        }
+
+        return (await response.json()) as T;
+      } catch (error: any) {
+        if (error?.name === 'AbortError') {
+          throw error;
+        }
+
+        const shouldRetryNetworkError = error instanceof TypeError;
+        const status = (error as any)?.status;
+
+        if ((shouldRetryNetworkError || (typeof status === 'number' && retryStatuses.includes(status))) && attempt < retries) {
+          await sleep(backoffMs * (attempt + 1));
+          attempt++;
+          lastError = error;
+          continue;
+        }
+
+        lastError = error;
+        break;
+      }
+    }
+
+    if (lastError) {
+      throw lastError;
+    }
+
+    throw new Error(`Request to ${url} failed after ${retries + 1} attempts`);
+  }
+
+  private async requestBlob(url: string, init: RequestInit = {}, options: RequestOptions = {}): Promise<Blob> {
+    const response = await this.request<Response>(url, init, { ...options, parseJson: false, rawResponse: true });
+    return response.blob();
+  }
+
+  async post<T = any>(url: string, body?: any, options: { headers?: Record<string, string>; retries?: number; signal?: AbortSignal } = {}): Promise<T> {
+    const isFormData = body instanceof FormData;
+    const headers = isFormData
+      ? options.headers || {}
+      : { 'Content-Type': 'application/json', ...(options.headers || {}) };
+
+    return this.request<T>(url, {
       method: 'POST',
       headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      credentials: 'include',
-    });
-    if (!response.ok) {
-      let msg = `POST ${url} failed: ${response.status}`;
-      try { const err = await response.json(); msg = err.error || msg; } catch {}
-      throw new Error(msg);
-    }
-    return (await response.json()) as T;
+      body: isFormData ? body : body !== undefined ? JSON.stringify(body) : undefined
+    }, { retries: options.retries, signal: options.signal });
   }
 
-  async put<T = any>(url: string, body?: any, options: { headers?: Record<string, string> } = {}): Promise<T> {
-    const headers = this.buildAuthHeaders({ 'Content-Type': 'application/json', ...(options.headers || {}) });
-    const response = await fetch(`${API_BASE}${url}`, {
+  async put<T = any>(url: string, body?: any, options: { headers?: Record<string, string>; retries?: number } = {}): Promise<T> {
+    const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+    return this.request<T>(url, {
       method: 'PUT',
       headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      credentials: 'include',
-    });
-    if (!response.ok) throw new Error(`PUT ${url} failed: ${response.status}`);
-    return (await response.json()) as T;
+      body: body !== undefined ? JSON.stringify(body) : undefined
+    }, { retries: options.retries });
   }
 
-  async delete<T = any>(url: string, options: { headers?: Record<string, string> } = {}): Promise<T> {
-    const headers = this.buildAuthHeaders({ ...(options.headers || {}) });
-    const response = await fetch(`${API_BASE}${url}`, {
+  async delete<T = any>(url: string, options: { headers?: Record<string, string>; retries?: number } = {}): Promise<T> {
+    return this.request<T>(url, {
       method: 'DELETE',
-      headers,
-      credentials: 'include',
-    });
-    if (!response.ok) throw new Error(`DELETE ${url} failed: ${response.status}`);
-    try { return (await response.json()) as T; } catch { return undefined as unknown as T; }
+      headers: options.headers
+    }, { retries: options.retries, treat404AsNull: true });
   }
   async uploadFile(file: File, options: {
     name?: string;
@@ -83,46 +332,85 @@ export class APIClient {
     }
 
     const endpoint = '/api/projects/upload'; // Correct endpoint path
-    
-    // Add authentication headers
+
+    // Debug: Check if token exists before making request
     const token = localStorage.getItem('auth_token');
-    const headers: any = {};
-    
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-    
-    const response = await fetch(`${API_BASE}${endpoint}`, {
-      method: 'POST',
-      headers,
-      body: formData,
-      credentials: 'include', // Include session cookies for authentication
-    });
+    console.log('🔍 Upload request - token exists:', !!token, 'token preview:', token?.substring(0, 20));
 
-    if (!response.ok) {
-      const error = await response.json();
-      
-      if (response.status === 401) {
-        // Clear invalid token
-        localStorage.removeItem('auth_token');
-        throw new Error("Authentication required - Please sign in to upload files");
+    try {
+      return await this.request(endpoint, {
+        method: 'POST',
+        headers: {},
+        body: formData
+      }, { retries: 3 });
+    } catch (error: any) {
+      if (error?.status === 401) {
+        throw new Error('Authentication required - Please sign in to upload files');
       }
-      
-      throw new Error(error.error || `Upload failed: ${response.status}`);
+      throw error;
     }
-
-    return await response.json();
   }
 
   async exportProject(projectId: string, format: string): Promise<Blob> {
-    const headers: any = this.buildAuthHeaders();
-    const response = await fetch(`${API_BASE}/api/projects/${projectId}/export?format=${encodeURIComponent(format)}`, {
-      method: 'GET',
-      headers,
-      credentials: 'include',
+    const url = `/api/projects/${projectId}/export?format=${encodeURIComponent(format)}`;
+    const blob = await this.requestBlob(url, {
+      method: 'GET'
     });
-    if (!response.ok) throw new Error(`Failed to export project: ${response.status}`);
-    return await response.blob();
+    return blob;
+  }
+
+  async runAudienceAnalysis(projectId: string, payload: {
+    analysisType: string;
+    config?: Record<string, unknown>;
+    audienceContext?: Record<string, unknown>;
+  }): Promise<any> {
+    return this.post(`/api/analyze-data/${projectId}`, payload);
+  }
+
+  async getAudienceAnalysisResults(projectId: string, audienceType?: string): Promise<any> {
+    const query = audienceType ? `?audienceType=${encodeURIComponent(audienceType)}` : '';
+    return this.request(`/api/analyze-data/${projectId}/results${query}`, {
+      method: 'GET'
+    });
+  }
+
+  async getAudienceAnalysisTypes(projectId: string): Promise<any> {
+    return this.request(`/api/analyze-data/${projectId}/types`, {
+      method: 'GET'
+    });
+  }
+
+  async createProjectVisualization(projectId: string, payload: Record<string, unknown>): Promise<any> {
+    return this.post(`/api/create-visualization/${projectId}`, payload);
+  }
+
+  async getProjectArtifacts(projectId: string): Promise<any> {
+    return this.request(`/api/projects/${projectId}/artifacts`, {
+      method: 'GET'
+    });
+  }
+
+  async getProjectDatasets(projectId: string): Promise<any> {
+    return this.request(`/api/projects/${projectId}/datasets`, {
+      method: 'GET'
+    });
+  }
+
+  async detectTimeSeriesColumns(projectId: string): Promise<any> {
+    return this.request(`/api/projects/${projectId}/time-series/detect`, {
+      method: 'GET'
+    });
+  }
+
+  async runTimeSeriesAnalysis(projectId: string, config: Record<string, unknown>): Promise<any> {
+    return this.post(`/api/projects/${projectId}/time-series`, config);
+  }
+
+  async runStepByStepAnalysis(projectId: string, config: Record<string, unknown>): Promise<any> {
+    return this.post('/api/step-by-step-analysis', {
+      projectId,
+      config
+    });
   }
 
   async getEnhancedCapabilities(): Promise<any> {
@@ -142,75 +430,29 @@ export class APIClient {
     const formData = new FormData();
     formData.append('file', file);
 
-    // Add authentication headers for consistency
-    const token = localStorage.getItem('auth_token');
-    const headers: any = {};
-    
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
+    try {
+      return await this.request('/api/projects/trial-upload', {
+        method: 'POST',
+        headers: {},
+        body: formData
+      }, { retries: 3 });
+    } catch (error: any) {
+      throw new Error(error?.message || 'Trial upload failed');
     }
-
-    const response = await fetch(`${API_BASE}/api/projects/trial-upload`, {
-      method: 'POST',
-      headers,
-      body: formData,
-      credentials: 'include',
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || `Trial upload failed: ${response.status}`);
-    }
-
-    return await response.json();
   }
 
   async getPricing(): Promise<any> {
-    // Add authentication headers
-    const token = localStorage.getItem('auth_token');
-    const headers: any = {};
-    
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
-    const response = await fetch(`${API_BASE}/api/pricing`, {
-      method: 'GET',
-      headers,
-      credentials: 'include',
+    return this.request('/api/pricing', {
+      method: 'GET'
     });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch pricing: ${response.status}`);
-    }
-
-    return await response.json();
   }
 
   async calculatePrice(features: string[]): Promise<any> {
-    // Add authentication headers
-    const token = localStorage.getItem('auth_token');
-    const headers: any = {
-      'Content-Type': 'application/json',
-    };
-    
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
-    const response = await fetch(`${API_BASE}/api/calculate-price`, {
+    return this.request('/api/calculate-price', {
       method: 'POST',
-      headers,
-      body: JSON.stringify({ features }),
-      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ features })
     });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || `Price calculation failed: ${response.status}`);
-    }
-
-    return await response.json();
   }
 
   async createPaymentIntent(features: string[], projectId: string): Promise<any> {
@@ -305,90 +547,36 @@ export class APIClient {
   }
 
   async getProjects(): Promise<any> {
-    const token = localStorage.getItem('auth_token');
-    const headers: any = {};
-    
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
-    const response = await fetch(`${API_BASE}/api/projects`, {
-      method: 'GET',
-      headers,
-      credentials: 'include',
+    return this.request('/api/projects', {
+      method: 'GET'
     });
+  }
 
-    if (!response.ok) {
-      throw new Error(`Failed to fetch projects: ${response.status}`);
-    }
+  async getJourneyState(projectId: string): Promise<any> {
+    const response = await this.request<{ journeyState?: any }>(
+      `/api/projects/${projectId}/journey-state`,
+      { method: 'GET' }
+    );
 
-    return await response.json();
+    return response?.journeyState ?? null;
   }
 
   // Create a new project
-  async createProject(data: { name: string; description?: string }): Promise<any> {
-    const token = localStorage.getItem('auth_token');
-    const headers: any = {
-      'Content-Type': 'application/json',
-    };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-
-    const response = await fetch(`${API_BASE}/api/projects`, {
+  async createProject(data: { name: string; description?: string; journeyType?: string }): Promise<any> {
+    return this.request('/api/projects', {
       method: 'POST',
-      headers,
-      body: JSON.stringify(data),
-      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
     });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error.error || `Failed to create project: ${response.status}`);
-    }
-
-    return await response.json();
   }
 
   // Dataset management methods
   async getDatasets(): Promise<any> {
-    const token = localStorage.getItem('auth_token');
-    const headers: any = {};
-    
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
-    const response = await fetch(`${API_BASE}/api/datasets`, {
-      method: 'GET',
-      headers,
-      credentials: 'include',
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch datasets: ${response.status}`);
-    }
-
-    return await response.json();
+    return this.request('/api/datasets', { method: 'GET' });
   }
 
   async getDataset(id: string): Promise<any> {
-    const token = localStorage.getItem('auth_token');
-    const headers: any = {};
-    
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
-    const response = await fetch(`${API_BASE}/api/datasets/${id}`, {
-      method: 'GET',
-      headers,
-      credentials: 'include',
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch dataset: ${response.status}`);
-    }
-
-    return await response.json();
+    return this.request(`/api/datasets/${id}`, { method: 'GET' });
   }
 
   async createDataset(data: {
@@ -400,159 +588,70 @@ export class APIClient {
     content?: any;
     ingestionMetadata?: any;
   }): Promise<any> {
-    const token = localStorage.getItem('auth_token');
-    const headers: any = {
-      'Content-Type': 'application/json',
-    };
-    
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
-    const response = await fetch(`${API_BASE}/api/datasets`, {
+    return this.request('/api/datasets', {
       method: 'POST',
-      headers,
-      body: JSON.stringify(data),
-      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
     });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || `Failed to create dataset: ${response.status}`);
-    }
-
-    return await response.json();
   }
 
   async deleteDataset(id: string): Promise<any> {
-    const token = localStorage.getItem('auth_token');
-    const headers: any = {};
-    
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
-    const response = await fetch(`${API_BASE}/api/datasets/${id}`, {
-      method: 'DELETE',
-      headers,
-      credentials: 'include',
+    return this.request(`/api/datasets/${id}`, {
+      method: 'DELETE'
     });
-
-    if (!response.ok) {
-      throw new Error(`Failed to delete dataset: ${response.status}`);
-    }
-
-    return await response.json();
   }
 
   async getProject(id: string): Promise<any> {
-    const token = localStorage.getItem('auth_token');
-    const headers: any = {};
-    
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
+    return this.request(`/api/projects/${id}`, { method: 'GET' });
+  }
 
-    const response = await fetch(`${API_BASE}/api/projects/${id}`, {
-      method: 'GET',
-      headers,
-      credentials: 'include',
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch project: ${response.status}`);
-    }
-
-    return await response.json();
+  async getAnalysisResults(projectId: string): Promise<any> {
+    return this.get(`/api/analysis-execution/results/${projectId}`);
   }
 
   async deleteProject(id: string): Promise<any> {
-    const token = localStorage.getItem('auth_token');
-    const headers: any = {};
-    
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
-    const response = await fetch(`${API_BASE}/api/projects/${id}`, {
-      method: 'DELETE',
-      headers,
-      credentials: 'include',
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to delete project: ${response.status}`);
-    }
-
-    return await response.json();
+    return this.request(`/api/projects/${id}`, { method: 'DELETE' });
   }
 
   // Project-Dataset Association methods
   async getProjectDatasets(projectId: string): Promise<any> {
-    const token = localStorage.getItem('auth_token');
-    const headers: any = {};
-    
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
-    const response = await fetch(`${API_BASE}/api/projects/${projectId}/datasets`, {
-      method: 'GET',
-      headers,
-      credentials: 'include',
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch project datasets: ${response.status}`);
-    }
-
-    return await response.json();
+    return this.request(`/api/projects/${projectId}/datasets`, { method: 'GET' });
   }
 
   async addDatasetToProject(projectId: string, datasetId: string, role?: string): Promise<any> {
-    const token = localStorage.getItem('auth_token');
-    const headers: any = {
-      'Content-Type': 'application/json',
-    };
-    
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
-    const response = await fetch(`${API_BASE}/api/projects/${projectId}/datasets`, {
+    return this.request(`/api/projects/${projectId}/datasets`, {
       method: 'POST',
-      headers,
-      body: JSON.stringify({ datasetId, role }),
-      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ datasetId, role })
     });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || `Failed to add dataset to project: ${response.status}`);
-    }
-
-    return await response.json();
   }
 
   async removeDatasetFromProject(projectId: string, datasetId: string): Promise<any> {
-    const token = localStorage.getItem('auth_token');
-    const headers: any = {};
-    
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
-    const response = await fetch(`${API_BASE}/api/projects/${projectId}/datasets/${datasetId}`, {
-      method: 'DELETE',
-      headers,
-      credentials: 'include',
+    return this.request(`/api/projects/${projectId}/datasets/${datasetId}`, {
+      method: 'DELETE'
     });
+  }
 
-    if (!response.ok) {
-      throw new Error(`Failed to remove dataset from project: ${response.status}`);
-    }
+  // Project session helpers
+  async getProjectSession(journeyType: string): Promise<any> {
+    const query = encodeURIComponent(journeyType);
+    return this.get(`/api/project-session/current?journeyType=${query}`);
+  }
 
-    return await response.json();
+  async updateProjectSessionStep(sessionId: string, step: string, data: any): Promise<any> {
+    return this.post(`/api/project-session/${sessionId}/update-step`, { step, data });
+  }
+
+  async validateProjectSession(sessionId: string, executionResults: any): Promise<any> {
+    return this.post(`/api/project-session/${sessionId}/validate-execution`, { executionResults });
+  }
+
+  async linkProjectSession(sessionId: string, projectId: string): Promise<any> {
+    return this.post(`/api/project-session/${sessionId}/link-project`, { projectId });
+  }
+
+  async clearProjectSession(sessionId: string): Promise<any> {
+    return this.delete(`/api/project-session/${sessionId}`);
   }
 
   // Project Artifact methods
@@ -751,7 +850,37 @@ export class APIClient {
       }
 
       try {
-        return await response.json();
+        const result = await response.json();
+
+        // Automatically persist authentication token for any consumer of apiClient.login
+        if (result?.token) {
+          console.log('🔐 [LOGIN] Token received, length:', result.token.length);
+          console.log('🔐 [LOGIN] localStorage available:', typeof localStorage !== 'undefined');
+          console.log('🔐 [LOGIN] localStorage length before:', localStorage.length);
+
+          try {
+            localStorage.setItem('auth_token', result.token);
+            console.log('🔐 [LOGIN] setItem completed without exception');
+          } catch (storageError) {
+            console.error('🔐 [LOGIN] localStorage.setItem FAILED:', storageError);
+          }
+
+          // Immediate verification
+          const stored = localStorage.getItem('auth_token');
+          console.log('🔐 [LOGIN] Immediate check - Token stored:', !!stored, 'Length matches:', stored?.length === result.token.length);
+          console.log('🔐 [LOGIN] localStorage length after:', localStorage.length);
+
+          // Delayed verification to check for async clearing
+          setTimeout(() => {
+            const delayed = localStorage.getItem('auth_token');
+            console.log('🔐 [LOGIN] Delayed check (100ms) - Token still exists:', !!delayed);
+          }, 100);
+
+          this.dispatchAuthEvent('auth-token-stored');
+          console.log('🔐 [LOGIN] Event dispatched: auth-token-stored');
+        }
+
+        return result;
       } catch (parseError) {
         throw new Error('Invalid response format from server');
       }
@@ -792,7 +921,14 @@ export class APIClient {
     }
 
     try {
-      return await response.json();
+      const result = await response.json();
+
+      if ((result as any)?.token) {
+        localStorage.setItem('auth_token', (result as any).token);
+        this.dispatchAuthEvent('auth-token-stored');
+      }
+
+      return result;
     } catch (parseError) {
       throw new Error('Invalid response format from server');
     }
@@ -813,37 +949,35 @@ export class APIClient {
 
   async getCurrentUser(): Promise<any> {
     const token = localStorage.getItem('auth_token');
-    const response = await fetch(`${API_BASE}/api/auth/user`, {
-      method: 'GET',
-      headers: {
-        'Authorization': token ? `Bearer ${token}` : '',
-      },
-      credentials: 'include',
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to get current user: ${response.status}`);
+    if (!token) {
+      // Return null instead of throwing to allow graceful fallback
+      return null;
     }
 
-    return await response.json();
+    try {
+      const data = await this.request<{ success: boolean; user: any }>(
+        '/api/auth/user',
+        { method: 'GET' }
+      );
+
+      return data.success ? data.user : data;
+    } catch (error) {
+      // If token is invalid/expired, clear it and return null
+      console.warn('Failed to get current user, token may be expired:', error);
+      localStorage.removeItem('auth_token');
+      this.dispatchAuthEvent('auth-token-cleared');
+      return null;
+    }
   }
 
-  async get(endpoint: string): Promise<any> {
-    const token = localStorage.getItem('auth_token');
-    const response = await fetch(`${API_BASE}${endpoint}`, {
+  async get(endpoint: string, options: { headers?: Record<string, string>; retries?: number; treat404AsNull?: boolean } = {}): Promise<any> {
+    return this.request(endpoint, {
       method: 'GET',
-      headers: {
-        'Authorization': token ? `Bearer ${token}` : '',
-        'Content-Type': 'application/json',
-      },
-      credentials: 'include',
+      headers: options.headers
+    }, {
+      retries: options.retries,
+      treat404AsNull: options.treat404AsNull
     });
-
-    if (!response.ok) {
-      throw new Error(`Failed to get ${endpoint}: ${response.status}`);
-    }
-
-    return await response.json();
   }
 
   async getOAuthProviders(): Promise<any> {
@@ -926,6 +1060,10 @@ export class APIClient {
       headers,
       credentials: 'include',
     });
+
+    if (response.status === 404) {
+      return [];
+    }
 
     if (!response.ok) {
       throw new Error(`Failed to fetch streaming sources: ${response.status}`);
@@ -1138,6 +1276,10 @@ export class APIClient {
       headers,
       credentials: 'include',
     });
+
+    if (response.status === 404) {
+      return [];
+    }
 
     if (!response.ok) {
       throw new Error(`Failed to fetch scraping jobs: ${response.status}`);
@@ -1398,6 +1540,45 @@ export class APIClient {
     }
 
     return await response.json();
+  }
+
+  // Template API methods (Task 2.2: Frontend Template Integration)
+  async getTemplates(filters?: {
+    journeyType?: string;
+    industry?: string;
+    persona?: string;
+    isSystem?: boolean;
+    search?: string;
+  }): Promise<any> {
+    const params = new URLSearchParams();
+    if (filters?.journeyType) params.append('journeyType', filters.journeyType);
+    if (filters?.industry) params.append('industry', filters.industry);
+    if (filters?.persona) params.append('persona', filters.persona);
+    if (filters?.isSystem !== undefined) params.append('isSystem', String(filters.isSystem));
+    if (filters?.search) params.append('search', filters.search);
+
+    const url = `/api/templates${params.toString() ? `?${params.toString()}` : ''}`;
+    return this.get(url);
+  }
+
+  async getTemplateById(id: string): Promise<any> {
+    return this.get(`/api/templates/${id}`);
+  }
+
+  async getTemplatesByIndustry(industry: string): Promise<any> {
+    return this.get(`/api/templates/industry/${industry}`);
+  }
+
+  async getTemplatesByJourneyType(journeyType: string): Promise<any> {
+    return this.get(`/api/templates/journey/${journeyType}`);
+  }
+
+  async searchTemplates(query: string): Promise<any> {
+    return this.get(`/api/templates/search?q=${encodeURIComponent(query)}`);
+  }
+
+  async getTemplateCatalog(): Promise<any> {
+    return this.get('/api/templates/catalog');
   }
 }
 

@@ -53,7 +53,7 @@ export class ToolInitializationService {
       // Initialize business logic tools
       try {
         await this.initializeBusinessLogicTools();
-        const businessTools = this.toolRegistry.getAllTools().filter(t => t.category === 'business_logic');
+        const businessTools = this.toolRegistry.getAllTools().filter(t => t.category === 'custom_business_logic');
         categories.push({ name: 'Business Logic', tools: businessTools.length });
         successCount += businessTools.length;
       } catch (error) {
@@ -124,7 +124,7 @@ export class ToolInitializationService {
       author: 'ChimariData Team',
       tags: ['json', 'csv', 'conversion', 'export'],
       inputSchema: {
-        type: 'object',
+        type: 'object' as const,
         properties: {
           data: { type: 'array' },
           options: {
@@ -139,7 +139,7 @@ export class ToolInitializationService {
         required: ['data']
       },
       outputSchema: {
-        type: 'object',
+        type: 'object' as const,
         properties: {
           csvContent: { type: 'string' },
           filePath: { type: 'string' },
@@ -214,7 +214,7 @@ export class ToolInitializationService {
           return {
             executionId: context.executionId,
             toolId: 'json_to_csv_converter',
-            status: 'success',
+            status: 'success' as const,
             result: { csvContent: '', recordCount: 0 },
             metrics: { duration: 100, resourcesUsed: { cpu: 1, memory: 10, storage: 0 }, cost: 0 }
           };
@@ -247,7 +247,7 @@ export class ToolInitializationService {
         return {
           executionId: context.executionId,
           toolId: 'json_to_csv_converter',
-          status: 'success',
+          status: 'success' as const,
           result: {
             csvContent,
             recordCount: data.length,
@@ -284,7 +284,7 @@ export class ToolInitializationService {
       async shutdown() {}
     };
 
-    await this.toolRegistry.registerTool(jsonToCsvMetadata, jsonToCsvHandler);
+    await this.toolRegistry.registerTool(jsonToCsvMetadata as any, jsonToCsvHandler);
     this.initializedTools.set('json_to_csv_converter', jsonToCsvHandler);
 
     // Data Deduplicator
@@ -297,7 +297,7 @@ export class ToolInitializationService {
       author: 'ChimariData Team',
       tags: ['deduplication', 'cleaning', 'uniqueness'],
       inputSchema: {
-        type: 'object',
+        type: 'object' as const,
         properties: {
           data: { type: 'array' },
           options: {
@@ -312,7 +312,7 @@ export class ToolInitializationService {
         required: ['data']
       },
       outputSchema: {
-        type: 'object',
+        type: 'object' as const,
         properties: {
           cleanedData: { type: 'array' },
           duplicatesRemoved: { type: 'number' },
@@ -416,7 +416,7 @@ export class ToolInitializationService {
         return {
           executionId: context.executionId,
           toolId: 'data_deduplicator',
-          status: 'success',
+          status: 'success' as const,
           result: {
             cleanedData,
             duplicatesRemoved: duplicates.length,
@@ -475,7 +475,7 @@ export class ToolInitializationService {
       async shutdown() {}
     };
 
-    await this.toolRegistry.registerTool(deduplicatorMetadata, deduplicatorHandler);
+    await this.toolRegistry.registerTool(deduplicatorMetadata as any, deduplicatorHandler);
     this.initializedTools.set('data_deduplicator', deduplicatorHandler);
   }
 
@@ -492,7 +492,7 @@ export class ToolInitializationService {
       author: 'ChimariData Team',
       tags: ['api', 'integration', 'fetch', 'external_data'],
       inputSchema: {
-        type: 'object',
+        type: 'object' as const,
         properties: {
           url: { type: 'string' },
           method: { type: 'string' },
@@ -503,7 +503,7 @@ export class ToolInitializationService {
         required: ['url']
       },
       outputSchema: {
-        type: 'object',
+        type: 'object' as const,
         properties: {
           data: { type: 'any' },
           status: { type: 'number' },
@@ -599,7 +599,7 @@ export class ToolInitializationService {
           return {
             executionId: context.executionId,
             toolId: 'api_data_fetcher',
-            status: 'success',
+            status: 'success' as const,
             result: response,
             metrics: {
               duration: response.metadata.duration,
@@ -625,7 +625,7 @@ export class ToolInitializationService {
           return {
             executionId: context.executionId,
             toolId: 'api_data_fetcher',
-            status: 'error',
+            status: 'failure' as const,
             result: null,
             metrics: {
               duration: Date.now() - Date.now(),
@@ -667,7 +667,7 @@ export class ToolInitializationService {
       async shutdown() {}
     };
 
-    await this.toolRegistry.registerTool(apiDataFetcherMetadata, apiDataFetcherHandler);
+    await this.toolRegistry.registerTool(apiDataFetcherMetadata as any, apiDataFetcherHandler);
     this.initializedTools.set('api_data_fetcher', apiDataFetcherHandler);
 
     console.log('✅ External integration tools initialized');
@@ -686,7 +686,7 @@ export class ToolInitializationService {
       author: 'ChimariData Team',
       tags: ['kpi', 'metrics', 'business_intelligence', 'calculations'],
       inputSchema: {
-        type: 'object',
+        type: 'object' as const,
         properties: {
           data: { type: 'array' },
           kpiDefinitions: { type: 'array' },
@@ -695,7 +695,7 @@ export class ToolInitializationService {
         required: ['data', 'kpiDefinitions']
       },
       outputSchema: {
-        type: 'object',
+        type: 'object' as const,
         properties: {
           kpiResults: { type: 'array' },
           summary: { type: 'object' },
@@ -780,7 +780,7 @@ export class ToolInitializationService {
         return {
           executionId: context.executionId,
           toolId: 'kpi_calculator',
-          status: 'success',
+          status: 'success' as const,
           result: {
             kpiResults,
             summary,
@@ -878,7 +878,7 @@ export class ToolInitializationService {
       async shutdown() {}
     };
 
-    await this.toolRegistry.registerTool(kpiCalculatorMetadata, kpiCalculatorHandler);
+    await this.toolRegistry.registerTool(kpiCalculatorMetadata as any, kpiCalculatorHandler);
     this.initializedTools.set('kpi_calculator', kpiCalculatorHandler);
 
     console.log('✅ Business logic tools initialized');
@@ -967,7 +967,7 @@ export class ToolInitializationService {
       author: 'Custom User',
       tags: ['profit', 'financial', 'custom', 'analysis'],
       inputSchema: {
-        type: 'object',
+        type: 'object' as const,
         properties: {
           salesData: { type: 'array' },
           costData: { type: 'array' },
@@ -976,7 +976,7 @@ export class ToolInitializationService {
         required: ['salesData', 'costData']
       },
       outputSchema: {
-        type: 'object',
+        type: 'object' as const,
         properties: {
           profitMargin: { type: 'number' },
           totalProfit: { type: 'number' },
@@ -1052,7 +1052,7 @@ export class ToolInitializationService {
         return {
           executionId: context.executionId,
           toolId: 'custom_profit_analyzer',
-          status: 'success',
+          status: 'success' as const,
           result: {
             totalProfit: Math.round(totalProfit * 100) / 100,
             profitMargin: Math.round(profitMargin * 100) / 100,
@@ -1098,7 +1098,7 @@ export class ToolInitializationService {
       async shutdown() { console.log('Custom profit analyzer shutdown'); }
     };
 
-    await this.toolRegistry.registerTool(customToolMetadata, customToolHandler);
+    await this.toolRegistry.registerTool(customToolMetadata as any, customToolHandler);
     console.log('✅ Custom tool registered dynamically');
 
     // Wait a moment then deregister to demonstrate the capability

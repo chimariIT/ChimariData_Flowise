@@ -70,7 +70,7 @@ export default function TemplateAnalysis({ onBack }: TemplateAnalysisProps) {
     queryFn: async () => {
       const result = await apiClient.getProjects();
       return result;
-    },
+    }
   });
 
   const handleScenarioSelect = (scenarioId: string) => {

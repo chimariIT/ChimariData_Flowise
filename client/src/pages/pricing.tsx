@@ -5,7 +5,6 @@ import { Badge } from "@/components/ui/badge";
 import { CheckCircle, ArrowRight, Sparkles, Users, Shield, Zap, ArrowLeft, User, BarChart3 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { UNIFIED_SUBSCRIPTION_TIERS, getAllUnifiedTiers } from "@shared/unified-subscription-tiers";
 import { apiClient } from "@/lib/api";
 
 interface PricingTier {
@@ -47,7 +46,7 @@ export default function PricingPage({ onGetStarted, onSubscribe, onBack, onPayPe
   const { data: currentUser, isLoading: userLoading } = useQuery({
     queryKey: ['/api/auth/user'],
     queryFn: () => apiClient.getCurrentUser(),
-    retry: false,
+    retry: false
   });
 
   // Get user's capacity summary
@@ -55,50 +54,33 @@ export default function PricingPage({ onGetStarted, onSubscribe, onBack, onPayPe
     queryKey: ['/api/billing/capacity-summary'],
     queryFn: () => apiClient.get('/api/billing/capacity-summary'),
     enabled: !!currentUser,
-    retry: false,
+    retry: false
   });
 
   // Get available subscription tiers from API
   const { data: pricingData, isLoading: tiersLoading } = useQuery({
     queryKey: ['/api/pricing/tiers'],
-    queryFn: () => apiClient.get('/api/pricing/tiers'),
+    queryFn: () => apiClient.get('/api/pricing/tiers')
   });
 
-  // Use API tiers if available, otherwise fallback to unified tiers
-  const tiers = pricingData?.tiers || getAllUnifiedTiers().map(tier => ({
-    name: tier.displayName,
-    price: billingCycle === 'yearly' ? tier.yearlyPrice : tier.monthlyPrice,
-    priceLabel: `$${billingCycle === 'yearly' ? tier.yearlyPrice : tier.monthlyPrice}/${billingCycle === 'yearly' ? 'year' : 'month'}`,
-    type: tier.id,
-    features: [
-      `${tier.limits.maxFiles === -1 ? 'Unlimited' : tier.limits.maxFiles} file${tier.limits.maxFiles !== 1 ? 's' : ''} per month`,
-      `${tier.limits.maxFileSizeMB === -1 ? 'Unlimited' : tier.limits.maxFileSizeMB}MB max file size`,
-      `${tier.limits.totalDataVolumeMB === -1 ? 'Unlimited' : tier.limits.totalDataVolumeMB}MB total data volume`,
-      `${tier.limits.aiInsights === -1 ? 'Unlimited' : tier.limits.aiInsights} AI insights`,
-      `${tier.limits.maxAnalysisComponents === -1 ? 'Unlimited' : tier.limits.maxAnalysisComponents} analysis components`,
-      `${tier.limits.maxVisualizations === -1 ? 'Unlimited' : tier.limits.maxVisualizations} visualizations`,
-      tier.limits.dataTransformation ? 'Data transformation' : null,
-      tier.limits.statisticalAnalysis ? 'Statistical analysis' : null,
-      tier.limits.advancedInsights ? 'Advanced insights' : null,
-      tier.limits.piiDetection ? 'PII detection' : null,
-      tier.limits.mlBasic ? 'Basic ML models' : null,
-      tier.limits.mlAdvanced ? 'Advanced ML (AutoML, XGBoost)' : null,
-      tier.limits.llmFineTuning ? 'LLM fine-tuning' : null,
-      `${tier.limits.exportOptions.join(', ')} export`,
-      `${tier.support.level} support`
-    ].filter(Boolean),
-    limits: {
-      analysesPerMonth: tier.limits.maxAnalysisComponents,
-      maxDataSizeMB: tier.limits.maxFileSizeMB,
-      maxRecords: tier.limits.totalDataVolumeMB * 1000, // Rough estimate
-      aiQueries: tier.limits.aiInsights,
-      supportLevel: tier.support.level,
-      customModels: tier.limits.customMLModels,
-      apiAccess: tier.id === 'enterprise',
-      teamCollaboration: tier.id !== 'trial'
-    },
-    recommended: tier.id === 'professional'
-  }));
+  // Get service pricing from database
+  const { data: servicePricingData } = useQuery({
+    queryKey: ['/api/pricing/services'],
+    queryFn: () => apiClient.get('/api/pricing/services')
+  });
+  
+  // Extract service prices from database
+  const payPerAnalysisService = servicePricingData?.services?.find((s: any) => s.serviceType === 'pay-per-analysis');
+  const expertConsultationService = servicePricingData?.services?.find((s: any) => s.serviceType === 'expert-consultation');
+  
+  const payPerAnalysisPrice = payPerAnalysisService ? (payPerAnalysisService.basePrice / 100) : 25;
+  const consultationPrice = expertConsultationService ? (expertConsultationService.basePrice / 100) : 150;
+
+  // Use API tiers - API already has fallback to code-based tiers if database is empty
+  const tiers = pricingData?.tiers || [];
+
+  // Find current user's tier from API data
+  const currentUserTier = tiers.find((t: any) => t.type === currentUser?.subscriptionTier || t.id === currentUser?.subscriptionTier);
 
   const getIcon = (tierName: string) => {
     switch (tierName.toLowerCase()) {
@@ -215,19 +197,16 @@ export default function PricingPage({ onGetStarted, onSubscribe, onBack, onPayPe
                     <div className="p-4 bg-card rounded-lg border border-border">
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-2xl font-bold text-primary">
-                          {currentUser.subscriptionTier ? 
-                            SUBSCRIPTION_TIERS[currentUser.subscriptionTier]?.name || currentUser.subscriptionTier :
-                            'Trial'
-                          }
+                          {currentUserTier?.name || currentUser.subscriptionTier || 'None'}
                         </span>
                         <Badge variant="outline" className="bg-primary/10 border-primary/20">
-                          {currentUser.subscriptionTier || 'trial'}
+                          {currentUser.subscriptionTier || 'none'}
                         </Badge>
                       </div>
                       <p className="text-muted-foreground">
-                        {currentUser.subscriptionTier ? 
-                          `$${SUBSCRIPTION_TIERS[currentUser.subscriptionTier]?.price || 0}/month` :
-                          'Free trial'
+                        {currentUserTier?.price ?
+                          `$${currentUserTier.price}/month` :
+                          'Trial'
                         }
                       </p>
                     </div>
@@ -383,6 +362,16 @@ export default function PricingPage({ onGetStarted, onSubscribe, onBack, onPayPe
                   </CardHeader>
 
                   <CardContent className="space-y-4">
+                    {/* Price Display */}
+                    <div className="text-center py-4">
+                      <div className="text-4xl font-bold text-foreground">
+                        {tier.price === 0 ? 'Free' : `$${tier.price}`}
+                      </div>
+                      <div className="text-sm text-muted-foreground">
+                        {tier.price === 0 ? '' : billingCycle === 'yearly' ? 'per year' : 'per month'}
+                      </div>
+                    </div>
+
                     <div className="pt-4 border-t border-slate-200">
                       <div className="grid grid-cols-2 gap-4 text-sm">
                         <div>
@@ -454,7 +443,7 @@ export default function PricingPage({ onGetStarted, onSubscribe, onBack, onPayPe
                     </div>
                     <div>
                       <CardTitle className="text-xl text-slate-900">Pay-per-Analysis</CardTitle>
-                      <div className="text-2xl font-bold text-orange-600">$25</div>
+                      <div className="text-2xl font-bold text-orange-600">${payPerAnalysisPrice}</div>
                     </div>
                   </div>
                 </CardHeader>
@@ -484,7 +473,7 @@ export default function PricingPage({ onGetStarted, onSubscribe, onBack, onPayPe
                     onClick={onPayPerAnalysis}
                     className="w-full bg-orange-600 hover:bg-orange-700"
                   >
-                    Start Analysis ($25)
+                    Start Analysis (${payPerAnalysisPrice})
                     <ArrowRight className="w-4 h-4 ml-2" />
                   </Button>
                 </CardContent>
@@ -498,7 +487,7 @@ export default function PricingPage({ onGetStarted, onSubscribe, onBack, onPayPe
                     </div>
                     <div>
                       <CardTitle className="text-xl text-slate-900">Expert Consultation</CardTitle>
-                      <div className="text-2xl font-bold text-purple-600">$150</div>
+                      <div className="text-2xl font-bold text-purple-600">${consultationPrice}</div>
                     </div>
                   </div>
                 </CardHeader>
@@ -528,7 +517,7 @@ export default function PricingPage({ onGetStarted, onSubscribe, onBack, onPayPe
                     onClick={onExpertConsultation}
                     className="w-full bg-purple-600 hover:bg-purple-700"
                   >
-                    Book Consultation ($150)
+                    Book Consultation (${consultationPrice})
                     <ArrowRight className="w-4 h-4 ml-2" />
                   </Button>
                 </CardContent>

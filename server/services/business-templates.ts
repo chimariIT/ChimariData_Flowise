@@ -7,8 +7,33 @@
 
 import { nanoid } from 'nanoid';
 
-export type BusinessDomain = 'retail' | 'finance' | 'healthcare' | 'manufacturing' | 'technology' | 'marketing' | 'hr';
-export type AnalysisGoal = 'increase_revenue' | 'reduce_costs' | 'customer_retention' | 'fraud_detection' | 'demand_forecasting' | 'talent_management' | 'employee_engagement' | 'workforce_optimization' | 'risk_management' | 'compliance' | 'performance_analysis';
+export type BusinessDomain =
+    | 'retail'
+    | 'finance'
+    | 'healthcare'
+    | 'manufacturing'
+    | 'technology'
+    | 'marketing'
+    | 'hr'
+    | 'general';
+
+export type AnalysisGoal =
+    | 'increase_revenue'
+    | 'reduce_costs'
+    | 'customer_retention'
+    | 'fraud_detection'
+    | 'demand_forecasting'
+    | 'talent_management'
+    | 'employee_engagement'
+    | 'workforce_optimization'
+    | 'risk_management'
+    | 'compliance'
+    | 'performance_analysis'
+    | 'sentiment_analysis'
+    | 'feedback_evaluation'
+    | 'engagement_measurement'
+    | 'program_effectiveness'
+    | 'participation_optimization';
 
 export interface BusinessTemplate {
     templateId: string;
@@ -28,7 +53,14 @@ export interface BusinessTemplate {
 export interface TemplateWorkflowStep {
     stepId: string;
     name: string;
-    component: 'data_ingestion' | 'transformation' | 'statistical_analysis' | 'ml_training' | 'visualization';
+    component:
+        | 'data_ingestion'
+        | 'transformation'
+        | 'statistical_analysis'
+        | 'ml_training'
+        | 'visualization'
+        | 'text_analysis'
+        | 'business_analysis';
     config: Record<string, any>;
     checkpointQuestions: string[];
 }
@@ -41,10 +73,12 @@ export interface TemplateDataField {
 }
 
 export interface TemplateVisualization {
-    type: 'bar' | 'line' | 'scatter' | 'pie' | 'heatmap';
+    type: 'bar' | 'line' | 'scatter' | 'pie' | 'heatmap' | 'boxplot' | 'wordcloud';
     title: string;
-    xAxis: string;
-    yAxis: string;
+    xAxis?: string;
+    yAxis?: string;
+    zAxis?: string;
+    dataSource?: string;
 }
 
 export interface TemplateDeliverable {
@@ -458,6 +492,149 @@ export class BusinessTemplateLibrary {
             tags: ['hr', 'compensation', 'equity', 'pay', 'compliance']
         });
 
+        // Survey Analysis
+        this.registerTemplate({
+            templateId: 'survey_analysis',
+            name: 'Survey Response Analysis',
+            description: 'Analyze survey responses to understand participant sentiment, preferences, and satisfaction',
+            domain: 'general',
+            goals: ['sentiment_analysis', 'feedback_evaluation', 'engagement_measurement'],
+            workflow: [
+                {
+                    stepId: 'survey_data_prep',
+                    name: 'Survey Data Preparation',
+                    component: 'transformation',
+                    config: { 
+                        handling: ['remove_duplicates', 'standardize_ratings'],
+                        pivotColumns: ['question_type', 'rating_scale']
+                    },
+                    checkpointQuestions: ['Confirm question categorization', 'Validate rating scales']
+                },
+                {
+                    stepId: 'response_analysis',
+                    name: 'Survey Response Statistical Analysis',
+                    component: 'statistical_analysis',
+                    config: { 
+                        analysisType: 'descriptive',
+                        methods: ['frequency', 'mean', 'median', 'mode', 'correlation']
+                    },
+                    checkpointQuestions: ['Review response distributions', 'Identify top concerns']
+                },
+                {
+                    stepId: 'sentiment_analysis',
+                    name: 'Sentiment & Feedback Analysis',
+                    component: 'text_analysis',
+                    config: { 
+                        analysisType: 'sentiment',
+                        methods: ['topic_modeling', 'word_frequency', 'sentiment_scoring']
+                    },
+                    checkpointQuestions: ['Review sentiment trends', 'Approve key themes']
+                },
+                {
+                    stepId: 'satisfaction_scoring',
+                    name: 'Satisfaction Score Calculation',
+                    component: 'statistical_analysis',
+                    config: { analysisType: 'composite_scoring' },
+                    checkpointQuestions: ['Review satisfaction metrics', 'Approve scoring methodology']
+                }
+            ],
+            requiredDataFields: [
+                { fieldName: 'response_id', dataType: 'string', description: 'Survey response ID', example: 'RESP_001' },
+                { fieldName: 'question_text', dataType: 'string', description: 'Survey question', example: 'How satisfied are you with...' },
+                { fieldName: 'response_text', dataType: 'string', description: 'Response/comment text', example: 'Very satisfied' },
+                { fieldName: 'rating', dataType: 'number', description: 'Numeric rating if applicable', example: '4.5' },
+                { fieldName: 'question_category', dataType: 'string', description: 'Question type/category', example: 'Satisfaction' },
+                { fieldName: 'timestamp', dataType: 'date', description: 'Response timestamp', example: '2024-10-27' }
+            ],
+            visualizations: [
+                { type: 'bar', title: 'Response Distribution by Question', xAxis: 'question_text', yAxis: 'count' },
+                { type: 'boxplot', title: 'Rating Distribution by Category', xAxis: 'question_category', yAxis: 'rating' },
+                { type: 'wordcloud', title: 'Most Common Feedback Themes', dataSource: 'response_text' },
+                { type: 'line', title: 'Satisfaction Trends Over Time', xAxis: 'timestamp', yAxis: 'avg_rating' }
+            ],
+            deliverables: [
+                { name: 'Survey Response Summary Report', type: 'report', format: ['PDF'] },
+                { name: 'Sentiment Analysis Dashboard', type: 'dashboard', format: ['Web', 'PowerPoint'] },
+                { name: 'Key Recommendations', type: 'report', format: ['PDF', 'Excel'] }
+            ],
+            popularity: 95,
+            complexity: 'intermediate',
+            tags: ['survey', 'feedback', 'satisfaction', 'sentiment', 'engagement', 'evaluation']
+        });
+
+        // Engagement Analysis
+        this.registerTemplate({
+            templateId: 'engagement_analysis',
+            name: 'Engagement & Satisfaction Analysis',
+            description: 'Analyze engagement metrics to understand participation levels, satisfaction trends, and program effectiveness',
+            domain: 'general',
+            goals: ['engagement_measurement', 'program_effectiveness', 'participation_optimization'],
+            workflow: [
+                {
+                    stepId: 'engagement_data_prep',
+                    name: 'Engagement Data Preparation',
+                    component: 'transformation',
+                    config: { 
+                        filtering: ['remove_incomplete', 'validate_sessions'],
+                        aggregation: ['session_duration', 'interaction_count']
+                    },
+                    checkpointQuestions: ['Confirm engagement metrics', 'Review data quality']
+                },
+                {
+                    stepId: 'participation_analysis',
+                    name: 'Participation Rate Analysis',
+                    component: 'statistical_analysis',
+                    config: { 
+                        analysisType: 'frequency',
+                        methods: ['attendance_rate', 'completion_rate', 'dropout_analysis']
+                    },
+                    checkpointQuestions: ['Review participation trends', 'Identify barriers']
+                },
+                {
+                    stepId: 'satisfaction_correlation',
+                    name: 'Satisfaction vs Engagement Correlation',
+                    component: 'statistical_analysis',
+                    config: { 
+                        analysisType: 'correlation',
+                        methods: ['pearson', 'spearman', 'regression']
+                    },
+                    checkpointQuestions: ['Review correlation findings', 'Approve insights']
+                },
+                {
+                    stepId: 'program_recommendations',
+                    name: 'Program Effectiveness & Recommendations',
+                    component: 'business_analysis',
+                    config: { 
+                        analysisType: 'comparative',
+                        methods: ['effectiveness_scoring', 'recommendation_generation']
+                    },
+                    checkpointQuestions: ['Review recommendations', 'Approve action plan']
+                }
+            ],
+            requiredDataFields: [
+                { fieldName: 'participant_id', dataType: 'string', description: 'Participant identifier', example: 'PART_001' },
+                { fieldName: 'program_name', dataType: 'string', description: 'Program/conference name', example: 'Tech Conference 2024' },
+                { fieldName: 'attendance', dataType: 'boolean', description: 'Attended or not', example: 'true' },
+                { fieldName: 'satisfaction_score', dataType: 'number', description: 'Satisfaction rating', example: '4.5' },
+                { fieldName: 'engagement_level', dataType: 'string', description: 'Engagement category', example: 'High' },
+                { fieldName: 'session_date', dataType: 'date', description: 'Session date', example: '2024-10-27' }
+            ],
+            visualizations: [
+                { type: 'bar', title: 'Program Popularity by Attendance', xAxis: 'program_name', yAxis: 'attendance_count' },
+                { type: 'scatter', title: 'Engagement vs Satisfaction', xAxis: 'engagement_level', yAxis: 'satisfaction_score' },
+                { type: 'heatmap', title: 'Participation Rate by Program & Date', xAxis: 'session_date', yAxis: 'program_name', zAxis: 'attendance_rate' },
+                { type: 'line', title: 'Engagement Trends Over Time', xAxis: 'session_date', yAxis: 'avg_engagement' }
+            ],
+            deliverables: [
+                { name: 'Engagement Analysis Report', type: 'report', format: ['PDF'] },
+                { name: 'Program Effectiveness Dashboard', type: 'dashboard', format: ['Web', 'PowerPoint'] },
+                { name: 'Engagement Optimization Recommendations', type: 'report', format: ['PDF', 'Excel'] }
+            ],
+            popularity: 90,
+            complexity: 'intermediate',
+            tags: ['engagement', 'satisfaction', 'attendance', 'participation', 'program_effectiveness', 'feedback']
+        });
+
         // Workforce Planning
         this.registerTemplate({
             templateId: 'hr_workforce_planning',
@@ -615,7 +792,34 @@ export class BusinessTemplateLibrary {
     }
 
     getTemplate(templateId: string): BusinessTemplate | undefined {
-        return this.templates.get(templateId);
+        if (!templateId) {
+            return undefined;
+        }
+
+        const direct = this.templates.get(templateId);
+        if (direct) {
+            return direct;
+        }
+
+        const normalizedName = templateId.trim().toLowerCase();
+        const slugCandidate = normalizedName.replace(/[^a-z0-9]+/g, '_');
+
+        const slugMatch = this.templates.get(slugCandidate) || this.templates.get(normalizedName);
+        if (slugMatch) {
+            return slugMatch;
+        }
+
+        const byName = this.getAllTemplates().find(template => {
+            const templateName = template.name?.toLowerCase();
+            const templateIdLower = template.templateId.toLowerCase();
+            return (
+                templateName === normalizedName ||
+                templateIdLower === normalizedName ||
+                templateIdLower === slugCandidate
+            );
+        });
+
+        return byName;
     }
 
     getAllTemplates(): BusinessTemplate[] {

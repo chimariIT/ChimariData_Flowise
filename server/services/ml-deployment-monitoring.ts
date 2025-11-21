@@ -65,6 +65,15 @@ export interface ModelVersion {
     promotedFrom?: string; // Previous version
 }
 
+function sanitizePerformanceMetrics(performance: MLModel['performance']): Record<string, number> {
+    return Object.entries(performance).reduce<Record<string, number>>((acc, [metric, value]) => {
+        if (typeof value === 'number' && Number.isFinite(value)) {
+            acc[metric] = value;
+        }
+        return acc;
+    }, {});
+}
+
 export interface PredictionRequest {
     modelId: string;
     version?: string;
@@ -180,7 +189,7 @@ export class MLModelRegistry {
             modelId,
             createdAt: new Date(),
             changelog: 'Initial model version',
-            performance: model.performance
+            performance: sanitizePerformanceMetrics(model.performance)
         }]);
 
         // Save model metadata
@@ -223,7 +232,7 @@ export class MLModelRegistry {
             modelId,
             createdAt: new Date(),
             changelog,
-            performance: updatedModel.performance,
+            performance: sanitizePerformanceMetrics(updatedModel.performance),
             promotedFrom: currentVersion
         };
 

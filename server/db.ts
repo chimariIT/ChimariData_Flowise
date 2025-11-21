@@ -1,18 +1,20 @@
 import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import * as schema from "@shared/schema";
+import { resolveDatabaseSslConfig } from './utils/database-ssl';
 
 // Handle missing DATABASE_URL gracefully for development
 let pool: Pool | null = null;
 let db: any = null;
+let resolvedPoolConfig: Record<string, any> | null = null;
 
 if (process.env.DATABASE_URL) {
   try {
     // Enhanced connection pool configuration for better concurrent performance
     const poolConfig = {
       connectionString: process.env.DATABASE_URL,
-      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined,
-      
+      ssl: resolveDatabaseSslConfig(process.env.DATABASE_URL),
+
       // Environment-specific optimizations
       ...(process.env.NODE_ENV === 'production' ? {
         min: 5,                     // Minimum connections for production
@@ -47,20 +49,24 @@ if (process.env.DATABASE_URL) {
       })
     };
 
-    pool = new Pool(poolConfig);
+  pool = new Pool(poolConfig);
+  resolvedPoolConfig = poolConfig;
     db = drizzle(pool, { schema });
 
     // Add connection event monitoring for better observability
-    pool.on('connect', (client) => {
-      console.debug(`✅ Database client connected. Pool stats: total=${pool?.totalCount}, idle=${pool?.idleCount}, waiting=${pool?.waitingCount}`);
+    pool.on('connect', () => {
+      console.debug(
+        `✅ Database client connected. Pool stats: total=${pool?.totalCount ?? 0}, idle=${pool?.idleCount ?? 0}, waiting=${pool?.waitingCount ?? 0}`
+      );
     });
 
-    pool.on('error', (err, client) => {
+    pool.on('error', (err) => {
       console.error('❌ Database pool error:', err);
     });
 
-    pool.on('acquire', (client) => {
-      console.debug(`🔄 Database client acquired. Active connections: ${pool?.totalCount - pool?.idleCount}`);
+    pool.on('acquire', () => {
+      const activeConnections = (pool?.totalCount ?? 0) - (pool?.idleCount ?? 0);
+      console.debug(`🔄 Database client acquired. Active connections: ${activeConnections}`);
     });
 
     console.log(`✅ Database connection established with optimized pool settings for ${process.env.NODE_ENV || 'development'}`);
@@ -80,15 +86,10 @@ export function getPoolStats() {
   if (!pool) return null;
   
   return {
-    totalCount: pool.totalCount,
-    idleCount: pool.idleCount,
-    waitingCount: pool.waitingCount,
-    config: {
-      min: pool.options.min,
-      max: pool.options.max,
-      idleTimeoutMillis: pool.options.idleTimeoutMillis,
-      connectionTimeoutMillis: pool.options.connectionTimeoutMillis
-    }
+    totalCount: pool.totalCount ?? 0,
+    idleCount: pool.idleCount ?? 0,
+    waitingCount: pool.waitingCount ?? 0,
+    config: resolvedPoolConfig
   };
 }
 

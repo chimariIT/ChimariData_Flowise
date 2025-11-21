@@ -25,6 +25,7 @@ import { PIIDetectionDialog } from "@/components/PIIDetectionDialog";
 import { SchemaAnalysis } from "@/components/SchemaAnalysis";
 import { DataQualityCheckpoint } from "@/components/DataQualityCheckpoint";
 import { SchemaValidationDialog } from "@/components/SchemaValidationDialog";
+import AgentCheckpoints from "@/components/agent-checkpoints";
 import { apiClient } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 
@@ -76,6 +77,36 @@ export default function DataVerificationStep({
   const [showSchemaDialog, setShowSchemaDialog] = useState(false);
   const [editedSchema, setEditedSchema] = useState<any>(null);
 
+  const qualityScore = dataQuality?.qualityScore?.overall ?? (typeof dataQuality?.score === 'number' ? dataQuality.score : 0);
+  const qualityLabel = dataQuality?.qualityScore?.label ?? null;
+  const qualityMetrics = dataQuality?.metrics && typeof dataQuality.metrics === 'object' ? dataQuality.metrics : null;
+  const qualityRecommendations = Array.isArray(dataQuality?.recommendations) ? dataQuality.recommendations : [];
+  const qualityIssues = Array.isArray(dataQuality?.issues)
+    ? dataQuality.issues.map((issue: any, index: number) => {
+        if (typeof issue === 'string') {
+          return {
+            severity: index === 0 ? 'warning' : 'info',
+            message: issue,
+            fix: undefined
+          } as const;
+        }
+
+        const severityValue = (issue?.severity || '').toString().toLowerCase();
+        const severity: 'critical' | 'warning' | 'info' =
+          severityValue === 'error'
+            ? 'critical'
+            : severityValue === 'warning'
+            ? 'warning'
+            : 'info';
+
+        return {
+          severity,
+          message: issue?.message || issue?.description || 'Data quality issue detected',
+          fix: issue?.suggestion || issue?.fix || undefined
+        };
+      })
+    : [];
+
   // Get current project data
   useEffect(() => {
     loadProjectData();
@@ -97,13 +128,54 @@ export default function DataVerificationStep({
 
       // Load project data
       const project = await apiClient.getProject(projectId);
-      setProjectData(project);
+      
+      // CRITICAL: Load datasets to get preview data (data is stored in datasets, not project)
+      try {
+        const datasetsResponse = await apiClient.get(`/api/projects/${projectId}/datasets`);
+        console.log('📊 Datasets response:', datasetsResponse);
+        
+        if (datasetsResponse.success && datasetsResponse.datasets && datasetsResponse.datasets.length > 0) {
+          // Extract the first dataset's data
+          const firstDatasetItem = datasetsResponse.datasets[0];
+          const dataset = firstDatasetItem?.dataset || firstDatasetItem;
+          
+          console.log('📁 Dataset found:', {
+            hasPreview: !!dataset?.preview,
+            previewLength: dataset?.preview?.length || 0,
+            hasSchema: !!dataset?.schema,
+            schemaKeys: dataset?.schema ? Object.keys(dataset.schema) : []
+          });
+          
+          // Update project data with dataset preview and schema
+          const projectWithData = {
+            ...project,
+            preview: dataset?.preview || dataset?.data?.slice(0, 10) || [],
+            sampleData: dataset?.preview || dataset?.data?.slice(0, 10) || [],
+            schema: dataset?.schema || project.schema || {},
+            datasets: datasetsResponse.datasets,
+            datasetCount: datasetsResponse.count
+          };
+          
+          setProjectData(projectWithData);
+          
+          // Mark preview as available if we have data
+          if (projectWithData.preview && projectWithData.preview.length > 0) {
+            console.log('✅ Preview data loaded:', projectWithData.preview.length, 'rows');
+          }
+        } else {
+          console.warn('⚠️ No datasets found for project');
+          setProjectData(project);
+        }
+      } catch (datasetError) {
+        console.error('❌ Failed to load datasets:', datasetError);
+        // Fallback to just project data
+        setProjectData(project);
+      }
 
       // Load data quality assessment
       try {
         const qualityResponse = await apiClient.get(`/api/projects/${projectId}/data-quality`);
         setDataQuality(qualityResponse);
-        setVerificationStatus(prev => ({ ...prev, dataQuality: true }));
       } catch (error) {
         console.warn('Data quality assessment not available:', error);
       }
@@ -112,7 +184,6 @@ export default function DataVerificationStep({
       try {
         const piiResponse = await apiClient.get(`/api/projects/${projectId}/pii-analysis`);
         setPiiResults(piiResponse);
-        setVerificationStatus(prev => ({ ...prev, piiReview: true }));
       } catch (error) {
         console.warn('PII analysis not available:', error);
       }
@@ -121,15 +192,12 @@ export default function DataVerificationStep({
       try {
         const schemaResponse = await apiClient.get(`/api/projects/${projectId}/schema-analysis`);
         setSchemaAnalysis(schemaResponse);
-        setVerificationStatus(prev => ({ ...prev, schemaValidation: true }));
       } catch (error) {
         console.warn('Schema analysis not available:', error);
       }
 
       // Mark data preview as available
-      if (project.preview || project.sampleData) {
-        setVerificationStatus(prev => ({ ...prev, dataPreview: true }));
-      }
+      // Await explicit confirmation before marking steps complete
 
     } catch (error) {
       console.error('Failed to load project data:', error);
@@ -152,7 +220,7 @@ export default function DataVerificationStep({
     }
   };
 
-  const handlePIIApproval = () => {
+  const handlePIIApproval = (requiresPII: boolean, anonymizeData: boolean, selectedColumns: string[]) => {
     setPiiReviewCompleted(true);
     setShowPIIDialog(false);
     updateVerificationStatus('piiReview', true);
@@ -176,6 +244,23 @@ export default function DataVerificationStep({
     toast({
       title: "Quality Approved",
       description: "Data quality has been approved",
+    });
+  };
+
+  const handlePreviewConfirm = () => {
+    if (!projectData?.preview || projectData.preview.length === 0) {
+      toast({
+        title: "No Preview Data",
+        description: "Upload data before marking the preview as reviewed.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    updateVerificationStatus('dataPreview', true);
+    toast({
+      title: "Preview Reviewed",
+      description: "Data preview marked as reviewed",
     });
   };
 
@@ -374,6 +459,24 @@ export default function DataVerificationStep({
         </CardContent>
       </Card>
 
+      {/* AI Agent Activity */}
+      {projectData?.id && (
+        <Card className="border-purple-200 bg-gradient-to-br from-purple-50 to-indigo-50">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Shield className="w-5 h-5 text-purple-600" />
+              AI Agent Activity
+            </CardTitle>
+            <CardDescription>
+              Our agents are reviewing your data quality. Please review and approve before proceeding.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <AgentCheckpoints projectId={projectData.id} />
+          </CardContent>
+        </Card>
+      )}
+
       {/* Verification Steps */}
       <Card>
         <CardHeader>
@@ -439,51 +542,163 @@ export default function DataVerificationStep({
                 <CardDescription>Sample records from your uploaded data</CardDescription>
               </CardHeader>
               <CardContent>
-                {projectData.preview || projectData.sampleData ? (
-                  <ScrollArea className="h-64">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          {Object.keys(projectData.preview?.[0] || projectData.sampleData?.[0] || {}).map((key) => (
-                            <TableHead key={key}>{key}</TableHead>
-                          ))}
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {(projectData.preview || projectData.sampleData || []).slice(0, 10).map((row: any, index: number) => (
-                          <TableRow key={index}>
-                            {Object.values(row).map((value: any, cellIndex: number) => (
-                              <TableCell key={cellIndex}>{String(value)}</TableCell>
-                            ))}
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </ScrollArea>
-                ) : (
-                  <Alert>
-                    <Info className="h-4 w-4" />
-                    <AlertDescription>
-                      No preview data available. Please ensure your file was uploaded successfully.
-                    </AlertDescription>
-                  </Alert>
-                )}
+                {(() => {
+                  const previewData = Array.isArray(projectData.data) ? projectData.data.slice(0, 10) :
+  Array.isArray(projectData.preview) ? projectData.preview :
+  Array.isArray(projectData.sampleData) ? projectData.sampleData : [];
+                  
+                  if (previewData.length > 0) {
+                    // Get column headers from first row
+                    const firstRow = previewData[0];
+                    const headers = Object.keys(firstRow || {});
+                    
+                    if (headers.length === 0) {
+                      return (
+                        <Alert>
+                          <Info className="h-4 w-4" />
+                          <AlertDescription>
+                            Preview data structure is invalid
+                          </AlertDescription>
+                        </Alert>
+                      );
+                    }
+                    
+                    return (
+                      <div className="space-y-4">
+                        <ScrollArea className="h-64">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                {headers.map((key) => (
+                                  <TableHead key={key}>{String(key)}</TableHead>
+                                ))}
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {previewData.slice(0, 10).map((row: any, index: number) => (
+                                <TableRow key={index}>
+                                  {Object.values(row).map((value: any, cellIndex: number) => {
+                                    // Safely convert value to string
+                                    let displayValue = '';
+                                    if (value === null || value === undefined) {
+                                      displayValue = '';
+                                    } else if (typeof value === 'object') {
+                                      displayValue = JSON.stringify(value);
+                                    } else {
+                                      displayValue = String(value);
+                                    }
+                                    
+                                    return (
+                                      <TableCell key={cellIndex}>{displayValue}</TableCell>
+                                    );
+                                  })}
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </ScrollArea>
+
+                        <div className="flex justify-end">
+                          <Button
+                            variant={verificationStatus.dataPreview ? "secondary" : "default"}
+                            onClick={handlePreviewConfirm}
+                            disabled={verificationStatus.dataPreview}
+                          >
+                            <CheckCircle className="w-4 h-4 mr-2" />
+                            {verificationStatus.dataPreview ? "Preview Reviewed" : "Mark Preview Reviewed"}
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  }
+                  
+                  return (
+                    <Alert>
+                      <Info className="h-4 w-4" />
+                      <AlertDescription>
+                        No preview data available. Please ensure your file was uploaded successfully.
+                      </AlertDescription>
+                    </Alert>
+                  );
+                })()}
               </CardContent>
             </Card>
           </TabsContent>
 
           <TabsContent value="quality" className="space-y-4">
             <DataQualityCheckpoint
-              qualityScore={dataQuality?.score || 85}
-              issues={dataQuality?.issues?.map((issue: string, index: number) => ({
-                severity: index < 2 ? 'critical' : 'warning',
-                message: issue,
-                fix: `Apply data cleaning for: ${issue}`
-              })) || []}
+              qualityScore={typeof qualityScore === 'number' && qualityScore > 0 ? Math.max(0, Math.min(100, Math.round(qualityScore))) : 0}
+              issues={qualityIssues}
               onApprove={handleQualityApprove}
               onFixIssue={handleFixIssue}
-              isLoading={isProcessing}
+              isLoading={isProcessing || typeof qualityScore !== 'number' || qualityScore === 0}
             />
+
+            {qualityLabel && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Quality Assessment Summary</CardTitle>
+                  <CardDescription>
+                    Assessment label: <Badge variant="outline" className="uppercase">{qualityLabel.replace(/_/g, ' ')}</Badge>
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <p className="text-sm text-gray-600">Dataset Records</p>
+                    <p className="text-2xl font-semibold">{projectData?.datasetCount ?? projectData?.recordCount ?? '—'}</p>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-sm text-gray-600">Generated At</p>
+                    <p className="text-2xl font-semibold">{dataQuality?.metadata?.generatedAt ? new Date(dataQuality.metadata.generatedAt).toLocaleString() : '—'}</p>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {qualityMetrics && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Quality Metrics Breakdown</CardTitle>
+                  <CardDescription>Detailed metrics powering the overall quality score</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {Object.entries(qualityMetrics).map(([metricName, value]) => {
+                    const metricValue = typeof value === 'number' ? Math.round(value) : null;
+                    const label = metricName.charAt(0).toUpperCase() + metricName.slice(1);
+                    return (
+                      <div key={metricName} className="space-y-2">
+                        <div className="flex items-center justify-between text-sm font-medium text-gray-700">
+                          <span>{label}</span>
+                          <span>{metricValue !== null ? `${metricValue}%` : '—'}</span>
+                        </div>
+                        {metricValue !== null && (
+                          <Progress value={Math.max(0, Math.min(100, metricValue))} />
+                        )}
+                      </div>
+                    );
+                  })}
+                </CardContent>
+              </Card>
+            )}
+
+            {qualityRecommendations.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Recommended Actions</CardTitle>
+                  <CardDescription>Suggestions from the data quality checker</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <ul className="space-y-2">
+                    {qualityRecommendations.map((rec: string, index: number) => (
+                      <li key={index} className="flex items-start gap-2 text-sm text-gray-700">
+                        <CheckCircle className="w-4 h-4 text-green-600 mt-0.5 flex-shrink-0" />
+                        <span>{rec}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </CardContent>
+              </Card>
+            )}
           </TabsContent>
 
           <TabsContent value="schema" className="space-y-4">
@@ -495,7 +710,43 @@ export default function DataVerificationStep({
               <CardContent>
                 {schemaAnalysis ? (
                   <div className="space-y-4">
-                    <SchemaAnalysis schema={schemaAnalysis} />
+                    <div className="grid gap-4">
+                      <div>
+                        <h4 className="font-semibold mb-2">Detected Schema</h4>
+                        <p className="text-sm text-gray-600 mb-4">
+                          Total columns: {schemaAnalysis.totalColumns || Object.keys(schemaAnalysis.schema || {}).length}
+                        </p>
+                      </div>
+                      
+                      {schemaAnalysis.columnNames && schemaAnalysis.columnNames.length > 0 && (
+                        <div>
+                          <h5 className="text-sm font-medium mb-2">Column Names:</h5>
+                          <div className="flex flex-wrap gap-2">
+                            {schemaAnalysis.columnNames.slice(0, 20).map((col: string, idx: number) => (
+                              <Badge key={idx} variant="outline">{col}</Badge>
+                            ))}
+                            {schemaAnalysis.columnNames.length > 20 && (
+                              <Badge variant="outline">+{schemaAnalysis.columnNames.length - 20} more</Badge>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {schemaAnalysis.columnTypes && (
+                        <div>
+                          <h5 className="text-sm font-medium mb-2">Data Types:</h5>
+                          <div className="text-sm text-gray-600">
+                            {Object.entries(schemaAnalysis.columnTypes).map(([type, count]) => (
+                              <div key={type} className="flex justify-between">
+                                <span>{type}</span>
+                                <span>{count as number} columns</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    
                     <Button 
                       onClick={() => setShowSchemaDialog(true)}
                       variant="outline"
@@ -557,6 +808,16 @@ export default function DataVerificationStep({
                         <CheckCircle className="w-12 h-12 text-green-600 mx-auto mb-4" />
                         <h4 className="font-semibold text-green-900">No PII Detected</h4>
                         <p className="text-gray-600">Your data appears to be free of personally identifiable information.</p>
+                        <div className="mt-4">
+                          <Button
+                            variant={verificationStatus.piiReview ? "secondary" : "outline"}
+                            onClick={handlePIIReview}
+                            disabled={verificationStatus.piiReview}
+                          >
+                            <CheckCircle className="w-4 h-4 mr-2" />
+                            {verificationStatus.piiReview ? "Privacy Review Complete" : "Confirm Privacy Review"}
+                          </Button>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -631,26 +892,46 @@ export default function DataVerificationStep({
       </Card>
 
       {/* PII Detection Dialog */}
-      {showPIIDialog && (
+      {showPIIDialog && piiResults && (
         <PIIDetectionDialog
           isOpen={showPIIDialog}
           onClose={() => setShowPIIDialog(false)}
-          onApprove={handlePIIApproval}
+          onDecision={handlePIIApproval}
           piiResult={piiResults}
-          projectData={projectData}
         />
       )}
 
       {/* Schema Validation Dialog */}
-      {showSchemaDialog && schemaAnalysis && (
-        <SchemaValidationDialog
-          isOpen={showSchemaDialog}
-          onClose={() => setShowSchemaDialog(false)}
-          onConfirm={handleSchemaConfirm}
-          detectedSchema={schemaAnalysis}
-          sampleData={projectData?.preview || projectData?.sampleData || []}
-        />
-      )}
+      {showSchemaDialog && schemaAnalysis && (() => {
+        // Convert schema to flat Record<string, string> format
+        let flatSchema: Record<string, string> = {};
+        
+        if (schemaAnalysis.schema && typeof schemaAnalysis.schema === 'object') {
+          // Handle nested schema format { column: { type: 'string' } }
+          flatSchema = Object.fromEntries(
+            Object.entries(schemaAnalysis.schema).map(([key, value]) => [
+              key,
+              typeof value === 'string' ? value : (value as any)?.type || 'string'
+            ])
+          );
+        } else if (Array.isArray(schemaAnalysis.columnNames) && schemaAnalysis.columnNames.length > 0) {
+          // If we only have column names, create a basic schema
+          flatSchema = Object.fromEntries(
+            schemaAnalysis.columnNames.map((col: string) => [col, 'string'])
+          );
+        }
+        
+        return (
+          <SchemaValidationDialog
+            isOpen={showSchemaDialog}
+            onClose={() => setShowSchemaDialog(false)}
+            onConfirm={handleSchemaConfirm}
+            detectedSchema={flatSchema}
+            sampleData={Array.isArray(projectData?.preview) ? projectData.preview : 
+                      Array.isArray(projectData?.sampleData) ? projectData.sampleData : []}
+          />
+        );
+      })()}
     </div>
   );
 }

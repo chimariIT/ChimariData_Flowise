@@ -11,14 +11,27 @@
  * 4. Bridge forwards response back to agent via message broker
  */
 
-import { getMessageBroker, AgentMessage, AgentCheckpoint } from './message-broker';
+import { getMessageBroker, AgentMessage, AgentCheckpoint, PendingCheckpointInfo } from './message-broker';
 import { RealtimeServer, RealtimeEvent } from '../../realtime';
 import { EventEmitter } from 'events';
 
 export class RealtimeAgentBridge extends EventEmitter {
   private messageBroker: ReturnType<typeof getMessageBroker>;
   private realtimeServer: RealtimeServer;
-  private checkpointMap: Map<string, { projectId: string; userId: string }> = new Map();
+  private checkpointMap: Map<string, {
+    projectId: string;
+    userId: string;
+    agentId?: string | null;
+    agentName?: string | null;
+    step?: string | null;
+    stepId?: string | null;
+    journeyId?: string | null;
+    options?: string[];
+    question?: string | null;
+    artifacts?: any[];
+  }> = new Map();
+  private pendingCheckpointIds: Set<string> = new Set();
+  private teardownCallbacks: Array<() => void> = [];
 
   constructor(realtimeServer: RealtimeServer, redisUrl?: string) {
     super();
@@ -27,6 +40,7 @@ export class RealtimeAgentBridge extends EventEmitter {
 
     this.setupAgentListeners();
     this.setupWebSocketListeners();
+    this.setupCheckpointTracking();
 
     console.log('Real-Time Agent Bridge initialized');
   }
@@ -67,7 +81,15 @@ export class RealtimeAgentBridge extends EventEmitter {
     this.checkpointMap.set(checkpoint.checkpointId, {
       projectId: checkpoint.projectId,
       userId: '', // Will be set from project lookup
+      agentId: checkpoint.agentId,
+      agentName: checkpoint.agentId,
+      step: checkpoint.step,
+      stepId: checkpoint.step,
+      options: checkpoint.options,
+      question: checkpoint.question,
+      artifacts: checkpoint.artifacts,
     });
+    this.pendingCheckpointIds.add(checkpoint.checkpointId);
 
     // Get project owner (userId) from database
     // TODO: Query database for project owner
@@ -193,6 +215,43 @@ export class RealtimeAgentBridge extends EventEmitter {
     });
   }
 
+  private setupCheckpointTracking(): void {
+    const pendingHandler = (payload: PendingCheckpointInfo) => {
+      this.pendingCheckpointIds.add(payload.checkpointId);
+      const existing = this.checkpointMap.get(payload.checkpointId);
+      this.checkpointMap.set(payload.checkpointId, {
+        projectId: payload.projectId ?? existing?.projectId ?? '',
+        userId: existing?.userId ?? '',
+        agentId: payload.agentId ?? existing?.agentId ?? null,
+        agentName: payload.agentName ?? existing?.agentName ?? payload.agentId ?? existing?.agentId ?? null,
+        step: payload.step ?? existing?.step ?? null,
+        stepId: payload.stepId ?? existing?.stepId ?? payload.step ?? existing?.step ?? null,
+        journeyId: payload.journeyId ?? existing?.journeyId ?? null,
+        options: payload.options ?? existing?.options,
+        question: payload.question ?? existing?.question ?? null,
+        artifacts: payload.artifacts ?? existing?.artifacts,
+      });
+    };
+
+    const resolvedHandler = (payload: Partial<PendingCheckpointInfo> & { checkpointId: string }) => {
+      this.pendingCheckpointIds.delete(payload.checkpointId);
+      this.checkpointMap.delete(payload.checkpointId);
+    };
+
+    const timeoutHandler = (payload: Partial<PendingCheckpointInfo> & { checkpointId: string }) => {
+      this.pendingCheckpointIds.delete(payload.checkpointId);
+      this.checkpointMap.delete(payload.checkpointId);
+    };
+
+    this.messageBroker.on('checkpoint_pending', pendingHandler);
+    this.messageBroker.on('checkpoint_resolved', resolvedHandler);
+    this.messageBroker.on('checkpoint_timeout', timeoutHandler);
+
+    this.teardownCallbacks.push(() => this.messageBroker.off('checkpoint_pending', pendingHandler));
+    this.teardownCallbacks.push(() => this.messageBroker.off('checkpoint_resolved', resolvedHandler));
+    this.teardownCallbacks.push(() => this.messageBroker.off('checkpoint_timeout', timeoutHandler));
+  }
+
   /**
    * Forward user's checkpoint response to agent
    */
@@ -201,23 +260,21 @@ export class RealtimeAgentBridge extends EventEmitter {
 
     // Get checkpoint metadata
     const metadata = this.checkpointMap.get(checkpointId);
-    if (!metadata) {
-      console.warn(`Checkpoint ${checkpointId} not found in map`);
-      return;
-    }
-
-    // Submit response to message broker
-    await this.messageBroker.submitCheckpointResponse(checkpointId, {
+    try {
+      await this.messageBroker.submitCheckpointResponse(checkpointId, {
       approved,
       feedback,
       modifications,
-    });
+      });
+    } finally {
+      if (metadata) {
+        this.checkpointMap.delete(checkpointId);
+      }
+      this.pendingCheckpointIds.delete(checkpointId);
 
-    // Clean up
-    this.checkpointMap.delete(checkpointId);
-
-    console.log(`Checkpoint ${checkpointId} response forwarded to agent`);
-    this.emit('checkpoint_response_forwarded', { checkpointId, approved });
+      console.log(`Checkpoint ${checkpointId} response forwarded to agent`);
+      this.emit('checkpoint_response_forwarded', { checkpointId, approved });
+    }
   }
 
   /**
@@ -235,7 +292,24 @@ export class RealtimeAgentBridge extends EventEmitter {
     feedback?: string;
     modifications?: any;
   }> {
-    return await this.messageBroker.waitForCheckpointResponse(checkpointId, timeout);
+    const metadata = this.checkpointMap.get(checkpointId);
+    return await this.messageBroker.waitForCheckpointResponse(
+      checkpointId,
+      timeout,
+      metadata
+        ? {
+            projectId: metadata.projectId,
+            agentId: metadata.agentId ?? undefined,
+            agentName: metadata.agentName ?? metadata.agentId ?? undefined,
+            step: metadata.step ?? undefined,
+            stepId: metadata.stepId ?? metadata.step ?? undefined,
+            journeyId: metadata.journeyId ?? undefined,
+            options: metadata.options,
+            question: metadata.question ?? undefined,
+            artifacts: metadata.artifacts,
+          }
+        : undefined
+    );
   }
 
   // ==========================================
@@ -251,7 +325,7 @@ export class RealtimeAgentBridge extends EventEmitter {
     realtimeStats: any;
   } {
     return {
-      pendingCheckpoints: this.checkpointMap.size,
+      pendingCheckpoints: this.pendingCheckpointIds.size,
       messageBrokerStats: this.messageBroker.getStats(),
       realtimeStats: {
         // Add RealtimeServer stats if available
@@ -272,7 +346,16 @@ export class RealtimeAgentBridge extends EventEmitter {
 
   async shutdown(): Promise<void> {
     console.log('Shutting down Real-Time Agent Bridge...');
+    for (const dispose of this.teardownCallbacks) {
+      try {
+        dispose();
+      } catch (error) {
+        console.warn('Failed to dispose bridge listener:', error);
+      }
+    }
+    this.teardownCallbacks = [];
     this.checkpointMap.clear();
+    this.pendingCheckpointIds.clear();
     this.removeAllListeners();
     console.log('Real-Time Agent Bridge shut down');
   }

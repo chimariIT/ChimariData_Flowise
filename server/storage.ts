@@ -1,5 +1,5 @@
 import { DataProject, InsertDataProject, insertProjectSchema, insertEnterpriseInquirySchema, insertGuidedAnalysisOrderSchema, insertDatasetSchema, insertProjectDatasetSchema, insertProjectArtifactSchema, insertStreamingSourceSchema, insertDatasetVersionSchema, journeys, journeyStepProgress, costEstimates, eligibilityChecks, insertAgentCheckpointSchema } from "@shared/schema";
-import { users, projects, enterpriseInquiries, guidedAnalysisOrders, datasets, projectDatasets, projectArtifacts, streamingSources, streamChunks, streamCheckpoints, scrapingJobs, scrapingRuns, datasetVersions, agentCheckpoints } from "@shared/schema";
+import { users, projects, enterpriseInquiries, guidedAnalysisOrders, datasets, projectDatasets, projectArtifacts, streamingSources, streamChunks, streamCheckpoints, scrapingJobs, scrapingRuns, datasetVersions, agentCheckpoints, projectSessions, projectStates } from "@shared/schema";
 import { db } from "./db";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
@@ -41,64 +41,199 @@ type GuidedAnalysisOrder = typeof guidedAnalysisOrders.$inferSelect;
 type InsertGuidedAnalysisOrder = typeof guidedAnalysisOrders.$inferInsert;
 type AgentCheckpoint = typeof agentCheckpoints.$inferSelect;
 type InsertAgentCheckpoint = typeof agentCheckpoints.$inferInsert;
-
-// Convert between DataProject and Project types
-function projectToDataProject(project: Project): DataProject {
-  return {
-    id: project.id,
-    userId: project.ownerId || '',
-    name: project.name,
-    fileName: '',
-    fileSize: 0,
-    fileType: '',
-    uploadedAt: new Date(),
-    description: project.description || undefined,
-    isTrial: false,
-    schema: undefined,
-    recordCount: undefined,
-    data: undefined,
-    processed: false,
-    piiAnalysis: undefined,
-    uniqueIdentifiers: undefined,
-    dataSource: "upload",
-    sourceMetadata: undefined,
-    transformations: undefined,
-    joinedFiles: undefined,
-    outlierAnalysis: undefined,
-    missingDataAnalysis: undefined,
-    normalityTests: undefined,
-    analysisResults: undefined,
-    stepByStepAnalysis: undefined,
-    visualizations: undefined,
-    aiInsights: undefined,
-    aiRole: undefined,
-    aiActions: undefined,
-    mcpResources: undefined,
-    purchasedFeatures: undefined,
-    isPaid: false,
-    selectedFeatures: undefined,
-    paymentIntentId: undefined,
-    upgradedAt: undefined,
+type ProjectStateRow = typeof projectStates.$inferSelect;
+export interface ProjectSessionSnapshot {
+  id: string;
+  projectId?: string | null;
+  journeyType?: string | null;
+  currentStep?: string | null;
+  prepare?: any;
+  data?: any;
+  execute?: any;
+  pricing?: any;
+  results?: any;
+  workflowState?: any;
+  transformation?: any;
+  metadata?: {
+    lastActivity?: Date | null;
+    expiresAt?: Date | null;
+    serverValidated?: boolean | null;
   };
 }
 
+// Convert between DataProject and Project types
+function projectToDataProject(project: Project, dataset?: Dataset, projectState?: Record<string, unknown> | ProjectStateRow): DataProject {
+  const projectRecord = project as any;
+  const datasetRecord = dataset as any;
+  const statePayload = projectState
+    ? (('state' in projectState ? (projectState as ProjectStateRow).state : projectState) as Record<string, unknown>)
+    : undefined;
+
+  const uploadedAtSource = datasetRecord?.createdAt ?? projectRecord?.createdAt ?? new Date();
+  const uploadedAt = uploadedAtSource instanceof Date ? uploadedAtSource : new Date(uploadedAtSource);
+
+  const fileName = datasetRecord?.originalFileName ?? projectRecord?.fileName ?? '';
+  const fileSize = datasetRecord?.fileSize ?? projectRecord?.fileSize ?? 0;
+  const fileType = datasetRecord?.mimeType ?? projectRecord?.fileType ?? '';
+  const schema = datasetRecord?.schema ?? projectRecord?.schema ?? undefined;
+  const recordCount = datasetRecord?.recordCount ?? projectRecord?.recordCount ?? undefined;
+  const dataSource = (datasetRecord?.sourceType as DataProject['dataSource'] | undefined) ?? (projectRecord?.dataSource as DataProject['dataSource'] | undefined) ?? 'upload';
+  const piiAnalysis = datasetRecord?.piiAnalysis ?? projectRecord?.piiAnalysis ?? undefined;
+  const sourceMetadata = datasetRecord?.ingestionMetadata ?? projectRecord?.sourceMetadata ?? undefined;
+  const storageUri = datasetRecord?.storageUri ?? projectRecord?.file_path ?? undefined;
+  const datasetStatus = (datasetRecord?.status as string | undefined)?.toLowerCase();
+  const projectStatus = (projectRecord?.status as string | undefined)?.toLowerCase();
+  const processed = datasetStatus
+    ? !['processing', 'uploading'].includes(datasetStatus)
+    : projectStatus
+      ? !['draft', 'uploading', 'pii_review'].includes(projectStatus)
+      : false;
+
+  const result: DataProject & { preview?: unknown; sampleData?: unknown } = {
+    id: project.id,
+    userId: project.userId || '',
+    journeyType: projectRecord?.journeyType ?? 'ai_guided',
+    name: project.name,
+    fileName,
+    fileSize,
+    fileType,
+    uploadedAt,
+    description: project.description ?? undefined,
+    isTrial: projectRecord?.isTrial ?? false,
+    schema,
+    recordCount,
+    data: projectRecord?.data ?? undefined,
+    processed,
+    piiAnalysis,
+    uniqueIdentifiers: projectRecord?.uniqueIdentifiers ?? undefined,
+    dataSource,
+    sourceMetadata,
+    transformations: projectRecord?.transformations ?? undefined,
+    joinedFiles: projectRecord?.joinedFiles ?? undefined,
+    outlierAnalysis: projectRecord?.outlierAnalysis ?? undefined,
+    missingDataAnalysis: projectRecord?.missingDataAnalysis ?? undefined,
+    normalityTests: projectRecord?.normalityTests ?? undefined,
+    analysisResults: projectRecord?.analysisResults ?? undefined,
+    stepByStepAnalysis: projectRecord?.stepByStepAnalysis ?? undefined,
+    interactiveSession: projectRecord?.interactiveSession ?? undefined,
+    costEstimation: projectRecord?.costEstimation ?? undefined,
+    visualizations: projectRecord?.visualizations ?? undefined,
+    aiInsights: projectRecord?.aiInsights ?? undefined,
+    aiRole: projectRecord?.aiRole ?? undefined,
+    aiActions: projectRecord?.aiActions ?? undefined,
+    mcpResources: projectRecord?.mcpResources ?? undefined,
+    purchasedFeatures: projectRecord?.purchasedFeatures ?? undefined,
+    isPaid: projectRecord?.isPaid ?? false,
+    selectedFeatures: projectRecord?.selectedFeatures ?? undefined,
+    paymentIntentId: projectRecord?.paymentIntentId ?? undefined,
+    upgradedAt: projectRecord?.upgradedAt ?? undefined,
+    transformedData: projectRecord?.transformedData ?? undefined,
+    file_path: storageUri,
+  };
+
+  if (datasetRecord?.preview !== undefined) {
+    result.preview = datasetRecord.preview;
+    result.sampleData = datasetRecord.preview;
+  }
+
+  if (datasetRecord?.data && result.data === undefined) {
+    result.data = datasetRecord.data;
+  }
+
+  if (statePayload && typeof statePayload === 'object') {
+    for (const [key, value] of Object.entries(statePayload)) {
+      if (value === undefined) {
+        continue;
+      }
+      (result as any)[key] = normalizeStateValue(key, value);
+    }
+  }
+
+  for (const key of JSON_STATE_KEYS) {
+    const currentValue = (result as any)[key];
+    if (typeof currentValue === 'string') {
+      const parsed = tryParseJson(currentValue);
+      if (parsed !== undefined) {
+        (result as any)[key] = parsed;
+      }
+    }
+  }
+
+  return result;
+}
+
 function dataProjectToInsertProject(dataProject: InsertDataProject): Omit<InsertProject, 'id'> {
-  // Accept both userId (preferred in app types) and ownerId (used by some callers)
-  const owner = (dataProject as any).userId ?? (dataProject as any).ownerId;
+  const userId = (dataProject as any).userId;
   return {
-    ownerId: owner,
+    userId: userId, // Set userId (required by schema)
     name: dataProject.name,
     description: dataProject.description || null,
-    journeyType: (dataProject as any).journeyType || 'ai_guided', // Default to ai_guided if not specified
+  journeyType: (dataProject as any).journeyType || 'ai_guided', // Default to ai_guided if not specified
   };
+}
+
+const PROJECT_COLUMN_KEYS = new Set([
+  'userId',
+  'name',
+  'description',
+  'status',
+  'journeyType',
+  'lastArtifactId',
+  'analysisResults',
+  'consultationProposalId',
+  'approvedPlanId',
+  'analysisExecutedAt',
+  'analysisBilledAt',
+  'totalCostIncurred',
+  'lockedCostEstimate',
+  'costBreakdown',
+  'stepCompletionStatus',
+  'lastAccessedStep',
+  'journeyStartedAt',
+  'journeyCompletedAt',
+  'journeyProgress',
+]);
+
+const JSON_STATE_KEYS = new Set([
+  'metadata',
+  'multiAgentCoordination',
+  'analysisResults',
+  'stepByStepAnalysis',
+  'interactiveSession',
+  'costEstimation',
+  'visualizations',
+  'aiInsights',
+  'journeyProgress',
+  'journeyMetrics',
+]);
+
+function tryParseJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeStateValue(key: string, value: unknown): unknown {
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  if (!JSON_STATE_KEYS.has(key)) {
+    return value;
+  }
+
+  const parsed = tryParseJson(value);
+  return parsed === undefined ? value : parsed;
 }
 
 function projectUpdatesToDb(updates: Partial<DataProject>): Partial<Project> {
   const dbUpdates: Partial<Project> = {};
-  
+
   // Map DataProject fields to Project database fields, only include provided values
   if (updates.userId !== undefined) {
-    dbUpdates.ownerId = updates.userId;
+    dbUpdates.userId = updates.userId;
   }
   if (updates.name !== undefined) dbUpdates.name = updates.name;
   if (updates.description !== undefined) dbUpdates.description = updates.description || null;
@@ -106,8 +241,71 @@ function projectUpdatesToDb(updates: Partial<DataProject>): Partial<Project> {
   if ((updates as any).status !== undefined) (dbUpdates as any).status = (updates as any).status;
   if ((updates as any).journeyType !== undefined) (dbUpdates as any).journeyType = (updates as any).journeyType;
   if ((updates as any).lastArtifactId !== undefined) (dbUpdates as any).lastArtifactId = (updates as any).lastArtifactId;
+  if ((updates as any).analysisResults !== undefined) (dbUpdates as any).analysisResults = (updates as any).analysisResults;
+  if ((updates as any).consultationProposalId !== undefined) (dbUpdates as any).consultationProposalId = (updates as any).consultationProposalId;
+  if ((updates as any).approvedPlanId !== undefined) (dbUpdates as any).approvedPlanId = (updates as any).approvedPlanId;
+  if ((updates as any).analysisExecutedAt !== undefined) (dbUpdates as any).analysisExecutedAt = (updates as any).analysisExecutedAt;
+  if ((updates as any).analysisBilledAt !== undefined) (dbUpdates as any).analysisBilledAt = (updates as any).analysisBilledAt;
+  if ((updates as any).totalCostIncurred !== undefined) (dbUpdates as any).totalCostIncurred = (updates as any).totalCostIncurred;
+  if ((updates as any).lockedCostEstimate !== undefined) (dbUpdates as any).lockedCostEstimate = (updates as any).lockedCostEstimate;
+  if ((updates as any).costBreakdown !== undefined) (dbUpdates as any).costBreakdown = (updates as any).costBreakdown;
+  if ((updates as any).stepCompletionStatus !== undefined) (dbUpdates as any).stepCompletionStatus = (updates as any).stepCompletionStatus;
+  if ((updates as any).lastAccessedStep !== undefined) (dbUpdates as any).lastAccessedStep = (updates as any).lastAccessedStep;
+  if ((updates as any).journeyStartedAt !== undefined) (dbUpdates as any).journeyStartedAt = (updates as any).journeyStartedAt;
+  if ((updates as any).journeyCompletedAt !== undefined) (dbUpdates as any).journeyCompletedAt = (updates as any).journeyCompletedAt;
+  if ((updates as any).journeyProgress !== undefined) (dbUpdates as any).journeyProgress = (updates as any).journeyProgress;
   
   return dbUpdates;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (Object.prototype.toString.call(value) !== '[object Object]') {
+    return false;
+  }
+  const proto = Object.getPrototypeOf(value);
+  return proto === null || proto === Object.prototype;
+}
+
+function mergeStatePayload(existing: Record<string, unknown>, updates: Record<string, unknown>): Record<string, unknown> {
+  if (!Object.keys(updates).length) {
+    return existing;
+  }
+
+  const merged: Record<string, unknown> = { ...existing };
+  for (const [key, value] of Object.entries(updates)) {
+    if (value === undefined) {
+      continue;
+    }
+
+    const current = merged[key];
+    if (isPlainObject(current) && isPlainObject(value)) {
+      merged[key] = { ...current, ...value };
+      continue;
+    }
+
+    merged[key] = value;
+  }
+
+  return merged;
+}
+
+function projectUpdatesToState(updates: Partial<DataProject>): Record<string, unknown> {
+  const stateUpdates: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(updates)) {
+    if (value === undefined) {
+      continue;
+    }
+    if (PROJECT_COLUMN_KEYS.has(key)) {
+      continue;
+    }
+    if (key === 'id' || key === 'userId') {
+      continue;
+    }
+    stateUpdates[key] = value;
+  }
+
+  return stateUpdates;
 }
 
 export interface IStorage {
@@ -221,6 +419,15 @@ export interface IStorage {
   
   // Usage Logging (missing method)
   logUsage(usage: { userId: string; projectId?: string | null; action: string; provider?: string; tokensUsed?: number; cost?: string }): Promise<void>;
+
+  // Agent checkpoint management
+  createAgentCheckpoint(checkpoint: Omit<InsertAgentCheckpoint, 'id' | 'createdAt' | 'timestamp'> & { id?: string; timestamp?: Date; createdAt?: Date }): Promise<AgentCheckpoint>;
+  getProjectCheckpoints(projectId: string): Promise<AgentCheckpoint[]>;
+  updateAgentCheckpoint(checkpointId: string, updates: Partial<Omit<AgentCheckpoint, 'id' | 'createdAt'>>): Promise<AgentCheckpoint | null>;
+  deleteProjectCheckpoints(projectId: string): Promise<void>;
+
+  // Project sessions
+  getProjectSession(projectId: string): Promise<ProjectSessionSnapshot | null>;
 }
 
 export class MemStorage implements IStorage {
@@ -240,6 +447,8 @@ export class MemStorage implements IStorage {
   private journeyStepProgress: Map<string, JourneyStepProgress> = new Map();
   private costEstimates: Map<string, CostEstimate> = new Map();
   private eligibilityChecks: Map<string, EligibilityCheck> = new Map();
+  private agentCheckpoints: Map<string, AgentCheckpoint> = new Map();
+  private projectSessions: Map<string, ProjectSessionSnapshot> = new Map();
   private nextId = 1;
 
   async createProject(projectData: InsertDataProject): Promise<DataProject> {
@@ -256,6 +465,26 @@ export class MemStorage implements IStorage {
     };
     
     this.projects.set(id, project);
+
+    const sessionId = `session_${this.nextId++}`;
+    this.projectSessions.set(id, {
+      id: sessionId,
+      projectId: id,
+      journeyType: (projectData as any).journeyType ?? 'non-tech',
+      currentStep: 'prepare',
+      prepare: {},
+      data: {},
+      execute: {},
+      pricing: {},
+      results: {},
+      workflowState: {},
+      metadata: {
+        lastActivity: new Date(),
+        expiresAt: null,
+        serverValidated: false,
+      },
+    });
+
     return project;
   }
 
@@ -275,11 +504,26 @@ export class MemStorage implements IStorage {
 
     const updated = { ...existing, ...updates };
     this.projects.set(id, updated);
+
+    const session = this.projectSessions.get(id);
+    if (session) {
+      this.projectSessions.set(id, {
+        ...session,
+        journeyType: (updates as any)?.journeyType ?? session.journeyType,
+        metadata: {
+          ...(session.metadata ?? {}),
+          lastActivity: new Date(),
+        },
+      });
+    }
+
     return updated;
   }
 
   async deleteProject(id: string): Promise<boolean> {
-    return this.projects.delete(id);
+    const deleted = this.projects.delete(id);
+    this.projectSessions.delete(id);
+    return deleted;
   }
 
   async getProjectsByOwner(ownerId: string): Promise<DataProject[]> {
@@ -288,26 +532,38 @@ export class MemStorage implements IStorage {
 
   // Dataset operations
   async createDataset(datasetData: InsertDataset): Promise<Dataset> {
-    const id = `dataset_${this.nextId++}`;
+    const normalized = { ...(datasetData as any) } as InsertDataset & { ownerId?: string };
+    const resolvedUserId = normalized.userId ?? normalized.ownerId;
+
+    if (!resolvedUserId) {
+      throw new Error("createDataset requires a userId or ownerId");
+    }
+
+    const id = (normalized as any).id ?? `dataset_${this.nextId++}`;
+    delete (normalized as any).ownerId;
     const dataset: Dataset = {
-      ...datasetData,
+      ...normalized,
       id,
-      sourceType: datasetData.sourceType ?? "upload",
-      dataType: datasetData.dataType ?? null,
-      data: (datasetData as any).data ?? null,
-      status: datasetData.status ?? "ready",
-      schema: datasetData.schema ?? null,
-      recordCount: datasetData.recordCount ?? null,
-      preview: datasetData.preview ?? null,
-      piiAnalysis: datasetData.piiAnalysis ?? null,
-      ingestionMetadata: datasetData.ingestionMetadata ?? null,
-      checksum: datasetData.checksum ?? null,
-      mode: datasetData.mode ?? "static",
-      retentionDays: datasetData.retentionDays ?? null,
+      userId: resolvedUserId,
+      sourceType: normalized.sourceType ?? "upload",
+      dataType: normalized.dataType ?? null,
+      data: (normalized as any).data ?? null,
+      status: normalized.status ?? "ready",
+      schema: normalized.schema ?? null,
+      recordCount: normalized.recordCount ?? null,
+      preview: normalized.preview ?? null,
+      piiAnalysis: normalized.piiAnalysis ?? null,
+      ingestionMetadata: normalized.ingestionMetadata ?? null,
+      checksum: normalized.checksum ?? null,
+      mode: normalized.mode ?? "static",
+      retentionDays: normalized.retentionDays ?? null,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
-    
+
+    // Preserve legacy ownerId property for any callers that still expect it
+    (dataset as any).ownerId = resolvedUserId;
+
     this.datasets.set(id, dataset);
     return dataset;
   }
@@ -317,7 +573,10 @@ export class MemStorage implements IStorage {
   }
 
   async getDatasetsByOwner(ownerId: string): Promise<Dataset[]> {
-    return Array.from(this.datasets.values()).filter(dataset => dataset.ownerId === ownerId);
+    return Array.from(this.datasets.values()).filter(dataset => {
+      const datasetRecord = dataset as any;
+      return dataset.userId === ownerId || datasetRecord?.ownerId === ownerId;
+    });
   }
 
   async updateDataset(id: string, updates: Partial<Dataset>): Promise<Dataset | undefined> {
@@ -480,6 +739,8 @@ export class MemStorage implements IStorage {
       stripeCustomerId: (userData as any).stripeCustomerId ?? null,
       stripeSubscriptionId: (userData as any).stripeSubscriptionId ?? null,
       subscriptionExpiresAt: (userData as any).subscriptionExpiresAt ?? null,
+        subscriptionBalances: (userData as any).subscriptionBalances ?? {},
+  credits: (userData as any).credits ?? '0',
       isPaid: (userData as any).isPaid ?? false,
       monthlyUploads: (userData as any).monthlyUploads ?? 0,
       monthlyDataVolume: (userData as any).monthlyDataVolume ?? 0,
@@ -495,6 +756,8 @@ export class MemStorage implements IStorage {
       preferredJourney: (userData as any).preferredJourney ?? null,
       journeyCompletions: (userData as any).journeyCompletions ?? null,
       onboardingCompleted: (userData as any).onboardingCompleted ?? false,
+      isAdmin: (userData as any).isAdmin ?? false,
+      role: (userData as any).role ?? null,
       createdAt: (userData as any).createdAt ?? new Date(),
       updatedAt: (userData as any).updatedAt ?? new Date(),
     };
@@ -578,6 +841,79 @@ export class MemStorage implements IStorage {
     // In-memory storage doesn't persist usage logs
     // This is handled by HybridStorage for persistence
     console.log('Usage logged:', usage);
+  }
+
+  async createAgentCheckpoint(checkpointData: Omit<InsertAgentCheckpoint, 'id' | 'createdAt' | 'timestamp'> & { id?: string; timestamp?: Date; createdAt?: Date }): Promise<AgentCheckpoint> {
+    const id = checkpointData.id ?? `agent_checkpoint_${this.nextId++}`;
+    const checkpoint: AgentCheckpoint = {
+      id,
+      projectId: checkpointData.projectId,
+      agentType: checkpointData.agentType,
+      stepName: checkpointData.stepName,
+      status: checkpointData.status ?? 'pending',
+      message: checkpointData.message ?? '',
+      data: checkpointData.data ?? null,
+      userFeedback: checkpointData.userFeedback ?? null,
+      requiresUserInput: checkpointData.requiresUserInput ?? false,
+      timestamp: checkpointData.timestamp ?? new Date(),
+      createdAt: checkpointData.createdAt ?? new Date(),
+    } as AgentCheckpoint;
+
+    this.agentCheckpoints.set(id, checkpoint);
+    return checkpoint;
+  }
+
+  async getProjectCheckpoints(projectId: string): Promise<AgentCheckpoint[]> {
+    return Array.from(this.agentCheckpoints.values())
+      .filter(cp => cp.projectId === projectId)
+      .sort((a, b) => (b.timestamp?.getTime?.() ?? 0) - (a.timestamp?.getTime?.() ?? 0));
+  }
+
+  async updateAgentCheckpoint(checkpointId: string, updates: Partial<Omit<AgentCheckpoint, 'id' | 'createdAt'>>): Promise<AgentCheckpoint | null> {
+    const existing = this.agentCheckpoints.get(checkpointId);
+    if (!existing) {
+      return null;
+    }
+
+    const updated: AgentCheckpoint = {
+      ...existing,
+      ...updates,
+      timestamp: updates.timestamp ?? existing.timestamp,
+    } as AgentCheckpoint;
+
+    this.agentCheckpoints.set(checkpointId, updated);
+    return updated;
+  }
+
+  async deleteProjectCheckpoints(projectId: string): Promise<void> {
+    for (const [id, checkpoint] of this.agentCheckpoints.entries()) {
+      if (checkpoint.projectId === projectId) {
+        this.agentCheckpoints.delete(id);
+      }
+    }
+  }
+
+  async getProjectSession(projectId: string): Promise<ProjectSessionSnapshot | null> {
+    return this.projectSessions.get(projectId) ?? null;
+  }
+
+  // Basic admin metrics for in-memory fallback
+  async getUserCount(): Promise<number> {
+    return this.users.size;
+  }
+
+  async getProjectCount(): Promise<number> {
+    return this.projects.size;
+  }
+
+  async updateUserRole(userId: string, role: string): Promise<void> {
+    const existing = this.users.get(userId);
+    if (!existing) {
+      return;
+    }
+
+    const updated = { ...existing, role } as User;
+    this.users.set(userId, updated);
   }
 
   // Guided analysis operations
@@ -966,13 +1302,69 @@ export class MemStorage implements IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
+  private async getProjectStateRow(projectId: string): Promise<ProjectStateRow | undefined> {
+    const [row] = await db
+      .select()
+      .from(projectStates)
+      .where(eq(projectStates.projectId, projectId));
+
+    return row as ProjectStateRow | undefined;
+  }
+
+  private async upsertProjectState(
+    projectId: string,
+    updates: Record<string, unknown>,
+    options?: { replace?: boolean }
+  ): Promise<Record<string, unknown>> {
+    if (!Object.keys(updates).length && !options?.replace) {
+      const existingRow = await this.getProjectStateRow(projectId);
+      return (existingRow?.state as Record<string, unknown>) ?? {};
+    }
+
+    const existingRow = await this.getProjectStateRow(projectId);
+    const existingState = (existingRow?.state as Record<string, unknown>) ?? {};
+    const nextState = options?.replace
+      ? { ...updates }
+      : mergeStatePayload(existingState, updates);
+
+    const timestamp = new Date();
+
+    if (existingRow) {
+      await db
+        .update(projectStates)
+        .set({
+          state: nextState,
+          updatedAt: timestamp,
+        })
+        .where(eq(projectStates.projectId, projectId));
+    } else {
+      await db
+        .insert(projectStates)
+        .values({
+          projectId,
+          state: nextState,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        })
+        .onConflictDoUpdate({
+          target: projectStates.projectId,
+          set: {
+            state: nextState,
+            updatedAt: timestamp,
+          },
+        });
+    }
+
+    return nextState;
+  }
+
   // Project operations
   async createProject(projectData: InsertDataProject): Promise<DataProject> {
     const insertData = dataProjectToInsertProject(projectData);
-    if (!insertData.ownerId) {
-      throw new Error('createProject: ownerId/userId is required');
+    if (!insertData.userId) {
+      throw new Error('createProject: userId is required');
     }
-    
+
     const [project] = await db
       .insert(projects)
       .values({
@@ -980,8 +1372,11 @@ export class DatabaseStorage implements IStorage {
         id: nanoid(),
       })
       .returning();
-    
-    return projectToDataProject(project);
+
+    const stateUpdates = projectUpdatesToState(projectData as Partial<DataProject>);
+    const state = await this.upsertProjectState(project.id, stateUpdates, { replace: !Object.keys(stateUpdates).length });
+
+    return projectToDataProject(project, undefined, state);
   }
 
   async getProject(id: string): Promise<DataProject | undefined> {
@@ -990,31 +1385,55 @@ export class DatabaseStorage implements IStorage {
       .from(projects)
       .where(eq(projects.id, id));
     
-    return project ? projectToDataProject(project) : undefined;
+    if (!project) {
+      return undefined;
+    }
+
+    const dataset = await this.getDatasetForProject(project.id);
+    const stateRow = await this.getProjectStateRow(project.id);
+    return projectToDataProject(project, dataset, stateRow);
   }
 
   async getAllProjects(): Promise<DataProject[]> {
     const allProjects = await db.select().from(projects);
-    return allProjects.map(projectToDataProject);
+    return Promise.all(
+      allProjects.map(async (project: Project) => {
+        const dataset = await this.getDatasetForProject(project.id);
+        const stateRow = await this.getProjectStateRow(project.id);
+        return projectToDataProject(project, dataset, stateRow);
+      })
+    );
   }
 
   async updateProject(id: string, updates: Partial<DataProject>): Promise<DataProject | undefined> {
     const dbUpdates = projectUpdatesToDb(updates);
-    // If no mappable fields provided, return current project to avoid DB error
+    const stateUpdates = projectUpdatesToState(updates);
+
+    let projectRecord: Project | undefined;
+
     if (Object.keys(dbUpdates).length === 0) {
-      const [existing] = await db
+      const [existingProject] = await db
         .select()
         .from(projects)
         .where(eq(projects.id, id));
-      return existing ? projectToDataProject(existing) : undefined;
+      projectRecord = existingProject;
+    } else {
+      const [project] = await db
+        .update(projects)
+        .set(dbUpdates)
+        .where(eq(projects.id, id))
+        .returning();
+
+      projectRecord = project;
     }
-    const [project] = await db
-      .update(projects)
-      .set(dbUpdates)
-      .where(eq(projects.id, id))
-      .returning();
-    
-    return project ? projectToDataProject(project) : undefined;
+
+    if (!projectRecord) {
+      return undefined;
+    }
+
+    const state = await this.upsertProjectState(id, stateUpdates);
+    const dataset = await this.getDatasetForProject(projectRecord.id);
+    return projectToDataProject(projectRecord, dataset, state);
   }
 
   async deleteProject(id: string): Promise<boolean> {
@@ -1044,8 +1463,11 @@ export class DatabaseStorage implements IStorage {
       .select()
       .from(users)
       .where(eq(users.id, id));
-    
-    if (!dbUser) return undefined;
+
+    if (!dbUser) {
+      return undefined;
+    }
+
     return dbUser as User;
   }
 
@@ -1054,8 +1476,11 @@ export class DatabaseStorage implements IStorage {
       .select()
       .from(users)
       .where(eq(users.email, email));
-    
-    if (!dbUser) return undefined;
+
+    if (!dbUser) {
+      return undefined;
+    }
+
     return dbUser as User;
   }
 
@@ -1064,23 +1489,39 @@ export class DatabaseStorage implements IStorage {
       .select()
       .from(users)
       .where(eq(users.emailVerificationToken, token));
-    
-    if (!dbUser) return undefined;
+
+    if (!dbUser) {
+      return undefined;
+    }
+
     return dbUser as User;
   }
 
   async updateUser(id: string, updates: Partial<User>): Promise<User | undefined> {
-    // Map application fields to database fields for update
+    const updatePayload: Record<string, any> = {};
+
+    for (const [key, value] of Object.entries(updates)) {
+      if (value !== undefined && key !== "id") {
+        updatePayload[key] = value;
+      }
+    }
+
+    if (!Object.keys(updatePayload).length) {
+      return this.getUser(id);
+    }
+
+    updatePayload.updatedAt = new Date();
+
     const [dbUser] = await db
       .update(users)
-      .set({
-        ...updates,
-        updatedAt: new Date(),
-      })
+      .set(updatePayload as Partial<InsertUser>)
       .where(eq(users.id, id))
       .returning();
-    
-    if (!dbUser) return undefined;
+
+    if (!dbUser) {
+      return undefined;
+    }
+
     return dbUser as User;
   }
 
@@ -1088,7 +1529,7 @@ export class DatabaseStorage implements IStorage {
     const result = await db
       .delete(users)
       .where(eq(users.id, id));
-    
+
     return (result.rowCount || 0) > 0;
   }
 
@@ -1189,25 +1630,42 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(enterpriseInquiries);
   }
 
-  // Missing project method
-  async getProjectsByOwner(ownerId: string): Promise<DataProject[]> {
-    // Fixed: Use ownerId field (maps to user_id column) instead of non-existent userId field
-    console.log("[DATABASE STORAGE] FIXED VERSION: getProjectsByOwner called for ownerId:", ownerId);
-    const ownerProjects = await db
+  // Get all projects for a user
+  async getProjectsByOwner(userId: string): Promise<DataProject[]> {
+    console.log("[DATABASE STORAGE] getProjectsByOwner called for userId:", userId);
+    const userProjects = await db
       .select()
       .from(projects)
-      .where(eq(projects.ownerId, ownerId));
+      .where(eq(projects.userId, userId));
 
-    return ownerProjects.map(projectToDataProject);
+    return Promise.all(
+      userProjects.map(async (project: Project) => {
+        const dataset = await this.getDatasetForProject(project.id);
+        const stateRow = await this.getProjectStateRow(project.id);
+        return projectToDataProject(project, dataset, stateRow);
+      })
+    );
   }
 
   // Dataset operations
   async createDataset(datasetData: InsertDataset): Promise<Dataset> {
+    const normalized = { ...(datasetData as any) } as InsertDataset & { ownerId?: string };
+    const resolvedUserId = normalized.userId ?? normalized.ownerId;
+
+    if (!resolvedUserId) {
+      throw new Error("createDataset requires a userId or ownerId");
+    }
+
+    normalized.userId = resolvedUserId;
+    delete (normalized as any).ownerId;
+
+    const datasetId = normalized.id ?? nanoid();
+
     const [dataset] = await db
       .insert(datasets)
       .values({
-        ...datasetData,
-        id: nanoid(),
+        ...normalized,
+        id: datasetId,
       })
       .returning();
     
@@ -1223,11 +1681,11 @@ export class DatabaseStorage implements IStorage {
     return dataset || undefined;
   }
 
-  async getDatasetsByOwner(ownerId: string): Promise<Dataset[]> {
+  async getDatasetsByOwner(userId: string): Promise<Dataset[]> {
     return await db
       .select()
       .from(datasets)
-      .where(eq(datasets.ownerId, ownerId));
+      .where(eq(datasets.userId, userId));
   }
 
   async updateDataset(id: string, updates: Partial<Dataset>): Promise<Dataset | undefined> {
@@ -1251,11 +1709,11 @@ export class DatabaseStorage implements IStorage {
     return (result.rowCount || 0) > 0;
   }
 
-  async searchDatasets(ownerId: string, query?: string): Promise<Dataset[]> {
+  async searchDatasets(userId: string, query?: string): Promise<Dataset[]> {
     let dbQuery = db
       .select()
       .from(datasets)
-      .where(eq(datasets.ownerId, ownerId));
+      .where(eq(datasets.userId, userId));
 
     if (query) {
       // Use ilike for case-insensitive search on file name
@@ -1264,7 +1722,7 @@ export class DatabaseStorage implements IStorage {
         .select()
         .from(datasets)
         .where(
-          eq(datasets.ownerId, ownerId)
+          eq(datasets.userId, userId)
         );
       // Note: For proper search functionality, we would need to add the ilike condition
       // For now, return all owner datasets and filter in memory
@@ -1345,10 +1803,11 @@ export class DatabaseStorage implements IStorage {
       .select()
       .from(projectDatasets)
       .innerJoin(projects, eq(projectDatasets.projectId, projects.id))
+      .innerJoin(datasets, eq(projectDatasets.datasetId, datasets.id))
       .where(eq(projectDatasets.datasetId, datasetId));
 
     return results.map((result: any) => ({
-      project: projectToDataProject(result.projects),
+      project: projectToDataProject(result.projects, result.datasets),
       association: result.project_datasets,
     }));
   }
@@ -2011,9 +2470,9 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Agent Checkpoint Management
-  async createCheckpoint(checkpointData: Omit<InsertAgentCheckpoint, 'id' | 'createdAt' | 'timestamp'>): Promise<AgentCheckpoint> {
+  async createAgentCheckpoint(checkpointData: Omit<InsertAgentCheckpoint, 'id' | 'createdAt' | 'timestamp'> & { id?: string; timestamp?: Date; createdAt?: Date }): Promise<AgentCheckpoint> {
     const checkpoint: InsertAgentCheckpoint = {
-      id: nanoid(),
+      id: checkpointData.id ?? nanoid(),
       ...checkpointData,
     };
 
@@ -2029,7 +2488,7 @@ export class DatabaseStorage implements IStorage {
       .orderBy(agentCheckpoints.timestamp);
   }
 
-  async updateCheckpoint(checkpointId: string, updates: Partial<Omit<AgentCheckpoint, 'id' | 'createdAt' | 'timestamp'>>): Promise<AgentCheckpoint | null> {
+  async updateAgentCheckpoint(checkpointId: string, updates: Partial<Omit<AgentCheckpoint, 'id' | 'createdAt'>>): Promise<AgentCheckpoint | null> {
     const [result] = await db
       .update(agentCheckpoints)
       .set(updates)
@@ -2043,6 +2502,71 @@ export class DatabaseStorage implements IStorage {
     await db.delete(agentCheckpoints).where(eq(agentCheckpoints.projectId, projectId));
   }
 
+  async getProjectSession(projectId: string): Promise<ProjectSessionSnapshot | null> {
+    if (!projectId) {
+      return null;
+    }
+
+    const { desc, and } = await import("drizzle-orm");
+    let [session] = await db
+      .select()
+      .from(projectSessions)
+      .where(eq(projectSessions.projectId, projectId))
+      .orderBy(desc(projectSessions.updatedAt))
+      .limit(1);
+
+    if (!session) {
+      const project = await this.getProject(projectId);
+      if (project?.userId) {
+        const conditions = [
+          eq(projectSessions.userId, project.userId),
+        ];
+
+        const journeyType = (project as any)?.journeyType;
+        if (journeyType) {
+          conditions.push(eq(projectSessions.journeyType, journeyType as string));
+        }
+
+        const whereClause = conditions.length > 1 ? and(...conditions) : conditions[0];
+        const fallback = await db
+          .select()
+          .from(projectSessions)
+          .where(whereClause)
+          .orderBy(desc(projectSessions.updatedAt))
+          .limit(1);
+
+        session = fallback[0];
+      }
+    }
+
+    if (!session) {
+      return null;
+    }
+
+    const workflowState = (session.workflowState as any) ?? {};
+    const executeData = (session.executeData as any) ?? {};
+    const transformation = workflowState?.transformation ?? executeData?.transformation ?? null;
+
+    return {
+      id: session.id,
+      projectId: session.projectId,
+      journeyType: session.journeyType,
+      currentStep: session.currentStep ?? null,
+      prepare: (session.prepareData as any) ?? {},
+      data: (session.dataUploadData as any) ?? {},
+      execute: executeData,
+      pricing: (session.pricingData as any) ?? {},
+      results: (session.resultsData as any) ?? {},
+      workflowState,
+      transformation,
+      metadata: {
+        lastActivity: session.lastActivity ?? null,
+        expiresAt: session.expiresAt ?? null,
+        serverValidated: session.serverValidated ?? null,
+      },
+    };
+  }
+
   // Admin-specific methods
   async getUserCount(): Promise<number> {
     const result = await db.select().from(users);
@@ -2052,14 +2576,6 @@ export class DatabaseStorage implements IStorage {
   async getProjectCount(): Promise<number> {
     const result = await db.select().from(projects);
     return result.length;
-  }
-
-  async getAllUsers(): Promise<User[]> {
-    return await db.select().from(users);
-  }
-
-  async getAllProjects(): Promise<Project[]> {
-    return await db.select().from(projects);
   }
 
   async updateUserRole(userId: string, role: string): Promise<void> {

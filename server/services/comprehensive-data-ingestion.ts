@@ -15,7 +15,7 @@ import * as Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
-import puppeteer from 'puppeteer';
+import puppeteer, { Browser } from 'puppeteer';
 import { Pool as PgPool } from 'pg';
 import { createPool as createMysqlPool, Pool as MysqlPool } from 'mysql2/promise';
 import { MongoClient, Db } from 'mongodb';
@@ -29,7 +29,7 @@ import { io, Socket } from 'socket.io-client';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { Readable } from 'stream';
-import * as pdfParse from 'pdf-parse';
+import pdfParse from 'pdf-parse';
 
 // ============================================================================
 // Types and Interfaces
@@ -143,7 +143,7 @@ export class ComprehensiveDataIngestion {
   private azureBlobClient?: BlobServiceClient;
   private gcsClient?: GCSStorage;
   private mongoClient?: MongoClient;
-  private browserInstance?: puppeteer.Browser;
+  private browserInstance?: Browser;
   private ocrWorker?: Worker;
   private streamingSockets: Map<string, Socket> = new Map();
 
@@ -699,7 +699,7 @@ export class ComprehensiveDataIngestion {
         dynamicTyping: true,
         skipEmptyLines: true,
         complete: (results) => resolve(results.data),
-        error: (error) => reject(error)
+  error: (error: Error) => reject(error)
       });
     });
   }
@@ -1188,6 +1188,8 @@ export class ComprehensiveDataIngestion {
         resolve(createResult());
       }, timeout);
 
+      let socket: Socket | null = null;
+
       const cleanup = () => {
         clearTimeout(timeoutId);
         if (socket) {
@@ -1217,7 +1219,7 @@ export class ComprehensiveDataIngestion {
       };
 
       if (config.type === 'websocket') {
-        const socket = io(config.url, {
+        socket = io(config.url, {
           auth: config.auth,
           reconnection: config.reconnect !== false
         });
@@ -1244,7 +1246,7 @@ export class ComprehensiveDataIngestion {
           }
         });
 
-        socket.on('error', (error: any) => {
+        socket.on('error', (error: Error) => {
           console.error('WebSocket error:', error);
           cleanup();
           resolve({

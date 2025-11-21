@@ -1,40 +1,2212 @@
 // server/routes/project.ts
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import multer from "multer";
+import path from 'path';
+import fs from 'fs/promises';
+import crypto from 'crypto';
 import { storage } from '../services/storage';
+import { nanoid } from 'nanoid';
 import { unifiedAuth, ensureAuthenticated } from './auth';
+import { getAuthHeader } from '../utils/auth-headers';
 import { requireOwnership } from '../middleware/rbac';
 import { 
     FileProcessor,
     PIIAnalyzer,
     PricingService,
-    DataTransformationService
+    DataTransformationService,
+    enhancedVisualizationEngine
 } from '../services';
+import type { DatasetCharacteristics, VisualizationRequirements } from '../services/intelligent-library-selector';
 import { PythonProcessor } from '../services/python-processor';
+import { journeyStateManager } from '../services/journey-state-manager';
 
 import { tempStore } from '../services/temp-store';
 import { jsonToCsv } from '../services/csv-export';
 import { exportService } from '../services/export-service';
 import { projectAgentOrchestrator } from '../services/project-agent-orchestrator';
 import { ProjectManagerAgent } from '../services/project-manager-agent';
-import { AgentMessageBroker } from '../services/agents/message-broker';
+import { getMessageBroker } from '../services/agents/message-broker';
 import { DataEngineerAgent } from '../services/data-engineer-agent';
 import { DataScientistAgent } from '../services/data-scientist-agent';
+import { getBillingService } from '../services/billing/unified-billing-service';
+import type { JourneyType } from "../../shared/schema.js";
+import { canAccessProject, isAdmin } from '../middleware/ownership';
+import type { DataEngineerContext, DataScientistContext } from '../types/agent-context';
+import { buildAgentContext } from '../utils/agent-context';
+import { performanceWebhookService } from '../services/performance-webhook-service';
+
+const VALID_PROJECT_JOURNEYS: JourneyType[] = ["ai_guided", "template_based", "self_service", "consultation", "custom"];
+
+const normalizeProjectJourneyType = (value: unknown): JourneyType =>
+    VALID_PROJECT_JOURNEYS.includes(value as JourneyType) ? (value as JourneyType) : "ai_guided";
+
+const mapProjectJourneyToAgentJourney = (
+    journeyType: JourneyType
+): 'ai_guided' | 'non_tech' | 'business' | 'technical' | 'consultation' => {
+    switch (journeyType) {
+        case 'template_based':
+            return 'business';
+        case 'self_service':
+            return 'technical';
+        case 'consultation':
+            return 'consultation';
+        case 'custom':
+            return 'consultation';
+        case 'ai_guided':
+        default:
+            return 'ai_guided';
+    }
+};
 
 const router = Router();
 
+const extractRowsForTransformation = (dataset: any, project: any): any[] => {
+    const datasetData = Array.isArray(dataset?.data) ? dataset.data : undefined;
+    if (datasetData && datasetData.length > 0) {
+        return datasetData;
+    }
+
+    const transformedData = Array.isArray(project?.transformedData) ? project.transformedData : undefined;
+    if (transformedData && transformedData.length > 0) {
+        return transformedData;
+    }
+
+    const datasetPreview = Array.isArray(dataset?.preview) ? dataset.preview : undefined;
+    if (datasetPreview && datasetPreview.length > 0) {
+        return datasetPreview;
+    }
+
+    const projectData = Array.isArray(project?.data) ? project.data : undefined;
+    if (projectData && projectData.length > 0) {
+        return projectData;
+    }
+
+    const datasetSample = Array.isArray(dataset?.sampleData) ? dataset.sampleData : undefined;
+    if (datasetSample && datasetSample.length > 0) {
+        return datasetSample;
+    }
+
+    const projectSample = Array.isArray(project?.sampleData) ? project.sampleData : undefined;
+    if (projectSample && projectSample.length > 0) {
+        return projectSample;
+    }
+
+    return [];
+};
+
+type TransformationType = 'join' | 'outlier_detection' | 'missing_data' | 'normality_test';
+
+type TransformationStep = {
+    type: TransformationType;
+    config: Record<string, any>;
+};
+
+const VALID_TRANSFORMATION_TYPES: ReadonlyArray<TransformationType> = ['join', 'outlier_detection', 'missing_data', 'normality_test'];
+
+async function markJourneyProgress(projectId: string, stepIds: string[]): Promise<void> {
+    for (const stepId of stepIds) {
+        try {
+            await journeyStateManager.completeStep(projectId, stepId);
+        } catch (progressError) {
+            const message = progressError instanceof Error ? progressError.message : String(progressError);
+            const isMissingStep = message.toLowerCase().includes('step') && message.toLowerCase().includes('not found');
+            const isAlreadyComplete = message.toLowerCase().includes('already complete');
+
+            if (isMissingStep || isAlreadyComplete) {
+                continue;
+            }
+
+            console.error(`Failed to update journey progress for step ${stepId}:`, progressError);
+        }
+    }
+}
+
 // Initialize Agents for recommendations
+const messageBroker = getMessageBroker();
 const projectManagerAgent = new ProjectManagerAgent();
-const messageBroker = new AgentMessageBroker();
 const dataEngineerAgent = new DataEngineerAgent();
 const dataScientistAgent = new DataScientistAgent();
 
-// Configure multer for file uploads
+const MAX_VISUALIZATION_RECORDS = 5000;
+
+type VisualizationFieldConfig = {
+    x?: string;
+    y?: string;
+    color?: string;
+    size?: string;
+    names?: string;
+    values?: string;
+    z?: string;
+};
+
+type VisualizationAggregationConfig = {
+    group_by?: string[];
+    aggregations?: Record<string, string>;
+};
+
+type AggregatedMetric = {
+    field: string;
+    aggregation: string;
+    value: number;
+};
+
+type AggregatedEntry = {
+    key: string[];
+    metrics: AggregatedMetric[];
+};
+
+interface ProjectDataSnapshot {
+    records: Record<string, unknown>[];
+    schema: Record<string, any>;
+    schemaKeys: string[];
+}
+
+const VISUALIZATION_LABELS: Record<string, string> = {
+    bar: 'bar chart',
+    line: 'line chart',
+    scatter: 'scatter plot',
+    pie: 'pie chart',
+    histogram: 'histogram',
+    boxplot: 'box plot',
+    violin: 'violin plot',
+    heatmap: 'heatmap',
+    correlation_matrix: 'correlation matrix'
+};
+
+const CHART_TYPE_ALIASES: Record<string, string> = {
+    bar: 'bar',
+    bar_chart: 'bar',
+    barplot: 'bar',
+    line: 'line',
+    line_chart: 'line',
+    scatter: 'scatter',
+    scatter_plot: 'scatter',
+    pie: 'pie',
+    pie_chart: 'pie',
+    histogram: 'histogram',
+    distribution: 'histogram',
+    box: 'boxplot',
+    box_plot: 'boxplot',
+    boxplot: 'boxplot',
+    violin: 'violin',
+    violin_plot: 'violin',
+    heatmap: 'heatmap',
+    correlation: 'correlation_matrix',
+    correlation_matrix: 'correlation_matrix'
+};
+
+const normalizeChartType = (value: unknown): string => {
+    if (typeof value !== 'string' || !value.trim()) {
+        return 'bar';
+    }
+    const key = value.trim().toLowerCase();
+    return CHART_TYPE_ALIASES[key] || key.replace(/\s+/g, '_');
+};
+
+const ensureString = (value: unknown): string | undefined => {
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        return trimmed.length ? trimmed : undefined;
+    }
+    return undefined;
+};
+
+const uniqueStrings = (...values: Array<unknown>): string[] => {
+    const collection = new Set<string>();
+    for (const value of values) {
+        if (Array.isArray(value)) {
+            value.forEach((item) => {
+                const normalized = ensureString(item);
+                if (normalized) {
+                    collection.add(normalized);
+                }
+            });
+        } else {
+            const normalized = ensureString(value);
+            if (normalized) {
+                collection.add(normalized);
+            }
+        }
+    }
+    return Array.from(collection);
+};
+
+const safeParseJson = (value: unknown): unknown => {
+    if (typeof value === 'string') {
+        try {
+            return JSON.parse(value);
+        } catch {
+            return undefined;
+        }
+    }
+    return value;
+};
+
+const resolveSchemaObject = (project: any, dataset: any): Record<string, any> => {
+    const candidate = dataset?.schema || project?.schema;
+    if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+        return candidate as Record<string, any>;
+    }
+    return {};
+};
+
+const resolveSchemaKeys = (project: any, dataset: any, schema: Record<string, any>): string[] => {
+    if (Array.isArray(dataset?.columns) && dataset.columns.length) {
+        return dataset.columns as string[];
+    }
+    return Object.keys(schema || {});
+};
+
+const normalizeRecord = (row: unknown, schemaKeys: string[]): Record<string, unknown> | null => {
+    if (row && typeof row === 'object' && !Array.isArray(row)) {
+        return row as Record<string, unknown>;
+    }
+    if (Array.isArray(row) && schemaKeys.length) {
+        const result: Record<string, unknown> = {};
+        schemaKeys.forEach((key, index) => {
+            if (index < row.length) {
+                result[key] = row[index];
+            }
+        });
+        return Object.keys(result).length ? result : null;
+    }
+    return null;
+};
+
+const buildProjectDataSnapshot = (project: any, dataset: any): ProjectDataSnapshot => {
+    const schema = resolveSchemaObject(project, dataset);
+    const schemaKeys = resolveSchemaKeys(project, dataset, schema);
+
+    const sources = [
+        dataset?.preview,
+        dataset?.sampleRows,
+        dataset?.data,
+        project?.preview,
+        project?.sampleData,
+        project?.data
+    ];
+
+    for (const candidate of sources) {
+        const parsed = safeParseJson(candidate);
+        if (Array.isArray(parsed) && parsed.length) {
+            const records = parsed
+                .map((row) => normalizeRecord(row, schemaKeys))
+                .filter((row): row is Record<string, unknown> => !!row)
+                .slice(0, MAX_VISUALIZATION_RECORDS);
+
+            if (records.length) {
+                return {
+                    records,
+                    schema,
+                    schemaKeys
+                };
+            }
+        }
+    }
+
+    return {
+        records: [],
+        schema,
+        schemaKeys
+    };
+};
+
+const toNumber = (value: unknown): number | null => {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+    }
+    if (typeof value === 'string' && value.trim().length) {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+};
+
+const toStringValue = (value: unknown): string | null => {
+    if (value === null || value === undefined) {
+        return null;
+    }
+    if (value instanceof Date) {
+        return value.toISOString();
+    }
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        return trimmed.length ? trimmed : null;
+    }
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return value.toString();
+    }
+    if (typeof value === 'boolean') {
+        return value ? 'true' : 'false';
+    }
+    return String(value);
+};
+
+const isNumericType = (schema: Record<string, any>, key: string): boolean => {
+    const entry = schema?.[key];
+    const typeValue = typeof entry === 'string'
+        ? entry
+        : typeof entry === 'object' && entry?.type
+            ? entry.type
+            : '';
+    const normalized = typeof typeValue === 'string' ? typeValue.toLowerCase() : '';
+    return [
+        'number',
+        'numeric',
+        'integer',
+        'float',
+        'double',
+        'decimal'
+    ].includes(normalized);
+};
+
+const isDateType = (schema: Record<string, any>, key: string): boolean => {
+    const entry = schema?.[key];
+    const typeValue = typeof entry === 'string'
+        ? entry
+        : typeof entry === 'object' && entry?.type
+            ? entry.type
+            : '';
+    const normalized = typeof typeValue === 'string' ? typeValue.toLowerCase() : '';
+    return ['date', 'datetime', 'timestamp', 'time'].includes(normalized);
+};
+
+const computeDatasetCharacteristics = (snapshot: ProjectDataSnapshot): DatasetCharacteristics => {
+    const { records, schema, schemaKeys } = snapshot;
+    const columnCount = schemaKeys.length || 1;
+
+    const dataTypes = {
+        numeric: 0,
+        categorical: 0,
+        datetime: 0,
+        text: 0,
+        boolean: 0
+    };
+
+    const cardinality: Record<string, number> = {};
+
+    schemaKeys.forEach((key) => {
+        const entry = schema?.[key];
+        const typeValue = typeof entry === 'string'
+            ? entry
+            : typeof entry === 'object' && entry?.type
+                ? entry.type
+                : '';
+        const normalized = typeof typeValue === 'string' ? typeValue.toLowerCase() : '';
+
+        if (['number', 'numeric', 'integer', 'float', 'double', 'decimal'].includes(normalized)) {
+            dataTypes.numeric += 1;
+        } else if (['boolean', 'bool'].includes(normalized)) {
+            dataTypes.boolean += 1;
+        } else if (['date', 'datetime', 'timestamp', 'time'].includes(normalized)) {
+            dataTypes.datetime += 1;
+        } else if (['text', 'string', 'varchar', 'char'].includes(normalized)) {
+            dataTypes.text += 1;
+            dataTypes.categorical += 1;
+        } else {
+            dataTypes.categorical += 1;
+        }
+
+        const values = new Set<string>();
+        for (const record of records) {
+            const raw = record[key];
+            if (raw === undefined || raw === null || raw === '') {
+                continue;
+            }
+            values.add(String(raw));
+            if (values.size >= 500) {
+                break;
+            }
+        }
+        cardinality[key] = values.size;
+    });
+
+    const totalCells = records.length * columnCount;
+    let missing = 0;
+    if (totalCells > 0) {
+        for (const record of records) {
+            for (const key of schemaKeys) {
+                if (record[key] === undefined || record[key] === null || record[key] === '') {
+                    missing += 1;
+                }
+            }
+        }
+    }
+
+    const serializedLength = records.length
+        ? Buffer.byteLength(JSON.stringify(records))
+        : 0;
+
+    return {
+        size: records.length,
+        columns: schemaKeys.length,
+        dataTypes,
+        memoryFootprint: Number((serializedLength / (1024 * 1024)).toFixed(2)),
+        sparsity: totalCells ? Number(((missing / totalCells) * 100).toFixed(2)) : 0,
+        cardinality
+    };
+};
+
+const buildVisualizationRequirements = (chartType: string, recordCount: number): VisualizationRequirements => {
+    const dataSize = recordCount > 100_000
+        ? 'large'
+        : recordCount > 10_000
+            ? 'medium'
+            : 'small';
+
+    return {
+        chartTypes: [chartType],
+        interactivity: 'interactive',
+        dataSize,
+        styling: 'professional',
+        complexity: 'moderate',
+        exportFormats: ['png', 'svg', 'json'],
+        performancePriority: dataSize === 'large' ? 'memory' : 'balanced'
+    };
+};
+
+const normalizeAggregationName = (name: string | undefined): string => {
+    if (!name) {
+        return '';
+    }
+    const normalized = name.toLowerCase();
+    if (normalized === 'avg' || normalized === 'average') {
+        return 'mean';
+    }
+    return normalized;
+};
+
+const getAggregationFn = (name: string): ((values: number[]) => number) => {
+    switch (name) {
+        case 'sum':
+            return (values) => values.reduce((acc, value) => acc + value, 0);
+        case 'mean':
+            return (values) => values.length ? values.reduce((acc, value) => acc + value, 0) / values.length : 0;
+        case 'count':
+            return (values) => values.length;
+        case 'min':
+            return (values) => values.length ? Math.min(...values) : 0;
+        case 'max':
+            return (values) => values.length ? Math.max(...values) : 0;
+        case 'std':
+            return (values) => {
+                if (!values.length) {
+                    return 0;
+                }
+                const mean = values.reduce((acc, value) => acc + value, 0) / values.length;
+                const variance = values.reduce((acc, value) => acc + Math.pow(value - mean, 2), 0) / values.length;
+                return Math.sqrt(variance);
+            };
+        case 'median':
+            return (values) => {
+                if (!values.length) {
+                    return 0;
+                }
+                const sorted = [...values].sort((a, b) => a - b);
+                const middle = Math.floor(sorted.length / 2);
+                if (sorted.length % 2 === 0) {
+                    return (sorted[middle - 1] + sorted[middle]) / 2;
+                }
+                return sorted[middle];
+            };
+        default:
+            return (values) => values.length ? values.reduce((acc, value) => acc + value, 0) : 0;
+    }
+};
+
+type ColumnQualityStat = {
+    column: string;
+    count: number;
+    percentage: number;
+};
+
+interface DerivedQualityInsights {
+    metrics: {
+        completeness: number;
+        consistency: number;
+        accuracy: number;
+        validity: number;
+    };
+    issues: string[];
+    recommendations: string[];
+    overall: number;
+    label: string;
+    diagnostics: {
+        missingRate: number;
+        mismatchRate: number;
+        duplicateRate: number;
+        duplicateCount: number;
+        evaluatedCells: number;
+        totalCells: number;
+        rowCount: number;
+        columnCount: number;
+        missingByColumn: ColumnQualityStat[];
+        mismatchByColumn: ColumnQualityStat[];
+    };
+    datasetSummary: {
+        overview: string;
+        totalRows: number;
+        totalColumns: number;
+        missingCellPercentage: number;
+        columnTypeBreakdown: Record<string, string[]>;
+    };
+}
+
+const QUALITY_LABEL_READY = 'ready_for_analysis';
+const QUALITY_LABEL_REVIEW = 'review_recommended';
+const QUALITY_LABEL_INSUFFICIENT = 'insufficient_data';
+
+const MISSING_VALUE_TOKENS = new Set(['null', 'none', 'n/a', 'na', 'undefined', 'nan']);
+
+const clampScore = (value: number): number => {
+    if (!Number.isFinite(value)) {
+        return 0;
+    }
+    return Math.max(0, Math.min(100, Math.round(value)));
+};
+
+const normalizeScoreCandidate = (value: unknown): number | null => {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+    }
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (!trimmed.length) {
+            return null;
+        }
+        const parsed = Number(trimmed);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+};
+
+const isEffectivelyMissing = (value: unknown): boolean => {
+    if (value === null || value === undefined) {
+        return true;
+    }
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (!trimmed.length) {
+            return true;
+        }
+        return MISSING_VALUE_TOKENS.has(trimmed.toLowerCase());
+    }
+    return false;
+};
+
+const normalizeSchemaTypeEntry = (entry: unknown): string | undefined => {
+    if (typeof entry === 'string') {
+        return entry.toLowerCase();
+    }
+    if (entry && typeof entry === 'object' && !Array.isArray(entry) && (entry as any).type) {
+        const { type } = entry as { type?: unknown };
+        if (typeof type === 'string') {
+            return type.toLowerCase();
+        }
+    }
+    return undefined;
+};
+
+const inferSchemaTypeFromRecords = (
+    records: Record<string, unknown>[],
+    key: string
+): string | undefined => {
+    for (const record of records) {
+        const value = record[key];
+        if (isEffectivelyMissing(value)) {
+            continue;
+        }
+        if (typeof value === 'number') {
+            return Number.isInteger(value) ? 'integer' : 'float';
+        }
+        if (typeof value === 'boolean') {
+            return 'boolean';
+        }
+        if (value instanceof Date) {
+            return 'date';
+        }
+        if (typeof value === 'string') {
+            const trimmed = value.trim();
+            if (!trimmed.length) {
+                continue;
+            }
+            const numericCandidate = Number(trimmed);
+            if (Number.isFinite(numericCandidate)) {
+                return Number.isInteger(numericCandidate) ? 'integer' : 'float';
+            }
+            const dateCandidate = Date.parse(trimmed);
+            if (!Number.isNaN(dateCandidate)) {
+                return 'date';
+            }
+            return 'string';
+        }
+    }
+    return undefined;
+};
+
+const valueMatchesSchemaType = (value: unknown, schemaType?: string): boolean => {
+    if (!schemaType) {
+        return true;
+    }
+    const normalized = schemaType.toLowerCase();
+
+    if (['integer', 'int'].includes(normalized)) {
+        if (typeof value === 'number') {
+            return Number.isInteger(value);
+        }
+        if (typeof value === 'string') {
+            const parsed = Number(value);
+            return Number.isFinite(parsed) && Number.isInteger(parsed);
+        }
+        return false;
+    }
+
+    if (['number', 'numeric', 'float', 'double', 'decimal'].includes(normalized)) {
+        if (typeof value === 'number') {
+            return Number.isFinite(value);
+        }
+        if (typeof value === 'string') {
+            const parsed = Number(value);
+            return Number.isFinite(parsed);
+        }
+        return false;
+    }
+
+    if (['boolean', 'bool'].includes(normalized)) {
+        if (typeof value === 'boolean') {
+            return true;
+        }
+        if (typeof value === 'number') {
+            return value === 0 || value === 1;
+        }
+        if (typeof value === 'string') {
+            const normalizedValue = value.trim().toLowerCase();
+            return ['true', 'false', '0', '1', 'yes', 'no', 'y', 'n'].includes(normalizedValue);
+        }
+        return false;
+    }
+
+    if (['date', 'datetime', 'timestamp', 'time'].includes(normalized)) {
+        if (value instanceof Date) {
+            return !Number.isNaN(value.getTime());
+        }
+        if (typeof value === 'string') {
+            const parsed = Date.parse(value);
+            return !Number.isNaN(parsed);
+        }
+        return false;
+    }
+
+    return true;
+};
+
+const summarizeColumnMap = (map: Record<string, number>, rowCount: number): ColumnQualityStat[] => {
+    return Object.entries(map)
+        .map(([column, count]) => ({
+            column,
+            count,
+            percentage: rowCount > 0 ? Number(((count / rowCount) * 100).toFixed(1)) : 0
+        }))
+        .filter(entry => entry.count > 0)
+        .sort((a, b) => b.percentage - a.percentage);
+};
+
+const describeTopColumns = (stats: ColumnQualityStat[]): string => {
+    if (!stats.length) {
+        return '';
+    }
+    const top = stats.slice(0, 3)
+        .map(entry => `${entry.column} (${entry.percentage}%)`)
+        .join(', ');
+    return top.length ? ` (notably ${top})` : '';
+};
+
+const buildColumnTypeBreakdown = (
+    keys: string[],
+    types: Map<string, string | undefined>
+): Record<string, string[]> => {
+    const breakdown: Record<string, string[]> = {
+        numeric: [],
+        categorical: [],
+        boolean: [],
+        date: [],
+        unknown: []
+    };
+
+    keys.forEach((key) => {
+        const schemaType = types.get(key) ?? 'unknown';
+        const normalized = schemaType.toLowerCase();
+
+        if (['integer', 'int', 'float', 'double', 'decimal', 'number', 'numeric'].includes(normalized)) {
+            breakdown.numeric.push(key);
+            return;
+        }
+        if (['boolean', 'bool'].includes(normalized)) {
+            breakdown.boolean.push(key);
+            return;
+        }
+        if (['date', 'datetime', 'timestamp', 'time'].includes(normalized)) {
+            breakdown.date.push(key);
+            return;
+        }
+        if (['string', 'text', 'varchar', 'char', 'category', 'categorical'].includes(normalized)) {
+            breakdown.categorical.push(key);
+            return;
+        }
+        breakdown.unknown.push(key);
+    });
+
+    return breakdown;
+};
+
+const deriveQualityInsights = (snapshot: ProjectDataSnapshot): DerivedQualityInsights | null => {
+    const { records, schema } = snapshot;
+    if (!Array.isArray(records) || records.length === 0) {
+        return null;
+    }
+
+    const schemaKeys = snapshot.schemaKeys.length
+        ? snapshot.schemaKeys
+        : Array.from(
+            records.reduce((set, record) => {
+                if (record && typeof record === 'object') {
+                    Object.keys(record).forEach(key => set.add(key));
+                }
+                return set;
+            }, new Set<string>())
+        );
+
+    if (!schemaKeys.length) {
+        return null;
+    }
+
+    const columnTypes = new Map<string, string | undefined>();
+    schemaKeys.forEach(key => {
+        const schemaType = normalizeSchemaTypeEntry((schema as Record<string, unknown> | undefined)?.[key]);
+        columnTypes.set(key, schemaType ?? inferSchemaTypeFromRecords(records, key));
+    });
+
+    const missingByColumn: Record<string, number> = {};
+    const mismatchByColumn: Record<string, number> = {};
+
+    let missingCells = 0;
+    let evaluatedCells = 0;
+    let typeMismatches = 0;
+
+    for (const record of records) {
+        if (!record || typeof record !== 'object') {
+            continue;
+        }
+        for (const key of schemaKeys) {
+            const raw = (record as Record<string, unknown>)[key];
+            if (isEffectivelyMissing(raw)) {
+                missingCells += 1;
+                missingByColumn[key] = (missingByColumn[key] || 0) + 1;
+                continue;
+            }
+
+            evaluatedCells += 1;
+            const expectedType = columnTypes.get(key);
+            if (!valueMatchesSchemaType(raw, expectedType)) {
+                typeMismatches += 1;
+                mismatchByColumn[key] = (mismatchByColumn[key] || 0) + 1;
+            }
+        }
+    }
+
+    const totalCells = records.length * schemaKeys.length;
+    const rowHashes = records.map(record => {
+        if (!record || typeof record !== 'object') {
+            return JSON.stringify(record);
+        }
+        const ordered = schemaKeys.map(key => (record as Record<string, unknown>)[key]);
+        return JSON.stringify(ordered);
+    });
+    const uniqueRows = new Set(rowHashes);
+    const duplicateCount = rowHashes.length - uniqueRows.size;
+
+    const missingRate = totalCells === 0 ? 0 : (missingCells / totalCells) * 100;
+    const mismatchRate = evaluatedCells === 0 ? 0 : (typeMismatches / evaluatedCells) * 100;
+    const duplicateRate = records.length === 0 ? 0 : (duplicateCount / records.length) * 100;
+
+    const completeness = clampScore(100 - missingRate);
+    const consistency = clampScore(100 - (mismatchRate + duplicateRate * 0.3));
+    const validity = clampScore(100 - (mismatchRate * 1.25 + missingRate * 0.2));
+    const accuracy = clampScore(100 - (duplicateRate * 1.5 + mismatchRate * 0.5 + missingRate * 0.2));
+
+    const overall = clampScore((completeness + consistency + validity + accuracy) / 4);
+
+    let label = QUALITY_LABEL_REVIEW;
+    if (overall >= 85 && missingRate <= 5 && mismatchRate <= 5 && duplicateRate <= 2) {
+        label = QUALITY_LABEL_READY;
+    } else if (overall < 60 || missingRate > 20) {
+        label = QUALITY_LABEL_INSUFFICIENT;
+    }
+
+    const missingStats = summarizeColumnMap(missingByColumn, records.length);
+    const mismatchStats = summarizeColumnMap(mismatchByColumn, records.length);
+
+    const issues: string[] = [];
+    if (missingRate > 0) {
+        const severityMessage = missingRate >= 15
+            ? `High missing data: ${missingRate.toFixed(1)}% of values are blank`
+            : `Detected ${missingRate.toFixed(1)}% missing values`;
+        issues.push(`${severityMessage}${describeTopColumns(missingStats)}`);
+    }
+    if (mismatchRate > 0) {
+        const severityMessage = mismatchRate >= 10
+            ? `Type mismatches in ${mismatchRate.toFixed(1)}% of populated cells`
+            : `Minor type inconsistencies detected (${mismatchRate.toFixed(1)}%)`;
+        issues.push(`${severityMessage}${describeTopColumns(mismatchStats)}`);
+    }
+    if (duplicateCount > 0) {
+        issues.push(`Found ${duplicateCount} duplicate rows (~${duplicateRate.toFixed(1)}%)`);
+    }
+
+    const recommendations: string[] = [];
+    if (missingRate > 0) {
+        recommendations.push(missingRate >= 15
+            ? 'Impute, filter, or enrich columns with heavy missing data before continuing.'
+            : 'Review columns with missing values and confirm acceptable thresholds.');
+    }
+    if (mismatchRate > 0) {
+        recommendations.push('Standardize column formats (dates, numbers) to reduce type mismatches.');
+    }
+    if (duplicateCount > 0) {
+        recommendations.push('Deduplicate rows or introduce a unique identifier column before modeling.');
+    }
+    if (!recommendations.length) {
+        recommendations.push('Data quality checks passed. Proceed to schema validation when ready.');
+    }
+
+    const columnTypeBreakdown = buildColumnTypeBreakdown(schemaKeys, columnTypes);
+
+    return {
+        metrics: {
+            completeness,
+            consistency,
+            accuracy,
+            validity
+        },
+        issues,
+        recommendations,
+        overall,
+        label,
+        diagnostics: {
+            missingRate: Number(missingRate.toFixed(2)),
+            mismatchRate: Number(mismatchRate.toFixed(2)),
+            duplicateRate: Number(duplicateRate.toFixed(2)),
+            duplicateCount,
+            evaluatedCells,
+            totalCells,
+            rowCount: records.length,
+            columnCount: schemaKeys.length,
+            missingByColumn: missingStats,
+            mismatchByColumn: mismatchStats
+        },
+        datasetSummary: {
+            overview: `Dataset has ${records.length} rows and ${schemaKeys.length} columns.`,
+            totalRows: records.length,
+            totalColumns: schemaKeys.length,
+            missingCellPercentage: Number(missingRate.toFixed(2)),
+            columnTypeBreakdown
+        }
+    };
+};
+
+const pickScore = (...candidates: Array<unknown>): number => {
+    for (const candidate of candidates) {
+        const normalized = normalizeScoreCandidate(candidate);
+        if (normalized !== null) {
+            return clampScore(normalized);
+        }
+    }
+    return 0;
+};
+
+const aggregateRecords = (
+    records: Record<string, unknown>[],
+    config?: VisualizationAggregationConfig
+): AggregatedEntry[] => {
+    const groupBy = config?.group_by?.filter(Boolean) || [];
+    const aggregations = config?.aggregations || {};
+    if (!groupBy.length || !Object.keys(aggregations).length) {
+        return [];
+    }
+
+    const supported = new Set(['sum', 'mean', 'count', 'min', 'max', 'std', 'median', 'avg', 'average']);
+    const groups = new Map<string, { key: string[]; collectors: Record<string, number[]>; aggregations: Record<string, string>; }>();
+
+    for (const record of records) {
+        const groupValues = groupBy.map((field) => toStringValue(record[field]) ?? 'Unspecified');
+        const groupKey = groupValues.join('||');
+        let bucket = groups.get(groupKey);
+        if (!bucket) {
+            bucket = { key: groupValues, collectors: {}, aggregations: {} };
+            groups.set(groupKey, bucket);
+        }
+
+        for (const [field, aggName] of Object.entries(aggregations)) {
+            const normalizedAgg = normalizeAggregationName(aggName);
+            if (!supported.has(normalizedAgg)) {
+                continue;
+            }
+            if (!bucket.collectors[field]) {
+                bucket.collectors[field] = [];
+                bucket.aggregations[field] = normalizedAgg;
+            }
+            if (normalizedAgg === 'count') {
+                bucket.collectors[field].push(1);
+            } else {
+                const numericValue = toNumber(record[field]);
+                if (numericValue !== null) {
+                    bucket.collectors[field].push(numericValue);
+                }
+            }
+        }
+    }
+
+    const entries: AggregatedEntry[] = [];
+    for (const bucket of groups.values()) {
+        const metrics: AggregatedMetric[] = [];
+        for (const [field, values] of Object.entries(bucket.collectors)) {
+            const aggregationName = bucket.aggregations[field];
+            const fn = getAggregationFn(aggregationName);
+            const result = fn(values);
+            metrics.push({
+                field,
+                aggregation: aggregationName,
+                value: Number.isFinite(result) ? Number(result.toFixed(4)) : result
+            });
+        }
+        entries.push({ key: bucket.key, metrics });
+    }
+
+    return entries;
+};
+
+const pearsonCorrelation = (x: number[], y: number[]): number => {
+    const length = Math.min(x.length, y.length);
+    if (!length) {
+        return 0;
+    }
+    const xSlice = x.slice(0, length);
+    const ySlice = y.slice(0, length);
+
+    const meanX = xSlice.reduce((acc, value) => acc + value, 0) / length;
+    const meanY = ySlice.reduce((acc, value) => acc + value, 0) / length;
+
+    let numerator = 0;
+    let denomX = 0;
+    let denomY = 0;
+
+    for (let index = 0; index < length; index += 1) {
+        const dx = xSlice[index] - meanX;
+        const dy = ySlice[index] - meanY;
+        numerator += dx * dy;
+        denomX += dx * dx;
+        denomY += dy * dy;
+    }
+
+    const denominator = Math.sqrt(denomX * denomY);
+    if (!denominator) {
+        return 0;
+    }
+
+    const result = numerator / denominator;
+    return Number.isFinite(result) ? Number(result.toFixed(4)) : 0;
+};
+
+const getNumericFields = (
+    schema: Record<string, any>,
+    records: Record<string, unknown>[],
+    preferredFields?: string[]
+): string[] => {
+    const seen = new Set<string>();
+    const ordered = preferredFields && preferredFields.length ? preferredFields : Object.keys(schema || {});
+
+    for (const field of ordered) {
+        if (seen.has(field)) {
+            continue;
+        }
+        const isNumeric = isNumericType(schema, field) || records.some((record) => toNumber(record[field]) !== null);
+        if (isNumeric) {
+            seen.add(field);
+        }
+    }
+
+    return Array.from(seen);
+};
+
+const computeCorrelationMatrix = (
+    fields: string[],
+    records: Record<string, unknown>[]
+): number[][] => {
+    if (!fields.length) {
+        return [];
+    }
+
+    const alignedRows: number[][] = [];
+    for (const record of records) {
+        const row: number[] = [];
+        let isValidRow = true;
+        for (const field of fields) {
+            const numericValue = toNumber(record[field]);
+            if (numericValue === null) {
+                isValidRow = false;
+                break;
+            }
+            row.push(numericValue);
+        }
+        if (isValidRow) {
+            alignedRows.push(row);
+        }
+    }
+
+    if (!alignedRows.length) {
+        return Array.from({ length: fields.length }, () => Array(fields.length).fill(0));
+    }
+
+    const matrix: number[][] = [];
+    for (let i = 0; i < fields.length; i += 1) {
+        const row: number[] = [];
+        for (let j = 0; j < fields.length; j += 1) {
+            const columnI = alignedRows.map((vals) => vals[i]);
+            const columnJ = alignedRows.map((vals) => vals[j]);
+            row.push(pearsonCorrelation(columnI, columnJ));
+        }
+        matrix.push(row);
+    }
+    return matrix;
+};
+
+interface ChartBuildResult {
+    chartData: {
+        data: Record<string, unknown>[];
+        layout: Record<string, unknown>;
+        frames?: Record<string, unknown>[];
+    };
+    insights: string[];
+    warnings: string[];
+}
+
+const buildSeriesFromAggregations = (
+    aggregated: AggregatedEntry[],
+    chartType: 'bar' | 'line'
+): { categories: string[]; traces: Record<string, unknown>[]; insights: string[] } => {
+    const categories = aggregated.map((entry) => entry.key.filter(Boolean).join(' / ') || 'All Records');
+    const labels = new Set<string>();
+
+    for (const entry of aggregated) {
+        for (const metric of entry.metrics) {
+            labels.add(`${metric.aggregation.toUpperCase()}(${metric.field})`);
+        }
+    }
+
+    const labelList = Array.from(labels);
+    const traces = labelList.map((label) => {
+        const values = aggregated.map((entry) => {
+            const matched = entry.metrics.find((metric) => `${metric.aggregation.toUpperCase()}(${metric.field})` === label);
+            return matched ? matched.value : 0;
+        });
+
+        if (chartType === 'line') {
+            return {
+                type: 'scatter',
+                mode: 'lines+markers',
+                x: categories,
+                y: values,
+                name: label
+            };
+        }
+
+        return {
+            type: 'bar',
+            x: categories,
+            y: values,
+            name: label
+        };
+    });
+
+    const insights: string[] = [];
+    if (categories.length) {
+        insights.push(`Aggregated ${labelList.length} measure${labelList.length === 1 ? '' : 's'} across ${categories.length} group${categories.length === 1 ? '' : 's'}.`);
+    }
+
+    return { categories, traces, insights };
+};
+
+const ensureField = (
+    field: string | undefined,
+    fallback: string[]
+): string | undefined => {
+    if (field && field.trim().length) {
+        return field;
+    }
+    return fallback.find((value) => value && value.trim().length);
+};
+
+const summarizeTopCategories = (values: Map<string, number>): string | null => {
+    const sorted = Array.from(values.entries()).sort((a, b) => b[1] - a[1]);
+    if (!sorted.length) {
+        return null;
+    }
+    const [topCategory, topValue] = sorted[0];
+    if (sorted.length === 1) {
+        return `All records fall under "${topCategory}" (${topValue} rows).`;
+    }
+    const [secondCategory, secondValue] = sorted[1];
+    return `Top segments: "${topCategory}" (${topValue}) vs "${secondCategory}" (${secondValue}).`;
+};
+
+const buildBarOrLineChart = (
+    chartType: 'bar' | 'line',
+    records: Record<string, unknown>[],
+    fields: VisualizationFieldConfig,
+    fallbackFields: string[],
+    aggregation?: VisualizationAggregationConfig
+): ChartBuildResult => {
+    const resolvedX = ensureField(fields.x, fallbackFields);
+    const resolvedY = ensureField(fields.y, fallbackFields.slice(1));
+
+    if (!resolvedX) {
+        throw new Error('A primary grouping field (x-axis) is required for bar/line charts.');
+    }
+
+    const aggregated = aggregateRecords(records, aggregation);
+    if (aggregated.length) {
+        const { categories, traces, insights } = buildSeriesFromAggregations(aggregated, chartType);
+        return {
+            chartData: {
+                data: traces,
+                layout: {
+                    title: `${chartType === 'bar' ? 'Bar' : 'Line'} chart for ${categories.length} group${categories.length === 1 ? '' : 's'}`,
+                    xaxis: { title: resolvedX },
+                    yaxis: { title: 'Aggregated Value' },
+                    barmode: traces.length > 1 ? 'group' : undefined
+                }
+            },
+            insights,
+            warnings: []
+        };
+    }
+
+    const groupedValues = new Map<string, number>();
+    for (const record of records) {
+        const bucket = toStringValue(record[resolvedX]) ?? 'Unspecified';
+        const current = groupedValues.get(bucket) ?? 0;
+        if (resolvedY) {
+            const yValue = toNumber(record[resolvedY]);
+            if (yValue !== null) {
+                groupedValues.set(bucket, current + yValue);
+            }
+        } else {
+            groupedValues.set(bucket, current + 1);
+        }
+    }
+
+    const categories = Array.from(groupedValues.keys());
+    const values = categories.map((category) => groupedValues.get(category) ?? 0);
+
+    const dataTrace = chartType === 'line'
+        ? {
+            type: 'scatter',
+            mode: 'lines+markers',
+            x: categories,
+            y: values,
+            name: resolvedY ? resolvedY : 'Count'
+        }
+        : {
+            type: 'bar',
+            x: categories,
+            y: values,
+            name: resolvedY ? resolvedY : 'Count'
+        };
+
+    const insights: string[] = [];
+    const segmentSummary = summarizeTopCategories(groupedValues);
+    if (segmentSummary) {
+        insights.push(segmentSummary);
+    }
+
+    return {
+        chartData: {
+            data: [dataTrace],
+            layout: {
+                title: `${chartType === 'bar' ? 'Bar' : 'Line'} chart grouped by ${resolvedX}`,
+                xaxis: { title: resolvedX },
+                yaxis: { title: resolvedY || 'Count' }
+            }
+        },
+        insights,
+        warnings: []
+    };
+};
+
+const buildScatterChart = (
+    records: Record<string, unknown>[],
+    fields: VisualizationFieldConfig,
+    fallbackFields: string[]
+): ChartBuildResult => {
+    const resolvedX = ensureField(fields.x, fallbackFields);
+    const resolvedY = ensureField(fields.y, fallbackFields.slice(1));
+
+    if (!resolvedX || !resolvedY) {
+        throw new Error('Scatter plots require both x and y fields.');
+    }
+
+    const xValues: number[] = [];
+    const yValues: number[] = [];
+    const colorValues: string[] = [];
+    const sizeValues: number[] = [];
+
+    for (const record of records) {
+        const xNumber = toNumber(record[resolvedX]);
+        const yNumber = toNumber(record[resolvedY]);
+        if (xNumber === null || yNumber === null) {
+            continue;
+        }
+        xValues.push(xNumber);
+        yValues.push(yNumber);
+        colorValues.push(fields.color ? toStringValue(record[fields.color]) ?? 'Category' : 'Series');
+        sizeValues.push(fields.size ? (toNumber(record[fields.size]) ?? 8) : 8);
+    }
+
+    const trace: Record<string, unknown> = {
+        type: 'scatter',
+        mode: 'markers',
+        x: xValues,
+        y: yValues,
+        marker: {
+            size: sizeValues,
+            color: fields.color ? colorValues : undefined,
+            showscale: Boolean(fields.color)
+        },
+        text: fields.color ? colorValues : undefined
+    };
+
+    const insights = [`Sampled ${xValues.length} points across ${resolvedX} vs ${resolvedY}.`];
+
+    return {
+        chartData: {
+            data: [trace],
+            layout: {
+                title: `Scatter plot: ${resolvedX} vs ${resolvedY}`,
+                xaxis: { title: resolvedX },
+                yaxis: { title: resolvedY }
+            }
+        },
+        insights,
+        warnings: []
+    };
+};
+
+const buildPieChart = (
+    records: Record<string, unknown>[],
+    fields: VisualizationFieldConfig,
+    fallbackFields: string[]
+): ChartBuildResult => {
+    const namesField = ensureField(fields.names ?? fields.x, fallbackFields);
+    const valuesField = ensureField(fields.values ?? fields.y, fallbackFields.slice(1));
+
+    if (!namesField) {
+        throw new Error('Pie charts require a categorical field (names).');
+    }
+
+    const buckets = new Map<string, number>();
+    for (const record of records) {
+        const label = toStringValue(record[namesField]) ?? 'Unspecified';
+        const current = buckets.get(label) ?? 0;
+        const value = valuesField ? toNumber(record[valuesField]) ?? 0 : 1;
+        buckets.set(label, current + value);
+    }
+
+    const labels = Array.from(buckets.keys());
+    const values = labels.map((label) => buckets.get(label) ?? 0);
+
+    const insights: string[] = [];
+    const summary = summarizeTopCategories(buckets);
+    if (summary) {
+        insights.push(summary);
+    }
+
+    return {
+        chartData: {
+            data: [
+                {
+                    type: 'pie',
+                    labels,
+                    values,
+                    hole: fields.z ? 0.4 : 0
+                }
+            ],
+            layout: {
+                title: `Pie chart for ${namesField}`
+            }
+        },
+        insights,
+        warnings: []
+    };
+};
+
+const buildHistogram = (
+    records: Record<string, unknown>[],
+    fields: VisualizationFieldConfig,
+    fallbackFields: string[]
+): ChartBuildResult => {
+    const resolvedField = ensureField(fields.x ?? fields.y, fallbackFields);
+    if (!resolvedField) {
+        throw new Error('Histogram requires a numeric field.');
+    }
+
+    const values: number[] = [];
+    for (const record of records) {
+        const numericValue = toNumber(record[resolvedField]);
+        if (numericValue !== null) {
+            values.push(numericValue);
+        }
+    }
+
+    return {
+        chartData: {
+            data: [
+                {
+                    type: 'histogram',
+                    x: values,
+                    nbinsx: Math.min(50, Math.ceil(Math.sqrt(values.length))) || undefined,
+                    name: resolvedField
+                }
+            ],
+            layout: {
+                title: `Distribution of ${resolvedField}`,
+                xaxis: { title: resolvedField },
+                yaxis: { title: 'Frequency' }
+            }
+        },
+        insights: [`Histogram generated with ${values.length} observations.`],
+        warnings: []
+    };
+};
+
+const buildBoxOrViolinChart = (
+    chartType: 'boxplot' | 'violin',
+    records: Record<string, unknown>[],
+    fields: VisualizationFieldConfig,
+    fallbackFields: string[]
+): ChartBuildResult => {
+    const valueField = ensureField(fields.y ?? fields.x, fallbackFields);
+    if (!valueField) {
+        throw new Error(`${chartType === 'boxplot' ? 'Box' : 'Violin'} plots require a numeric value field.`);
+    }
+
+    const groupField = fields.x && fields.x !== valueField ? fields.x : undefined;
+    const groups = new Map<string, number[]>();
+
+    for (const record of records) {
+        const numericValue = toNumber(record[valueField]);
+        if (numericValue === null) {
+            continue;
+        }
+        const groupKey = groupField ? toStringValue(record[groupField]) ?? 'Group' : 'Series';
+        const bucket = groups.get(groupKey) || [];
+        bucket.push(numericValue);
+        groups.set(groupKey, bucket);
+    }
+
+    const data: Record<string, unknown>[] = [];
+    for (const [group, values] of groups.entries()) {
+        if (!values.length) {
+            continue;
+        }
+        if (chartType === 'violin') {
+            data.push({ type: 'violin', y: values, name: group, box: { visible: true }, meanline: { visible: true } });
+        } else {
+            data.push({ type: 'box', y: values, name: group, boxpoints: 'outliers' });
+        }
+    }
+
+    return {
+        chartData: {
+            data,
+            layout: {
+                title: `${chartType === 'boxplot' ? 'Box' : 'Violin'} plot for ${valueField}`,
+                yaxis: { title: valueField },
+                xaxis: groupField ? { title: groupField } : undefined
+            }
+        },
+        insights: [`Summarized ${groups.size} group${groups.size === 1 ? '' : 's'} for ${valueField}.`],
+        warnings: []
+    };
+};
+
+const buildCorrelationHeatmap = (
+    schema: Record<string, any>,
+    records: Record<string, unknown>[],
+    explicitFields?: string[]
+): ChartBuildResult => {
+    const numericFields = getNumericFields(schema, records, explicitFields);
+    if (numericFields.length < 2) {
+        throw new Error('Correlation matrices require at least two numeric fields.');
+    }
+
+    const matrix = computeCorrelationMatrix(numericFields, records);
+
+    return {
+        chartData: {
+            data: [
+                {
+                    type: 'heatmap',
+                    z: matrix,
+                    x: numericFields,
+                    y: numericFields,
+                    colorscale: 'RdBu',
+                    zmin: -1,
+                    zmax: 1,
+                    reversescale: true
+                }
+            ],
+            layout: {
+                title: 'Correlation matrix',
+                xaxis: { title: 'Fields' },
+                yaxis: { title: 'Fields' }
+            }
+        },
+        insights: ['Correlation matrix computed. Values range from -1 (inverse) to 1 (direct correlation).'],
+        warnings: []
+    };
+};
+
+const buildHeatmapFromGroups = (
+    records: Record<string, unknown>[],
+    fields: VisualizationFieldConfig,
+    fallbackFields: string[]
+): ChartBuildResult => {
+    const xField = ensureField(fields.x, fallbackFields);
+    const yField = ensureField(fields.y, fallbackFields.slice(1));
+
+    if (!xField || !yField) {
+        throw new Error('Heatmaps require both x and y categorical fields.');
+    }
+
+    const valueField = ensureField(fields.z ?? fields.values, fallbackFields.slice(2));
+    const matrixMap = new Map<string, Map<string, number>>();
+
+    for (const record of records) {
+        const xKey = toStringValue(record[xField]) ?? 'Unspecified';
+        const yKey = toStringValue(record[yField]) ?? 'Unspecified';
+        const row = matrixMap.get(yKey) || new Map<string, number>();
+        const existing = row.get(xKey) ?? 0;
+        const increment = valueField ? toNumber(record[valueField]) ?? 0 : 1;
+        row.set(xKey, existing + increment);
+        matrixMap.set(yKey, row);
+    }
+
+    const xCategories = Array.from(new Set(Array.from(matrixMap.values()).flatMap((row) => Array.from(row.keys()))));
+    const yCategories = Array.from(matrixMap.keys());
+    const zValues = yCategories.map((yCat) => xCategories.map((xCat) => matrixMap.get(yCat)?.get(xCat) ?? 0));
+
+    return {
+        chartData: {
+            data: [
+                {
+                    type: 'heatmap',
+                    x: xCategories,
+                    y: yCategories,
+                    z: zValues,
+                    colorscale: 'Viridis'
+                }
+            ],
+            layout: {
+                title: `Heatmap of ${yField} vs ${xField}`,
+                xaxis: { title: xField },
+                yaxis: { title: yField }
+            }
+        },
+        insights: [`Generated heatmap across ${xCategories.length} by ${yCategories.length} categories.`],
+        warnings: []
+    };
+};
+
+const buildVisualizationChart = (
+    chartType: string,
+    snapshot: ProjectDataSnapshot,
+    fields: VisualizationFieldConfig,
+    fallbackFields: string[],
+    aggregation?: VisualizationAggregationConfig,
+    explicitFields?: string[]
+): ChartBuildResult => {
+    switch (chartType) {
+        case 'bar':
+            return buildBarOrLineChart('bar', snapshot.records, fields, fallbackFields, aggregation);
+        case 'line':
+            return buildBarOrLineChart('line', snapshot.records, fields, fallbackFields, aggregation);
+        case 'scatter':
+            return buildScatterChart(snapshot.records, fields, fallbackFields);
+        case 'pie':
+            return buildPieChart(snapshot.records, fields, fallbackFields);
+        case 'histogram':
+            return buildHistogram(snapshot.records, fields, fallbackFields);
+        case 'boxplot':
+            return buildBoxOrViolinChart('boxplot', snapshot.records, fields, fallbackFields);
+        case 'violin':
+            return buildBoxOrViolinChart('violin', snapshot.records, fields, fallbackFields);
+        case 'heatmap':
+            return buildHeatmapFromGroups(snapshot.records, fields, fallbackFields);
+        case 'correlation_matrix':
+            return buildCorrelationHeatmap(snapshot.schema, snapshot.records, explicitFields);
+        default:
+            throw new Error(`Unsupported chart type requested: ${chartType}`);
+    }
+};
+
+const collectFieldCandidates = (snapshot: ProjectDataSnapshot): string[] => {
+    const keys = new Set<string>();
+    snapshot.schemaKeys.forEach((key) => {
+        if (key) {
+            keys.add(key);
+        }
+    });
+    snapshot.records.slice(0, 200).forEach((record) => {
+        Object.keys(record).forEach((key) => {
+            if (key) {
+                keys.add(key);
+            }
+        });
+    });
+    return Array.from(keys);
+};
+
+const deriveNumericCandidates = (snapshot: ProjectDataSnapshot): string[] => {
+    const bySchema = snapshot.schemaKeys.filter((key) => key && isNumericType(snapshot.schema, key));
+    if (bySchema.length) {
+        return bySchema;
+    }
+    const candidates = new Set<string>();
+    snapshot.records.slice(0, 200).forEach((record) => {
+        Object.entries(record).forEach(([key, value]) => {
+            if (!key || candidates.has(key)) {
+                return;
+            }
+            if (toNumber(value) !== null) {
+                candidates.add(key);
+            }
+        });
+    });
+    return Array.from(candidates);
+};
+
+const deriveCategoricalCandidates = (snapshot: ProjectDataSnapshot): string[] => {
+    const bySchema = snapshot.schemaKeys.filter((key) => key && !isNumericType(snapshot.schema, key));
+    if (bySchema.length) {
+        return bySchema;
+    }
+    const candidates = new Set<string>();
+    snapshot.records.slice(0, 200).forEach((record) => {
+        Object.entries(record).forEach(([key, value]) => {
+            if (!key || candidates.has(key)) {
+                return;
+            }
+            if (toNumber(value) === null) {
+                candidates.add(key);
+            }
+        });
+    });
+    return Array.from(candidates);
+};
+
+const ensureFieldCoverage = (
+    chartType: string,
+    fields: VisualizationFieldConfig,
+    snapshot: ProjectDataSnapshot
+): void => {
+    const fallbackFields = collectFieldCandidates(snapshot);
+    const numericCandidates = deriveNumericCandidates(snapshot);
+    const categoricalCandidates = deriveCategoricalCandidates(snapshot);
+    const used = new Set<string>();
+
+    Object.values(fields).forEach((value) => {
+        if (typeof value === 'string' && value) {
+            used.add(value);
+        }
+    });
+
+    const assignField = (key: keyof VisualizationFieldConfig, preferred: string[], fallback: string[]): void => {
+        if (fields[key]) {
+            if (typeof fields[key] === 'string') {
+                used.add(fields[key] as string);
+            }
+            return;
+        }
+        const candidate = [...preferred, ...fallback].find((value) => value && !used.has(value));
+        if (candidate) {
+            fields[key] = candidate;
+            used.add(candidate);
+        }
+    };
+
+    switch (chartType) {
+        case 'bar':
+            assignField('x', categoricalCandidates, fallbackFields);
+            assignField('y', numericCandidates, fallbackFields);
+            break;
+        case 'line':
+            assignField('x', categoricalCandidates.length ? categoricalCandidates : numericCandidates, fallbackFields);
+            assignField('y', numericCandidates, fallbackFields);
+            break;
+        case 'scatter':
+            assignField('x', numericCandidates, fallbackFields);
+            const yFallback = numericCandidates.filter((value) => value !== fields.x);
+            assignField('y', yFallback, fallbackFields);
+            if (!fields.color) {
+                const colorCandidates = categoricalCandidates.filter((value) => value !== fields.x);
+                assignField('color', colorCandidates, fallbackFields);
+            }
+            break;
+        case 'pie':
+            assignField('names', categoricalCandidates, fallbackFields);
+            if (!fields.values) {
+                const valueCandidates = numericCandidates.filter((value) => value !== fields.names);
+                assignField('values', valueCandidates, fallbackFields);
+            }
+            break;
+        case 'histogram':
+            assignField('x', numericCandidates, fallbackFields);
+            break;
+        case 'boxplot':
+        case 'violin':
+            assignField('y', numericCandidates, fallbackFields);
+            if (!fields.x) {
+                const groupCandidates = categoricalCandidates.filter((value) => value !== fields.y);
+                assignField('x', groupCandidates, fallbackFields);
+            }
+            break;
+        case 'heatmap':
+            assignField('x', categoricalCandidates, fallbackFields);
+            const yCandidates = categoricalCandidates.filter((value) => value !== fields.x);
+            assignField('y', yCandidates, fallbackFields);
+            if (!fields.z) {
+                assignField('z', numericCandidates, fallbackFields);
+            }
+            break;
+        default:
+            assignField('x', fallbackFields, fallbackFields);
+            const fallbackY = fallbackFields.filter((value) => value !== fields.x);
+            assignField('y', fallbackY, fallbackFields);
+    }
+};
+
+const parseFieldConfig = (
+    rawFields: unknown,
+    extras: {
+        groupByColumn?: unknown;
+        colorByColumn?: unknown;
+        sizeByColumn?: unknown;
+        config?: Record<string, unknown>;
+    }
+): { fields: VisualizationFieldConfig; explicit: string[] } => {
+    const fields: VisualizationFieldConfig = {};
+    const explicit = new Set<string>();
+
+    const assign = (key: keyof VisualizationFieldConfig, value: unknown) => {
+        if (fields[key]) {
+            return;
+        }
+        const normalized = ensureString(value);
+        if (normalized) {
+            fields[key] = normalized;
+            explicit.add(normalized);
+        }
+    };
+
+    if (Array.isArray(rawFields)) {
+        rawFields.forEach((value, index) => {
+            switch (index) {
+                case 0:
+                    assign('x', value);
+                    break;
+                case 1:
+                    assign('y', value);
+                    break;
+                case 2:
+                    assign('color', value);
+                    break;
+                case 3:
+                    assign('size', value);
+                    break;
+                default:
+                    assign('z', value);
+                    break;
+            }
+        });
+    } else if (rawFields && typeof rawFields === 'object') {
+        const candidate = rawFields as Record<string, unknown> | any;
+        assign('x', candidate['x'] ?? candidate['xAxis'] ?? candidate['dimension'] ?? candidate['group_by']);
+        assign('y', candidate['y'] ?? candidate['yAxis'] ?? candidate['value'] ?? candidate['metric']);
+        assign('color', candidate['color'] ?? candidate['colorBy']);
+        assign('size', candidate['size'] ?? candidate['sizeBy']);
+        assign('names', candidate['names'] ?? candidate['labels'] ?? candidate['category']);
+        assign('values', candidate['values'] ?? candidate['metric'] ?? candidate['valueField']);
+        assign('z', candidate['z'] ?? candidate['heatmapValue'] ?? candidate['value']);
+    }
+
+    assign('x', extras.groupByColumn);
+    assign('color', extras.colorByColumn);
+    assign('size', extras.sizeByColumn);
+
+    const config = extras.config;
+    if (config) {
+        const configAny = config as Record<string, unknown> | any;
+        assign('x', configAny['xAxis'] ?? configAny['dimension'] ?? configAny['primaryField']);
+        assign('y', configAny['yAxis'] ?? configAny['metric'] ?? configAny['valueField'] ?? configAny['measureField']);
+        assign('names', configAny['names'] ?? configAny['namesField'] ?? configAny['categoryField']);
+        assign('values', configAny['values'] ?? configAny['valuesField'] ?? configAny['metricField']);
+        assign('color', configAny['colorBy'] ?? configAny['seriesField']);
+        assign('size', configAny['sizeBy']);
+    }
+
+    return { fields, explicit: Array.from(explicit) };
+};
+
+const parseAggregationConfig = (
+    rawAggregation: unknown,
+    fields: VisualizationFieldConfig,
+    extras: {
+        groupByColumn?: unknown;
+        config?: Record<string, unknown>;
+    }
+): VisualizationAggregationConfig | undefined => {
+    const configAny = extras.config as Record<string, unknown> | any;
+    const aggregationRequested = Boolean(rawAggregation) || Boolean(configAny?.['aggregation']) || Boolean(configAny?.['aggregate']);
+    if (!aggregationRequested) {
+        return undefined;
+    }
+
+    const groupValues = uniqueStrings(
+        rawAggregation && typeof rawAggregation === 'object' ? (rawAggregation as any).group_by : undefined,
+        rawAggregation && typeof rawAggregation === 'object' ? (rawAggregation as any).groupBy : undefined,
+        extras.groupByColumn,
+        configAny?.['groupBy'],
+        configAny?.['group_by'],
+        fields.x
+    );
+
+    const aggregations: Record<string, string> = {};
+    const rawAggMap = rawAggregation && typeof rawAggregation === 'object' ? (rawAggregation as any).aggregations : undefined;
+
+    if (rawAggMap && typeof rawAggMap === 'object') {
+        for (const [field, agg] of Object.entries(rawAggMap)) {
+            const normalizedField = ensureString(field);
+            const normalizedAgg = normalizeAggregationName(ensureString(agg));
+            if (normalizedField && normalizedAgg) {
+                aggregations[normalizedField] = normalizedAgg;
+            }
+        }
+    }
+
+    const configAggField = ensureString(configAny?.['aggregationField'] ?? configAny?.['metric'] ?? fields.y);
+    const configAggName = normalizeAggregationName(ensureString(configAny?.['aggregation'] ?? configAny?.['aggregate']));
+    if (configAggField && configAggName) {
+        aggregations[configAggField] = configAggName;
+    }
+
+    if (!Object.keys(aggregations).length) {
+        return undefined;
+    }
+
+    const sanitizedGroups = groupValues.filter((value, index, array) => value && array.indexOf(value) === index);
+    if (!sanitizedGroups.length) {
+        return undefined;
+    }
+
+    return {
+        group_by: sanitizedGroups,
+        aggregations
+    };
+};
+
+const mergeVisualizationOptions = (
+    chartType: string,
+    config: Record<string, unknown>,
+    options: Record<string, unknown>
+): Record<string, unknown> => {
+    const merged: Record<string, unknown> = {};
+    const optionsAny = options as Record<string, unknown> | any;
+    const configAny = config as Record<string, unknown> | any;
+
+    const assignOption = (key: string, ...values: unknown[]) => {
+        for (const value of values) {
+            if (value === undefined || value === null) {
+                continue;
+            }
+            if (typeof value === 'string' && value.trim().length) {
+                merged[key] = value.trim();
+                return;
+            }
+            if (typeof value === 'number' && Number.isFinite(value)) {
+                merged[key] = value;
+                return;
+            }
+            if (typeof value === 'boolean') {
+                merged[key] = value;
+                return;
+            }
+        }
+    };
+
+    assignOption('title', optionsAny?.['title'], configAny?.['title'], `Generated ${VISUALIZATION_LABELS[chartType] || chartType}`);
+    assignOption(
+        'x_title',
+        optionsAny?.['x_title'],
+        optionsAny?.['xlabel'],
+        configAny?.['x_title'],
+        configAny?.['xlabel'],
+        configAny?.['xAxisTitle'],
+        configAny?.['xAxisLabel']
+    );
+    assignOption(
+        'y_title',
+        optionsAny?.['y_title'],
+        optionsAny?.['ylabel'],
+        configAny?.['y_title'],
+        configAny?.['ylabel'],
+        configAny?.['yAxisTitle'],
+        configAny?.['yAxisLabel']
+    );
+    assignOption('height', Number(optionsAny?.['height']), Number(configAny?.['height']));
+    assignOption('width', Number(optionsAny?.['width']), Number(configAny?.['width']));
+    assignOption('showLegend', optionsAny?.['showLegend'], configAny?.['showLegend']);
+    assignOption('showGrid', optionsAny?.['showGrid'], configAny?.['showGrid']);
+    assignOption('colorScheme', optionsAny?.['colorScheme'], configAny?.['colorScheme'], configAny?.['theme']);
+
+    if (optionsAny?.['labels'] && typeof optionsAny['labels'] === 'object') {
+        merged.labels = optionsAny['labels'];
+    } else if (configAny?.['labels'] && typeof configAny['labels'] === 'object') {
+        merged.labels = configAny['labels'];
+    }
+
+    if (optionsAny?.['bins'] && Number(optionsAny['bins'])) {
+        merged.bins = Number(optionsAny['bins']);
+    } else if (configAny?.['bins'] && Number(configAny['bins'])) {
+        merged.bins = Number(configAny['bins']);
+    }
+
+    return merged;
+};
+
+const buildSnapshot = async (projectId: string, project: any): Promise<{
+    snapshot: ProjectDataSnapshot;
+    dataset?: any;
+}> => {
+    const associations = await storage.getProjectDatasets(projectId).catch(() => []);
+    for (const association of associations) {
+        const dataset = association?.dataset;
+        const candidate = buildProjectDataSnapshot(project, dataset);
+        if (candidate.records.length) {
+            return { snapshot: candidate, dataset };
+        }
+    }
+
+    const fallback = buildProjectDataSnapshot(project, project);
+    return { snapshot: fallback };
+};
+
+const buildCustomizations = (
+    fields: VisualizationFieldConfig,
+    config: Record<string, unknown>,
+    options: Record<string, unknown>
+) => {
+    const configAny = config as Record<string, unknown> | any;
+    const optionsAny = options as Record<string, unknown> | any;
+
+    const title = ensureString(optionsAny?.['title'] ?? configAny?.['title']);
+    const xAxis = fields.x ?? ensureString(configAny?.['xAxis'] ?? configAny?.['dimension'] ?? configAny?.['primaryField']);
+    const yAxis = fields.y ?? ensureString(configAny?.['yAxis'] ?? configAny?.['metric'] ?? configAny?.['valueField']);
+    const colorBy = fields.color ?? ensureString(configAny?.['colorBy'] ?? configAny?.['seriesField']);
+    const sizeBy = fields.size ?? ensureString(configAny?.['sizeBy']);
+
+    const styling = typeof configAny?.['styling'] === 'object' ? configAny['styling']
+        : typeof optionsAny?.['styling'] === 'object' ? optionsAny['styling']
+        : undefined;
+
+    const filters = typeof configAny?.['filters'] === 'object' ? configAny['filters']
+        : typeof optionsAny?.['filters'] === 'object' ? optionsAny['filters']
+        : undefined;
+
+    return {
+        title,
+        xAxis,
+        yAxis,
+        colorBy,
+        sizeBy,
+        filters,
+        styling
+    };
+};
+
+const limitFields = (fields: string[], max: number): string[] => fields.filter(Boolean).slice(0, max);
+
+export async function createVisualizationHandler(req: Request, res: Response): Promise<void> {
+    try {
+        const { projectId } = req.params;
+        const userId = (req.user as any)?.id;
+
+        if (!projectId) {
+            res.status(400).json({ success: false, error: 'Project ID is required' });
+            return;
+        }
+
+        if (!userId) {
+            res.status(401).json({ success: false, error: 'Authentication required' });
+            return;
+        }
+
+        const project = await storage.getProject(projectId);
+        if (!project) {
+            res.status(404).json({ success: false, error: 'Project not found' });
+            return;
+        }
+
+        const { snapshot, dataset } = await buildSnapshot(projectId, project);
+        if (!snapshot.records.length) {
+            res.status(400).json({
+                success: false,
+                error: 'No data available for visualization. Upload data or run an analysis first.'
+            });
+            return;
+        }
+
+        const fieldCandidates = collectFieldCandidates(snapshot);
+        if (!fieldCandidates.length) {
+            res.status(400).json({ success: false, error: 'No fields found to visualize.' });
+            return;
+        }
+
+    const config = (req.body && typeof req.body.config === 'object') ? (req.body.config as Record<string, unknown>) : {};
+    const options = (req.body && typeof req.body.options === 'object') ? (req.body.options as Record<string, unknown>) : {};
+
+        const chartType = normalizeChartType(req.body?.chartType ?? req.body?.type ?? config.chartType);
+        const { fields, explicit } = parseFieldConfig(req.body?.fields, {
+            groupByColumn: req.body?.groupByColumn,
+            colorByColumn: req.body?.colorByColumn,
+            sizeByColumn: req.body?.sizeByColumn,
+            config
+        });
+
+        ensureFieldCoverage(chartType, fields, snapshot);
+
+        let explicitFields = explicit;
+        if (chartType === 'correlation_matrix') {
+            const numericCandidates = deriveNumericCandidates(snapshot);
+            explicitFields = limitFields(uniqueStrings(req.body?.fields, explicitFields, numericCandidates), 12);
+            if (!explicitFields.length) {
+                res.status(400).json({ success: false, error: 'Correlation matrix requires at least two numeric fields.' });
+                return;
+            }
+        }
+
+        const aggregationConfig = parseAggregationConfig(req.body?.aggregate ?? req.body?.aggregation, fields, {
+            groupByColumn: req.body?.groupByColumn,
+            config
+        });
+
+        const datasetCharacteristics = computeDatasetCharacteristics(snapshot);
+        const requirements = buildVisualizationRequirements(chartType, snapshot.records.length);
+
+        let chartResult: ChartBuildResult;
+        try {
+            chartResult = buildVisualizationChart(chartType, snapshot, fields, fieldCandidates, aggregationConfig, explicitFields);
+        } catch (chartError) {
+            const message = chartError instanceof Error ? chartError.message : 'Unable to generate visualization';
+            res.status(400).json({ success: false, error: message });
+            return;
+        }
+
+        const mergedOptions = mergeVisualizationOptions(chartType, config, options);
+        const customizations = buildCustomizations(fields, config, mergedOptions);
+
+        let engineResult;
+        try {
+            engineResult = await enhancedVisualizationEngine.createVisualization({
+                data: snapshot.records,
+                chartType,
+                requirements,
+                datasetCharacteristics,
+                customizations
+            });
+        } catch (engineError) {
+            console.error('Visualization engine error:', engineError);
+            engineResult = {
+                success: false,
+                library: 'unknown',
+                chartData: null,
+                metadata: {
+                    renderTime: 0,
+                    dataPoints: snapshot.records.length,
+                    interactive: false
+                },
+                exportOptions: { formats: [] },
+                error: engineError instanceof Error ? engineError.message : String(engineError)
+            };
+        }
+
+        const insights = [...chartResult.insights];
+        const warnings = [...chartResult.warnings];
+        if (!engineResult.success && engineResult.error) {
+            warnings.push(engineResult.error);
+        }
+
+        const metadata = {
+            dataset: {
+                id: dataset?.id ?? projectId,
+                name: dataset?.name ?? project?.name ?? 'Project Dataset',
+                recordCount: snapshot.records.length,
+                schemaFields: snapshot.schemaKeys
+            },
+            datasetCharacteristics,
+            requirements,
+            engine: {
+                library: engineResult.library,
+                metadata: engineResult.metadata,
+                exportOptions: engineResult.exportOptions,
+                success: engineResult.success,
+                error: engineResult.error
+            }
+        };
+
+        const responsePayload = {
+            success: true,
+            message: `Generated ${VISUALIZATION_LABELS[chartType] || chartType}`,
+            visualization: {
+                chart_type: chartType,
+                chart_data: chartResult.chartData,
+                fields,
+                aggregation: aggregationConfig,
+                options: mergedOptions,
+                insights,
+                warnings,
+                metadata,
+                engine_chart_data: engineResult.chartData
+            }
+        };
+
+        res.json(responsePayload);
+    } catch (error) {
+        console.error('Create visualization error:', error);
+        res.status(500).json({
+            success: false,
+            error: error instanceof Error ? error.message : 'Failed to create visualization'
+        });
+    }
+}
+
+// ==========================================
+// Agent Coordination Setup
+// ==========================================
+console.log('🔗 Setting up agent coordination via message broker...');
+
+// Subscribe to data engineering events
+messageBroker.on('data:quality_assessed', async (message) => {
+  console.log('📨 PM ← DE: Data quality assessed', message.data?.projectId);
+  // Project Manager can track quality assessment completion
+  // Data Scientist can use quality metrics for recommendations
+});
+
+messageBroker.on('data:analyzed', async (message) => {
+  console.log('📨 DS ← DE: Data analyzed', message.data?.projectId);
+  // Data Scientist receives data analysis results for recommendations
+});
+
+messageBroker.on('data:requirements_estimated', async (message) => {
+  console.log('📨 DS ← DE: Data requirements estimated', message.data?.projectId);
+  // Data Scientist uses requirements for complexity analysis
+});
+
+// Subscribe to data science events
+messageBroker.on('analysis:recommended', async (message) => {
+  console.log('📨 PM ← DS: Analysis configuration recommended', message.data?.projectId);
+  // Project Manager tracks that analysis plan is ready
+});
+
+messageBroker.on('analysis:complexity_calculated', async (message) => {
+  console.log('📨 PM ← DS: Complexity calculated', message.data?.projectId);
+  // Project Manager can update project estimates
+});
+
+// Subscribe to project manager events
+messageBroker.on('project:configuration_approved', async (message) => {
+  console.log('📨 DE,DS ← PM: Configuration approved', message.data?.projectId);
+  // Both Data Engineer and Data Scientist can proceed with approved config
+});
+
+messageBroker.on('project:workflow_started', async (message) => {
+  console.log('📨 All Agents ← PM: Workflow started', message.data?.projectId);
+  // All agents initialize for the project
+});
+
+console.log('✅ Agent coordination established - agents can now communicate');
+
+const buildUserContext = (req: any, project?: any) => {
+    const user = (req.user as any) || {};
+    const middlewareRole = (req as any).userRole?.id || (req as any).userRole?.name;
+    const derivedRole = typeof middlewareRole === 'string'
+        ? middlewareRole
+        : user.role || (user.isAdmin ? 'admin' : 'user');
+
+    return {
+        userId: user.id,
+        userEmail: user.email,
+        userRole: derivedRole || 'user',
+        isAdmin: Boolean(user.isAdmin),
+        subscriptionTier: user.subscriptionTier || 'trial',
+        projectId: project?.id,
+        projectName: project?.name,
+        journeyType: project?.journeyType || 'ai_guided'
+    };
+};
+
+// Configure upload directories
+const UPLOADS_DIR = process.env.UPLOAD_DIR || './uploads';
+const ORIGINAL_FILES_DIR = path.join(UPLOADS_DIR, 'originals');
+const TRANSFORMED_FILES_DIR = path.join(UPLOADS_DIR, 'transformed');
+
+// Ensure upload directories exist on startup
+(async () => {
+  try {
+    await fs.mkdir(ORIGINAL_FILES_DIR, { recursive: true });
+    await fs.mkdir(TRANSFORMED_FILES_DIR, { recursive: true });
+    console.log(`✅ Upload directories initialized: ${ORIGINAL_FILES_DIR}, ${TRANSFORMED_FILES_DIR}`);
+  } catch (error) {
+    console.error('Failed to create upload directories:', error);
+  }
+})();
+
+// Configure multer for file uploads with disk storage
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      cb(null, ORIGINAL_FILES_DIR);
+    },
+    filename: (req, file, cb) => {
+      const userId = (req.user as any)?.id || 'anonymous';
+      const timestamp = Date.now();
+      const sanitized = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
+      const filename = `${userId}_${timestamp}_${sanitized}`;
+      cb(null, filename);
+    }
+  }),
   limits: {
     fileSize: 100 * 1024 * 1024, // 100MB limit for paid features
   },
+  fileFilter: (req, file, cb) => {
+    // Accept CSV, JSON, Excel files
+    const allowedTypes = ['.csv', '.json', '.xlsx', '.xls'];
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (allowedTypes.includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`File type ${ext} not supported. Allowed: ${allowedTypes.join(', ')}`));
+    }
+  }
 });
 
 // Create a new project
@@ -57,7 +2229,7 @@ const upload = multer({
  * - Error: 400, 401, or 500 with an error message.
  * @dependencies `storage`.
  */
-router.post("/", ensureAuthenticated, async (req, res) => {
+async function createProjectHandler(req: Request, res: Response) {
     try {
         const { name, description, journeyType } = req.body;
         const userId = (req.user as any)?.id;
@@ -70,11 +2242,25 @@ router.post("/", ensureAuthenticated, async (req, res) => {
             return res.status(400).json({ success: false, error: "Project name is required" });
         }
 
+        const requestedJourneyType = normalizeProjectJourneyType(journeyType);
+        const billingService = getBillingService();
+        const accessCheck = await billingService.canAccessJourney(userId, requestedJourneyType);
+
+        if (!accessCheck.allowed) {
+            return res.status(403).json({
+                success: false,
+                error: accessCheck.message || 'Journey access denied',
+                requiresUpgrade: accessCheck.requiresUpgrade,
+                minimumTier: accessCheck.minimumTier,
+                currentJourneyType: requestedJourneyType
+            });
+        }
+
         const project = await storage.createProject({
             userId,
             name: name.trim(),
             description: description || '',
-            journeyType: journeyType || 'ai_guided', // Default to ai_guided if not provided
+            journeyType: requestedJourneyType,
             isPaid: false,
             isTrial: true,
             dataSource: 'upload',
@@ -83,25 +2269,38 @@ router.post("/", ensureAuthenticated, async (req, res) => {
             fileSize: 0,
         });
 
-        // Initialize AI agents for the project
+        try {
+            await journeyStateManager.initializeJourney(project.id, requestedJourneyType);
+        } catch (stateError) {
+            console.error('Failed to initialize journey progress:', stateError);
+        }
+
         try {
             await projectAgentOrchestrator.initializeProjectAgents({
                 projectId: project.id,
                 userId,
-                journeyType: journeyType || 'ai_guided',
+                journeyType: mapProjectJourneyToAgentJourney(requestedJourneyType),
                 projectName: name.trim(),
                 description: description || ''
             });
         } catch (agentError) {
             console.error('Agent initialization failed:', agentError);
-            // Continue without agents rather than failing the entire project creation
         }
 
         res.json({ success: true, project });
     } catch (error: any) {
         res.status(500).json({ success: false, error: error.message || "Failed to create project" });
     }
-});
+}
+
+router.post("/", ensureAuthenticated, createProjectHandler);
+
+router.post(
+    "/:projectId/create-visualization",
+    ensureAuthenticated,
+    requireOwnership('project'),
+    createVisualizationHandler
+);
 
 /**
  * Agent Recommendations Endpoint
@@ -127,62 +2326,108 @@ router.post("/:id/agent-recommendations", ensureAuthenticated, async (req, res) 
             });
         }
 
-        console.log(`🔮 Getting agent recommendations for project ${projectId}`);
+        console.log(`🤖 Starting agent recommendation workflow for project ${projectId}`);
+        console.log(`📋 Input: ${questions.length} questions, goals: ${goals}`);
 
-        // For now, return estimated values based on questions
-        // In full implementation, these would come from actual agent analysis
+        // Get project for context
+        const project = await storage.getProject(projectId);
+        if (!project) {
+            return res.status(404).json({ success: false, error: "Project not found" });
+        }
+
+        // Verify ownership with admin bypass
+        const isAdminUser = (req.user as any)?.isAdmin || false;
+        if (!isAdminUser && project.userId !== userId) {
+            return res.status(403).json({ success: false, error: "Access denied" });
+        }
+
+        // Build agent context with full information
+        const baseContext = buildAgentContext(req.user, project);
         
-        // Estimate data size based on question complexity
-        const questionCount = questions.length;
-        const hasComplexAnalysis = questions.some(q => 
-            q.toLowerCase().includes('predict') || 
-            q.toLowerCase().includes('forecast') ||
-            q.toLowerCase().includes('trend') ||
-            q.toLowerCase().includes('over time')
-        );
+        // Step 1: Data Engineer estimates data requirements with full context
+        console.log('📊 Data Engineer estimating data requirements...');
+        const dataEngineerContext: DataEngineerContext = {
+            ...baseContext,
+            goals,
+            questions,
+            dataSource: dataSource || 'upload',
+            journeyType: project.journeyType || 'ai_guided'
+        };
 
-        // Estimate data size (rows)
-        let estimatedDataSize = 1000; // Default
-        if (hasComplexAnalysis) {
-            estimatedDataSize = 3000;
-        } else if (questionCount > 2) {
-            estimatedDataSize = 2000;
-        }
+        // Use context if available, fallback to old signature for backward compatibility
+        const dataEstimate = await dataEngineerAgent.estimateDataRequirements({
+            ...dataEngineerContext,
+            // Also pass old params for backward compatibility
+            goals,
+            questions,
+            dataSource: dataSource || 'upload',
+            journeyType: project.journeyType || 'ai_guided'
+        } as any);
 
-        // Estimate analysis complexity (matching frontend options: simple, moderate, complex, expert)
-        let complexity = 'moderate';
-        if (hasComplexAnalysis) {
-            complexity = 'complex';
-        } else if (questionCount <= 2) {
-            complexity = 'simple';
-        }
+        // Publish event about data requirements estimation
+    messageBroker.emit('data:requirements_estimated', {
+            projectId,
+            userId,
+            dataEstimate,
+            timestamp: new Date().toISOString()
+        });
+        console.log('📤 Data Engineer → Broadcast: Requirements estimated');
 
-        // Calculate complexity score for recommendation
-        const complexityScore = questions.reduce((score: number, q: string) => {
-            const lowerQ = q.toLowerCase();
-            if (lowerQ.includes('predict') || lowerQ.includes('forecast')) return score + 3;
-            if (lowerQ.includes('trend') || lowerQ.includes('over time')) return score + 2;
-            if (lowerQ.includes('compare') || lowerQ.includes('each')) return score + 1;
-            return score + 0.5;
-        }, 0);
+        // Step 2: Data Scientist analyzes complexity and recommends config with full context
+        console.log('🔬 Data Scientist analyzing complexity...');
+        const dataScientistContext: DataScientistContext = {
+            ...baseContext,
+            dataAnalysis: dataEstimate,
+            userQuestions: questions,
+            analysisGoal: goals,
+            analysisType: 'exploratory',
+            complexity: (dataEstimate as any)?.complexity || 'medium'
+        };
 
-        // Map score to complexity level (matching frontend options: simple, moderate, complex, expert)
-        if (complexityScore >= 5) complexity = 'expert';
-        else if (complexityScore >= 3) complexity = 'complex';
-        else if (complexityScore >= 1.5) complexity = 'moderate';
-        else complexity = 'simple';
+        const dsRecommendations = await dataScientistAgent.recommendAnalysisConfig({
+            ...dataScientistContext,
+            // Also pass old params for backward compatibility
+            dataAnalysis: dataEstimate,
+            userQuestions: questions,
+            analysisGoal: goals,
+            journeyType: project.journeyType || 'ai_guided'
+        } as any);
 
+        // Publish event about analysis recommendations
+    messageBroker.emit('analysis:recommended', {
+            projectId,
+            userId,
+            recommendations: dsRecommendations,
+            timestamp: new Date().toISOString()
+        });
+        console.log('📤 Data Scientist → Broadcast: Analysis recommended');
+
+        // Step 3: Combine recommendations
         const recommendations = {
             success: true,
             recommendations: {
-                expectedDataSize: estimatedDataSize.toString(),
-                analysisComplexity: complexity,
-                rationale: `Based on ${questionCount} questions: ${complexity} complexity analysis recommended for ${estimatedDataSize.toLocaleString()} rows`,
-                confidence: 0.85
+                expectedDataSize: dataEstimate.estimatedRows?.toString() || '1000',
+                analysisComplexity: dsRecommendations.recommendedComplexity || 'moderate',
+                rationale: dsRecommendations.rationale || `Analysis configuration for ${questions.length} questions`,
+                confidence: dsRecommendations.confidence || 0.85,
+                dataEngineering: {
+                    estimatedRows: dataEstimate.estimatedRows,
+                    estimatedColumns: dataEstimate.estimatedColumns,
+                    dataCharacteristics: dataEstimate.dataCharacteristics
+                },
+                dataScience: {
+                    recommendedAnalyses: dsRecommendations.recommendedAnalyses,
+                    suggestedVisualizations: dsRecommendations.suggestedVisualizations,
+                    estimatedProcessingTime: dsRecommendations.estimatedProcessingTime
+                }
+            },
+            metadata: {
+                generatedAt: new Date().toISOString(),
+                agents: ['data_engineer', 'data_scientist']
             }
         };
 
-        console.log(`✅ Agent recommendations: Size=${estimatedDataSize}, Complexity=${complexity}`);
+        console.log(`✅ Agent recommendations generated: Size=${dataEstimate.estimatedRows}, Complexity=${dsRecommendations.recommendedComplexity}`);
         
         res.json(recommendations);
 
@@ -204,7 +2449,7 @@ router.post("/trial-upload", upload.single('file'), async (req, res) => {
         const file = req.file;
         const freeTrialLimit = PricingService.getFreeTrialLimits();
         if (file.size > freeTrialLimit.maxFileSize) {
-            return res.status(400).json({ success: false, error: `File size exceeds free trial limit of ${Math.round(freeTrialLimit.maxFileSize / (1024 * 1024))}MB` });
+            return res.status(400).json({ success: false, error: `File size exceeds trial limit of ${Math.round(freeTrialLimit.maxFileSize / (1024 * 1024))}MB` });
         }
         const processedData = await FileProcessor.processFile(file.buffer, file.originalname, file.mimetype);
         const piiAnalysis = await PIIAnalyzer.analyzePII(processedData.preview || [], processedData.schema || {});
@@ -222,7 +2467,12 @@ router.post("/trial-upload", upload.single('file'), async (req, res) => {
                 tempFileId,
                 piiResult: piiAnalysis,
                 sampleData: processedData.preview,
-                fileInfo: { originalname: file.originalname, size: file.size, mimetype: file.mimetype }
+                fileInfo: { originalname: file.originalname, size: file.size, mimetype: file.mimetype },
+                dataDescription: processedData.datasetSummary.overview,
+                datasetSummary: processedData.datasetSummary,
+                descriptiveStats: processedData.descriptiveStats,
+                qualityMetrics: processedData.qualityMetrics,
+                relationships: processedData.relationships
             });
         }
         
@@ -244,9 +2494,14 @@ router.post("/trial-upload", upload.single('file'), async (req, res) => {
                 basicVisualizations: trialResults.visualizations || [],
                 piiAnalysis: { ...piiAnalysis, userDecision: 'proceed', decisionTimestamp: new Date() },
                 piiDecision: 'proceed',
-                recordCount: processedData.recordCount
+                recordCount: processedData.recordCount,
+                datasetSummary: processedData.datasetSummary,
+                descriptiveStats: processedData.descriptiveStats,
+                qualityMetrics: processedData.qualityMetrics,
+                relationships: processedData.relationships
             },
-            recordCount: processedData.recordCount
+            recordCount: processedData.recordCount,
+            dataDescription: processedData.datasetSummary.overview
         });
 
     } catch (error: any) {
@@ -268,15 +2523,95 @@ router.post("/save-transformations/:projectId", unifiedAuth, async (req, res) =>
         if (!project || owner !== userId) {
             return res.status(404).json({ error: "Project not found or access denied" });
         }
-        const transformedData = await DataTransformationService.applyTransformations(project.data || [], transformations);
-        if (!transformedData) {
-            return res.status(500).json({ success: false, error: "Data transformation failed" });
+        const dataset = await storage.getDatasetForProject(projectId);
+        const sourceRows = extractRowsForTransformation(dataset, project);
+
+        if (sourceRows.length === 0) {
+            return res.status(400).json({ success: false, error: "Project has no data to transform" });
         }
+
+        const baseWarnings: string[] = [];
+        const sanitizedSteps: TransformationStep[] = Array.isArray(transformations)
+            ? transformations
+                .map((rawStep: unknown) => {
+                    if (!rawStep || typeof rawStep !== 'object') {
+                        baseWarnings.push('Skipped invalid transformation step.');
+                        return null;
+                    }
+
+                    const step = rawStep as { type?: unknown; config?: unknown };
+                    const typeValue = typeof step.type === 'string' ? step.type.trim() : '';
+                    if (!typeValue || !VALID_TRANSFORMATION_TYPES.includes(typeValue as TransformationType)) {
+                        baseWarnings.push(`Skipped unsupported transformation type: ${typeValue || 'unknown'}.`);
+                        return null;
+                    }
+
+                    const configCandidate = step.config;
+                    const config = configCandidate && typeof configCandidate === 'object' && !Array.isArray(configCandidate)
+                        ? { ...(configCandidate as Record<string, any>) }
+                        : {};
+
+                    return { type: typeValue as TransformationType, config };
+                })
+                .filter((step): step is TransformationStep => step !== null)
+            : [];
+
+        const joinCache = new Map<string, { rows: any[]; projectName?: string }>();
+        const joinResolver = async (targetProjectId: string) => {
+            if (joinCache.has(targetProjectId)) {
+                return joinCache.get(targetProjectId)!;
+            }
+
+            const relatedProject = await storage.getProject(targetProjectId);
+            if (!relatedProject) {
+                throw new Error('Join project not found.');
+            }
+
+            const relatedOwner = (relatedProject as any)?.ownerId ?? (relatedProject as any)?.userId;
+            if (relatedOwner !== userId) {
+                throw new Error('Access denied for join project.');
+            }
+
+            const relatedDataset = await storage.getDatasetForProject(targetProjectId);
+            const relatedRows = extractRowsForTransformation(relatedDataset, relatedProject);
+
+            if (relatedRows.length === 0) {
+                throw new Error('Join dataset has no rows.');
+            }
+
+            const payload = {
+                rows: relatedRows,
+                projectName: relatedProject?.name ?? targetProjectId,
+            };
+
+            joinCache.set(targetProjectId, payload);
+            return payload;
+        };
+
+        const transformationResult = await DataTransformationService.applyTransformations(
+            sourceRows,
+            sanitizedSteps,
+            {
+                originalSchema: dataset?.schema ?? (project as any)?.schema,
+                warnings: baseWarnings,
+                joinResolver,
+            },
+        );
+
         const updatedProject = await storage.updateProject(projectId, {
-            transformedData: transformedData,
-            transformations: transformations,
+            transformedData: transformationResult.rows,
+            transformations: sanitizedSteps,
         });
-        res.json({ success: true, message: "Transformations saved successfully", project: updatedProject });
+
+        res.json({
+            success: true,
+            message: "Transformations saved successfully",
+            project: updatedProject,
+            preview: transformationResult.preview,
+            rowCount: transformationResult.rowCount,
+            warnings: transformationResult.warnings,
+            summary: transformationResult.summary,
+        });
     } catch (error: any) {
         res.status(500).json({ error: error.message || "Failed to save transformations" });
     }
@@ -309,13 +2644,52 @@ router.get("/get-transformed-data/:projectId", unifiedAuth, async (req, res) => 
 
 // Main project upload endpoint
 router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, res) => {
+    const uploadStart = Date.now();
+    const uploadTrackingId = `upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const metricDetails: Record<string, any> = {
+        method: req.method,
+        path: req.path,
+        uploadId: uploadTrackingId
+    };
+    let metricUserId: string | undefined;
+
+    res.on('finish', () => {
+        const duration = Date.now() - uploadStart;
+        const status = res.statusCode >= 500 ? 'error' : res.statusCode >= 400 ? 'warning' : 'success';
+
+        if (duration > 60000) {
+            console.warn(`⚠️  Upload SLA exceeded (${duration}ms) for ${metricDetails.fileName || 'unknown file'} [${uploadTrackingId}]`);
+        }
+
+        performanceWebhookService.recordMetric({
+            timestamp: new Date(),
+            service: 'project_upload',
+            operation: 'upload_total',
+            duration,
+            status,
+            details: {
+                ...metricDetails,
+                statusCode: res.statusCode
+            },
+            userId: metricUserId,
+            sessionId: req.sessionID
+        }).catch(error => {
+            console.error('Failed to record upload performance metric:', error);
+        });
+    });
+
     try {
+        const uploadAuthHeader = getAuthHeader(req);
         console.log('🔍 Upload request debug:', {
             hasFile: !!req.file,
             hasUser: !!req.user,
             userId: req.user?.id,
             reqUserId: req.userId,
-            authHeader: req.headers.authorization?.substring(0, 20) + '...'
+            authHeader: uploadAuthHeader ? uploadAuthHeader.substring(0, 20) + '...' : 'missing',
+            rawAuthorizationHeader: req.headers.authorization?.substring(0, 20) + '...',
+            forwardedAuthorizationHeader: typeof req.headers['x-forwarded-authorization'] === 'string'
+                ? (req.headers['x-forwarded-authorization'] as string).substring(0, 20) + '...'
+                : undefined
         });
 
         if (!req.file) {
@@ -326,15 +2700,130 @@ router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, r
             return res.status(400).json({ success: false, error: "Project name is required" });
         }
 
+        metricDetails.fileName = req.file.originalname;
+        metricDetails.fileSize = req.file.size;
+
         // Ensure we have a valid user ID
-        const userId = req.user?.id || req.userId;
-        if (!userId) {
+        const adminId = req.user?.id || req.userId;
+        if (!adminId) {
             console.error('❌ No user ID found in request:', { reqUser: req.user, reqUserId: req.userId });
             return res.status(401).json({ success: false, error: "Authentication required" });
         }
 
-        console.log('✅ Using user ID:', userId);
-        const processedData = await FileProcessor.processFile(req.file.buffer, req.file.originalname, req.file.mimetype);
+        const isAdminUser = (req.user as any)?.isAdmin || false;
+        let actualUserId = adminId; // Default to admin's ID
+        let createdByAdminId: string | undefined = undefined;
+
+        // ✅ Check for customer context header (consultant mode)
+        const customerContextHeader = req.headers['x-customer-context'];
+        if (isAdminUser && customerContextHeader) {
+            try {
+                const customerContext = JSON.parse(customerContextHeader as string);
+                
+                // ✅ VALIDATE customer exists
+                const customer = await storage.getUser(customerContext.userId);
+                if (!customer) {
+                    return res.status(404).json({ 
+                        success: false, 
+                        error: "Customer not found" 
+                    });
+                }
+
+                // ✅ VALIDATE customer is not admin
+                if (customer.isAdmin) {
+                    return res.status(403).json({ 
+                        success: false, 
+                        error: "Cannot act as another admin" 
+                    });
+                }
+
+                // ✅ Use customer's ID for project creation
+                actualUserId = customerContext.userId;
+                createdByAdminId = adminId;
+
+                console.log(`✅ Admin ${adminId} creating project for customer ${actualUserId}`);
+                
+                // TODO: Add audit logging here (will implement audit service next)
+                
+            } catch (error: any) {
+                console.error('Invalid customer context:', error);
+                return res.status(400).json({ 
+                    success: false, 
+                    error: "Invalid customer context" 
+                });
+            }
+        }
+
+        metricUserId = actualUserId;
+
+        console.log('✅ Using user ID:', actualUserId);
+
+        // Check journey access control (use actual user's permissions)
+        const requestedJourneyType = normalizeProjectJourneyType(req.body.journeyType);
+        const billingService = getBillingService();
+        const accessCheck = await billingService.canAccessJourney(actualUserId, requestedJourneyType);
+
+        if (!accessCheck.allowed) {
+            return res.status(403).json({
+                success: false,
+                error: accessCheck.message || 'Journey access denied',
+                requiresUpgrade: accessCheck.requiresUpgrade,
+                minimumTier: accessCheck.minimumTier,
+                currentJourneyType: requestedJourneyType
+            });
+        }
+
+        // File is now saved to disk at req.file.path
+        const originalFilePath = req.file.path; // e.g., uploads/originals/user123_1699999999_data.csv
+        const originalFileName = req.file.originalname;
+
+        console.log(`✅ File saved to disk: ${originalFilePath}`);
+
+        // Read file for processing (since we need to parse it)
+        const fileReadStart = Date.now();
+        const fileBuffer = await fs.readFile(originalFilePath);
+        const fileReadDuration = Date.now() - fileReadStart;
+        metricDetails.readMs = fileReadDuration;
+        performanceWebhookService.recordMetric({
+            timestamp: new Date(),
+            service: 'project_upload',
+            operation: 'read_file',
+            duration: fileReadDuration,
+            status: 'success',
+            details: {
+                fileName: req.file.originalname,
+                fileSize: req.file.size,
+                uploadId: uploadTrackingId
+            },
+            userId: actualUserId,
+            sessionId: req.sessionID
+        }).catch(error => {
+            console.error('Failed to record file read metric:', error);
+        });
+
+        // Calculate MD5 checksum for file integrity
+        const checksumMd5 = crypto.createHash('md5').update(fileBuffer).digest('hex');
+
+        const processStart = Date.now();
+        const processedData = await FileProcessor.processFile(fileBuffer, req.file.originalname, req.file.mimetype);
+        const processDuration = Date.now() - processStart;
+        metricDetails.processingMs = processDuration;
+        performanceWebhookService.recordMetric({
+            timestamp: new Date(),
+            service: 'project_upload',
+            operation: 'process_file',
+            duration: processDuration,
+            status: 'success',
+            details: {
+                fileName: req.file.originalname,
+                recordCount: processedData.recordCount,
+                uploadId: uploadTrackingId
+            },
+            userId: actualUserId,
+            sessionId: req.sessionID
+        }).catch(error => {
+            console.error('Failed to record file process metric:', error);
+        });
         let parsedQuestions: string[] = [];
         if (questions) {
             try {
@@ -343,8 +2832,28 @@ router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, r
                 parsedQuestions = questions.split('\n').filter((q: string) => q.trim());
             }
         }
+        const piiStart = Date.now();
         const piiAnalysis = await PIIAnalyzer.analyzePII(processedData.preview || [], processedData.schema || {});
+        const piiDuration = Date.now() - piiStart;
+        metricDetails.piiMs = piiDuration;
+        performanceWebhookService.recordMetric({
+            timestamp: new Date(),
+            service: 'project_upload',
+            operation: 'pii_analysis',
+            duration: piiDuration,
+            status: 'success',
+            details: {
+                fileName: req.file.originalname,
+                detectedPII: piiAnalysis.detectedPII?.length || 0,
+                uploadId: uploadTrackingId
+            },
+            userId: actualUserId,
+            sessionId: req.sessionID
+        }).catch(error => {
+            console.error('Failed to record PII analysis metric:', error);
+        });
         if (piiAnalysis.detectedPII.length > 0) {
+            metricDetails.hasPii = true;
             const tempFileId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
             tempStore.set(tempFileId, {
                 processedData,
@@ -361,41 +2870,143 @@ router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, r
                 questions: parsedQuestions,
                 recordCount: processedData.recordCount,
                 sampleData: processedData.preview,
+                dataDescription: processedData.datasetSummary.overview,
+                datasetSummary: processedData.datasetSummary,
+                descriptiveStats: processedData.descriptiveStats,
+                qualityMetrics: processedData.qualityMetrics,
+                relationships: processedData.relationships,
                 message: 'PII detected - user consent required'
             });
         }
 
+        const projectCreateStart = Date.now();
         const project = await storage.createProject({
-            userId: userId,
+            userId: actualUserId, // ✅ Use customer's ID, not admin's
             name: name.trim(),
             description: description || '',
-            journeyType: req.body.journeyType || 'ai_guided', // Add journeyType
+            journeyType: requestedJourneyType,
             fileType: req.file.mimetype,
             fileName: req.file.originalname,
             fileSize: req.file.size,
             dataSource: 'upload',
             isTrial: false,
             isPaid: false,
+            metadata: {
+                originalFilePath: originalFilePath,
+                checksumMd5: checksumMd5,
+                uploadedAt: new Date().toISOString(),
+                ...(createdByAdminId && { createdByAdminId, createdByAdminAt: new Date().toISOString() })
+            }
         } as any);
+        const projectCreateDuration = Date.now() - projectCreateStart;
+        metricDetails.projectId = project.id;
+        metricDetails.projectCreateMs = projectCreateDuration;
+        performanceWebhookService.recordMetric({
+            timestamp: new Date(),
+            service: 'project_upload',
+            operation: 'create_project',
+            duration: projectCreateDuration,
+            status: 'success',
+            details: {
+                projectId: project.id,
+                uploadId: uploadTrackingId,
+                journeyType: requestedJourneyType
+            },
+            userId: actualUserId,
+            sessionId: req.sessionID
+        }).catch(error => {
+            console.error('Failed to record project creation metric:', error);
+        });
 
-        // Create a dataset and link it
+        try {
+            await journeyStateManager.initializeJourney(project.id, requestedJourneyType);
+        } catch (stateError) {
+            console.error('Failed to initialize journey progress:', stateError);
+        }
+
+        const ingestionMetadata = {
+            recordCount: processedData.recordCount,
+            fileSize: req.file.size,
+            fileType: req.file.mimetype,
+            checksum: checksumMd5,
+            dataDescription: processedData.datasetSummary.overview,
+            datasetSummary: processedData.datasetSummary,
+            descriptiveStats: processedData.descriptiveStats,
+            qualityMetrics: processedData.qualityMetrics,
+            relationships: processedData.relationships,
+            preview: processedData.preview?.slice(0, 20) ?? [],
+            generatedAt: new Date().toISOString()
+        };
+
+        // Create a dataset and link it with real file path
+        const datasetCreateStart = Date.now();
         const dataset = await storage.createDataset({
             id: undefined as any, // will be set by storage impl
-            ownerId: userId,
+            userId: actualUserId, // ✅ Use customer's ID
             sourceType: 'upload',
             originalFileName: req.file.originalname,
             mimeType: req.file.mimetype,
             fileSize: req.file.size,
-            storageUri: `mem://${project.id}/${req.file.originalname}`,
+            storageUri: originalFilePath, // ✅ Real file path, not virtual URI
             schema: processedData.schema,
             recordCount: processedData.recordCount,
+            preview: processedData.preview,
             data: processedData.data,
             piiAnalysis: piiAnalysis,
+            ingestionMetadata
         } as any);
         await storage.linkProjectToDataset(project.id, dataset.id);
+        const datasetCreateDuration = Date.now() - datasetCreateStart;
+        metricDetails.datasetId = dataset.id;
+        metricDetails.datasetCreateMs = datasetCreateDuration;
+        performanceWebhookService.recordMetric({
+            timestamp: new Date(),
+            service: 'project_upload',
+            operation: 'create_dataset',
+            duration: datasetCreateDuration,
+            status: 'success',
+            details: {
+                projectId: project.id,
+                datasetId: dataset.id,
+                uploadId: uploadTrackingId
+            },
+            userId: actualUserId,
+            sessionId: req.sessionID
+        }).catch(error => {
+            console.error('Failed to record dataset creation metric:', error);
+        });
 
-        res.json({ success: true, projectId: project.id, project: { ...project, preview: processedData.preview }, piiAnalysis });
+        await markJourneyProgress(project.id, [
+            'intake_alignment',
+            'industry_context',
+            'auto_schema_detection',
+            'data_health_check'
+        ]);
+
+        res.json({ 
+            success: true, 
+            projectId: project.id, 
+            project: { ...project, preview: processedData.preview }, 
+            piiAnalysis,
+            originalFilePath: originalFilePath, // Return path for client reference
+            dataDescription: processedData.datasetSummary.overview,
+            datasetSummary: processedData.datasetSummary,
+            descriptiveStats: processedData.descriptiveStats,
+            qualityMetrics: processedData.qualityMetrics,
+            relationships: processedData.relationships
+        });
     } catch (error: any) {
+        metricDetails.error = error?.message || 'Unknown error';
+        // Clean up file if processing failed
+        if (req.file?.path) {
+            try {
+                await fs.unlink(req.file.path).catch(err =>
+                    console.error('Failed to delete file after error:', err)
+                );
+            } catch (unlinkError) {
+                console.error('File cleanup error:', unlinkError);
+            }
+        }
         res.status(500).json({ success: false, error: error.message || "Failed to process file" });
     }
 });
@@ -416,19 +3027,290 @@ router.get("/", ensureAuthenticated, async (req, res) => {
     }
 });
 
+router.get("/:projectId/datasets", ensureAuthenticated, async (req, res) => {
+    try {
+        const { projectId } = req.params;
+        const userId = (req.user as any)?.id;
+
+        if (!userId) {
+            return res.status(401).json({ success: false, error: 'Authentication required' });
+        }
+
+        const accessCheck = await canAccessProject(userId, projectId, isAdmin(req));
+        if (!accessCheck.allowed) {
+            const status = accessCheck.reason === 'Project not found' ? 404 : 403;
+            return res.status(status).json({ success: false, error: accessCheck.reason });
+        }
+
+        const datasets = await storage.getProjectDatasets(projectId);
+        const normalized = datasets.map(({ dataset, association }) => {
+            const datasetAny = dataset as any;
+
+            const previewSources = [
+                datasetAny?.preview,
+                datasetAny?.ingestionMetadata?.preview,
+                datasetAny?.ingestionMetadata?.sampleRows,
+                datasetAny?.data
+            ];
+
+            let previewRows: any[] | null = null;
+            for (const source of previewSources) {
+                const parsed = safeParseJson(source);
+                if (Array.isArray(parsed) && parsed.length) {
+                    previewRows = parsed.slice(0, 20);
+                    break;
+                }
+            }
+
+            const schema = dataset.schema ?? datasetAny?.ingestionMetadata?.schema ?? null;
+
+            const { data, ...rest } = datasetAny;
+
+            return {
+                dataset: {
+                    ...rest,
+                    schema,
+                    preview: previewRows ?? [],
+                },
+                association,
+            };
+        });
+
+        return res.json({
+            success: true,
+            datasets: normalized,
+            count: normalized.length
+        });
+    } catch (error: any) {
+        console.error('Failed to fetch project datasets:', error);
+        res.status(500).json({ success: false, error: error.message || 'Failed to fetch datasets' });
+    }
+});
+
+router.post("/:projectId/datasets", ensureAuthenticated, async (req, res) => {
+    try {
+        const { projectId } = req.params;
+        const { datasetId, role } = req.body || {};
+        const userId = (req.user as any)?.id;
+
+        if (!userId) {
+            return res.status(401).json({ success: false, error: 'Authentication required' });
+        }
+
+        if (!datasetId || typeof datasetId !== 'string') {
+            return res.status(400).json({ success: false, error: 'datasetId is required' });
+        }
+
+        const accessCheck = await canAccessProject(userId, projectId, isAdmin(req));
+        if (!accessCheck.allowed) {
+            const status = accessCheck.reason === 'Project not found' ? 404 : 403;
+            return res.status(status).json({ success: false, error: accessCheck.reason });
+        }
+
+        const dataset = await storage.getDataset(datasetId);
+        if (!dataset) {
+            return res.status(404).json({ success: false, error: 'Dataset not found' });
+        }
+
+        const isAdminUser = isAdmin(req);
+        if (!isAdminUser && dataset.userId !== userId && (dataset as any).ownerId !== userId) {
+            return res.status(403).json({ success: false, error: 'Access denied to dataset' });
+        }
+
+        const existingAssociations = await storage.getProjectDatasets(projectId);
+        const alreadyLinked = existingAssociations.some(({ dataset: linked }) => linked.id === datasetId);
+        if (alreadyLinked) {
+            return res.json({
+                success: true,
+                message: 'Dataset already linked to project',
+                dataset,
+                association: existingAssociations.find(({ dataset: linked }) => linked.id === datasetId)?.association
+            });
+        }
+
+        const association = await storage.linkProjectToDataset(projectId, datasetId, role ?? 'primary');
+
+        res.json({
+            success: true,
+            dataset,
+            association
+        });
+    } catch (error: any) {
+        console.error('Failed to add dataset to project:', error);
+        res.status(500).json({ success: false, error: error.message || 'Failed to add dataset to project' });
+    }
+});
+
+router.delete("/:projectId/datasets/:datasetId", ensureAuthenticated, async (req, res) => {
+    try {
+        const { projectId, datasetId } = req.params;
+        const userId = (req.user as any)?.id;
+
+        if (!userId) {
+            return res.status(401).json({ success: false, error: 'Authentication required' });
+        }
+
+        const accessCheck = await canAccessProject(userId, projectId, isAdmin(req));
+        if (!accessCheck.allowed) {
+            const status = accessCheck.reason === 'Project not found' ? 404 : 403;
+            return res.status(status).json({ success: false, error: accessCheck.reason });
+        }
+
+        const removed = await storage.removeDatasetFromProject(projectId, datasetId);
+        if (!removed) {
+            return res.status(404).json({ success: false, error: 'Dataset link not found' });
+        }
+
+        res.json({ success: true });
+    } catch (error: any) {
+        console.error('Failed to remove dataset from project:', error);
+        res.status(500).json({ success: false, error: error.message || 'Failed to remove dataset from project' });
+    }
+});
+
+router.get("/:projectId/artifacts", ensureAuthenticated, async (req, res) => {
+    try {
+        const { projectId } = req.params;
+        const { type } = req.query;
+        const userId = (req.user as any)?.id;
+
+        if (!userId) {
+            return res.status(401).json({ success: false, error: 'Authentication required' });
+        }
+
+        const accessCheck = await canAccessProject(userId, projectId, isAdmin(req));
+        if (!accessCheck.allowed) {
+            const status = accessCheck.reason === 'Project not found' ? 404 : 403;
+            return res.status(status).json({ success: false, error: accessCheck.reason });
+        }
+
+        const normalizedType = typeof type === 'string' && type.trim().length > 0 ? type.trim() : undefined;
+        const artifacts = await storage.getProjectArtifacts(projectId, normalizedType);
+
+        return res.json({
+            success: true,
+            artifacts,
+            data: artifacts,
+            count: artifacts.length
+        });
+    } catch (error: any) {
+        console.error('Failed to fetch project artifacts:', error);
+        res.status(500).json({ success: false, error: error.message || 'Failed to fetch project artifacts' });
+    }
+});
+
+router.get("/:projectId/journey-state", ensureAuthenticated, async (req, res) => {
+    try {
+        const { projectId } = req.params;
+        const userId = (req.user as any)?.id;
+
+        if (!userId) {
+            return res.status(401).json({ success: false, error: 'Authentication required' });
+        }
+
+        const accessCheck = await canAccessProject(userId, projectId, isAdmin(req));
+        if (!accessCheck.allowed) {
+            const status = accessCheck.reason === 'Project not found' ? 404 : 403;
+            return res.status(status).json({ success: false, error: accessCheck.reason });
+        }
+
+        const journeyState = await journeyStateManager.getJourneyState(projectId);
+
+        res.json({ success: true, journeyState });
+    } catch (error: any) {
+        console.error('Error fetching journey state:', error);
+        res.status(500).json({ success: false, error: error.message || 'Failed to fetch journey state' });
+    }
+});
+
+router.post("/:projectId/journey/complete-step", ensureAuthenticated, async (req, res) => {
+    try {
+        const { projectId } = req.params;
+        const { stepId } = req.body;
+        const userId = (req.user as any)?.id;
+
+        if (!userId) {
+            return res.status(401).json({ success: false, error: 'Authentication required' });
+        }
+
+        if (!stepId || typeof stepId !== 'string') {
+            return res.status(400).json({ success: false, error: 'stepId is required' });
+        }
+
+        const accessCheck = await canAccessProject(userId, projectId, isAdmin(req));
+        if (!accessCheck.allowed) {
+            const status = accessCheck.reason === 'Project not found' ? 404 : 403;
+            return res.status(status).json({ success: false, error: accessCheck.reason });
+        }
+
+        await journeyStateManager.completeStep(projectId, stepId);
+        const journeyState = await journeyStateManager.getJourneyState(projectId);
+
+        res.json({
+            success: true,
+            message: `Step ${stepId} marked as complete`,
+            journeyState,
+        });
+    } catch (error: any) {
+        console.error('Error completing journey step:', error);
+        res.status(500).json({ success: false, error: error.message || 'Failed to complete journey step' });
+    }
+});
+
 router.get("/:id", ensureAuthenticated, async (req, res) => {
     try {
+        const { id } = req.params;
         const userId = (req.user as any)?.id;
-        const project = await storage.getProject(req.params.id);
+
+        if (!userId) {
+            return res.status(401).json({ error: "User authentication required" });
+        }
+
+        const accessCheck = await canAccessProject(userId, id, isAdmin(req));
+        if (!accessCheck.allowed) {
+            const status = accessCheck.reason === 'Project not found' ? 404 : 403;
+            return res.status(status).json({ error: accessCheck.reason });
+        }
+
+        const project = await storage.getProject(id);
         if (!project) {
             return res.status(404).json({ error: "Project not found" });
         }
-        const owner = (project as any)?.ownerId ?? (project as any)?.userId;
-        if (owner !== userId) {
-            return res.status(403).json({ error: "Access denied - not your project" });
-        }
-        res.json(project);
+
+        const datasets = await storage.getProjectDatasets(id);
+        const primaryAssociation = datasets.find(({ association }) => association?.role === 'primary') ?? datasets[0];
+        const primaryDataset = primaryAssociation?.dataset;
+
+        const schema = project.schema ?? primaryDataset?.schema ?? null;
+        const recordCount = project.recordCount ?? primaryDataset?.recordCount ?? null;
+
+        const datasetSummaries = datasets.map(({ dataset, association }) => {
+            const datasetName =
+                association?.alias ||
+                (dataset as any)?.name ||
+                (association as any)?.datasetName ||
+                dataset.originalFileName ||
+                association.datasetId;
+
+            return {
+                id: dataset.id,
+                name: datasetName,
+                role: association.role,
+                sourceType: dataset.sourceType,
+                recordCount: dataset.recordCount ?? null,
+                addedAt: association.addedAt ?? null,
+            };
+        });
+
+        res.json({
+            ...project,
+            schema,
+            recordCount,
+            datasetSummaries,
+            primaryDatasetId: primaryDataset?.id ?? null,
+        });
     } catch (error: any) {
+        console.error('Failed to fetch project:', error);
         res.status(500).json({ error: "Failed to fetch project" });
     }
 });
@@ -472,13 +3354,30 @@ router.post("/:id/upload", ensureAuthenticated, upload.single('file'), async (re
             return res.status(404).json({ error: "Project not found or access denied" });
         }
 
-        const processedData = await FileProcessor.processFile(req.file.buffer, req.file.originalname, req.file.mimetype);
+        const filePath = req.file.path;
+        const fileBuffer = req.file.buffer || (filePath ? await fs.readFile(filePath) : null);
+        if (!fileBuffer) {
+            throw new Error('Failed to load uploaded file for processing');
+        }
+
+        const processedData = await FileProcessor.processFile(fileBuffer, req.file.originalname, req.file.mimetype);
         const piiAnalysis = await PIIAnalyzer.analyzePII(processedData.preview || [], processedData.schema || {});
+        const ingestionMetadata = {
+            recordCount: processedData.recordCount,
+            fileSize: req.file.size,
+            fileType: req.file.mimetype,
+            dataDescription: processedData.datasetSummary.overview,
+            datasetSummary: processedData.datasetSummary,
+            descriptiveStats: processedData.descriptiveStats,
+            qualityMetrics: processedData.qualityMetrics,
+            relationships: processedData.relationships,
+            generatedAt: new Date().toISOString()
+        };
 
         // Create a new Dataset
         const newDataset = await storage.createDataset({
             id: undefined as any,
-            ownerId: userId,
+            userId: userId,
             sourceType: 'upload',
             originalFileName: req.file.originalname,
             mimeType: req.file.mimetype,
@@ -489,6 +3388,7 @@ router.post("/:id/upload", ensureAuthenticated, upload.single('file'), async (re
             preview: processedData.preview,
             piiAnalysis: piiAnalysis,
             data: processedData.data, // Storing data with the dataset
+            ingestionMetadata
         } as any);
 
         // Link dataset to the project
@@ -501,6 +3401,159 @@ router.post("/:id/upload", ensureAuthenticated, upload.single('file'), async (re
             fileSize: req.file.size,
             fileType: req.file.mimetype,
             processed: true,
+        });
+
+        const columnCount = Object.keys(processedData.schema || {}).length;
+        const defaultQualityMetrics = {
+            totalRows: processedData.recordCount ?? 0,
+            totalColumns: columnCount,
+            completeness: 1,
+            duplicateRows: 0,
+            potentialPIIFields: [] as string[],
+            dataQualityScore: 75,
+        };
+        const qualityMetrics = processedData.qualityMetrics ?? defaultQualityMetrics;
+    const metricsAny = (processedData.qualityMetrics ?? {}) as unknown as Record<string, unknown>;
+        const qualityIssues = Array.isArray(metricsAny.issues) ? metricsAny.issues : [];
+        const qualityRecommendations = Array.isArray(metricsAny.recommendations) ? metricsAny.recommendations : [];
+        const scoreCandidates: number[] = [];
+        const candidateValues = [
+            (qualityMetrics as any).dataQualityScore,
+            metricsAny.qualityScore,
+            metricsAny.overallScore,
+        ];
+        for (const value of candidateValues) {
+            if (typeof value === 'number' && !Number.isNaN(value)) {
+                scoreCandidates.push(value);
+            }
+        }
+        const derivedScore = scoreCandidates.length > 0 ? scoreCandidates[0] : 75;
+        const qualityScore = derivedScore <= 1 ? Math.round(derivedScore * 100) : Math.round(derivedScore);
+
+        let ingestionArtifactId: string | null = null;
+        let qualityArtifactId: string | null = null;
+
+        try {
+            const ingestionArtifact = await storage.createArtifact({
+                id: nanoid(),
+                projectId,
+                type: 'ingestion',
+                status: 'completed',
+                inputRefs: [newDataset.id],
+                params: {
+                    source: 'file_upload',
+                    fileName: req.file.originalname,
+                    mimeType: req.file.mimetype
+                },
+                metrics: {
+                    recordCount: processedData.recordCount ?? null,
+                    columnCount,
+                    fileSize: req.file.size
+                },
+                output: {
+                    datasetId: newDataset.id,
+                    schema: processedData.schema,
+                    preview: Array.isArray(processedData.preview)
+                        ? processedData.preview.slice(0, 20)
+                        : processedData.preview,
+                    summary: processedData.datasetSummary.overview,
+                    datasetSummary: processedData.datasetSummary,
+                    descriptiveStats: processedData.descriptiveStats,
+                    relationships: processedData.relationships
+                },
+                createdBy: userId
+            });
+            ingestionArtifactId = ingestionArtifact.id;
+        } catch (artifactError) {
+            console.error('Failed to create ingestion artifact:', artifactError);
+        }
+
+        try {
+            const inputRefs = [newDataset.id];
+            if (ingestionArtifactId) {
+                inputRefs.push(ingestionArtifactId);
+            }
+
+            const qualityArtifact = await storage.createArtifact({
+                id: nanoid(),
+                projectId,
+                type: 'analysis',
+                status: 'completed',
+                inputRefs,
+                params: {
+                    analysis: 'data_quality_assessment'
+                },
+                metrics: {
+                    qualityScore,
+                    issueCount: qualityIssues.length
+                },
+                output: {
+                    summary: `Data quality score ${qualityScore}%`,
+                    qualityMetrics,
+                    datasetSummary: processedData.datasetSummary,
+                    descriptiveStats: processedData.descriptiveStats,
+                    relationships: processedData.relationships,
+                    issues: qualityIssues,
+                    recommendations: qualityRecommendations
+                },
+                createdBy: 'data_engineer_agent'
+            });
+            qualityArtifactId = qualityArtifact.id;
+        } catch (artifactError) {
+            console.error('Failed to create data quality artifact:', artifactError);
+        }
+
+        await markJourneyProgress(projectId, [
+            'intake_alignment',
+            'industry_context',
+            'auto_schema_detection',
+            'data_health_check'
+        ]);
+
+        // Create initial checkpoints when data is uploaded
+        const checkpointTime = Date.now();
+        
+        // Checkpoint 1: Data upload confirmation
+        await projectAgentOrchestrator.addCheckpoint(projectId, {
+            id: `checkpoint_${checkpointTime}_data_upload`,
+            projectId,
+            agentType: 'data_engineer',
+            stepName: 'data_upload',
+            status: 'completed',
+            message: `Data uploaded successfully! ${processedData.recordCount} rows processed.`,
+            data: {
+                fileName: req.file.originalname,
+                rowCount: processedData.recordCount,
+                columnCount,
+                dataDescription: processedData.datasetSummary.overview,
+                datasetSummary: processedData.datasetSummary,
+                descriptiveStats: processedData.descriptiveStats,
+                relationships: processedData.relationships
+            },
+            timestamp: new Date(),
+            requiresUserInput: false
+        });
+
+        // Checkpoint 2: Data Quality Agent - Quality assessment
+        await projectAgentOrchestrator.addCheckpoint(projectId, {
+            id: `checkpoint_${checkpointTime + 1}_data_quality`,
+            projectId,
+            agentType: 'data_engineer',
+            stepName: 'data_quality_assessment',
+            status: 'waiting_approval',
+            message: `Data quality assessment complete. Overall quality score: ${qualityScore}%. Please review quality issues before proceeding.`,
+            data: {
+                qualityScore,
+                qualityMetrics,
+                rowCount: processedData.recordCount,
+                columnCount,
+                issues: qualityIssues,
+                datasetSummary: processedData.datasetSummary,
+                descriptiveStats: processedData.descriptiveStats,
+                relationships: processedData.relationships
+            },
+            timestamp: new Date(),
+            requiresUserInput: true
         });
 
         // ==========================================
@@ -529,6 +3582,10 @@ router.post("/:id/upload", ensureAuthenticated, upload.single('file'), async (re
                         data: processedData.data,
                         schema: processedData.schema,
                         qualityMetrics: processedData.qualityMetrics,
+                        descriptiveStats: processedData.descriptiveStats,
+                        datasetSummary: processedData.datasetSummary,
+                        dataDescription: processedData.datasetSummary.overview,
+                        relationships: processedData.relationships,
                         rowCount: processedData.recordCount,
                         type: 'tabular'
                     },
@@ -542,7 +3599,7 @@ router.post("/:id/upload", ensureAuthenticated, upload.single('file'), async (re
 
                 // Store coordination result in project metadata for later retrieval
                 await storage.updateProject(projectId, {
-                    multiAgentCoordination: JSON.stringify(coordinationResult)
+                    multiAgentCoordination: coordinationResult
                 } as any);
 
                 // Notify project orchestrator to create a checkpoint
@@ -570,17 +3627,281 @@ router.post("/:id/upload", ensureAuthenticated, upload.single('file'), async (re
 
                 console.log(`[project.ts] Multi-agent checkpoint created for project ${projectId}`);
 
+                try {
+                    const analysisInputRefs = [newDataset.id];
+                    if (ingestionArtifactId) analysisInputRefs.push(ingestionArtifactId);
+                    if (qualityArtifactId) analysisInputRefs.push(qualityArtifactId);
+
+                    await storage.createArtifact({
+                        id: nanoid(),
+                        projectId,
+                        type: 'analysis',
+                        status: 'completed',
+                        inputRefs: analysisInputRefs,
+                        params: {
+                            analysis: 'multi_agent_goal_analysis'
+                        },
+                        metrics: {
+                            confidence: coordinationResult.synthesis.confidence,
+                            totalResponseTime: coordinationResult.totalResponseTime
+                        },
+                        output: {
+                            overallAssessment: coordinationResult.synthesis.overallAssessment,
+                            keyFindings: coordinationResult.synthesis.keyFindings,
+                            actionableRecommendations: coordinationResult.synthesis.actionableRecommendations,
+                            expertConsensus: coordinationResult.synthesis.expertConsensus
+                        },
+                        createdBy: 'pm_agent'
+                    });
+                } catch (artifactError) {
+                    console.error('Failed to create multi-agent coordination artifact:', artifactError);
+                }
+
             } catch (coordinationError) {
                 console.error(`[project.ts] Multi-agent coordination failed (non-blocking):`, coordinationError);
                 // Don't block upload success, coordination is an enhancement
                 // User can still proceed with analysis using traditional flow
             }
         });
-
-        res.json({ success: true, project: updatedProject, datasetId: newDataset.id, piiAnalysis });
+        res.json({
+            success: true,
+            project: updatedProject,
+            datasetId: newDataset.id,
+            piiAnalysis,
+            dataDescription: processedData.datasetSummary.overview,
+            datasetSummary: processedData.datasetSummary,
+            descriptiveStats: processedData.descriptiveStats,
+            qualityMetrics: processedData.qualityMetrics,
+            relationships: processedData.relationships
+        });
 
     } catch (error: any) {
         res.status(500).json({ success: false, error: error.message || "Failed to process file" });
+    }
+});
+
+// Data quality, PII, and schema analysis endpoints
+router.get("/:id/data-quality", ensureAuthenticated, requireOwnership('project'), async (req, res) => {
+    try {
+        const { id: projectId } = req.params;
+        const project = await storage.getProject(projectId);
+        if (!project) {
+            return res.status(404).json({ success: false, error: "Project not found" });
+        }
+
+        const userContext = buildUserContext(req, project);
+        const datasets = await storage.getProjectDatasets(projectId);
+        const datasetRecord = datasets?.[0]?.dataset;
+        const ingestionMetadata = (datasetRecord as any)?.ingestionMetadata || {};
+        const qualityMetrics = ingestionMetadata?.qualityMetrics || (datasetRecord as any)?.qualityMetrics || {};
+        const qualityMetricsAny = qualityMetrics as Record<string, unknown>;
+        const descriptiveStatsByColumn = ingestionMetadata?.descriptiveStats || null;
+        const inferredRelationships = Array.isArray(ingestionMetadata?.relationships)
+            ? ingestionMetadata.relationships
+            : Array.isArray((datasetRecord as any)?.relationships)
+                ? (datasetRecord as any).relationships
+                : [];
+
+        const snapshot = datasetRecord ? buildProjectDataSnapshot(project, datasetRecord) : null;
+        const derivedQuality = snapshot ? deriveQualityInsights(snapshot) : null;
+
+        const metrics = {
+            completeness: pickScore(
+                qualityMetricsAny['completeness'],
+                derivedQuality?.metrics.completeness,
+                datasetRecord ? undefined : 0
+            ),
+            consistency: pickScore(
+                qualityMetricsAny['consistency'],
+                derivedQuality?.metrics.consistency,
+                datasetRecord ? undefined : 0
+            ),
+            accuracy: pickScore(
+                qualityMetricsAny['accuracy'],
+                derivedQuality?.metrics.accuracy,
+                datasetRecord ? undefined : 0
+            ),
+            validity: pickScore(
+                qualityMetricsAny['validity'],
+                derivedQuality?.metrics.validity,
+                datasetRecord ? undefined : 0
+            )
+        };
+
+        const computedAverage = datasetRecord
+            ? clampScore((metrics.completeness + metrics.consistency + metrics.accuracy + metrics.validity) / 4)
+            : 0;
+
+        const qualityScoreValue = pickScore(
+            qualityMetricsAny['overall'],
+            qualityMetricsAny['overallScore'],
+            qualityMetricsAny['dataQualityScore'],
+            qualityMetricsAny['qualityScore'],
+            derivedQuality?.overall,
+            datasetRecord ? computedAverage : 0
+        );
+
+        const resolvedIssues = (Array.isArray(qualityMetricsAny['issues']) && (qualityMetricsAny['issues'] as unknown[]).length > 0
+            ? qualityMetricsAny['issues']
+            : derivedQuality?.issues
+                ?? (datasetRecord
+                    ? ['Dataset preview is unavailable or incomplete. Re-run ingestion to refresh data quality metrics.']
+                    : ['Dataset not uploaded yet. Upload data to enable detailed quality checks.'])) as unknown[];
+
+        const resolvedRecommendations = (Array.isArray(qualityMetricsAny['recommendations']) && (qualityMetricsAny['recommendations'] as unknown[]).length > 0
+            ? qualityMetricsAny['recommendations']
+            : derivedQuality?.recommendations
+                ?? (datasetRecord
+                    ? ['Reprocess the dataset to generate up-to-date quality metrics.', 'Confirm column types and address any missing data discovered during ingestion.']
+                    : ['Upload a dataset to unlock automated quality assessments.', 'Set data quality thresholds to monitor future uploads.'])) as unknown[];
+
+        const rawLabel = qualityMetricsAny['label'];
+        const qualityLabel = typeof rawLabel === 'string' && rawLabel.trim().length > 0
+            ? rawLabel
+            : (derivedQuality?.label ?? (datasetRecord ? QUALITY_LABEL_REVIEW : QUALITY_LABEL_INSUFFICIENT));
+
+        const datasetSummary = ingestionMetadata?.datasetSummary
+            || derivedQuality?.datasetSummary
+            || null;
+
+        const metadata: Record<string, unknown> = {
+            datasetAvailable: Boolean(datasetRecord),
+            generatedAt: new Date().toISOString()
+        };
+
+        if (derivedQuality?.diagnostics) {
+            metadata.qualityDiagnostics = derivedQuality.diagnostics;
+        }
+
+        res.json({
+            success: true,
+            assessedBy: 'data_engineer_agent',
+            userContext,
+            datasetId: datasetRecord?.id || null,
+            recordCount: datasetRecord?.recordCount ?? 0,
+            metrics,
+            qualityScore: {
+                overall: qualityScoreValue,
+                label: qualityLabel
+            },
+            issues: resolvedIssues,
+            recommendations: resolvedRecommendations,
+            datasetSummary,
+            descriptiveStats: descriptiveStatsByColumn,
+            relationships: inferredRelationships,
+            metadata
+        });
+
+    } catch (error: any) {
+        console.error('Data quality error:', error);
+        res.status(500).json({ success: false, error: error.message || "Failed to get data quality assessment" });
+    }
+});
+
+router.get("/:id/pii-analysis", ensureAuthenticated, requireOwnership('project'), async (req, res) => {
+    try {
+        const { id: projectId } = req.params;
+        const project = await storage.getProject(projectId);
+        if (!project) {
+            return res.status(404).json({ success: false, error: "Project not found" });
+        }
+
+        const userContext = buildUserContext(req, project);
+        const datasets = await storage.getProjectDatasets(projectId);
+        const datasetRecord = datasets?.[0]?.dataset;
+        const piiAnalysis = (datasetRecord as any)?.piiAnalysis || {};
+
+        const detectedPII = Array.isArray(piiAnalysis.detectedPII) ? piiAnalysis.detectedPII : [];
+        const requiresReview = detectedPII.length > 0;
+
+        res.json({
+            success: true,
+            assessedBy: 'data_verification_service_enhanced',
+            userContext,
+            datasetId: datasetRecord?.id || null,
+            detectedPII,
+            userConsent: piiAnalysis.userConsent ?? false,
+            requiresReview,
+            userDecision: piiAnalysis.userDecision || null,
+            decisionTimestamp: piiAnalysis.consentTimestamp || null,
+            metadata: {
+                datasetAvailable: Boolean(datasetRecord),
+                generatedAt: new Date().toISOString()
+            }
+        });
+
+    } catch (error: any) {
+        console.error('PII analysis error:', error);
+        res.status(500).json({ success: false, error: error.message || "Failed to get PII analysis" });
+    }
+});
+
+router.get("/:id/schema-analysis", ensureAuthenticated, requireOwnership('project'), async (req, res) => {
+    try {
+        const { id: projectId } = req.params;
+        const project = await storage.getProject(projectId);
+        if (!project) {
+            return res.status(404).json({ success: false, error: "Project not found" });
+        }
+
+        const userContext = buildUserContext(req, project);
+        const datasets = await storage.getProjectDatasets(projectId);
+        const datasetRecord = datasets?.[0]?.dataset;
+        const schema = (datasetRecord as any)?.schema || {};
+        const ingestionMetadata = (datasetRecord as any)?.ingestionMetadata || {};
+        const datasetSummary = ingestionMetadata?.datasetSummary || null;
+        const descriptiveStatsByColumn = ingestionMetadata?.descriptiveStats || null;
+        const inferredRelationships = Array.isArray(ingestionMetadata?.relationships)
+            ? ingestionMetadata.relationships
+            : Array.isArray((datasetRecord as any)?.relationships)
+                ? (datasetRecord as any).relationships
+                : [];
+        const schemaEntries = Object.entries(schema as Record<string, any>);
+
+        const columnDetails = schemaEntries.map(([columnName, columnInfo]) => ({
+            name: columnName,
+            type: columnInfo?.type || 'unknown',
+            nullable: columnInfo?.nullable ?? true,
+            sampleValues: Array.isArray(columnInfo?.sampleValues)
+                ? columnInfo.sampleValues.slice(0, 5)
+                : [],
+            descriptiveStats: descriptiveStatsByColumn?.[columnName] ?? columnInfo?.descriptiveStats ?? null
+        }));
+
+        const recommendations = Array.isArray((datasetRecord as any)?.schemaRecommendations)
+            ? (datasetRecord as any).schemaRecommendations
+            : (schemaEntries.length > 0 ? [
+                'Validate detected data types before training models.',
+                'Document business meaning for key columns to support collaboration.'
+            ] : [
+                'Upload a dataset to generate schema insights.',
+                'Define expected columns for this project to guide future uploads.'
+            ]);
+
+        res.json({
+            success: true,
+            assessedBy: 'data_verification_service_enhanced',
+            userContext,
+            datasetId: datasetRecord?.id || null,
+            columnCount: columnDetails.length,
+            columnDetails,
+            dataTypes: schemaEntries.reduce((acc, [key, val]) => {
+                acc[key] = (val as any)?.type || 'unknown';
+                return acc;
+            }, {} as Record<string, string>),
+            datasetSummary,
+            dataDescription: typeof datasetSummary?.overview === 'string' ? datasetSummary.overview : null,
+            relationships: inferredRelationships,
+            recommendations,
+            metadata: {
+                datasetAvailable: Boolean(datasetRecord),
+                generatedAt: new Date().toISOString()
+            }
+        });
+
+    } catch (error: any) {
+        console.error('Schema analysis error:', error);
+        res.status(500).json({ success: false, error: error.message || "Failed to get schema analysis" });
     }
 });
 
@@ -703,9 +4024,9 @@ No additional text or explanation.`;
                 // Fallback: split by newlines and clean up
                 suggestions = text
                     .split('\n')
-                    .filter(line => line.trim().length > 0)
-                    .map(line => line.replace(/^[-*•]\s*/, '').replace(/^["\s]+|["\s]+$/g, ''))
-                    .filter(line => line.length > 10)
+                    .filter((line: string) => line.trim().length > 0)
+                    .map((line: string) => line.replace(/^[-*•]\s*/, '').replace(/^["\s]+|["\s]+$/g, ''))
+                    .filter((line: string) => line.length > 10)
                     .slice(0, 5);
             }
         } catch (parseError) {
@@ -739,6 +4060,111 @@ No additional text or explanation.`;
             suggestions: fallbackSuggestions,
             fallback: true
         });
+    }
+});
+
+// Download original uploaded file
+router.get("/:id/download/original", ensureAuthenticated, async (req, res) => {
+    try {
+        const projectId = req.params.id;
+        const userId = (req.user as any)?.id;
+        const isAdminUser = isAdmin(req);
+
+        if (!userId) {
+            return res.status(401).json({ error: "Authentication required" });
+        }
+
+        const project = await storage.getProject(projectId);
+        if (!project) {
+            return res.status(404).json({ error: "Project not found" });
+        }
+
+        // Verify ownership with admin bypass
+        if (!isAdminUser && project.userId !== userId) {
+            return res.status(403).json({ error: "Access denied" });
+        }
+
+        // Get original file path from project metadata or dataset
+        const datasets = await storage.getProjectDatasets(projectId);
+        let originalFilePath: string | null = null;
+
+        // Try to get from project metadata first
+        if ((project as any)?.metadata?.originalFilePath) {
+            originalFilePath = (project as any).metadata.originalFilePath;
+        } else if (datasets.length > 0 && (datasets[0] as any)?.storageUri) {
+            // Fallback to dataset storageUri if it's a real path (not mem://)
+            const storageUri = (datasets[0] as any).storageUri;
+            if (storageUri && !storageUri.startsWith('mem://')) {
+                originalFilePath = storageUri;
+            }
+        }
+
+        if (!originalFilePath) {
+            return res.status(404).json({ error: "Original file not found" });
+        }
+
+        // Verify file exists
+        try {
+            await fs.access(originalFilePath);
+        } catch {
+            return res.status(404).json({ error: "Original file no longer available on disk" });
+        }
+
+        // Get original filename from project or dataset
+        const originalFileName = (project as any)?.fileName || (datasets[0] as any)?.originalFileName || `project-${projectId}.csv`;
+
+        // Send file
+        res.download(originalFilePath, originalFileName);
+    } catch (error: any) {
+        console.error('Download original file error:', error);
+        res.status(500).json({ error: error.message || "Failed to download original file" });
+    }
+});
+
+// Download transformed file
+router.get("/:id/download/transformed", ensureAuthenticated, async (req, res) => {
+    try {
+        const projectId = req.params.id;
+        const userId = (req.user as any)?.id;
+        const isAdminUser = isAdmin(req);
+
+        if (!userId) {
+            return res.status(401).json({ error: "Authentication required" });
+        }
+
+        const project = await storage.getProject(projectId);
+        if (!project) {
+            return res.status(404).json({ error: "Project not found" });
+        }
+
+        // Verify ownership with admin bypass
+        if (!isAdminUser && project.userId !== userId) {
+            return res.status(403).json({ error: "Access denied" });
+        }
+
+        // Get transformed file path from project metadata
+        const transformedFilePath = (project as any)?.metadata?.transformedFilePath;
+
+        if (!transformedFilePath) {
+            return res.status(404).json({ error: "No transformed file available. Please apply transformations first." });
+        }
+
+        // Verify file exists
+        try {
+            await fs.access(transformedFilePath);
+        } catch {
+            return res.status(404).json({ error: "Transformed file no longer available on disk" });
+        }
+
+        // Generate filename
+        const projectName = (project as any)?.name || 'project';
+        const filename = `transformed_${projectName}_${projectId}.json`;
+
+        // Send file
+        res.download(transformedFilePath, filename);
+    } catch (error: any) {
+        console.error('Download transformed file error:', error);
+        res.status(500).json({ error: error.message || "Failed to download transformed file" });
     }
 });
 

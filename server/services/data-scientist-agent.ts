@@ -3,6 +3,7 @@ import { AgentHandler, AgentTask, AgentResult, AgentStatus, AgentCapability } fr
 import { TechnicalAIAgent } from './technical-ai-agent';
 import { SparkProcessor } from './spark-processor';
 import { nanoid } from 'nanoid';
+import type { AnalysisStep, MLModelSpec, VisualizationSpec, DataAssessment } from '@shared/schema';
 
 // ==========================================
 // CONSULTATION INTERFACES (Multi-Agent Coordination)
@@ -27,6 +28,7 @@ export interface ValidationResult {
   confidence: number;
   warnings: string[];
   alternatives: string[];
+  recommendations?: string[];
 }
 
 export interface ConfidenceScore {
@@ -37,6 +39,16 @@ export interface ConfidenceScore {
     weight: number;
   }>;
   recommendation: string;
+}
+
+export interface PlanAnalysisBlueprint {
+  analysisSteps: AnalysisStep[];
+  mlModels: MLModelSpec[];
+  visualizations: VisualizationSpec[];
+  recommendations: string[];
+  risks: string[];
+  estimatedDuration: string;
+  complexity: 'low' | 'medium' | 'high' | 'very_high';
 }
 
 // ==========================================
@@ -776,13 +788,29 @@ export class DataScientistAgent implements AgentHandler {
   }
 
   private async analyzeDistribution(data: any[], column: string): Promise<any> {
-    const values = data.map(row => row[column]).filter(v => v !== null && v !== undefined);
+    const values = data
+      .map(row => row[column])
+      .filter((v): v is number => typeof v === 'number' && !Number.isNaN(v));
     const stats = this.calculateColumnStats(data, column);
+
+    if (!stats || typeof stats.min !== 'number' || typeof stats.max !== 'number' || values.length === 0) {
+      return {
+        bins: [],
+        normality: { isNormal: false, pValue: 0.01 },
+        stats
+      };
+    }
 
     // Normality test using statistical heuristic (Shapiro-Wilk approximation)
     // For production, should use scipy.stats.shapiro via Python
-    const skewness = this.calculateSkewness(values, stats.mean, stats.std);
-    const isNormal = Math.abs(stats.mean - stats.median) < stats.std * 0.5 && Math.abs(skewness) < 0.5;
+    const skewness =
+      typeof stats.mean === 'number' && typeof stats.std === 'number' && stats.std !== 0
+        ? this.calculateSkewness(values, stats.mean, stats.std)
+        : 0;
+    const isNormal =
+      typeof stats.std === 'number' && typeof stats.mean === 'number' && typeof stats.median === 'number'
+        ? Math.abs(stats.mean - stats.median) < stats.std * 0.5 && Math.abs(skewness) < 0.5
+        : false;
 
     // Approximate p-value based on skewness and kurtosis
     // Real implementation should use Python scipy.stats.shapiro
@@ -794,8 +822,9 @@ export class DataScientistAgent implements AgentHandler {
     };
 
     // Create histogram bins
-    const binCount = Math.min(30, Math.ceil(Math.sqrt(values.length)));
-    const binSize = (stats.max - stats.min) / binCount;
+    const range = stats.max - stats.min;
+    const binCount = range > 0 ? Math.min(30, Math.ceil(Math.sqrt(values.length))) : 1;
+    const binSize = range > 0 ? range / binCount : 1;
     const bins = Array(binCount).fill(0).map((_, i) => ({
       start: stats.min + i * binSize,
       end: stats.min + (i + 1) * binSize,
@@ -803,11 +832,21 @@ export class DataScientistAgent implements AgentHandler {
     }));
 
     values.forEach(val => {
-      const binIndex = Math.min(Math.floor((val - stats.min) / binSize), binCount - 1);
+      const adjustedIndex = binSize > 0 ? Math.floor((val - stats.min) / binSize) : 0;
+      const binIndex = Math.min(Math.max(adjustedIndex, 0), binCount - 1);
       if (binIndex >= 0 && binIndex < binCount) bins[binIndex].count++;
     });
 
     return { bins, normality, stats };
+  }
+
+  private calculateSkewness(values: number[], mean: number, std: number): number {
+    if (!values.length || std === 0) {
+      return 0;
+    }
+
+    const normalizedSum = values.reduce((sum, value) => sum + Math.pow((value - mean) / std, 3), 0);
+    return normalizedSum / values.length;
   }
 
   private async detectOutliers(data: any[], columns: string[]): Promise<any> {
@@ -894,35 +933,39 @@ export class DataScientistAgent implements AgentHandler {
         feasible: false,
         confidence: 0,
         requiredAnalyses: [],
+        estimatedDuration: 'N/A - Invalid input',
         dataRequirements: {
           met: [],
           missing: ['Valid goals array'],
           canDerive: []
         },
         concerns: ['Invalid goals: goals must be a valid array'],
-        recommendations: ['Please provide valid analysis goals'],
-        estimatedTime: 'N/A - Invalid input'
+        recommendations: ['Please provide valid analysis goals']
       };
     }
 
-    if (!dataQuality || typeof dataQuality !== 'number') {
+    if (!dataQuality || (typeof dataQuality !== 'number' && typeof dataQuality !== 'object')) {
       return {
         feasible: false,
         confidence: 0,
         requiredAnalyses: [],
+        estimatedDuration: 'N/A - Invalid input',
         dataRequirements: {
           met: [],
           missing: ['Valid data quality score'],
           canDerive: []
         },
         concerns: ['Invalid data quality: data quality must be a number'],
-        recommendations: ['Please provide a valid data quality assessment'],
-        estimatedTime: 'N/A - Invalid input'
+        recommendations: ['Please provide a valid data quality assessment']
       };
     }
 
     // Calculate data size from schema if available
-    const dataSize = dataSchema && typeof dataSchema === 'object' ? Object.keys(dataSchema).length : 0;
+    const schemaEntries = dataSchema && typeof dataSchema === 'object'
+      ? Object.entries(dataSchema as Record<string, any>)
+      : [];
+    const schemaKeys = schemaEntries.map(([key]) => key);
+    const dataSize = schemaKeys.length;
     
     const requiredAnalyses: string[] = [];
     const dataRequirements = {
@@ -938,9 +981,9 @@ export class DataScientistAgent implements AgentHandler {
     
     if (goalsLower.includes('segment') || goalsLower.includes('cluster') || goalsLower.includes('group')) {
       requiredAnalyses.push('clustering', 'segmentation');
-      
+
       // Check for segmentation columns
-      const hasSegmentData = Object.keys(dataSchema).some(col => 
+      const hasSegmentData = schemaKeys.some(col => 
         col.toLowerCase().includes('segment') || 
         col.toLowerCase().includes('category') ||
         col.toLowerCase().includes('group')
@@ -956,7 +999,7 @@ export class DataScientistAgent implements AgentHandler {
     
     if (goalsLower.includes('predict') || goalsLower.includes('forecast') || goalsLower.includes('trend')) {
       // Check if it's time series forecasting or general prediction
-      const hasTimeData = Object.keys(dataSchema).some(col =>
+      const hasTimeData = schemaKeys.some(col =>
         col.toLowerCase().includes('date') || col.toLowerCase().includes('time')
       );
       
@@ -978,7 +1021,9 @@ export class DataScientistAgent implements AgentHandler {
     if (goalsLower.includes('correlat') || goalsLower.includes('relationship') || goalsLower.includes('impact')) {
       requiredAnalyses.push('correlation_analysis', 'regression_analysis');
       
-      const numericColumns = Object.values(dataSchema).filter((col: any) => 
+      const numericColumns = schemaEntries
+        .map(([, value]) => value)
+        .filter((col: any) => 
         col.type === 'number' || col.type === 'integer' || col.type === 'float'
       ).length;
       
@@ -990,7 +1035,13 @@ export class DataScientistAgent implements AgentHandler {
     }
     
     // Check data quality impact
-    const qualityScore = typeof dataQuality === 'number' ? dataQuality : dataQuality?.overallScore;
+    let qualityScore: number | undefined;
+    if (typeof dataQuality === 'number') {
+      qualityScore = dataQuality;
+    } else if (typeof dataQuality === 'object') {
+      const qualityObj = dataQuality as { overallScore?: number; score?: number };
+      qualityScore = qualityObj.overallScore ?? qualityObj.score;
+    }
     
     if (qualityScore !== undefined && qualityScore < 0.5) {
       concerns.push('Critical: Data quality too low for reliable analysis');
@@ -1013,7 +1064,7 @@ export class DataScientistAgent implements AgentHandler {
     }
     
     // Estimate duration based on complexity
-    const estimatedMinutes = requiredAnalyses.length * 5 + (dataSchema ? Object.keys(dataSchema).length : 0);
+  const estimatedMinutes = requiredAnalyses.length * 5 + schemaKeys.length;
     const estimatedDuration = `${estimatedMinutes}-${estimatedMinutes + 10} minutes`;
     
     // Determine feasibility
@@ -1047,7 +1098,7 @@ export class DataScientistAgent implements AgentHandler {
     console.log(`🔬 Data Scientist: Validating methodology`);
     
     // Handle null/undefined inputs gracefully
-    if (!analysisParams || typeof analysisParams !== 'object') {
+    if (!analysisParams || typeof analysisParams !== 'object' || Array.isArray(analysisParams) || typeof analysisParams.type !== 'string') {
       return {
         valid: false,
         confidence: 0,
@@ -1057,11 +1108,14 @@ export class DataScientistAgent implements AgentHandler {
       };
     }
 
-    if (!dataCharacteristics || typeof dataCharacteristics !== 'object') {
+    if (!dataCharacteristics || typeof dataCharacteristics !== 'object' || Array.isArray(dataCharacteristics)) {
       return {
         valid: false,
         confidence: 0,
-        warnings: ['Invalid data characteristics: characteristics must be a valid object'],
+        warnings: [
+          'Invalid analysis parameters: parameters must be a valid object',
+          'Invalid data characteristics: characteristics must be a valid object'
+        ],
         alternatives: ['Please provide valid data characteristics'],
         recommendations: ['Please provide valid data characteristics for validation']
       };
@@ -1133,9 +1187,31 @@ export class DataScientistAgent implements AgentHandler {
    * Estimate confidence score for analysis type given data quality
    */
   async estimateConfidence(
-    analysisType: string,
-    dataQuality: any
-  ): Promise<ConfidenceScore> {
+    analysisTypeInput: any,
+    dataQualityInput?: any
+  ): Promise<ConfidenceScore & { confidence: number; warnings?: string[] }> {
+    let analysisType = analysisTypeInput;
+    let dataQuality = dataQualityInput;
+    const warnings: string[] = [];
+
+    if (analysisType && typeof analysisType === 'object' && !Array.isArray(analysisType)) {
+      const candidate = analysisType as Record<string, any>;
+      analysisType = candidate.analysisType || candidate.type;
+      if (dataQuality === undefined) {
+        dataQuality = candidate.dataQuality;
+      }
+    }
+
+    if (typeof analysisType !== 'string' || analysisType.trim().length === 0) {
+      return {
+        score: 0,
+        confidence: 0,
+        factors: [],
+        recommendation: 'Provide valid analysis parameters before estimating confidence.',
+        warnings: ['Invalid analysis parameters: parameters must be a valid object']
+      };
+    }
+
     console.log(`🔬 Data Scientist: Estimating confidence for ${analysisType}`);
 
     const factors: ConfidenceScore['factors'] = [];
@@ -1144,6 +1220,10 @@ export class DataScientistAgent implements AgentHandler {
     // Data quality impact - handle both number and object formats
     const qualityScore = typeof dataQuality === 'number' ? dataQuality : dataQuality?.overallScore;
     const completenessScore = typeof dataQuality === 'object' ? dataQuality?.completeness : qualityScore;
+
+    if (qualityScore === undefined) {
+      warnings.push('Data quality input missing - using neutral baseline.');
+    }
 
     if (qualityScore !== undefined) {
       if (qualityScore > 0.9) {
@@ -1182,16 +1262,19 @@ export class DataScientistAgent implements AgentHandler {
       });
     }
 
-    const recommendation = score > 0.85
+    const boundedScore = Math.max(0.5, Math.min(0.95, score));
+    const recommendation = boundedScore > 0.85
       ? 'High confidence - proceed with analysis'
-      : score > 0.70
-      ? 'Moderate confidence - consider data improvements'
-      : 'Low confidence - improve data quality before analysis';
+      : boundedScore > 0.70
+        ? 'Moderate confidence - consider data improvements'
+        : 'Low confidence - improve data quality before analysis';
 
     return {
-      score: Math.max(0.5, Math.min(0.95, score)),
+      score: boundedScore,
+      confidence: boundedScore,
       factors,
-      recommendation
+      recommendation,
+      warnings: warnings.length > 0 ? warnings : undefined
     };
   }
 
@@ -1199,23 +1282,119 @@ export class DataScientistAgent implements AgentHandler {
    * Recommend analysis configuration based on user questions and data characteristics
    * Part of Agent Recommendation Workflow
    */
-  async recommendAnalysisConfig(params: {
-    dataSize: number;
-    questions: string[];
-    dataCharacteristics: {
-      hasTimeSeries: boolean;
-      hasCategories: boolean;
-      hasText: boolean;
-      hasNumeric: boolean;
-    };
-  }): Promise<{
-    complexity: 'low' | 'medium' | 'high' | 'very_high';
-    analyses: string[];
-    estimatedCost: string;
-    estimatedTime: string;
-    rationale: string;
+  async recommendAnalysisConfig(params: any): Promise<{
+    recommendedComplexity?: string;
+    complexity?: 'low' | 'medium' | 'high' | 'very_high';
+    analyses?: string[];
+    estimatedCost?: string;
+    estimatedTime?: string;
+    rationale?: string;
+    recommendedAnalyses?: string[];
+    suggestedVisualizations?: string[];
+    estimatedProcessingTime?: string;
+    confidence?: number;
   }> {
-    console.log(`🔬 Data Scientist: Recommending analysis configuration for ${params.questions.length} questions`);
+    // Handle both old and new parameter formats
+    const isNewFormat = params.dataAnalysis || params.userQuestions || params.analysisGoal;
+
+    if (isNewFormat) {
+      // New format from agent-recommendations endpoint
+      const dataEstimate = params.dataAnalysis || {};
+      const userQuestions: string[] = params.userQuestions || [];
+      const analysisGoal: string = params.analysisGoal || '';
+
+      console.log(`🔬 Data Scientist: Recommending analysis configuration for ${userQuestions.length} questions`);
+
+      // Normalize data characteristics (default to conservative assumptions)
+      const rawCharacteristics = dataEstimate.characteristics || dataEstimate.dataCharacteristics || {};
+      const dataCharacteristics = {
+        hasTimeSeries: Boolean(rawCharacteristics.hasTimeSeries),
+        hasCategories: Boolean(rawCharacteristics.hasCategories ?? true),
+        hasText: Boolean(rawCharacteristics.hasText),
+        hasNumeric: Boolean(rawCharacteristics.hasNumeric ?? true)
+      };
+
+      // Determine the record count from the richest available source
+      const derivedRecordCount = typeof params.recordCount === 'number'
+        ? params.recordCount
+        : Array.isArray(params.data)
+          ? params.data.length
+          : Array.isArray(params.project?.data)
+            ? params.project.data.length
+            : typeof dataEstimate.recordCount === 'number'
+              ? dataEstimate.recordCount
+              : typeof dataEstimate.estimatedRows === 'number'
+                ? dataEstimate.estimatedRows
+                : 1000;
+
+      const questions = userQuestions.length > 0 ? userQuestions : params.questions || [];
+
+      // Reuse existing scoring utilities for consistency with legacy behaviour
+      const questionComplexity = this.analyzeQuestions(questions);
+      const mappedAnalyses = this.mapQuestionsToAnalyses(questions, dataCharacteristics);
+      const complexity = this.calculateComplexity({
+        dataSize: derivedRecordCount,
+        questionComplexity,
+        analysisTypes: mappedAnalyses,
+        dataCharacteristics
+      });
+
+      const estimates = this.estimateResources({
+        dataSize: derivedRecordCount,
+        complexity,
+        analyses: mappedAnalyses
+      });
+
+      const rationale = this.generateRationale({
+        dataSize: derivedRecordCount,
+        complexity,
+        analyses: mappedAnalyses,
+        dataCharacteristics
+      });
+
+      // Additional heuristic suggestions based on natural language intent
+      const allText = `${analysisGoal} ${questions.join(' ')}`.toLowerCase();
+      const heuristicAnalyses: string[] = [];
+      if (allText.includes('trend') || allText.includes('time')) heuristicAnalyses.push('Time Series Analysis');
+      if (allText.includes('segment') || allText.includes('group')) heuristicAnalyses.push('Clustering/Segmentation');
+      if (allText.includes('predict') || allText.includes('forecast')) heuristicAnalyses.push('Predictive Modeling');
+      if (allText.includes('compare') || allText.includes('difference')) heuristicAnalyses.push('Comparative Analysis');
+      if (allText.includes('correlat') || allText.includes('relationship')) heuristicAnalyses.push('Correlation Analysis');
+      if (heuristicAnalyses.length === 0) heuristicAnalyses.push('Descriptive Statistics');
+
+      const suggestedVisualizations: string[] = [];
+      if (allText.includes('trend') || allText.includes('time')) suggestedVisualizations.push('Line Charts');
+      if (allText.includes('segment') || allText.includes('group')) suggestedVisualizations.push('Cluster Maps', 'Pie Charts');
+      if (allText.includes('compare')) suggestedVisualizations.push('Bar Charts', 'Box Plots');
+      if (allText.includes('predict') || allText.includes('forecast')) suggestedVisualizations.push('Forecast Curves');
+      if (suggestedVisualizations.length === 0) suggestedVisualizations.push('Bar Charts', 'Histograms');
+
+      const estimatedProcessingTime =
+        complexity === 'very_high' ? '10-15 minutes' :
+        complexity === 'high' ? '5-10 minutes' :
+        complexity === 'medium' ? '2-5 minutes' :
+        '1-2 minutes';
+
+      const uniqueRecommendedAnalyses = Array.from(new Set([...mappedAnalyses, ...heuristicAnalyses]));
+      const uniqueSuggestedVisualizations = Array.from(new Set(suggestedVisualizations));
+
+      return {
+        complexity,
+        recommendedComplexity: complexity,
+        analyses: mappedAnalyses,
+        recommendedAnalyses: uniqueRecommendedAnalyses,
+        suggestedVisualizations: uniqueSuggestedVisualizations,
+        estimatedProcessingTime,
+        estimatedTime: estimates.timeMinutes,
+        estimatedCost: estimates.cost,
+        rationale,
+        confidence: 0.85
+      };
+    }
+
+    // Old format - use existing logic
+    const questions = params.questions || [];
+    console.log(`🔬 Data Scientist: Recommending analysis configuration for ${questions.length} questions`);
 
     // Analyze question complexity
     const questionComplexity = this.analyzeQuestions(params.questions);
@@ -1253,6 +1432,192 @@ export class DataScientistAgent implements AgentHandler {
       estimatedTime: estimates.timeMinutes,
       rationale
     };
+  }
+
+  async generatePlanBlueprint(params: {
+    goals: string[];
+    questions: string[];
+    journeyType: string;
+    dataAssessment: DataAssessment;
+  }): Promise<PlanAnalysisBlueprint> {
+    const goals = params.goals || [];
+    const questions = params.questions || [];
+
+    const config = await this.recommendAnalysisConfig({
+      dataAnalysis: {
+        estimatedRows: params.dataAssessment.recordCount,
+        dataCharacteristics: {
+          hasTimeSeries: false,
+          hasCategories: params.dataAssessment.columnCount > 0,
+          hasText: false,
+          hasNumeric: true
+        }
+      },
+      userQuestions: questions,
+      analysisGoal: goals.join('; '),
+      journeyType: params.journeyType
+    });
+
+    const analyses = (config.recommendedAnalyses || config.analyses || ['Descriptive Statistics'])
+      .map(item => item.trim())
+      .filter(Boolean);
+
+    const confidenceScore = Math.max(0.6, Math.min(0.95, config.confidence || 0.8));
+    const estimatedDuration = config.estimatedProcessingTime || '2-3 hours';
+
+    const steps: AnalysisStep[] = analyses.map((analysis, index) => ({
+      stepNumber: index + 1,
+      name: analysis,
+      description: this.describeAnalysisStep(analysis, goals),
+      method: this.inferAnalysisMethod(analysis),
+      inputs: ['primary_dataset'],
+      expectedOutputs: this.expectedOutputsForAnalysis(analysis),
+      tools: this.toolsForAnalysis(analysis),
+      estimatedDuration,
+      confidence: Math.round(confidenceScore * 100)
+    }));
+
+    if (steps.length === 0) {
+      steps.push({
+        stepNumber: 1,
+        name: 'Descriptive Statistics',
+        description: 'Summarize key metrics and distributions to establish baseline understanding.',
+        method: 'descriptive_statistics',
+        inputs: ['primary_dataset'],
+        expectedOutputs: ['summary_statistics', 'distribution_plots'],
+        tools: ['analysis_suite'],
+        estimatedDuration: estimatedDuration,
+        confidence: Math.round(confidenceScore * 100)
+      });
+    }
+
+    const mlModels: MLModelSpec[] = [];
+    if (analyses.some(analysis => /predict|forecast|classification|regression/i.test(analysis))) {
+      mlModels.push({
+        modelType: 'prediction',
+        algorithm: 'Gradient Boosted Trees',
+        targetVariable: 'Primary KPI',
+        features: ['Key drivers', 'Trend indicators'],
+        expectedAccuracy: '75-85%',
+        trainingTime: '10-15 minutes'
+      });
+    }
+
+    const visualizations: VisualizationSpec[] = (config.suggestedVisualizations || [])
+      .map(viz => this.visualizationFromSuggestion(viz));
+
+    if (visualizations.length === 0) {
+      visualizations.push(
+        { type: 'bar', title: 'KPI comparison', description: 'Compare primary KPIs across segments.' },
+        { type: 'line', title: 'Trend analysis', description: 'Monitor KPI movement over time.' }
+      );
+    }
+
+    const recommendations: string[] = [
+      config.rationale || 'Apply recommended analyses to address stated goals.',
+      ...analyses.map(analysis => `Prioritize execution of ${analysis.toLowerCase()} to validate key questions.`)
+    ].filter(Boolean);
+
+    const risks: string[] = [];
+    if (params.dataAssessment.qualityScore < 70) {
+      risks.push('Data quality below optimal thresholds may impact statistical confidence.');
+    }
+    if (params.dataAssessment.completenessScore < 80) {
+      risks.push('Missing data detected. Address gaps before running advanced modeling.');
+    }
+    if (params.dataAssessment.infrastructureNeeds.useSpark) {
+      risks.push('Plan requires distributed compute resources for timely execution.');
+    }
+
+    if (risks.length === 0) {
+      risks.push('Monitor plan execution checkpoints to ensure assumptions remain valid.');
+    }
+
+    return {
+      analysisSteps: steps,
+      mlModels,
+      visualizations,
+      recommendations,
+      risks,
+      estimatedDuration,
+      complexity: this.mapComplexity(config.recommendedComplexity || config.complexity)
+    };
+  }
+
+  private describeAnalysisStep(analysis: string, goals: string[]): string {
+    const primaryGoal = goals[0] || 'the stated objectives';
+    if (/predict|forecast/i.test(analysis)) {
+      return `Develop predictive models to support ${primaryGoal.toLowerCase()} and quantify forecast confidence.`;
+    }
+    if (/segment|cluster/i.test(analysis)) {
+      return `Group similar records to expose actionable segments aligned with ${primaryGoal.toLowerCase()}.`;
+    }
+    if (/correlation|relationship/i.test(analysis)) {
+      return `Surface statistically significant relationships that influence ${primaryGoal.toLowerCase()}.`;
+    }
+    if (/trend|time/i.test(analysis)) {
+      return `Analyze temporal patterns and seasonality impacting ${primaryGoal.toLowerCase()}.`;
+    }
+    return `Summarize key descriptive statistics to ground ${primaryGoal.toLowerCase()} in current performance.`;
+  }
+
+  private inferAnalysisMethod(analysis: string): string {
+    if (/predict|forecast/i.test(analysis)) return 'predictive_modeling';
+    if (/segment|cluster/i.test(analysis)) return 'clustering';
+    if (/correlation|relationship/i.test(analysis)) return 'correlation_analysis';
+    if (/trend|time/i.test(analysis)) return 'time_series_analysis';
+    if (/compar/i.test(analysis)) return 'comparative_analysis';
+    return 'descriptive_statistics';
+  }
+
+  private expectedOutputsForAnalysis(analysis: string): string[] {
+    if (/predict|forecast/i.test(analysis)) {
+      return ['prediction_results', 'model_performance_report', 'scenario_simulations'];
+    }
+    if (/segment|cluster/i.test(analysis)) {
+      return ['segment_profiles', 'cluster_assignments'];
+    }
+    if (/correlation|relationship/i.test(analysis)) {
+      return ['correlation_matrix', 'significance_tests'];
+    }
+    if (/trend|time/i.test(analysis)) {
+      return ['trend_visualizations', 'seasonality_breakdowns'];
+    }
+    return ['summary_statistics', 'insight_notes'];
+  }
+
+  private toolsForAnalysis(analysis: string): string[] {
+    if (/predict|forecast/i.test(analysis)) return ['ml_pipeline'];
+    if (/segment|cluster/i.test(analysis)) return ['clustering_suite'];
+    if (/correlation|relationship/i.test(analysis)) return ['statistical_tests'];
+    if (/trend|time/i.test(analysis)) return ['time_series_toolkit'];
+    if (/visual/i.test(analysis)) return ['visualization_builder'];
+    return ['analysis_suite'];
+  }
+
+  private visualizationFromSuggestion(suggestion: string): VisualizationSpec {
+    const lower = suggestion.toLowerCase();
+    if (lower.includes('line')) {
+      return { type: 'line', title: 'Trend analysis', description: 'Track KPI movements over time.' };
+    }
+    if (lower.includes('cluster') || lower.includes('segment')) {
+      return { type: 'scatter', title: 'Cluster distribution', description: 'Visualize segmented groupings.' };
+    }
+    if (lower.includes('pie')) {
+      return { type: 'pie', title: 'Category share', description: 'Show proportional composition by category.' };
+    }
+    if (lower.includes('histogram')) {
+      return { type: 'histogram', title: 'Distribution overview', description: 'Inspect frequency of value ranges.' };
+    }
+    return { type: 'bar', title: 'Comparison chart', description: 'Compare KPIs across segments.' };
+  }
+
+  private mapComplexity(level?: string): 'low' | 'medium' | 'high' | 'very_high' {
+    const normalized = (level || '').toLowerCase();
+    if (normalized === 'very_high') return 'very_high';
+    if (normalized === 'high' || normalized === 'advanced') return 'high';
+    if (normalized === 'low' || normalized === 'basic') return 'low';
+    return 'medium';
   }
 
   /**

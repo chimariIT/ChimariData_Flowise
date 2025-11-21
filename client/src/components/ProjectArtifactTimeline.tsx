@@ -1,24 +1,24 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { 
-  FileText, 
-  Database, 
-  BarChart3, 
-  Brain, 
-  Download, 
-  Eye, 
-  Clock, 
+import {
+  FileText,
+  Database,
+  BarChart3,
+  Brain,
+  Download,
+  Eye,
+  Clock,
   CheckCircle,
   ArrowRight,
   Layers,
   Zap,
   TrendingUp,
-  FileSearch
+  FileSearch,
 } from "lucide-react";
 import { apiClient } from "@/lib/api";
 import { formatDistanceToNow } from "date-fns";
@@ -30,102 +30,228 @@ interface ProjectArtifactTimelineProps {
 }
 
 const ARTIFACT_TYPE_ICONS = {
-  'transformation': Layers,
-  'analysis': BarChart3,
-  'visualization': TrendingUp,
-  'ai_insight': Brain,
-  'report': FileText,
-  'export': Download,
-  'ingestion': Database,
-  'schema': FileSearch
-};
+  transformation: Layers,
+  analysis: BarChart3,
+  visualization: TrendingUp,
+  ai_insight: Brain,
+  report: FileText,
+  export: Download,
+  ingestion: Database,
+  schema: FileSearch,
+} as const;
 
 const ARTIFACT_TYPE_COLORS = {
-  'transformation': 'bg-blue-100 text-blue-800',
-  'analysis': 'bg-green-100 text-green-800',
-  'visualization': 'bg-purple-100 text-purple-800',
-  'ai_insight': 'bg-orange-100 text-orange-800',
-  'report': 'bg-red-100 text-red-800',
-  'export': 'bg-gray-100 text-gray-800',
-  'ingestion': 'bg-cyan-100 text-cyan-800',
-  'schema': 'bg-indigo-100 text-indigo-800'
-};
+  transformation: "bg-blue-100 text-blue-800",
+  analysis: "bg-green-100 text-green-800",
+  visualization: "bg-purple-100 text-purple-800",
+  ai_insight: "bg-orange-100 text-orange-800",
+  report: "bg-red-100 text-red-800",
+  export: "bg-gray-100 text-gray-800",
+  ingestion: "bg-cyan-100 text-cyan-800",
+  schema: "bg-indigo-100 text-indigo-800",
+} as const;
 
 const ARTIFACT_TYPE_NAMES = {
-  'transformation': 'Data Transformation',
-  'analysis': 'Statistical Analysis',
-  'visualization': 'Data Visualization',
-  'ai_insight': 'AI Insights',
-  'report': 'Report',
-  'export': 'Export',
-  'ingestion': 'Data Ingestion',
-  'schema': 'Schema Analysis'
+  transformation: "Data Transformation",
+  analysis: "Statistical Analysis",
+  visualization: "Data Visualization",
+  ai_insight: "AI Insights",
+  report: "Report",
+  export: "Export",
+  ingestion: "Data Ingestion",
+  schema: "Schema Analysis",
+} as const;
+
+type ArtifactPreview = string | Record<string, unknown> | unknown[] | null;
+
+type NormalizedArtifact = {
+  id: string;
+  type: string;
+  createdAt: string;
+  parentArtifactId?: string | null;
+  displayName: string;
+  displayDescription: string | null;
+  previewContent: ArtifactPreview;
+  status?: string;
+  name?: string;
+  children?: NormalizedArtifact[];
+  [key: string]: any;
 };
 
-export function ProjectArtifactTimeline({ 
-  projectId, 
-  onViewArtifact, 
-  onExportArtifact 
+type NormalizedProjectDataset = {
+  id?: string;
+  name: string;
+  role?: string;
+  sourceType?: string;
+  recordCount?: number | null;
+};
+
+export function ProjectArtifactTimeline({
+  projectId,
+  onViewArtifact,
+  onExportArtifact,
 }: ProjectArtifactTimelineProps) {
   const [expandedArtifacts, setExpandedArtifacts] = useState<Set<string>>(new Set());
 
-  // Fetch project artifacts
-  const { data: artifacts = [], isLoading, error, refetch } = useQuery({
-    queryKey: ['/api/projects', projectId, 'artifacts'],
-    enabled: !!projectId
+  const {
+    data: artifacts = [],
+    isLoading,
+    error,
+    refetch,
+  } = useQuery({
+    queryKey: ["/api/projects", projectId, "artifacts"],
+    queryFn: async () => {
+      if (!projectId) {
+        return [];
+      }
+      try {
+        const result = await apiClient.getProjectArtifacts(projectId);
+        if (Array.isArray(result?.data)) {
+          return result.data;
+        }
+        return Array.isArray(result) ? result : result?.artifacts ?? [];
+      } catch (fetchError) {
+        console.error("Failed to fetch project artifacts:", fetchError);
+        return [];
+      }
+    },
+    enabled: !!projectId,
   });
 
-  // Fetch project datasets for context
   const { data: projectDatasets = [] } = useQuery({
-    queryKey: ['/api/projects', projectId, 'datasets'],
-    enabled: !!projectId
+    queryKey: ["/api/projects", projectId, "datasets"],
+    queryFn: async () => {
+      if (!projectId) {
+        return [];
+      }
+      try {
+        const result = await apiClient.getProjectDatasets(projectId);
+        if (Array.isArray(result?.data)) {
+          return result.data;
+        }
+        return Array.isArray(result) ? result : result?.datasets ?? [];
+      } catch (fetchError) {
+        console.error("Failed to fetch project datasets:", fetchError);
+        return [];
+      }
+    },
+    enabled: !!projectId,
   });
 
-  // Type assertions for proper TypeScript support
-  const typedArtifacts = artifacts as any[];
-  const typedProjectDatasets = projectDatasets as any[];
-
-  const toggleArtifactExpansion = (artifactId: string) => {
-    const newExpanded = new Set(expandedArtifacts);
-    if (newExpanded.has(artifactId)) {
-      newExpanded.delete(artifactId);
-    } else {
-      newExpanded.add(artifactId);
+  const normalizedArtifacts = useMemo<NormalizedArtifact[]>(() => {
+    if (!Array.isArray(artifacts)) {
+      return [];
     }
-    setExpandedArtifacts(newExpanded);
-  };
 
-  // Build artifact hierarchy (parent-child relationships)
-  const buildArtifactHierarchy = (artifacts: any[]) => {
-    const artifactMap = new Map();
-    const rootArtifacts: any[] = [];
-    
-    // First pass: create artifact map
-    artifacts.forEach(artifact => {
-      artifactMap.set(artifact.id, { ...artifact, children: [] });
+    return artifacts.map((artifact: any) => {
+      const output = artifact.output || {};
+      const formatted = output.formattedResults || null;
+      const rawResults = output.rawResults || null;
+      const metadata = output.metadata || artifact.metadata || {};
+      const params = artifact.params || {};
+
+      const defaultName = typeof params.analysisType === "string"
+        ? `${params.analysisType.replace(/_/g, " ")} analysis`
+        : (artifact.type || "Artifact").replace(/_/g, " ");
+
+      const displayName = metadata.title || output.analysisType || defaultName;
+      const displayDescription = metadata.summary
+        || metadata.description
+        || formatted?.summary
+        || rawResults?.summary
+        || null;
+
+      const previewContent = formatted || rawResults || output;
+
+      return {
+        ...artifact,
+        displayName,
+        displayDescription,
+        previewContent,
+        name: artifact.name ?? displayName,
+      };
     });
-    
-    // Second pass: build hierarchy
-    artifacts.forEach(artifact => {
-      const artifactNode = artifactMap.get(artifact.id);
-      if (artifact.parentArtifactId && artifactMap.has(artifact.parentArtifactId)) {
-        const parent = artifactMap.get(artifact.parentArtifactId);
-        parent.children.push(artifactNode);
+  }, [artifacts]);
+
+  const normalizedProjectDatasets = useMemo<NormalizedProjectDataset[]>(() => {
+    if (!Array.isArray(projectDatasets)) {
+      return [];
+    }
+
+    return projectDatasets.map((pd: any) => {
+      const dataset = pd.dataset ?? pd.datasetDetails ?? pd;
+      const association = pd.association ?? pd;
+      const datasetId = dataset?.id || association?.datasetId || pd.datasetId;
+      const resolvedName =
+        association?.alias ||
+        dataset?.name ||
+        association?.datasetName ||
+        dataset?.originalFileName ||
+        datasetId ||
+        "Dataset";
+
+      return {
+        id: datasetId,
+        name: resolvedName,
+        role: association?.role ?? pd.role,
+        sourceType: dataset?.sourceType,
+        recordCount: dataset?.recordCount ?? null,
+      };
+    });
+  }, [projectDatasets]);
+
+  const hierarchicalArtifacts = useMemo(() => {
+    const map = new Map<string, NormalizedArtifact>();
+    const roots: NormalizedArtifact[] = [];
+
+    normalizedArtifacts.forEach((artifact) => {
+      map.set(artifact.id, { ...artifact, children: [] });
+    });
+
+    normalizedArtifacts.forEach((artifact) => {
+      const node = map.get(artifact.id);
+      if (!node) {
+        return;
+      }
+      if (artifact.parentArtifactId && map.has(artifact.parentArtifactId)) {
+        map.get(artifact.parentArtifactId)!.children!.push(node);
       } else {
-        rootArtifacts.push(artifactNode);
+        roots.push(node);
       }
     });
-    
-    return rootArtifacts.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    return roots.sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+    );
+  }, [normalizedArtifacts]);
+
+  const toggleArtifactExpansion = (artifactId: string) => {
+    setExpandedArtifacts((prev) => {
+      const next = new Set(prev);
+      if (next.has(artifactId)) {
+        next.delete(artifactId);
+      } else {
+        next.add(artifactId);
+      }
+      return next;
+    });
   };
 
-  const renderArtifactNode = (artifact: any, level = 0) => {
+  const renderArtifactNode = (artifact: NormalizedArtifact, level = 0) => {
     const IconComponent = ARTIFACT_TYPE_ICONS[artifact.type as keyof typeof ARTIFACT_TYPE_ICONS] || FileText;
+    const badgeClass = ARTIFACT_TYPE_COLORS[artifact.type as keyof typeof ARTIFACT_TYPE_COLORS] || "bg-muted text-foreground";
+    const badgeLabel = ARTIFACT_TYPE_NAMES[artifact.type as keyof typeof ARTIFACT_TYPE_NAMES] || artifact.type;
+    const preview = artifact.previewContent;
     const isExpanded = expandedArtifacts.has(artifact.id);
-    const hasChildren = artifact.children && artifact.children.length > 0;
-    
+    const hasChildren = Array.isArray(artifact.children) && artifact.children.length > 0;
+    const previewJson = preview && typeof preview !== "string" ? JSON.stringify(preview, null, 2) : null;
+    const hasPreview = preview !== null && preview !== undefined;
+
     return (
-      <div key={artifact.id} className={`${level > 0 ? 'ml-6 border-l-2 border-muted pl-4' : ''}`}>
+      <div
+        key={artifact.id}
+        className={level > 0 ? "ml-6 border-l-2 border-muted pl-4" : ""}
+      >
         <Card className="mb-3" data-testid={`card-artifact-${artifact.id}`}>
           <CardContent className="p-4">
             <div className="flex items-start justify-between">
@@ -134,54 +260,50 @@ export function ProjectArtifactTimeline({
                   <div className="p-2 rounded-lg bg-muted">
                     <IconComponent className="w-5 h-5" />
                   </div>
-                  {hasChildren && level === 0 && (
-                    <div className="w-px h-6 bg-muted mt-2"></div>
-                  )}
+                  {hasChildren && level === 0 && <div className="w-px h-6 bg-muted mt-2" />}
                 </div>
+
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center space-x-2 mb-2">
                     <h4 className="font-medium" data-testid={`text-artifact-name-${artifact.id}`}>
-                      {artifact.name}
+                      {artifact.displayName || artifact.name || artifact.type}
                     </h4>
-                    <Badge 
-                      variant="outline" 
-                      className={ARTIFACT_TYPE_COLORS[artifact.type as keyof typeof ARTIFACT_TYPE_COLORS]}
+                    <Badge
+                      variant="outline"
+                      className={badgeClass}
                       data-testid={`badge-artifact-type-${artifact.id}`}
                     >
-                      {ARTIFACT_TYPE_NAMES[artifact.type as keyof typeof ARTIFACT_TYPE_NAMES] || artifact.type}
+                      {badgeLabel}
                     </Badge>
                   </div>
-                  
-                  {artifact.description && (
+
+                  {artifact.displayDescription && (
                     <p className="text-sm text-muted-foreground mb-2">
-                      {artifact.description}
+                      {artifact.displayDescription}
                     </p>
                   )}
-                  
+
                   <div className="flex items-center space-x-4 text-xs text-muted-foreground mb-3">
                     <span className="flex items-center space-x-1">
                       <Clock className="w-3 h-3" />
-                      <span>
-                        {formatDistanceToNow(new Date(artifact.createdAt), { addSuffix: true })}
-                      </span>
+                      <span>{formatDistanceToNow(new Date(artifact.createdAt), { addSuffix: true })}</span>
                     </span>
                     <span className="flex items-center space-x-1">
                       <CheckCircle className="w-3 h-3 text-green-500" />
-                      <span>Completed</span>
+                      <span>{artifact.status ? artifact.status : "Completed"}</span>
                     </span>
                   </div>
-                  
-                  {/* Content preview */}
-                  {isExpanded && artifact.content && (
+
+                  {isExpanded && hasPreview && (
                     <div className="mt-3 p-3 bg-muted rounded-lg">
                       <h5 className="text-sm font-medium mb-2">Content Preview:</h5>
                       <div className="text-sm text-muted-foreground">
-                        {typeof artifact.content === 'string' ? (
-                          <p className="whitespace-pre-wrap line-clamp-3">{artifact.content}</p>
+                        {typeof preview === "string" ? (
+                          <p className="whitespace-pre-wrap line-clamp-3">{preview}</p>
                         ) : (
                           <pre className="text-xs overflow-x-auto">
-                            {JSON.stringify(artifact.content, null, 2).slice(0, 200)}
-                            {JSON.stringify(artifact.content, null, 2).length > 200 && '...'}
+                            {previewJson?.slice(0, 200)}
+                            {previewJson && previewJson.length > 200 && "..."}
                           </pre>
                         )}
                       </div>
@@ -189,10 +311,9 @@ export function ProjectArtifactTimeline({
                   )}
                 </div>
               </div>
-              
-              {/* Actions */}
+
               <div className="flex items-center space-x-2">
-                {artifact.content && (
+                {hasPreview && (
                   <Button
                     size="sm"
                     variant="outline"
@@ -206,7 +327,7 @@ export function ProjectArtifactTimeline({
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => onViewArtifact(artifact)}
+                    onClick={() => onViewArtifact({ ...artifact })}
                     data-testid={`button-view-${artifact.id}`}
                   >
                     <FileText className="w-4 h-4" />
@@ -216,7 +337,7 @@ export function ProjectArtifactTimeline({
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => onExportArtifact(artifact)}
+                    onClick={() => onExportArtifact({ ...artifact })}
                     data-testid={`button-export-${artifact.id}`}
                   >
                     <Download className="w-4 h-4" />
@@ -226,11 +347,10 @@ export function ProjectArtifactTimeline({
             </div>
           </CardContent>
         </Card>
-        
-        {/* Render children */}
+
         {hasChildren && (
           <div className="space-y-0">
-            {artifact.children.map((child: any) => renderArtifactNode(child, level + 1))}
+            {artifact.children!.map((child) => renderArtifactNode(child, level + 1))}
           </div>
         )}
       </div>
@@ -247,11 +367,8 @@ export function ProjectArtifactTimeline({
     );
   }
 
-  const hierarchicalArtifacts = buildArtifactHierarchy(typedArtifacts);
-
   return (
-    <div className="space-y-6">
-      {/* Header */}
+    <div className="space-y-6" data-testid="project-artifact-timeline">
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-lg font-semibold">Project Timeline</h3>
@@ -259,9 +376,9 @@ export function ProjectArtifactTimeline({
             Track your analysis workflow from data ingestion to final results
           </p>
         </div>
-        <Button 
-          onClick={() => refetch()} 
-          variant="outline" 
+        <Button
+          onClick={() => refetch()}
+          variant="outline"
           size="sm"
           data-testid="button-refresh-timeline"
         >
@@ -270,18 +387,21 @@ export function ProjectArtifactTimeline({
         </Button>
       </div>
 
-      {/* Project Datasets Context */}
-      {typedProjectDatasets.length > 0 && (
+      {normalizedProjectDatasets.length > 0 && (
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base">Connected Datasets</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="flex flex-wrap gap-2">
-              {typedProjectDatasets.map((pd: any) => (
-                <Badge key={pd.datasetId} variant="secondary" data-testid={`badge-dataset-${pd.datasetId}`}>
+              {normalizedProjectDatasets.map((pd) => (
+                <Badge
+                  key={pd.id || pd.name}
+                  variant="secondary"
+                  data-testid={`badge-dataset-${pd.id ?? pd.name}`}
+                >
                   <Database className="w-3 h-3 icon-gap" />
-                  {pd.dataset?.name || pd.datasetId}
+                  {pd.name || pd.id || "Dataset"}
                   {pd.role && ` (${pd.role})`}
                 </Badge>
               ))}
@@ -290,11 +410,10 @@ export function ProjectArtifactTimeline({
         </Card>
       )}
 
-      {/* Artifact Timeline */}
       <div className="space-y-0">
         {isLoading ? (
           <div className="text-center py-8">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto" />
             <p className="text-sm text-muted-foreground mt-2">Loading project timeline...</p>
           </div>
         ) : hierarchicalArtifacts.length === 0 ? (
@@ -307,14 +426,13 @@ export function ProjectArtifactTimeline({
         ) : (
           <ScrollArea className="h-96">
             <div className="space-y-0">
-              {hierarchicalArtifacts.map(artifact => renderArtifactNode(artifact))}
+              {hierarchicalArtifacts.map((artifact) => renderArtifactNode(artifact))}
             </div>
           </ScrollArea>
         )}
       </div>
 
-      {/* Workflow Guidance */}
-      {typedArtifacts.length > 0 && (
+      {normalizedArtifacts.length > 0 && (
         <Card className="border-dashed">
           <CardContent className="p-4">
             <div className="flex items-center space-x-2 text-sm text-muted-foreground">

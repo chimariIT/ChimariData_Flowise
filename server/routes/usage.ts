@@ -1,13 +1,31 @@
 import { Router } from "express";
 import { UsageTrackingService } from "../services/usage-tracking.js";
 import { validateSubscriptionLimits, trackAiUsage, requireFeatureAccess } from "../middleware/subscription-validation.js";
+import { tokenStorage } from "../token-storage.js";
+import { storage } from "../services/storage.js";
+import { getAuthHeader } from "../utils/auth-headers";
 
 const router = Router();
+
+// Helper function to extract user from token
+async function getUserFromRequest(req: any): Promise<any> {
+  const authHeader = getAuthHeader(req);
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7);
+    const tokenData = tokenStorage.validateToken(token);
+    if (tokenData) {
+      const user = await storage.getUser(tokenData.userId);
+      return user;
+    }
+  }
+  return null;
+}
 
 // Get current usage and limits
 router.get("/current", async (req, res) => {
   try {
-    const userId = req.user?.id;
+    const user = await getUserFromRequest(req);
+    const userId = user?.id;
     if (!userId) {
       return res.status(401).json({ error: "Authentication required" });
     }
@@ -30,7 +48,8 @@ router.get("/current", async (req, res) => {
 // Check if user can perform a specific action
 router.post("/check", async (req, res) => {
   try {
-    const userId = req.user?.id;
+    const user = await getUserFromRequest(req);
+    const userId = user?.id;
     if (!userId) {
       return res.status(401).json({ error: "Authentication required" });
     }
@@ -67,7 +86,8 @@ router.post("/check", async (req, res) => {
 // Track usage for a specific action
 router.post("/track", async (req, res) => {
   try {
-    const userId = req.user?.id;
+    const user = await getUserFromRequest(req);
+    const userId = user?.id;
     if (!userId) {
       return res.status(401).json({ error: "Authentication required" });
     }
@@ -127,7 +147,8 @@ router.post("/track", async (req, res) => {
 // Get usage history (last 30 days)
 router.get("/history", async (req, res) => {
   try {
-    const userId = req.user?.id;
+    const user = await getUserFromRequest(req);
+    const userId = user?.id;
     if (!userId) {
       return res.status(401).json({ error: "Authentication required" });
     }
@@ -159,7 +180,8 @@ router.get("/history", async (req, res) => {
 // Reset usage (admin only or for testing)
 router.post("/reset", async (req, res) => {
   try {
-    const userId = req.user?.id;
+    const user = await getUserFromRequest(req);
+    const userId = user?.id;
     if (!userId) {
       return res.status(401).json({ error: "Authentication required" });
     }
@@ -184,7 +206,8 @@ router.post("/reset", async (req, res) => {
 // Get upgrade recommendations
 router.get("/upgrade-recommendations", async (req, res) => {
   try {
-    const userId = req.user?.id;
+    const user = await getUserFromRequest(req);
+    const userId = user?.id;
     if (!userId) {
       return res.status(401).json({ error: "Authentication required" });
     }

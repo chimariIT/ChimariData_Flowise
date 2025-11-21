@@ -6,10 +6,11 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api";
-import { ChartLine, Folder, FileText, Lightbulb, Plus, Search, Calendar, Database, TrendingUp, Bell, LogOut, Settings, BarChart3, Target, Zap, Calculator, Brain, HardDrive } from "lucide-react";
+import { ChartLine, Folder, FileText, Lightbulb, Plus, Search, Calendar, Database, Bell, LogOut, Settings, BarChart3, Target, Brain } from "lucide-react";
 import UploadModal from "@/components/upload-modal";
 import { AdvancedAnalysisModalLazy } from "@/components/LazyComponents";
 import UpgradeDialog from "@/components/upgrade-dialog";
+import { JourneyProgressCard } from "@/components/JourneyProgressCard";
 
 interface DashboardProps {
   user: { id: number; email: string; firstName?: string; lastName?: string; username?: string };
@@ -97,13 +98,6 @@ export default function Dashboard({ user, onLogout, onProjectSelect, onSettings,
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString();
-  };
-
-  const getProjectStatus = (project: any) => {
-    if (Object.keys(project.insights || {}).length > 0) {
-      return { label: "Complete", color: "bg-gray-100 text-gray-700" };
-    }
-    return { label: "Active", color: "bg-gray-100 text-gray-700" };
   };
 
   return (
@@ -327,35 +321,14 @@ export default function Dashboard({ user, onLogout, onProjectSelect, onSettings,
                     </Button>
                   </div>
                 ) : (
-                  <div className="space-y-4">
-                    {filteredProjects.slice(0, 4).map((project: any) => {
-                      const status = getProjectStatus(project);
-                      return (
-                        <div
-                          key={project.id}
-                          onClick={() => onProjectSelect(project.id)}
-                          className="flex items-center justify-between p-4 bg-slate-50 rounded-lg hover:bg-slate-100 transition duration-150 cursor-pointer"
-                        >
-                          <div className="flex items-center space-x-4">
-                            <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
-                              <FileText className="w-5 h-5 text-primary" />
-                            </div>
-                            <div>
-                              <h3 className="font-medium text-slate-900">{project.name}</h3>
-                              <p className="text-sm text-slate-600">
-                                Created {formatDate(project.createdAt)} • {Object.keys(project.insights || {}).length} insights
-                              </p>
-                            </div>
-                          </div>
-                          <div className="flex items-center space-x-2">
-                            <span className={`px-2 py-1 text-xs font-medium rounded-full ${status.color}`}>
-                              {status.label}
-                            </span>
-                            <TrendingUp className="w-4 h-4 text-slate-400" />
-                          </div>
-                        </div>
-                      );
-                    })}
+                  <div className="grid gap-4">
+                    {filteredProjects.slice(0, 4).map((project: any) => (
+                      <JourneyProgressCard
+                        key={project.id}
+                        project={project}
+                        onSelect={onProjectSelect}
+                      />
+                    ))}
                   </div>
                 )}
               </CardContent>

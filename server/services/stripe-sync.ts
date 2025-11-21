@@ -6,10 +6,14 @@
  * - Creates/updates Stripe prices when tier pricing changes
  * - Archives old prices and creates new ones for price changes
  * - Maintains mapping between local tiers and Stripe product/price IDs
+ * - Syncs from database (not hardcoded tiers)
  */
 
 import Stripe from 'stripe';
-import { SUBSCRIPTION_TIERS, SubscriptionTier } from '@shared/subscription-tiers';
+import { getPricingDataService } from './pricing-data-service';
+import { db } from '../db';
+import { subscriptionTierPricing } from '@shared/schema';
+import { eq } from 'drizzle-orm';
 
 export class StripeSyncService {
   private stripe: Stripe;
@@ -25,7 +29,7 @@ export class StripeSyncService {
       this.stripe = {} as Stripe;
     } else {
       this.stripe = new Stripe(secretKey, {
-        apiVersion: '2024-12-18.acacia',
+        apiVersion: '2025-08-27.basil',
       });
       this.isConfigured = true;
     }
@@ -39,16 +43,27 @@ export class StripeSyncService {
   }
 
   /**
-   * Sync a subscription tier with Stripe
-   * Creates or updates the Stripe product and price
+   * Sync a subscription tier with Stripe (from database)
+   * Creates or updates the Stripe product and prices (monthly & yearly)
    */
   async syncTierWithStripe(
     tierId: string,
-    tierData: SubscriptionTier
+    tierData: {
+      displayName: string;
+      description: string;
+      monthlyPriceUsd: number; // in cents
+      yearlyPriceUsd: number; // in cents
+      stripeProductId?: string | null;
+      stripeMonthlyPriceId?: string | null;
+      stripeYearlyPriceId?: string | null;
+      limits: any;
+      features: any;
+    }
   ): Promise<{
     success: boolean;
     stripeProductId?: string;
-    stripePriceId?: string;
+    stripeMonthlyPriceId?: string;
+    stripeYearlyPriceId?: string;
     error?: string;
   }> {
     if (!this.isConfigured) {
@@ -71,25 +86,56 @@ export class StripeSyncService {
 
       const stripeProductId = productResult.productId;
 
-      // Step 2: Create or update Stripe Price
-      const priceResult = await this.syncPrice(
+      // Step 2: Sync Monthly Price
+      const monthlyPriceResult = await this.syncPrice(
         stripeProductId,
-        tierData.price,
-        tierData.name
+        tierData.monthlyPriceUsd / 100, // Convert cents to dollars
+        tierData.displayName,
+        'month'
       );
 
-      if (!priceResult.success || !priceResult.priceId) {
+      if (!monthlyPriceResult.success) {
         return {
           success: false,
           stripeProductId,
-          error: `Failed to sync price: ${priceResult.error}`,
+          error: `Failed to sync monthly price: ${monthlyPriceResult.error}`,
         };
       }
+
+      // Step 3: Sync Yearly Price
+      const yearlyPriceResult = await this.syncPrice(
+        stripeProductId,
+        tierData.yearlyPriceUsd / 100, // Convert cents to dollars
+        tierData.displayName,
+        'year'
+      );
+
+      if (!yearlyPriceResult.success) {
+        return {
+          success: false,
+          stripeProductId,
+          stripeMonthlyPriceId: monthlyPriceResult.priceId,
+          error: `Failed to sync yearly price: ${yearlyPriceResult.error}`,
+        };
+      }
+
+      // Step 4: Update database with Stripe IDs
+      await db.update(subscriptionTierPricing)
+        .set({
+          stripeProductId: stripeProductId,
+          stripeMonthlyPriceId: monthlyPriceResult.priceId,
+          stripeYearlyPriceId: yearlyPriceResult.priceId,
+          updatedAt: new Date()
+        })
+        .where(eq(subscriptionTierPricing.id, tierId));
+
+      console.log(`✅ Synced tier ${tierId} with Stripe and updated database`);
 
       return {
         success: true,
         stripeProductId,
-        stripePriceId: priceResult.priceId,
+        stripeMonthlyPriceId: monthlyPriceResult.priceId,
+        stripeYearlyPriceId: yearlyPriceResult.priceId,
       };
     } catch (error: any) {
       console.error('❌ Error syncing tier with Stripe:', error);
@@ -105,7 +151,13 @@ export class StripeSyncService {
    */
   private async syncProduct(
     tierId: string,
-    tierData: SubscriptionTier
+    tierData: {
+      displayName: string;
+      description: string;
+      stripeProductId?: string | null;
+      limits: any;
+      features: any;
+    }
   ): Promise<{
     success: boolean;
     productId?: string;
@@ -113,20 +165,27 @@ export class StripeSyncService {
   }> {
     try {
       const existingProductId = tierData.stripeProductId;
+      const limits = tierData.limits || {};
+      const features = tierData.features || {};
+
+      const metadata: any = {
+        tierId: tierId,
+        maxFiles: limits.maxFiles?.toString() || '0',
+        maxFileSizeMB: limits.maxFileSizeMB?.toString() || '0',
+        totalDataVolumeMB: limits.totalDataVolumeMB?.toString() || '0',
+        aiInsights: limits.aiInsights?.toString() || '0',
+        dataTransformation: features.dataTransformation?.toString() || 'false',
+        statisticalAnalysis: features.statisticalAnalysis?.toString() || 'false',
+        advancedInsights: features.advancedInsights?.toString() || 'false',
+      };
 
       // If product ID exists, try to update it
       if (existingProductId) {
         try {
           const product = await this.stripe.products.update(existingProductId, {
-            name: tierData.name,
-            description: tierData.description,
-            metadata: {
-              tierId: tierId,
-              maxFiles: tierData.features.maxFiles.toString(),
-              maxFileSizeMB: tierData.features.maxFileSizeMB.toString(),
-              totalDataVolumeMB: tierData.features.totalDataVolumeMB.toString(),
-              aiInsights: tierData.features.aiInsights.toString(),
-            },
+            name: tierData.displayName,
+            description: tierData.description || `${tierData.displayName} subscription tier`,
+            metadata,
           });
 
           console.log(`✅ Updated Stripe product: ${product.id} for tier: ${tierId}`);
@@ -146,15 +205,9 @@ export class StripeSyncService {
 
       // Create new product
       const product = await this.stripe.products.create({
-        name: tierData.name,
-        description: tierData.description,
-        metadata: {
-          tierId: tierId,
-          maxFiles: tierData.features.maxFiles.toString(),
-          maxFileSizeMB: tierData.features.maxFileSizeMB.toString(),
-          totalDataVolumeMB: tierData.features.totalDataVolumeMB.toString(),
-          aiInsights: tierData.features.aiInsights.toString(),
-        },
+        name: tierData.displayName,
+        description: tierData.description || `${tierData.displayName} subscription tier`,
+        metadata,
       });
 
       console.log(`✅ Created Stripe product: ${product.id} for tier: ${tierId}`);
@@ -178,7 +231,8 @@ export class StripeSyncService {
   private async syncPrice(
     productId: string,
     priceAmount: number,
-    tierName: string
+    tierName: string,
+    interval: 'month' | 'year' = 'month'
   ): Promise<{
     success: boolean;
     priceId?: string;
@@ -189,32 +243,32 @@ export class StripeSyncService {
       const existingPrices = await this.stripe.prices.list({
         product: productId,
         active: true,
-        limit: 10,
+        limit: 20,
       });
 
-      // Check if a price with the same amount already exists
+      // Check if a price with the same amount and interval already exists
       const matchingPrice = existingPrices.data.find(
         (price) =>
           price.unit_amount === priceAmount * 100 && // Stripe uses cents
-          price.recurring?.interval === 'month'
+          price.recurring?.interval === interval
       );
 
       if (matchingPrice) {
-        console.log(`✅ Using existing Stripe price: ${matchingPrice.id} for product: ${productId}`);
+        console.log(`✅ Using existing Stripe price: ${matchingPrice.id} ($${priceAmount}/${interval}) for product: ${productId}`);
         return {
           success: true,
           priceId: matchingPrice.id,
         };
       }
 
-      // Archive old prices (make them inactive)
+      // Archive old prices with same interval (make them inactive)
       for (const oldPrice of existingPrices.data) {
-        if (oldPrice.recurring?.interval === 'month') {
+        if (oldPrice.recurring?.interval === interval) {
           try {
             await this.stripe.prices.update(oldPrice.id, {
               active: false,
             });
-            console.log(`📦 Archived old price: ${oldPrice.id}`);
+            console.log(`📦 Archived old ${interval}ly price: ${oldPrice.id}`);
           } catch (archiveError) {
             console.warn(`⚠️  Failed to archive price ${oldPrice.id}:`, archiveError);
           }
@@ -227,14 +281,15 @@ export class StripeSyncService {
         unit_amount: priceAmount * 100, // Convert dollars to cents
         currency: 'usd',
         recurring: {
-          interval: 'month',
+          interval: interval,
         },
         metadata: {
           tierName: tierName,
+          interval: interval,
         },
       });
 
-      console.log(`✅ Created new Stripe price: ${newPrice.id} ($${priceAmount}/month) for product: ${productId}`);
+      console.log(`✅ Created new Stripe price: ${newPrice.id} ($${priceAmount}/${interval}) for product: ${productId}`);
       return {
         success: true,
         priceId: newPrice.id,
@@ -249,7 +304,7 @@ export class StripeSyncService {
   }
 
   /**
-   * Sync all subscription tiers with Stripe
+   * Sync all subscription tiers with Stripe (from database)
    */
   async syncAllTiersWithStripe(): Promise<{
     success: boolean;
@@ -257,7 +312,8 @@ export class StripeSyncService {
       tierId: string;
       success: boolean;
       stripeProductId?: string;
-      stripePriceId?: string;
+      stripeMonthlyPriceId?: string;
+      stripeYearlyPriceId?: string;
       error?: string;
     }>;
   }> {
@@ -269,23 +325,45 @@ export class StripeSyncService {
       };
     }
 
-    const results = [];
+    try {
+      const pricingService = getPricingDataService();
+      const dbTiers = await pricingService.getAllActiveTiers();
 
-    for (const [tierId, tierData] of Object.entries(SUBSCRIPTION_TIERS)) {
-      console.log(`🔄 Syncing tier ${tierId} with Stripe...`);
-      const result = await this.syncTierWithStripe(tierId, tierData);
-      results.push({
-        tierId,
-        ...result,
-      });
+      const results = [];
+
+      for (const tierData of dbTiers) {
+        console.log(`🔄 Syncing tier ${tierData.id} with Stripe...`);
+        const result = await this.syncTierWithStripe(tierData.id, {
+          displayName: tierData.displayName,
+          description: tierData.description || '',
+          monthlyPriceUsd: tierData.monthlyPriceUsd,
+          yearlyPriceUsd: tierData.yearlyPriceUsd,
+          stripeProductId: tierData.stripeProductId,
+          stripeMonthlyPriceId: tierData.stripeMonthlyPriceId,
+          stripeYearlyPriceId: tierData.stripeYearlyPriceId,
+          limits: tierData.limits,
+          features: tierData.features
+        });
+
+        results.push({
+          tierId: tierData.id,
+          ...result,
+        });
+      }
+
+      const allSucceeded = results.every((r) => r.success);
+
+      return {
+        success: allSucceeded,
+        results,
+      };
+    } catch (error: any) {
+      console.error('❌ Error syncing all tiers:', error);
+      return {
+        success: false,
+        results: [],
+      };
     }
-
-    const allSucceeded = results.every((r) => r.success);
-
-    return {
-      success: allSucceeded,
-      results,
-    };
   }
 }
 

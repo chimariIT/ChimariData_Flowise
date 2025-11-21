@@ -2,12 +2,14 @@
 import { EventEmitter } from 'events';
 import { nanoid } from 'nanoid';
 
+export type AgentComplexity = 'low' | 'medium' | 'high' | string;
+
 export interface AgentCapability {
   name: string;
   description: string;
   inputTypes: string[];
   outputTypes: string[];
-  complexity: 'low' | 'medium' | 'high';
+  complexity: AgentComplexity;
   estimatedDuration: number; // in seconds
   requiredResources: string[];
   tags: string[];
@@ -45,6 +47,44 @@ export interface AgentMetadata {
 export interface AgentInstance {
   metadata: AgentMetadata;
   handler: AgentHandler;
+}
+
+export interface AgentDefinition {
+  id?: string;
+  name: string;
+  type: string;
+  description: string;
+  version: string;
+  capabilities: AgentCapability[];
+  priority?: number;
+  maxConcurrentTasks?: number;
+  currentTasks?: number;
+  configuration?: Record<string, any>;
+  config?: Record<string, any>;
+  permissions?: string[];
+  status?: AgentMetadata['status'];
+  healthCheck?: {
+    endpoint: string;
+    interval: number;
+    timeout: number;
+  };
+  health?: {
+    status: AgentMetadata['status'];
+    lastCheck: Date;
+    responseTime: number;
+    errorRate: number;
+    resourceUsage: {
+      cpu: number;
+      memory: number;
+      storage: number;
+    };
+  };
+  contactInfo?: {
+    escalationPath: string[];
+    responseTime: string;
+    expertise: string[];
+  };
+  metrics?: Record<string, any>;
 }
 
 export interface AgentHandler {
@@ -123,20 +163,34 @@ export class AgentRegistry extends EventEmitter {
    * Register a new agent with the registry
    */
   async registerAgent(
-    metadata: Omit<AgentMetadata, 'id' | 'createdAt' | 'updatedAt' | 'metrics'>,
+    metadata: AgentDefinition,
     handler: AgentHandler
   ): Promise<string> {
-    const agentId = `agent_${metadata.type}_${nanoid()}`;
-    
+    const agentId = metadata.id ?? `agent_${metadata.type}_${nanoid()}`;
+
     const fullMetadata: AgentMetadata = {
-      ...metadata,
       id: agentId,
+      name: metadata.name,
+      type: metadata.type,
+      description: metadata.description,
+      version: metadata.version,
+      capabilities: metadata.capabilities,
+      status: metadata.status ?? 'active',
       health: {
         lastHeartbeat: new Date(),
         responseTime: 0,
         errorRate: 0,
         uptime: 0
       },
+      configuration: {
+        ...(metadata.configuration ?? {}),
+        ...(metadata.healthCheck ? { healthCheck: metadata.healthCheck } : {}),
+        ...(metadata.contactInfo ? { contactInfo: metadata.contactInfo } : {}),
+      },
+      permissions: metadata.permissions ?? [],
+      priority: metadata.priority ?? 5,
+      maxConcurrentTasks: metadata.maxConcurrentTasks ?? 1,
+      currentTasks: 0,
       metrics: {
         totalTasks: 0,
         successfulTasks: 0,
@@ -187,6 +241,10 @@ export class AgentRegistry extends EventEmitter {
     this.emit('agentUnregistered', { agentId });
     
     return true;
+  }
+
+  async deregisterAgent(agentId: string): Promise<boolean> {
+    return this.unregisterAgent(agentId);
   }
 
   /**
@@ -396,6 +454,50 @@ export class AgentRegistry extends EventEmitter {
     return this.getAgents().filter(agent =>
       agent.capabilities.some(cap => cap.name === capabilityName)
     );
+  }
+
+  async getAgentStatus(agentId: string): Promise<AgentStatus | null> {
+    const agent = this.agents.get(agentId);
+    if (!agent) {
+      return null;
+    }
+
+    try {
+      const status = await agent.handler.getStatus();
+      const lastActivity = status.lastActivity ?? new Date();
+      agent.metadata.status = status.status;
+      agent.metadata.currentTasks = status.currentTasks;
+      agent.metadata.metrics.lastActivity = lastActivity;
+      return {
+        ...status,
+        lastActivity,
+      };
+    } catch (error) {
+      return {
+        status: agent.metadata.status,
+        currentTasks: agent.metadata.currentTasks,
+        queuedTasks: this.taskQueue.filter(task => task.constraints.preferredAgents?.includes(agentId)).length,
+        lastActivity: agent.metadata.metrics.lastActivity,
+        resourceUsage: { cpu: 0, memory: 0, storage: 0 }
+      };
+    }
+  }
+
+  async getSystemMetrics(): Promise<{
+    totalAgents: number;
+    activeAgents: number;
+    busyAgents: number;
+    queuedTasks: number;
+    activeTasks: number;
+  }> {
+    const agents = this.getAgents();
+    return {
+      totalAgents: agents.length,
+      activeAgents: agents.filter(agent => agent.status === 'active').length,
+      busyAgents: agents.filter(agent => agent.status === 'busy').length,
+      queuedTasks: this.taskQueue.length,
+      activeTasks: this.activeTasks.size
+    };
   }
 
   /**

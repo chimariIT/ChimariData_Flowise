@@ -20,6 +20,8 @@ import Stripe from 'stripe';
 
 const router = Router();
 
+type ConsultationRequestRow = typeof consultationRequests.$inferSelect;
+
 /**
  * GET /api/consultation/pricing
  * Get available consultation pricing options (public endpoint for customers)
@@ -54,9 +56,9 @@ router.get('/pricing', async (req, res) => {
 });
 
 // Initialize Stripe if configured
-const stripe = process.env.STRIPE_SECRET_KEY
-  ? new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-12-18.acacia' })
-  : null;
+  const stripe = process.env.STRIPE_SECRET_KEY
+    ? new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2025-08-27.basil' })
+    : null;
 
 /**
  * POST /api/consultation/request
@@ -146,7 +148,7 @@ router.get('/my-requests', ensureAuthenticated, async (req, res) => {
 
     res.json({
       success: true,
-      requests: requests.map(r => ({
+  requests: requests.map((r: ConsultationRequestRow) => ({
         id: r.id,
         challenge: r.challenge,
         consultationType: r.consultationType,
@@ -451,6 +453,7 @@ router.post('/:id/upload-data', ensureAuthenticated, async (req, res) => {
     const [newProject] = await db.insert(projects).values({
       id: projectId,
       userId,
+      ownerId: userId, // Set ownerId for backward compatibility
       name: `Consultation: ${request.challenge.substring(0, 50)}`,
       description: `Expert consultation project for ${request.consultationType}`,
       journeyType: 'consultation',

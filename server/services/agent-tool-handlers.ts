@@ -17,7 +17,7 @@ import { getBillingService } from './billing/unified-billing-service';
 export interface ToolExecutionContext {
   executionId: string;
   agentId: string;
-  userId?: number;
+  userId?: string;
   projectId?: string;
   timestamp: Date;
 }
@@ -31,6 +31,8 @@ export interface ToolExecutionResult {
     duration: number;
     resourcesUsed: { cpu: number; memory: number; storage: number };
     cost: number;
+    executionTimeMs?: number;
+    billingUnits?: number;
   };
   artifacts?: Array<{
     type: string;
@@ -38,6 +40,13 @@ export interface ToolExecutionResult {
     metadata?: any;
   }>;
   error?: string;
+  billing?: {
+    quotaExceeded?: boolean;
+    cost?: number;
+    remainingQuota?: number;
+    message?: string;
+    error?: string;
+  };
 }
 
 // ==========================================
@@ -61,12 +70,10 @@ export class PMToolHandlers {
       const { targetAgentId, messageType, payload, priority } = input;
 
       await this.messageBroker.sendMessage({
-        id: context.executionId,
         from: context.agentId,
         to: targetAgentId,
         type: messageType,
         payload,
-        timestamp: new Date(),
         priority: priority || 'normal'
       });
 
@@ -287,12 +294,12 @@ export class PMToolHandlers {
       const { projectId } = input;
 
       // Get checkpoints from orchestrator
-      const checkpoints = await projectAgentOrchestrator.getCheckpoints(projectId);
+  const checkpoints = await projectAgentOrchestrator.getProjectCheckpoints(projectId);
 
       // Calculate progress
       const totalStages = 10;
-      const completedCheckpoints = checkpoints.filter(cp => cp.status === 'completed' || cp.status === 'approved');
-      const currentStage = checkpoints[checkpoints.length - 1]?.stepName || 'initialization';
+  const completedCheckpoints = checkpoints.filter((cp) => cp.status === 'completed' || cp.status === 'approved');
+  const currentStage = checkpoints[checkpoints.length - 1]?.stepName || 'initialization';
 
       // Get artifacts (mock for now, should come from project)
       const artifacts = [
@@ -303,7 +310,7 @@ export class PMToolHandlers {
       // Format progress report
       const progressReport = userFriendlyFormatter.formatProgressReport(
         currentStage,
-        completedCheckpoints.map(cp => cp.stepName),
+  completedCheckpoints.map((cp) => cp.stepName),
         totalStages,
         artifacts,
         input.totalCost || 0
@@ -342,12 +349,12 @@ export class PMToolHandlers {
       const { projectId, requiredAgents, scenario } = input;
 
       // Use existing PM coordination
-      const coordinationResult = await pmAgent.coordinateMultipleAgents({
+      const coordinationResult = await pmAgent.coordinateGoalAnalysis(
         projectId,
-        userId: context.userId?.toString() || 'unknown',
-        scenario,
-        requiredAgents
-      });
+        scenario?.uploadedData ?? scenario?.data ?? {},
+        scenario?.goals ?? requiredAgents ?? [],
+        scenario?.industry ?? 'general'
+      );
 
       return {
         executionId: context.executionId,

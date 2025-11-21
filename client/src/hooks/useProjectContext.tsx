@@ -45,11 +45,10 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 
   const fetchProject = async (projectId: string) => {
     try {
-      // Get auth token from localStorage, fallback to dev token for development
-      let authToken = localStorage.getItem('auth_token');
+      const authToken = localStorage.getItem('auth_token');
       if (!authToken) {
-        authToken = 'test-token-dev'; // Development fallback
-        localStorage.setItem('auth_token', authToken);
+        console.warn('Skipping project fetch: missing auth token');
+        return;
       }
 
       const response = await fetch(`/api/projects/${projectId}`, {
@@ -73,6 +72,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         // Handle authentication failure
         console.warn('Authentication failed, clearing stored auth token');
         localStorage.removeItem('auth_token');
+        setCurrentProjectState(null);
         // Could redirect to login page here
       } else {
         console.error('Failed to fetch project:', response.status, response.statusText);

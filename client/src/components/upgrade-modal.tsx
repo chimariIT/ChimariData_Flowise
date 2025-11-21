@@ -242,7 +242,7 @@ export function UpgradeModal({ isOpen, onClose, projectId, trialResults }: Upgra
             {trialResults && (
               <Card className="border-blue-200 bg-blue-50">
                 <CardHeader>
-                  <CardTitle className="text-blue-800">Your Free Trial Results</CardTitle>
+                  <CardTitle className="text-blue-800">Your Trial Results</CardTitle>
                   <CardDescription className="text-blue-600">
                     You've analyzed {trialResults.schema ? Object.keys(trialResults.schema).length : 0} columns
                     with basic insights. Upgrade for advanced multivariate analysis.
@@ -317,7 +317,7 @@ export function UpgradeModal({ isOpen, onClose, projectId, trialResults }: Upgra
             {/* Action Buttons */}
             <div className="flex gap-3">
               <Button variant="outline" onClick={onClose} className="flex-1">
-                Continue with Free Trial
+                Continue with Trial
               </Button>
               <Button 
                 onClick={handleProceedToPayment}

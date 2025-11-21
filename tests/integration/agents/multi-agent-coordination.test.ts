@@ -18,10 +18,14 @@ describe('Multi-Agent Coordination Integration', () => {
   let businessAgent: BusinessAgent;
 
   beforeEach(async () => {
-    pmAgent = new ProjectManagerAgent();
     dataEngineer = new DataEngineerAgent();
     dataScientist = new DataScientistAgent();
     businessAgent = new BusinessAgent();
+    pmAgent = new ProjectManagerAgent({
+      dataEngineerAgent: dataEngineer,
+      dataScientistAgent: dataScientist,
+      businessAgent
+    });
     
     // Initialize agents properly
     await pmAgent.initialize();

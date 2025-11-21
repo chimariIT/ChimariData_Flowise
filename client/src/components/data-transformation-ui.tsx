@@ -63,6 +63,16 @@ interface TransformationPreview {
   columns: string[];
   sampleData: any[];
   warnings: string[];
+  summary?: {
+    stepsApplied: number;
+    operations: Array<{
+      index: number;
+      type: string;
+      rowCount: number;
+      description?: string;
+      details?: Record<string, unknown>;
+    }>;
+  };
 }
 
 export function DataTransformationUI({ projectId, project, onProjectUpdate, onNext, onBack }: DataTransformationUIProps) {
@@ -75,7 +85,9 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
   const [selectedJoinProject, setSelectedJoinProject] = useState<string>('');
   const [availableProjects, setAvailableProjects] = useState<any[]>([]);
   const { toast } = useToast();
-  const { updateProjectSession } = useProjectSession();
+  // Fix: Pass journeyType from project to useProjectSession
+  const journeyType = project?.journeyType || 'ai_guided';
+  const { updateStep } = useProjectSession({ journeyType: journeyType as any });
 
   const schema = project?.schema || {};
   const fields = Object.keys(schema);
@@ -154,7 +166,8 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
       });
       
       if (response.ok) {
-        const projects = await response.json();
+        const payload = await response.json();
+        const projects = Array.isArray(payload) ? payload : Array.isArray(payload?.projects) ? payload.projects : [];
         // Filter out current project and only show projects with data
         const availableProjects = projects.filter((p: any) => 
           p.id !== projectId && p.data && p.data.length > 0
@@ -209,8 +222,8 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
 
     setTransformationSteps([...transformationSteps, newStep]);
     
-    // Update project session
-    updateProjectSession(projectId, {
+    // Update project session with transformation data
+    updateStep('data', {
       transformation: {
         steps: [...transformationSteps, newStep],
         lastUpdated: new Date().toISOString()
@@ -313,13 +326,29 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
 
       if (response.ok) {
         const result = await response.json();
-        
+
+        const resultColumns = Array.isArray(result.columns)
+          ? result.columns.filter((column: any) => typeof column === 'string')
+          : [];
+
+        const previewRows = Array.isArray(result.preview) ? result.preview : [];
+        const sampleColumns = previewRows.length > 0 ? Object.keys(previewRows[0]) : [];
+        const fallbackColumns = Object.keys(schema);
+        const columns = resultColumns.length > 0
+          ? resultColumns
+          : (sampleColumns.length > 0 ? sampleColumns : fallbackColumns);
+
         setPreview({
-          originalCount: project?.data?.length || 0,
-          transformedCount: result.rowCount,
-          columns: Object.keys(schema),
-          sampleData: result.preview || [],
-          warnings: []
+          originalCount: typeof result.originalRowCount === 'number'
+            ? result.originalRowCount
+            : (project?.data?.length || 0),
+          transformedCount: typeof result.rowCount === 'number'
+            ? result.rowCount
+            : previewRows.length,
+          columns,
+          sampleData: previewRows,
+          warnings: Array.isArray(result.warnings) ? result.warnings : [],
+          summary: result.summary,
         });
 
         setShowPreview(true);
@@ -330,13 +359,11 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
         });
 
         // Update project session with transformation results
-        updateProjectSession(projectId, {
-          transformation: {
-            steps: transformationSteps,
-            results: result,
-            completed: true,
-            lastUpdated: new Date().toISOString()
-          }
+        await updateStep('transformation', {
+          steps: transformationSteps,
+          results: result,
+          completed: true,
+          lastUpdated: new Date().toISOString()
         });
 
       } else {
@@ -378,12 +405,10 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
         });
 
         // Update project session
-        updateProjectSession(projectId, {
-          transformation: {
-            steps: transformationSteps,
-            saved: true,
-            lastUpdated: new Date().toISOString()
-          }
+        await updateStep('transformation', {
+          steps: transformationSteps,
+          saved: true,
+          lastUpdated: new Date().toISOString()
         });
 
         if (onNext) {
@@ -736,6 +761,43 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
                     <div className="text-sm text-purple-600">Columns</div>
                   </div>
                 </div>
+
+                {preview.warnings.length > 0 && (
+                  <Alert className="mb-6 border-yellow-200 bg-yellow-50 text-yellow-800">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription>
+                      <strong>Warnings:</strong>
+                      <ul className="mt-2 list-disc list-inside space-y-1 text-sm">
+                        {preview.warnings.map((warning, index) => (
+                          <li key={`${warning}-${index}`}>{warning}</li>
+                        ))}
+                      </ul>
+                    </AlertDescription>
+                  </Alert>
+                )}
+
+                {preview.summary?.operations?.length ? (
+                  <div className="mb-6">
+                    <h4 className="text-sm font-semibold text-gray-700 mb-2">Step Summary</h4>
+                    <div className="space-y-2">
+                      {preview.summary.operations.map((operation) => (
+                        <div key={operation.index} className="border rounded-lg p-3">
+                          <div className="flex items-center justify-between text-sm font-medium">
+                            <span>
+                              Step {operation.index + 1}: {operation.type}
+                            </span>
+                            <span>{operation.rowCount} rows</span>
+                          </div>
+                          {operation.description && (
+                            <p className="text-sm text-gray-600 mt-1">
+                              {operation.description}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
 
                 {/* Sample Data Table */}
                 <div className="overflow-x-auto">

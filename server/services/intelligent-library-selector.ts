@@ -34,6 +34,7 @@ export interface VisualizationRequirements {
   interactivity: 'static' | 'interactive' | 'dashboard';
   dataSize: 'small' | 'medium' | 'large' | 'massive';
   styling: 'basic' | 'professional' | 'custom';
+  complexity?: 'simple' | 'moderate' | 'complex';
   exportFormats: string[];
   performancePriority: 'speed' | 'memory' | 'quality' | 'balanced';
 }

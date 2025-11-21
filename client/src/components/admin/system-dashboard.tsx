@@ -22,7 +22,7 @@ import {
   OperationStatus, 
   MultiAgentStatus,
   PerformanceIndicator 
-} from './feedback';
+} from '@/components/ui/feedback';
 
 interface SystemStatus {
   overall: 'healthy' | 'degraded' | 'down';

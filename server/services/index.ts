@@ -12,5 +12,6 @@ export { DataTransformationService } from './data-transformation';
 export * from './time-series-analyzer';
 export * from './cloud-connector';
 export * from './export-service';
+export * from './enhanced-visualization-engine';
 
 // Use shared/subscription-tiers helpers for subscription capability checks.

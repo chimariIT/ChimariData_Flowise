@@ -85,12 +85,33 @@ export default defineConfig({
     host: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:5000',
+        target: 'http://localhost:5000',  // Must match PORT in .env
         changeOrigin: true,
         secure: false,
+        configure: (proxy, options) => {
+          proxy.on('proxyReq', (proxyReq, req, res) => {
+            // Explicitly preserve all headers, especially Authorization
+            if (req.headers.authorization) {
+              proxyReq.setHeader('Authorization', req.headers.authorization);
+            }
+            const forwardedAuthHeader = req.headers['x-forwarded-authorization'];
+            if (typeof forwardedAuthHeader === 'string') {
+              proxyReq.setHeader('X-Forwarded-Authorization', forwardedAuthHeader);
+            } else if (Array.isArray(forwardedAuthHeader) && forwardedAuthHeader.length > 0) {
+              proxyReq.setHeader('X-Forwarded-Authorization', forwardedAuthHeader[0]);
+            }
+            // Preserve other important headers
+            if (req.headers['content-type']) {
+              proxyReq.setHeader('Content-Type', req.headers['content-type']);
+            }
+            if (req.headers['x-customer-context']) {
+              proxyReq.setHeader('X-Customer-Context', req.headers['x-customer-context']);
+            }
+          });
+        },
       },
       '/ws': {
-        target: 'ws://localhost:5000',
+        target: 'ws://localhost:5000',  // Must match PORT in .env
         ws: true,
         changeOrigin: true,
       },

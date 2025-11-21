@@ -20,22 +20,30 @@ export interface JourneyAccess {
 }
 
 export interface FeaturePermissions {
+  canUseAI: boolean; // Basic AI feature access (required for all AI features)
   canAccessAdvancedAnalytics: boolean;
+  canAccessAdvancedFeatures: boolean; // Advanced feature access (used by middleware)
   canUseCustomAiKeys: boolean;
   canGenerateCode: boolean;
   canAccessRawData: boolean;
   canExportResults: boolean;
 }
 
+type BasePermissionSet = RoleBasedLimits & JourneyAccess & FeaturePermissions;
+
+type ExtendedUserPermissions = UserPermissions & Partial<FeaturePermissions>;
+
 export class RolePermissionService {
   // Define base role permissions (journey access should be universal)
-  private static readonly DEFAULT_PERMISSIONS: Record<UserRole, RoleBasedLimits> = {
+  private static readonly DEFAULT_PERMISSIONS: Record<UserRole, BasePermissionSet> = {
     "non-tech": {
       canAccessNonTechJourney: true,
       canAccessBusinessJourney: true,
       canAccessTechnicalJourney: true,
       canRequestConsultation: true,
+      canUseAI: true, // All users can use basic AI features
       canAccessAdvancedAnalytics: false,
+      canAccessAdvancedFeatures: false,
       canUseCustomAiKeys: false,
       canGenerateCode: false,
       canAccessRawData: false,
@@ -52,7 +60,9 @@ export class RolePermissionService {
       canAccessBusinessJourney: true,
       canAccessTechnicalJourney: true,
       canRequestConsultation: true,
+      canUseAI: true,
       canAccessAdvancedAnalytics: true,
+      canAccessAdvancedFeatures: true,
       canUseCustomAiKeys: false,
       canGenerateCode: false,
       canAccessRawData: true,
@@ -69,7 +79,9 @@ export class RolePermissionService {
       canAccessBusinessJourney: true,
       canAccessTechnicalJourney: true,
       canRequestConsultation: true,
+      canUseAI: true,
       canAccessAdvancedAnalytics: true,
+      canAccessAdvancedFeatures: true,
       canUseCustomAiKeys: true,
       canGenerateCode: true,
       canAccessRawData: true,
@@ -86,7 +98,9 @@ export class RolePermissionService {
       canAccessBusinessJourney: true,
       canAccessTechnicalJourney: true,
       canRequestConsultation: true,
+      canUseAI: true,
       canAccessAdvancedAnalytics: true,
+      canAccessAdvancedFeatures: true,
       canUseCustomAiKeys: true,
       canGenerateCode: true,
       canAccessRawData: true,
@@ -95,6 +109,25 @@ export class RolePermissionService {
       maxDatasetSizeMB: 50,
       maxAiQueriesPerMonth: 100,
       maxVisualizationsPerProject: 15,
+      allowedAiProviders: ["gemini", "openai", "anthropic"],
+      canUseAdvancedModels: true,
+    },
+    "custom": {
+      canAccessNonTechJourney: true,
+      canAccessBusinessJourney: true,
+      canAccessTechnicalJourney: true,
+      canRequestConsultation: true,
+      canUseAI: true,
+      canAccessAdvancedAnalytics: true,
+      canAccessAdvancedFeatures: true,
+      canUseCustomAiKeys: true,
+      canGenerateCode: true,
+      canAccessRawData: true,
+      canExportResults: true,
+      maxConcurrentProjects: 10,
+      maxDatasetSizeMB: 100,
+      maxAiQueriesPerMonth: 200,
+      maxVisualizationsPerProject: 25,
       allowedAiProviders: ["gemini", "openai", "anthropic"],
       canUseAdvancedModels: true,
     },
@@ -117,7 +150,7 @@ export class RolePermissionService {
   /**
    * Get user permissions by userId, creating default permissions if they don't exist
    */
-  static async getUserPermissions(userId: string): Promise<UserPermissions | null> {
+  static async getUserPermissions(userId: string): Promise<ExtendedUserPermissions | null> {
     try {
       // Try to get existing permissions
       const existingPermissions = await db
@@ -127,7 +160,7 @@ export class RolePermissionService {
         .limit(1);
 
       if (existingPermissions.length > 0) {
-        return existingPermissions[0] as UserPermissions;
+        return existingPermissions[0] as ExtendedUserPermissions;
       }
 
       // Get user role to create default permissions
@@ -160,7 +193,7 @@ export class RolePermissionService {
     userId: string,
     userRole: UserRole,
     subscriptionTier: string = "none"
-  ): Promise<UserPermissions> {
+  ): Promise<ExtendedUserPermissions> {
     const basePermissions = this.DEFAULT_PERMISSIONS[userRole];
     const multipliers = this.SUBSCRIPTION_MULTIPLIERS[subscriptionTier] || this.SUBSCRIPTION_MULTIPLIERS["none"];
 
@@ -182,7 +215,7 @@ export class RolePermissionService {
       .values(permissionsData as any)
       .returning();
 
-    return createdPermissions as UserPermissions;
+    return createdPermissions as ExtendedUserPermissions;
   }
 
   /**
@@ -218,10 +251,49 @@ export class RolePermissionService {
   /**
    * Check if user has permission for a specific feature
    */
-  static async hasPermission(userId: string, permission: keyof FeaturePermissions): Promise<boolean> {
-    const permissions = await this.getUserPermissions(userId);
-    if (!permissions) return false;
-    return permissions[permission] as boolean || false;
+  static async hasPermission(userId: string, permission: keyof FeaturePermissions | string): Promise<boolean> {
+    try {
+      const permissions = await this.getUserPermissions(userId);
+      
+      // Always allow canUseAI - it's a basic feature available to all authenticated users
+      if (permission === 'canUseAI') {
+        if (!permissions) {
+          console.log(`✅ [PERMISSIONS] Allowing canUseAI for user ${userId} (no permissions record)`);
+          return true;
+        }
+        const hasPermission = permissions.canUseAI ?? true;
+        if (hasPermission) {
+          console.log(`✅ [PERMISSIONS] User ${userId} has canUseAI permission`);
+        }
+        return hasPermission;
+      }
+      
+      if (!permissions) {
+        console.warn(`⚠️  [PERMISSIONS] No permissions record for user ${userId}, denying ${permission}`);
+        return false;
+      }
+      
+      // Handle canAccessAdvancedFeatures - map to canAccessAdvancedAnalytics if not set
+      if (permission === 'canAccessAdvancedFeatures') {
+        return permissions.canAccessAdvancedFeatures ?? permissions.canAccessAdvancedAnalytics ?? false;
+      }
+      
+      // Standard permission check
+      if (permission in permissions) {
+        return (permissions[permission as keyof typeof permissions] as boolean) ?? false;
+      }
+      
+      console.warn(`⚠️  [PERMISSIONS] Permission ${permission} not found in permissions record for user ${userId}`);
+      return false;
+    } catch (error) {
+      console.error(`❌ [PERMISSIONS] Error checking permission ${permission} for user ${userId}:`, error);
+      // Always allow canUseAI even on error (fail open for basic features)
+      if (permission === 'canUseAI') {
+        console.log(`✅ [PERMISSIONS] Error occurred, but allowing canUseAI as fallback for user ${userId}`);
+        return true;
+      }
+      return false;
+    }
   }
 
   /**

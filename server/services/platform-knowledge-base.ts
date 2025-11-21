@@ -580,7 +580,7 @@ Contact support if subscription shows active but features unavailable.`,
           id: `feature_${featureKey}`,
           title: feature.name,
           category: 'features',
-          content: `${feature.description}\n\n**Usage**: ${feature.usage}\n\n**Benefits**:\n${feature.benefits.map(b => `- ${b}`).join('\n')}`,
+          content: `${feature.description}\n\n**Usage**: ${feature.usage}\n\n**Benefits**:\n${feature.benefits.map((benefit: string) => `- ${benefit}`).join('\n')}`,
           tags: ['features', featureKey],
           relevanceScore: 0,
           lastUpdated: new Date()

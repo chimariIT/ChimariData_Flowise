@@ -18,12 +18,11 @@ test.describe('Authentication smoke', () => {
     await page.goto('/auth/register');
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('input[type="email"]')).toBeVisible({ timeout: 30_000 });
-    await expect(page.locator('input[type="password"]')).toBeVisible();
-    // Often has confirm password too; if absent, this will no-op quickly
-    const confirm = page.locator('input[type="password"]').nth(1);
-    // Don't fail if there's only one password field
-    if (await confirm.count()) {
-      await expect(confirm).toBeVisible();
+    const passwordFields = page.locator('input[type="password"]');
+    await expect(passwordFields.first()).toBeVisible();
+    // Often has confirm password too; if present, make sure it is visible
+    if (await passwordFields.count() > 1) {
+      await expect(passwordFields.nth(1)).toBeVisible();
     }
   // Prefer the submit button on registration as well
   const registerButton = page.locator('button[type="submit"]').first();

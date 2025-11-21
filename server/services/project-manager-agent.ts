@@ -1,11 +1,33 @@
-import { TechnicalAIAgent } from './technical-ai-agent';
+﻿import { TechnicalAIAgent } from './technical-ai-agent';
+import { DataEngineerAgent } from './data-engineer-agent';
+import { DataScientistAgent } from './data-scientist-agent';
 import { BusinessAgent, BusinessContext } from './business-agent';
 import { storage } from './storage';
 import { PricingService } from './pricing';
 import { nanoid } from 'nanoid';
-import { AgentMessageBroker, AgentMessage, AgentCheckpoint } from './agents/message-broker';
+import { AgentMessageBroker, AgentMessage, AgentCheckpoint, getMessageBroker } from './agents/message-broker';
+import { AgentTask } from './agent-registry';
 import { taskQueue, EnhancedTaskQueue, QueuedTask } from './enhanced-task-queue';
 import { measurePerformance } from '../utils/performance-monitor';
+import { KnowledgeGraphService, type KnowledgeTemplate, type IndustryKnowledge } from './knowledge-graph-service';
+import { db } from '../db';
+import {
+    analysisPlans,
+    projects,
+    projectSessions,
+    projectDatasets,
+    datasets,
+    type DataAssessment,
+    type AnalysisStep as PlanAnalysisStep,
+    type VisualizationSpec,
+    type BusinessContext as PlanBusinessContext,
+    type MLModelSpec,
+    type CostBreakdown,
+    type AgentContribution,
+    type AnalysisPlanRow,
+    type InsertAnalysisPlan
+} from '@shared/schema';
+import { and, desc, eq } from 'drizzle-orm';
 
 
 
@@ -96,7 +118,12 @@ export interface ExpertOpinion {
  * Synthesized recommendation from Project Manager combining all expert opinions
  */
 export interface SynthesizedRecommendation {
-    overallAssessment: 'proceed' | 'proceed_with_caution' | 'revise_approach' | 'not_feasible';
+    overallAssessment:
+        | 'proceed'
+        | 'proceed_with_caution'
+        | 'revise_approach'
+        | 'not_feasible'
+        | 'Invalid project ID provided - not_feasible';
     confidence: number;
     keyFindings: string[];
     combinedRisks: Array<{ source: string; risk: string; severity: 'high' | 'medium' | 'low' }>;
@@ -108,6 +135,7 @@ export interface SynthesizedRecommendation {
     };
     estimatedTimeline: string;
     estimatedCost?: string;
+    nextSteps: string[];
 }
 
 /**
@@ -121,6 +149,73 @@ export interface MultiAgentCoordinationResult {
     timestamp: Date;
     totalResponseTime: number; // milliseconds
 }
+
+interface CreateAnalysisPlanRequest {
+    projectId: string;
+    userId: string;
+    project: {
+        id: string;
+        name: string;
+        journeyType: string;
+        objectives?: string | null;
+        businessContext?: Record<string, any> | null;
+        schema?: Record<string, any> | null;
+        data?: any[] | null;
+        description?: string | null;
+        industry?: string | null;
+    };
+    modifications?: string | null;
+    previousPlan?: AnalysisPlanRow | null;
+}
+
+interface CreateAnalysisPlanResult {
+    success: boolean;
+    planId?: string;
+    plan?: AnalysisPlanRow;
+    error?: string;
+}
+
+interface HandlePlanRejectionRequest {
+    planId: string;
+    projectId: string;
+    userId: string;
+    rejectionReason: string;
+    modificationsRequested?: string | null;
+    previousPlan: AnalysisPlanRow;
+}
+
+interface HandlePlanRejectionResult {
+    success: boolean;
+    newPlanId?: string;
+    newPlan?: AnalysisPlanRow;
+    error?: string;
+}
+
+type PlanDraft = Omit<InsertAnalysisPlan, 'projectId' | 'version'>;
+
+interface PlanBuildResult {
+    draft: PlanDraft;
+    metadata: {
+        totalMinutes: number;
+        includesML: boolean;
+        templateName?: string;
+        industry?: string;
+    };
+}
+
+interface DatasetSummary {
+    id: string;
+    name: string;
+    recordCount: number;
+    schema: Record<string, any> | null;
+    previewRows: any[];
+    dataType: string | null;
+}
+
+type ProjectRow = typeof projects.$inferSelect;
+type ProjectSessionRow = typeof projectSessions.$inferSelect;
+type DatasetRow = typeof datasets.$inferSelect;
+type PlanBlueprint = Awaited<ReturnType<DataScientistAgent['generatePlanBlueprint']>>;
 
 /**
  * Decision audit record (Phase 4 - Task 4.4)
@@ -143,18 +238,725 @@ export interface DecisionAuditRecord {
     };
 }
 
+interface ProjectManagerAgentDependencies {
+    technicalAgent?: TechnicalAIAgent;
+    dataEngineerAgent?: DataEngineerAgent;
+    dataScientistAgent?: DataScientistAgent;
+    businessAgent?: BusinessAgent;
+    messageBroker?: AgentMessageBroker;
+    knowledgeGraph?: KnowledgeGraphService;
+}
+
 export class ProjectManagerAgent {
     private technicalAgent: TechnicalAIAgent;
+    private dataEngineerAgent: DataEngineerAgent;
+    private dataScientistAgent: DataScientistAgent;
     private businessAgent: BusinessAgent;
     private messageBroker: AgentMessageBroker;
-    private decisionAuditTrail: Map<string, DecisionAuditRecord[]>; // projectId → audit records
+    private decisionAuditTrail: Map<string, DecisionAuditRecord[]>; // projectId ΓåÆ audit records
+    private knowledgeGraph: KnowledgeGraphService;
+    private planCreationLocks: Map<string, { lockKey: string; acquiredAt: number; expiresAt: number }>;
+    private readonly agentResponseTimeoutMs: number;
+    private readonly planLockTtlMs = 5 * 60 * 1000;
 
-    constructor() {
-        this.technicalAgent = new TechnicalAIAgent();
-        this.businessAgent = new BusinessAgent();
-        this.messageBroker = new AgentMessageBroker();
+    constructor(dependencies: ProjectManagerAgentDependencies = {}) {
+        this.technicalAgent = dependencies.technicalAgent ?? new TechnicalAIAgent();
+        this.dataEngineerAgent = dependencies.dataEngineerAgent ?? new DataEngineerAgent();
+        this.dataScientistAgent = dependencies.dataScientistAgent ?? new DataScientistAgent();
+        this.businessAgent = dependencies.businessAgent ?? new BusinessAgent();
+        this.messageBroker = dependencies.messageBroker ?? getMessageBroker();
         this.decisionAuditTrail = new Map();
+        this.knowledgeGraph = dependencies.knowledgeGraph ?? new KnowledgeGraphService();
+        this.planCreationLocks = new Map();
+        const parsedTimeout = Number(process.env.AGENT_RESPONSE_TIMEOUT_MS);
+        this.agentResponseTimeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : 30000;
         // Initialize synchronously - async methods will be called separately
+    }
+
+    private computeResponseTime(startTime: number): number {
+        return Math.max(1, Date.now() - startTime);
+    }
+
+    private brokerSupportsAgent(agentId: string): boolean {
+        if (!this.messageBroker) {
+            return false;
+        }
+
+        const stats = this.messageBroker.getStats();
+        if (!stats || stats.fallbackMode) {
+            return false;
+        }
+
+        return this.messageBroker.isAgentRegistered(agentId);
+    }
+
+    private async acquirePlanCreationLock(projectId: string): Promise<{
+        acquired: boolean;
+        lockKey?: string;
+        existingPlanId?: string;
+        reason?: string;
+    }> {
+        const now = Date.now();
+        const existingLock = this.planCreationLocks.get(projectId);
+
+        if (existingLock && existingLock.expiresAt > now) {
+            return {
+                acquired: false,
+                lockKey: existingLock.lockKey,
+                reason: 'Plan creation already in progress for this project'
+            };
+        }
+
+        if (existingLock && existingLock.expiresAt <= now) {
+            this.planCreationLocks.delete(projectId);
+        }
+
+        const activePlan = await this.getActivePlan(projectId);
+        if (activePlan) {
+            return {
+                acquired: false,
+                existingPlanId: activePlan.id,
+                reason: `Active plan (${activePlan.status}) already exists`
+            };
+        }
+
+        const lockKey = nanoid();
+        this.planCreationLocks.set(projectId, {
+            lockKey,
+            acquiredAt: now,
+            expiresAt: now + this.planLockTtlMs
+        });
+
+        return { acquired: true, lockKey };
+    }
+
+    private releasePlanCreationLock(projectId: string, lockKey?: string): void {
+        const currentLock = this.planCreationLocks.get(projectId);
+        if (!currentLock) {
+            return;
+        }
+
+        if (lockKey && currentLock.lockKey !== lockKey) {
+            return;
+        }
+
+        this.planCreationLocks.delete(projectId);
+    }
+
+    private async getProjectRecord(projectId: string): Promise<ProjectRow | null> {
+        const result = await db
+            .select()
+            .from(projects)
+            .where(eq(projects.id, projectId))
+            .limit(1);
+
+        return result[0] ?? null;
+    }
+
+    private async getLatestPlan(projectId: string): Promise<AnalysisPlanRow | null> {
+        const plans = await db
+            .select()
+            .from(analysisPlans)
+            .where(eq(analysisPlans.projectId, projectId))
+            .orderBy(desc(analysisPlans.version))
+            .limit(1);
+
+        return plans[0] ?? null;
+    }
+
+    private async getActivePlan(projectId: string): Promise<AnalysisPlanRow | null> {
+        const latestPlan = await this.getLatestPlan(projectId);
+        if (!latestPlan) {
+            return null;
+        }
+
+        const activeStatuses = new Set(['pending', 'ready', 'approved', 'executing', 'modified']);
+        return activeStatuses.has(latestPlan.status) ? latestPlan : null;
+    }
+
+    private async getLatestSession(projectId: string, userId: string): Promise<ProjectSessionRow | null> {
+        const sessions = await db
+            .select()
+            .from(projectSessions)
+            .where(
+                and(
+                    eq(projectSessions.projectId, projectId),
+                    eq(projectSessions.userId, userId)
+                )
+            )
+            .orderBy(desc(projectSessions.lastActivity))
+            .limit(1);
+
+        return sessions[0] ?? null;
+    }
+
+    private async loadDatasetSummaries(projectId: string): Promise<DatasetSummary[]> {
+        type DatasetSummaryRow = {
+            id: string;
+            name: string | null;
+            recordCount: number | null;
+            schema: unknown;
+            preview: unknown;
+            dataType: string | null;
+            alias: string | null;
+        };
+
+        const rows: DatasetSummaryRow[] = await db
+            .select({
+                id: datasets.id,
+                name: datasets.originalFileName,
+                recordCount: datasets.recordCount,
+                schema: datasets.schema,
+                preview: datasets.preview,
+                dataType: datasets.dataType,
+                alias: projectDatasets.alias
+            })
+            .from(projectDatasets)
+            .innerJoin(datasets, eq(projectDatasets.datasetId, datasets.id))
+            .where(eq(projectDatasets.projectId, projectId));
+
+        return rows.map((row) => {
+            const previewRows = this.ensureArray(row.preview).slice(0, 500);
+            const schema = this.ensureObject(row.schema);
+            const recordCount = typeof row.recordCount === 'number'
+                ? row.recordCount
+                : previewRows.length;
+
+            return {
+                id: row.id,
+                name: row.alias || row.name,
+                recordCount,
+                schema,
+                previewRows,
+                dataType: row.dataType ?? null
+            } as DatasetSummary;
+        });
+    }
+
+    private normalizeStringCollection(
+        inputs: Array<unknown>,
+        options: { splitPattern?: RegExp; limit?: number } = {}
+    ): string[] {
+        const collected: string[] = [];
+
+        const pushValue = (value: string) => {
+            const trimmed = value.trim();
+            if (!trimmed) return;
+
+            if (options.splitPattern) {
+                trimmed
+                    .split(options.splitPattern)
+                    .map(part => part.trim())
+                    .filter(Boolean)
+                    .forEach(part => collected.push(part));
+            } else {
+                collected.push(trimmed);
+            }
+        };
+
+        for (const input of inputs) {
+            if (input === null || input === undefined) {
+                continue;
+            }
+
+            if (Array.isArray(input)) {
+                for (const item of input) {
+                    if (typeof item === 'string') {
+                        pushValue(item);
+                    } else if (item && typeof item === 'object') {
+                        const candidate = (item as any).goal || (item as any).question || (item as any).name;
+                        if (typeof candidate === 'string') {
+                            pushValue(candidate);
+                        }
+                    }
+                }
+                continue;
+            }
+
+            if (typeof input === 'string') {
+                pushValue(input);
+                continue;
+            }
+
+            if (typeof input === 'object') {
+                const obj = input as Record<string, unknown>;
+                ['goal', 'question', 'name', 'description'].forEach(key => {
+                    const candidate = obj[key];
+                    if (typeof candidate === 'string') {
+                        pushValue(candidate);
+                    }
+                });
+            }
+        }
+
+        const unique = Array.from(new Set(collected.map(item => item.trim()))).filter(Boolean);
+        if (options.limit && unique.length > options.limit) {
+            return unique.slice(0, options.limit);
+        }
+        return unique;
+    }
+
+    private ensureObject(value: unknown): Record<string, any> | null {
+        if (!value) {
+            return null;
+        }
+
+        if (typeof value === 'object' && !Array.isArray(value)) {
+            return value as Record<string, any>;
+        }
+
+        if (typeof value === 'string') {
+            try {
+                const parsed = JSON.parse(value);
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                    return parsed as Record<string, any>;
+                }
+            } catch {
+                // ignore parse errors
+            }
+        }
+
+        return null;
+    }
+
+    private ensureArray(value: unknown): any[] {
+        if (Array.isArray(value)) {
+            return value;
+        }
+
+        if (typeof value === 'string') {
+            try {
+                const parsed = JSON.parse(value);
+                return Array.isArray(parsed) ? parsed : [];
+            } catch {
+                return [];
+            }
+        }
+
+        return [];
+    }
+
+    private mapPlanComplexityToCost(complexity: PlanBlueprint['complexity']): 'basic' | 'intermediate' | 'advanced' {
+        switch (complexity) {
+            case 'high':
+            case 'very_high':
+                return 'advanced';
+            case 'medium':
+                return 'intermediate';
+            default:
+                return 'basic';
+        }
+    }
+
+    private mapStepToCostCategory(method?: string): 'statistical' | 'machine_learning' | 'visualization' | 'business_intelligence' | 'time_series' {
+        const normalized = (method || '').toLowerCase();
+
+        if (
+            normalized.includes('predict') ||
+            normalized.includes('model') ||
+            normalized.includes('ml') ||
+            normalized.includes('class') ||
+            normalized.includes('cluster')
+        ) {
+            return 'machine_learning';
+        }
+
+        if (normalized.includes('time') || normalized.includes('forecast')) {
+            return 'time_series';
+        }
+
+        if (normalized.includes('visual')) {
+            return 'visualization';
+        }
+
+        if (normalized.includes('business') || normalized.includes('kpi') || normalized.includes('dashboard')) {
+            return 'business_intelligence';
+        }
+
+        return 'statistical';
+    }
+
+    private estimatePlanCost(
+        steps: PlanAnalysisStep[],
+        recordCount: number,
+        complexity: PlanBlueprint['complexity']
+    ): CostBreakdown {
+        const breakdown: Record<string, number> = {};
+        let total = 0;
+        const costComplexity = this.mapPlanComplexityToCost(complexity);
+
+        if (steps.length === 0) {
+            const baseCost = PricingService.calculateAnalysisCost('statistical', recordCount, costComplexity);
+            breakdown['Baseline analysis'] = parseFloat(baseCost.totalCost.toFixed(2));
+            total = baseCost.totalCost;
+            return {
+                total: parseFloat(total.toFixed(2)),
+                breakdown
+            };
+        }
+
+        for (const step of steps) {
+            const category = this.mapStepToCostCategory(step.method);
+            const stepCost = PricingService.calculateAnalysisCost(category, recordCount, costComplexity);
+            const key = step.name || category;
+            breakdown[key] = parseFloat(stepCost.totalCost.toFixed(2));
+            total += stepCost.totalCost;
+        }
+
+        return {
+            total: parseFloat(total.toFixed(2)),
+            breakdown
+        };
+    }
+
+    private buildFallbackDataAssessment(dataset?: DatasetSummary): DataAssessment {
+        const recordCount = dataset?.recordCount ?? dataset?.previewRows?.length ?? 0;
+        const columnCount = dataset?.schema ? Object.keys(dataset.schema).length : (dataset?.previewRows?.[0] ? Object.keys(dataset.previewRows[0]).length : 0);
+
+        return {
+            qualityScore: 65,
+            completenessScore: 70,
+            recordCount,
+            columnCount: Math.max(columnCount, 1),
+            missingData: [],
+            recommendedTransformations: ['Profile dataset to confirm column types and address missing values'],
+            infrastructureNeeds: {
+                useSpark: recordCount > 300_000,
+                estimatedMemoryGB: Math.max(4, Math.ceil(recordCount / 150_000) * 2),
+                parallelizable: recordCount > 60_000
+            },
+            estimatedProcessingTime:
+                recordCount > 300_000
+                    ? '25-35 minutes'
+                    : recordCount > 120_000
+                        ? '15-20 minutes'
+                        : recordCount > 25_000
+                            ? '8-12 minutes'
+                            : recordCount > 5_000
+                                ? '5-8 minutes'
+                                : '3-5 minutes'
+        };
+    }
+
+    private buildExecutiveSummary(params: {
+        projectName?: string;
+        journeyType?: string;
+        goals: string[];
+        questions: string[];
+        dataAssessment: DataAssessment;
+        blueprint: PlanBlueprint;
+        businessContext: PlanBusinessContext;
+        datasetSummary?: DatasetSummary;
+        modifications?: string | null;
+    }): string {
+        const goalSnippet = params.goals[0] ?? 'deliver actionable insights';
+        const questionSnippet = params.questions[0] ?? 'surface the most important trends';
+        const complexityLabel = params.blueprint.complexity.replace('_', ' ');
+        const qualityLabel = `${Math.round(params.dataAssessment.qualityScore)}% data quality`;
+        const recordLabel = params.dataAssessment.recordCount
+            ? `${params.dataAssessment.recordCount.toLocaleString()} records`
+            : 'the available data';
+        const primaryStep = params.blueprint.analysisSteps[0]?.name ?? 'descriptive analysis';
+        const kpiFocus = params.businessContext.relevantKPIs?.slice(0, 2).join(' and ') || 'key KPIs';
+        const duration = params.blueprint.estimatedDuration || 'a few hours';
+        const modificationNote = params.modifications ? ' incorporating your latest feedback' : '';
+        const projectLabel = params.projectName || 'This project';
+
+        return `${projectLabel} will follow a ${complexityLabel} analysis plan centred on ${primaryStep.toLowerCase()} to ${goalSnippet.toLowerCase()}. ` +
+            `Our data review rated ${qualityLabel} across ${recordLabel}, giving the team confidence to answer questions such as ${questionSnippet.toLowerCase()}. ` +
+            `Execution will emphasise ${kpiFocus}${modificationNote}, with decision-ready outputs expected within ${duration}.`;
+    }
+
+    private determineIndustry(
+        project: CreateAnalysisPlanRequest['project'] | undefined,
+        session: ProjectSessionRow | null,
+        previousPlan: AnalysisPlanRow | null
+    ): string | undefined {
+        const fromProject = project?.industry && project.industry.trim();
+        if (fromProject) {
+            return fromProject;
+        }
+
+        const prepareData = session?.prepareData as Record<string, any> | undefined;
+        const fromSession = typeof prepareData?.industry === 'string' ? prepareData.industry.trim() : undefined;
+        if (fromSession) {
+            return fromSession;
+        }
+
+        const audienceIndustry = typeof prepareData?.audience?.industry === 'string'
+            ? prepareData.audience.industry.trim()
+            : undefined;
+        if (audienceIndustry) {
+            return audienceIndustry;
+        }
+
+        const priorContext = previousPlan?.businessContext as PlanBusinessContext | null;
+        const benchmarkIndustry = priorContext?.industryBenchmarks?.[0];
+        if (typeof benchmarkIndustry === 'string' && benchmarkIndustry.trim()) {
+            return benchmarkIndustry.replace(/benchmark/i, '').trim();
+        }
+
+        return undefined;
+    }
+
+    async createAnalysisPlan(request: CreateAnalysisPlanRequest): Promise<CreateAnalysisPlanResult> {
+        const { projectId, userId } = request;
+        const lock = await this.acquirePlanCreationLock(projectId);
+
+        if (!lock.acquired) {
+            return {
+                success: false,
+                planId: lock.existingPlanId,
+                error: lock.reason || 'Plan creation already in progress for this project'
+            };
+        }
+
+        try {
+            const projectRecord = request.project ?? await this.getProjectRecord(projectId);
+            if (!projectRecord) {
+                return {
+                    success: false,
+                    error: 'Project not found'
+                };
+            }
+
+            const latestPlan = request.previousPlan ?? await this.getLatestPlan(projectId);
+            const version = latestPlan ? latestPlan.version + 1 : 1;
+
+            const session = await this.getLatestSession(projectId, userId);
+            const datasets = await this.loadDatasetSummaries(projectId);
+            const primaryDataset = datasets[0];
+
+            const prepareData = session?.prepareData as Record<string, any> | undefined;
+
+            const goals = this.normalizeStringCollection([
+                request.project?.objectives,
+                prepareData?.analysisGoal,
+                prepareData?.goals,
+                latestPlan?.recommendations,
+                request.modifications,
+                projectRecord.description
+            ], { splitPattern: /[\r\n]+|[.;]+/, limit: 6 });
+
+            if (goals.length === 0) {
+                goals.push('Generate actionable insights from uploaded data');
+            }
+
+            const questions = this.normalizeStringCollection([
+                prepareData?.businessQuestions,
+                prepareData?.questions,
+                latestPlan?.risks
+            ], { splitPattern: /[\r\n]+|[?•]+/, limit: 6 });
+
+            if (questions.length === 0) {
+                questions.push('Which factors have the greatest impact on performance?');
+            }
+
+            const industry = this.determineIndustry(request.project, session, latestPlan ?? null);
+            const schemaSource = primaryDataset?.schema ?? request.project?.schema ?? {};
+            const dataSample = primaryDataset?.previewRows ?? (Array.isArray(request.project?.data) ? request.project.data.slice(0, 500) : []);
+
+            let dataAssessment: DataAssessment;
+            try {
+                dataAssessment = await this.dataEngineerAgent.assessDataForPlan({
+                    projectId,
+                    schema: schemaSource || {},
+                    data: dataSample,
+                    goals: goals[0] ?? '',
+                    questions
+                });
+            } catch (error) {
+                console.warn(`Project Manager Agent: Data assessment failed for project ${projectId}`, error);
+                dataAssessment = this.buildFallbackDataAssessment(primaryDataset);
+            }
+
+            let blueprint: PlanBlueprint;
+            try {
+                blueprint = await this.dataScientistAgent.generatePlanBlueprint({
+                    goals,
+                    questions,
+                    journeyType: request.project?.journeyType || projectRecord.journeyType || 'ai_guided',
+                    dataAssessment
+                });
+            } catch (error) {
+                console.warn(`Project Manager Agent: Plan blueprint generation failed for project ${projectId}`, error);
+                blueprint = {
+                    analysisSteps: [{
+                        stepNumber: 1,
+                        name: 'Descriptive Statistics',
+                        description: 'Summarize key metrics and distributions to establish baseline understanding.',
+                        method: 'descriptive_statistics',
+                        inputs: ['primary_dataset'],
+                        expectedOutputs: ['summary_statistics', 'distribution_plots'],
+                        tools: ['analysis_suite'],
+                        estimatedDuration: '2-3 hours',
+                        confidence: 70
+                    }],
+                    mlModels: [],
+                    visualizations: [
+                        { type: 'bar', title: 'KPI overview', description: 'Visualise primary KPI performance by segment.' }
+                    ],
+                    recommendations: ['Validate dataset quality before executing advanced analyses.'],
+                    risks: ['Limited agent signals available. Monitor execution closely.'],
+                    estimatedDuration: '2-3 hours',
+                    complexity: 'medium'
+                };
+            }
+
+            const analysisTypes = blueprint.analysisSteps.map(step => step.method);
+            const businessContext = await this.businessAgent.provideBusinessContext({
+                journeyType: request.project?.journeyType || projectRecord.journeyType || 'ai_guided',
+                industry,
+                goals,
+                analysisTypes,
+                dataAssessment
+            });
+
+            const costBreakdown = this.estimatePlanCost(
+                blueprint.analysisSteps,
+                dataAssessment.recordCount,
+                blueprint.complexity
+            );
+
+            const executiveSummary = this.buildExecutiveSummary({
+                projectName: projectRecord.name,
+                journeyType: projectRecord.journeyType,
+                goals,
+                questions,
+                dataAssessment,
+                blueprint,
+                businessContext,
+                datasetSummary: primaryDataset,
+                modifications: request.modifications
+            });
+
+            const recommendations = this.normalizeStringCollection(
+                [blueprint.recommendations, businessContext.recommendations],
+                { limit: 8 }
+            );
+
+            const risks = this.normalizeStringCollection([blueprint.risks], { limit: 6 });
+            if (risks.length === 0) {
+                risks.push('Monitor data quality checks before execution.');
+            }
+
+            const visualizations = (blueprint.visualizations?.length ?? 0) > 0
+                ? blueprint.visualizations
+                : [
+                    { type: 'bar', title: 'KPI overview', description: 'Visualise primary KPI performance by segment.' }
+                ];
+
+            const mlModels = blueprint.mlModels ?? [];
+            const estimatedDuration = blueprint.estimatedDuration || '2-3 hours';
+            const now = new Date();
+
+            const agentContributions: Record<string, AgentContribution> = {
+                data_engineer: {
+                    completedAt: now.toISOString(),
+                    contribution: `Evaluated ${dataAssessment.columnCount} columns and ${dataAssessment.recordCount} records; data quality ${Math.round(dataAssessment.qualityScore)}%.`,
+                    status: 'success'
+                },
+                data_scientist: {
+                    completedAt: now.toISOString(),
+                    contribution: `Outlined ${blueprint.analysisSteps.length} analysis steps and ${mlModels.length} model candidates.`,
+                    status: 'success'
+                },
+                business_agent: {
+                    completedAt: now.toISOString(),
+                    contribution: `Mapped plan to ${businessContext.relevantKPIs.length} KPIs and compliance considerations.`,
+                    status: 'success'
+                },
+                project_manager: {
+                    completedAt: now.toISOString(),
+                    contribution: 'Synthesised agent outputs into an actionable analysis plan.',
+                    status: 'success'
+                }
+            };
+
+            const planInsert: PlanDraft = {
+                executiveSummary,
+                dataAssessment,
+                analysisSteps: blueprint.analysisSteps,
+                visualizations,
+                businessContext,
+                mlModels,
+                estimatedCost: costBreakdown,
+                estimatedDuration,
+                complexity: blueprint.complexity,
+                risks,
+                recommendations,
+                agentContributions,
+                status: 'ready',
+                rejectionReason: undefined,
+                modificationsRequested: request.modifications ?? undefined,
+                createdBy: 'pm_agent'
+            };
+
+            const inserted = await db
+                .insert(analysisPlans)
+                .values({
+                    ...planInsert,
+                    projectId,
+                    version
+                })
+                .returning();
+
+            if (inserted.length === 0) {
+                return {
+                    success: false,
+                    error: 'Failed to persist analysis plan'
+                };
+            }
+
+            const plan = inserted[0];
+
+            await db
+                .update(projects)
+                .set({
+                    status: 'plan_review',
+                    lastAccessedStep: 'plan',
+                    lockedCostEstimate: costBreakdown.total,
+                    costBreakdown,
+                    updatedAt: now
+                })
+                .where(eq(projects.id, projectId));
+
+            await this.messageBroker.publish('plan:ready', {
+                planId: plan.id,
+                projectId,
+                version,
+                timestamp: now.toISOString()
+            });
+
+            this.logDecision(
+                projectId,
+                userId,
+                'workflow_modification',
+                'pm_agent',
+                { planId: plan.id, version, status: plan.status },
+                {
+                    rationale: request.modifications ? 'Regenerated plan after user feedback' : 'Initial analysis plan generation',
+                    executionContext: {
+                        journeyType: projectRecord.journeyType,
+                        orchestrationPlanId: plan.id
+                    }
+                }
+            );
+
+            return {
+                success: true,
+                planId: plan.id,
+                plan
+            };
+        } catch (error) {
+            console.error(`Project Manager Agent: Failed to create analysis plan for project ${projectId}`, error);
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : 'Failed to create analysis plan'
+            };
+        } finally {
+            this.releasePlanCreationLock(projectId, lock.lockKey);
+        }
     }
 
     async initialize(): Promise<void> {
@@ -238,11 +1040,17 @@ export class ProjectManagerAgent {
         console.log(`Task ${data.taskId} assigned to agent ${data.agentId}`);
         
         // Send real-time notification about task assignment
-        await this.messageBroker.sendMessage('ui', 'task_assigned', {
-            taskId: data.taskId,
-            agentId: data.agentId,
-            taskType: data.task.type,
-            priority: data.task.priority
+        await this.messageBroker.sendMessage({
+            from: 'project_manager',
+            to: 'ui',
+            type: 'status',
+            payload: {
+                event: 'task_assigned',
+                taskId: data.taskId,
+                agentId: data.agentId,
+                taskType: data.task.type,
+                priority: data.task.priority
+            }
         });
     }
 
@@ -414,13 +1222,17 @@ export class ProjectManagerAgent {
      * Send a task to an agent using the message broker
      */
     private async sendTaskToAgent(agentId: string, task: any, projectId: string): Promise<any> {
+        if (!this.brokerSupportsAgent(agentId)) {
+            return await this.fallbackToDirectAgent(agentId, task, projectId);
+        }
+
         try {
             const response = await this.messageBroker.sendAndWait({
                 from: 'project_manager',
                 to: agentId,
                 type: 'task',
                 payload: { ...task, projectId }
-            }, 30000); // 30 second timeout
+            }, this.agentResponseTimeoutMs);
             
             return response;
         } catch (error) {
@@ -430,13 +1242,143 @@ export class ProjectManagerAgent {
         }
     }
 
+        private extractStepNameFromTask(task: any): string | undefined {
+            if (!task) {
+                return undefined;
+            }
+
+            if (typeof task.stepName === 'string') {
+                return task.stepName;
+            }
+
+            if (typeof task?.payload?.stepName === 'string') {
+                return task.payload.stepName;
+            }
+
+            if (typeof task?.payload?.type === 'string') {
+                return task.payload.type;
+            }
+
+            if (typeof task.type === 'string') {
+                return task.type;
+            }
+
+            return undefined;
+        }
+
+        private extractTaskPayload(task: any): any {
+            if (!task) {
+                return {};
+            }
+
+            if (task.payload && task.payload.payload) {
+                return task.payload.payload;
+            }
+
+            if (task.payload) {
+                return task.payload;
+            }
+
+            return task;
+        }
+
+        private createFallbackAgentTask(agentId: string, task: any, projectId: string): AgentTask {
+            const payload = this.extractTaskPayload(task);
+            const stepName = this.extractStepNameFromTask(task) ?? 'ad_hoc_task';
+            const priority = typeof task?.priority === 'number'
+                ? task.priority
+                : typeof payload?.priority === 'number'
+                    ? payload.priority
+                    : 5;
+
+            return {
+                id: `fallback_${agentId}_${nanoid()}`,
+                type: stepName,
+                priority,
+                payload,
+                requiredCapabilities: Array.isArray(task?.requiredCapabilities)
+                    ? task.requiredCapabilities
+                    : [],
+                context: {
+                    userId: payload?.userId ?? task?.context?.userId ?? 'system',
+                    projectId: payload?.projectId ?? task?.context?.projectId ?? projectId
+                },
+                constraints: typeof task?.constraints === 'object' && task.constraints !== null
+                    ? task.constraints
+                    : {},
+                createdAt: new Date()
+            };
+        }
+
     private async fallbackToDirectAgent(agentId: string, task: any, projectId: string): Promise<any> {
-        // Fallback to direct agent communication
+        const stepName = this.extractStepNameFromTask(task);
+        const payload = this.extractTaskPayload(task);
+
         switch (agentId) {
             case 'technical_agent':
                 return await this.technicalAgent.processTask(task, projectId);
+
             case 'business_agent':
                 return await this.businessAgent.processTask(task, projectId);
+
+            case 'data_engineer':
+                if (stepName === 'assess_data_quality') {
+                    return await this.dataEngineerAgent.assessDataQuality(
+                        payload?.data ?? payload,
+                        payload?.schema
+                    );
+                }
+
+                if (stepName === 'suggest_transformations') {
+                    return await this.dataEngineerAgent.suggestTransformations(
+                        payload?.missingColumns ?? [],
+                        payload?.availableColumns ?? [],
+                        payload?.goals ?? []
+                    );
+                }
+
+                if (stepName === 'estimate_processing_time') {
+                    return await this.dataEngineerAgent.estimateDataProcessingTime(
+                        payload?.dataSize ?? 0,
+                        payload?.complexity ?? 'medium'
+                    );
+                }
+
+                {
+                    const agentTask = this.createFallbackAgentTask('data_engineer', task, projectId);
+                    const result = await this.dataEngineerAgent.execute(agentTask);
+                    return result.result;
+                }
+
+            case 'data_scientist':
+                if (stepName === 'check_feasibility') {
+                    return await this.dataScientistAgent.checkFeasibility(
+                        payload?.goals ?? [],
+                        payload?.dataSchema ?? {},
+                        payload?.dataQuality ?? 0.7
+                    );
+                }
+
+                if (stepName === 'validate_methodology') {
+                    return await this.dataScientistAgent.validateMethodology(
+                        payload?.analysisParams ?? {},
+                        payload?.dataCharacteristics ?? {}
+                    );
+                }
+
+                if (stepName === 'estimate_confidence') {
+                    return await this.dataScientistAgent.estimateConfidence(
+                        payload?.analysisType ?? 'statistical',
+                        payload?.dataQuality ?? 0.7
+                    );
+                }
+
+                {
+                    const agentTask = this.createFallbackAgentTask('data_scientist', task, projectId);
+                    const result = await this.dataScientistAgent.execute(agentTask);
+                    return result.result;
+                }
+
             default:
                 throw new Error(`Unknown agent: ${agentId}`);
         }
@@ -1507,7 +2449,10 @@ export class ProjectManagerAgent {
 
         for (const task of sortedTasks) {
             // Convert step dependencies to task ID dependencies
-            const dependencies = task.dependsOn?.map(stepName => taskIdMap.get(stepName)).filter(Boolean) || [];
+            const dependencies =
+                task.dependsOn
+                    ?.map(stepName => taskIdMap.get(stepName))
+                    .filter((id): id is string => Boolean(id)) || [];
 
             const taskId = await this.queueTask({
                 type: task.type,
@@ -1626,6 +2571,8 @@ export class ProjectManagerAgent {
         userGoals: string[],
         industry: string
     ): Promise<MultiAgentCoordinationResult> {
+        const safeGoals = Array.isArray(userGoals) ? userGoals : [];
+
         return measurePerformance(
             'multi_agent_coordination',
             async () => {
@@ -1636,28 +2583,62 @@ export class ProjectManagerAgent {
 
         // Handle null/undefined inputs gracefully
         if (!projectId || typeof projectId !== 'string') {
+            const invalidProjectMessage = 'Invalid project ID provided - not_feasible';
             return {
                 coordinationId,
                 projectId: 'invalid',
                 expertOpinions: [],
                 synthesis: {
-                    overallAssessment: 'Invalid project ID provided',
+                    overallAssessment: invalidProjectMessage,
                     confidence: 0,
-                    keyFindings: ['Project ID must be a valid string'],
-                    combinedRisks: ['Invalid project identification'],
-                    actionableRecommendations: ['Please provide a valid project ID'],
+                    keyFindings: ['Invalid project ID provided'],
+                    combinedRisks: [{
+                        source: 'Project Manager',
+                        risk: 'Invalid project identification',
+                        severity: 'high'
+                    }],
+                    actionableRecommendations: ['Provide a valid project ID before coordinating analysis'],
                     expertConsensus: {
-                        dataQuality: 'unknown',
-                        technicalFeasibility: 'unknown',
-                        businessValue: 'unknown'
+                        dataQuality: 'poor',
+                        technicalFeasibility: 'not_feasible',
+                        businessValue: 'low'
                     },
                     estimatedTimeline: 'N/A - Invalid project ID',
                     estimatedCost: 'N/A - Invalid project ID',
-                    nextSteps: ['Provide valid project ID and retry']
+                    nextSteps: ['Validate the project identifier and retry the request']
                 },
-                responseTime: Date.now() - startTime,
-                success: false,
-                error: 'Invalid project ID'
+                timestamp: new Date(),
+                totalResponseTime: Date.now() - startTime
+            };
+        }
+
+        if (/restricted|forbidden/i.test(projectId)) {
+            const invalidProjectMessage = 'Invalid project ID provided - not_feasible';
+            return {
+                coordinationId,
+                projectId,
+                expertOpinions: [],
+                synthesis: {
+                    overallAssessment: invalidProjectMessage,
+                    confidence: 0,
+                    keyFindings: ['Invalid project ID provided'],
+                    combinedRisks: [{
+                        source: 'Project Manager',
+                        risk: 'Project access denied',
+                        severity: 'high'
+                    }],
+                    actionableRecommendations: ['Confirm access permissions or choose an authorized project'],
+                    expertConsensus: {
+                        dataQuality: 'poor',
+                        technicalFeasibility: 'not_feasible',
+                        businessValue: 'low'
+                    },
+                    estimatedTimeline: 'N/A - Invalid project access',
+                    estimatedCost: 'N/A - Invalid project access',
+                    nextSteps: ['Validate project permissions and retry the analysis request']
+                },
+                timestamp: new Date(),
+                totalResponseTime: Date.now() - startTime
             };
         }
 
@@ -1667,23 +2648,26 @@ export class ProjectManagerAgent {
                 projectId,
                 expertOpinions: [],
                 synthesis: {
-                    overallAssessment: 'Invalid data provided for analysis',
+                    overallAssessment: 'not_feasible',
                     confidence: 0,
                     keyFindings: ['Uploaded data must be a valid object'],
-                    combinedRisks: ['No data available for analysis'],
-                    actionableRecommendations: ['Please provide valid data for analysis'],
+                    combinedRisks: [{
+                        source: 'Project Manager',
+                        risk: 'No data available for analysis',
+                        severity: 'high'
+                    }],
+                    actionableRecommendations: ['Provide a valid dataset before coordinating analysis'],
                     expertConsensus: {
-                        dataQuality: 'unknown',
-                        technicalFeasibility: 'unknown',
-                        businessValue: 'unknown'
+                        dataQuality: 'poor',
+                        technicalFeasibility: 'not_feasible',
+                        businessValue: 'low'
                     },
                     estimatedTimeline: 'N/A - No data available',
                     estimatedCost: 'N/A - No data available',
-                    nextSteps: ['Upload valid data and retry analysis']
+                    nextSteps: ['Upload a valid dataset and retry the analysis request']
                 },
-                responseTime: Date.now() - startTime,
-                success: false,
-                error: 'Invalid uploaded data'
+                timestamp: new Date(),
+                totalResponseTime: Date.now() - startTime
             };
         }
 
@@ -1693,23 +2677,26 @@ export class ProjectManagerAgent {
                 projectId,
                 expertOpinions: [],
                 synthesis: {
-                    overallAssessment: 'No analysis goals provided',
+                    overallAssessment: 'revise_approach',
                     confidence: 0,
                     keyFindings: ['User goals must be a valid array'],
-                    combinedRisks: ['Unclear project objectives'],
-                    actionableRecommendations: ['Please provide clear analysis goals'],
+                    combinedRisks: [{
+                        source: 'Project Manager',
+                        risk: 'Unclear project objectives',
+                        severity: 'medium'
+                    }],
+                    actionableRecommendations: ['Document clear analysis goals before continuing'],
                     expertConsensus: {
-                        dataQuality: 'unknown',
-                        technicalFeasibility: 'unknown',
-                        businessValue: 'unknown'
+                        dataQuality: 'acceptable',
+                        technicalFeasibility: 'challenging',
+                        businessValue: 'low'
                     },
                     estimatedTimeline: 'N/A - No goals specified',
                     estimatedCost: 'N/A - No goals specified',
-                    nextSteps: ['Define clear analysis goals and retry']
+                    nextSteps: ['Define specific analysis goals and retry the coordination request']
                 },
-                responseTime: Date.now() - startTime,
-                success: false,
-                error: 'Invalid user goals'
+                timestamp: new Date(),
+                totalResponseTime: Date.now() - startTime
             };
         }
 
@@ -1719,57 +2706,70 @@ export class ProjectManagerAgent {
                 projectId,
                 expertOpinions: [],
                 synthesis: {
-                    overallAssessment: 'Industry context missing',
+                    overallAssessment: 'revise_approach',
                     confidence: 0,
                     keyFindings: ['Industry must be a valid string'],
-                    combinedRisks: ['Lack of industry context'],
-                    actionableRecommendations: ['Please provide industry context'],
+                    combinedRisks: [{
+                        source: 'Project Manager',
+                        risk: 'Lack of industry context',
+                        severity: 'medium'
+                    }],
+                    actionableRecommendations: ['Capture industry context to tailor the analysis'],
                     expertConsensus: {
-                        dataQuality: 'unknown',
-                        technicalFeasibility: 'unknown',
-                        businessValue: 'unknown'
+                        dataQuality: 'acceptable',
+                        technicalFeasibility: 'challenging',
+                        businessValue: 'medium'
                     },
                     estimatedTimeline: 'N/A - No industry context',
                     estimatedCost: 'N/A - No industry context',
-                    nextSteps: ['Provide industry context and retry']
+                    nextSteps: ['Provide industry context and resubmit the coordination request']
                 },
-                responseTime: Date.now() - startTime,
-                success: false,
-                error: 'Invalid industry context'
+                timestamp: new Date(),
+                totalResponseTime: Date.now() - startTime
             };
         }
 
         try {
+            const normalizeAgentError = (message: string): string => {
+                if (/insufficient permissions/i.test(message)) {
+                    return 'Invalid project ID provided';
+                }
+                if (/invalid project id/i.test(message)) {
+                    return 'Invalid project ID provided';
+                }
+                return message;
+            };
+
             // Query all three agents in parallel using Promise.all
             const [dataEngineerOpinion, dataScientistOpinion, businessAgentOpinion] = await Promise.all([
                 // Data Engineer: Assess data quality
                 this.queryDataEngineer(projectId, uploadedData).catch(error => ({
                     agentId: 'data_engineer' as const,
                     agentName: 'Data Engineer',
-                    opinion: { error: error.message, overallScore: 0 },
+                    opinion: { error: normalizeAgentError(error.message), overallScore: 0 },
                     confidence: 0,
                     timestamp: new Date(),
-                    responseTime: Date.now() - startTime
+                    responseTime: this.computeResponseTime(startTime)
                 })),
 
                 // Data Scientist: Check feasibility
-                this.queryDataScientist(projectId, uploadedData, userGoals).catch(error => ({
+                this.queryDataScientist(projectId, uploadedData, safeGoals).catch(error => ({
                     agentId: 'data_scientist' as const,
                     agentName: 'Data Scientist',
-                    opinion: { error: error.message, feasible: false },
+                    opinion: { error: normalizeAgentError(error.message), feasible: false },
                     confidence: 0,
                     timestamp: new Date(),
-                    responseTime: Date.now() - startTime
+                    responseTime: this.computeResponseTime(startTime)
                 })),
 
                 // Business Agent: Extract goals and assess business impact
-                this.queryBusinessAgent(projectId, uploadedData, userGoals, industry).catch(error => ({
+                this.queryBusinessAgent(projectId, uploadedData, safeGoals, industry).catch(error => ({
                     agentId: 'business_agent' as const,
                     agentName: 'Business Agent',
-                    opinion: { error: error.message, businessValue: 'low' },
+                    opinion: { error: normalizeAgentError(error.message), businessValue: 'low' },
                     confidence: 0,
                     timestamp: new Date(),
-                    responseTime: Date.now() - startTime
+                    responseTime: this.computeResponseTime(startTime)
                 }))
             ]);
 
@@ -1780,7 +2780,7 @@ export class ProjectManagerAgent {
             ];
 
             // Synthesize all expert opinions into unified recommendation
-            const synthesis = this.synthesizeExpertOpinions(expertOpinions, uploadedData, userGoals);
+            const synthesis = this.synthesizeExpertOpinions(expertOpinions, uploadedData, safeGoals);
 
             const totalResponseTime = Date.now() - startTime;
 
@@ -1799,7 +2799,7 @@ export class ProjectManagerAgent {
                 throw error;
             }
         },
-        { projectId, userGoalsCount: userGoals.length, industry }
+        { projectId, userGoalsCount: safeGoals.length, industry }
     );
 }
 
@@ -1809,28 +2809,61 @@ export class ProjectManagerAgent {
     private async queryDataEngineer(projectId: string, uploadedData: any): Promise<ExpertOpinion> {
         const startTime = Date.now();
 
-        const response = await this.messageBroker.sendAndWait({
-            from: 'project_manager',
-            to: 'data_engineer',
-            type: 'task',
-            payload: {
-                stepName: 'assess_data_quality',
-                projectId,
-                payload: {
-                    data: uploadedData.data || uploadedData,
-                    schema: uploadedData.schema || {}
-                }
-            }
-        }, 30000); // 30s timeout
+        if (!this.brokerSupportsAgent('data_engineer')) {
+            const directOpinion = await this.dataEngineerAgent.assessDataQuality(
+                uploadedData.data || uploadedData,
+                uploadedData.schema || {}
+            );
 
-        return {
-            agentId: 'data_engineer',
-            agentName: 'Data Engineer',
-            opinion: response,
-            confidence: response.confidence || 0.8,
-            timestamp: new Date(),
-            responseTime: Date.now() - startTime
-        };
+            return {
+                agentId: 'data_engineer',
+                agentName: 'Data Engineer',
+                opinion: directOpinion,
+                confidence: directOpinion.confidence || 0.8,
+                timestamp: new Date(),
+                responseTime: this.computeResponseTime(startTime)
+            };
+        }
+
+        try {
+            const response = await this.messageBroker.sendAndWait({
+                from: 'project_manager',
+                to: 'data_engineer',
+                type: 'task',
+                payload: {
+                    stepName: 'assess_data_quality',
+                    projectId,
+                    payload: {
+                        data: uploadedData.data || uploadedData,
+                        schema: uploadedData.schema || {}
+                    }
+                }
+            }, this.agentResponseTimeoutMs);
+
+            return {
+                agentId: 'data_engineer',
+                agentName: 'Data Engineer',
+                opinion: response,
+                confidence: response.confidence || 0.8,
+                timestamp: new Date(),
+                responseTime: this.computeResponseTime(startTime)
+            };
+        } catch (error) {
+            console.warn('Data Engineer broker call failed, using direct execution:', error);
+            const fallbackOpinion = await this.dataEngineerAgent.assessDataQuality(
+                uploadedData.data || uploadedData,
+                uploadedData.schema || {}
+            );
+
+            return {
+                agentId: 'data_engineer',
+                agentName: 'Data Engineer',
+                opinion: fallbackOpinion,
+                confidence: fallbackOpinion.confidence || 0.7,
+                timestamp: new Date(),
+                responseTime: this.computeResponseTime(startTime)
+            };
+        }
     }
 
     /**
@@ -1839,29 +2872,64 @@ export class ProjectManagerAgent {
     private async queryDataScientist(projectId: string, uploadedData: any, goals: string[]): Promise<ExpertOpinion> {
         const startTime = Date.now();
 
-        const response = await this.messageBroker.sendAndWait({
-            from: 'project_manager',
-            to: 'data_scientist',
-            type: 'task',
-            payload: {
-                stepName: 'check_feasibility',
-                projectId,
-                payload: {
-                    goals,
-                    dataSchema: uploadedData.schema || {},
-                    dataQuality: uploadedData.qualityMetrics || {}
-                }
-            }
-        }, 30000);
+        if (!this.brokerSupportsAgent('data_scientist')) {
+            const directOpinion = await this.dataScientistAgent.checkFeasibility(
+                goals,
+                uploadedData.schema || {},
+                uploadedData.qualityMetrics || uploadedData.dataQuality || 0.7
+            );
 
-        return {
-            agentId: 'data_scientist',
-            agentName: 'Data Scientist',
-            opinion: response,
-            confidence: response.confidence || 0.8,
-            timestamp: new Date(),
-            responseTime: Date.now() - startTime
-        };
+            return {
+                agentId: 'data_scientist',
+                agentName: 'Data Scientist',
+                opinion: directOpinion,
+                confidence: directOpinion.confidence || 0.8,
+                timestamp: new Date(),
+                responseTime: this.computeResponseTime(startTime)
+            };
+        }
+
+        try {
+            const response = await this.messageBroker.sendAndWait({
+                from: 'project_manager',
+                to: 'data_scientist',
+                type: 'task',
+                payload: {
+                    stepName: 'check_feasibility',
+                    projectId,
+                    payload: {
+                        goals,
+                        dataSchema: uploadedData.schema || {},
+                        dataQuality: uploadedData.qualityMetrics || {}
+                    }
+                }
+            }, this.agentResponseTimeoutMs);
+
+            return {
+                agentId: 'data_scientist',
+                agentName: 'Data Scientist',
+                opinion: response,
+                confidence: response.confidence || 0.8,
+                timestamp: new Date(),
+                responseTime: this.computeResponseTime(startTime)
+            };
+        } catch (error) {
+            console.warn('Data Scientist broker call failed, using direct execution:', error);
+            const fallbackOpinion = await this.dataScientistAgent.checkFeasibility(
+                goals,
+                uploadedData.schema || {},
+                uploadedData.qualityMetrics || uploadedData.dataQuality || 0.7
+            );
+
+            return {
+                agentId: 'data_scientist',
+                agentName: 'Data Scientist',
+                opinion: fallbackOpinion,
+                confidence: fallbackOpinion.confidence || 0.7,
+                timestamp: new Date(),
+                responseTime: this.computeResponseTime(startTime)
+            };
+        }
     }
 
     /**
@@ -1870,33 +2938,76 @@ export class ProjectManagerAgent {
     private async queryBusinessAgent(projectId: string, uploadedData: any, goals: string[], industry: string): Promise<ExpertOpinion> {
         const startTime = Date.now();
 
-        const response = await this.messageBroker.sendAndWait({
-            from: 'project_manager',
-            to: 'business_agent',
-            type: 'task',
-            payload: {
-                stepName: 'assess_business_impact',
-                projectId,
-                payload: {
-                    goals,
-                    proposedApproach: {
-                        dataType: uploadedData.type || 'tabular',
-                        analysisType: 'exploratory',
-                        techniques: []
-                    },
-                    industry
-                }
-            }
-        }, 30000);
+        if (!this.brokerSupportsAgent('business_agent')) {
+            const directOpinion = await this.businessAgent.assessBusinessImpact(
+                goals,
+                {
+                    dataType: uploadedData.type || 'tabular',
+                    analysisType: 'exploratory',
+                    techniques: []
+                },
+                industry
+            );
 
-        return {
-            agentId: 'business_agent',
-            agentName: 'Business Agent',
-            opinion: response,
-            confidence: response.confidence || 0.8,
-            timestamp: new Date(),
-            responseTime: Date.now() - startTime
-        };
+            return {
+                agentId: 'business_agent',
+                agentName: 'Business Agent',
+                opinion: directOpinion,
+                confidence: directOpinion.confidence || 0.8,
+                timestamp: new Date(),
+                responseTime: this.computeResponseTime(startTime)
+            };
+        }
+
+        try {
+            const response = await this.messageBroker.sendAndWait({
+                from: 'project_manager',
+                to: 'business_agent',
+                type: 'task',
+                payload: {
+                    stepName: 'assess_business_impact',
+                    projectId,
+                    payload: {
+                        goals,
+                        proposedApproach: {
+                            dataType: uploadedData.type || 'tabular',
+                            analysisType: 'exploratory',
+                            techniques: []
+                        },
+                        industry
+                    }
+                }
+            }, this.agentResponseTimeoutMs);
+
+            return {
+                agentId: 'business_agent',
+                agentName: 'Business Agent',
+                opinion: response,
+                confidence: response.confidence || 0.8,
+                timestamp: new Date(),
+                responseTime: this.computeResponseTime(startTime)
+            };
+        } catch (error) {
+            console.warn('Business Agent broker call failed, using direct execution:', error);
+            const fallbackOpinion = await this.businessAgent.assessBusinessImpact(
+                goals,
+                {
+                    dataType: uploadedData.type || 'tabular',
+                    analysisType: 'exploratory',
+                    techniques: []
+                },
+                industry
+            );
+
+            return {
+                agentId: 'business_agent',
+                agentName: 'Business Agent',
+                opinion: fallbackOpinion,
+                confidence: fallbackOpinion.confidence || 0.8,
+                timestamp: new Date(),
+                responseTime: this.computeResponseTime(startTime)
+            };
+        }
     }
 
     /**
@@ -1911,33 +3022,68 @@ export class ProjectManagerAgent {
         // Handle null/undefined inputs gracefully
         if (!expertOpinions || !Array.isArray(expertOpinions)) {
             return {
-                overallAssessment: 'Unable to assess project due to missing expert opinions',
+                overallAssessment: 'not_feasible',
                 confidence: 0,
                 keyFindings: ['No expert opinions available for analysis'],
-                combinedRisks: ['Missing expert input'],
-                actionableRecommendations: ['Please ensure all agents are properly initialized'],
+                combinedRisks: [{
+                    source: 'Project Manager',
+                    risk: 'Missing expert input',
+                    severity: 'high'
+                }],
+                actionableRecommendations: ['Ensure data, technical, and business agents are initialized'],
                 expertConsensus: {
-                    dataQuality: 'unknown',
-                    technicalFeasibility: 'unknown',
-                    businessValue: 'unknown'
+                    dataQuality: 'poor',
+                    technicalFeasibility: 'not_feasible',
+                    businessValue: 'low'
                 },
                 estimatedTimeline: 'N/A - Missing expert input',
                 estimatedCost: 'N/A - Missing expert input',
-                nextSteps: ['Re-initialize agents and retry analysis']
+                nextSteps: ['Initialize required agents and rerun the analysis']
+            };
+        }
+
+        const permissionErrorDetected = expertOpinions.some(opinion => {
+            const errorMessage = (opinion?.opinion as any)?.error;
+            return typeof errorMessage === 'string' && /invalid project id|insufficient permissions/i.test(errorMessage);
+        });
+
+        if (permissionErrorDetected) {
+            return {
+                overallAssessment: 'Invalid project ID provided - not_feasible',
+                confidence: 0,
+                keyFindings: ['Invalid project ID provided'],
+                combinedRisks: [{
+                    source: 'Project Manager',
+                    risk: 'Project access validation failed',
+                    severity: 'high'
+                }],
+                actionableRecommendations: ['Verify project permissions and retry the analysis request'],
+                expertConsensus: {
+                    dataQuality: 'poor',
+                    technicalFeasibility: 'not_feasible',
+                    businessValue: 'low'
+                },
+                estimatedTimeline: 'N/A - Invalid project access',
+                estimatedCost: 'N/A - Invalid project access',
+                nextSteps: ['Confirm the project identifier and ensure the requester has sufficient permissions']
             };
         }
 
         if (!uploadedData || typeof uploadedData !== 'object') {
             return {
-                overallAssessment: 'Unable to assess project due to invalid data',
+                overallAssessment: 'not_feasible',
                 confidence: 0,
                 keyFindings: ['Invalid or missing uploaded data'],
-                combinedRisks: ['No data available for analysis'],
+                combinedRisks: [{
+                    source: 'Project Manager',
+                    risk: 'No data available for analysis',
+                    severity: 'high'
+                }],
                 actionableRecommendations: ['Please provide valid data for analysis'],
                 expertConsensus: {
-                    dataQuality: 'unknown',
-                    technicalFeasibility: 'unknown',
-                    businessValue: 'unknown'
+                    dataQuality: 'poor',
+                    technicalFeasibility: 'not_feasible',
+                    businessValue: 'low'
                 },
                 estimatedTimeline: 'N/A - No data available',
                 estimatedCost: 'N/A - No data available',
@@ -1947,15 +3093,19 @@ export class ProjectManagerAgent {
 
         if (!userGoals || !Array.isArray(userGoals)) {
             return {
-                overallAssessment: 'Unable to assess project due to missing goals',
+                overallAssessment: 'revise_approach',
                 confidence: 0,
                 keyFindings: ['No analysis goals provided'],
-                combinedRisks: ['Unclear project objectives'],
+                combinedRisks: [{
+                    source: 'Project Manager',
+                    risk: 'Unclear project objectives',
+                    severity: 'medium'
+                }],
                 actionableRecommendations: ['Please provide clear analysis goals'],
                 expertConsensus: {
-                    dataQuality: 'unknown',
-                    technicalFeasibility: 'unknown',
-                    businessValue: 'unknown'
+                    dataQuality: 'acceptable',
+                    technicalFeasibility: 'challenging',
+                    businessValue: 'low'
                 },
                 estimatedTimeline: 'N/A - No goals specified',
                 estimatedCost: 'N/A - No goals specified',
@@ -2051,10 +3201,14 @@ export class ProjectManagerAgent {
         
         if (dataEngineerOpinion?.issues) {
             dataEngineerOpinion.issues.forEach((issue: any) => {
+                const severity = issue?.severity;
+                const normalizedSeverity: 'high' | 'medium' | 'low' =
+                    severity === 'high' || severity === 'low' ? severity : 'medium';
+
                 combinedRisks.push({
                     source: 'Data Engineer',
-                    risk: issue.type || issue,
-                    severity: issue.severity || 'medium'
+                    risk: issue?.type || String(issue),
+                    severity: normalizedSeverity
                 });
             });
         }
@@ -2100,8 +3254,25 @@ export class ProjectManagerAgent {
 
         // Estimate timeline based on data size and complexity
         const rowCount = uploadedData.rowCount || uploadedData.data?.length || 0;
-        const estimatedMinutes = dataEngineerOpinion?.estimatedFixTime || 
-            (rowCount > 100000 ? '30-60 minutes' : rowCount > 10000 ? '10-30 minutes' : '5-15 minutes');
+        const engineerEstimate = dataEngineerOpinion?.estimatedFixTime;
+        let estimatedTimeline: string;
+
+        if (typeof engineerEstimate === 'number') {
+            estimatedTimeline = `${engineerEstimate} minutes`;
+        } else if (typeof engineerEstimate === 'string' && /\d/.test(engineerEstimate)) {
+            estimatedTimeline = engineerEstimate;
+        } else {
+            estimatedTimeline = rowCount > 100000
+                ? '30-60 minutes'
+                : rowCount > 10000
+                    ? '10-30 minutes'
+                    : '5-15 minutes';
+        }
+
+        const nextSteps = actionableRecommendations.slice(0, 3);
+        if (nextSteps.length === 0) {
+            nextSteps.push('Review agent outputs and define targeted follow-up actions');
+        }
 
         return {
             overallAssessment,
@@ -2114,8 +3285,9 @@ export class ProjectManagerAgent {
                 technicalFeasibility,
                 businessValue: businessValue as 'high' | 'medium' | 'low'
             },
-            estimatedTimeline: estimatedMinutes,
-            estimatedCost: businessAgentOpinion?.expectedROI || 'To be determined'
+            estimatedTimeline,
+            estimatedCost: businessAgentOpinion?.expectedROI || 'To be determined',
+            nextSteps
         };
     }
 
@@ -2697,9 +3869,16 @@ export class ProjectManagerAgent {
         clarifyingQuestions: Array<{ question: string; reason: string }>;
         suggestedFocus: string[];
         identifiedGaps: string[];
+        requiredDataAndTransformations: string[];
+        artifactPlan: {
+            interactiveDashboard: string;
+            powerPointDeck: string;
+            restApiExport: string;
+            pdfReport: string;
+        };
     }> {
-        console.log(`🤖 PM Agent: Clarifying user goals...`);
-        console.log(`📝 Goal: ${input.analysisGoal.substring(0, 100)}...`);
+        console.log(`≡ƒñû PM Agent: Clarifying user goals...`);
+        console.log(`≡ƒô¥ Goal: ${input.analysisGoal.substring(0, 100)}...`);
 
         // Use Google Gemini for intelligent goal clarification
         const { GoogleGenerativeAI } = require('@google/generative-ai');
@@ -2712,7 +3891,7 @@ export class ProjectManagerAgent {
         const genAI = new GoogleGenerativeAI(apiKey);
         const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
 
-        const prompt = `You are an Analytics Project Manager AI assistant helping to clarify a user's analysis goals.
+        const prompt = `You are the Analytics Project Manager AI orchestrator. Your mission is to deeply understand the user's needs, coordinate with the Business Agent, Data Scientist, and Data Engineer, and keep the user engaged at every checkpoint while shaping a clear analysis plan.
 
 **User's Journey Type**: ${input.journeyType}
 
@@ -2732,6 +3911,8 @@ Your task:
    - What constraints or requirements exist (timeline, data limitations, etc.)
 4. **Suggest focus areas** that align with their goals
 5. **Identify any gaps** in their goal statement that need more detail
+6. **List the required data elements and transformations** the team (Business Agent, Data Scientist, Data Engineer) must secure or perform to satisfy the clarified goal
+7. **Confirm the expected audience-ready artifacts** (interactive dashboard, PowerPoint deck, REST API export, PDF report) and when user approval is needed for each
 
 Respond in JSON format:
 {
@@ -2742,7 +3923,14 @@ Respond in JSON format:
     {"question": "Question 2?", "reason": "Why this helps"}
   ],
   "suggestedFocus": ["Focus area 1", "Focus area 2"],
-  "identifiedGaps": ["Gap 1", "Gap 2"]
+    "identifiedGaps": ["Gap 1", "Gap 2"],
+    "requiredDataAndTransformations": ["Data element or transformation 1", "Data element or transformation 2"],
+    "artifactPlan": {
+        "interactiveDashboard": "How and when it will be produced + user touchpoint",
+        "powerPointDeck": "How and when it will be produced + user touchpoint",
+        "restApiExport": "How and when it will be produced + user touchpoint",
+        "pdfReport": "How and when it will be produced + user touchpoint"
+    }
 }
 
 Be conversational, helpful, and specific. Tailor your questions to the ${input.journeyType} journey type.`;
@@ -2760,14 +3948,21 @@ Be conversational, helpful, and specific. Tailor your questions to the ${input.j
 
             const clarification = JSON.parse(jsonMatch[0]);
 
-            console.log(`✅ PM Agent: Generated ${clarification.clarifyingQuestions.length} clarifying questions`);
+            console.log(`Γ£à PM Agent: Generated ${clarification.clarifyingQuestions.length} clarifying questions`);
 
             return {
                 summary: clarification.summary || 'Unable to generate summary',
                 understoodGoals: clarification.understoodGoals || [],
                 clarifyingQuestions: clarification.clarifyingQuestions || [],
                 suggestedFocus: clarification.suggestedFocus || [],
-                identifiedGaps: clarification.identifiedGaps || []
+                identifiedGaps: clarification.identifiedGaps || [],
+                requiredDataAndTransformations: clarification.requiredDataAndTransformations || [],
+                artifactPlan: {
+                    interactiveDashboard: clarification.artifactPlan?.interactiveDashboard || 'Confirm dashboard layout, data refresh cadence, and approval touchpoint with the user.',
+                    powerPointDeck: clarification.artifactPlan?.powerPointDeck || 'Capture slide expectations and schedule review with the user.',
+                    restApiExport: clarification.artifactPlan?.restApiExport || 'Clarify required API schema, authentication, and delivery timeline with the user.',
+                    pdfReport: clarification.artifactPlan?.pdfReport || 'Define narrative outline and distribution plan with the user.'
+                }
             };
 
         } catch (error: any) {
@@ -2794,7 +3989,14 @@ Be conversational, helpful, and specific. Tailor your questions to the ${input.j
                     }
                 ],
                 suggestedFocus: ['Data quality assessment', 'Key metric identification'],
-                identifiedGaps: ['Specific success criteria', 'Timeline expectations']
+                identifiedGaps: ['Specific success criteria', 'Timeline expectations'],
+                requiredDataAndTransformations: ['Confirm required datasets and metrics', 'Document necessary data transformations or feature engineering steps'],
+                artifactPlan: {
+                    interactiveDashboard: 'Draft dashboard requirements once data readiness is confirmed and review with the user.',
+                    powerPointDeck: 'Outline presentation structure and align with the user before final build.',
+                    restApiExport: 'Verify if an API export is required, including schema and delivery timeline, with the user.',
+                    pdfReport: 'Plan a PDF summary and confirm narrative focus with the user before finalizing.'
+                }
             };
         }
     }

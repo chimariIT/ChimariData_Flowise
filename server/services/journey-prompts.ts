@@ -77,7 +77,7 @@ export class JourneyPromptService {
    * Enhanced prompt templates for each role and journey step
    */
   private static getPromptTemplates(): Record<UserRole, Record<string, PromptTemplate>> {
-    return {
+    const baseTemplates = {
       'non-tech': {
         'default': {
           systemPrompt: `You are a helpful AI assistant specializing in making data analysis accessible to non-technical users.
@@ -291,7 +291,30 @@ Provide strategic consultation on organizational data capabilities and implement
           temperature: 0.4
         }
       }
+    } satisfies Record<Exclude<UserRole, 'custom'>, Record<string, PromptTemplate>>;
+
+    const customTemplates: Record<string, PromptTemplate> = {
+      ...baseTemplates.technical,
+      default: {
+        ...baseTemplates.technical.default,
+        systemPrompt: `You are an adaptive AI orchestrator supporting bespoke, multi-agent workflows that blend business, technical, and consultation expertise.
+        Evaluate requests holistically, surface strategic implications, and highlight technical considerations.
+        Coordinate recommendations across roles to deliver cohesive guidance for complex custom journeys.`,
+        userPromptTemplate: `{CONTEXT_PREFIX}
+
+User Question: {USER_PROMPT}
+
+Provide a response that combines strategic insight with technical feasibility. Identify where specialist agents should engage, outline orchestration steps, and present next actions for the hybrid team.`,
+        responseFormat: baseTemplates.technical.default.responseFormat,
+        maxTokens: Math.max(baseTemplates.technical.default.maxTokens, 1700),
+        temperature: 0.45
+      }
     };
+
+    return {
+      ...baseTemplates,
+      custom: customTemplates
+    } satisfies Record<UserRole, Record<string, PromptTemplate>>;
   }
 
   /**

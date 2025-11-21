@@ -17,7 +17,7 @@ export interface ToolExecutionMetrics {
   toolId: string;
   executionId: string;
   agentId: string;
-  userId?: number;
+  userId?: string;
   projectId?: string;
   status: 'success' | 'error' | 'timeout' | 'cancelled';
   startTime: Date;
@@ -96,7 +96,7 @@ export class ToolAnalyticsService {
   startExecution(params: {
     toolId: string;
     agentId: string;
-    userId?: number;
+    userId?: string;
     projectId?: string;
     executionId?: string;
   }): { executionId: string; startTime: Date; complete: (result: any) => Promise<void> } {
@@ -288,8 +288,8 @@ export class ToolAnalyticsService {
   /**
    * Get cost breakdown by user
    */
-  async getUserCostBreakdown(userId: number, startDate?: Date, endDate?: Date): Promise<{
-    userId: number;
+  async getUserCostBreakdown(userId: string, startDate?: Date, endDate?: Date): Promise<{
+    userId: string;
     totalCost: number;
     executionCount: number;
     toolBreakdown: { toolId: string; cost: number; count: number }[];
@@ -297,7 +297,7 @@ export class ToolAnalyticsService {
   }> {
     await this.flushMetrics();
 
-    let userMetrics = this.metricsBuffer.filter(m => m.userId === userId);
+  let userMetrics = this.metricsBuffer.filter(m => m.userId === userId);
 
     // Apply date filters if provided
     if (startDate) {

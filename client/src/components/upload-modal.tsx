@@ -173,7 +173,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
     try {
       setIsUploading(true);
       
-      // Use the unified JSON approach like the free trial uploader
+  // Use the unified JSON approach like the trial uploader
       const requestData = {
         tempFileId: tempFileInfo.tempFileId,
         decision: decision,

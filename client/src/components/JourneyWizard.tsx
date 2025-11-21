@@ -25,6 +25,7 @@ import PrepareStep from "@/pages/prepare-step";
 import ProjectSetupStep from "@/pages/project-setup-step";
 import DataStep from "@/pages/data-step";
 import DataVerificationStep from "@/pages/data-verification-step";
+import PlanStep from "@/pages/plan-step";
 import ExecuteStep from "@/pages/execute-step";
 import ResultsPreviewStep from "@/pages/results-preview-step";
 import PricingStep from "@/pages/pricing-step";
@@ -78,6 +79,14 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
       description: 'Review data quality, schema, and privacy',
       route: `/journeys/${journeyType}/data-verification`,
       icon: CheckCircle,
+      completed: false
+    },
+    {
+      id: 'plan',
+      title: 'Analysis Planning',
+      description: 'AI agents design analysis plan with cost estimate',
+      route: `/journeys/${journeyType}/plan`,
+      icon: Lightbulb,
       completed: false
     },
     {
@@ -402,6 +411,15 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
           
           {currentStage === 'data-verification' && (
             <DataVerificationStep 
+              journeyType={journeyType}
+              onNext={handleNext}
+              onPrevious={handlePrevious}
+              renderAsContent={true}
+            />
+          )}
+          
+          {currentStage === 'plan' && (
+            <PlanStep 
               journeyType={journeyType}
               onNext={handleNext}
               onPrevious={handlePrevious}

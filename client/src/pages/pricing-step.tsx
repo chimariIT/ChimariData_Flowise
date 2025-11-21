@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -7,18 +7,17 @@ import {
   DollarSign,
   CheckCircle,
   CreditCard,
-  Clock,
   Zap,
   Shield,
-  Download,
-  Eye,
   ArrowRight,
   ShieldCheck,
-  AlertTriangle
+  AlertTriangle,
+  Loader2
 } from "lucide-react";
 import { apiClient } from "@/lib/api";
 import BillingCapacityDisplay from "@/components/BillingCapacityDisplay";
 import { useProjectSession } from "@/hooks/useProjectSession";
+import { useJourneyState } from "@/hooks/useJourneyState";
 
 interface PricingStepProps {
   journeyType: string;
@@ -26,24 +25,125 @@ interface PricingStepProps {
   onPrevious?: () => void;
 }
 
+type AnalysisSummary = {
+  totalAnalyses: number;
+  dataSize: number;
+  complexity: string;
+  executionTime: string;
+  resultsGenerated: number;
+  insightsFound: number;
+};
+
+type NormalizedBreakdown = {
+  journeyType: string;
+  datasetSizeMB: number;
+  totalCost: number;
+  baseCost: number;
+  subscriptionCredits: number;
+  capacityUsed: Record<string, number> | null;
+  capacityRemaining: Record<string, number> | null;
+  utilizationPercentage: Record<string, number> | null;
+  breakdown: Array<{
+    description: string;
+    cost: number;
+    capacityImpact?: {
+      used?: Record<string, number>;
+      remaining?: Record<string, number>;
+    };
+  }>;
+};
+
+const formatCurrency = (centsOrDollars: number | null | undefined, isCents = false) => {
+  if (centsOrDollars === null || centsOrDollars === undefined || Number.isNaN(centsOrDollars)) {
+    return '—';
+  }
+  const value = isCents ? centsOrDollars / 100 : centsOrDollars;
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
+};
+
+const pickNumber = (...values: unknown[]) => {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return 0;
+};
+
+const mapCapacityBlock = (block: any): Record<string, number> | null => {
+  if (!block || typeof block !== 'object') return null;
+  return {
+    dataVolumeMB: pickNumber(block.dataVolumeMB, block.dataMB, block.data, block.volumeMB),
+    aiInsights: pickNumber(block.aiInsights, block.ai, block.aiQueries),
+    analysisComponents: pickNumber(block.analysisComponents, block.components),
+    visualizations: pickNumber(block.visualizations, block.charts),
+    fileUploads: pickNumber(block.fileUploads, block.uploads),
+  };
+};
+
+const normalizeBillingBreakdown = (
+  raw: any,
+  fallbackCostCents: number,
+  fallbackJourneyType: string,
+  fallbackDatasetSizeMB: number
+): NormalizedBreakdown => {
+  const toCents = (value: unknown, fallback: number) => {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return Math.round(value * 100);
+    }
+    return fallback;
+  };
+
+  const normalizedItems = Array.isArray(raw?.breakdown)
+    ? raw.breakdown.map((item: any, index: number) => ({
+        description: item.description || item.item || `Line item ${index + 1}`,
+        cost: toCents(item.cost, 0),
+        capacityImpact: item.capacityImpact
+          ? {
+              used: mapCapacityBlock(item.capacityImpact.used) || undefined,
+              remaining: mapCapacityBlock(item.capacityImpact.remaining) || undefined,
+            }
+          : undefined,
+      }))
+    : [];
+
+  return {
+    journeyType: typeof raw?.journeyType === 'string' ? raw.journeyType : fallbackJourneyType,
+    datasetSizeMB: typeof raw?.datasetSizeMB === 'number' ? raw.datasetSizeMB : fallbackDatasetSizeMB,
+    totalCost: toCents(raw?.totalCost, fallbackCostCents),
+    baseCost: toCents(raw?.baseCost, fallbackCostCents),
+    subscriptionCredits: toCents(raw?.subscriptionCredits, 0),
+    capacityUsed: mapCapacityBlock(raw?.capacityUsed),
+    capacityRemaining: mapCapacityBlock(raw?.capacityRemaining),
+    utilizationPercentage: raw?.utilizationPercentage ?? null,
+    breakdown: normalizedItems,
+  };
+};
+
 export default function PricingStep({ journeyType, onNext, onPrevious }: PricingStepProps) {
-  const [selectedPlan, setSelectedPlan] = useState<string>('');
+  const [selectedPlan, setSelectedPlan] = useState<string>('per-analysis');
   const [paymentMethod, setPaymentMethod] = useState<'card' | 'paypal' | 'bank'>('card');
   const [billingLoading, setBillingLoading] = useState<boolean>(false);
   const [billingError, setBillingError] = useState<string | null>(null);
-  const [billingBreakdown, setBillingBreakdown] = useState<any | null>(null);
+  const [billingBreakdown, setBillingBreakdown] = useState<NormalizedBreakdown | null>(null);
   const [currentTier, setCurrentTier] = useState<string>('');
-  const [validationWarning, setValidationWarning] = useState<string | null>(null);
 
   // 🔒 CRITICAL: Use server-validated session data ONLY
   const {
     session,
     getExecuteData,
-    loading: sessionLoading,
-    error: sessionError
+    loading: sessionLoading
   } = useProjectSession({
-    journeyType: journeyType as 'non-tech' | 'business' | 'technical' | 'consultation'
+    journeyType: journeyType as 'non-tech' | 'business' | 'technical' | 'consultation' | 'custom'
   });
+
+  const projectId = session?.projectId ?? null;
+  const {
+    data: journeyState,
+    isLoading: journeyStateLoading,
+    isFetching: journeyStateFetching,
+    error: journeyStateError
+  } = useJourneyState(projectId ?? undefined, { enabled: Boolean(projectId) });
 
   const getJourneyTypeInfo = () => {
     switch (journeyType) {
@@ -93,20 +193,28 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
   const journeyInfo = getJourneyTypeInfo();
   const Icon = journeyInfo.icon;
 
-  // 🔒 SECURITY: Load ONLY server-validated analysis results
-  const getAnalysisResults = () => {
-    // CRITICAL: Verify server validation
+  const defaultAnalysisSummary: AnalysisSummary = {
+    totalAnalyses: 0,
+    dataSize: 0,
+    complexity: 'moderate',
+    executionTime: 'N/A',
+    resultsGenerated: 0,
+    insightsFound: 0,
+  };
+
+  const { summary: analysisResults, warning: validationWarning } = useMemo(() => {
+    let warning: string | null = null;
+    let summary: AnalysisSummary = { ...defaultAnalysisSummary };
+
     if (session) {
       if (!session.serverValidated) {
-        setValidationWarning('⚠️ SECURITY: Execution results have NOT been validated by the server. Pricing may be inaccurate. Please re-run your analysis.');
+        warning = '⚠️ SECURITY: Execution results have NOT been validated by the server. Pricing may be inaccurate. Please re-run your analysis.';
         console.error('SECURITY ALERT: Attempting to use unvalidated execution results for pricing');
       }
 
-      // Use server-authoritative data
       const serverData = getExecuteData();
       if (serverData) {
-        console.log('✅ Using server-validated execution results for pricing');
-        return {
+        summary = {
           totalAnalyses: serverData.totalAnalyses || serverData.selectedAnalyses?.length || 1,
           dataSize: serverData.dataSize || serverData.resultsGenerated || 1000,
           complexity: serverData.complexity || 'moderate',
@@ -114,17 +222,17 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
           resultsGenerated: serverData.resultsGenerated || 0,
           insightsFound: serverData.insightsFound || 0
         };
+        return { summary, warning };
       }
     }
 
-    // Fallback to localStorage cache (with warning)
     try {
       const cached = localStorage.getItem('chimari_execution_results');
       if (cached) {
-        console.warn('⚠️  Using localStorage fallback (not server-validated)');
-        setValidationWarning('Using cached data. For accurate pricing, please ensure your analysis completed successfully.');
         const parsed = JSON.parse(cached);
-        return {
+        warning = warning ?? 'Using cached data. For accurate pricing, please ensure your analysis completed successfully.';
+        console.warn('⚠️  Using localStorage fallback (not server-validated)');
+        summary = {
           totalAnalyses: parsed.totalAnalyses || parsed.selectedAnalyses?.length || 1,
           dataSize: parsed.dataSize || parsed.resultsGenerated || 1000,
           complexity: parsed.complexity || 'moderate',
@@ -132,80 +240,22 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
           resultsGenerated: parsed.resultsGenerated || 0,
           insightsFound: parsed.insightsFound || 0
         };
+        return { summary, warning };
       }
     } catch (error) {
       console.error('Failed to load execution results:', error);
+      warning = warning ?? '⚠️ We could not load your execution results. Please rerun analysis before payment.';
     }
 
-    // Last resort: defaults
-    setValidationWarning('⚠️ No execution results found. Please run analysis before viewing pricing.');
-    return {
-      totalAnalyses: 0,
-      dataSize: 0,
-      complexity: 'moderate' as const,
-      executionTime: 'N/A',
-      resultsGenerated: 0,
-      insightsFound: 0
-    };
-  };
-
-  const analysisResults = getAnalysisResults();
+    warning = warning ?? '⚠️ No execution results found. Please run analysis before viewing pricing.';
+    return { summary, warning };
+  }, [session, getExecuteData]);
 
   // Compute dataset size in MB from rows (rough estimate: 10,000 rows ~ 100 MB)
-  const datasetSizeMB = Math.max(1, Math.round(analysisResults.dataSize / 100));
-
-  // Load billing breakdown from server so subscription credits are applied
-  useEffect(() => {
-    let cancelled = false;
-    async function loadBreakdown() {
-      setBillingLoading(true);
-      setBillingError(null);
-      try {
-        // Load current subscription tier for display
-        try {
-          const cap: any = await apiClient.get('/api/billing/capacity-summary');
-          if (!cancelled && cap?.success && cap.summary?.currentTier) {
-            setCurrentTier(cap.summary.currentTier);
-          }
-        } catch { /* non-fatal */ }
-
-        const payload = {
-          journeyType: ['non-tech', 'business', 'technical', 'consultation'].includes(journeyType)
-            ? journeyType
-            : 'non-tech',
-          datasetSizeMB,
-          additionalFeatures: [],
-        };
-        const res: any = await apiClient.post('/api/billing/journey-breakdown', payload);
-        if (!cancelled && res?.success) {
-          setBillingBreakdown(res.breakdown);
-        }
-      } catch (err: any) {
-        // If unauthenticated or endpoint unavailable, fail softly and keep client-only pricing
-        if (!cancelled) {
-          console.error('Billing breakdown error:', err);
-          const errorMsg = err?.message || err?.error || 'Unable to load subscription-adjusted pricing';
-          setBillingError(errorMsg);
-          // Set default billing breakdown for non-authenticated users
-          setBillingBreakdown({
-            journeyType: payload.journeyType, // Add journeyType to fallback
-            datasetSizeMB: payload.datasetSizeMB,
-            baseCost: journeyInfo.basePrice * analysisResults.totalAnalyses,
-            subscriptionCredits: 0,
-            totalCost: journeyInfo.basePrice * analysisResults.totalAnalyses,
-            breakdown: []
-          });
-        }
-      } finally {
-        if (!cancelled) setBillingLoading(false);
-      }
-    }
-    loadBreakdown();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [journeyType, datasetSizeMB]);
+  const datasetSizeMB = useMemo(() =>
+    Math.max(1, Math.round(analysisResults.dataSize / 100)),
+    [analysisResults.dataSize]
+  );
 
   const calculatePricing = () => {
     let basePrice = journeyInfo.basePrice;
@@ -232,65 +282,160 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
 
   const finalPrice = calculatePricing();
 
-  const formatCurrency = (centsOrDollars: number, isCents = false) => {
-    const value = isCents ? centsOrDollars / 100 : centsOrDollars;
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
+  const toCents = (amount: unknown): number | null => {
+    if (amount === null || amount === undefined) return null;
+    const numeric = Number(amount);
+    if (!Number.isFinite(numeric)) return null;
+    return Math.round(numeric * 100);
   };
 
-  const pricingPlans = [
-    {
-      id: 'per-analysis',
-      name: 'Per-Analysis Pricing',
-      description: 'Pay only for what you use - transparent usage-based pricing',
-      price: finalPrice,
-      features: [
-        'Complete analysis execution',
-        'Detailed results report',
-        'Data visualizations',
-        'Insights and recommendations',
-        'Downloadable artifacts',
-        '30-day access to results'
-      ],
-      popular: true,
-      pricingDetails: {
-        baseCost: journeyInfo.basePrice,
-        dataSizeCost: Math.max(0, (analysisResults.dataSize - 1000) * 0.001),
-        complexityMultiplier: analysisResults.complexity === 'moderate' ? 1.2 : analysisResults.complexity === 'complex' ? 1.5 : analysisResults.complexity === 'expert' ? 2.0 : 1.0,
-        analysisCount: analysisResults.totalAnalyses
+  const lockedCostCents = useMemo(() => toCents(journeyState?.costs?.estimated), [journeyState]);
+  const spentCostCents = useMemo(() => toCents(journeyState?.costs?.spent), [journeyState]);
+  const remainingCostCents = useMemo(() => toCents(journeyState?.costs?.remaining), [journeyState]);
+
+  const authoritativeCostCents = useMemo(() => {
+    if (lockedCostCents !== null) return lockedCostCents;
+    if (typeof billingBreakdown?.totalCost === 'number') return billingBreakdown.totalCost;
+    return Math.round(finalPrice * 100);
+  }, [lockedCostCents, billingBreakdown?.totalCost, finalPrice]);
+
+  const pricingPlans = useMemo(() => {
+    const perAnalysisPriceDisplay = formatCurrency(authoritativeCostCents, true);
+    return [
+      {
+        id: 'per-analysis',
+        name: 'Per-Analysis Pricing',
+        description: 'Pay only for what you use - transparent usage-based pricing',
+        priceCents: authoritativeCostCents,
+        priceDisplay: perAnalysisPriceDisplay,
+        features: [
+          'Complete analysis execution',
+          'Detailed results report',
+          'Data visualizations',
+          'Insights and recommendations',
+          'Downloadable artifacts',
+          '30-day access to results'
+        ],
+        popular: true,
+        locked: Boolean(lockedCostCents),
+        pricingDetails: {
+          baseCost: journeyInfo.basePrice,
+          dataSizeCost: Math.max(0, (analysisResults.dataSize - 1000) * 0.001),
+          complexityMultiplier: analysisResults.complexity === 'moderate' ? 1.2 : analysisResults.complexity === 'complex' ? 1.5 : analysisResults.complexity === 'expert' ? 2.0 : 1.0,
+          analysisCount: analysisResults.totalAnalyses
+        }
+      },
+      {
+        id: 'volume-discount',
+        name: 'Volume Discount',
+        description: 'Save 15% when you purchase 5+ analyses',
+        priceCents: authoritativeCostCents !== null ? Math.round(authoritativeCostCents * 0.85) : null,
+        priceDisplay:
+          authoritativeCostCents !== null ? formatCurrency(Math.round(authoritativeCostCents * 0.85), true) : 'Custom',
+        features: [
+          'Same features as per-analysis',
+          '15% volume discount',
+          'Bulk processing priority',
+          'Extended result access (90 days)',
+          'Batch report generation'
+        ],
+        popular: false,
+        locked: Boolean(lockedCostCents),
+        minQuantity: 5
+      },
+      {
+        id: 'enterprise',
+        name: 'Enterprise Usage',
+        description: 'Custom pricing for high-volume usage',
+        priceCents: null,
+        priceDisplay: 'Custom',
+        features: [
+          'Custom analysis workflows',
+          'Dedicated processing resources',
+          'On-premise deployment options',
+          'Custom integrations',
+          'SLA guarantees',
+          'Training and onboarding'
+        ],
+        popular: false,
+        locked: Boolean(lockedCostCents),
+        minVolume: '100+ analyses/month'
       }
-    },
-    {
-      id: 'volume-discount',
-      name: 'Volume Discount',
-      description: 'Save 15% when you purchase 5+ analyses',
-      price: Math.round(finalPrice * 0.85),
-      features: [
-        'Same features as per-analysis',
-        '15% volume discount',
-        'Bulk processing priority',
-        'Extended result access (90 days)',
-        'Batch report generation'
-      ],
-      popular: false,
-      minQuantity: 5
-    },
-    {
-      id: 'enterprise',
-      name: 'Enterprise Usage',
-      description: 'Custom pricing for high-volume usage',
-      price: 'Custom',
-      features: [
-        'Custom analysis workflows',
-        'Dedicated processing resources',
-        'On-premise deployment options',
-        'Custom integrations',
-        'SLA guarantees',
-        'Training and onboarding'
-      ],
-      popular: false,
-      minVolume: '100+ analyses/month'
+    ];
+  }, [analysisResults, authoritativeCostCents, journeyInfo.basePrice, lockedCostCents]);
+
+  // Load billing breakdown from server so subscription credits are applied
+  useEffect(() => {
+    if (!projectId) {
+      setBillingBreakdown(null);
+      return;
     }
-  ];
+
+    let cancelled = false;
+    async function loadBreakdown() {
+      setBillingLoading(true);
+      setBillingError(null);
+      const fallbackJourneyType = ['non-tech', 'business', 'technical', 'consultation'].includes(journeyType)
+        ? journeyType
+        : 'non-tech';
+      const fallbackCostCents = Math.round(finalPrice * 100);
+
+      try {
+        try {
+          const cap: any = await apiClient.get('/api/billing/capacity-summary');
+          if (!cancelled && cap?.success && cap.summary?.currentTier) {
+            setCurrentTier(cap.summary.currentTier);
+          }
+        } catch {
+          // optional diagnostic only
+        }
+
+        const payload = {
+          journeyType: fallbackJourneyType,
+          datasetSizeMB,
+          additionalFeatures: [],
+        };
+        const res: any = await apiClient.post('/api/billing/journey-breakdown', payload);
+        if (!cancelled && res?.success) {
+          setBillingBreakdown(
+            normalizeBillingBreakdown(res.breakdown, fallbackCostCents, payload.journeyType, payload.datasetSizeMB)
+          );
+          return;
+        }
+        throw new Error(res?.error || 'Unable to load subscription-adjusted pricing');
+      } catch (err: any) {
+        if (cancelled) return;
+        console.error('Billing breakdown error:', err);
+        const errorMsg = err?.message || err?.error || 'Unable to load subscription-adjusted pricing';
+        setBillingError(errorMsg);
+        const fallbackCostDollars = finalPrice;
+        setBillingBreakdown(
+          normalizeBillingBreakdown(
+            {
+              journeyType: fallbackJourneyType,
+              datasetSizeMB,
+              baseCost: fallbackCostDollars,
+              subscriptionCredits: 0,
+              totalCost: fallbackCostDollars,
+              breakdown: [],
+              capacityUsed: null,
+              capacityRemaining: null,
+              utilizationPercentage: null,
+            },
+            fallbackCostCents,
+            fallbackJourneyType,
+            datasetSizeMB
+          )
+        );
+      } finally {
+        if (!cancelled) setBillingLoading(false);
+      }
+    }
+    loadBreakdown();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, journeyType, datasetSizeMB, finalPrice]);
 
   const paymentMethods = [
     { id: 'card', name: 'Credit/Debit Card', icon: CreditCard, description: 'Visa, Mastercard, American Express' },
@@ -347,6 +492,51 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
                 <p className="text-sm text-yellow-800">{validationWarning}</p>
               </div>
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Locked Cost Overview */}
+      {projectId && (
+        <Card className="border-blue-200 bg-blue-50">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-blue-900">
+              <ShieldCheck className="w-5 h-5" />
+              Journey Cost Summary
+            </CardTitle>
+            <CardDescription className="text-blue-800">
+              {journeyStateError ? 'Unable to load journey state. Displaying latest estimate.' : 'Locked at plan approval and updated after execution.'}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {(journeyStateLoading || journeyStateFetching) && (
+              <div className="flex items-center gap-2 text-sm text-blue-800">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>Syncing journey cost...</span>
+              </div>
+            )}
+            {!journeyStateLoading && !journeyStateFetching && (
+              <div className="grid gap-4 md:grid-cols-3">
+                <div className="rounded-lg border border-blue-100 bg-white p-3">
+                  <p className="text-xs text-blue-700">Locked estimate</p>
+                  <p className="text-lg font-semibold text-blue-900" data-testid="pricing-locked-cost">
+                    {formatCurrency(lockedCostCents ?? authoritativeCostCents, true)}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-blue-100 bg-white p-3">
+                  <p className="text-xs text-blue-700">Spent to date</p>
+                  <p className="text-lg font-semibold text-blue-900" data-testid="pricing-spent-cost">
+                    {spentCostCents !== null ? formatCurrency(spentCostCents, true) : '—'}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-blue-100 bg-white p-3">
+                  <p className="text-xs text-blue-700">Remaining balance</p>
+                  <p className="text-lg font-semibold text-blue-900" data-testid="pricing-remaining-cost">
+                    {remainingCostCents !== null ? formatCurrency(remainingCostCents, true) : '—'}
+                  </p>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -440,7 +630,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
             <Separator />
             <div className="flex justify-between items-center text-lg font-semibold">
               <span>Total Per Analysis</span>
-              <span className="text-blue-600">${finalPrice}</span>
+              <span className="text-blue-600">{formatCurrency(authoritativeCostCents, true)}</span>
             </div>
             <div className="text-xs text-gray-500 bg-gray-50 p-2 rounded">
               💡 This is a one-time cost for this specific analysis. No monthly subscriptions required.
@@ -484,7 +674,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
               <Separator />
               <div className="flex justify-between items-center text-lg font-semibold">
                 <span>Final Total</span>
-                <span className="text-blue-600">{formatCurrency(billingBreakdown.totalCost, true)}</span>
+                <span className="text-blue-600">{formatCurrency(lockedCostCents ?? billingBreakdown.totalCost, true)}</span>
               </div>
             </div>
           )}
@@ -522,8 +712,13 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
                   selectedPlan === plan.id
                     ? 'border-blue-500 bg-blue-50'
                     : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-                } ${plan.popular ? 'ring-2 ring-blue-500' : ''}`}
-                onClick={() => setSelectedPlan(plan.id)}
+                } ${plan.popular ? 'ring-2 ring-blue-500' : ''} ${
+                  plan.locked && plan.id !== 'per-analysis' ? 'pointer-events-none opacity-60' : ''
+                }`}
+                onClick={() => {
+                  if (plan.locked && plan.id !== 'per-analysis') return;
+                  setSelectedPlan(plan.id);
+                }}
               >
                 <div className="text-center mb-4">
                   {plan.popular && (
@@ -533,12 +728,10 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
                   <p className="text-sm text-gray-600 mt-1">{plan.description}</p>
                   <div className="mt-3">
                     <span className="text-3xl font-bold text-gray-900">
-                      {typeof plan.price === 'number' ? `$${plan.price}` : plan.price}
+                      {plan.priceDisplay}
                     </span>
-                    {typeof plan.price === 'number' && (
-                      <span className="text-sm text-gray-600 ml-1">
-                        {plan.id === 'monthly' ? '/month' : '/analysis'}
-                      </span>
+                    {plan.id !== 'enterprise' && (
+                      <span className="text-sm text-gray-600 ml-1">/analysis</span>
                     )}
                   </div>
                 </div>
@@ -660,10 +853,8 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
                 <span className="text-blue-900">Total</span>
                 <span className="text-blue-900">
                   {billingBreakdown
-                    ? formatCurrency(billingBreakdown.totalCost, true)
-                    : (typeof pricingPlans.find(p => p.id === selectedPlan)?.price === 'number'
-                        ? `$${pricingPlans.find(p => p.id === selectedPlan)?.price}`
-                        : 'Contact Sales')}
+                    ? formatCurrency(lockedCostCents ?? billingBreakdown.totalCost, true)
+                    : pricingPlans.find(p => p.id === selectedPlan)?.priceDisplay || 'Contact Sales'}
                 </span>
               </div>
               

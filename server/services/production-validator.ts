@@ -76,6 +76,25 @@ export async function validateProductionReadiness(): Promise<ValidationResult> {
         }
     }
 
+    // Check for ENABLE_MOCK_MODE flag
+    if (process.env.ENABLE_MOCK_MODE === 'true') {
+        if (isProduction) {
+            failures.push('ENABLE_MOCK_MODE is enabled - mock data will be returned to users');
+        } else {
+            warnings.push('ENABLE_MOCK_MODE enabled - using mock data');
+        }
+    }
+
+    // Check for client-side mock data (Vite environment variable)
+    // Note: This can't be checked at runtime, but we document it
+    if (isProduction) {
+        // Verify production build doesn't have VITE_ENABLE_MOCK set
+        const viteMockMode = process.env.VITE_ENABLE_MOCK_MODE;
+        if (viteMockMode === 'true') {
+            warnings.push('VITE_ENABLE_MOCK_MODE is set - verify client-side mock data is disabled in production build');
+        }
+    }
+
     // Check for missing required environment variables
     const envCheck = checkRequiredEnvironmentVariables();
     if (envCheck.missing.length > 0) {

@@ -33,6 +33,7 @@ export interface FeatureComplexityConfig {
     maxCount?: number; // Maximum instances allowed per tier
     maxSize?: number; // Maximum size per instance
     maxConcurrent?: number; // Maximum concurrent executions
+    maxWidgets?: number; // Maximum widgets supported for UI-centric features
   };
 }
 

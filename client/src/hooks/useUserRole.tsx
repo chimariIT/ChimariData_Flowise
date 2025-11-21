@@ -64,16 +64,28 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
       setLoading(true);
       setError(null);
 
-      const response = await apiClient.get("/api/user/role-permissions");
-      if (response.ok) {
-        const data = await response.json();
-        setUserRoleData(data);
-      } else {
-        throw new Error("Failed to fetch user role data");
+      // Check if user has auth token before making request
+      const token = localStorage.getItem('auth_token');
+      if (!token) {
+        // No token - user not authenticated, silently skip
+        setUserRoleData(null);
+        setLoading(false);
+        return;
       }
+
+      // apiClient.get() returns parsed JSON directly, not a Response object
+      const data = await apiClient.get("/api/user/role-permissions");
+      setUserRoleData(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
-      console.error("Error fetching user role:", err);
+      const errorMessage = err instanceof Error ? err.message : "Unknown error";
+
+      // Only log error if it's not an authentication issue
+      if (!errorMessage.includes("Authentication required")) {
+        setError(errorMessage);
+        console.error("Error fetching user role:", err);
+      }
+      // For auth errors, silently set user data to null (user not logged in)
+      setUserRoleData(null);
     } finally {
       setLoading(false);
     }

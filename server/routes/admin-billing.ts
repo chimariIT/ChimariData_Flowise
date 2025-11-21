@@ -1,6 +1,10 @@
 import { Router } from 'express';
 import { getBillingService } from '../services/billing/unified-billing-service';
 import { ensureAuthenticated } from './auth';
+import { db } from '../db';
+import { subscriptionTierPricing, servicePricing } from '@shared/schema';
+import { eq } from 'drizzle-orm';
+import { getStripeSyncService } from '../services/stripe-sync';
 
 const billingService = getBillingService();
 
@@ -24,12 +28,15 @@ router.get('/overview', ensureAuthenticated, ensureAdmin, async (req, res) => {
     }
 });
 
-// Subscription Tier Management
+// Subscription Tier Management - CONNECTED TO DATABASE
 router.get('/tiers', ensureAuthenticated, ensureAdmin, async (req, res) => {
     try {
-        const config = (billingService as any).config;
-        res.json({ success: true, tiers: config.tiers });
+        // Query database instead of in-memory config
+        const tiers = await db.select().from(subscriptionTierPricing);
+
+        res.json({ success: true, tiers });
     } catch (error: any) {
+        console.error('Error fetching tiers from database:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -38,27 +45,116 @@ router.post('/tiers', ensureAuthenticated, ensureAdmin, async (req, res) => {
     try {
         const { tier } = req.body;
 
-        // Validate tier structure
-        if (!tier.id || !tier.name || !tier.role || !tier.pricing || !tier.quotas) {
+        // Validate tier structure - updated for database schema
+        if (!tier.id || !tier.displayName || !tier.monthlyPriceUsd) {
             return res.status(400).json({
                 success: false,
-                error: 'Invalid tier structure. Required: id, name, role, pricing, quotas'
+                error: 'Invalid tier structure. Required: id, displayName, monthlyPriceUsd'
             });
         }
 
-        const config = (billingService as any).config;
-        const existingIndex = config.tiers.findIndex((t: any) => t.id === tier.id);
+        // Check if tier exists
+        const [existing] = await db
+            .select()
+            .from(subscriptionTierPricing)
+            .where(eq(subscriptionTierPricing.id, tier.id));
 
-        if (existingIndex >= 0) {
-            config.tiers[existingIndex] = tier;
+        if (existing) {
+            // Update existing tier
+            const [updated] = await db
+                .update(subscriptionTierPricing)
+                .set({
+                    name: tier.name || existing.name,
+                    displayName: tier.displayName,
+                    description: tier.description || existing.description,
+                    monthlyPriceUsd: tier.monthlyPriceUsd,
+                    yearlyPriceUsd: tier.yearlyPriceUsd || tier.monthlyPriceUsd * 10, // Default: 2 months free
+                    limits: tier.limits || existing.limits,
+                    features: tier.features || existing.features,
+                    journeyPricing: tier.journeyPricing || existing.journeyPricing,
+                    overagePricing: tier.overagePricing || existing.overagePricing,
+                    discounts: tier.discounts || existing.discounts,
+                    compliance: tier.compliance || existing.compliance,
+                    isActive: tier.isActive !== undefined ? tier.isActive : existing.isActive,
+                    updatedAt: new Date(),
+                })
+                .where(eq(subscriptionTierPricing.id, tier.id))
+                .returning();
+
+            // Sync with Stripe after database update
+            const stripeSync = getStripeSyncService();
+            if (stripeSync.isStripeConfigured()) {
+                console.log(`🔄 Syncing updated tier ${tier.id} with Stripe...`);
+                const syncResult = await stripeSync.syncTierWithStripe(tier.id, {
+                    displayName: updated.displayName,
+                    description: updated.description || '',
+                    monthlyPriceUsd: updated.monthlyPriceUsd,
+                    yearlyPriceUsd: updated.yearlyPriceUsd,
+                    stripeProductId: updated.stripeProductId,
+                    stripeMonthlyPriceId: updated.stripeMonthlyPriceId,
+                    stripeYearlyPriceId: updated.stripeYearlyPriceId,
+                    limits: updated.limits,
+                    features: updated.features
+                });
+
+                if (syncResult.success) {
+                    console.log(`✅ Stripe sync completed for tier ${tier.id}`);
+                } else {
+                    console.warn(`⚠️  Stripe sync failed for tier ${tier.id}:`, syncResult.error);
+                }
+            }
+
+            res.json({ success: true, message: 'Tier updated successfully', tier: updated });
         } else {
-            config.tiers.push(tier);
+            // Create new tier
+            const [newTier] = await db
+                .insert(subscriptionTierPricing)
+                .values({
+                    id: tier.id,
+                    name: tier.name || tier.displayName,
+                    displayName: tier.displayName,
+                    description: tier.description || '',
+                    monthlyPriceUsd: tier.monthlyPriceUsd,
+                    yearlyPriceUsd: tier.yearlyPriceUsd || tier.monthlyPriceUsd * 10,
+                    limits: tier.limits || {},
+                    features: tier.features || {},
+                    journeyPricing: tier.journeyPricing || {},
+                    overagePricing: tier.overagePricing || {},
+                    discounts: tier.discounts || {},
+                    compliance: tier.compliance || {},
+                    isActive: tier.isActive !== undefined ? tier.isActive : true,
+                    createdAt: new Date(),
+                    updatedAt: new Date(),
+                })
+                .returning();
+
+            // Sync with Stripe after database insert
+            const stripeSync = getStripeSyncService();
+            if (stripeSync.isStripeConfigured()) {
+                console.log(`🔄 Syncing new tier ${tier.id} with Stripe...`);
+                const syncResult = await stripeSync.syncTierWithStripe(tier.id, {
+                    displayName: newTier.displayName,
+                    description: newTier.description || '',
+                    monthlyPriceUsd: newTier.monthlyPriceUsd,
+                    yearlyPriceUsd: newTier.yearlyPriceUsd,
+                    stripeProductId: newTier.stripeProductId,
+                    stripeMonthlyPriceId: newTier.stripeMonthlyPriceId,
+                    stripeYearlyPriceId: newTier.stripeYearlyPriceId,
+                    limits: newTier.limits,
+                    features: newTier.features
+                });
+
+                if (syncResult.success) {
+                    console.log(`✅ Stripe sync completed for new tier ${tier.id}`);
+                } else {
+                    console.warn(`⚠️  Stripe sync failed for tier ${tier.id}:`, syncResult.error);
+                }
+            }
+
+            res.json({ success: true, message: 'Tier created successfully', tier: newTier });
         }
-
-        await billingService.updateBillingConfiguration({ tiers: config.tiers });
-
-        res.json({ success: true, message: 'Tier updated successfully' });
     } catch (error: any) {
+        console.error('Error saving tier to database:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -66,13 +162,24 @@ router.post('/tiers', ensureAuthenticated, ensureAdmin, async (req, res) => {
 router.delete('/tiers/:tierId', ensureAuthenticated, ensureAdmin, async (req, res) => {
     try {
         const { tierId } = req.params;
-        const config = (billingService as any).config;
 
-        config.tiers = config.tiers.filter((t: any) => t.id !== tierId);
-        await billingService.updateBillingConfiguration({ tiers: config.tiers });
+        // Soft delete by deactivating instead of hard delete
+        const [deactivated] = await db
+            .update(subscriptionTierPricing)
+            .set({
+                isActive: false,
+                updatedAt: new Date(),
+            })
+            .where(eq(subscriptionTierPricing.id, tierId))
+            .returning();
 
-        res.json({ success: true, message: 'Tier deleted successfully' });
+        if (!deactivated) {
+            return res.status(404).json({ success: false, error: 'Tier not found' });
+        }
+
+        res.json({ success: true, message: 'Tier deactivated successfully', tier: deactivated });
     } catch (error: any) {
+        console.error('Error deactivating tier:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -291,25 +398,146 @@ router.get('/analytics/revenue', ensureAuthenticated, ensureAdmin, async (req, r
     try {
         const { startDate, endDate, groupBy = 'day' } = req.query;
 
-        // This would integrate with your analytics service
+        const { db } = await import('../db');
+        const { users, subscriptionTierPricing } = await import('../../shared/schema');
+        const { sql, eq, and, gte, lte, count } = await import('drizzle-orm');
+
+        // Parse date filters
+        const start = startDate ? new Date(startDate as string) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000); // Default: last 30 days
+        const end = endDate ? new Date(endDate as string) : new Date();
+
+        // Query all users with their subscription data
+        const allUsers = await db.select({
+            id: users.id,
+            email: users.email,
+            subscriptionTier: users.subscriptionTier,
+            subscriptionStatus: users.subscriptionStatus,
+            createdAt: users.createdAt,
+            updatedAt: users.updatedAt,
+            monthlyUploads: users.monthlyUploads,
+            monthlyDataVolume: users.monthlyDataVolume,
+            monthlyAnalysisComponents: users.monthlyAnalysisComponents,
+            monthlyAIInsights: users.monthlyAIInsights,
+        }).from(users);
+
+        // Get subscription tier pricing to calculate revenue
+        const tierPricing = await db.select().from(subscriptionTierPricing);
+        const pricingMap = new Map<string, { monthly: number; yearly: number }>(
+            tierPricing.map((tier: any) => [tier.id, { monthly: tier.monthlyPriceUsd / 100, yearly: tier.yearlyPriceUsd / 100 }])
+        );
+
+        // Calculate revenue metrics
+        let totalRevenue = 0;
+        let subscriptionRevenue = 0;
+        let consumptionRevenue = 0;
+
+        const tierStats = new Map<string, { revenue: number; customers: number; }>();
+
+        for (const user of allUsers) {
+            const tier = user.subscriptionTier;
+
+            // Skip users without active subscriptions
+            if (!tier || tier === 'none' || user.subscriptionStatus !== 'active') {
+                continue;
+            }
+
+            // Calculate subscription revenue (assume monthly for simplicity)
+            const tierPrice = pricingMap.get(tier);
+            if (tierPrice) {
+                const monthlyRevenue = tierPrice.monthly;
+                subscriptionRevenue += monthlyRevenue;
+                totalRevenue += monthlyRevenue;
+
+                // Track tier performance
+                const existing = tierStats.get(tier) || { revenue: 0, customers: 0 };
+                existing.revenue += monthlyRevenue;
+                existing.customers += 1;
+                tierStats.set(tier, existing);
+            }
+
+            // Calculate consumption/overage revenue (simplified - based on usage over quotas)
+            // This is a basic estimation; in production, you'd track actual billing transactions
+            const overageUsage = {
+                dataVolume: Math.max(0, (user.monthlyDataVolume || 0) - 1000),        // Assume 1000MB base quota
+                uploads: Math.max(0, (user.monthlyUploads || 0) - 10),                // Assume 10 uploads base
+                analysisComponents: Math.max(0, (user.monthlyAnalysisComponents || 0) - 20),  // Assume 20 components base
+                insights: Math.max(0, (user.monthlyAIInsights || 0) - 50)              // Assume 50 insights base
+            };
+
+            const overageRevenue =
+                (overageUsage.dataVolume * 0.01) +          // $0.01 per MB overage
+                (overageUsage.uploads * 1.00) +             // $1.00 per upload overage
+                (overageUsage.analysisComponents * 0.50) +  // $0.50 per analysis component overage
+                (overageUsage.insights * 0.50);             // $0.50 per insight overage
+
+            consumptionRevenue += overageRevenue;
+            totalRevenue += overageRevenue;
+
+            // Add overage to tier stats
+            if (overageRevenue > 0) {
+                const existing = tierStats.get(tier) || { revenue: 0, customers: 0 };
+                existing.revenue += overageRevenue;
+                tierStats.set(tier, existing);
+            }
+        }
+
+        // Generate breakdown by date (simplified - in production, use transaction timestamps)
+        const breakdown = [];
+        const daysDiff = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+
+        if (groupBy === 'day' && daysDiff <= 31) {
+            const dailyAvgSubscription = subscriptionRevenue / Math.max(daysDiff, 1);
+            const dailyAvgConsumption = consumptionRevenue / Math.max(daysDiff, 1);
+
+            for (let i = 0; i < Math.min(daysDiff, 31); i++) {
+                const date = new Date(start.getTime() + i * 24 * 60 * 60 * 1000);
+                breakdown.push({
+                    date: date.toISOString().split('T')[0],
+                    subscription: Math.round(dailyAvgSubscription * 100) / 100,
+                    consumption: Math.round(dailyAvgConsumption * 100) / 100,
+                    total: Math.round((dailyAvgSubscription + dailyAvgConsumption) * 100) / 100
+                });
+            }
+        } else {
+            // For longer periods or different groupBy, aggregate by month
+            breakdown.push({
+                date: start.toISOString().split('T')[0],
+                subscription: Math.round(subscriptionRevenue * 100) / 100,
+                consumption: Math.round(consumptionRevenue * 100) / 100,
+                total: Math.round(totalRevenue * 100) / 100
+            });
+        }
+
+        // Get top performing tiers
+        const topPerformingTiers = Array.from(tierStats.entries())
+            .map(([tier, stats]) => ({
+                tier,
+                revenue: Math.round(stats.revenue * 100) / 100,
+                customers: stats.customers
+            }))
+            .sort((a, b) => b.revenue - a.revenue)
+            .slice(0, 5);
+
         const analyticsData = {
-            totalRevenue: 125400.50,
-            subscriptionRevenue: 89800.00,
-            consumptionRevenue: 35600.50,
-            period: { startDate, endDate },
-            breakdown: [
-                { date: '2024-01-01', subscription: 2980, consumption: 1120, total: 4100 },
-                { date: '2024-01-02', subscription: 3240, consumption: 980, total: 4220 },
-                // ... more data points
-            ],
-            topPerformingTiers: [
-                { tier: 'professional-business', revenue: 45200, customers: 152 },
-                { tier: 'enterprise-technical', revenue: 39800, customers: 67 }
-            ]
+            totalRevenue: Math.round(totalRevenue * 100) / 100,
+            subscriptionRevenue: Math.round(subscriptionRevenue * 100) / 100,
+            consumptionRevenue: Math.round(consumptionRevenue * 100) / 100,
+            period: {
+                startDate: start.toISOString().split('T')[0],
+                endDate: end.toISOString().split('T')[0]
+            },
+            breakdown,
+            topPerformingTiers,
+            metadata: {
+                totalActiveSubscriptions: allUsers.filter((u: any) => u.subscriptionStatus === 'active').length,
+                totalUsers: allUsers.length,
+                calculatedAt: new Date().toISOString()
+            }
         };
 
         res.json({ success: true, analytics: analyticsData });
     } catch (error: any) {
+        console.error('Revenue analytics error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });

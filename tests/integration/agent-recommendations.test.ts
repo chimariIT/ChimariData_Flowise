@@ -4,6 +4,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { DataEngineerAgent } from '../../server/services/data-engineer-agent';
+import { DataScientistAgent } from '../../server/services/data-scientist-agent';
 
 describe('Agent Recommendation API', () => {
   it.skip('should test API endpoint with authentication', () => {
@@ -16,17 +18,8 @@ describe('Data Engineer Agent File Analysis', () => {
   it('should analyze uploaded file structure', async () => {
     // This will be tested when we have actual files
     // For now, we're verifying the agent methods exist
-    const { DataEngineerAgent } = await import('../../server/services/data-engineer-agent');
-
-    expect(DataEngineerAgent).toBeDefined();
-
     // Verify the agent has the new methods
-    const agent = new DataEngineerAgent('test-agent-id', 'Data Engineer Test', {
-      name: 'Data Engineer',
-      description: 'Test agent',
-      capabilities: ['file_analysis'],
-      tools: []
-    });
+    const agent = new DataEngineerAgent();
 
     expect(typeof agent.analyzeUploadedFile).toBe('function');
     expect(typeof agent.analyzeProjectData).toBe('function');
@@ -35,35 +28,48 @@ describe('Data Engineer Agent File Analysis', () => {
 
 describe('Data Scientist Agent Complexity Recommendation', () => {
   it('should recommend analysis complexity', async () => {
-    const { DataScientistAgent } = await import('../../server/services/data-scientist-agent');
-
-    expect(DataScientistAgent).toBeDefined();
-
     // Create test instance
-    const agent = new DataScientistAgent('test-ds-agent', 'Data Scientist Test', {
-      name: 'Data Scientist',
-      description: 'Test agent',
-      capabilities: ['analysis_recommendation'],
-      tools: []
-    });
+    const agent = new DataScientistAgent();
 
     expect(typeof agent.recommendAnalysisConfig).toBe('function');
 
-    // Test complexity recommendation logic
-    const recommendation = await agent.recommendAnalysisConfig({
-      dataSize: 1800,
-      questions: [
+    // Test complexity recommendation logic with proper context
+    const mockContext = {
+      userId: 'test-user-id',
+      userRole: 'business' as const,
+      isAdmin: false,
+      projectId: 'test-project-id',
+      project: {
+        id: 'test-project-id',
+        userId: 'test-user-id',
+        name: 'Test Project',
+        journeyType: 'ai_guided',
+        status: 'active',
+        data: Array(1800).fill({ value: 1 })
+      },
+      data: Array(1800).fill({ value: 1 }),
+      schema: {},
+      recordCount: 1800,
+      ownershipVerified: true,
+      analysisType: 'exploratory' as const,
+      complexity: 'medium' as const,
+      userQuestions: [
         'What are the engagement scores by leader?',
         'How do team scores compare to company average?',
         'What is the trend over time?'
       ],
-      dataCharacteristics: {
-        hasTimeSeries: true,
-        hasCategories: true,
-        hasText: false,
-        hasNumeric: true
+      analysisGoal: 'Analyze employee engagement trends',
+      dataAnalysis: {
+        characteristics: {
+          hasTimeSeries: true,
+          hasCategories: true,
+          hasText: false,
+          hasNumeric: true
+        }
       }
-    });
+    };
+
+    const recommendation = await agent.recommendAnalysisConfig(mockContext);
 
     expect(recommendation).toBeDefined();
     expect(recommendation.complexity).toBeDefined();
@@ -76,41 +82,77 @@ describe('Data Scientist Agent Complexity Recommendation', () => {
   });
 
   it('should return higher complexity for larger datasets', async () => {
-    const { DataScientistAgent } = await import('../../server/services/data-scientist-agent');
+    const agent = new DataScientistAgent();
 
-    const agent = new DataScientistAgent('test-ds-agent-2', 'Data Scientist Test 2', {
-      name: 'Data Scientist',
-      description: 'Test agent',
-      capabilities: ['analysis_recommendation'],
-      tools: []
-    });
-
-    const smallDataset = await agent.recommendAnalysisConfig({
-      dataSize: 500,
-      questions: ['Simple analysis question'],
-      dataCharacteristics: {
-        hasTimeSeries: false,
-        hasCategories: true,
-        hasText: false,
-        hasNumeric: true
+    const smallDatasetContext = {
+      userId: 'test-user-id',
+      userRole: 'business' as const,
+      isAdmin: false,
+      projectId: 'test-project-small',
+      project: {
+        id: 'test-project-small',
+        userId: 'test-user-id',
+        name: 'Small Test Project',
+        journeyType: 'ai_guided',
+        status: 'active',
+        data: Array(500).fill({ value: 1 })
+      },
+      data: Array(500).fill({ value: 1 }),
+      schema: {},
+      recordCount: 500,
+      ownershipVerified: true,
+      analysisType: 'exploratory' as const,
+      complexity: 'low' as const,
+      userQuestions: ['Simple analysis question'],
+      analysisGoal: 'Simple analysis',
+      dataAnalysis: {
+        characteristics: {
+          hasTimeSeries: false,
+          hasCategories: true,
+          hasText: false,
+          hasNumeric: true
+        }
       }
-    });
+    };
 
-    const largeDataset = await agent.recommendAnalysisConfig({
-      dataSize: 50000,
-      questions: [
+    const largeDatasetContext = {
+      userId: 'test-user-id',
+      userRole: 'business' as const,
+      isAdmin: false,
+      projectId: 'test-project-large',
+      project: {
+        id: 'test-project-large',
+        userId: 'test-user-id',
+        name: 'Large Test Project',
+        journeyType: 'ai_guided',
+        status: 'active',
+        data: Array(50000).fill({ value: 1 })
+      },
+      data: Array(50000).fill({ value: 1 }),
+      schema: {},
+      recordCount: 50000,
+      ownershipVerified: true,
+      analysisType: 'exploratory' as const,
+      complexity: 'high' as const,
+      userQuestions: [
         'Complex predictive analysis',
         'Machine learning clustering',
         'Time series forecasting',
         'Text sentiment analysis'
       ],
-      dataCharacteristics: {
-        hasTimeSeries: true,
-        hasCategories: true,
-        hasText: true,
-        hasNumeric: true
+      analysisGoal: 'Complex predictive analysis with ML',
+      dataAnalysis: {
+        characteristics: {
+          hasTimeSeries: true,
+          hasCategories: true,
+          hasText: true,
+          hasNumeric: true
+        }
       }
-    });
+    };
+
+    const smallDataset = await agent.recommendAnalysisConfig(smallDatasetContext);
+    const largeDataset = await agent.recommendAnalysisConfig(largeDatasetContext);
 
     // Large dataset with complex questions should have higher complexity
     const complexityLevels = ['low', 'medium', 'high', 'very_high'];

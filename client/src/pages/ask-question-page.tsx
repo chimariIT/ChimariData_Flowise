@@ -26,7 +26,7 @@ export default function AskQuestionPage({ onBack, onPaymentRequired }: AskQuesti
     queryFn: async () => {
       const result = await apiClient.getProjects();
       return result;
-    },
+    }
   });
 
   const analysisTypes = [

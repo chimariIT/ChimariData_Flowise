@@ -664,7 +664,8 @@ export class TemplateResearchAgent {
             'hr': ['employee', 'talent', 'recruitment', 'workforce', 'compensation', 'performance'],
             'manufacturing': ['production', 'equipment', 'quality', 'supply', 'maintenance'],
             'marketing': ['campaign', 'lead', 'conversion', 'engagement', 'social'],
-            'technology': ['user', 'feature', 'system', 'api', 'security', 'performance']
+            'technology': ['user', 'feature', 'system', 'api', 'security', 'performance'],
+            'general': ['data', 'analysis', 'report', 'metric', 'dashboard', 'insight']
         };
 
         let bestMatch: BusinessDomain = 'technology';

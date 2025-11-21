@@ -302,6 +302,52 @@ export class RoleBasedAIService {
         capabilities: ["executive_consultation", "cutting_edge_methods", "research_direction", "innovation"],
         responseStyle: "expert"
       }]
+    },
+    "custom": {
+      "none": [{
+        providerId: "gemini",
+        modelName: "gemini-1.5-pro",
+        displayName: "Custom Workflow Assistant",
+        description: "Flexible guidance tailored to hybrid project needs",
+        maxTokens: 4096,
+        temperature: 0.35,
+        cost: 2,
+        capabilities: ["expert_guidance", "methodology_advice", "project_planning", "code_generation"],
+        responseStyle: "expert"
+      }],
+      "starter": [{
+        providerId: "anthropic",
+        modelName: "claude-3-5-sonnet-20241022",
+        displayName: "Custom Strategy Consultant",
+        description: "Blends technical depth with strategic planning",
+        maxTokens: 8192,
+        temperature: 0.25,
+        cost: 3,
+        capabilities: ["professional_consultation", "detailed_methodology", "implementation_guidance", "code_generation"],
+        responseStyle: "expert"
+      }],
+      "professional": [{
+        providerId: "openai",
+        modelName: "gpt-4o",
+        displayName: "Hybrid Project Architect",
+        description: "End-to-end coordination across business and technical tracks",
+        maxTokens: 12288,
+        temperature: 0.2,
+        cost: 4,
+        capabilities: ["senior_consultation", "strategic_insights", "risk_assessment", "code_generation", "visualization_guidance"],
+        responseStyle: "expert"
+      }],
+      "enterprise": [{
+        providerId: "openai",
+        modelName: "o1-preview",
+        displayName: "Custom Program Director",
+        description: "C-level orchestration across bespoke analytics programs",
+        maxTokens: 32768,
+        temperature: 0.1,
+        cost: 6,
+        capabilities: ["executive_consultation", "cutting_edge_methods", "research_direction", "innovation", "multi_agent_coordination"],
+        responseStyle: "expert"
+      }]
     }
   };
 
@@ -667,14 +713,16 @@ Frame recommendations from a senior consultant perspective.`,
       expert: "You are a senior consultant and subject matter expert. Provide comprehensive analysis with strategic insights, methodology recommendations, and implementation guidance. Consider enterprise-level implications and best practices."
     };
 
-    const roleSpecific = {
+    const roleSpecific: Record<UserRole, string> = {
       "non-tech": " Remember to explain concepts as if you're talking to someone who is new to data analysis.",
       "business": " Focus on business value, KPIs, and strategic implications of your analysis.",
       "technical": " Include statistical rigor, methodology details, and code examples where helpful.",
-      "consultation": " Provide expert-level guidance as if you're a senior consultant advising on best practices."
+      "consultation": " Provide expert-level guidance as if you're a senior consultant advising on best practices.",
+      "custom": " Blend business context with technical depth. Provide cross-functional recommendations that balance strategy, implementation, and change management."
     };
 
-    return basePrompts[responseStyle as keyof typeof basePrompts] + roleSpecific[userRole];
+    const rolePrompt = roleSpecific[userRole] ?? roleSpecific["consultation"];
+    return basePrompts[responseStyle as keyof typeof basePrompts] + rolePrompt;
   }
 
   private static async callAIProvider(
@@ -704,8 +752,8 @@ Frame recommendations from a senior consultant perspective.`,
     const circuitBreakerRegistry = CircuitBreakerRegistry.getInstance();
     const circuitBreaker = circuitBreakerRegistry.getCircuitBreaker(`ai_provider_${providerId}`, {
       failureThreshold: 3,      // Open after 3 failures for AI services
-      recoveryTimeout: 30000,   // Wait 30 seconds before retry
-      requestTimeout: 25000,    // 25 second timeout for AI calls
+      recoveryTimeout: 15000,   // Wait 15 seconds before retry (reduced for SLA)
+      requestTimeout: 12000,    // 12 second timeout for AI calls (reduced from 25s for < 1 min SLA)
       successThreshold: 2       // Need 2 successes to close
     });
 
@@ -798,7 +846,7 @@ Frame recommendations from a senior consultant perspective.`,
           .getCircuitBreaker(`ai_provider_${fallbackProvider}_fallback`, {
             failureThreshold: 2,
             recoveryTimeout: 15000,
-            requestTimeout: 15000,
+            requestTimeout: 12000, // Reduced for < 1 min SLA (was 15s)
             successThreshold: 1
           });
         

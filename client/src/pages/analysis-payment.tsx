@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useStripe, Elements, PaymentElement, useElements } from '@stripe/react-stripe-js';
 import { loadStripe } from '@stripe/stripe-js';
 import { Button } from "@/components/ui/button";
@@ -6,11 +6,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft, Calculator, Clock, Database, BarChart3, Zap, Crown, Eye } from "lucide-react";
+import { ArrowLeft, Calculator, Clock, Database, BarChart3, Zap, Crown, Eye, ShieldCheck, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { ResultsPreview } from '@/components/results-preview';
 import { useProjectSession } from '@/hooks/useProjectSession';
+import { useJourneyState } from '@/hooks/useJourneyState';
 
 // Load Stripe with development fallback
 const stripePublicKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY || 'pk_test_development_key';
@@ -46,6 +47,7 @@ interface PricingData {
     questionsCharge: number;
     analysisTypeCharge: number;
   };
+  source?: 'locked' | 'calculated';
 }
 
 const AnalysisPaymentForm = ({ projectId, onSuccess }: { projectId: string; analysisType: string; onSuccess: () => void }) => {
@@ -160,8 +162,62 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
   const [clientSecret, setClientSecret] = useState("");
   const [isCalculating, setIsCalculating] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const [intentMetrics, setIntentMetrics] = useState<{ lockedCostCents?: number; spentCostCents?: number; remainingCostCents?: number; payableCents?: number } | null>(null);
   const [audienceContext, setAudienceContext] = useState<any>(null);
   const { toast } = useToast();
+  const {
+    data: journeyState,
+    isLoading: journeyStateLoading,
+    isFetching: journeyStateFetching,
+    error: journeyStateError
+  } = useJourneyState(projectId, { enabled: Boolean(projectId) });
+
+  const toCents = (amount: unknown): number | null => {
+    if (amount === null || amount === undefined) return null;
+    const numeric = Number(amount);
+    if (!Number.isFinite(numeric)) return null;
+    return Math.round(numeric * 100);
+  };
+
+  const lockedCostCents = useMemo(() => {
+    if (intentMetrics?.lockedCostCents !== undefined) {
+      return intentMetrics.lockedCostCents;
+    }
+    return toCents(journeyState?.costs?.estimated);
+  }, [intentMetrics, journeyState]);
+
+  const spentCostCents = useMemo(() => {
+    if (intentMetrics?.spentCostCents !== undefined) {
+      return intentMetrics.spentCostCents;
+    }
+    return toCents(journeyState?.costs?.spent);
+  }, [intentMetrics, journeyState]);
+
+  const remainingCostCents = useMemo(() => {
+    if (intentMetrics?.remainingCostCents !== undefined) {
+      return intentMetrics.remainingCostCents;
+    }
+    return toCents(journeyState?.costs?.remaining);
+  }, [intentMetrics, journeyState]);
+
+  const displayLockedCents = lockedCostCents ?? pricing?.priceInCents ?? null;
+
+  const chargeableCents = useMemo(() => {
+    if (intentMetrics?.payableCents !== undefined) {
+      return intentMetrics.payableCents;
+    }
+    if (lockedCostCents !== null && lockedCostCents !== undefined) {
+      return remainingCostCents ?? lockedCostCents;
+    }
+    return pricing?.priceInCents ?? null;
+  }, [intentMetrics, lockedCostCents, remainingCostCents, pricing]);
+
+  const formatCurrency = (cents: number | null | undefined) => {
+    if (cents === null || cents === undefined || Number.isNaN(cents)) {
+      return '—';
+    }
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
+  };
 
   const analysisOptions = [
     {
@@ -192,33 +248,35 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
 
   const calculatePricing = async () => {
     setIsCalculating(true);
+    setIntentMetrics(null);
     try {
-      // Calculate pricing without authentication check
-      // Authentication will be checked during payment processing
-
-      const response = await apiRequest("POST", "/api/calculate-pricing", {
+      const response = await apiRequest("POST", "/api/analysis-payment/calculate", {
         dataSizeMB: projectData.dataSizeMB,
         questionsCount: projectData.questions.length,
         analysisType,
-        schema: projectData.schema,
         recordCount: projectData.recordCount
       });
-      
+
       const data = await response.json();
-      setPricing(data.pricing);
-      setDataComplexity(data.dataComplexity);
+
+      if (!data?.success) {
+        throw new Error(data?.error || 'Pricing request failed');
+      }
+
+      setPricing(data.pricing ?? null);
+      setDataComplexity(data.dataComplexity ?? '');
     } catch (error: any) {
       console.error("Pricing calculation error:", error);
-      
+
       // Fallback pricing calculation if API fails
       const basePrice = 5.00;
       const dataSizeCharge = Math.max(0, (projectData.dataSizeMB - 10) * 0.10);
       const complexityCharge = projectData.recordCount > 100000 ? 15.00 : projectData.recordCount > 10000 ? 8.00 : 0;
       const questionsCharge = Math.max(0, (projectData.questions.length - 3) * 1.00);
       const analysisTypeCharge = analysisType === 'advanced' ? 10.00 : analysisType === 'custom' ? 20.00 : 0;
-      
+
       const finalPrice = basePrice + dataSizeCharge + complexityCharge + questionsCharge + analysisTypeCharge;
-      
+
       setPricing({
         finalPrice,
         priceInCents: Math.round(finalPrice * 100),
@@ -228,11 +286,12 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
           complexityCharge,
           questionsCharge,
           analysisTypeCharge
-        }
+        },
+        source: 'calculated'
       });
-      
+
       setDataComplexity(projectData.recordCount > 100000 ? 'complex' : projectData.recordCount > 10000 ? 'moderate' : 'simple');
-      
+
       toast({
         title: "Using Estimated Pricing",
         description: "Calculated pricing based on project data.",
@@ -276,15 +335,46 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
         return;
       }
 
-      const response = await apiRequest("POST", "/api/create-analysis-payment", {
+      const amountForIntent = chargeableCents;
+      if (amountForIntent === null || amountForIntent === undefined || Number.isNaN(amountForIntent) || amountForIntent <= 0) {
+        toast({
+          title: amountForIntent === 0 ? "No Balance Due" : "Pricing Required",
+          description: amountForIntent === 0
+            ? "This analysis has already been billed in full."
+            : "Unable to determine the amount to charge. Please refresh pricing.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const response = await apiRequest("POST", "/api/analysis-payment/create-intent", {
         projectId,
-        analysisType
+        analysisType,
+        dataSizeMB: projectData.dataSizeMB,
+        recordCount: projectData.recordCount,
+        questionsCount: projectData.questions.length,
+        payableCents: amountForIntent
       });
       
       const data = await response.json();
+      if (!data?.success) {
+        toast({
+          title: "Payment Error",
+          description: data?.error || 'Failed to create payment intent.',
+          variant: "destructive",
+        });
+        return;
+      }
+
       setClientSecret(data.clientSecret);
-      setPricing(data.pricing);
-      setDataComplexity(data.dataComplexity);
+      setPricing(data.pricing ?? null);
+      setDataComplexity(data.dataComplexity ?? dataComplexity);
+      setIntentMetrics({
+        lockedCostCents: typeof data.lockedCostCents === 'number' ? data.lockedCostCents : undefined,
+        spentCostCents: typeof data.spentCostCents === 'number' ? data.spentCostCents : undefined,
+        remainingCostCents: typeof data.remainingCostCents === 'number' ? data.remainingCostCents : undefined,
+        payableCents: typeof data.payableCents === 'number' ? data.payableCents : undefined,
+      });
     } catch (error: any) {
       console.error("Payment creation error:", error);
       
@@ -293,6 +383,10 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
         errorMessage = "Authentication expired. Please sign in again.";
       } else if (error.message?.includes("404")) {
         errorMessage = "Project not found. Please go back and try again.";
+      } else if (error.message?.includes("400")) {
+        errorMessage = "No outstanding balance detected for this analysis.";
+      } else if (error.message?.includes("409")) {
+        errorMessage = "Payment amount mismatch detected. Refresh the page and retry.";
       }
       
       toast({
@@ -398,6 +492,48 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
           </div>
         </div>
 
+        <Card className="mb-6 border-blue-200 bg-blue-50">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-blue-900">
+              <ShieldCheck className="w-5 h-5" />
+              Journey Cost Summary
+            </CardTitle>
+            <CardDescription className="text-blue-800">
+              {journeyStateError ? 'Unable to refresh journey state. Displaying latest estimate.' : 'Locked during plan approval and updated after execution.'}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {(journeyStateLoading || journeyStateFetching) && (
+              <div className="flex items-center gap-2 text-sm text-blue-800">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>Syncing journey cost...</span>
+              </div>
+            )}
+            {!journeyStateLoading && !journeyStateFetching && (
+              <div className="grid gap-4 md:grid-cols-3">
+                <div className="rounded-lg border border-blue-100 bg-white p-3">
+                  <p className="text-xs text-blue-700">Locked estimate</p>
+                  <p className="text-lg font-semibold text-blue-900" data-testid="analysis-locked-cost">
+                    {formatCurrency(displayLockedCents)}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-blue-100 bg-white p-3">
+                  <p className="text-xs text-blue-700">Spent to date</p>
+                  <p className="text-lg font-semibold text-blue-900" data-testid="analysis-spent-cost">
+                    {formatCurrency(spentCostCents)}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-blue-100 bg-white p-3">
+                  <p className="text-xs text-blue-700">Remaining balance</p>
+                  <p className="text-lg font-semibold text-blue-900" data-testid="analysis-remaining-cost">
+                    {formatCurrency(remainingCostCents ?? chargeableCents)}
+                  </p>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           {/* Project & Analysis Selection */}
           <div className="space-y-6">
@@ -484,38 +620,43 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
                     <div className="space-y-2">
                       <div className="flex justify-between">
                         <span>Base Analysis</span>
-                        <span>${pricing.breakdown.basePrice.toFixed(2)}</span>
+                        <span>{formatCurrency(toCents(pricing.breakdown.basePrice))}</span>
                       </div>
                       {pricing.breakdown.dataSizeCharge > 0 && (
                         <div className="flex justify-between text-sm text-muted-foreground">
                           <span>Data Size Charge</span>
-                          <span>+${pricing.breakdown.dataSizeCharge.toFixed(2)}</span>
+                          <span>+{formatCurrency(toCents(pricing.breakdown.dataSizeCharge))}</span>
                         </div>
                       )}
                       {pricing.breakdown.complexityCharge > 0 && (
                         <div className="flex justify-between text-sm text-muted-foreground">
                           <span>Complexity Charge</span>
-                          <span>+${pricing.breakdown.complexityCharge.toFixed(2)}</span>
+                          <span>+{formatCurrency(toCents(pricing.breakdown.complexityCharge))}</span>
                         </div>
                       )}
                       {pricing.breakdown.questionsCharge > 0 && (
                         <div className="flex justify-between text-sm text-muted-foreground">
                           <span>Extra Questions</span>
-                          <span>+${pricing.breakdown.questionsCharge.toFixed(2)}</span>
+                          <span>+{formatCurrency(toCents(pricing.breakdown.questionsCharge))}</span>
                         </div>
                       )}
                       {pricing.breakdown.analysisTypeCharge > 0 && (
                         <div className="flex justify-between text-sm text-muted-foreground">
                           <span>Analysis Type</span>
-                          <span>+${pricing.breakdown.analysisTypeCharge.toFixed(2)}</span>
+                          <span>+{formatCurrency(toCents(pricing.breakdown.analysisTypeCharge))}</span>
                         </div>
                       )}
                     </div>
                     <Separator />
                     <div className="flex justify-between text-lg font-semibold">
                       <span>Total</span>
-                      <span>${pricing.finalPrice.toFixed(2)}</span>
+                      <span>{formatCurrency(pricing.source === 'locked' ? (chargeableCents ?? toCents(pricing.finalPrice)) : toCents(pricing.finalPrice))}</span>
                     </div>
+                    {pricing.source === 'locked' && chargeableCents !== null && chargeableCents !== toCents(pricing.finalPrice) && (
+                      <p className="text-sm text-muted-foreground">
+                        Remaining balance from locked estimate.
+                      </p>
+                    )}
                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
                       <Clock className="w-4 h-4" />
                       {selectedOption?.features.find(f => f.includes('minute'))}
@@ -546,7 +687,7 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
                   size="lg"
                 >
                   <Zap className="w-4 h-4 mr-2" />
-                  Proceed to Payment
+                  Proceed to Payment{chargeableCents !== null ? ` (${formatCurrency(chargeableCents)})` : ''}
                 </Button>
               </div>
             )}

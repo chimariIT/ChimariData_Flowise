@@ -4,30 +4,48 @@ import { users } from "../../shared/schema.js";
 import { eq } from "drizzle-orm";
 import { RolePermissionService } from "../services/role-permission.js";
 import { SubscriptionJourneyMappingService } from "../services/subscription-journey-mapping.js";
+import { tokenStorage } from "../token-storage.js";
+import { storage } from "../services/storage.js";
+import { getAuthHeader } from "../utils/auth-headers";
 import type { UserRole, TechnicalLevel } from "../../shared/schema.js";
 
 const router = Router();
 
+// Helper function to extract user from token (following usage.ts pattern)
+async function getUserFromRequest(req: any): Promise<any> {
+  const authHeader = getAuthHeader(req);
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7);
+    const tokenData = tokenStorage.validateToken(token);
+    if (tokenData) {
+      const user = await storage.getUser(tokenData.userId);
+      return user;
+    }
+  }
+  return null;
+}
+
 // Get user role and permissions
 router.get("/role-permissions", async (req, res) => {
   try {
-    const userId = req.user?.id;
+    const authenticatedUser = await getUserFromRequest(req);
+    const userId = authenticatedUser?.id;
     if (!userId) {
       return res.status(401).json({ error: "Authentication required" });
     }
 
-    // Get user data
-    const user = await db
+    // Get user data from database
+    const userRecords = await db
       .select()
       .from(users)
       .where(eq(users.id, userId))
       .limit(1);
 
-    if (user.length === 0) {
+    if (userRecords.length === 0) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    const userData = user[0];
+    const userData = userRecords[0];
 
     // Get user permissions
     const permissions = await RolePermissionService.getUserPermissions(userId);
@@ -229,7 +247,8 @@ router.get("/available-journeys", async (req, res) => {
 // Check specific permission
 router.get("/check-permission/:permission", async (req, res) => {
   try {
-    const userId = req.user?.id;
+    const user = await getUserFromRequest(req);
+    const userId = user?.id;
     if (!userId) {
       return res.status(401).json({ error: "Authentication required" });
     }
@@ -250,7 +269,8 @@ router.get("/check-permission/:permission", async (req, res) => {
 // Check journey access
 router.get("/check-journey/:journeyType", async (req, res) => {
   try {
-    const userId = req.user?.id;
+    const user = await getUserFromRequest(req);
+    const userId = user?.id;
     if (!userId) {
       return res.status(401).json({ error: "Authentication required" });
     }

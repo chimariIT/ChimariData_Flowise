@@ -5,8 +5,10 @@
  */
 
 import { db } from '../db';
-import { eq, and, gte, lte } from 'drizzle-orm';
+import { eq, and, gte, lte, type InferSelectModel } from 'drizzle-orm';
 import { mlUsageLog } from '../../shared/schema';
+
+type MLUsageLogRow = InferSelectModel<typeof mlUsageLog>;
 
 export interface MLUsageEvent {
   userId: string;
@@ -74,7 +76,7 @@ export class MLLLMUsageTracker {
    */
   async getUserUsage(userId: string, startDate: Date, endDate: Date): Promise<MLUsageSummary> {
     try {
-      const usage = await db.select()
+      const usage: MLUsageLogRow[] = await db.select()
         .from(mlUsageLog)
         .where(
           and(

@@ -8,6 +8,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { toast } from '@/hooks/use-toast';
 import { Separator } from '@/components/ui/separator';
 import Plot from 'react-plotly.js';
+import { apiClient } from '@/lib/api';
 
 interface VisualizationWorkshopProps {
   project: any;
@@ -135,7 +136,7 @@ export function AdvancedVisualizationWorkshop({ project, onSave }: Visualization
     
     try {
       const requestBody = {
-        chart_type: chartType,
+        chartType,
         fields,
         options: {
           ...options,
@@ -147,32 +148,23 @@ export function AdvancedVisualizationWorkshop({ project, onSave }: Visualization
 
       console.log('Creating visualization with:', requestBody);
 
-      const response = await fetch(`/api/create-visualization/${project.id}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        },
-        body: JSON.stringify(requestBody)
-      });
+      const result = await apiClient.post(`/api/create-visualization/${project.id}`, requestBody);
+      console.log('Visualization result:', result);
 
-      if (response.ok) {
-        const result = await response.json();
-        console.log('Visualization result:', result);
-        
-        if (result.success && result.visualization.chart_data) {
-          setVisualizationData(result.visualization.chart_data);
-          toast({
-            title: "Visualization created",
-            description: "Your chart has been generated successfully",
-          });
-        } else {
-          throw new Error(result.error || 'Failed to create visualization');
-        }
-      } else {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to create visualization');
+      if (!result?.success) {
+        throw new Error(result?.error || 'Failed to create visualization');
       }
+
+      const chartPayload = result.visualization?.chart_data || result.visualization?.chartData || null;
+      if (!chartPayload || !Array.isArray(chartPayload.data) || !chartPayload.layout) {
+        throw new Error('Visualization response was missing chart data');
+      }
+
+      setVisualizationData(chartPayload);
+      toast({
+        title: 'Visualization created',
+        description: result.message || 'Your chart has been generated successfully',
+      });
     } catch (error) {
       console.error('Visualization error:', error);
       toast({
@@ -357,14 +349,14 @@ export function AdvancedVisualizationWorkshop({ project, onSave }: Visualization
                   {fieldType.toUpperCase()} (Optional)
                 </Label>
                 <Select 
-                  value={fields[fieldType as keyof ChartField] || ''} 
-                  onValueChange={(value) => handleFieldChange(fieldType, value)}
+                  value={fields[fieldType as keyof ChartField] || 'none'}
+                  onValueChange={(value) => handleFieldChange(fieldType, value === 'none' ? '' : value)}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder={`Select ${fieldType} field`} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">None</SelectItem>
+                    <SelectItem value="none">None</SelectItem>
                     {availableFields.map(field => (
                       <SelectItem key={field} value={field}>{field}</SelectItem>
                     ))}

@@ -4,8 +4,10 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { Router } from 'express';
 import multer from "multer";
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import { storage } from '../services/storage';
 import { tokenStorage } from '../token-storage';
+import { EmailService } from '../email-service';
 
 import { 
     GoogleDriveService,
@@ -18,6 +20,21 @@ import { UnifiedPIIProcessor } from '../services/unified-pii-processor';
 
 import { tempStore } from '../services/temp-store';
 import { performanceWebhookService } from '../services/performance-webhook-service';
+import type { InsertDataProject, JourneyType } from "../../shared/schema.js";
+import { getAuthHeader } from '../utils/auth-headers';
+
+const VALID_PROJECT_JOURNEYS: JourneyType[] = ["ai_guided", "template_based", "self_service", "consultation", "custom"];
+
+const normalizeProjectJourneyType = (value: unknown): JourneyType => {
+    return VALID_PROJECT_JOURNEYS.includes(value as JourneyType) ? (value as JourneyType) : "ai_guided";
+};
+
+const normalizeExpressUser = (user: any): Record<string, any> => ({
+    ...user,
+    role: user?.role ?? undefined,
+    technicalLevel: user?.technicalLevel ?? undefined,
+    preferredJourney: user?.preferredJourney ?? undefined
+});
 
 const router = Router();
 
@@ -74,13 +91,15 @@ router.post("/login", async (req, res) => {
     try {
         const { email, password } = req.body;
 
-        if (!email || !password) {
+        const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+
+        if (!normalizedEmail || !password) {
             return res.status(400).json({ error: "Email and password are required" });
         }
 
         // Get user by email
         const dbStart = Date.now();
-        const user = await storage.getUserByEmail(email);
+    const user = await storage.getUserByEmail(normalizedEmail);
         const dbTime = Date.now() - dbStart;
 
         if (user && user.hashedPassword) {
@@ -88,8 +107,18 @@ router.post("/login", async (req, res) => {
             const bcryptStart = Date.now();
             const isValidPassword = await bcrypt.compare(password, user.hashedPassword);
             const bcryptTime = Date.now() - bcryptStart;
-            
+
             if (isValidPassword) {
+                // Check email verification in production
+                const isProduction = process.env.NODE_ENV === 'production';
+                if (isProduction && !user.emailVerified) {
+                    return res.status(403).json({
+                        error: "Email not verified",
+                        message: "Please verify your email address before logging in. Check your inbox for the verification link.",
+                        requiresEmailVerification: true
+                    });
+                }
+
                 // Generate JWT token
                 const tokenStart = Date.now();
                 const token = tokenStorage.generateToken(user.id, user.email);
@@ -109,7 +138,7 @@ router.post("/login", async (req, res) => {
                         dbTime,
                         bcryptTime,
                         tokenTime,
-                        email: email, // Consider privacy implications
+                        email: normalizedEmail, // Consider privacy implications
                         breakdown: {
                             database: { duration: dbTime, percentage: (dbTime / totalTime * 100).toFixed(1) },
                             bcrypt: { duration: bcryptTime, percentage: (bcryptTime / totalTime * 100).toFixed(1) },
@@ -131,9 +160,15 @@ router.post("/login", async (req, res) => {
                     }
                 });
             } else {
+                console.warn(`⚠️  Login failed for ${normalizedEmail}: password mismatch`);
                 res.status(401).json({ error: "Invalid credentials" });
             }
         } else {
+            if (!user) {
+                console.warn(`⚠️  Login attempt for unknown email ${normalizedEmail}`);
+            } else if (!user.hashedPassword) {
+                console.warn(`⚠️  Login attempt for ${normalizedEmail} without a password on record (provider=${user.provider})`);
+            }
             res.status(401).json({ error: "Invalid credentials" });
         }
     } catch (error: any) {
@@ -146,41 +181,70 @@ router.post("/login", async (req, res) => {
 router.post("/register", async (req, res) => {
     try {
         const { email, firstName, lastName, password } = req.body;
+        const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
 
-        if (!email || !firstName || !lastName || !password) {
+        if (!normalizedEmail || !firstName || !lastName || !password) {
             return res.status(400).json({ error: "All fields are required" });
         }
 
         // Check if user already exists
-        const existingUser = await storage.getUserByEmail(email);
+        const existingUser = await storage.getUserByEmail(normalizedEmail);
         if (existingUser) {
             return res.status(409).json({ error: "User already exists" });
         }
 
         // Create new user with optimized password hashing (reduced from 12 to 10 rounds for better performance)
         const hashedPassword = await bcrypt.hash(password, 10);
-        
+
+        // Check environment for email verification
+        const isProduction = process.env.NODE_ENV === 'production';
+
+        // Generate verification token for production
+        const verificationToken = isProduction ? crypto.randomBytes(32).toString('hex') : null;
+        const verificationExpires = isProduction ? new Date(Date.now() + 24 * 60 * 60 * 1000) : null; // 24 hours
+
         const user = await storage.createUser({
-            email,
+            email: normalizedEmail,
             firstName,
             lastName,
             hashedPassword,
             provider: 'local',
-            subscriptionTier: 'trial'
+            subscriptionTier: 'trial',
+            emailVerified: !isProduction, // Auto-verify in development, require verification in production
+            emailVerificationToken: verificationToken,
+            emailVerificationExpires: verificationExpires
         });
 
-        // Generate JWT token
-        const token = tokenStorage.generateToken(user.id, user.email);
+        // Send verification email in production only
+        if (isProduction && verificationToken) {
+            const protocol = req.get('x-forwarded-proto') || (req.secure ? 'https' : 'http');
+            const host = req.get('host');
+            const verificationUrl = `${protocol}://${host}/api/auth/verify-email?token=${verificationToken}`;
 
+            await EmailService.sendVerificationEmail({
+                to: normalizedEmail,
+                firstName,
+                verificationUrl
+            });
+
+            console.log(`📧 Verification email sent to ${normalizedEmail}`);
+        } else {
+            console.log(`🔓 DEV MODE: User ${normalizedEmail} auto-verified (email verification bypassed)`);
+        }
+
+        // Registration successful - do NOT auto-login
+        // User must explicitly log in after registration
         res.json({
             success: true,
-            token,
+            message: isProduction
+                ? 'Account created successfully. Please check your email to verify your account before logging in.'
+                : 'Account created successfully. Please log in.',
+            requiresEmailVerification: isProduction,
             user: {
                 id: user.id,
                 email: user.email,
                 firstName: user.firstName,
-                lastName: user.lastName,
-                subscriptionTier: user.subscriptionTier
+                lastName: user.lastName
             }
         });
     } catch (error: any) {
@@ -194,7 +258,7 @@ router.post("/register", async (req, res) => {
 router.get("/user", async (req, res) => {
     try {
         // Check for Bearer token
-        const authHeader = req.headers.authorization;
+        const authHeader = getAuthHeader(req);
         if (!authHeader || !authHeader.startsWith('Bearer ')) {
             return res.status(401).json({ error: "Authentication required" });
         }
@@ -224,6 +288,37 @@ router.get("/user", async (req, res) => {
     } catch (error: any) {
         console.error('Get current user error:', error);
         res.status(500).json({ error: "Failed to get user" });
+    }
+});
+
+// Refresh token endpoint
+router.post('/refresh', async (req, res) => {
+    try {
+        const authHeader = getAuthHeader(req);
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({ error: 'Authentication required' });
+        }
+
+        const existingToken = authHeader.substring(7).trim();
+        if (!existingToken) {
+            return res.status(401).json({ error: 'Authentication required' });
+        }
+
+        const refreshedToken = tokenStorage.refreshToken(existingToken);
+        if (!refreshedToken) {
+            return res.status(401).json({ error: 'Invalid or expired token' });
+        }
+
+        const decoded = tokenStorage.validateToken(refreshedToken);
+
+        res.json({
+            success: true,
+            token: refreshedToken,
+            expiresAt: decoded?.exp ? decoded.exp * 1000 : null
+        });
+    } catch (error) {
+        console.error('Token refresh error:', error);
+        res.status(500).json({ error: 'Failed to refresh token' });
     }
 });
 
@@ -258,49 +353,132 @@ const upload = multer({
  */
 export const ensureAuthenticated = async (req: Request, res: Response, next: NextFunction) => {
     try {
+            // Debug: Log all headers for upload requests
+            const isUploadRequest = req.path === '/upload' || req.url.includes('/upload') || req.url.includes('/projects/upload');
+            const derivedAuthHeader = getAuthHeader(req);
+            if (isUploadRequest) {
+                console.log('🔍 Upload request authentication check:', {
+                    path: req.path,
+                    url: req.url,
+                    method: req.method,
+                    hasAuthHeader: !!derivedAuthHeader,
+                    authHeaderPreview: derivedAuthHeader?.substring(0, 30),
+                    rawAuthorizationHeader: req.headers.authorization?.substring(0, 30),
+                    forwardedAuthorizationHeader: typeof req.headers['x-forwarded-authorization'] === 'string'
+                        ? (req.headers['x-forwarded-authorization'] as string).substring(0, 30)
+                        : undefined,
+                    hasSession: !!req.isAuthenticated?.(),
+                    contentType: req.headers['content-type']?.substring(0, 50),
+                    allHeaderKeys: Object.keys(req.headers).filter(k => k.toLowerCase().includes('auth') || k.toLowerCase().includes('authorization'))
+                });
+            }
+
             // Check session-based authentication first
             if (req.isAuthenticated && req.isAuthenticated()) {
-                // Some environments may report authenticated without attaching user
+                // If user is already attached, ensure identifiers are normalized then proceed
                 if (req.user) {
+                    const sessionUser: any = req.user;
+                    const resolvedId = sessionUser.id || sessionUser.userId;
+
+                    if (resolvedId) {
+                        sessionUser.userId = resolvedId;
+                        req.userId = resolvedId;
+                    }
+
+                    if (isUploadRequest) {
+                        console.log('✅ Session-based authentication successful for upload');
+                    }
                     return next();
                 }
-                // Fall through to token-based auth to attach user
+
+                // Session authenticated but user not attached - this should not happen with proper Passport config
+                // but we'll handle it gracefully
+                console.warn('Session authenticated but user not attached, checking bearer token as fallback');
             }
 
       // Check Bearer token authentication
-      const authHeader = req.headers.authorization;
+      // Debug: Log ALL headers to see what's actually coming in
+            console.log('🔍 [AUTH DEBUG] All request headers:', JSON.stringify(req.headers, null, 2));
+            console.log('🔍 [AUTH DEBUG] Derived authorization header:', derivedAuthHeader);
+            console.log('🔍 [AUTH DEBUG] Raw authorization variants:', {
+                authorization: req.headers.authorization,
+                forwarded: req.headers['x-forwarded-authorization']
+            });
+            console.log('🔍 [AUTH DEBUG] Headers keys:', Object.keys(req.headers));
+
+            const authHeader = derivedAuthHeader;
       if (authHeader && authHeader.startsWith('Bearer ')) {
-        const token = authHeader.substring(7);
+        const token = authHeader.substring(7).trim();
 
         // Additional validation: ensure token isn't empty after extraction
-        if (!token || token.trim() === '') {
-          console.error('Authentication failed: Empty token after Bearer extraction');
+        if (!token || token === '') {
+          console.error('❌ Authentication failed: Empty token after Bearer extraction', {
+            authHeaderLength: authHeader.length,
+            extractedTokenLength: token.length
+          });
           return res.status(401).json({ error: "Authentication required" });
         }
 
-        const tokenData = tokenStorage.validateToken(token);
-        if (tokenData) {
-          const user = await storage.getUser(tokenData.userId);
-          if (user) {
-            req.user = user;
-            req.userId = user.id;
-            return next();
-          } else {
-            console.error('Authentication failed: User not found for token');
-          }
+                const tokenData = tokenStorage.validateToken(token);
+                if (tokenData) {
+                    const user = await storage.getUser(tokenData.userId);
+                    if (user) {
+                        req.user = normalizeExpressUser(user);
+                        req.userId = user.id;
+                        if (isUploadRequest) {
+                            console.log('✅ Bearer token authentication successful for upload:', {
+                                userId: user.id,
+                                email: user.email
+                            });
+                        }
+                        return next();
+                    } else {
+                        console.error('❌ Authentication failed: User not found for token', {
+                            userId: tokenData.userId
+                        });
+                    }
         } else {
-          console.error('Authentication failed: Invalid token');
+          console.error('❌ Authentication failed: Invalid token', {
+            tokenPreview: token.substring(0, 20) + '...',
+            tokenLength: token.length
+          });
         }
       } else {
-        console.error('Authentication failed: No valid authorization header');
+        console.error('❌ Authentication failed: No valid authorization header', {
+          hasAuthHeader: !!authHeader,
+          authHeaderType: typeof authHeader,
+          authHeaderValue: authHeader ? authHeader.substring(0, 50) : 'null'
+        });
       }
 
             res.status(401).json({ error: "Authentication required" });
     } catch (error) {
-      console.error('Authentication error:', error);
+      console.error('❌ Authentication error:', error);
       res.status(401).json({ error: "Authentication required" });
     }
 };
+
+// Logout endpoint - must be after ensureAuthenticated definition
+router.post("/logout", ensureAuthenticated, async (req, res) => {
+    try {
+        const userId = (req.user as any)?.id;
+
+        // Clear server-side session if using sessions
+        if (req.session) {
+            req.session.destroy((err) => {
+                if (err) {
+                    console.error('Session destruction error:', err);
+                }
+            });
+        }
+
+        console.log(`✅ User ${userId} logged out`);
+        res.json({ success: true, message: "Logged out successfully" });
+    } catch (error: any) {
+        console.error('Logout error:', error);
+        res.status(500).json({ error: 'Logout failed', details: error.message });
+    }
+});
 
 // Unified auth middleware
 /**
@@ -324,18 +502,20 @@ export const unifiedAuth = async (req: Request, res: Response, next: NextFunctio
       if (req.isAuthenticated && req.isAuthenticated()) {
         return next();
       }
-      const authHeader = req.headers.authorization;
+    const authHeader = getAuthHeader(req);
       if (authHeader && authHeader.startsWith('Bearer ')) {
         const token = authHeader.substring(7);
         try {
-          const tokenData = tokenStorage.validateToken(token);
-          if (tokenData) {
-            const user = await storage.getUser(tokenData.userId);
-            if (user) {
-              req.user = user;
-              req.userId = user.id;
-              return next();
-            }
+                    const tokenData = tokenStorage.validateToken(token);
+                    if (tokenData) {
+                        const user = await storage.getUser(tokenData.userId);
+                        if (user) {
+                            const normalizedUser = normalizeExpressUser(user) as any;
+                            normalizedUser.userId = user.id;
+                            req.user = normalizedUser;
+                            req.userId = user.id;
+                            return next();
+                        }
           }
         } catch (error) {
           console.error('Token validation error:', error);
@@ -523,8 +703,9 @@ router.post("/pii-decision", unifiedAuth, (req, res, next) => {
             if (!fileInfo || !fileInfo.originalname || !fileInfo.size || !fileInfo.mimetype) {
                 return res.status(500).json({ success: false, error: "File information is missing or invalid" });
             }
-            const newProjectData = {
+            const newProjectData: InsertDataProject = {
                 userId: userId,
+                journeyType: normalizeProjectJourneyType((projectData || projectMetadata)?.journeyType),
                 name: (projectData || projectMetadata)?.name || "Uploaded Data",
                 description: (projectData || projectMetadata)?.description || "",
                 fileName: fileInfo.originalname,
@@ -545,10 +726,23 @@ router.post("/pii-decision", unifiedAuth, (req, res, next) => {
             };
             const project = await storage.createProject(newProjectData);
 
+            const { descriptiveStats, datasetSummary, relationships } = FileProcessor.createDataProfile(finalData || [], updatedSchema || {});
+            const ingestionMetadata = {
+                recordCount: finalData.length,
+                fileSize: fileInfo.size,
+                fileType: fileInfo.mimetype,
+                dataDescription: datasetSummary.overview,
+                datasetSummary,
+                descriptiveStats,
+                qualityMetrics: processedData.qualityMetrics,
+                relationships,
+                generatedAt: new Date().toISOString()
+            };
+
             // Create a dataset and link it
             const dataset = await storage.createDataset({
                 id: `ds_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-                ownerId: userId,
+                userId: userId,
                 sourceType: 'upload',
                 originalFileName: fileInfo.originalname,
                 mimeType: fileInfo.mimetype,
@@ -557,11 +751,22 @@ router.post("/pii-decision", unifiedAuth, (req, res, next) => {
                 schema: updatedSchema,
                 recordCount: finalData.length,
                 data: finalData,
+                ingestionMetadata
             });
             await storage.linkProjectToDataset(project.id, dataset.id);
 
             tempStore.delete(tempFileId);
-            return res.json({ success: true, projectId: project.id, project: project, message: "Project created successfully with PII decision applied" });
+            return res.json({
+                success: true,
+                projectId: project.id,
+                project,
+                message: "Project created successfully with PII decision applied",
+                dataDescription: datasetSummary.overview,
+                datasetSummary,
+                descriptiveStats,
+                qualityMetrics: processedData.qualityMetrics,
+                relationships
+            });
         } else {
             const { name, description, questions, tempFileId, decision, anonymizationConfig } = req.body;
             if (!req.file) {
@@ -587,8 +792,10 @@ router.post("/pii-decision", unifiedAuth, (req, res, next) => {
             });
             const finalData = piiProcessingResult.finalData;
             const updatedSchema = piiProcessingResult.updatedSchema;
+            const { descriptiveStats, datasetSummary, relationships } = FileProcessor.createDataProfile(finalData || [], updatedSchema || {});
             const project = await storage.createProject({
                 userId: (req.user as any)?.id || 'anonymous',
+                journeyType: normalizeProjectJourneyType(req.body?.journeyType),
                 name: name.trim(),
                 description: description || '',
                 fileName: req.file.originalname,
@@ -606,7 +813,17 @@ router.post("/pii-decision", unifiedAuth, (req, res, next) => {
                     decisionTimestamp: new Date()
                 },
             });
-            res.json({ success: true, projectId: project.id, schema: updatedSchema, project: { ...project, preview: finalData.slice(0, 10) } });
+            res.json({
+                success: true,
+                projectId: project.id,
+                schema: updatedSchema,
+                project: { ...project, preview: finalData.slice(0, 10) },
+                dataDescription: datasetSummary.overview,
+                datasetSummary,
+                descriptiveStats,
+                qualityMetrics: processedData.qualityMetrics,
+                relationships
+            });
         }
     } catch (error: any) {
         res.status(500).json({ success: false, error: error.message || "Failed to process PII decision" });
@@ -700,6 +917,256 @@ router.post("/unique-identifiers", async (req, res) => {
       res.json({ success: true, project: updatedProject });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
+    }
+});
+
+// Email verification endpoint
+/**
+ * @summary Verifies a user's email address using a verification token.
+ * @description Users receive a verification email with a link containing a token.
+ * This endpoint validates the token and marks the email as verified.
+ * @route GET /api/auth/verify-email?token=...
+ * @auth Not required.
+ * @input
+ * - `req.query.token`: Verification token from email link
+ * @process
+ * 1. Validates token is present and non-empty
+ * 2. Finds user with matching verification token
+ * 3. Checks if token has expired (24 hours)
+ * 4. Updates user to verified status and clears token
+ * @output
+ * - Success: 200 { success: true, message: string }
+ * - Error: 400 { error: string, canResend?: boolean }
+ * @dependencies `storage`.
+ */
+router.get("/verify-email", async (req, res) => {
+    try {
+        const { token } = req.query;
+
+        if (!token || typeof token !== 'string') {
+            return res.status(400).json({
+                error: "Verification token is required"
+            });
+        }
+
+        // Find user with this verification token
+        const user = await storage.getUserByVerificationToken(token);
+
+        if (!user) {
+            return res.status(400).json({
+                error: "Invalid or expired verification token",
+                canResend: true
+            });
+        }
+
+        // Check if token has expired
+        if (user.emailVerificationExpires && new Date() > user.emailVerificationExpires) {
+            return res.status(400).json({
+                error: "Verification token has expired. Please request a new verification email.",
+                canResend: true
+            });
+        }
+
+        // Update user to verified
+        await storage.updateUser(user.id, {
+            emailVerified: true,
+            emailVerificationToken: null,
+            emailVerificationExpires: null
+        });
+
+        console.log(`✅ Email verified for user: ${user.email}`);
+
+        res.json({
+            success: true,
+            message: "Email verified successfully! You can now log in."
+        });
+    } catch (error: any) {
+        console.error('Email verification error:', error);
+        res.status(500).json({ error: "Verification failed" });
+    }
+});
+
+// Resend verification email endpoint
+/**
+ * @summary Resends a verification email to a user.
+ * @description Generates a new verification token and sends a new email.
+ * Used when the original verification link expires or is lost.
+ * @route POST /api/auth/resend-verification
+ * @auth Not required.
+ * @input
+ * - `req.body.email`: User's email address
+ * @process
+ * 1. Validates email is provided
+ * 2. Finds user by email
+ * 3. Checks if already verified
+ * 4. Generates new verification token with 24-hour expiration
+ * 5. Sends new verification email via SendGrid
+ * @output
+ * - Success: 200 { success: true, message: string }
+ * - Error: 400 or 500 { error: string }
+ * @dependencies `storage`, `EmailService`.
+ */
+router.post("/resend-verification", async (req, res) => {
+    try {
+        const { email } = req.body;
+
+        if (!email) {
+            return res.status(400).json({ error: "Email is required" });
+        }
+
+        const user = await storage.getUserByEmail(email);
+
+        if (!user) {
+            // Don't reveal if email exists for security
+            return res.json({
+                success: true,
+                message: "If the email exists and is not verified, a verification link has been sent."
+            });
+        }
+
+        if (user.emailVerified) {
+            return res.status(400).json({
+                error: "Email is already verified. You can log in now."
+            });
+        }
+
+        // Generate new verification token
+        const verificationToken = crypto.randomBytes(32).toString('hex');
+        const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+        await storage.updateUser(user.id, {
+            emailVerificationToken: verificationToken,
+            emailVerificationExpires: verificationExpires
+        });
+
+        const protocol = req.get('x-forwarded-proto') || (req.secure ? 'https' : 'http');
+        const host = req.get('host');
+        const verificationUrl = `${protocol}://${host}/api/auth/verify-email?token=${verificationToken}`;
+
+        await EmailService.sendVerificationEmail({
+            to: email,
+            firstName: user.firstName || 'User',
+            verificationUrl
+        });
+
+        console.log(`📧 Verification email resent to ${email}`);
+
+        res.json({
+            success: true,
+            message: "Verification email sent. Please check your inbox."
+        });
+    } catch (error: any) {
+        console.error('Resend verification error:', error);
+        res.status(500).json({ error: "Failed to resend verification email" });
+    }
+});
+
+/**
+ * @summary Creates or updates a user account to have admin privileges.
+ * @description Development/testing endpoint to bootstrap admin accounts.
+ * This endpoint allows creating or upgrading a user to admin status without authentication.
+ * ⚠️ SECURITY: Should be disabled or restricted in production environments.
+ * @route POST /api/auth/setup-admin
+ * @auth Not required (for development/testing only).
+ * @input
+ * - `req.body.email`: Admin email address
+ * - `req.body.password`: Admin password (will be hashed)
+ * - `req.body.firstName`: Admin first name
+ * - `req.body.lastName`: Admin last name
+ * @process
+ * 1. Validates required fields (email, password, firstName, lastName)
+ * 2. Checks if user exists by email
+ * 3. If exists: Updates user to admin status with enterprise tier
+ * 4. If not exists: Creates new admin user with enterprise tier
+ * 5. Hashes password with bcrypt (10 rounds)
+ * 6. Generates JWT token for immediate authentication
+ * 7. Returns token and user object
+ * @output
+ * - Success: 200 { success: true, token: string, user: User }
+ * - Error: 400 or 500 { success: false, error: string }
+ * @dependencies `storage`, `tokenStorage`, `bcrypt`.
+ */
+router.post("/setup-admin", async (req, res) => {
+    try {
+        const { email, password, firstName, lastName } = req.body;
+        const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+
+        if (!normalizedEmail || !password || !firstName || !lastName) {
+            return res.status(400).json({ 
+                success: false,
+                error: "Email, password, firstName, and lastName are required" 
+            });
+        }
+
+        // Optional: Restrict to development environment
+        // Uncomment the following lines to disable in production:
+        // if (process.env.NODE_ENV === 'production' && !process.env.ALLOW_ADMIN_SETUP) {
+        //     return res.status(403).json({ 
+        //         success: false,
+        //         error: "Admin setup is disabled in production" 
+        //     });
+        // }
+
+        // Check if user already exists
+        const existingUser = await storage.getUserByEmail(normalizedEmail);
+        const hashedPassword = await bcrypt.hash(password, 10);
+        let isNewUser = false;
+
+        let user;
+        if (existingUser) {
+            // Update existing user to admin
+            console.log(`🔄 Updating existing user ${normalizedEmail} to admin status`);
+            user = await storage.updateUser(existingUser.id, {
+                firstName,
+                lastName,
+                hashedPassword,
+                isAdmin: true,
+                subscriptionTier: 'enterprise',
+                emailVerified: true, // Auto-verify admin accounts
+                role: 'admin'
+            }) as any;
+        } else {
+            // Create new admin user
+            isNewUser = true;
+            console.log(`✨ Creating new admin user: ${normalizedEmail}`);
+            user = await storage.createUser({
+                email: normalizedEmail,
+                firstName,
+                lastName,
+                hashedPassword,
+                provider: 'local',
+                subscriptionTier: 'enterprise',
+                emailVerified: true, // Auto-verify admin accounts
+                isAdmin: true,
+                role: 'admin'
+            } as any);
+        }
+
+        // Generate JWT token for immediate authentication
+        const token = tokenStorage.generateToken(user.id, user.email);
+        console.log(`✅ Admin account ${isNewUser ? 'created' : 'updated'} successfully: ${normalizedEmail}`);
+
+        res.json({
+            success: true,
+            message: isNewUser ? "Admin account created successfully" : "Admin account updated successfully",
+            token,
+            user: {
+                id: user.id,
+                email: user.email,
+                firstName: user.firstName,
+                lastName: user.lastName,
+                isAdmin: true,
+                subscriptionTier: user.subscriptionTier || 'enterprise',
+                role: 'admin'
+            }
+        });
+    } catch (error: any) {
+        console.error('Admin setup error:', error);
+        res.status(500).json({ 
+            success: false,
+            error: "Admin setup failed", 
+            details: error.message 
+        });
     }
 });
 

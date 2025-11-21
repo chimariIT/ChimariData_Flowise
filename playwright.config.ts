@@ -1,18 +1,22 @@
 import { defineConfig, devices } from '@playwright/test';
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-/**
- * Read environment variables from file.
- * https://github.com/motdotla/dotenv
- */
-// import dotenv from 'dotenv';
-// import path from 'path';
-// dotenv.config({ path: path.resolve(__dirname, '.env') });
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Load default env, then overlay Playwright-specific overrides if present
+dotenv.config({ path: path.resolve(__dirname, '.env') });
+dotenv.config({ path: path.resolve(__dirname, '.env.playwright'), override: true });
 
 /**
  * See https://playwright.dev/docs/test-configuration.
  */
 export default defineConfig({
   testDir: './tests',
+  testMatch: ['**/*.spec.ts', '**/*.test.ts'],
+  testIgnore: ['**/unit/**', '**/integration/**', '**/performance/**'],
   /* Run tests in files in parallel */
   fullyParallel: true,
   /* Fail the build on CI if you accidentally left test.only in the source code. */
@@ -80,10 +84,21 @@ export default defineConfig({
   ],
 
   /* Run your local dev server before starting the tests */
+  /* 
+   * Architecture: The app uses TWO servers:
+   * - Frontend (Vite): http://localhost:5173 (client app)
+   * - Backend (Express): http://localhost:5000 (API server)
+   * 
+   * The webServer runs 'npm run dev' which starts both via concurrently.
+   * We check the backend health endpoint to ensure both servers are ready,
+   * since the backend is critical for API calls (auth, data, etc.).
+   */
   webServer: {
     command: 'npm run dev',
-    url: 'http://localhost:5173',
+    url: 'http://localhost:5000/api/health', // Check backend health endpoint (requires both servers)
     reuseExistingServer: true,  // Always reuse to avoid conflicts
-    timeout: 240 * 1000,
+    timeout: 240 * 1000, // 4 minutes for both servers to start
+    stdout: 'pipe',
+    stderr: 'pipe',
   },
 });

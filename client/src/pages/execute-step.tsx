@@ -18,10 +18,17 @@ import {
   MessageCircle,
   Lightbulb,
   Shield,
-  ShieldCheck
+  ShieldCheck,
+  Loader2
 } from "lucide-react";
 import { useProjectSession } from "@/hooks/useProjectSession";
 import { CheckpointDialog } from "@/components/CheckpointDialog";
+import { apiClient } from "@/lib/api";
+import type { JourneyTemplate } from '@shared/journey-templates';
+import { useToast } from "@/hooks/use-toast";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
 
 interface ExecuteStepProps {
   journeyType: string;
@@ -30,10 +37,16 @@ interface ExecuteStepProps {
 }
 
 export default function ExecuteStep({ journeyType, onNext, onPrevious }: ExecuteStepProps) {
+  const { toast } = useToast();
   const [executionStatus, setExecutionStatus] = useState<'idle' | 'configuring' | 'running' | 'completed' | 'error'>('idle');
   const [executionProgress, setExecutionProgress] = useState(0);
   const [selectedAnalyses, setSelectedAnalyses] = useState<string[]>([]);
   const [executionResults, setExecutionResults] = useState<any>(null);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewData, setPreviewData] = useState<any>(null);
+  const [artifactLoading, setArtifactLoading] = useState(false);
   const [selectedScenario, setSelectedScenario] = useState<string | null>(null);
   const [scenarioQuestion, setScenarioQuestion] = useState<string>("");
   const [suggestedScenarios, setSuggestedScenarios] = useState<Array<{ id: string; title: string; description: string; analyses: string[] }>>([]);
@@ -41,6 +54,97 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
   const [isSuggesting, setIsSuggesting] = useState(false);
   const [selectedBusinessTemplates, setSelectedBusinessTemplates] = useState<string[]>([]);
   const [primaryBusinessTemplate, setPrimaryBusinessTemplate] = useState<string>("");
+  const [savedQuestions, setSavedQuestions] = useState<string[]>([]);
+  const [savedGoal, setSavedGoal] = useState<string>("");
+  useEffect(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem('chimari_analysis_questions') || '[]');
+      if (Array.isArray(stored) && stored.length > 0) {
+        const filtered = stored
+          .map((q: any) => (typeof q === 'string' ? q.trim() : ''))
+          .filter((q: string) => q.length > 0)
+          .slice(0, 6);
+        setSavedQuestions(filtered);
+      }
+    } catch {
+      setSavedQuestions([]);
+    }
+
+    const goal = localStorage.getItem('chimari_analysis_goal') || "";
+    if (goal) {
+      setSavedGoal(goal);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!scenarioQuestion && savedQuestions.length > 0) {
+      setScenarioQuestion(savedQuestions[0]);
+      setSelectedScenario(`user-${0}`);
+    }
+  }, [scenarioQuestion, savedQuestions]);
+
+  const resolvedProjectId = session?.projectId ?? localStorage.getItem('currentProjectId');
+  const [loadingServerResults, setLoadingServerResults] = useState(false);
+  const [resultsError, setResultsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!resolvedProjectId || executionResults || executionStatus === 'running') {
+      return;
+    }
+
+    let cancelled = false;
+    const loadResults = async () => {
+      setLoadingServerResults(true);
+      setResultsError(null);
+      try {
+        const response = await apiClient.getAnalysisResults(resolvedProjectId);
+        if (!cancelled && response?.results) {
+          setExecutionResults(response.results);
+          setExecutionStatus('completed');
+          setValidationStatus('validated');
+          try {
+            localStorage.setItem('chimari_execution_results', JSON.stringify(response.results));
+          } catch {
+            // ignore storage failures
+          }
+        }
+      } catch (error: any) {
+        if (cancelled) return;
+        const status = error?.response?.status || error?.status;
+        if (status === 404) {
+          // No execution yet; keep idle state
+          return;
+        }
+        console.error('Failed to load execution results from server:', error);
+        setResultsError(error?.message || 'Unable to load execution results. Please try again.');
+      } finally {
+        if (!cancelled) setLoadingServerResults(false);
+      }
+    };
+
+    loadResults();
+    return () => { cancelled = true; };
+  }, [resolvedProjectId, executionResults, executionStatus]);
+
+  const inferAnalysesForQuestion = (question: string): string[] => {
+    const q = question.toLowerCase();
+    const analyses = new Set<string>(['descriptive']);
+    if (/(trend|time|month|week|year|season)/.test(q)) analyses.add('time-series');
+    if (/(impact|effect|improve|drive|increase|decrease|predict|churn|attrition)/.test(q)) analyses.add('regression');
+    if (/(relationship|correlat|association|compare|versus|vs)/.test(q)) analyses.add('correlation');
+    if (/(segment|cluster|group|persona)/.test(q)) analyses.add('clustering');
+    if (/(classification|classify|category)/.test(q)) analyses.add('classification');
+    return Array.from(analyses);
+  };
+
+  const personalizedScenarios = savedQuestions.map((question, index) => ({
+    id: `user-${index}`,
+    title: question.length > 60 ? `${question.slice(0, 57)}…` : question,
+    description: 'Based on the questions you entered earlier',
+    analyses: inferAnalysesForQuestion(question),
+    example: question,
+    source: 'user' as const
+  }));
   const [validationStatus, setValidationStatus] = useState<'pending' | 'validating' | 'validated' | 'failed'>('pending');
   const [showCheckpoint, setShowCheckpoint] = useState(false);
   const [checkpointApproved, setCheckpointApproved] = useState(false);
@@ -58,7 +162,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     loading: sessionLoading,
     error: sessionError
   } = useProjectSession({
-    journeyType: journeyType as 'non-tech' | 'business' | 'technical' | 'consultation'
+    journeyType: journeyType as 'non-tech' | 'business' | 'technical' | 'consultation' | 'custom'
   });
 
   // Load templates and fetch their configurations (Phase 3 - Task 3.2)
@@ -268,7 +372,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
   const analysisOptions = getAnalysisOptions();
 
   // Non-tech scenario presets in plain language → mapped to analyses
-  const scenarioPresets: Array<{ id: string; title: string; description: string; analyses: string[]; example?: string }>= [
+  const scenarioPresets: Array<{ id: string; title: string; description: string; analyses: string[]; example?: string; source?: 'user' | 'system' }>= [
     {
       id: 'policy-attrition',
       title: 'Policy impact on employee attrition',
@@ -299,6 +403,8 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     }
   ];
 
+  const scenarioOptions = personalizedScenarios.concat(scenarioPresets);
+
   // Debounced question suggestion fetch for non-tech users
   useEffect(() => {
     let cancelled = false;
@@ -311,15 +417,10 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     setIsSuggesting(true);
     const t = setTimeout(async () => {
       try {
-        const resp = await fetch('/api/analysis/suggest-scenarios', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question: scenarioQuestion })
-        });
-        const json = await resp.json();
+        const resp = await apiClient.post('/api/analysis/suggest-scenarios', { question: scenarioQuestion });
         if (!cancelled) {
-          setSuggestedScenarios(json.scenarios || []);
-          setScenarioSource(json.source || null);
+          setSuggestedScenarios(resp?.scenarios || []);
+          setScenarioSource(resp?.source || null);
         }
       } catch (e) {
         if (!cancelled) {
@@ -365,7 +466,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
 
     try {
       // Get current project ID from localStorage or context
-      const currentProjectId = localStorage.getItem('currentProjectId');
+      const currentProjectId = getCurrentProjectId();
       
       if (!currentProjectId) {
         console.error('No project ID found');
@@ -379,12 +480,19 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       // Call the REAL analysis execution API
       setExecutionStatus('running');
       setExecutionProgress(10);
-      
+
+      // Get authentication token
+      const token = localStorage.getItem('auth_token');
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       const response = await fetch('/api/analysis-execution/execute', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         credentials: 'include',
         body: JSON.stringify({
           projectId: currentProjectId,
@@ -405,39 +513,47 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       setExecutionProgress(50);
 
       const data = await response.json();
-      
+
       if (!data.success) {
         throw new Error(data.error || 'Analysis execution failed');
       }
 
+      // ✅ Validate response data structure
+      if (!data.results) {
+        throw new Error('Analysis results missing from response');
+      }
+
       console.log('✅ Analysis completed successfully');
-      console.log(`📈 Results: ${data.results.insightCount} insights, ${data.results.recommendationCount} recommendations`);
+      console.log(`📈 Results: ${data.results?.insightCount || 0} insights, ${data.results?.recommendationCount || 0} recommendations`);
 
       setExecutionProgress(100);
       setExecutionStatus('completed');
 
-      // Store execution results for pricing step
-      const results = {
-        totalAnalyses: data.results.summary.totalAnalyses,
-        executionTime: data.results.summary.executionTime,
-        resultsGenerated: data.results.summary.dataRowsProcessed,
-        insightsFound: data.results.insightCount,
-        qualityScore: data.results.summary.qualityScore,
-        dataSize: data.results.summary.dataRowsProcessed || 0,
-        complexity: data.results.summary.complexity || 'moderate',
-        selectedAnalyses: selectedAnalyses
-      };
+      const payload = data.results;
+      setExecutionResults(payload);
 
-      setExecutionResults(results);
+      // Store execution summary for pricing/session validation
+      const pricingSummary = {
+        totalAnalyses: payload?.analysisTypes?.length ?? payload?.summary?.totalAnalyses ?? selectedAnalyses.length,
+        executionTime: payload?.summary?.executionTime ?? (payload?.executionTimeSeconds ? `${payload.executionTimeSeconds}s` : '0s'),
+        resultsGenerated: payload?.insightCount ?? payload?.summary?.dataRowsProcessed ?? 0,
+        insightsFound: payload?.insightCount ?? 0,
+        recommendationsFound: payload?.recommendationCount ?? payload?.recommendations?.length ?? 0,
+        qualityScore: payload?.qualityScore ?? payload?.summary?.qualityScore ?? 0,
+        dataSize: payload?.dataRowsProcessed ?? payload?.summary?.dataRowsProcessed ?? 0,
+        datasetCount: payload?.metadata?.datasetCount ?? payload?.datasetCount ?? 1,
+        selectedAnalyses,
+        estimatedCost: payload?.cost ?? payload?.costBreakdown?.total ?? payload?.estimatedCost?.total ?? 0
+      };
 
       // 🔒 SECURITY: Save to server AND validate integrity
       try {
         // Save to server session
-        await updateStep('execute', results);
+        await updateStep('execute', pricingSummary);
 
         // Server-side validation to prevent tampering
         setValidationStatus('validating');
-        const isValid = await validateExecution(results);
+        const isValid = await validateExecution(pricingSummary);
 
         if (isValid) {
           setValidationStatus('validated');
@@ -451,7 +567,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         }
 
         // Backwards compatibility: Also cache in localStorage
-        localStorage.setItem('chimari_execution_results', JSON.stringify(results));
+        localStorage.setItem('chimari_execution_results', JSON.stringify(payload));
 
       } catch (error) {
         console.error('Failed to save/validate execution results:', error);
@@ -465,6 +581,87 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       setExecutionStatus('error');
       setExecutionProgress(0);
       alert(`Analysis failed: ${error.message}`);
+    }
+  };
+
+  const getCurrentProjectId = () => resolvedProjectId;
+
+  const handlePreviewResults = async () => {
+    const projectId = getCurrentProjectId();
+    if (!projectId) {
+      toast({
+        title: "Missing project",
+        description: "Please select a project or upload data before previewing results.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    setPreviewError(null);
+    setPreviewLoading(true);
+
+    try {
+      let resultsPayload = executionResults;
+      if (!resultsPayload) {
+        const apiResponse = await apiClient.getAnalysisResults(projectId);
+        resultsPayload = apiResponse?.results;
+      }
+
+      if (!resultsPayload) {
+        throw new Error('Results are not available yet. Please run the analysis first.');
+      }
+
+      setPreviewData(resultsPayload);
+      setIsPreviewOpen(true);
+    } catch (error: any) {
+      const message = error?.message || 'Failed to load preview results.';
+      setPreviewError(message);
+      toast({
+        title: "Preview unavailable",
+        description: message,
+        variant: "destructive"
+      });
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const handleDownloadArtifacts = async () => {
+    const projectId = getCurrentProjectId();
+    if (!projectId) {
+      toast({
+        title: "Missing project",
+        description: "Please select a project before downloading artifacts.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    setArtifactLoading(true);
+
+    try {
+      const response = await apiClient.getProjectArtifacts(projectId);
+      const artifacts = response?.artifacts ?? [];
+      const fileRef = artifacts
+        .flatMap((artifact: any) => artifact.fileRefs || [])
+        .find((ref: any) =>
+          ['pdf', 'presentation', 'dashboard', 'csv'].includes(ref?.type || '') || ref?.url
+        );
+
+      if (fileRef?.url) {
+        window.open(fileRef.url, '_blank', 'noopener,noreferrer');
+      } else {
+        throw new Error('Artifacts are still generating. Please check back shortly.');
+      }
+    } catch (error: any) {
+      const message = error?.message || 'Failed to download artifacts.';
+      toast({
+        title: "Download unavailable",
+        description: message,
+        variant: "destructive"
+      });
+    } finally {
+      setArtifactLoading(false);
     }
   };
 
@@ -558,6 +755,36 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     }
   };
 
+  // State for template duration
+  const [executeDuration, setExecuteDuration] = useState<string>('<1 minute');
+
+  // Load template duration from API (Task 2.2: Frontend Template Integration)
+  useEffect(() => {
+    async function loadTemplateDuration() {
+      try {
+        const templates = await apiClient.getTemplatesByJourneyType(journeyType);
+        if (templates?.data && templates.data.length > 0) {
+          const template = templates.data[0];
+          const executeStep = template.steps?.find((s: any) => s.id === 'execute');
+          if (executeStep?.estimatedDuration) {
+            setExecuteDuration(`${executeStep.estimatedDuration} minute${executeStep.estimatedDuration === 1 ? '' : 's'}`);
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to load template duration from API, using default:', error);
+        // Fallback to default if API fails
+      }
+    }
+    if (journeyType) {
+      loadTemplateDuration();
+    }
+  }, [journeyType]);
+
+  // Find correct duration from template (fallback function kept for backwards compatibility)
+  function getExecuteDuration(journeyType: string): string {
+    return executeDuration; // Use state value from API
+  }
+
   const getEstimatedDuration = () => {
     const totalMinutes = selectedAnalyses.reduce((total, analysisId) => {
       const analysis = analysisOptions.find(opt => opt.id === analysisId);
@@ -566,6 +793,65 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     }, 0);
     return `${totalMinutes}-${totalMinutes + selectedAnalyses.length * 2} minutes`;
   };
+
+  const executionSummary = useMemo(() => {
+    if (!executionResults) {
+      return {
+        totalAnalyses: 0,
+        executionTime: '—',
+        resultsGenerated: 0,
+        qualityScore: 0,
+        insightCount: 0,
+        recommendationCount: 0,
+        datasetCount: 0
+      };
+    }
+
+    const totalAnalyses = executionResults.analysisTypes?.length
+      ?? executionResults.summary?.totalAnalyses
+      ?? selectedAnalyses.length;
+    const executionTime = executionResults.summary?.executionTime
+      ?? (executionResults.executionTimeSeconds ? `${executionResults.executionTimeSeconds}s` : '—');
+    const resultsGenerated = executionResults.insightCount
+      ?? executionResults.summary?.dataRowsProcessed
+      ?? 0;
+    const qualityScore = executionResults.qualityScore
+      ?? executionResults.summary?.qualityScore
+      ?? 0;
+
+    return {
+      totalAnalyses,
+      executionTime,
+      resultsGenerated,
+      qualityScore,
+      insightCount: executionResults.insightCount ?? executionResults.insights?.length ?? 0,
+      recommendationCount: executionResults.recommendationCount ?? executionResults.recommendations?.length ?? 0,
+      datasetCount: executionResults.metadata?.datasetCount ?? executionResults.datasetCount ?? 1
+    };
+  }, [executionResults, selectedAnalyses.length]);
+
+  const previewSummary = useMemo(() => {
+    if (!previewData) return null;
+    const insightCount = previewData.insightCount ?? previewData.insights?.length ?? 0;
+    const recommendationCount = previewData.recommendationCount ?? previewData.recommendations?.length ?? 0;
+    const quality = previewData.qualityScore ?? previewData.summary?.qualityScore ?? executionSummary.qualityScore;
+    const avgConfidence = previewData.insights?.length
+      ? Math.round(
+          previewData.insights.reduce(
+            (sum: number, insight: any) => sum + (insight.confidence || 60),
+            0
+          ) / previewData.insights.length
+        )
+      : quality;
+
+    return {
+      insightCount,
+      recommendationCount,
+      quality,
+      avgConfidence,
+      duration: previewData.summary?.executionTime ?? executionSummary.executionTime
+    };
+  }, [previewData, executionSummary]);
 
   return (
     <div className="space-y-6">
@@ -579,6 +865,128 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         journeyType={journeyType}
         estimatedDuration={selectedAnalyses.length > 0 ? `${selectedAnalyses.length * 5}-${selectedAnalyses.length * 8} minutes` : undefined}
       />
+
+      <Dialog
+        open={isPreviewOpen}
+        onOpenChange={(open) => {
+          setIsPreviewOpen(open);
+          if (!open) {
+            setPreviewError(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-4xl max-h-[85vh]">
+          <DialogHeader>
+            <DialogTitle>Analysis Preview</DialogTitle>
+            <DialogDescription>
+              Generated insights and confidence scores from your latest execution.
+            </DialogDescription>
+          </DialogHeader>
+
+          {previewLoading ? (
+            <div className="flex items-center justify-center py-10">
+              <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
+            </div>
+          ) : previewError ? (
+            <div className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+              {previewError}
+            </div>
+          ) : previewData ? (
+            <>
+              {previewSummary && (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                  <div className="rounded-lg border p-3">
+                    <p className="text-xs text-gray-500 uppercase">Confidence</p>
+                    <p className="text-2xl font-semibold text-gray-900">{previewSummary.avgConfidence}%</p>
+                  </div>
+                  <div className="rounded-lg border p-3">
+                    <p className="text-xs text-gray-500 uppercase">Insights</p>
+                    <p className="text-2xl font-semibold text-gray-900">{previewSummary.insightCount}</p>
+                  </div>
+                  <div className="rounded-lg border p-3">
+                    <p className="text-xs text-gray-500 uppercase">Recommendations</p>
+                    <p className="text-2xl font-semibold text-gray-900">{previewSummary.recommendationCount}</p>
+                  </div>
+                  <div className="rounded-lg border p-3">
+                    <p className="text-xs text-gray-500 uppercase">Quality Score</p>
+                    <p className="text-2xl font-semibold text-gray-900">{previewSummary.quality}%</p>
+                  </div>
+                </div>
+              )}
+
+              <Separator />
+
+              <div className="mt-4">
+                <h4 className="text-sm font-semibold mb-2">Key Insights</h4>
+                <ScrollArea className="h-64 pr-4">
+                  {previewData.insights?.length ? (
+                    previewData.insights.map((insight: any, index: number) => (
+                      <div key={`insight-${index}`} className="mb-3 rounded-lg border border-gray-200 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="font-medium text-gray-900">{insight.title || `Insight ${index + 1}`}</p>
+                          <Badge variant="secondary" className="text-xs">
+                            {insight.confidence ?? 60}% confidence
+                          </Badge>
+                        </div>
+                        <p className="text-sm text-gray-700 mt-2">{insight.description}</p>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-sm text-gray-600">No insights are available yet.</p>
+                  )}
+                </ScrollArea>
+              </div>
+
+              <Separator className="my-4" />
+
+              <div>
+                <h4 className="text-sm font-semibold mb-2">Recommended Actions</h4>
+                <ScrollArea className="h-48 pr-4">
+                  {previewData.recommendations?.length ? (
+                    previewData.recommendations.map((rec: any, index: number) => (
+                      <div key={`rec-${index}`} className="mb-3 rounded-lg border border-blue-100 bg-blue-50 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="font-medium text-blue-900">{rec.title || `Recommendation ${index + 1}`}</p>
+                          <Badge className="text-xs bg-blue-100 text-blue-700">
+                            Priority: {rec.priority || 'Medium'}
+                          </Badge>
+                        </div>
+                        <p className="text-sm text-blue-800 mt-2">{rec.description}</p>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-sm text-gray-600">No recommendations generated yet.</p>
+                  )}
+                </ScrollArea>
+              </div>
+            </>
+          ) : (
+            <p className="text-sm text-gray-600">No preview data is available yet. Run the analysis to generate insights.</p>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {loadingServerResults && (
+        <Card className="border-blue-200 bg-blue-50">
+          <CardContent className="py-3">
+            <div className="flex items-center gap-2 text-sm text-blue-800">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span>Loading latest execution results from the server…</span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {resultsError && (
+        <Card className="border-red-200 bg-red-50">
+          <CardContent className="py-3">
+            <div className="flex items-center gap-2 text-sm text-red-800">
+              <AlertCircle className="w-4 h-4" />
+              <span>{resultsError}</span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Journey Type Info */}
       <Card className={`border-${journeyInfo.color}-200 bg-${journeyInfo.color}-50`}>
@@ -610,7 +1018,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">
                 <p className="text-sm font-medium text-blue-900 mb-1">💡 Your Project Goal:</p>
                 <p className="text-sm text-blue-700 italic">
-                  {localStorage.getItem('chimari_analysis_goal') || 'Not specified'}
+                  {savedGoal || localStorage.getItem('chimari_analysis_goal') || 'Not specified'}
                 </p>
               </div>
               <Label htmlFor="scenario-question">Specific question to answer:</Label>
@@ -619,14 +1027,18 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
                 type="text"
                 value={scenarioQuestion}
                 onChange={(e) => setScenarioQuestion(e.target.value)}
-                placeholder="For example: 'Is there evidence of employee attrition due to the new policy?' or 'Which marketing channel drives the most conversions?'"
+                placeholder={
+                  savedQuestions.length > 0
+                    ? `Ex: ${savedQuestions[0]}`
+                    : "For example: 'Is there evidence of employee attrition due to the new policy?'"
+                }
                 className="w-full rounded-md border px-3 py-2 text-sm"
               />
               {isSuggesting && (
                 <div className="text-xs text-blue-600">Analyzing your question…</div>
               )}
               <div className="grid md:grid-cols-2 gap-3">
-                {suggestedScenarios.map((s) => (
+                {scenarioOptions.map((s) => (
                   <div
                     key={`suggested-${s.id}`}
                     className={`p-3 border rounded-lg cursor-pointer transition-all ${selectedScenario === s.id ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'}`}
@@ -638,27 +1050,16 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
                         <p className="font-medium text-gray-900">{s.title}</p>
                         <p className="text-sm text-gray-600">{s.description}</p>
                       </div>
-                      <Badge variant="secondary" className={scenarioSource === 'internal' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}>
-                        {scenarioSource === 'internal' ? 'From your data' : 'New type' }
+                      <Badge
+                        variant="secondary"
+                        className={
+                          s.source === 'user' || scenarioSource === 'internal'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-amber-100 text-amber-800'
+                        }
+                      >
+                        {s.source === 'user' || scenarioSource === 'internal' ? 'Your question' : 'Suggested'}
                       </Badge>
-                    </div>
-                  </div>
-                ))}
-                {scenarioPresets.map((s) => (
-                  <div
-                    key={s.id}
-                    className={`p-3 border rounded-lg cursor-pointer transition-all ${selectedScenario === s.id ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'}`}
-                    onClick={() => handleSelectScenario(s.id)}
-                    data-testid={`scenario-${s.id}`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-medium text-gray-900">{s.title}</p>
-                        <p className="text-sm text-gray-600">{s.description}</p>
-                      </div>
-                      {selectedScenario === s.id && (
-                        <Badge variant="secondary" className="bg-blue-100 text-blue-800">Selected</Badge>
-                      )}
                     </div>
                   </div>
                 ))}
@@ -1020,30 +1421,48 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
 
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   <div className="text-center">
-                    <p className="text-2xl font-bold text-green-900">{executionResults.totalAnalyses}</p>
+                    <p className="text-2xl font-bold text-green-900">{executionSummary.totalAnalyses}</p>
                     <p className="text-sm text-green-700">Analyses Completed</p>
                   </div>
                   <div className="text-center">
-                    <p className="text-2xl font-bold text-green-900">{executionResults.executionTime}</p>
+                    <p className="text-2xl font-bold text-green-900">{executionSummary.executionTime}</p>
                     <p className="text-sm text-green-700">Execution Time</p>
                   </div>
                   <div className="text-center">
-                    <p className="text-2xl font-bold text-green-900">{executionResults.resultsGenerated}</p>
+                    <p className="text-2xl font-bold text-green-900">{executionSummary.resultsGenerated}</p>
                     <p className="text-sm text-green-700">Results Generated</p>
                   </div>
                   <div className="text-center">
-                    <p className="text-2xl font-bold text-green-900">{executionResults.qualityScore}%</p>
+                    <p className="text-2xl font-bold text-green-900">{executionSummary.qualityScore}%</p>
                     <p className="text-sm text-green-700">Quality Score</p>
                   </div>
                 </div>
                 
                 <div className="flex items-center justify-center gap-4">
-                  <Button variant="outline" className="flex items-center gap-2">
-                    <Eye className="w-4 h-4" />
+                  <Button
+                    variant="outline"
+                    className="flex items-center gap-2"
+                    onClick={handlePreviewResults}
+                    disabled={previewLoading || (!executionResults && executionStatus !== 'completed')}
+                  >
+                    {previewLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Eye className="w-4 h-4" />
+                    )}
                     Preview Results
                   </Button>
-                  <Button variant="outline" className="flex items-center gap-2">
-                    <Download className="w-4 h-4" />
+                  <Button
+                    variant="outline"
+                    className="flex items-center gap-2"
+                    onClick={handleDownloadArtifacts}
+                    disabled={artifactLoading}
+                  >
+                    {artifactLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Download className="w-4 h-4" />
+                    )}
                     Download Report
                   </Button>
                 </div>
@@ -1068,13 +1487,13 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
             </p>
             <div className="flex items-center gap-2">
               <Badge variant="secondary" className="bg-green-100 text-green-800">
-                {executionResults?.totalAnalyses} analyses completed
+                {executionSummary.totalAnalyses} analyses completed
               </Badge>
               <Badge variant="secondary" className="bg-green-100 text-green-800">
-                {executionResults?.resultsGenerated} results generated
+                {executionSummary.resultsGenerated} results generated
               </Badge>
               <Badge variant="secondary" className="bg-green-100 text-green-800">
-                {executionResults?.qualityScore}% quality score
+                {executionSummary.qualityScore}% quality score
               </Badge>
             </div>
           </CardContent>

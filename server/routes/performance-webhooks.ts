@@ -1,9 +1,13 @@
 // server/routes/performance-webhooks.ts
 import { Router } from 'express';
-import { performanceWebhookService, WebhookEndpoint } from '../services/performance-webhook-service';
+import { performanceWebhookService, WebhookEndpoint, type PerformanceMetric } from '../services/performance-webhook-service';
 import { ensureAuthenticated } from './auth';
 
 const router = Router();
+
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+};
 
 // Middleware to check admin privileges (you may want to implement proper role checking)
 const requireAdmin = (req: any, res: any, next: any) => {
@@ -199,6 +203,10 @@ router.post('/webhooks/:id/toggle', ensureAuthenticated, requireAdmin, (req, res
  */
 router.post('/webhooks/:id/test', ensureAuthenticated, requireAdmin, async (req, res) => {
     try {
+        if (!req.user) {
+            return res.status(401).json({ error: 'Authentication required to trigger webhook tests' });
+        }
+
         const { id } = req.params;
         const webhooks = performanceWebhookService.getWebhookEndpoints();
         const webhook = webhooks.find(w => w.id === id);
@@ -216,10 +224,10 @@ router.post('/webhooks/:id/test', ensureAuthenticated, requireAdmin, async (req,
             status: 'success',
             details: {
                 testPayload: true,
-                triggeredBy: req.user.email,
+                triggeredBy: (req.user as any).email ?? 'unknown-user',
                 message: 'This is a test webhook payload from ChimariData Performance Monitor'
             },
-            userId: req.user.id
+            userId: (req.user as any).id
         });
 
         res.json({
@@ -229,6 +237,132 @@ router.post('/webhooks/:id/test', ensureAuthenticated, requireAdmin, async (req,
     } catch (error: any) {
         console.error('Error sending test webhook:', error);
         res.status(500).json({ error: 'Failed to send test webhook' });
+    }
+});
+
+/**
+ * @route POST /api/performance/metrics/batch
+ * @desc Record client-submitted performance metrics
+ * @access Authenticated
+ */
+router.post('/metrics/batch', ensureAuthenticated, async (req, res) => {
+    try {
+        const userId = (req.user as any)?.id;
+        if (!userId) {
+            return res.status(401).json({ error: 'Authentication required' });
+        }
+
+        const rawMetrics = Array.isArray(req.body?.metrics)
+            ? (req.body.metrics as unknown[]).slice(0, 25)
+            : [];
+
+        if (rawMetrics.length === 0) {
+            return res.status(400).json({ error: 'Metrics payload is required' });
+        }
+
+        const sessionId = typeof (req as any).sessionID === 'string' ? (req as any).sessionID : undefined;
+
+        const normalized = rawMetrics
+            .map((candidate): PerformanceMetric | null => {
+                if (!isRecord(candidate)) {
+                    return null;
+                }
+
+                const operation = typeof candidate.operation === 'string' ? candidate.operation.trim() : '';
+                if (!operation) {
+                    return null;
+                }
+
+                const durationNumber = Number(candidate.duration);
+                if (!Number.isFinite(durationNumber) || durationNumber < 0) {
+                    return null;
+                }
+
+                const rawTimestamp = candidate.timestamp;
+                let timestamp: Date;
+
+                if (rawTimestamp instanceof Date) {
+                    timestamp = rawTimestamp;
+                } else if (typeof rawTimestamp === 'string' || typeof rawTimestamp === 'number') {
+                    const parsedTimestamp = new Date(rawTimestamp);
+                    if (Number.isNaN(parsedTimestamp.getTime())) {
+                        return null;
+                    }
+                    timestamp = parsedTimestamp;
+                } else {
+                    timestamp = new Date();
+                }
+
+                const status: PerformanceMetric['status'] = candidate.status === 'error'
+                    ? 'error'
+                    : candidate.status === 'warning'
+                        ? 'warning'
+                        : 'success';
+
+                const service = typeof candidate.service === 'string' && candidate.service.trim().length > 0
+                    ? candidate.service.trim()
+                    : 'client';
+
+                const metadata = candidate.metadata;
+                const details: Record<string, any> = isRecord(metadata) ? metadata : {};
+
+                return {
+                    timestamp,
+                    service,
+                    operation,
+                    duration: Math.round(durationNumber),
+                    status,
+                    details,
+                    userId,
+                    sessionId
+                };
+            })
+            .filter((metric: PerformanceMetric | null): metric is PerformanceMetric => metric !== null);
+
+        if (normalized.length === 0) {
+            return res.status(400).json({ error: 'No valid metrics found in payload' });
+        }
+
+        await Promise.all(normalized.map(metric => performanceWebhookService.recordMetric(metric)));
+
+        res.json({
+            success: true,
+            recorded: normalized.length
+        });
+    } catch (error: any) {
+        console.error('Error recording performance metrics batch:', error);
+        res.status(500).json({ error: 'Failed to record performance metrics' });
+    }
+});
+
+/**
+ * @route GET /api/performance/metrics/my-uploads
+ * @desc Get upload SLA metrics for the authenticated user
+ * @access Authenticated
+ */
+router.get('/metrics/my-uploads', ensureAuthenticated, (req, res) => {
+    try {
+        const userId = (req.user as any)?.id;
+        if (!userId) {
+            return res.status(401).json({ error: 'Authentication required' });
+        }
+
+        const timeWindow = parseInt(String(req.query.timeWindow || ''), 10);
+        const timeWindowMs = Number.isFinite(timeWindow) && timeWindow > 0 ? timeWindow : 60 * 60 * 1000;
+
+        const summary = performanceWebhookService.getUserMetricsSummary(userId, timeWindowMs, {
+            services: ['client_upload', 'project_upload'],
+            operations: ['upload_flow_total', 'upload_total', 'upload_network']
+        });
+
+        res.json({
+            success: true,
+            summary,
+            timeWindow: `${timeWindowMs / 1000}s`
+        });
+    } catch (error: any) {
+        console.error('Error fetching user upload metrics summary:', error);
+        res.status(500).json({ error: 'Failed to fetch metrics summary' });
     }
 });
 

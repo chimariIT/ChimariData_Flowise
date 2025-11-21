@@ -123,16 +123,37 @@ export class IntelligentDataTransformer {
   private static SMALL_DATASET_THRESHOLD = 100_000;
   private static MEDIUM_DATASET_THRESHOLD = 10_000_000;
 
+  private isTransformationInput(value: unknown): value is TransformationInput {
+    return Boolean(value) && typeof value === 'object' && Array.isArray((value as TransformationInput).data);
+  }
+
+  private isTransformationInputArray(
+    value: TransformationConfig['inputData'] | any
+  ): value is TransformationInput[] {
+    return Array.isArray(value) && value.every(item => this.isTransformationInput(item));
+  }
+
+  private extractRowsFromInput(input: TransformationConfig['inputData'] | any[]): any[] {
+    if (this.isTransformationInputArray(input)) {
+      return input.flatMap(item => item.data);
+    }
+    return Array.isArray(input) ? input : [];
+  }
+
+  private getTransformationInputs(input: TransformationConfig['inputData']): TransformationInput[] {
+    if (!this.isTransformationInputArray(input)) {
+      throw new Error('Structured transformation input required for this operation');
+    }
+    return input;
+  }
+
   /**
    * Main transformation entry point with intelligent technology selection
    */
   async transform(config: TransformationConfig): Promise<TransformationResult> {
     const startTime = Date.now();
-    const inputData = Array.isArray(config.inputData)
-      ? config.inputData
-      : config.inputData.map(i => i.data).flat();
-
-    const rowCount = inputData.length;
+    const rows = this.extractRowsFromInput(config.inputData);
+    const rowCount = rows.length;
 
     // Determine best technology based on dataset size and operation
     const technology = this.selectTechnology(rowCount, config.operation, config.optimizationHint);
@@ -240,12 +261,26 @@ export class IntelligentDataTransformer {
     }
   }
 
+  /**
+   * Expose engine recommendation without executing a transformation.
+   * Useful for planners that need to pick an execution engine up-front.
+   */
+  recommendTechnology(
+    rowCount: number,
+    operation: TransformationOperation,
+    hint?: 'speed' | 'memory' | 'balanced'
+  ): 'javascript' | 'polars' | 'pandas' | 'spark' {
+    return this.selectTechnology(rowCount, operation, hint);
+  }
+
   // ==========================================================================
   // JavaScript Transformations (Fast for small datasets)
   // ==========================================================================
 
   private async transformWithJavaScript(config: TransformationConfig): Promise<any> {
-    const data = Array.isArray(config.inputData) ? config.inputData : config.inputData[0].data;
+    const data = Array.isArray(config.inputData) && config.inputData.length > 0 && !('data' in config.inputData[0])
+      ? config.inputData
+      : (config.inputData as TransformationInput[])[0]?.data || [];
     const optimizations: string[] = [];
 
     switch (config.operation) {
@@ -788,16 +823,18 @@ print(result_df.to_json(orient='records'))
     const sparkProcessor = new SparkProcessor();
 
     // Convert config to Spark operations
-    const data = Array.isArray(config.inputData) ? config.inputData : config.inputData[0].data;
+    const data = Array.isArray(config.inputData) && config.inputData.length > 0 && !('data' in config.inputData[0])
+      ? config.inputData
+      : (config.inputData as TransformationInput[])[0]?.data || [];
 
     try {
-      const result = await sparkProcessor.processDataset(data, {
+      const result = await sparkProcessor.applyTransformations(data, [{
         operation: config.operation as any,
         ...config.parameters
-      });
+      }]);
 
       return {
-        data: result.data,
+        data: result,
         optimizations: ['spark-distributed-processing', 'partition-based-computation']
       };
     } catch (error) {

@@ -2,24 +2,41 @@
 import { AgentHandler, AgentTask, AgentResult, AgentStatus, AgentCapability } from './agent-registry';
 import { nanoid } from 'nanoid';
 import { measurePerformance } from '../utils/performance-monitor';
-import type { FileProcessor } from './file-processor';
+import { FileProcessor } from './file-processor';
+import { promises as fs } from 'fs';
+import path from 'path';
+import type { DataAssessment } from '@shared/schema';
+import { intelligentTransformer, type TransformationOperation } from './intelligent-data-transformer';
 
 // ==========================================
 // CONSULTATION INTERFACES (Multi-Agent Coordination)
 // ==========================================
 
+export interface DataQualityIssueDetail {
+  type: 'missing_values' | 'outliers' | 'inconsistencies' | 'duplicates';
+  severity: 'high' | 'medium' | 'low';
+  affected: string[];
+  count: number;
+  message?: string;
+}
+
 export interface DataQualityReport {
   overallScore: number;
   completeness: number;
-  issues: Array<{
-    type: 'missing_values' | 'outliers' | 'inconsistencies' | 'duplicates';
-    severity: 'high' | 'medium' | 'low';
-    affected: string[];
-    count: number;
-  }>;
+  issues: Array<DataQualityIssueDetail | string>;
+  issueDetails: DataQualityIssueDetail[];
+  issueMessages: string[];
   recommendations: string[];
+  warnings: string[];
+  transformations: string[];
   confidence: number;
   estimatedFixTime: string;
+  qualityScore: number;
+  metadata: {
+    datasetId?: string;
+    rowsAnalyzed: number;
+    columnsAnalyzed: number;
+  };
 }
 
 export interface TransformationOptions {
@@ -40,6 +57,21 @@ export interface TimeEstimate {
   factors: string[];
 }
 
+type TransformationEngine = 'javascript' | 'polars' | 'pandas' | 'spark';
+
+interface EngineDecision {
+  transformationId: string;
+  name: string;
+  requestedType: DataTransformation['type'];
+  operation: TransformationOperation | null;
+  estimatedRows: number;
+  optimizationHint: 'speed' | 'memory' | 'balanced';
+  selectedEngine: TransformationEngine;
+  fallbackEngines: TransformationEngine[];
+  slaCategory: 'critical' | 'high' | 'standard';
+  notes?: string;
+}
+
 // ==========================================
 // FILE ANALYSIS INTERFACES (Agent Recommendation Workflow)
 // ==========================================
@@ -47,7 +79,7 @@ export interface TimeEstimate {
 export interface FileAnalysisResult {
   fileId: string;
   fileName: string;
-  rowCount: number;
+  recordCount: number;
   columnCount: number;
   schema: Array<{ name: string; type: string; nullable?: boolean; }>;
   sampleData: any[];
@@ -172,15 +204,36 @@ export class DataEngineerAgent implements AgentHandler {
   private executions: Map<string, PipelineExecution> = new Map();
   private currentTasks = 0;
   private readonly maxConcurrentTasks = 3;
-  private fileProcessor: FileProcessor | null = null;
+  private fileProcessor: typeof FileProcessor;
+  private readonly transformer = intelligentTransformer;
 
-  constructor(fileProcessor?: FileProcessor) {
-    this.fileProcessor = fileProcessor || null;
+  constructor(fileProcessor?: typeof FileProcessor) {
+    this.fileProcessor = fileProcessor || FileProcessor;
     console.log('🔧 Data Engineer Agent initialized');
   }
 
-  setFileProcessor(fileProcessor: FileProcessor): void {
+  setFileProcessor(fileProcessor: typeof FileProcessor): void {
     this.fileProcessor = fileProcessor;
+  }
+
+  private inferMimeType(fileName: string): string {
+    const ext = path.extname(fileName).toLowerCase();
+
+    switch (ext) {
+      case '.csv':
+        return 'text/csv';
+      case '.json':
+        return 'application/json';
+      case '.xlsx':
+      case '.xls':
+        return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      case '.parquet':
+        return 'application/octet-stream';
+      case '.txt':
+        return 'text/plain';
+      default:
+        return 'application/octet-stream';
+    }
   }
 
   static getCapabilities(): AgentCapability[] {
@@ -427,15 +480,66 @@ export class DataEngineerAgent implements AgentHandler {
   }
 
   private async handleDataTransformation(task: AgentTask): Promise<AgentResult> {
-    const { transformations, sourceData } = task.payload;
+    const transformations: DataTransformation[] = Array.isArray(task.payload?.transformations)
+      ? task.payload.transformations
+      : [];
+    const sourceData = task.payload?.sourceData;
 
-    // Process transformations
+    const sourceStats = this.estimateSourceStats(sourceData);
+    const slaCategory = this.getSlaCategory(task);
+    const overallHint = this.resolveOptimizationHint(task, sourceStats.estimatedRowCount);
+
+    const engineDecisions: EngineDecision[] = transformations.map(transformation => {
+      const operation = this.mapToTransformationOperation(transformation.type);
+      const estimatedRows = this.estimateRowsForTransformation(transformation, sourceStats.estimatedRowCount);
+      const optimizationHint = this.resolveOptimizationHint(task, estimatedRows);
+
+      let selectedEngine: TransformationEngine;
+      let notes: string | undefined;
+
+      if (operation) {
+        selectedEngine = this.transformer.recommendTechnology(estimatedRows, operation, optimizationHint);
+      } else {
+        selectedEngine = optimizationHint === 'speed' ? 'polars' : 'javascript';
+        notes = `No direct mapping available for transformation type "${transformation.type}"; defaulted to ${selectedEngine}`;
+      }
+
+      return {
+        transformationId: transformation.id,
+        name: transformation.name,
+        requestedType: transformation.type,
+        operation,
+        estimatedRows,
+        optimizationHint,
+        selectedEngine,
+        fallbackEngines: this.getFallbackChain(selectedEngine),
+        slaCategory,
+        notes
+      };
+    });
+
+    const { engine: primaryEngine, decision: primaryDecision } = this.selectPrimaryEngine(engineDecisions);
+    const transformationTime = this.estimateTransformationRuntime(primaryEngine, sourceStats.estimatedRowCount);
+    const fallbackPlan = this.getFallbackChain(primaryEngine).map(engine => ({
+      engine,
+      trigger: this.describeFallbackTrigger(engine)
+    }));
+
     const transformationResults = {
       transformationsApplied: transformations.length,
       outputSchema: this.generateOutputSchema(transformations),
-      recordsProcessed: 10000,
-      transformationTime: 30000,
-      outputLocation: `transformed_data_${nanoid()}.csv`
+      recordsProcessed: Math.max(sourceStats.estimatedRowCount, sourceStats.sampleRows.length, 0),
+      transformationTime,
+      outputLocation: `transformed_data_${nanoid()}.csv`,
+      enginePlan: {
+        slaCategory,
+        optimizationHint: overallHint,
+        primaryEngine,
+        fallbackChain: fallbackPlan,
+        decisions: engineDecisions,
+        preferredOperation: primaryDecision?.operation,
+        computedAt: new Date().toISOString()
+      }
     };
 
     return {
@@ -444,14 +548,17 @@ export class DataEngineerAgent implements AgentHandler {
       status: 'success',
       result: transformationResults,
       metrics: {
-        duration: 30000,
-        resourcesUsed: ['compute'],
+        duration: transformationTime,
+        resourcesUsed: this.getResourcesForEngine(primaryEngine),
         tokensConsumed: 0
       },
       artifacts: [{
         type: 'transformed_data',
         data: transformationResults.outputLocation,
-        metadata: { schema: transformationResults.outputSchema }
+        metadata: {
+          schema: transformationResults.outputSchema,
+          enginePlan: transformationResults.enginePlan
+        }
       }],
       completedAt: new Date()
     };
@@ -730,6 +837,217 @@ How can I help you with your data engineering needs today?`;
     };
   }
 
+  private estimateSourceStats(sourceData: any): { estimatedRowCount: number; sampleRows: any[]; schema?: Record<string, any>; } {
+    if (!sourceData) {
+      return { estimatedRowCount: 0, sampleRows: [], schema: undefined };
+    }
+
+    if (Array.isArray(sourceData)) {
+      return { estimatedRowCount: sourceData.length, sampleRows: sourceData, schema: undefined };
+    }
+
+    const rows = Array.isArray(sourceData.rows)
+      ? sourceData.rows
+      : Array.isArray(sourceData.data)
+        ? sourceData.data
+        : Array.isArray(sourceData.samples)
+          ? sourceData.samples
+          : Array.isArray(sourceData.preview)
+            ? sourceData.preview
+            : [];
+
+    const numericCandidates = [
+      sourceData.rowCount,
+      sourceData.recordCount,
+      sourceData.totalRows,
+      sourceData.records,
+      sourceData.estimatedRowCount,
+      sourceData.size
+    ].filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+
+    const estimatedRowCount = numericCandidates.length > 0
+      ? Math.max(0, ...numericCandidates)
+      : rows.length;
+
+    const schema = (sourceData.schema && typeof sourceData.schema === 'object')
+      ? sourceData.schema
+      : sourceData.metadata?.schema;
+
+    return {
+      estimatedRowCount,
+      sampleRows: rows,
+      schema
+    };
+  }
+
+  private getSlaCategory(task: AgentTask): 'critical' | 'high' | 'standard' {
+    const payload = task.payload ?? {};
+
+    const explicit = payload.slaTier ?? payload.sla?.tier ?? payload.priorityLevel;
+    if (typeof explicit === 'string') {
+      const normalized = explicit.toLowerCase();
+      if (['critical', 'p0', 'p1', 'urgent'].includes(normalized)) {
+        return 'critical';
+      }
+      if (['high', 'p2', 'rush'].includes(normalized)) {
+        return 'high';
+      }
+    }
+
+    if (typeof task.priority === 'number') {
+      if (task.priority <= 2) {
+        return 'critical';
+      }
+      if (task.priority <= 4) {
+        return 'high';
+      }
+    }
+
+    if (typeof payload.priority === 'string') {
+      const normalized = payload.priority.toLowerCase();
+      if (['critical', 'urgent', 'p0'].includes(normalized)) {
+        return 'critical';
+      }
+      if (['high', 'rush', 'p1', 'p2'].includes(normalized)) {
+        return 'high';
+      }
+    }
+
+    return 'standard';
+  }
+
+  private resolveOptimizationHint(task: AgentTask, estimatedRows: number): 'speed' | 'memory' | 'balanced' {
+    const payload = task.payload ?? {};
+    const hint = payload.optimizationHint ?? payload.performancePriority;
+    if (hint === 'speed' || hint === 'memory' || hint === 'balanced') {
+      return hint;
+    }
+
+    const slaCategory = this.getSlaCategory(task);
+    if (slaCategory !== 'standard') {
+      return 'speed';
+    }
+
+    if (estimatedRows >= 20_000_000) {
+      return 'memory';
+    }
+
+    if (estimatedRows >= 500_000) {
+      return 'speed';
+    }
+
+    return 'balanced';
+  }
+
+  private estimateRowsForTransformation(transformation: DataTransformation, fallback: number): number {
+    const config = transformation.configuration ?? {};
+    const candidate = config.estimatedRows ?? config.rowCount ?? config.records ?? config.sampleSize;
+    if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+      return Math.max(0, candidate);
+    }
+    return fallback;
+  }
+
+  private mapToTransformationOperation(type: DataTransformation['type']): TransformationOperation | null {
+    switch (type) {
+      case 'filter':
+        return 'filter_rows';
+      case 'map':
+        return 'apply_function';
+      case 'aggregate':
+        return 'aggregate';
+      case 'join':
+        return 'join_datasets';
+      case 'pivot':
+        return 'pivot';
+      case 'normalize':
+        return 'normalize_columns';
+      case 'denormalize':
+        return 'unpivot';
+      default:
+        return null;
+    }
+  }
+
+  private getFallbackChain(engine: TransformationEngine): TransformationEngine[] {
+    switch (engine) {
+      case 'spark':
+        return ['polars', 'pandas', 'javascript'];
+      case 'polars':
+        return ['pandas', 'javascript'];
+      case 'pandas':
+        return ['javascript'];
+      default:
+        return [];
+    }
+  }
+
+  private describeFallbackTrigger(engine: TransformationEngine): string {
+    switch (engine) {
+      case 'polars':
+        return 'Fallback when Spark cluster is unavailable or dataset fits in-memory processing.';
+      case 'pandas':
+        return 'Fallback when Polars runtime is missing; rely on Pandas for compatibility.';
+      case 'javascript':
+        return 'Last-resort fallback using in-memory JavaScript to guarantee completion.';
+      default:
+        return 'Alternative execution engine';
+    }
+  }
+
+  private selectPrimaryEngine(decisions: EngineDecision[]): { engine: TransformationEngine; decision?: EngineDecision } {
+    if (decisions.length === 0) {
+      return { engine: 'javascript' };
+    }
+
+    const priority: Record<TransformationEngine, number> = {
+      javascript: 1,
+      pandas: 2,
+      polars: 3,
+      spark: 4
+    };
+
+    const bestDecision = decisions.reduce<EngineDecision>((best, current) => {
+      if (!best) {
+        return current;
+      }
+      return priority[current.selectedEngine] > priority[best.selectedEngine] ? current : best;
+    }, decisions[0]);
+
+    return {
+      engine: bestDecision.selectedEngine,
+      decision: bestDecision
+    };
+  }
+
+  private estimateTransformationRuntime(engine: TransformationEngine, rows: number): number {
+    if (!rows || rows <= 0) {
+      return 2000;
+    }
+
+    const baseMsPerThousand = 250;
+    const multipliers: Record<TransformationEngine, number> = {
+      spark: 0.35,
+      polars: 0.55,
+      pandas: 1,
+      javascript: 1.2
+    };
+
+    const runtime = (rows / 1000) * baseMsPerThousand * multipliers[engine];
+    return Math.max(2000, Math.round(runtime));
+  }
+
+  private getResourcesForEngine(engine: TransformationEngine): string[] {
+    switch (engine) {
+      case 'spark':
+        return ['compute', 'spark_cluster'];
+      case 'polars':
+        return ['compute', 'python_bridge'];
+      default:
+        return ['compute'];
+    }
+  }
+
   // ==========================================
   // CONSULTATION METHODS (Multi-Agent Coordination)
   // ==========================================
@@ -738,126 +1056,271 @@ How can I help you with your data engineering needs today?`;
    * Quick data quality assessment for PM coordination
    * Uses existing quality metrics logic
    */
-  async assessDataQuality(data: any[], schema: any): Promise<DataQualityReport> {
+  async assessDataQuality(input: any, schemaArg?: any): Promise<DataQualityReport> {
+    const payload = Array.isArray(input) ? null : input;
+    const dataSection = payload?.data;
+    const explicitSchema = schemaArg ?? payload?.schema ?? dataSection?.schema;
+    const schemaObject = (explicitSchema && typeof explicitSchema === 'object' && !Array.isArray(explicitSchema))
+      ? explicitSchema as Record<string, any>
+      : null;
+    const schemaColumnCount = schemaObject ? Object.keys(schemaObject).length : 0;
+    const metadataRows = Array.isArray(input)
+      ? input.length
+      : (typeof dataSection?.rowCount === 'number' ? Math.max(0, dataSection.rowCount) : 0);
+
     return measurePerformance(
       'data_quality_assessment',
       async () => {
-        console.log(`🔧 Data Engineer: Assessing data quality for ${data?.length || 0} rows`);
-        
-        // Handle null/undefined inputs gracefully
-        if (!data || !Array.isArray(data)) {
-          return {
-            qualityScore: 0,
-            completeness: 0,
-            consistency: 0,
-            validity: 0,
-        uniqueness: 0,
-        issues: ['Invalid data: data must be a valid array'],
-        recommendations: ['Please provide valid data for analysis'],
-        estimatedFixTime: 'N/A - Invalid input'
-      };
-    }
+        const datasetId = payload?.datasetId;
 
-    if (!schema || typeof schema !== 'object') {
-      return {
-        qualityScore: 0,
-        completeness: 0,
-        consistency: 0,
-        validity: 0,
-        uniqueness: 0,
-        issues: ['Invalid schema: schema must be a valid object'],
-        recommendations: ['Please provide a valid schema for analysis'],
-        estimatedFixTime: 'N/A - Invalid schema'
-      };
-    }
-    
-    // Calculate basic metrics
-    const totalRows = data.length;
-    const totalColumns = Object.keys(schema).length;
-    let totalCells = totalRows * totalColumns;
-    let filledCells = 0;
-    
-    // Calculate completeness from actual data if missingCount not in schema
-    if (totalRows > 0 && data[0]) {
-      for (const column of Object.keys(schema)) {
-        const colSchema = schema[column];
-        
-        // If schema has missingCount metadata, use it
-        if (colSchema.missingCount !== undefined) {
-          filledCells += totalRows - colSchema.missingCount;
-        } else {
-          // Otherwise, count from actual data
-          let nonNullCount = 0;
-          for (const row of data) {
-            if (row[column] !== null && row[column] !== undefined && row[column] !== '') {
-              nonNullCount++;
+        const dataRows = Array.isArray(input)
+          ? input
+          : Array.isArray(dataSection)
+            ? dataSection
+            : Array.isArray(dataSection?.rows)
+              ? dataSection.rows
+              : Array.isArray(payload?.rows)
+                ? payload.rows
+                : [];
+
+        const rowCountMeta = typeof dataSection?.rowCount === 'number' ? dataSection.rowCount : undefined;
+        const columnsMeta = Array.isArray(dataSection?.columns) ? dataSection.columns : undefined;
+
+        const issueDetails: DataQualityIssueDetail[] = [];
+        const issueMessages: string[] = [];
+        const recommendations: string[] = [];
+        const warnings: string[] = [];
+        const transformations: string[] = [];
+
+        const addRecommendation = (text: string) => {
+          if (!recommendations.includes(text)) {
+            recommendations.push(text);
+          }
+        };
+
+        const SCHEMA_INVALID_MESSAGE = 'Invalid schema: schema must be a valid object';
+        const addSchemaIssue = (reason: string) => {
+          issueDetails.push({
+            type: 'inconsistencies',
+            severity: 'high',
+            affected: ['schema'],
+            count: 0,
+            message: reason
+          });
+          if (!issueMessages.includes(SCHEMA_INVALID_MESSAGE)) {
+            issueMessages.push(SCHEMA_INVALID_MESSAGE);
+          }
+        };
+
+        const schemaValid = !!schemaObject && schemaColumnCount > 0;
+
+        if (!schemaValid) {
+          addSchemaIssue('Schema definition is missing or not an object.');
+          addRecommendation('Provide a valid schema so automated checks can run accurately.');
+        }
+
+        if (typeof rowCountMeta === 'number' && rowCountMeta < 0) {
+          issueDetails.push({
+            type: 'inconsistencies',
+            severity: 'high',
+            affected: ['rowCount'],
+            count: Math.abs(rowCountMeta),
+            message: 'Invalid row count detected'
+          });
+          issueMessages.push('Invalid row count: rowCount must be a non-negative number');
+          warnings.push('Row count metadata is invalid; assuming zero rows for calculations.');
+        }
+
+        const actualRows = Array.isArray(dataRows) ? dataRows : [];
+        const hasSampleRows = actualRows.length > 0;
+        const totalRows = hasSampleRows
+          ? actualRows.length
+          : Math.max(0, rowCountMeta ?? 0);
+        const totalColumns = columnsMeta?.length ?? schemaColumnCount;
+
+        if (totalRows === 0) {
+          warnings.push('Dataset appears to be empty or failed to load.');
+          addSchemaIssue('Schema could not be validated without sample data.');
+        } else if (!hasSampleRows) {
+          warnings.push('No sample data provided; results are estimated from metadata only.');
+          addSchemaIssue('Schema validation requires sample rows; using reported metadata only.');
+          addRecommendation('Upload a small sample of rows so the platform can validate schema details.');
+        }
+
+        let filledCells = 0;
+        const totalCells = totalRows * totalColumns;
+
+        if (schemaValid && totalRows > 0 && totalColumns > 0) {
+          for (const column of Object.keys(schemaObject!)) {
+            const colSchema = schemaObject![column] ?? {};
+
+            if (typeof colSchema.missingCount === 'number') {
+              filledCells += Math.max(0, totalRows - colSchema.missingCount);
+              if (colSchema.missingCount > 0) {
+                issueDetails.push({
+                  type: 'missing_values',
+                  severity: colSchema.missingCount / totalRows > 0.5 ? 'high' : colSchema.missingCount / totalRows > 0.25 ? 'medium' : 'low',
+                  affected: [column],
+                  count: colSchema.missingCount,
+                  message: `Column ${column} has ${colSchema.missingCount} missing values`
+                });
+                issueMessages.push(`Column ${column} has missing values that should be reviewed`);
+              }
+            } else if (typeof colSchema.missingPercentage === 'number') {
+              const missingPercentage = Math.max(0, Math.min(100, colSchema.missingPercentage));
+              filledCells += Math.max(0, totalRows * (1 - missingPercentage / 100));
+              if (missingPercentage > 10) {
+                issueDetails.push({
+                  type: 'missing_values',
+                  severity: missingPercentage > 50 ? 'high' : missingPercentage > 25 ? 'medium' : 'low',
+                  affected: [column],
+                  count: Math.round((missingPercentage / 100) * totalRows),
+                  message: `Column ${column} has ${missingPercentage}% missing values`
+                });
+                issueMessages.push(`Column ${column} has ${missingPercentage}% missing values`);
+              }
+            } else if (actualRows.length > 0) {
+              let nonNullCount = 0;
+              for (const row of actualRows) {
+                const value = row?.[column];
+                if (value !== null && value !== undefined && value !== '') {
+                  nonNullCount++;
+                }
+              }
+              filledCells += nonNullCount;
+              const missingCount = totalRows - nonNullCount;
+              if (missingCount > 0) {
+                const missingPct = (missingCount / totalRows) * 100;
+                issueDetails.push({
+                  type: 'missing_values',
+                  severity: missingPct > 50 ? 'high' : missingPct > 25 ? 'medium' : 'low',
+                  affected: [column],
+                  count: missingCount,
+                  message: `Column ${column} has ${missingCount} missing values`
+                });
+                issueMessages.push(`Column ${column} has ${missingCount} missing values`);
+              }
+            } else {
+              // No concrete data available; assume column is complete for now
+              filledCells += totalRows;
             }
           }
-          filledCells += nonNullCount;
         }
-      }
-    }
-    
-    const completeness = totalCells > 0 ? (filledCells / totalCells) : 0;
-    
-    // Analyze issues
-    const issues = [];
-    for (const [col, colSchema] of Object.entries(schema as Record<string, any>)) {
-      const missingPct = colSchema.missingPercentage || 0;
-      
-      if (missingPct > 10) {
-        issues.push({
-          type: 'missing_values' as const,
-          severity: missingPct > 50 ? 'high' as const : missingPct > 25 ? 'medium' as const : 'low' as const,
-          affected: [col],
-          count: colSchema.missingCount || 0
-        });
-      }
-    }
-    
-    // Check for duplicates (simple check)
-    const uniqueRows = new Set(data.map(row => JSON.stringify(row)));
-    const duplicateCount = totalRows - uniqueRows.size;
-    
-    if (duplicateCount > 0) {
-      issues.push({
-        type: 'duplicates' as const,
-        severity: duplicateCount > totalRows * 0.1 ? 'high' as const : 'medium' as const,
-        affected: ['all_columns'],
-        count: duplicateCount
-      });
-    }
-    
-    // Generate recommendations
-    const recommendations = [];
-    if (duplicateCount > 0) {
-      recommendations.push(`Remove ${duplicateCount} duplicate rows to improve data quality`);
-    }
-    if (completeness < 0.95) {
-      recommendations.push('Address missing values before performing analysis');
-    }
-    if (issues.filter(i => i.severity === 'high').length > 0) {
-      recommendations.push('High severity issues detected - data cleaning strongly recommended');
-    }
-    
-    // Calculate overall score
-    const overallScore = Math.max(0, Math.min(1, 
-      completeness * 0.6 + 
-      (1 - (duplicateCount / totalRows)) * 0.2 +
-      (1 - (issues.length / totalColumns)) * 0.2
-    ));
-    
-    return {
-      overallScore,
-      completeness,
-      issues,
-      recommendations,
-      confidence: 0.85,
-      estimatedFixTime: issues.length > 5 ? '15-20 minutes' : 
-                        issues.length > 2 ? '10-15 minutes' : '5-10 minutes'
-    };
+
+        let completeness = 0;
+        if (totalCells > 0) {
+          completeness = Math.max(0, Math.min(1, filledCells / totalCells));
+        }
+
+        let duplicateCount = 0;
+        if (actualRows.length > 0) {
+          const uniqueRows = new Set(actualRows.map(row => JSON.stringify(row)));
+          duplicateCount = totalRows - uniqueRows.size;
+          if (duplicateCount > 0) {
+            issueDetails.push({
+              type: 'duplicates',
+              severity: duplicateCount > totalRows * 0.1 ? 'high' : 'medium',
+              affected: ['all_columns'],
+              count: duplicateCount,
+              message: `Detected ${duplicateCount} duplicate rows`
+            });
+            issueMessages.push(`Detected ${duplicateCount} duplicate rows`);
+            transformations.push('Consider deduplicating rows before continuing analysis');
+          }
+        }
+
+        const highSeverityCount = issueDetails.filter(issue => issue.severity === 'high').length;
+
+        if (duplicateCount > 0) {
+          addRecommendation(`Remove ${duplicateCount} duplicate rows to improve data quality.`);
+        }
+        if (schemaValid && completeness < 0.95 && totalRows > 0) {
+          addRecommendation('Address missing values before performing analysis.');
+        }
+        if (highSeverityCount > 0) {
+          addRecommendation('High severity issues detected - data cleaning strongly recommended.');
+        }
+        if (!schemaValid || totalRows === 0) {
+          addRecommendation('Provide sample data with schema details so diagnostics can complete.');
+        }
+
+        const issuePenalty = totalColumns > 0 ? Math.min(1, issueDetails.length / totalColumns) : 1;
+        const duplicatePenalty = totalRows > 0 ? Math.min(1, duplicateCount / Math.max(1, totalRows)) : 1;
+        let overallScore = 0;
+        if (schemaValid && totalRows > 0 && totalColumns > 0) {
+          overallScore = Math.max(0, Math.min(1,
+            completeness * 0.6 +
+            (1 - duplicatePenalty) * 0.2 +
+            (1 - issuePenalty) * 0.2
+          ));
+        }
+
+        if (!hasSampleRows) {
+          completeness = 0;
+          if (schemaValid && totalColumns > 0) {
+            overallScore = Math.max(overallScore, 0.2);
+            if (!warnings.includes('No sample data provided; results are estimated from metadata only.')) {
+              warnings.push('No sample data provided; results are estimated from metadata only.');
+            }
+          } else {
+            overallScore = 0;
+          }
+        }
+
+        const corruptionIndicator = typeof (dataSection as any)?.corruption === 'string' || typeof (payload as any)?.corruption === 'string';
+        if (corruptionIndicator) {
+          issueDetails.push({
+            type: 'inconsistencies',
+            severity: 'high',
+            affected: ['all_columns'],
+            count: totalRows,
+            message: 'Dataset marked as corrupted; restrict usage until cleaned.'
+          });
+          issueMessages.push('Corrupted data detected - treat dataset as unsafe until cleaned');
+          if (!warnings.includes('Dataset flagged as corrupted - quality scores reduced.')) {
+            warnings.push('Dataset flagged as corrupted - quality scores reduced.');
+          }
+          overallScore = Math.min(overallScore, 0.2);
+        }
+
+        const issuesCombined: Array<DataQualityIssueDetail | string> = [
+          ...issueDetails,
+          ...issueMessages
+        ];
+
+        const estimatedFixTime = !schemaValid
+          ? 'N/A - Invalid schema'
+          : totalRows === 0
+            ? 'N/A - Empty dataset'
+            : issueDetails.length > 5
+              ? '15-20 minutes'
+              : issueDetails.length > 2
+                ? '10-15 minutes'
+                : '5-10 minutes';
+
+        return {
+          overallScore,
+          completeness,
+          issues: issuesCombined,
+          issueDetails,
+          issueMessages,
+          recommendations,
+          warnings,
+          transformations,
+          confidence: schemaValid ? 0.85 : 0.1,
+          estimatedFixTime,
+          qualityScore: Math.round(overallScore * 100),
+          metadata: {
+            datasetId,
+            rowsAnalyzed: totalRows,
+            columnsAnalyzed: totalColumns
+          }
+        };
       },
-      { dataRows: data?.length || 0, schemaColumns: Object.keys(schema || {}).length }
+      {
+        dataRows: metadataRows,
+        schemaColumns: schemaColumnCount
+      }
     );
   }
 
@@ -994,14 +1457,14 @@ How can I help you with your data engineering needs today?`;
   ): Promise<TimeEstimate> {
     console.log(`🔧 Data Engineer: Estimating processing time for ${dataSize} rows with ${complexity} complexity`);
 
-    // Base time: 1 minute per 10,000 rows
-    const baseTime = Math.ceil(dataSize / 10000);
+    // Optimized baseline: ~1 minute per 20k rows after pipeline tuning
+    const baseTime = Math.max(1, Math.ceil(dataSize / 20000));
 
     const complexityMultiplier =
-      complexity === 'high' ? 3 :
-      complexity === 'medium' ? 2 : 1;
+      complexity === 'high' ? 2 :
+      complexity === 'medium' ? 1.5 : 1;
 
-    const estimatedMinutes = Math.max(1, baseTime * complexityMultiplier);
+    const estimatedMinutes = Math.max(1, Math.round(baseTime * complexityMultiplier));
 
     return {
       estimatedMinutes,
@@ -1012,6 +1475,71 @@ How can I help you with your data engineering needs today?`;
         'Server load and resource availability',
         'Network latency for distributed processing'
       ]
+    };
+  }
+
+  async assessDataForPlan(params: {
+    projectId: string;
+    schema: Record<string, any>;
+    data: any[];
+    goals: string;
+    questions: string[];
+  }): Promise<DataAssessment> {
+    const schema = params.schema || {};
+    const dataRows = Array.isArray(params.data) ? params.data.slice(0, 1000) : [];
+    const questions = Array.isArray(params.questions) ? params.questions : [];
+    const goalsList = params.goals ? [params.goals] : [];
+
+    const qualityReport = await this.assessDataQuality(dataRows, schema);
+
+    const availableColumns = Object.keys(schema);
+    const transformationOptions = await this.suggestTransformations(
+      [],
+      availableColumns,
+      [...goalsList, ...questions]
+    );
+
+    const recordCountFromSchema = typeof (schema as any)?.__recordCount === 'number'
+      ? (schema as any).__recordCount
+      : undefined;
+    const recordCount = recordCountFromSchema ?? (Array.isArray(params.data) ? params.data.length : dataRows.length);
+
+    const columnCount = availableColumns.length;
+    const missingData = availableColumns.filter(column => {
+      const info = (schema as Record<string, any>)[column];
+      const missingCount = info?.missingCount ?? 0;
+      const missingPercentage = info?.missingPercentage ?? 0;
+      return missingCount > 0 || missingPercentage > 0.05;
+    });
+
+    const complexity = [...goalsList, ...questions].some(entry => /predict|forecast|model/i.test(entry))
+      ? 'high'
+      : [...goalsList, ...questions].some(entry => /segment|cluster|trend|optimiz/i.test(entry))
+        ? 'medium'
+        : 'low';
+
+    const timeEstimate = await this.estimateDataProcessingTime(Math.max(recordCount, dataRows.length), complexity);
+
+    const infrastructureNeeds = {
+      useSpark: recordCount > 250_000,
+      estimatedMemoryGB: Math.max(2, Math.ceil(Math.max(recordCount, dataRows.length) / 100_000) * 4),
+      parallelizable: recordCount > 50_000
+    };
+
+    const qualityScore = Math.max(0, Math.min(100, Math.round((qualityReport.overallScore ?? 0) * 100)));
+    const completenessScore = Math.max(0, Math.min(100, Math.round((qualityReport.completeness ?? 0) * 100)));
+
+    return {
+      qualityScore,
+      completenessScore,
+      recordCount,
+      columnCount,
+      missingData,
+      recommendedTransformations: (transformationOptions.transformations || []).map(item => `${item.method}: ${item.description}`),
+      infrastructureNeeds,
+      estimatedProcessingTime: timeEstimate.estimatedMinutes >= 60
+        ? `${(timeEstimate.estimatedMinutes / 60).toFixed(1)} hours`
+        : `${Math.max(5, timeEstimate.estimatedMinutes)} minutes`
     };
   }
 
@@ -1030,13 +1558,12 @@ How can I help you with your data engineering needs today?`;
   }): Promise<FileAnalysisResult> {
     console.log(`🔧 Data Engineer: Analyzing uploaded file ${params.fileName}`);
 
-    if (!this.fileProcessor) {
-      throw new Error('File processor not initialized - cannot analyze file');
-    }
-
     try {
+      const buffer = await fs.readFile(params.filePath);
+      const mimeType = this.inferMimeType(params.fileName);
+
       // Use file processor to read and analyze the file
-      const fileData = await this.fileProcessor.processFile(params.filePath, params.fileName);
+      const fileData = await this.fileProcessor.processFile(buffer, params.fileName, mimeType);
 
       // Extract schema information
       const schema = fileData.schema ? Object.entries(fileData.schema).map(([name, info]: [string, any]) => ({
@@ -1046,7 +1573,7 @@ How can I help you with your data engineering needs today?`;
       })) : [];
 
       // Calculate data quality metrics
-      const totalRows = fileData.rowCount || 0;
+  const totalRows = fileData.recordCount || 0;
       const totalColumns = schema.length;
       let nullCount = 0;
 
@@ -1061,8 +1588,8 @@ How can I help you with your data engineering needs today?`;
       const completeness = totalCells > 0 ? ((totalCells - nullCount) / totalCells) : 1;
 
       // Detect duplicates in sample data
-      const sampleData = fileData.preview || [];
-      const uniqueRows = new Set(sampleData.map(row => JSON.stringify(row)));
+  const sampleData = fileData.preview || [];
+  const uniqueRows = new Set(sampleData.map((row: Record<string, unknown>) => JSON.stringify(row)));
       const duplicateCount = sampleData.length - uniqueRows.size;
 
       // Detect potential foreign key relationships
@@ -1071,7 +1598,7 @@ How can I help you with your data engineering needs today?`;
       return {
         fileId: params.fileId,
         fileName: params.fileName,
-        rowCount: totalRows,
+  recordCount: totalRows,
         columnCount: totalColumns,
         schema,
         sampleData,
@@ -1112,7 +1639,7 @@ How can I help you with your data engineering needs today?`;
       );
 
       // Aggregate metrics
-      const totalRows = fileAnalyses.reduce((sum, analysis) => sum + analysis.rowCount, 0);
+  const totalRows = fileAnalyses.reduce((sum, analysis) => sum + analysis.recordCount, 0);
       const totalColumns = fileAnalyses.reduce((sum, analysis) => sum + analysis.columnCount, 0);
 
       // Detect cross-file relationships
@@ -1258,6 +1785,87 @@ How can I help you with your data engineering needs today?`;
       hasCategories,
       hasText,
       hasNumeric
+    };
+  }
+
+  /**
+   * Estimate data requirements based on user goals and questions
+   * Used in agent recommendation workflow BEFORE data is uploaded
+   */
+  async estimateDataRequirements(params: {
+    goals: string;
+    questions: string[];
+    dataSource: string;
+    journeyType: string;
+  }): Promise<{
+    estimatedRows: number;
+    estimatedColumns: number;
+    dataCharacteristics: string[];
+  }> {
+    // Defensive parameter validation
+    const goals = params.goals || '';
+    const questions = params.questions || [];
+    const questionCount = Array.isArray(questions) ? questions.length : 0;
+
+    console.log(`🔧 Data Engineer: Estimating data requirements for ${questionCount} questions`);
+
+    // Analyze questions to estimate complexity
+    const allText = `${goals} ${Array.isArray(questions) ? questions.join(' ') : ''}`.toLowerCase();
+
+    // Estimate columns based on question complexity
+    let estimatedColumns = 5; // Base estimate
+
+    // Keywords that suggest more columns needed
+    if (allText.includes('demographic') || allText.includes('segment')) estimatedColumns += 3;
+    if (allText.includes('time') || allText.includes('trend') || allText.includes('over time')) estimatedColumns += 2;
+    if (allText.includes('category') || allText.includes('type') || allText.includes('group')) estimatedColumns += 2;
+    if (allText.includes('compare') || allText.includes('correlation')) estimatedColumns += 3;
+    if (allText.includes('predict') || allText.includes('forecast')) estimatedColumns += 4;
+
+    // Add columns for each question (each question likely needs 1-2 data points)
+    estimatedColumns += questionCount;
+
+    // Estimate rows based on analysis type and journey
+    let estimatedRows = 1000; // Base for simple analysis
+
+    if (allText.includes('machine learning') || allText.includes('predict')) estimatedRows = 5000;
+    if (allText.includes('trend') || allText.includes('time series')) estimatedRows = 2000;
+    if (allText.includes('statistical') || allText.includes('significance')) estimatedRows = 1500;
+    if (params.journeyType === 'technical') estimatedRows *= 1.5;
+
+    // Identify data characteristics from questions
+    const dataCharacteristics: string[] = [];
+
+    if (allText.includes('time') || allText.includes('date') || allText.includes('trend')) {
+      dataCharacteristics.push('Time series data recommended');
+    }
+    if (allText.includes('category') || allText.includes('segment') || allText.includes('group')) {
+      dataCharacteristics.push('Categorical variables needed');
+    }
+    if (allText.includes('amount') || allText.includes('value') || allText.includes('metric')) {
+      dataCharacteristics.push('Numerical measurements required');
+    }
+    if (allText.includes('text') || allText.includes('description') || allText.includes('comment')) {
+      dataCharacteristics.push('Text data for NLP analysis');
+    }
+    if (allText.includes('predict') || allText.includes('forecast')) {
+      dataCharacteristics.push('Historical data for predictive modeling');
+    }
+    if (allText.includes('compare') || allText.includes('correlation')) {
+      dataCharacteristics.push('Multiple variables for comparative analysis');
+    }
+
+    // Default characteristic if none detected
+    if (dataCharacteristics.length === 0) {
+      dataCharacteristics.push('General structured data with identifiers and metrics');
+    }
+
+    console.log(`🔧 Data Engineer: Estimated ${estimatedRows} rows, ${estimatedColumns} columns`);
+
+    return {
+      estimatedRows: Math.round(estimatedRows),
+      estimatedColumns: Math.round(estimatedColumns),
+      dataCharacteristics
     };
   }
 

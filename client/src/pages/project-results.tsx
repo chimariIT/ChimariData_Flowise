@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -18,18 +19,95 @@ interface ProjectResultsProps {
   onSchemaEdit?: (projectId: string) => void;
 }
 
-export default function ProjectResults({ projectId, onBack, onSettings, onPayForAnalysis, onSchemaEdit }: ProjectResultsProps) {
+export default function ProjectResults({
+  projectId,
+  onBack,
+  onSettings,
+  onPayForAnalysis,
+  onSchemaEdit,
+}: ProjectResultsProps) {
   const { toast } = useToast();
 
-  const { data: project, isLoading } = useQuery({
+  const {
+    data: project,
+    isLoading: projectLoading,
+    error: projectError,
+  } = useQuery({
     queryKey: ["/api/projects", projectId],
     queryFn: async () => {
-      const result = await apiClient.getProjects();
-      return result.projects?.find((p: any) => p.id === projectId);
+      if (!projectId) {
+        throw new Error("Project id is required");
+      }
+      return await apiClient.getProject(projectId);
     },
   });
 
-  if (isLoading) {
+  const {
+    data: analysisResults,
+    isLoading: analysisLoading,
+    error: analysisError,
+  } = useQuery({
+    queryKey: ["/api/analysis-execution/results", projectId],
+    queryFn: async () => {
+      const response = await apiClient.get(`/api/analysis-execution/results/${projectId}`);
+      if (response?.success && response.results) {
+        return response.results;
+      }
+      throw new Error(response?.error || "Analysis results are not available yet.");
+    },
+    enabled: !!projectId,
+    retry: 1,
+  });
+
+  const {
+    data: artifacts = [],
+    isLoading: artifactsLoading,
+    error: artifactsError,
+  } = useQuery({
+    queryKey: ["/api/projects", projectId, "artifacts"],
+    queryFn: async () => {
+      if (!projectId) return [];
+      const res = await apiClient.getProjectArtifacts(projectId);
+      if (Array.isArray(res?.artifacts)) {
+        return res.artifacts;
+      }
+      if (Array.isArray(res)) {
+        return res;
+      }
+      return [];
+    },
+    enabled: !!projectId,
+  });
+
+  const pageLoading = projectLoading || (analysisLoading && !analysisError);
+
+  const insightList = analysisResults?.insights ?? [];
+  const recommendationList = analysisResults?.recommendations ?? [];
+
+  const analysisSummary = useMemo(() => {
+    const summary = analysisResults?.summary ?? {};
+    const totalAnalyses =
+      summary.totalAnalyses ??
+      analysisResults?.analysisTypes?.length ??
+      insightList.length;
+    return {
+      totalAnalyses,
+      dataRowsProcessed: summary.dataRowsProcessed ?? 0,
+      qualityScore: summary.qualityScore ?? 0,
+      executionTime:
+        summary.executionTime ??
+        (summary.executionTimeSeconds
+          ? `${summary.executionTimeSeconds}s`
+          : "—"),
+      datasetCount: summary.datasetCount ?? 0,
+      confidence:
+        typeof summary.confidence === "number"
+          ? summary.confidence
+          : summary.averageConfidence ?? null,
+    };
+  }, [analysisResults, insightList.length]);
+
+  if (pageLoading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
         <p className="text-slate-600">Loading project...</p>
@@ -37,10 +115,12 @@ export default function ProjectResults({ projectId, onBack, onSettings, onPayFor
     );
   }
 
-  if (!project) {
+  if (projectError || !project) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <p className="text-red-600">Project not found.</p>
+        <p className="text-red-600">
+          {projectError instanceof Error ? projectError.message : "Project not found."}
+        </p>
       </div>
     );
   }
@@ -123,25 +203,82 @@ export default function ProjectResults({ projectId, onBack, onSettings, onPayFor
     }
   };
 
-  // Sample chart data
-  const chartData = [
-    { name: "Jan", value: 40 },
-    { name: "Feb", value: 55 },
-    { name: "Mar", value: 70 },
-    { name: "Apr", value: 45 },
-    { name: "May", value: 80 },
-    { name: "Jun", value: 65 }
-  ];
+  const chartData = useMemo(() => {
+    const trend = analysisResults?.summary?.trendData;
+    if (Array.isArray(trend) && trend.length > 0) {
+      return trend.map((item: any, index: number) => ({
+        name: item.label || `Period ${index + 1}`,
+        value: typeof item.value === "number" ? item.value : 0,
+      }));
+    }
+    return [
+      { name: "Jan", value: 40 },
+      { name: "Feb", value: 55 },
+      { name: "Mar", value: 70 },
+      { name: "Apr", value: 45 },
+      { name: "May", value: 80 },
+      { name: "Jun", value: 65 },
+    ];
+  }, [analysisResults]);
 
-  const pieData = [
-    { name: "Category A", value: 35, color: "#3b82f6" },
-    { name: "Category B", value: 28, color: "#8b5cf6" },
-    { name: "Category C", value: 22, color: "#10b981" },
-    { name: "Category D", value: 15, color: "#f59e0b" }
-  ];
+  const pieData = useMemo(() => {
+    const breakdown = analysisResults?.summary?.categoryBreakdown;
+    if (Array.isArray(breakdown) && breakdown.length > 0) {
+      const fallbackColors = ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444"];
+      return breakdown.map((item: any, index: number) => ({
+        name: item.label || `Segment ${index + 1}`,
+        value: typeof item.value === "number" ? item.value : 0,
+        color: item.color || fallbackColors[index % fallbackColors.length],
+      }));
+    }
+    return [
+      { name: "Category A", value: 35, color: "#3b82f6" },
+      { name: "Category B", value: 28, color: "#8b5cf6" },
+      { name: "Category C", value: 22, color: "#10b981" },
+      { name: "Category D", value: 15, color: "#f59e0b" },
+    ];
+  }, [analysisResults]);
 
   const fieldCount = Object.keys(project.schema || {}).length;
-  const insightCount = Object.keys(project.insights || {}).length;
+  const insightCount = insightList.length;
+  const totalRecords = analysisSummary.dataRowsProcessed || project.recordCount || 0;
+  const qualityScore = analysisSummary.qualityScore || project.qualityScore || 0;
+  const datasetCountBadge = analysisSummary.datasetCount || project.datasets?.length || 0;
+  const normalizedArtifacts = useMemo(() => {
+    if (!Array.isArray(artifacts)) {
+      return [];
+    }
+    return artifacts.map((artifact: any, index: number) => {
+      const primaryRef =
+        artifact.fileRefs?.find((ref: any) => ref?.url || ref?.signedUrl) ||
+        artifact.fileRefs?.[0];
+      const sizeLabel = primaryRef?.sizeMB
+        ? `${Number(primaryRef.sizeMB).toFixed(1)} MB`
+        : primaryRef?.size
+          ? primaryRef.size
+          : "—";
+      return {
+        id: artifact.id || `artifact-${index}`,
+        name: artifact.name || artifact.type || `Artifact ${index + 1}`,
+        type: (primaryRef?.type || artifact.type || "file").toUpperCase(),
+        createdAt: artifact.createdAt,
+        url: primaryRef?.url || primaryRef?.signedUrl || null,
+        size: sizeLabel,
+      };
+    });
+  }, [artifacts]);
+
+  const handleArtifactDownload = (artifact: { url: string | null }) => {
+    if (!artifact?.url) {
+      toast({
+        title: "Artifact not ready",
+        description: "This artifact is still generating. Please check again shortly.",
+        variant: "destructive",
+      });
+      return;
+    }
+    window.open(artifact.url, "_blank", "noopener,noreferrer");
+  };
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -237,14 +374,37 @@ export default function ProjectResults({ projectId, onBack, onSettings, onPayFor
               </p>
             </div>
           </div>
-          <div className="flex items-center space-x-4">
+          <div className="flex flex-wrap items-center gap-3">
             <span className="px-3 py-1 bg-green-100 text-green-700 text-sm font-medium rounded-full flex items-center">
               <CheckCircle className="w-4 h-4 icon-gap" />
               Analysis Complete
             </span>
-            <span className="text-slate-600 text-sm">{insightCount} insights generated</span>
+            <Badge variant="outline" className="text-xs">
+              {datasetCountBadge} dataset{datasetCountBadge === 1 ? "" : "s"}
+            </Badge>
+            {analysisSummary.executionTime !== "—" && (
+              <Badge variant="outline" className="text-xs">
+                Execution {analysisSummary.executionTime}
+              </Badge>
+            )}
+            {analysisSummary.confidence !== null && (
+              <Badge variant="outline" className="text-xs">
+                {analysisSummary.confidence}% confidence
+              </Badge>
+            )}
+            <span className="text-slate-600 text-sm whitespace-nowrap">
+              {insightCount} insights generated
+            </span>
           </div>
         </div>
+
+        {analysisError && (
+          <div className="mb-6 rounded-md border border-yellow-200 bg-yellow-50 p-4 text-sm text-yellow-800">
+            {analysisError instanceof Error
+              ? analysisError.message
+              : "Analysis results are still processing. You can continue reviewing project data in the meantime."}
+          </div>
+        )}
 
         {/* Stats Overview */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
@@ -253,7 +413,9 @@ export default function ProjectResults({ projectId, onBack, onSettings, onPayFor
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-slate-600 text-sm font-medium">Total Records</p>
-                  <p className="text-2xl font-bold text-slate-900">{project.recordCount}</p>
+                  <p className="text-2xl font-bold text-slate-900">
+                    {Number(totalRecords).toLocaleString()}
+                  </p>
                 </div>
                 <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center">
                   <Database className="w-6 h-6 text-blue-600" />
@@ -295,7 +457,9 @@ export default function ProjectResults({ projectId, onBack, onSettings, onPayFor
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-slate-600 text-sm font-medium">Data Quality</p>
-                  <p className="text-2xl font-bold text-emerald-600">98%</p>
+                  <p className="text-2xl font-bold text-emerald-600">
+                    {qualityScore ? `${qualityScore}%` : "—"}
+                  </p>
                 </div>
                 <div className="w-12 h-12 bg-emerald-100 rounded-xl flex items-center justify-center">
                   <CheckCircle className="w-6 h-6 text-emerald-600" />
@@ -330,7 +494,7 @@ export default function ProjectResults({ projectId, onBack, onSettings, onPayFor
           <TabsContent value="insights">
             <AIInsightsPanelLazy 
               projectId={projectId} 
-              onPaymentRequired={(projectId, type) => {
+              onPaymentRequired={(requestedProjectId: string, analysisType: string) => {
                 if (onPayForAnalysis) {
                   onPayForAnalysis({
                     name: project.name,
@@ -469,6 +633,66 @@ export default function ProjectResults({ projectId, onBack, onSettings, onPayFor
             </div>
           </TabsContent>
         </Tabs>
+
+        {(artifactsLoading || normalizedArtifacts.length > 0 || artifactsError) && (
+          <Card className="mt-8" data-testid="project-artifacts-panel">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <FileText className="w-5 h-5" />
+                Generated Artifacts
+              </CardTitle>
+              <CardDescription>
+                Export-ready deliverables created during the analysis
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {artifactsLoading ? (
+                <div className="flex items-center gap-2 text-sm text-blue-700">
+                  <Zap className="w-4 h-4 animate-pulse" />
+                  Compiling artifact list…
+                </div>
+              ) : artifactsError ? (
+                <div className="rounded-md border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-800">
+                  {artifactsError instanceof Error
+                    ? artifactsError.message
+                    : "Artifacts are still generating. Please refresh later."}
+                </div>
+              ) : normalizedArtifacts.length === 0 ? (
+                <p className="text-sm text-slate-600">
+                  No artifacts are available yet. Run the analysis to generate reports and exports.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {normalizedArtifacts.map((artifact) => (
+                    <div
+                      key={artifact.id}
+                      className="flex items-center justify-between rounded-lg border border-slate-200 p-3 hover:bg-slate-50"
+                    >
+                      <div>
+                        <p className="font-medium text-slate-900">{artifact.name}</p>
+                        <p className="text-sm text-slate-500">
+                          {artifact.type}
+                          {artifact.size ? ` • ${artifact.size}` : ""}
+                          {artifact.createdAt
+                            ? ` • ${new Date(artifact.createdAt).toLocaleString()}`
+                            : ""}
+                        </p>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleArtifactDownload(artifact)}
+                      >
+                        <Download className="w-4 h-4 mr-2" />
+                        Download
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
       </div>
     </div>
   );

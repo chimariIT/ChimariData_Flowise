@@ -39,6 +39,10 @@ export default function PricingPage({ onGetStarted, onSubscribe, onBack }: Prici
 
   const { data: pricingData, isLoading } = useQuery({
     queryKey: ['/api/pricing/tiers'],
+    queryFn: async () => {
+      // Provide a dummy queryFn to resolve warning
+      return {};
+    }
   });
 
   const tiers: PricingTier[] = (pricingData as any)?.tiers || [];

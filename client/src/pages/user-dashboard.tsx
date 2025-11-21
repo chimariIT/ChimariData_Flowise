@@ -4,6 +4,9 @@ import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { apiClient } from "@/lib/api";
+import { useJourneyState } from "@/hooks/useJourneyState";
+import { getResumeRoute, canResumeJourney } from "@/utils/journey-routing";
 import { 
   FolderOpen, 
   Plus, 
@@ -17,12 +20,26 @@ import {
   User,
   Settings,
   LogOut,
-  Shield
+  Shield,
+  PlayCircle
 } from "lucide-react";
 
 interface UserDashboardProps {
   user?: any;
   onLogout?: () => void;
+}
+
+interface DashboardProject {
+  id: string;
+  name: string;
+  type?: string;
+  status?: string;
+  createdAt?: string;
+  lastModified?: string;
+  journeyType?: string;
+  recordCount?: number;
+  insights?: number;
+  visualizations?: number;
 }
 
 export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
@@ -33,42 +50,32 @@ export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
     queryKey: ['/api/admin/permissions'],
     queryFn: async () => {
       try {
-        const response = await fetch('/api/admin/permissions', {
-          credentials: 'include',
-        });
-        if (!response.ok) {
-          return null;
-        }
-        const result = await response.json();
+        // Use apiClient which includes auth token automatically
+        const result = await apiClient.get('/api/admin/permissions');
         return result.success ? result.data : null;
       } catch {
         return null;
       }
-    },
+    }
   });
 
   const isAdmin = permissions?.role?.id === 'admin' || permissions?.role?.id === 'super_admin';
 
   // Fetch real user projects from API
-  const { data: userProjects = [], isLoading: projectsLoading } = useQuery({
+  const { data: userProjects = [], isLoading: projectsLoading } = useQuery<DashboardProject[]>({
     queryKey: ['/api/projects', user?.id],
     queryFn: async () => {
       try {
-        const response = await fetch('/api/projects', {
-          credentials: 'include',
-        });
-        if (!response.ok) {
-          console.warn('Failed to fetch projects, using empty array');
-          return [];
-        }
-        const result = await response.json();
-        return result.projects || [];
+        // Use apiClient which includes auth token automatically
+        const result = await apiClient.get('/api/projects');
+        return (result.projects || []) as DashboardProject[];
       } catch (error) {
         console.error('Error fetching projects:', error);
+        console.warn('Failed to fetch projects, using empty array');
         return [];
       }
     },
-    enabled: !!user?.id,
+    enabled: !!user?.id
   });
 
   const getStatusColor = (status: string) => {
@@ -91,11 +98,25 @@ export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
   };
 
   const handleNewProject = () => {
+    // Go to journey selection page
     setLocation('/');
   };
 
   const handleViewProject = (projectId: string) => {
     setLocation(`/project/${projectId}`);
+  };
+
+  const handleResumeJourney = async (projectId: string, journeyType?: string) => {
+    try {
+      // Fetch journey state to determine current step
+      const journeyState = await apiClient.getJourneyState(projectId);
+      const route = await getResumeRoute(projectId, journeyState);
+      setLocation(route);
+    } catch (error) {
+      console.error('Failed to resume journey:', error);
+      // Fallback to project page if journey state unavailable
+      setLocation(`/project/${projectId}?resume=true`);
+    }
   };
 
   return (
@@ -176,7 +197,7 @@ export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
             </CardContent>
           </Card>
 
-          <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => setLocation('/')}>
+          <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => setLocation('/journeys/template_based/prepare')}>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Target className="w-5 h-5 text-green-600" />
@@ -233,7 +254,11 @@ export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
           ) : userProjects.length > 0 ? (
             <div className="grid gap-6">
               {userProjects.map((project) => {
-                const TypeIcon = getTypeIcon(project.type);
+                const projectType = project.type ?? 'project';
+                const projectStatus = project.status ?? 'draft';
+                const TypeIcon = getTypeIcon(projectType);
+                const insightsCount = project.insights ?? 0;
+                const visualizationCount = project.visualizations ?? 0;
                 return (
                   <Card key={project.id} className="hover:shadow-lg transition-shadow">
                     <CardHeader>
@@ -257,11 +282,11 @@ export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
                           </div>
                         </div>
                         <div className="flex items-center gap-2">
-                          <Badge className={getStatusColor(project.status)}>
-                            {project.status.replace('-', ' ')}
+                          <Badge className={getStatusColor(projectStatus)}>
+                            {projectStatus.replace('-', ' ')}
                           </Badge>
                           <Badge variant="outline">
-                            {project.type}
+                            {projectType}
                           </Badge>
                         </div>
                       </div>
@@ -271,19 +296,26 @@ export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
                         <div className="flex items-center gap-6 text-sm text-gray-600">
                           <span className="flex items-center gap-1">
                             <Brain className="w-4 h-4" />
-                            {project.insights} insights
+                            {insightsCount} insights
                           </span>
                           <span className="flex items-center gap-1">
                             <BarChart3 className="w-4 h-4" />
-                            {project.visualizations} visualizations
+                            {visualizationCount} visualizations
                           </span>
                         </div>
                         <div className="flex items-center gap-2">
+                          {/* Resume Journey button - show if project has a journey and is not completed */}
+                          <ProjectResumeButton 
+                            projectId={project.id}
+                            journeyType={project.journeyType}
+                            status={projectStatus}
+                            onResume={handleResumeJourney}
+                          />
                           <Button variant="outline" size="sm" onClick={() => handleViewProject(project.id)}>
                             <Eye className="w-4 h-4 mr-2" />
                             View
                           </Button>
-                          {project.status === 'completed' && (
+                          {projectStatus === 'completed' && (
                             <Button variant="outline" size="sm">
                               <Download className="w-4 h-4 mr-2" />
                               Download
@@ -348,6 +380,48 @@ export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
     </div>
   );
 }
+
+/**
+ * Project Resume Button Component
+ * Shows Resume Journey button if project has an active journey
+ */
+function ProjectResumeButton({ 
+  projectId, 
+  journeyType, 
+  status,
+  onResume 
+}: { 
+  projectId: string; 
+  journeyType?: string;
+  status?: string;
+  onResume: (projectId: string, journeyType?: string) => void;
+}) {
+  const { data: journeyState } = useJourneyState(projectId, { 
+    enabled: !!projectId && status !== 'completed' 
+  });
+  
+  const canResume = canResumeJourney(journeyState);
+  
+  // Don't show if journey cannot resume or already completed
+  if (status === 'completed' || !canResume) {
+    return null;
+  }
+  
+  return (
+    <Button 
+      variant="default" 
+      size="sm" 
+      onClick={() => onResume(projectId, journeyType)}
+      className="bg-blue-600 hover:bg-blue-700 text-white"
+    >
+      <PlayCircle className="w-4 h-4 mr-2" />
+      Resume Journey
+    </Button>
+  );
+}
+
+
+
 
 
 

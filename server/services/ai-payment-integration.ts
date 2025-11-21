@@ -69,11 +69,12 @@ export interface PricingConfig {
     professional: number; // 60% discount
     enterprise: number;   // 80% discount
   };
-  roleMultipliers: {
+  roleMultipliers: Record<UserRole, number> & {
     'non-tech': number;    // 1.0x
     'business': number;    // 1.2x
     'technical': number;   // 1.5x
     'consultation': number; // 2.0x
+    'custom': number;       // Bespoke hybrid workflows
   };
 }
 
@@ -100,7 +101,8 @@ export class AIPaymentIntegrationService {
       'non-tech': 1.0,     // Standard pricing
       'business': 1.2,     // 20% premium for business features
       'technical': 1.5,    // 50% premium for technical features
-      'consultation': 2.0  // 100% premium for consultation
+      'consultation': 2.0, // 100% premium for consultation
+      'custom': 1.8        // Hybrid journey sits between technical and consultation
     }
   };
 

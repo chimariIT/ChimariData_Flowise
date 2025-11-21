@@ -57,7 +57,7 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
       { id: 'upload', title: 'Data Upload', description: 'Upload from multiple sources', required: true, completed: false },
       { id: 'scan', title: 'Security Scan', description: 'Malware and security validation', required: true, completed: false },
       { id: 'schema', title: 'Schema Analysis', description: 'Data structure detection', required: true, completed: false },
-      { id: 'analysis', title: 'Free Trial Analysis', description: 'Basic analysis with limited features', required: true, completed: false },
+  { id: 'analysis', title: 'Trial Analysis', description: 'Basic analysis with limited features', required: true, completed: false },
       { id: 'complete', title: 'Results', description: 'View trial results', required: false, completed: false }
     ],
     data: {}
@@ -102,7 +102,7 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
           questionsAnalyzed: uploadInfo.questions || [],
           dataQuality: {
             score: 85,
-            issues: ['Some data processing limitations in free trial'],
+            issues: ['Some data processing limitations in the trial experience'],
             strengths: ['Successfully processed and analyzed your data', 'Data structure validated']
           },
           keyInsights: [
@@ -119,7 +119,7 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
             { type: 'quality_report', description: 'Data quality assessment' }
           ],
           limitations: [
-            'Free trial provides basic analysis only',
+            'The trial provides basic analysis only',
             'Advanced AI features require premium subscription',
             'Limited to 10MB file size'
           ],
@@ -251,7 +251,7 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
               <CardHeader>
                 <CardTitle className="flex items-center">
                   <BarChart3 className="w-5 h-5 mr-2" />
-                  Running Free Trial Analysis
+                  Running Trial Analysis
                 </CardTitle>
                 <CardDescription>
                   Generating basic insights from your data
@@ -261,7 +261,7 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
                 <Alert>
                   <Gift className="w-4 h-4" />
                   <AlertDescription>
-                    Free trial provides basic analysis features. Upgrade for advanced AI insights and custom reports.
+                    The trial provides basic analysis features. Upgrade for advanced AI insights and custom reports.
                   </AlertDescription>
                 </Alert>
                 
@@ -275,7 +275,7 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
                     ) : (
                       <>
                         <BarChart3 className="w-4 h-4 mr-2" />
-                        Start Free Trial Analysis
+                        Start Trial Analysis
                       </>
                     )}
                   </Button>
@@ -295,7 +295,7 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
                   Analysis Complete - {data.analysisResults.analysisType?.charAt(0).toUpperCase() + data.analysisResults.analysisType?.slice(1) || 'General'} Analysis
                 </CardTitle>
                 <CardDescription>
-                  Your free trial analysis has been completed with basic insights
+                  Your trial analysis has been completed with basic insights
                 </CardDescription>
               </CardHeader>
             </Card>
@@ -471,7 +471,7 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
             {/* Limitations & Upgrade */}
             <Card>
               <CardHeader>
-                <CardTitle className="text-lg">Free Trial Limitations</CardTitle>
+                <CardTitle className="text-lg">Trial Limitations</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <ul className="space-y-1">
@@ -527,7 +527,7 @@ export function FreeTrialWorkflow({ onComplete, onBack }: FreeTrialWorkflowProps
             </Button>
             <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
               <Gift className="w-3 h-3 icon-gap" />
-              Free Trial
+              Trial
             </Badge>
           </div>
         </div>

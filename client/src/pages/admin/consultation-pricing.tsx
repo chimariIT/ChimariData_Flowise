@@ -35,7 +35,7 @@ interface ConsultationPricingTier {
 }
 
 export default function AdminConsultationPricing() {
-  const { isAuthenticated, user, token } = useOptimizedAuth();
+  const { isAuthenticated, user } = useOptimizedAuth();
   const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
   const [pricingTiers, setPricingTiers] = useState<ConsultationPricingTier[]>([]);
   const [loading, setLoading] = useState(true);
@@ -55,6 +55,13 @@ export default function AdminConsultationPricing() {
     sortOrder: '0',
   });
 
+  const getAuthHeaders = (extra: Record<string, string> = {}) => {
+    const authToken = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+    return authToken
+      ? { ...extra, Authorization: `Bearer ${authToken}` }
+      : { ...extra };
+  };
+
   useEffect(() => {
     if (isAuthenticated && isAdmin) {
       loadPricingTiers();
@@ -66,9 +73,7 @@ export default function AdminConsultationPricing() {
     setError(null);
     try {
       const response = await fetch(`/api/admin/consultation-pricing?includeInactive=${includeInactive}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers: getAuthHeaders(),
       });
 
       if (!response.ok) {
@@ -88,10 +93,7 @@ export default function AdminConsultationPricing() {
     try {
       const response = await fetch('/api/admin/consultation-pricing/seed-defaults', {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' })
       });
 
       if (!response.ok) {
@@ -114,10 +116,7 @@ export default function AdminConsultationPricing() {
 
       const response = await fetch('/api/admin/consultation-pricing', {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           consultationType: formData.consultationType,
           displayName: formData.displayName,
@@ -155,10 +154,7 @@ export default function AdminConsultationPricing() {
 
       const response = await fetch(`/api/admin/consultation-pricing/${id}`, {
         method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           displayName: formData.displayName,
           description: formData.description || null,
@@ -190,9 +186,7 @@ export default function AdminConsultationPricing() {
     try {
       const response = await fetch(`/api/admin/consultation-pricing/${id}`, {
         method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers: getAuthHeaders()
       });
 
       if (!response.ok) {
@@ -210,9 +204,7 @@ export default function AdminConsultationPricing() {
     try {
       const response = await fetch(`/api/admin/consultation-pricing/${id}/activate`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers: getAuthHeaders()
       });
 
       if (!response.ok) {

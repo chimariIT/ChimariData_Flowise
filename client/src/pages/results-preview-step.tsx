@@ -35,7 +35,7 @@ export default function ResultsPreviewStep({
 }: ResultsPreviewStepProps) {
   const { toast } = useToast();
   const { session, getExecuteData } = useProjectSession({
-    journeyType: journeyType as 'non-tech' | 'business' | 'technical' | 'consultation'
+    journeyType: journeyType as 'non-tech' | 'business' | 'technical' | 'consultation' | 'custom'
   });
 
   const [analysisType, setAnalysisType] = useState<string>("");
@@ -216,6 +216,22 @@ export default function ResultsPreviewStep({
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

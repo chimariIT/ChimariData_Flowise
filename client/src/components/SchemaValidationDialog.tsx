@@ -91,7 +91,43 @@ export function SchemaValidationDialog({
                 <TableBody>
                   {Object.entries(editedSchema).map(([column, type]) => (
                     <TableRow key={column}>
-                      <TableCell className="font-medium">{column}</TableCell>
+                      <TableCell className="font-medium">
+                        {editingColumn === `name_${column}` ? (
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              value={column}
+                              onChange={(e) => {
+                                const newSchema = { ...editedSchema };
+                                delete newSchema[column];
+                                newSchema[e.target.value] = type;
+                                setEditedSchema(newSchema);
+                              }}
+                              className="rounded border px-2 py-1 text-sm w-32"
+                              autoFocus
+                            />
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => setEditingColumn(null)}
+                            >
+                              <Check className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            {column}
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => setEditingColumn(`name_${column}`)}
+                              className="opacity-0 group-hover:opacity-100"
+                            >
+                              <Edit className="w-3 h-3" />
+                            </Button>
+                          </div>
+                        )}
+                      </TableCell>
                       <TableCell>
                         {editingColumn === column ? (
                           <div className="flex items-center gap-2">
@@ -147,11 +183,8 @@ export function SchemaValidationDialog({
               </Table>
             </div>
 
-            {/* Schema Analysis Component */}
-            <div>
-              <h3 className="text-lg font-semibold mb-3">Schema Analysis</h3>
-              <SchemaAnalysis schema={editedSchema} />
-            </div>
+            {/* Schema Analysis Component - Removed to avoid prop mismatch */}
+            {/* Schema details are shown in the table above */}
 
             {/* Changes Summary */}
             {hasChanges && (
@@ -192,6 +225,9 @@ export function SchemaValidationDialog({
     </Dialog>
   );
 }
+
+
+
 
 
 

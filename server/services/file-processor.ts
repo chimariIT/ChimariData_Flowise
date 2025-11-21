@@ -9,6 +9,44 @@ interface SchemaColumn {
     sampleValues: any[];
     missingCount: number;
     missingPercentage: number;
+    descriptiveStats?: ColumnDescriptiveStats;
+}
+
+type ColumnCategory = 'numeric' | 'categorical' | 'boolean' | 'date' | 'unknown';
+
+interface ValueFrequency {
+    value: string;
+    count: number;
+    percentage: number;
+}
+
+interface ColumnDescriptiveStats {
+    columnType: ColumnCategory;
+    nonNullCount: number;
+    missingCount: number;
+    missingPercentage: number;
+    uniqueCount: number;
+    topValues?: ValueFrequency[];
+    mean?: number;
+    median?: number;
+    stdDev?: number;
+    min?: number;
+    max?: number;
+    q1?: number;
+    q3?: number;
+    sum?: number;
+    trueCount?: number;
+    falseCount?: number;
+    minDate?: string;
+    maxDate?: string;
+}
+
+interface DatasetSummary {
+    overview: string;
+    totalRows: number;
+    totalColumns: number;
+    missingCellPercentage: number;
+    columnTypeBreakdown: Record<ColumnCategory, string[]>;
 }
 
 interface DataQualityMetrics {
@@ -32,6 +70,8 @@ interface ProcessedFileResult {
         type: 'potential_foreign_key' | 'correlation';
         confidence: number;
     }>;
+    descriptiveStats: Record<string, ColumnDescriptiveStats>;
+    datasetSummary: DatasetSummary;
 }
 
 export class FileProcessor {
@@ -73,11 +113,10 @@ export class FileProcessor {
         // Calculate quality metrics
         const qualityMetrics = this.calculateQualityMetrics(data, schema);
 
-        // Detect potential relationships
-        const relationships = this.detectRelationships(data, schema);
-
         // Generate preview (first 10 rows)
         const preview = data.slice(0, 10);
+
+        const { descriptiveStats, datasetSummary, relationships } = this.createDataProfile(data, schema);
 
         return {
             preview,
@@ -85,7 +124,9 @@ export class FileProcessor {
             recordCount: data.length,
             data,
             qualityMetrics,
-            relationships
+            relationships,
+            descriptiveStats,
+            datasetSummary
         };
     }
 
@@ -96,20 +137,21 @@ export class FileProcessor {
         return new Promise((resolve, reject) => {
             const csvString = buffer.toString('utf8');
 
-            Papa.parse(csvString, {
-                header: true,
-                dynamicTyping: true,
-                skipEmptyLines: true,
-                complete: (results) => {
-                    if (results.errors.length > 0) {
-                        console.warn('CSV parsing warnings:', results.errors);
-                    }
-                    resolve(results.data);
-                },
-                error: (error) => {
-                    reject(new Error(`CSV parsing failed: ${error.message}`));
+            try {
+                const result = Papa.parse<Record<string, unknown>>(csvString, {
+                    header: true,
+                    dynamicTyping: true,
+                    skipEmptyLines: true
+                });
+
+                if (result.errors.length > 0) {
+                    console.warn('CSV parsing warnings:', result.errors);
                 }
-            });
+
+                resolve(result.data as Record<string, unknown>[]);
+            } catch (error) {
+                reject(new Error(`CSV parsing failed: ${(error as Error).message}`));
+            }
         });
     }
 
@@ -459,5 +501,273 @@ export class FileProcessor {
         if (denominator === 0) return 0;
 
         return numerator / denominator;
+    }
+
+    static createDataProfile(
+        data: any[],
+        schema: Record<string, SchemaColumn>
+    ): {
+        descriptiveStats: Record<string, ColumnDescriptiveStats>;
+        datasetSummary: DatasetSummary;
+        relationships: ProcessedFileResult['relationships'];
+    } {
+        const descriptiveStats: Record<string, ColumnDescriptiveStats> = {};
+        const columnTypeBreakdown: Record<ColumnCategory, string[]> = {
+            numeric: [],
+            categorical: [],
+            boolean: [],
+            date: [],
+            unknown: []
+        };
+
+        const totalRows = data.length;
+        const totalColumns = Object.keys(schema).length;
+
+        let totalMissingCells = 0;
+
+        for (const [column, columnSchema] of Object.entries(schema)) {
+            const values = data.map(row => (row ? row[column] : undefined));
+            const nonNullValues = values.filter(v => v !== null && v !== undefined && v !== '');
+            const missingCount = totalRows - nonNullValues.length;
+            const missingPercentage = totalRows === 0 ? 0 : (missingCount / totalRows) * 100;
+            const uniqueCount = new Set(nonNullValues.map(value => JSON.stringify(value))).size;
+
+            totalMissingCells += missingCount;
+
+            const columnCategory = this.normalizeColumnCategory(columnSchema.type);
+            columnTypeBreakdown[columnCategory].push(column);
+
+            schema[column].missingCount = missingCount;
+            schema[column].missingPercentage = missingPercentage;
+
+            const baseStats: ColumnDescriptiveStats = {
+                columnType: columnCategory,
+                nonNullCount: nonNullValues.length,
+                missingCount,
+                missingPercentage,
+                uniqueCount,
+                topValues: this.calculateTopValues(nonNullValues, nonNullValues.length)
+            };
+
+            let enrichedStats: ColumnDescriptiveStats = baseStats;
+
+            if (columnCategory === 'numeric') {
+                enrichedStats = {
+                    ...baseStats,
+                    ...this.calculateNumericStats(nonNullValues as Array<number | string>)
+                } as ColumnDescriptiveStats;
+            } else if (columnCategory === 'boolean') {
+                enrichedStats = {
+                    ...baseStats,
+                    ...this.calculateBooleanStats(nonNullValues as Array<boolean | string | number>)
+                } as ColumnDescriptiveStats;
+            } else if (columnCategory === 'date') {
+                enrichedStats = {
+                    ...baseStats,
+                    ...this.calculateDateStats(nonNullValues as Array<string | Date>)
+                } as ColumnDescriptiveStats;
+            }
+
+            descriptiveStats[column] = enrichedStats;
+            schema[column].descriptiveStats = enrichedStats;
+        }
+
+        const totalCells = totalRows * totalColumns;
+        const missingCellPercentage = totalCells === 0 ? 0 : (totalMissingCells / totalCells) * 100;
+
+        const overviewParts: string[] = [];
+        overviewParts.push(`Dataset contains ${totalRows} row${totalRows === 1 ? '' : 's'} and ${totalColumns} column${totalColumns === 1 ? '' : 's'}.`);
+
+        const numericColumns = columnTypeBreakdown.numeric;
+        if (numericColumns.length > 0) {
+            overviewParts.push(`Numeric columns (${numericColumns.length}): ${this.formatColumnList(numericColumns)}.`);
+        }
+
+        const categoricalColumns = columnTypeBreakdown.categorical;
+        if (categoricalColumns.length > 0) {
+            overviewParts.push(`Categorical columns (${categoricalColumns.length}): ${this.formatColumnList(categoricalColumns)}.`);
+        }
+
+        const booleanColumns = columnTypeBreakdown.boolean;
+        if (booleanColumns.length > 0) {
+            overviewParts.push(`Boolean columns (${booleanColumns.length}): ${this.formatColumnList(booleanColumns)}.`);
+        }
+
+        const dateColumns = columnTypeBreakdown.date;
+        if (dateColumns.length > 0) {
+            overviewParts.push(`Date columns (${dateColumns.length}): ${this.formatColumnList(dateColumns)}.`);
+        }
+
+        const unknownColumns = columnTypeBreakdown.unknown;
+        if (unknownColumns.length > 0) {
+            overviewParts.push(`Columns requiring review (${unknownColumns.length}): ${this.formatColumnList(unknownColumns)}.`);
+        }
+
+        overviewParts.push(`Overall missing data: ${missingCellPercentage.toFixed(1)}%.`);
+
+        const datasetSummary: DatasetSummary = {
+            overview: overviewParts.join(' '),
+            totalRows,
+            totalColumns,
+            missingCellPercentage,
+            columnTypeBreakdown
+        };
+
+        const relationships = this.detectRelationships(data, schema);
+
+        return { descriptiveStats, datasetSummary, relationships };
+    }
+
+    private static normalizeColumnCategory(type: SchemaColumn['type']): ColumnCategory {
+        switch (type) {
+            case 'number':
+            case 'integer':
+            case 'float':
+                return 'numeric';
+            case 'boolean':
+                return 'boolean';
+            case 'date':
+                return 'date';
+            case 'string':
+                return 'categorical';
+            default:
+                return 'unknown';
+        }
+    }
+
+    private static calculateTopValues(values: any[], nonNullCount: number): ValueFrequency[] | undefined {
+        if (!values.length || nonNullCount === 0) {
+            return undefined;
+        }
+
+        const counts = new Map<string, { count: number; original: any }>();
+        for (const value of values) {
+            const key = typeof value === 'string' ? value : JSON.stringify(value);
+            const existing = counts.get(key);
+            if (existing) {
+                existing.count += 1;
+            } else {
+                counts.set(key, { count: 1, original: value });
+            }
+        }
+
+        return Array.from(counts.entries())
+            .sort((a, b) => b[1].count - a[1].count)
+            .slice(0, 5)
+            .map(([key, info]) => ({
+                value: this.formatValueForDisplay(info.original, key),
+                count: info.count,
+                percentage: Number(((info.count / values.length) * 100).toFixed(2))
+            }));
+    }
+
+    private static calculateNumericStats(values: Array<number | string>): Partial<ColumnDescriptiveStats> {
+        const numericValues = values
+            .map(value => (typeof value === 'number' ? value : Number(value)))
+            .filter(value => Number.isFinite(value));
+
+        if (!numericValues.length) {
+            return {};
+        }
+
+        const sorted = [...numericValues].sort((a, b) => a - b);
+        const sum = sorted.reduce((acc, val) => acc + val, 0);
+        const mean = sum / sorted.length;
+        const variance = sorted.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / sorted.length;
+
+        return {
+            mean,
+            median: this.calculateQuantile(sorted, 0.5),
+            stdDev: Math.sqrt(variance),
+            min: sorted[0],
+            max: sorted[sorted.length - 1],
+            q1: this.calculateQuantile(sorted, 0.25),
+            q3: this.calculateQuantile(sorted, 0.75),
+            sum
+        };
+    }
+
+    private static calculateBooleanStats(values: Array<boolean | string | number>): Partial<ColumnDescriptiveStats> {
+        let trueCount = 0;
+        let falseCount = 0;
+
+        for (const value of values) {
+            const normalized = typeof value === 'boolean'
+                ? value
+                : typeof value === 'string'
+                    ? value.toLowerCase() === 'true'
+                    : Boolean(value);
+
+            if (normalized) {
+                trueCount += 1;
+            } else {
+                falseCount += 1;
+            }
+        }
+
+        return {
+            trueCount,
+            falseCount
+        };
+    }
+
+    private static calculateDateStats(values: Array<string | Date>): Partial<ColumnDescriptiveStats> {
+        const validDates = values
+            .map(value => (value instanceof Date ? value : new Date(value)))
+            .filter(date => !Number.isNaN(date.getTime()))
+            .sort((a, b) => a.getTime() - b.getTime());
+
+        if (!validDates.length) {
+            return {};
+        }
+
+        return {
+            minDate: validDates[0].toISOString(),
+            maxDate: validDates[validDates.length - 1].toISOString()
+        };
+    }
+
+    private static calculateQuantile(sortedValues: number[], quantile: number): number {
+        if (!sortedValues.length) {
+            return NaN;
+        }
+        if (sortedValues.length === 1) {
+            return sortedValues[0];
+        }
+
+        const position = (sortedValues.length - 1) * quantile;
+        const lowerIndex = Math.floor(position);
+        const upperIndex = Math.ceil(position);
+        const weight = position - lowerIndex;
+
+        if (upperIndex >= sortedValues.length) {
+            return sortedValues[lowerIndex];
+        }
+
+        return sortedValues[lowerIndex] * (1 - weight) + sortedValues[upperIndex] * weight;
+    }
+
+    private static formatColumnList(columns: string[]): string {
+        if (columns.length <= 5) {
+            return columns.join(', ');
+        }
+        const displayed = columns.slice(0, 5).join(', ');
+        return `${displayed}, ...`;
+    }
+
+    private static formatValueForDisplay(value: any, fallback: string): string {
+        if (value === null || value === undefined) {
+            return 'null';
+        }
+        if (typeof value === 'string') {
+            return value;
+        }
+        if (typeof value === 'number' || typeof value === 'boolean') {
+            return String(value);
+        }
+        if (value instanceof Date) {
+            return value.toISOString();
+        }
+        return fallback;
     }
 }

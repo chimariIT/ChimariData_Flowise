@@ -56,6 +56,7 @@ interface ConsultationRequest {
   assignedAt?: string;
   scheduledAt?: string;
   completedAt?: string;
+  dataUploadedAt?: string;
   createdAt: string;
 }
 

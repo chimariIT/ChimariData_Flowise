@@ -21,7 +21,8 @@ export const UserRoleEnum = z.enum([
   "non-tech",     // Non-technical users - AI-guided journey
   "business",     // Business users - Template-based journey
   "technical",    // Technical users - Self-service journey
-  "consultation"  // Expert consultation users
+  "consultation", // Expert consultation users
+  "custom"        // Bespoke hybrid users with tailored workflows
 ]);
 
 export type UserRole = z.infer<typeof UserRoleEnum>;
@@ -53,7 +54,8 @@ export const JourneyTypeEnum = z.enum([
   "ai_guided",      // Full AI orchestration with checkpoints
   "template_based", // Structured workflow with business templates
   "self_service",   // Full user control with advanced tools
-  "consultation"    // Expert-assisted analysis
+  "consultation",   // Expert-assisted analysis
+  "custom"          // Hybrid workflow with bespoke orchestration
 ]);
 
 export type JourneyType = z.infer<typeof JourneyTypeEnum>;
@@ -66,7 +68,8 @@ export const journeyToRoleMapping = {
   ai_guided: ['non-tech'] as UserRole[],
   template_based: ['business'] as UserRole[],
   self_service: ['technical'] as UserRole[],
-  consultation: ['technical', 'business', 'consultation'] as UserRole[]
+  consultation: ['technical', 'business', 'consultation', 'custom'] as UserRole[],
+  custom: ['technical', 'business', 'consultation', 'custom'] as UserRole[]
 } as const;
 
 /**
@@ -92,7 +95,7 @@ export type JourneyComplexity = z.infer<typeof JourneyComplexityEnum>;
  */
 export const SubscriptionTierEnum = z.enum([
   "none",          // No subscription (anonymous/guest)
-  "trial",         // Free trial period
+  "trial",         // Trial period
   "starter",       // Entry-level paid tier
   "professional",  // Mid-tier with advanced features
   "enterprise"     // Full access with custom support
@@ -123,7 +126,7 @@ export const tierToJourneyMapping = {
   trial: ['ai_guided'] as JourneyType[],
   starter: ['ai_guided', 'template_based'] as JourneyType[],
   professional: ['ai_guided', 'template_based', 'self_service'] as JourneyType[],
-  enterprise: ['ai_guided', 'template_based', 'self_service', 'consultation'] as JourneyType[]
+  enterprise: ['ai_guided', 'template_based', 'self_service', 'consultation', 'custom'] as JourneyType[]
 } as const;
 
 // ==========================================
@@ -224,12 +227,32 @@ export const ProjectStatusEnum = z.enum([
   "analyzing",      // Analysis in progress
   "checkpoint",     // Awaiting user checkpoint decision
   "generating",     // Generating artifacts
+  "plan_creation",  // Agents are building the analysis plan
+  "plan_review",    // Awaiting user approval on the analysis plan
+  "plan_approved",  // Plan approved and ready for downstream steps
   "completed",      // Analysis complete
   "error",          // Error occurred
   "cancelled"       // User cancelled
 ]);
 
 export type ProjectStatus = z.infer<typeof ProjectStatusEnum>;
+
+/**
+ * Analysis Plan Status
+ * Tracks lifecycle of generated analysis plans
+ */
+export const AnalysisPlanStatusEnum = z.enum([
+  "pending",        // Plan creation has started
+  "ready",          // Plan ready for user review
+  "approved",       // User approved plan
+  "rejected",       // User rejected the current plan
+  "modified",       // Plan adjusted and waiting re-review
+  "executing",      // Plan currently executing
+  "completed",      // Plan execution completed
+  "cancelled"       // Plan cancelled by user or system
+]);
+
+export type AnalysisPlanStatus = z.infer<typeof AnalysisPlanStatusEnum>;
 
 /**
  * Agent Task Status

@@ -413,7 +413,7 @@ export function createAgentFromTemplate(
       lastActivity: new Date()
     },
     health: {
-      status: 'healthy',
+      status: 'active',
       lastCheck: new Date(),
       responseTime: 0,
       errorRate: 0,

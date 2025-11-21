@@ -1,9 +1,19 @@
 # Production Readiness Assessment
 
-**Last Updated**: January 2025
+**Last Updated**: November 2025
 **Status**: ⚠️ **NOT PRODUCTION READY**
 
-A comprehensive audit (October 2025) identified critical gaps that must be addressed before production deployment.
+A comprehensive audit (October 2025) identified critical gaps that must be addressed before production deployment. November spot-checks reconfirm the outstanding items below and add new follow-ups for infrastructure observability and dependency management.
+
+---
+
+## November 2025 Update Snapshot
+
+- Redis-backed broker availability in production is still unverified. Capture connection details, failover strategy, and alerting hooks before the readiness sign-off meeting.
+- Python analytics bridge is missing an explicit dependency manifest for deployment pipelines. Produce a pinned `requirements-prod.txt` and document install steps in the platform runbook.
+- Retry/backoff conventions for MCP tool handlers remain undocumented. Align the orchestration RFC with concrete examples so operations can trace failure handling.
+- Tool registry hygiene work has restarted: focus on removing mock/pseudo handlers and validating S3/SharePoint ingestion connectors ahead of the December release candidate.
+- Workflow transparency narrative needs swimlanes for the PM/Data Engineer/Data Scientist trio plus cross-links into the readiness checklist to help product sign-off.
 
 ---
 

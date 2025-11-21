@@ -32,6 +32,7 @@ import SubscriptionManagement from "./subscription-management";
 import ToolsManagement from "./tools-management";
 import Consultations from "./consultations";
 import ConsultationPricing from "./consultation-pricing";
+import PricingServicesAdmin from "./pricing-services";
 
 interface AdminLayoutProps {
   user?: any;
@@ -45,22 +46,33 @@ export default function AdminLayout({ user }: AdminLayoutProps) {
   const { data: permissions, isLoading: permissionsLoading, error: permissionsError } = useQuery({
     queryKey: ['/api/admin/permissions'],
     queryFn: async () => {
+      // Get auth token from localStorage
+      const token = localStorage.getItem('auth_token');
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      // Add Authorization header if token exists
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
       const response = await fetch('/api/admin/permissions', {
+        method: 'GET',
+        headers,
         credentials: 'include',
       });
       if (!response.ok) {
-        throw new Error('Failed to fetch permissions');
+        // If 401, token might be invalid or expired
+        if (response.status === 401) {
+          throw new Error('Authentication required. Please log in again.');
+        }
+        throw new Error(`Failed to fetch permissions: ${response.status}`);
       }
       return response.json();
-    },
+    }
   });
 
-  // Redirect non-admin users
-  useEffect(() => {
-    if (!permissionsLoading && (!permissions?.success || !permissions?.data?.role)) {
-      setLocation('/dashboard');
-    }
-  }, [permissions, permissionsLoading, setLocation]);
+  // Don't redirect - show access denied instead
+  // Non-admin users should see access denied message, not be redirected to dashboard
 
   // Extract tab from URL path
   useEffect(() => {
@@ -130,14 +142,14 @@ export default function AdminLayout({ user }: AdminLayoutProps) {
         <Card className="w-full max-w-md">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-red-600">
-              <Shield className="w-5 h-5" />
-              Insufficient Privileges
+              <AlertTriangle className="w-5 h-5" />
+              Access Denied
             </CardTitle>
           </CardHeader>
           <CardContent>
             <Alert>
               <AlertDescription>
-                Admin access required. Your current role: <strong>{userRole.name}</strong>
+                You don't have permission to access the admin panel. Please contact your administrator.
               </AlertDescription>
             </Alert>
             <Button 
@@ -189,7 +201,7 @@ export default function AdminLayout({ user }: AdminLayoutProps) {
       {/* Main Content */}
       <div className="container mx-auto px-4 py-6">
         <Tabs value={activeTab} onValueChange={handleTabChange}>
-          <TabsList className="grid w-full grid-cols-6 mb-6">
+          <TabsList className="grid w-full grid-cols-7 mb-6">
             <TabsTrigger value="dashboard" className="flex items-center gap-2">
               <BarChart3 className="w-4 h-4" />
               Dashboard
@@ -198,13 +210,17 @@ export default function AdminLayout({ user }: AdminLayoutProps) {
               <DollarSign className="w-4 h-4" />
               Subscriptions
             </TabsTrigger>
+            <TabsTrigger value="service-pricing" className="flex items-center gap-2">
+              <DollarSign className="w-4 h-4" />
+              Service Pricing
+            </TabsTrigger>
             <TabsTrigger value="consultations" className="flex items-center gap-2">
               <MessageSquare className="w-4 h-4" />
               Consultations
             </TabsTrigger>
             <TabsTrigger value="consultation-pricing" className="flex items-center gap-2">
               <Receipt className="w-4 h-4" />
-              Pricing
+              Consultation Pricing
             </TabsTrigger>
             <TabsTrigger value="agent-management" className="flex items-center gap-2">
               <Bot className="w-4 h-4" />
@@ -222,6 +238,10 @@ export default function AdminLayout({ user }: AdminLayoutProps) {
 
           <TabsContent value="subscription-management">
             <SubscriptionManagement />
+          </TabsContent>
+
+          <TabsContent value="service-pricing">
+            <PricingServicesAdmin onBack={() => setActiveTab('dashboard')} />
           </TabsContent>
 
           <TabsContent value="consultations">

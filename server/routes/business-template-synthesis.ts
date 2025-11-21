@@ -1,13 +1,13 @@
 import { Router } from 'express';
 import { businessTemplateSynthesisService } from '../services/business-template-synthesis';
-import { authenticateUser } from '../middleware/auth';
+import { ensureAuthenticated } from './auth';
 
 const router = Router();
 
 /**
  * Synthesize business template with user goals and data
  */
-router.post('/synthesize', authenticateUser, async (req, res) => {
+router.post('/synthesize', ensureAuthenticated, async (req, res) => {
   try {
     const { templateId, userGoals, dataSchema, audienceContext, industry } = req.body;
 
@@ -60,7 +60,7 @@ router.post('/synthesize', authenticateUser, async (req, res) => {
 /**
  * Get available templates for synthesis
  */
-router.get('/templates', authenticateUser, async (req, res) => {
+router.get('/templates', ensureAuthenticated, async (req, res) => {
   try {
     const { domain, complexity, goals } = req.query;
 
@@ -89,7 +89,7 @@ router.get('/templates', authenticateUser, async (req, res) => {
 /**
  * Validate template synthesis configuration
  */
-router.post('/validate', authenticateUser, async (req, res) => {
+router.post('/validate', ensureAuthenticated, async (req, res) => {
   try {
     const { templateId, dataSchema, userGoals } = req.body;
 
@@ -124,7 +124,7 @@ router.post('/validate', authenticateUser, async (req, res) => {
 /**
  * Get template synthesis preview
  */
-router.post('/preview', authenticateUser, async (req, res) => {
+router.post('/preview', ensureAuthenticated, async (req, res) => {
   try {
     const { templateId, userGoals, audienceContext } = req.body;
 

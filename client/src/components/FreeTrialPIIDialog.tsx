@@ -68,7 +68,7 @@ export function FreeTrialPIIDialog({
             </div>
             <p className="text-red-700 text-sm">
               Your file contains {piiData.detectedPII.length} type(s) of personally identifiable information (PII). 
-              Free trial analysis does not include data anonymization or advanced privacy protection.
+              Trial analysis does not include data anonymization or advanced privacy protection.
             </p>
           </div>
 
@@ -167,7 +167,7 @@ export function FreeTrialPIIDialog({
           <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-xs">
             <h4 className="font-medium text-gray-900 mb-1">Privacy Notice</h4>
             <p className="text-gray-700">
-              Free trial analysis processes data temporarily for basic insights. 
+              Trial analysis processes data temporarily for basic insights. 
               For production use with sensitive data, we recommend our full service 
               which includes advanced privacy protection and data anonymization features.
             </p>

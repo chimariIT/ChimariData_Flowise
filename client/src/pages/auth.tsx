@@ -14,7 +14,15 @@ interface AuthPageProps {
 }
 
 export default function AuthPage({ onLogin }: AuthPageProps) {
-  const [isLogin, setIsLogin] = useState(true);
+  const [isLogin, setIsLogin] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const path = window.location.pathname.toLowerCase();
+      if (path.includes('/auth/register')) {
+        return false;
+      }
+    }
+    return true;
+  });
   const [isLoading, setIsLoading] = useState(false);
   const [isForgotPasswordOpen, setIsForgotPasswordOpen] = useState(false);
   const [formData, setFormData] = useState({
@@ -35,30 +43,53 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
         throw new Error("Passwords do not match");
       }
 
-      const result = isLogin 
-        ? await apiClient.login({ email: formData.email, password: formData.password })
-        : await apiClient.register({ 
-            email: formData.email, 
-            firstName: formData.firstName,
-            lastName: formData.lastName,
-            password: formData.password 
-          });
+      if (isLogin) {
+        // Handle login
+        const result = await apiClient.login({ email: formData.email, password: formData.password });
 
-      if (result.success && (result.user || result.token)) {
-        // Store auth token in localStorage
-        if (result.token) {
-          localStorage.setItem('auth_token', result.token);
+        if (result.success && (result.user || result.token)) {
+          // Store auth token in localStorage
+          if (result.token) {
+            localStorage.setItem('auth_token', result.token);
+          }
+          // Pass the full result (including token) to onLogin
+          onLogin(result);
+
+          toast({
+            title: "Success",
+            description: "Welcome back!"
+          });
+        } else {
+          throw new Error("Authentication succeeded but no user data received");
         }
-        // Pass the full result (including token) to onLogin
-        onLogin(result);
       } else {
-        throw new Error("Authentication succeeded but no user data received");
+        // Handle registration - do NOT auto-login
+        const result = await apiClient.register({
+          email: formData.email,
+          firstName: formData.firstName,
+          lastName: formData.lastName,
+          password: formData.password
+        });
+
+        if (result.success) {
+          // Registration successful - switch to login mode
+          setIsLogin(true);
+          setFormData(prev => ({
+            ...prev,
+            password: '',
+            confirmPassword: '',
+            firstName: '',
+            lastName: ''
+          }));
+
+          toast({
+            title: "Registration Successful",
+            description: "Account created! Please log in with your credentials."
+          });
+        } else {
+          throw new Error("Registration failed");
+        }
       }
-      
-      toast({
-        title: "Success",
-        description: isLogin ? "Welcome back!" : "Account created successfully!"
-      });
     } catch (error) {
       toast({
         title: "Error",

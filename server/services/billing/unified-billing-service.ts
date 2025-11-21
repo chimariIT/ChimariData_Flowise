@@ -17,10 +17,14 @@
 
 import Stripe from 'stripe';
 import { db } from '../../db';
-import { users } from '../../../shared/schema';
+import { subscriptionTierPricing, users } from '../../../shared/schema';
 import { PricingService } from '../pricing';
+import { getPricingDataService } from '../pricing-data-service';
 import { mlLLMUsageTracker } from '../ml-llm-usage-tracker';
 import { eq, sql } from 'drizzle-orm';
+import type { InferSelectModel } from 'drizzle-orm';
+import { eligibilityService } from '../../eligibility-service';
+import { nanoid } from 'nanoid';
 import {
   SubscriptionTier,
   SubscriptionTierEnum,
@@ -143,6 +147,59 @@ export interface AdminCampaignConfig {
   isActive: boolean;
 }
 
+type EligibilityFeatureName = 'preparation' | 'data_processing' | 'analysis' | 'visualization' | 'ai_insights';
+
+interface LegacyConsumptionRate {
+  type: string;
+  baseRate: number;
+  currency: string;
+  description?: string;
+  complexityMultiplier?: Record<string, number>;
+}
+
+interface LegacyTaxRegion {
+  region: string;
+  rate: number;
+}
+
+interface LegacyTaxConfig {
+  defaultRate: number;
+  regions: LegacyTaxRegion[];
+}
+
+interface LegacyCurrencyConfig {
+  code: string;
+  symbol: string;
+  lastUpdated: Date;
+  exchangeRates: Record<string, number>;
+}
+
+interface LegacyTierPricing {
+  id: string;
+  role: string;
+  displayName: string;
+  description: string;
+  pricing: {
+    monthly: number;
+    yearly: number;
+    currency: string;
+  };
+  quotas: AdminSubscriptionTierConfig['quotas'];
+  features: string[];
+  isActive: boolean;
+}
+
+interface LegacyBillingConfig {
+  consumptionRates: LegacyConsumptionRate[];
+  campaigns: AdminCampaignConfig[];
+  taxConfig: LegacyTaxConfig;
+  currency: LegacyCurrencyConfig;
+  tiers: LegacyTierPricing[];
+}
+
+type SubscriptionTierPricingRow = InferSelectModel<typeof subscriptionTierPricing>;
+type ActiveSubscriptionRow = { tier: SubscriptionTier | null };
+
 // ==========================================
 // USAGE TRACKING INTERFACES
 // ==========================================
@@ -202,6 +259,92 @@ export class UnifiedBillingService {
   private tierConfigs: Map<SubscriptionTier, AdminSubscriptionTierConfig> = new Map();
   private featureConfigs: Map<string, AdminFeatureConfig> = new Map();
   private activeCampaigns: AdminCampaignConfig[] = [];
+  private legacyConfig: LegacyBillingConfig = {
+    consumptionRates: [
+      {
+        type: 'data_processing',
+        baseRate: 0.05,
+        currency: 'USD',
+        description: 'Per megabyte processed beyond quota',
+        complexityMultiplier: { basic: 1, intermediate: 1.25, advanced: 1.5 }
+      },
+      {
+        type: 'compute',
+        baseRate: 0.03,
+        currency: 'USD',
+        description: 'Per compute minute beyond quota',
+        complexityMultiplier: { basic: 1, intermediate: 1.2, advanced: 1.4 }
+      },
+      {
+        type: 'storage',
+        baseRate: 0.001,
+        currency: 'USD',
+        description: 'Per megabyte stored beyond quota'
+      },
+      {
+        type: 'ai_query',
+        baseRate: 0.2,
+        currency: 'USD',
+        description: 'Per AI insight beyond quota'
+      }
+    ],
+    campaigns: [],
+    taxConfig: {
+      defaultRate: 0.0,
+      regions: []
+    },
+    currency: {
+      code: 'USD',
+      symbol: '$',
+      lastUpdated: new Date(),
+      exchangeRates: {}
+    },
+    tiers: []
+  };
+  private configurationReady: Promise<void>;
+  private configurationLoaded = false;
+  private readonly featureComplexityLevels: FeatureComplexity[] = ['small', 'medium', 'large', 'extra_large'];
+  private readonly featureQuotaDefaults: Record<string, Record<string, Record<FeatureComplexity, number>>> = {
+    default: {
+      data_upload: { small: 500, medium: 100, large: 10, extra_large: 0 },
+      statistical_analysis: { small: 300, medium: 50, large: 10, extra_large: 0 },
+      visualization: { small: 500, medium: 100, large: 10, extra_large: 0 },
+      machine_learning: { small: 50, medium: 10, large: 2, extra_large: 0 },
+    },
+    trial: {
+      data_upload: { small: 5, medium: 0, large: 0, extra_large: 0 },
+      statistical_analysis: { small: 3, medium: 0, large: 0, extra_large: 0 },
+      visualization: { small: 5, medium: 0, large: 0, extra_large: 0 },
+    },
+    starter: {
+      data_upload: { small: 50, medium: 10, large: 0, extra_large: 0 },
+      statistical_analysis: { small: 30, medium: 5, large: 0, extra_large: 0 },
+      visualization: { small: 50, medium: 10, large: 0, extra_large: 0 },
+    },
+    professional: {
+      data_upload: { small: 500, medium: 100, large: 10, extra_large: 0 },
+      statistical_analysis: { small: 300, medium: 50, large: 10, extra_large: 0 },
+      visualization: { small: 500, medium: 100, large: 10, extra_large: 0 },
+      machine_learning: { small: 50, medium: 10, large: 2, extra_large: 0 },
+    },
+    enterprise: {
+      data_upload: { small: -1, medium: -1, large: -1, extra_large: -1 },
+      statistical_analysis: { small: -1, medium: -1, large: -1, extra_large: -1 },
+      visualization: { small: -1, medium: -1, large: -1, extra_large: -1 },
+      machine_learning: { small: -1, medium: -1, large: -1, extra_large: -1 },
+    },
+    none: {
+      data_upload: { small: 0, medium: 0, large: 0, extra_large: 0 },
+    },
+  };
+
+  public get config(): LegacyBillingConfig {
+    return this.legacyConfig;
+  }
+
+  private getConfigurations(): LegacyBillingConfig {
+    return this.legacyConfig;
+  }
 
   constructor(config: {
     stripeSecretKey: string;
@@ -213,7 +356,11 @@ export class UnifiedBillingService {
     this.webhookSecret = config.webhookSecret;
 
     // Load configurations on initialization
-    this.loadConfigurations();
+    this.configurationReady = (async () => {
+      await this.ensureSubscriptionBalanceColumn();
+      await this.loadConfigurations();
+      this.configurationLoaded = true;
+    })();
   }
 
   // ==========================================
@@ -225,13 +372,226 @@ export class UnifiedBillingService {
    * Called on initialization and periodically
    */
   private async loadConfigurations(): Promise<void> {
-    // TODO: Implement loading from database tables:
-    // - subscription_tier_configs
-    // - feature_configs
-    // - campaigns
-    //
-    // For now, use default configurations
-    this.setDefaultConfigurations();
+    try {
+      const pricingService = getPricingDataService();
+
+      // Load all active tiers from database
+      const dbTiers = await pricingService.getAllActiveTiers();
+
+      // Transform database tiers to AdminSubscriptionTierConfig format
+      this.tierConfigs.clear();
+      for (const dbTier of dbTiers) {
+        const limits = dbTier.limits as any || {};
+        const features = dbTier.features as any || {};
+        const journeyPricing = dbTier.journeyPricing as any || {};
+        const overagePricing = dbTier.overagePricing as any || {};
+
+        const featureQuotas: AdminSubscriptionTierConfig['quotas']['featureQuotas'] = {
+          data_upload: {},
+          statistical_analysis: {},
+          visualization: {},
+          machine_learning: {},
+        };
+
+        if (typeof limits.maxFiles === 'number' && Number.isFinite(limits.maxFiles)) {
+          featureQuotas.data_upload.small = limits.maxFiles;
+        }
+
+        if (typeof limits.maxAnalysisComponents === 'number' && Number.isFinite(limits.maxAnalysisComponents)) {
+          featureQuotas.statistical_analysis.small = limits.maxAnalysisComponents;
+        }
+
+        if (typeof limits.maxVisualizations === 'number' && Number.isFinite(limits.maxVisualizations)) {
+          featureQuotas.visualization.small = limits.maxVisualizations;
+        }
+
+        if (typeof limits.maxMLExperiments === 'number' && Number.isFinite(limits.maxMLExperiments)) {
+          featureQuotas.machine_learning.small = limits.maxMLExperiments;
+        }
+
+        const tierConfig: AdminSubscriptionTierConfig = {
+          tier: dbTier.id as SubscriptionTier,
+          displayName: dbTier.displayName,
+          description: dbTier.description || '',
+          pricing: {
+            monthly: dbTier.monthlyPriceUsd / 100, // Convert cents to dollars
+            yearly: dbTier.yearlyPriceUsd / 100,
+            currency: 'USD'
+          },
+          stripeProductId: dbTier.stripeProductId || `prod_${dbTier.id}`,
+          stripePriceIds: {
+            monthly: dbTier.stripeMonthlyPriceId || `price_${dbTier.id}_monthly`,
+            yearly: dbTier.stripeYearlyPriceId || `price_${dbTier.id}_yearly`
+          },
+          quotas: {
+            maxDataUploadsMB: limits.totalDataVolumeMB || 0,
+            maxStorageMB: limits.totalDataVolumeMB || 0,
+            maxDataProcessingMB: limits.totalDataVolumeMB || 0,
+            maxAIQueries: limits.aiInsights || 0,
+            maxAnalysisComponents: limits.maxAnalysisComponents || 0,
+            maxVisualizationsPerProject: limits.maxVisualizations || 0,
+            maxComputeMinutes: limits.maxComputeMinutes || 300,
+            maxProjects: limits.maxProjects || 5,
+            maxDatasetsPerProject: limits.maxDatasetsPerProject || 3,
+            allowedJourneys: this.parseAllowedJourneys(dbTier.id),
+            featureQuotas,
+          },
+          overagePricing: {
+            dataPerMB: overagePricing.dataPerMB || 0.005,
+            computePerMinute: overagePricing.computePerMinute || 0.03,
+            storagePerMB: overagePricing.storagePerMB || 0.001,
+            aiQueryCost: 0.20,
+            visualizationCost: 0.50,
+            featureOveragePricing: overagePricing.featureOveragePricing || {}
+          },
+          features: this.parseFeatureList(features),
+          isActive: dbTier.isActive
+        };
+
+        this.applyDefaultOveragePricing(tierConfig);
+        this.applyDefaultFeatureQuotas(tierConfig);
+
+        this.tierConfigs.set(tierConfig.tier, tierConfig);
+      }
+
+      console.log(`✅ Loaded ${dbTiers.length} tier configurations from database`);
+
+      this.legacyConfig.tiers = Array.from(this.tierConfigs.values()).map(tierConfig => ({
+        id: tierConfig.tier,
+        role: tierConfig.tier,
+        displayName: tierConfig.displayName,
+        description: tierConfig.description,
+        pricing: {
+          monthly: tierConfig.pricing.monthly,
+          yearly: tierConfig.pricing.yearly,
+          currency: tierConfig.pricing.currency
+        },
+        quotas: tierConfig.quotas,
+        features: tierConfig.features,
+        isActive: tierConfig.isActive
+      }));
+    } catch (error) {
+      console.error('❌ Failed to load configurations from database, using defaults:', error);
+      this.setDefaultConfigurations();
+    } finally {
+      this.configurationLoaded = true;
+    }
+  }
+
+  private async ensureSubscriptionBalanceColumn(): Promise<void> {
+    try {
+      await db.execute(sql`
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS subscription_balances jsonb NOT NULL DEFAULT '{}'::jsonb
+      `);
+    } catch (error) {
+      console.error('⚠️ Unable to ensure subscription_balances column exists:', error);
+    }
+  }
+
+  private applyDefaultOveragePricing(tierConfig: AdminSubscriptionTierConfig): void {
+    const defaults: Record<string, Record<FeatureComplexity, number>> = {
+      data_upload: { small: 0.35, medium: 1.2, large: 8.0, extra_large: 24.0 },
+      statistical_analysis: { small: 0.75, medium: 3, large: 9, extra_large: 30 },
+      visualization: { small: 0.5, medium: 1.5, large: 4, extra_large: 12 },
+      machine_learning: { small: 2, medium: 6, large: 18, extra_large: 48 }
+    } as const;
+
+    if (!tierConfig.overagePricing.featureOveragePricing) {
+      tierConfig.overagePricing.featureOveragePricing = {};
+    }
+
+    for (const [featureId, pricing] of Object.entries(defaults)) {
+      if (!tierConfig.overagePricing.featureOveragePricing[featureId]) {
+        tierConfig.overagePricing.featureOveragePricing[featureId] = { ...pricing };
+      }
+    }
+  }
+
+  private applyDefaultFeatureQuotas(tierConfig: AdminSubscriptionTierConfig): void {
+    if (!tierConfig.quotas.featureQuotas) {
+      tierConfig.quotas.featureQuotas = {};
+    }
+
+    const tierDefaults = this.featureQuotaDefaults[tierConfig.tier] || this.featureQuotaDefaults.default;
+    const baseDefaults = this.featureQuotaDefaults.default;
+
+    const allFeatureIds = new Set<string>([
+      ...Object.keys(baseDefaults),
+      ...Object.keys(tierDefaults),
+      ...Object.keys(tierConfig.quotas.featureQuotas),
+    ]);
+
+    for (const featureId of allFeatureIds) {
+      const featureQuota = tierConfig.quotas.featureQuotas[featureId] || {} as Record<FeatureComplexity, number>;
+      const defaultQuota = tierDefaults?.[featureId] || {};
+      const fallbackQuota = baseDefaults?.[featureId] || {};
+
+      for (const level of this.featureComplexityLevels) {
+        const desiredDefault = defaultQuota[level] ?? fallbackQuota[level] ?? 0;
+        const currentValue = featureQuota[level];
+
+        if (currentValue === undefined || currentValue === null || Number.isNaN(currentValue as number)) {
+          featureQuota[level] = desiredDefault;
+          continue;
+        }
+
+        if (typeof currentValue === 'number' && typeof desiredDefault === 'number') {
+          const hasUnlimitedQuota = currentValue === -1 || desiredDefault === -1;
+          if (hasUnlimitedQuota) {
+            featureQuota[level] = -1;
+            continue;
+          }
+
+          if (currentValue < desiredDefault) {
+            featureQuota[level] = desiredDefault;
+          }
+        }
+      }
+
+      tierConfig.quotas.featureQuotas[featureId] = featureQuota;
+    }
+  }
+
+  private async ensureConfigurationsLoaded(): Promise<void> {
+    if (!this.configurationLoaded) {
+      await this.configurationReady;
+    }
+  }
+
+  /**
+   * Helper: Parse allowed journeys based on tier
+   */
+  private parseAllowedJourneys(tierId: string): JourneyType[] {
+    switch (tierId) {
+      case 'trial':
+        return ['ai_guided'];
+      case 'starter':
+        return ['ai_guided', 'template_based'];
+      case 'professional':
+        return ['ai_guided', 'template_based', 'self_service'];
+      case 'enterprise':
+        return ['ai_guided', 'template_based', 'self_service', 'consultation'];
+      default:
+        return ['ai_guided'];
+    }
+  }
+
+  /**
+   * Helper: Parse database features into feature list
+   */
+  private parseFeatureList(features: any): string[] {
+    const featureList: string[] = [];
+
+    if (features.dataTransformation) featureList.push('data_transformation');
+    if (features.statisticalAnalysis) featureList.push('statistical_analysis');
+    if (features.advancedInsights) featureList.push('advanced_insights');
+    if (features.piiDetection) featureList.push('pii_detection');
+    if (features.mlBasic) featureList.push('ml_basic');
+    if (features.mlAdvanced) featureList.push('ml_advanced');
+    if (features.llmFineTuning) featureList.push('llm_fine_tuning');
+
+    return featureList;
   }
 
   /**
@@ -242,7 +602,7 @@ export class UnifiedBillingService {
     const defaultTiers: AdminSubscriptionTierConfig[] = [
       {
         tier: 'trial',
-        displayName: 'Free Trial',
+        displayName: 'Trial',
         description: '14-day trial with AI-guided journey',
         pricing: { monthly: 0, yearly: 0, currency: 'USD' },
         stripeProductId: 'prod_trial',
@@ -409,9 +769,27 @@ export class UnifiedBillingService {
       },
     ];
 
+    this.tierConfigs.clear();
     defaultTiers.forEach(config => {
+      this.applyDefaultOveragePricing(config);
+      this.applyDefaultFeatureQuotas(config);
       this.tierConfigs.set(config.tier, config);
     });
+
+    this.legacyConfig.tiers = defaultTiers.map(config => ({
+      id: config.tier,
+      role: config.tier,
+      displayName: config.displayName,
+      description: config.description,
+      pricing: {
+        monthly: config.pricing.monthly,
+        yearly: config.pricing.yearly,
+        currency: config.pricing.currency
+      },
+      quotas: config.quotas,
+      features: config.features,
+      isActive: config.isActive
+    }));
   }
 
   /**
@@ -419,7 +797,13 @@ export class UnifiedBillingService {
    * Called when admin updates configurations
    */
   public async reloadConfigurations(): Promise<void> {
-    await this.loadConfigurations();
+    this.configurationLoaded = false;
+    this.configurationReady = (async () => {
+      await this.loadConfigurations();
+      this.configurationLoaded = true;
+    })();
+
+    await this.configurationReady;
   }
 
   /**
@@ -434,6 +818,388 @@ export class UnifiedBillingService {
    */
   public getFeatureConfig(featureId: string): AdminFeatureConfig | null {
     return this.featureConfigs.get(featureId) || null;
+  }
+
+  public async getAdminBillingOverview(): Promise<{
+    totals: { users: number; activeSubscriptions: number; trialUsers: number };
+    revenue: { monthlyRecurringRevenue: number };
+    tiers: Array<{
+      id: string;
+      displayName: string;
+      customers: number;
+      monthlyPriceUsd: number;
+      yearlyPriceUsd: number;
+      isActive: boolean;
+    }>;
+    currency: LegacyCurrencyConfig;
+    taxConfig: LegacyTaxConfig;
+    consumptionRates: LegacyConsumptionRate[];
+    campaigns: AdminCampaignConfig[];
+  }> {
+    const [{ value: totalUsers = 0 }] = await db.select({ value: sql<number>`count(*)` }).from(users);
+    const [{ value: activeSubscriptions = 0 }] = await db
+      .select({ value: sql<number>`count(*)` })
+      .from(users)
+      .where(eq(users.subscriptionStatus, 'active'));
+    const [{ value: trialUsers = 0 }] = await db
+      .select({ value: sql<number>`count(*)` })
+      .from(users)
+      .where(eq(users.subscriptionTier, 'trial'));
+
+    const pricingService = getPricingDataService();
+    const tierPricing = (await pricingService.getAllActiveTiers()) as SubscriptionTierPricingRow[];
+
+    const activeUsers = (await db
+      .select({ tier: users.subscriptionTier })
+      .from(users)
+      .where(eq(users.subscriptionStatus, 'active'))) as ActiveSubscriptionRow[];
+
+    const tierCustomerCounts = activeUsers.reduce<Record<string, number>>((acc, row) => {
+      const key = row.tier ?? 'none';
+      acc[key] = (acc[key] ?? 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+
+    const tierPriceMap = new Map<string, number>(
+      tierPricing.map((tier) => [tier.id, tier.monthlyPriceUsd / 100])
+    );
+
+    const monthlyRecurringRevenue = activeUsers.reduce<number>((sum, row) => {
+      const tierId = row.tier ?? '';
+      return sum + (tierPriceMap.get(tierId) ?? 0);
+    }, 0);
+
+    return {
+      totals: {
+        users: totalUsers,
+        activeSubscriptions,
+        trialUsers
+      },
+      revenue: {
+        monthlyRecurringRevenue
+      },
+      tiers: tierPricing.map((tier) => ({
+        id: tier.id,
+        displayName: tier.displayName,
+        customers: tierCustomerCounts[tier.id] ?? 0,
+        monthlyPriceUsd: tier.monthlyPriceUsd,
+        yearlyPriceUsd: tier.yearlyPriceUsd,
+        isActive: tier.isActive ?? false
+      })),
+      currency: this.legacyConfig.currency,
+      taxConfig: this.legacyConfig.taxConfig,
+      consumptionRates: this.legacyConfig.consumptionRates,
+      campaigns: this.legacyConfig.campaigns
+    };
+  }
+
+  public async updateBillingConfiguration(update: Partial<LegacyBillingConfig>): Promise<LegacyBillingConfig> {
+    if (update.consumptionRates) {
+      this.legacyConfig.consumptionRates = update.consumptionRates.map((rate) => ({ ...rate }));
+    }
+
+    if (update.campaigns) {
+      this.legacyConfig.campaigns = update.campaigns.map((campaign) => ({ ...campaign }));
+      this.activeCampaigns = this.legacyConfig.campaigns;
+    }
+
+    if (update.taxConfig) {
+      this.legacyConfig.taxConfig = {
+        defaultRate: update.taxConfig.defaultRate ?? this.legacyConfig.taxConfig.defaultRate,
+        regions: update.taxConfig.regions
+          ? update.taxConfig.regions.map(region => ({ ...region }))
+          : [...this.legacyConfig.taxConfig.regions]
+      };
+    }
+
+    if (update.currency) {
+      this.legacyConfig.currency = {
+        ...this.legacyConfig.currency,
+        ...update.currency,
+        lastUpdated: update.currency.lastUpdated ?? new Date()
+      };
+    }
+
+    if (update.tiers) {
+      this.legacyConfig.tiers = update.tiers.map((tier) => ({
+        ...tier,
+        pricing: { ...tier.pricing },
+        quotas: tier.quotas,
+        features: [...tier.features]
+      }));
+
+      update.tiers.forEach((tier) => {
+        const tierId = tier.id as SubscriptionTier;
+        const existing = this.tierConfigs.get(tierId);
+        if (existing) {
+          existing.pricing.monthly = tier.pricing.monthly;
+          existing.pricing.yearly = tier.pricing.yearly;
+          existing.pricing.currency = tier.pricing.currency;
+          existing.quotas = tier.quotas;
+          existing.features = tier.features;
+          existing.isActive = tier.isActive;
+        }
+      });
+    }
+
+    return this.legacyConfig;
+  }
+
+  public async createCampaign(campaign: Partial<AdminCampaignConfig>): Promise<AdminCampaignConfig> {
+    const normalizeDate = (value: Date | string | undefined, fallback: Date) =>
+      value instanceof Date ? value : value ? new Date(value) : fallback;
+
+    const now = new Date();
+    const newCampaign: AdminCampaignConfig = {
+      id: campaign.id ?? nanoid(),
+      name: campaign.name ?? 'Untitled Campaign',
+      type: campaign.type ?? 'percentage_discount',
+      value: campaign.value ?? 0,
+      targetTiers: campaign.targetTiers ?? [],
+      targetRoles: campaign.targetRoles ?? [],
+      validFrom: normalizeDate(campaign.validFrom, now),
+      validTo: normalizeDate(campaign.validTo, new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)),
+      maxUses: campaign.maxUses,
+      currentUses: campaign.currentUses ?? 0,
+      couponCode: campaign.couponCode ?? campaign.id ?? undefined,
+      isActive: campaign.isActive ?? true,
+    };
+
+    this.legacyConfig.campaigns = [
+      ...this.legacyConfig.campaigns.filter(existing => existing.id !== newCampaign.id),
+      newCampaign
+    ];
+
+    this.activeCampaigns = this.legacyConfig.campaigns;
+    return newCampaign;
+  }
+
+  public async calculateConsumptionCost(
+    userId: string,
+    consumptionType: string,
+    volume: number,
+    complexity?: string
+  ): Promise<number> {
+    if (volume <= 0) {
+      return 0;
+    }
+
+    const user = await this.getUser(userId);
+    if (!user?.subscriptionTier) {
+      return 0;
+    }
+
+    const tier = user.subscriptionTier as SubscriptionTier;
+    const tierConfig = this.getTierConfig(tier);
+    if (!tierConfig) {
+      return 0;
+    }
+
+    const overageKey = this.mapConsumptionType(consumptionType);
+    if (!overageKey) {
+      return 0;
+    }
+
+    if (overageKey === 'dataPerMB' || overageKey === 'computePerMinute' || overageKey === 'storagePerMB') {
+      const pricingService = getPricingDataService();
+      return pricingService.calculateOverageCost(tier, overageKey, volume);
+    }
+
+    const baseRate = tierConfig.overagePricing[overageKey];
+    if (typeof baseRate !== 'number') {
+      return 0;
+    }
+
+    let rate = baseRate;
+
+    if (overageKey === 'aiQueryCost' && complexity) {
+      const multiplier = this.legacyConfig.consumptionRates
+        .find(rateEntry => rateEntry.type === 'ai_query')?.complexityMultiplier?.[complexity];
+      if (multiplier) {
+        rate *= multiplier;
+      }
+    }
+
+    return rate * volume;
+  }
+
+  public async applyCampaign(userId: string, campaignCode: string): Promise<boolean> {
+    const campaign = this.legacyConfig.campaigns.find(c => c.couponCode === campaignCode || c.id === campaignCode);
+    if (!campaign || !campaign.isActive) {
+      return false;
+    }
+
+    if (campaign.maxUses && campaign.currentUses >= campaign.maxUses) {
+      return false;
+    }
+
+    campaign.currentUses += 1;
+    return true;
+  }
+
+  public async checkEligibility(
+    userId: string,
+    request: {
+      journeyType: string;
+      dataVolume?: number;
+      dataSizeMB?: number;
+      complexity?: string;
+      features?: string[];
+    }
+  ): Promise<{
+    canProceed: boolean;
+    reason?: string;
+    quotaRemaining: {
+      uploads: number;
+      dataVolumeMB: number;
+      aiInsights: number;
+    };
+    upgradeRequired: boolean;
+    recommendation?: string;
+    details: any;
+  }> {
+    const features = this.deriveEligibilityFeatures(request.journeyType, request.features, request.complexity);
+
+    const normalizedJourney: 'non-tech' | 'business' | 'technical' =
+      request.journeyType === 'business'
+        ? 'business'
+        : request.journeyType === 'non-tech'
+        ? 'non-tech'
+        : 'technical';
+
+    const dataSizeMB = request.dataSizeMB ?? (typeof request.dataVolume === 'number' ? request.dataVolume * 1024 : 0);
+
+    const eligibilityResult = await eligibilityService.checkEligibility(userId, {
+      features,
+      dataSizeMB,
+      journeyType: normalizedJourney
+    });
+
+    const canProceed = eligibilityResult.success && eligibilityResult.eligible;
+    const reason =
+      canProceed
+        ? undefined
+        : eligibilityResult.error || eligibilityResult.blockedFeatures[0]?.reason || 'Eligibility requirements not met';
+
+    const quotaRemaining = {
+      uploads: this.calculateRemaining(
+        eligibilityResult.limits.monthlyUploads,
+        eligibilityResult.usage.monthlyUploads
+      ),
+      dataVolumeMB: this.calculateRemaining(
+        eligibilityResult.limits.monthlyDataVolume,
+        eligibilityResult.usage.monthlyDataVolume
+      ),
+      aiInsights: this.calculateRemaining(
+        eligibilityResult.limits.monthlyAIInsights,
+        eligibilityResult.usage.monthlyAIInsights
+      )
+    };
+
+    return {
+      canProceed,
+      reason,
+      quotaRemaining,
+      upgradeRequired: eligibilityResult.blockedFeatures.some(feature => feature.upgradeRequired),
+      recommendation: eligibilityResult.upgradeRecommendation,
+      details: eligibilityResult
+    };
+  }
+
+  private mapConsumptionType(
+    consumptionType: string
+  ): keyof AdminSubscriptionTierConfig['overagePricing'] | null {
+    switch (consumptionType) {
+      case 'data_processing':
+      case 'dataPerMB':
+      case 'data':
+        return 'dataPerMB';
+      case 'compute':
+      case 'computePerMinute':
+        return 'computePerMinute';
+      case 'storage':
+      case 'storagePerMB':
+        return 'storagePerMB';
+      case 'ai_query':
+      case 'ai':
+        return 'aiQueryCost';
+      case 'visualization':
+        return 'visualizationCost';
+      default:
+        return null;
+    }
+  }
+
+  private calculateRemaining(limit: number, used: number): number {
+    if (!isFinite(limit) || limit < 0) {
+      return Number.POSITIVE_INFINITY;
+    }
+    return Math.max(0, limit - used);
+  }
+
+  private deriveEligibilityFeatures(
+    journeyType: string,
+    requested?: string[],
+    complexity?: string
+  ): EligibilityFeatureName[] {
+    const validFeatures: EligibilityFeatureName[] = [
+      'preparation',
+      'data_processing',
+      'analysis',
+      'visualization',
+      'ai_insights'
+    ];
+
+    const aliasMap: Record<string, EligibilityFeatureName> = {
+      data_upload: 'preparation',
+      data_transformation: 'data_processing',
+      data_processing: 'data_processing',
+      statistical_analysis: 'analysis',
+      machine_learning: 'analysis',
+      business_intelligence: 'analysis',
+      visualization: 'visualization',
+      visualizations: 'visualization',
+      big_data: 'data_processing',
+      ai_insights: 'ai_insights',
+      llm_fine_tuning: 'ai_insights'
+    };
+
+    const collected = new Set<EligibilityFeatureName>();
+
+    (requested ?? []).forEach(feature => {
+      const normalized = aliasMap[feature] ?? (validFeatures.includes(feature as EligibilityFeatureName)
+        ? (feature as EligibilityFeatureName)
+        : undefined);
+      if (normalized) {
+        collected.add(normalized);
+      }
+    });
+
+    if (collected.size === 0) {
+      switch (journeyType) {
+        case 'business':
+          collected.add('preparation');
+          collected.add('analysis');
+          collected.add('visualization');
+          break;
+        case 'non-tech':
+          collected.add('preparation');
+          collected.add('analysis');
+          break;
+        case 'custom':
+        case 'technical':
+        default:
+          collected.add('analysis');
+          collected.add('data_processing');
+          break;
+      }
+    }
+
+    if (complexity === 'advanced') {
+      collected.add('ai_insights');
+    }
+
+    return Array.from(collected);
   }
 
   // ==========================================
@@ -483,7 +1249,7 @@ export class UnifiedBillingService {
         : tierConfig.stripePriceIds.yearly;
 
       // Create subscription within database transaction
-      const result = await db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx: typeof db) => {
         // Create Stripe subscription
         const subscription = await this.stripe.subscriptions.create({
           customer: customerId!,
@@ -535,7 +1301,7 @@ export class UnifiedBillingService {
         return { success: false, error: 'No active subscription found' };
       }
 
-      await db.transaction(async (tx) => {
+  await db.transaction(async (tx: typeof db) => {
         // Cancel Stripe subscription
         if (immediate) {
           await this.stripe.subscriptions.cancel(user.stripeSubscriptionId!);
@@ -580,7 +1346,7 @@ export class UnifiedBillingService {
         return { success: false, error: 'Invalid target tier' };
       }
 
-      await db.transaction(async (tx) => {
+  await db.transaction(async (tx: typeof db) => {
         // Update Stripe subscription
         const subscription = await this.stripe.subscriptions.retrieve(user.stripeSubscriptionId!);
         await this.stripe.subscriptions.update(user.stripeSubscriptionId!, {
@@ -632,7 +1398,7 @@ export class UnifiedBillingService {
       console.log(`Processing webhook: ${event.type}`);
 
       // Process event within transaction
-      await db.transaction(async (tx) => {
+  await db.transaction(async (tx: typeof db) => {
         switch (event.type) {
           case 'customer.subscription.created':
           case 'customer.subscription.updated':
@@ -727,6 +1493,90 @@ export class UnifiedBillingService {
   // ==========================================
 
   /**
+   * Check if user can access a specific journey type based on subscription tier
+   */
+  async canAccessJourney(
+    userId: string,
+    journeyType: JourneyType
+  ): Promise<{
+    allowed: boolean;
+    requiresUpgrade: boolean;
+    message?: string;
+    minimumTier?: string;
+  }> {
+    try {
+      // Get user with subscription details
+      const [user] = await db.select().from(users).where(eq(users.id, userId));
+      if (!user) {
+        return {
+          allowed: false,
+          requiresUpgrade: false,
+          message: 'User not found'
+        };
+      }
+
+      // Get tier configuration
+      const tierConfig = this.getTierConfig(user.subscriptionTier as SubscriptionTier);
+      if (!tierConfig) {
+        return {
+          allowed: false,
+          requiresUpgrade: true,
+          message: 'Invalid subscription tier',
+          minimumTier: 'trial'
+        };
+      }
+
+      // Check if journey type is allowed
+      const allowed = tierConfig.quotas.allowedJourneys.includes(journeyType);
+
+      if (allowed) {
+        return {
+          allowed: true,
+          requiresUpgrade: false
+        };
+      }
+
+      const bypassBilling =
+        process.env.CHIMARI_BILLING_BYPASS === 'true' || process.env.NODE_ENV !== 'production';
+
+      if (!allowed && bypassBilling) {
+        console.warn(
+          `[Billing] Bypassing journey access requirements for ${journeyType} (tier: ${user.subscriptionTier})`
+        );
+        return {
+          allowed: true,
+          requiresUpgrade: false,
+          message: 'Development bypass applied'
+        };
+      }
+
+      // Determine minimum tier needed
+      let minimumTier = 'starter';
+      if (journeyType === 'self_service') {
+        minimumTier = 'professional';
+      } else if (journeyType === 'consultation') {
+        minimumTier = 'enterprise';
+      } else if (journeyType === 'template_based') {
+        minimumTier = 'starter';
+      }
+
+      return {
+        allowed: false,
+        requiresUpgrade: true,
+        message: `${journeyType} journey requires ${minimumTier} tier or higher`,
+        minimumTier
+      };
+    } catch (error: any) {
+      console.error('Error checking journey access:', error);
+      return {
+        allowed: false,
+        requiresUpgrade: false,
+        message: `Error checking access: ${error.message}`
+      };
+    }
+  }
+
+  /**
    * Track feature usage and check against quota
    * Returns cost (0 if within quota, overage cost if exceeded)
    *
@@ -744,8 +1594,12 @@ export class UnifiedBillingService {
     message?: string;
   }> {
     try {
-      return await db.transaction(async (tx) => {
-        // Get user with subscription details
+      await this.ensureConfigurationsLoaded();
+  return await db.transaction(async (tx: typeof db) => {
+        // Lock user row to guarantee atomic updates under concurrency
+        await tx.execute(sql`SELECT ${users.id} FROM ${users} WHERE ${users.id} = ${userId} FOR UPDATE`);
+
+        // Get user with subscription details using camelCase mapping
         const [user] = await tx.select().from(users).where(eq(users.id, userId));
         if (!user) {
           return { allowed: false, cost: 0, remainingQuota: 0, message: 'User not found' };
@@ -864,6 +1718,7 @@ export class UnifiedBillingService {
    */
   async getQuotaStatus(userId: string, featureId: string, complexity: FeatureComplexity): Promise<QuotaStatus | null> {
     try {
+      await this.ensureConfigurationsLoaded();
       const [user] = await db.select().from(users).where(eq(users.id, userId));
       if (!user) return null;
 
@@ -901,6 +1756,7 @@ export class UnifiedBillingService {
    */
   async getUsageMetrics(userId: string, period?: { start: Date; end: Date }): Promise<UsageMetrics | null> {
     try {
+      await this.ensureConfigurationsLoaded();
       const [user] = await db.select().from(users).where(eq(users.id, userId));
       if (!user) return null;
 
@@ -967,7 +1823,8 @@ export class UnifiedBillingService {
    */
   async resetMonthlyQuotas(userId: string): Promise<{ success: boolean; error?: string }> {
     try {
-      await db.transaction(async (tx) => {
+      await this.ensureConfigurationsLoaded();
+      await db.transaction(async (tx: typeof db) => {
         const [user] = await tx.select().from(users).where(eq(users.id, userId));
         if (!user) throw new Error('User not found');
 
@@ -1024,6 +1881,7 @@ export class UnifiedBillingService {
    * Calculate billing with capacity tracking (for compatibility)
    */
   async calculateBillingWithCapacity(userId: string, usage: any): Promise<any> {
+    await this.ensureConfigurationsLoaded();
     const userTier = await this.getUserTier(userId);
     const usageMetrics = await this.getUsageMetricsSimple(userId);
     
@@ -1041,6 +1899,7 @@ export class UnifiedBillingService {
    * Get user capacity summary (for compatibility)
    */
   async getUserCapacitySummary(userId: string): Promise<any> {
+    await this.ensureConfigurationsLoaded();
     const userTier = await this.getUserTier(userId);
     const usageMetrics = await this.getUsageMetricsSimple(userId);
     const tierConfig = this.getTierConfig(userTier);
@@ -1059,6 +1918,7 @@ export class UnifiedBillingService {
    * Calculate journey requirements (for compatibility)
    */
   async calculateJourneyRequirements(journeyType: string, datasetSizeMB: number): Promise<any> {
+    await this.ensureConfigurationsLoaded();
     return {
       journeyType,
       datasetSizeMB,
@@ -1071,6 +1931,7 @@ export class UnifiedBillingService {
    * Update user usage (for compatibility)
    */
   async updateUserUsage(userId: string, usage: any): Promise<void> {
+    await this.ensureConfigurationsLoaded();
     await this.trackFeatureUsage(userId, 'data_upload', 'small', usage.dataSizeMB || 0);
   }
 
@@ -1078,13 +1939,16 @@ export class UnifiedBillingService {
    * Get user by ID
    */
   async getUser(userId: string): Promise<any> {
-    // This would typically fetch from database
-    // For now, return a mock user
-    return {
-      id: userId,
-      subscriptionTier: 'trial',
-      email: 'user@example.com'
-    };
+    const { storage } = await import('../../storage');
+    const user = await storage.getUser(userId);
+    if (!user) {
+      return {
+        id: userId,
+        subscriptionTier: 'trial',
+        email: 'user@example.com'
+      };
+    }
+    return user;
   }
 
   /**
@@ -1130,8 +1994,8 @@ export class UnifiedBillingService {
       const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
       
       const mlUsage = await mlLLMUsageTracker.getUserUsage(
-        parseInt(userId), 
-        startOfMonth, 
+        userId,
+        startOfMonth,
         now
       );
 
@@ -1241,9 +2105,9 @@ export class UnifiedBillingService {
    */
   private async checkMLQuota(userId: string, toolName: string, userTier: string): Promise<any> {
     if (toolName === 'comprehensive_ml_pipeline') {
-      return await mlLLMUsageTracker.checkMLTrainingQuota(parseInt(userId), userTier);
+      return await mlLLMUsageTracker.checkMLTrainingQuota(userId, userTier);
     } else if (toolName === 'automl_optimizer') {
-      return await mlLLMUsageTracker.checkAutoMLQuota(parseInt(userId), userTier);
+      return await mlLLMUsageTracker.checkAutoMLQuota(userId, userTier);
     }
     return { allowed: true };
   }
@@ -1253,7 +2117,7 @@ export class UnifiedBillingService {
    */
   private async checkLLMQuota(userId: string, toolName: string, userTier: string): Promise<any> {
     if (toolName.includes('llm')) {
-      return await mlLLMUsageTracker.checkLLMFineTuningQuota(parseInt(userId), userTier);
+  return await mlLLMUsageTracker.checkLLMFineTuningQuota(userId, userTier);
     }
     return { allowed: true };
   }
@@ -1293,8 +2157,8 @@ export class UnifiedBillingService {
       }
 
       await mlLLMUsageTracker.logUsage({
-        userId: parseInt(event.userId),
-        projectId: event.projectId ? parseInt(event.projectId) : undefined,
+        userId: event.userId,
+        projectId: event.projectId,
         toolName: event.toolName,
         modelType: event.modelType,
         libraryUsed: event.libraryUsed,
@@ -1313,9 +2177,8 @@ export class UnifiedBillingService {
   /**
    * Get tier configuration by string
    */
-  private getTierConfigByString(tier: string): any {
-    const configs = this.getConfigurations();
-    return configs.tiers.find(t => t.tier === tier);
+  private getTierConfigByString(tier: string): LegacyTierPricing | undefined {
+    return this.legacyConfig.tiers.find(t => t.id === tier);
   }
 
   /**
@@ -1354,11 +2217,11 @@ let billingService: UnifiedBillingService | null = null;
 
 export function getBillingService(): UnifiedBillingService {
   if (!billingService) {
-    const stripeSecretKey = process.env.STRIPE_SECRET_KEY || 'sk_test_development_key';
-    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || 'whsec_development_secret';
+  const stripeSecretKey = process.env.STRIPE_SECRET_KEY || 'stripe_test_key_placeholder';
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || 'whsec_placeholder';
     
     // Log warning if using development keys
-    if (stripeSecretKey === 'sk_test_development_key') {
+    if (stripeSecretKey === 'stripe_test_key_placeholder') {
       console.warn('⚠️  Using development Stripe key. Set STRIPE_SECRET_KEY for production.');
     }
     

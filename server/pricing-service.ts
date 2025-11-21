@@ -736,7 +736,7 @@ export class PricingService {
   static getFreeTrialLimits(): { maxFileSize: number; description: string } {
     return {
       maxFileSize: 10 * 1024 * 1024, // 10MB
-      description: "Free trial includes: data upload (max 10MB), schema detection, descriptive analysis, and basic visualizations"
+      description: "Trial includes: data upload (max 10MB), schema detection, descriptive analysis, and basic visualizations"
     };
   }
 

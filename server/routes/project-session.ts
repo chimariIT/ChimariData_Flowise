@@ -19,6 +19,28 @@ import { eq, and, desc, lt } from 'drizzle-orm';
 import { ensureAuthenticated } from './auth';
 import crypto from 'crypto';
 
+type SessionJourneyType = 'non-tech' | 'business' | 'technical' | 'consultation' | 'custom';
+
+const JOURNEY_TYPE_NORMALIZATION: Record<string, SessionJourneyType> = {
+  'non-tech': 'non-tech',
+  'non_tech': 'non-tech',
+  'ai_guided': 'non-tech',
+  guided: 'non-tech',
+  business: 'business',
+  'template_based': 'business',
+  technical: 'technical',
+  'self_service': 'technical',
+  consultation: 'consultation',
+  custom: 'custom',
+};
+
+function normalizeJourneyType(value?: string | string[]): SessionJourneyType | null {
+  const input = Array.isArray(value) ? value[0] : value;
+  if (!input) return null;
+  const key = input.toLowerCase();
+  return JOURNEY_TYPE_NORMALIZATION[key] ?? null;
+}
+
 const router = Router();
 
 // Session expires after 7 days of inactivity
@@ -43,8 +65,8 @@ router.get('/current', ensureAuthenticated, async (req, res) => {
       return res.status(401).json({ error: 'User not authenticated' });
     }
 
-    const { journeyType } = req.query;
-    if (!journeyType || !['non-tech', 'business', 'technical', 'consultation'].includes(journeyType as string)) {
+    const normalizedJourneyType = normalizeJourneyType(req.query.journeyType as string);
+    if (!normalizedJourneyType) {
       return res.status(400).json({ error: 'Valid journeyType required' });
     }
 
@@ -55,7 +77,7 @@ router.get('/current', ensureAuthenticated, async (req, res) => {
       .where(
         and(
           eq(projectSessions.userId, userId),
-          eq(projectSessions.journeyType, journeyType as string)
+          eq(projectSessions.journeyType, normalizedJourneyType)
         )
       )
       .orderBy(desc(projectSessions.lastActivity))
@@ -88,7 +110,7 @@ router.get('/current', ensureAuthenticated, async (req, res) => {
       .values({
         id: sessionId,
         userId,
-        journeyType: journeyType as string,
+        journeyType: normalizedJourneyType,
         currentStep: 'prepare',
         ipAddress: req.ip || req.headers['x-forwarded-for'] as string || 'unknown',
         userAgent: req.headers['user-agent'] || 'unknown',
@@ -143,17 +165,52 @@ router.post('/:sessionId/update-step', ensureAuthenticated, async (req, res) => 
       return res.status(403).json({ error: 'Access denied to this session' });
     }
 
-    // Check session expiry
-    if (session.expiresAt && new Date(session.expiresAt) < new Date()) {
-      return res.status(410).json({ error: 'Session expired' });
-    }
-
-    // Prepare update object
+    // Prepare update object first
     const updateData: any = {
       currentStep: step,
       lastActivity: new Date(),
       updatedAt: new Date(),
     };
+
+    // Check session expiry with 1-hour grace period for active users
+    const now = new Date();
+    if (session.expiresAt) {
+      const expiresAt = new Date(session.expiresAt);
+      const hoursSinceExpiry = (now.getTime() - expiresAt.getTime()) / (1000 * 60 * 60);
+
+      // ✅ Allow 24-hour grace period for recently expired sessions (increased for long operations)
+      if (hoursSinceExpiry > 24) {
+        console.warn(`⚠️ Session ${sessionId} expired ${hoursSinceExpiry.toFixed(1)} hours ago at ${expiresAt}`);
+        return res.status(410).json({
+          error: 'Session expired',
+          expiredAt: expiresAt,
+          hint: 'Please create a new project session to continue'
+        });
+      }
+
+      // ✅ Auto-renew if expired within grace period OR within 2 days of expiry
+      if (expiresAt < now && hoursSinceExpiry <= 24) {
+        console.log(`🔄 Auto-renewing recently expired session ${sessionId} (expired ${hoursSinceExpiry.toFixed(1)} hours ago)`);
+        const newExpiresAt = new Date();
+        newExpiresAt.setDate(newExpiresAt.getDate() + SESSION_EXPIRY_DAYS);
+        updateData.expiresAt = newExpiresAt;
+      } else {
+        // Extend session if it's within 2 days of expiring (proactive renewal for long operations)
+        const daysUntilExpiry = (expiresAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
+        if (daysUntilExpiry < 2) {
+          const newExpiresAt = new Date();
+          newExpiresAt.setDate(newExpiresAt.getDate() + SESSION_EXPIRY_DAYS);
+          console.log(`🔄 Auto-extending session ${sessionId} expiry from ${expiresAt} to ${newExpiresAt}`);
+          updateData.expiresAt = newExpiresAt;
+        }
+      }
+    } else {
+      // If no expiry set, set one now
+      const newExpiresAt = new Date();
+      newExpiresAt.setDate(newExpiresAt.getDate() + SESSION_EXPIRY_DAYS);
+      console.log(`📅 Setting expiry for session ${sessionId}: ${newExpiresAt}`);
+      updateData.expiresAt = newExpiresAt;
+    }
 
     // Update step-specific data
     switch (step) {

@@ -53,7 +53,7 @@ export default function SettingsPage({ onBack, onPricing }: SettingsPageProps) {
       });
       if (!res.ok) throw new Error("Failed to fetch settings");
       return res.json();
-    },
+    }
   });
 
   const { data: providersData } = useQuery({
@@ -62,7 +62,7 @@ export default function SettingsPage({ onBack, onPricing }: SettingsPageProps) {
       const res = await fetch("/api/ai/providers");
       if (!res.ok) throw new Error("Failed to fetch providers");
       return res.json();
-    },
+    }
   });
 
   const updateSettingsMutation = useMutation({

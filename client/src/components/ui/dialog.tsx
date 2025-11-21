@@ -1,3 +1,9 @@
+// VisuallyHidden utility for accessibility
+export const VisuallyHidden: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <span style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0,0,0,0)', border: 0 }}>
+    {children}
+  </span>
+);
 "use client"
 
 import * as React from "react"
@@ -84,16 +90,22 @@ DialogFooter.displayName = "DialogFooter"
 const DialogTitle = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Title>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Title>
->(({ className, ...props }, ref) => (
-  <DialogPrimitive.Title
-    ref={ref}
-    className={cn(
-      "text-lg font-semibold leading-none tracking-tight",
-      className
-    )}
-    {...props}
-  />
-))
+>(({ className, children, ...props }, ref) => {
+  // If no children, render a visually hidden fallback for accessibility
+  const hasTitle = !!children && (typeof children === 'string' ? children.trim().length > 0 : true);
+  return (
+    <DialogPrimitive.Title
+      ref={ref}
+      className={cn(
+        "text-lg font-semibold leading-none tracking-tight",
+        className
+      )}
+      {...props}
+    >
+      {hasTitle ? children : <VisuallyHidden>Dialog</VisuallyHidden>}
+    </DialogPrimitive.Title>
+  );
+})
 DialogTitle.displayName = DialogPrimitive.Title.displayName
 
 const DialogDescription = React.forwardRef<

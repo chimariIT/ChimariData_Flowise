@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { nanoid } from "nanoid";
+import { AnalysisPlanStatusEnum } from "./canonical-types";
 import {
   pgTable,
   text,
@@ -13,12 +15,13 @@ import {
   doublePrecision,
   check,
   foreignKey,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 
 // User role and permission types
-export const UserRoleEnum = z.enum(["non-tech", "business", "technical", "consultation"]);
+export const UserRoleEnum = z.enum(["non-tech", "business", "technical", "consultation", "custom"]);
 export type UserRole = z.infer<typeof UserRoleEnum>;
 
 export const TechnicalLevelEnum = z.enum(["beginner", "intermediate", "advanced", "expert"]);
@@ -69,6 +72,7 @@ export type TechnicalQueryType = z.infer<typeof TechnicalQuery>;
 export const dataProjectSchema = z.object({
   id: z.string(),
   userId: z.string(),
+  journeyType: JourneyTypeEnum.default("ai_guided"),
   name: z.string(),
   fileName: z.string(),
   fileSize: z.number(),
@@ -97,6 +101,7 @@ export const dataProjectSchema = z.object({
   uniqueIdentifiers: z.array(z.string()).optional(),
   dataSource: z.enum(["upload", "google_drive", "api"]).default("upload"),
   sourceMetadata: z.record(z.any()).optional(),
+  metadata: z.record(z.any()).optional(),
   // Data transformation capabilities
   transformations: z.array(z.object({
     type: z.enum(["join", "outlier_detection", "missing_data", "normality_test"]),
@@ -104,21 +109,61 @@ export const dataProjectSchema = z.object({
     result: z.any().optional(),
   })).optional(),
   joinedFiles: z.array(z.string()).optional(),
-  outlierAnalysis: z.object({
-    method: z.string(),
-    threshold: z.number(),
-    outliers: z.array(z.any()).optional(),
-  }).optional(),
-  missingDataAnalysis: z.object({
-    patterns: z.record(z.any()),
-    recommendations: z.array(z.string()),
-  }).optional(),
-  normalityTests: z.record(z.object({
-    test: z.string(),
-    statistic: z.number(),
-    pValue: z.number(),
-    isNormal: z.boolean(),
-  })).optional(),
+  outlierAnalysis: z.union([
+    z.object({
+      method: z.string(),
+      threshold: z.number(),
+      outliers: z.array(z.any()).optional(),
+    }),
+    z.object({
+      method: z.string(),
+      threshold: z.number(),
+      columns: z.array(z.any()).optional(),
+      outliers: z.array(z.any()).optional(),
+      profile: z.any().optional(),
+      executionId: z.string().optional(),
+      generatedAt: z.union([z.string(), z.date()]).optional(),
+    })
+  ]).optional(),
+  missingDataAnalysis: z.union([
+    z.object({
+      patterns: z.record(z.any()),
+      recommendations: z.array(z.string()),
+    }),
+    z.object({
+      summary: z.any(),
+      profile: z.any().optional(),
+      recommendations: z.array(z.string()).optional(),
+      patterns: z.record(z.any()).optional(),
+      executionId: z.string().optional(),
+      generatedAt: z.union([z.string(), z.date()]).optional(),
+    })
+  ]).optional(),
+  normalityTests: z.union([
+    z.record(z.object({
+      test: z.string(),
+      statistic: z.number(),
+      pValue: z.number(),
+      isNormal: z.boolean(),
+    })),
+    z.object({
+      generatedAt: z.union([z.string(), z.date()]).optional(),
+      columns: z.array(z.object({
+        column: z.string(),
+        inspected: z.number(),
+        mean: z.number().nullable(),
+        stdDev: z.number().nullable(),
+        skewness: z.number().nullable(),
+        kurtosis: z.number().nullable(),
+        excessKurtosis: z.number().nullable(),
+        normalityScore: z.number().nullable(),
+        interpretation: z.string(),
+        isApproximatelyNormal: z.boolean(),
+      })).optional(),
+      descriptiveStatistics: z.any().optional(),
+      executionId: z.string().optional(),
+    })
+  ]).optional(),
   // Advanced analysis capabilities
   analysisResults: z.any().optional(),
   stepByStepAnalysis: z.object({
@@ -131,6 +176,8 @@ export const dataProjectSchema = z.object({
   }).optional(),
   interactiveSession: z.any().optional(), // For agentic workflow state
   costEstimation: z.any().optional(), // For pricing and checkout
+  totalCostIncurred: z.union([z.number(), z.string()]).optional(),
+  costBreakdown: z.any().optional(),
   // AI capabilities
   visualizations: z.array(z.any()).optional(),
   aiInsights: z.any().optional(),
@@ -141,6 +188,7 @@ export const dataProjectSchema = z.object({
     name: z.string(),
     config: z.any(),
   })).optional(),
+  multiAgentCoordination: z.any().optional(),
   purchasedFeatures: z.array(z.enum(["transformation", "analysis", "visualization", "ai_insights"])).optional(),
   isPaid: z.boolean().default(false),
   selectedFeatures: z.array(z.string()).optional(),
@@ -175,7 +223,7 @@ export const pricingTierSchema = z.object({
 
 export type PricingTier = z.infer<typeof pricingTierSchema>;
 
-// Free trial request
+// Trial request
 export const freeTrialRequestSchema = z.object({
   file: z.any(), // File upload
   description: z.string().optional(),
@@ -255,6 +303,7 @@ export const users = pgTable("users", {
   stripeCustomerId: varchar("stripe_customer_id"),
   stripeSubscriptionId: varchar("stripe_subscription_id"),
   subscriptionExpiresAt: timestamp("subscription_expires_at"),
+  credits: decimal("credits").default("0"),
   isPaid: boolean("is_paid").default(false), // Added field
   
   // Usage tracking for tier limits
@@ -268,6 +317,7 @@ export const users = pgTable("users", {
   currentStorageGb: decimal("current_storage_gb"),
   monthlyDataProcessedGb: decimal("monthly_data_processed_gb"),
   usageResetAt: timestamp("usage_reset_at").defaultNow(),
+  subscriptionBalances: jsonb("subscription_balances").notNull().default(sql`'{}'::jsonb`).$type<Record<string, any>>(),
 
   // User role and journey preferences
   userRole: varchar("user_role").notNull().default("non-tech"), // "non-tech", "business", "technical", "consultation"
@@ -292,7 +342,7 @@ export const users = pgTable("users", {
     sql`${table.subscriptionStatus} IN ('active', 'inactive', 'cancelled', 'past_due', 'expired')`
   ),
   userRoleCheck: check("user_role_check", 
-    sql`${table.userRole} IN ('non-tech', 'business', 'technical', 'consultation')`
+    sql`${table.userRole} IN ('non-tech', 'business', 'technical', 'consultation', 'custom')`
   ),
   technicalLevelCheck: check("technical_level_check", 
     sql`${table.technicalLevel} IN ('beginner', 'intermediate', 'advanced', 'expert')`
@@ -314,6 +364,25 @@ export const users = pgTable("users", {
   userRoleStatusIdx: index("user_role_status_idx").on(table.userRole, table.subscriptionStatus),
   subscriptionTierStatusIdx: index("subscription_tier_status_idx").on(table.subscriptionTier, table.subscriptionStatus),
 }));
+
+export const adminProjectActions = pgTable("admin_project_actions", {
+  id: varchar("id").primaryKey().notNull(),
+  adminId: varchar("admin_id").notNull(),
+  projectId: varchar("project_id"),
+  userId: varchar("user_id"),
+  action: varchar("action").notNull(),
+  entityType: varchar("entity_type").notNull(),
+  entityId: varchar("entity_id"),
+  changes: jsonb("changes"),
+  reason: text("reason"),
+  ipAddress: varchar("ip_address"),
+  userAgent: varchar("user_agent"),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export type AdminProjectAction = typeof adminProjectActions.$inferSelect;
+export type InsertAdminProjectAction = typeof adminProjectActions.$inferInsert;
 
 // Password reset tokens table
 export const passwordResetTokens = pgTable("password_reset_tokens", {
@@ -366,7 +435,7 @@ export const userPermissions = pgTable("user_permissions", {
 // Datasets table - files exist independently of projects
 export const datasets = pgTable("datasets", {
   id: varchar("id").primaryKey().notNull(),
-  ownerId: varchar("owner_id").notNull(), // Reference to users.id
+  userId: varchar("user_id").notNull(), // Reference to users.id
   sourceType: varchar("source_type").notNull().default("upload"), // "upload", "google_drive", "web", "api"
   originalFileName: varchar("original_file_name").notNull(),
   mimeType: varchar("mime_type").notNull(),
@@ -388,13 +457,13 @@ export const datasets = pgTable("datasets", {
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => ({
   // Foreign key constraints
-  ownerIdFk: foreignKey({
-    columns: [table.ownerId],
+  userIdFk: foreignKey({
+    columns: [table.userId],
     foreignColumns: [users.id],
-    name: "datasets_owner_id_fk"
+    name: "datasets_user_id_fk"
   }).onDelete("cascade"),
   // Indexes for performance
-  ownerIdIdx: index("datasets_owner_id_idx").on(table.ownerId),
+  userIdIdx: index("datasets_user_id_idx").on(table.userId),
   statusIdx: index("datasets_status_idx").on(table.status),
   createdAtIdx: index("datasets_created_at_idx").on(table.createdAt),
   checksumIdx: index("datasets_checksum_idx").on(table.checksum), // For duplicate detection
@@ -423,6 +492,20 @@ export const projectDatasets = pgTable("project_datasets", {
   // Indexes
   projectDatasetIdx: index("project_dataset_idx").on(table.projectId, table.datasetId),
   datasetProjectIdx: index("dataset_project_idx").on(table.datasetId, table.projectId),
+}));
+
+export const projectStates = pgTable("project_states", {
+  projectId: varchar("project_id").primaryKey().notNull(),
+  state: jsonb("state").notNull().default(sql`'{}'::jsonb`),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  projectStateProjectFk: foreignKey({
+    columns: [table.projectId],
+    foreignColumns: [projects.id],
+    name: "project_states_project_id_fk"
+  }).onDelete("cascade"),
+  projectStatesUpdatedAtIdx: index("project_states_updated_at_idx").on(table.updatedAt),
 }));
 
 // Project artifacts - track entire workflow from ingestion to results
@@ -459,24 +542,101 @@ export const projectArtifacts = pgTable("project_artifacts", {
   createdAtIdx: index("project_artifacts_created_at_idx").on(table.createdAt),
 }));
 
+// Analysis plans generated during the plan step workflow
+export const analysisPlans = pgTable("analysis_plans", {
+  id: varchar("id").primaryKey().$defaultFn(() => nanoid()),
+  projectId: varchar("project_id").notNull(),
+  createdBy: varchar("created_by", { length: 50 }).notNull().default("pm_agent"),
+  version: integer("version").notNull().default(1),
+
+  // Plan content
+  executiveSummary: text("executive_summary").notNull(),
+  dataAssessment: jsonb("data_assessment").notNull().$type<DataAssessment>(),
+  analysisSteps: jsonb("analysis_steps").notNull().$type<AnalysisStep[]>(),
+  visualizations: jsonb("visualizations").default(sql`'[]'::jsonb`).$type<VisualizationSpec[]>(),
+  businessContext: jsonb("business_context").$type<BusinessContext | null>(),
+  mlModels: jsonb("ml_models").default(sql`'[]'::jsonb`).$type<MLModelSpec[]>(),
+
+  // Estimates and metadata
+  estimatedCost: jsonb("estimated_cost").notNull().$type<CostBreakdown>(),
+  estimatedDuration: varchar("estimated_duration", { length: 50 }).notNull(),
+  complexity: varchar("complexity", { length: 20 }).notNull(),
+  risks: jsonb("risks").default(sql`'[]'::jsonb`).$type<string[]>(),
+  recommendations: jsonb("recommendations").default(sql`'[]'::jsonb`).$type<string[]>(),
+  agentContributions: jsonb("agent_contributions").notNull().$type<Record<string, AgentContribution>>(),
+
+  // Approval workflow
+  status: varchar("status", { length: 30 }).notNull().default("pending"),
+  approvedAt: timestamp("approved_at"),
+  approvedBy: varchar("approved_by"),
+  rejectionReason: text("rejection_reason"),
+  modificationsRequested: text("modifications_requested"),
+
+  // Execution tracking
+  executedAt: timestamp("executed_at"),
+  executionCompletedAt: timestamp("execution_completed_at"),
+  actualCost: jsonb("actual_cost").$type<CostBreakdown | null>(),
+  actualDuration: varchar("actual_duration", { length: 50 }),
+
+  // Audit metadata
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  projectIdFk: foreignKey({
+    columns: [table.projectId],
+    foreignColumns: [projects.id],
+    name: "analysis_plans_project_id_fk"
+  }).onDelete("cascade"),
+  approvedByFk: foreignKey({
+    columns: [table.approvedBy],
+    foreignColumns: [users.id],
+    name: "analysis_plans_approved_by_fk"
+  }).onDelete("set null"),
+  planStatusCheck: check("analysis_plans_status_check",
+    sql`${table.status} IN ('pending', 'ready', 'approved', 'rejected', 'modified', 'executing', 'completed', 'cancelled')`
+  ),
+  planComplexityCheck: check("analysis_plans_complexity_check",
+    sql`${table.complexity} IN ('low', 'medium', 'high', 'very_high')`
+  ),
+  projectVersionIdx: index("analysis_plans_project_version_idx").on(table.projectId, table.version),
+  statusIdx: index("analysis_plans_status_idx").on(table.status),
+  projectStatusIdx: index("analysis_plans_project_status_idx").on(table.projectId, table.status),
+  createdAtIdx: index("analysis_plans_created_at_idx").on(table.createdAt),
+}));
+
 // Updated projects table - now a lightweight container for analysis workflows
 export const projects = pgTable("projects", {
   id: varchar("id").primaryKey().notNull(),
   userId: varchar("user_id").notNull(), // Reference to users.id (consistent with analysis service)
-  ownerId: varchar("owner_id").notNull(), // Deprecated - use userId instead
   name: varchar("name").notNull(),
   description: text("description"),
-    status: varchar("status").notNull().default("draft"), // "draft", "uploading", "processing", "pii_review", "ready", "analyzing", "checkpoint", "generating", "completed", "error", "cancelled"
+    status: varchar("status").notNull().default("draft"), // "draft", "uploading", "processing", "pii_review", "ready", "analyzing", "checkpoint", "generating", "completed", "error", "cancelled", plan_*
   journeyType: varchar("journey_type").notNull(), // "ai_guided", "template_based", "self_service", "consultation"
   lastArtifactId: varchar("last_artifact_id"), // Quick reference to latest artifact
   analysisResults: jsonb("analysis_results"), // Store analysis results from analysis-execution service
   consultationProposalId: varchar("consultation_proposal_id"), // Legacy column that exists in database
+
+  // Journey lifecycle billing fields
+  approvedPlanId: varchar("approved_plan_id"),
+  analysisExecutedAt: timestamp("analysis_executed_at"),
+  analysisBilledAt: timestamp("analysis_billed_at"),
+  totalCostIncurred: decimal("total_cost_incurred", { precision: 10, scale: 2 }).default("0"),
+  lockedCostEstimate: decimal("locked_cost_estimate", { precision: 10, scale: 2 }),
+  costBreakdown: jsonb("cost_breakdown"),
+
+  // Journey state tracking - for resumable multi-step workflows
+  stepCompletionStatus: jsonb("step_completion_status").default('{}'), // { "prepare": true, "data": true, "execute": false, ... }
+  lastAccessedStep: varchar("last_accessed_step"), // "prepare", "project-setup", "data", "data-verification", "execute", "pricing", "results"
+  journeyStartedAt: timestamp("journey_started_at"), // When user first started the journey
+  journeyCompletedAt: timestamp("journey_completed_at"), // When user completed all steps
+  journeyProgress: jsonb("journey_progress").default('{}'),
+
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => ({
     // CHECK constraints for projects table
     projectStatusCheck: check("project_status_check",
-      sql`${table.status} IN ('draft', 'uploading', 'processing', 'pii_review', 'ready', 'analyzing', 'checkpoint', 'generating', 'completed', 'error', 'cancelled')`
+      sql`${table.status} IN ('draft', 'uploading', 'processing', 'pii_review', 'ready', 'analyzing', 'checkpoint', 'generating', 'plan_creation', 'plan_review', 'plan_approved', 'completed', 'error', 'cancelled')`
     ),
   projectJourneyTypeCheck: check("project_journey_type_check",
     sql`${table.journeyType} IN ('ai_guided', 'template_based', 'self_service', 'consultation', 'custom')`
@@ -485,7 +645,7 @@ export const projects = pgTable("projects", {
   userIdFk: foreignKey({
     columns: [table.userId],
     foreignColumns: [users.id],
-    name: "projects_owner_id_fk"
+    name: "projects_user_id_fk"
   }).onDelete("cascade"),
   // Indexes
   userIdIdx: index("projects_user_id_idx").on(table.userId),
@@ -511,6 +671,7 @@ export const projectSessions = pgTable("project_sessions", {
   executeData: jsonb("execute_data"), // Selected analyses, execution status, results
   pricingData: jsonb("pricing_data"), // Pricing calculations, payment intent
   resultsData: jsonb("results_data"), // Final artifacts, download links
+  workflowState: jsonb("workflow_state"), // Resilient workflow manager state with clarifications
 
   // Integrity and security
   dataHash: varchar("data_hash"), // SHA-256 hash of critical data to detect tampering
@@ -619,6 +780,49 @@ export const consultationPricing = pgTable("consultation_pricing", {
 }, (table) => ({
   consultationTypeIdx: index("consultation_pricing_type_idx").on(table.consultationType),
   activeIdx: index("consultation_pricing_active_idx").on(table.isActive),
+}));
+
+// Service pricing configuration table (admin-managed one-time services)
+export const servicePricing = pgTable("service_pricing", {
+  id: varchar("id").primaryKey().notNull(),
+  serviceType: varchar("service_type").notNull().unique(), // "pay-per-analysis", "expert-consultation"
+  displayName: varchar("display_name").notNull(),
+  description: text("description"),
+  basePrice: integer("base_price").notNull(), // Price in cents
+  pricingModel: varchar("pricing_model").notNull().default("fixed"), // "fixed", "calculated"
+  pricingConfig: jsonb("pricing_config").default('{}'), // Dynamic pricing configuration
+  isActive: boolean("is_active").default(true),
+  stripeProductId: varchar("stripe_product_id"),
+  stripePriceId: varchar("stripe_price_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  serviceTypeIdx: index("service_pricing_type_idx").on(table.serviceType),
+  activeIdx: index("service_pricing_active_idx").on(table.isActive),
+}));
+
+// Subscription tier pricing configuration table (admin-managed)
+export const subscriptionTierPricing = pgTable("subscription_tier_pricing", {
+  id: varchar("id").primaryKey().notNull(), // 'trial', 'starter', 'professional', 'enterprise'
+  name: varchar("name").notNull(),
+  displayName: varchar("display_name").notNull(),
+  description: text("description"),
+  monthlyPriceUsd: integer("monthly_price_usd").notNull(), // Price in cents
+  yearlyPriceUsd: integer("yearly_price_usd").notNull(), // Price in cents
+  stripeProductId: varchar("stripe_product_id"),
+  stripeMonthlyPriceId: varchar("stripe_monthly_price_id"),
+  stripeYearlyPriceId: varchar("stripe_yearly_price_id"),
+  limits: jsonb("limits").notNull().default('{}'), // Feature limits
+  features: jsonb("features").notNull().default('{}'), // Feature flags
+  journeyPricing: jsonb("journey_pricing").default('{}'), // Journey type multipliers
+  overagePricing: jsonb("overage_pricing").default('{}'), // Overage charges
+  discounts: jsonb("discounts").default('{}'), // Discount configuration
+  compliance: jsonb("compliance").default('{}'), // Compliance features
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  activeIdx: index("subscription_tier_pricing_active_idx").on(table.isActive),
 }));
 
 // Guided analysis orders table
@@ -1009,6 +1213,80 @@ export const generatedArtifacts = pgTable("generated_artifacts", {
   workflowIdIdx: index("generated_artifacts_workflow_id_idx").on(table.workflowId),
 }));
 
+// Analysis patterns discovered by research agents and curated via admin review
+export const analysisPatterns = pgTable("analysis_patterns", {
+  id: varchar("id").primaryKey().notNull(),
+  name: varchar("name").notNull(),
+  description: text("description"),
+  industry: varchar("industry").default("general").notNull(),
+  goal: varchar("goal").notNull(),
+  questionSummary: text("question_summary"),
+  dataSchemaSignature: varchar("data_schema_signature"),
+  dataSchema: jsonb("data_schema").default("{}"),
+  toolSequence: jsonb("tool_sequence").default("[]").notNull(),
+  requiredSignals: jsonb("required_signals").default("[]"),
+  fallbackNarratives: jsonb("fallback_narratives").default("[]"),
+  applicableJourneys: jsonb("applicable_journeys").default("[]"),
+  confidence: integer("confidence").default(0),
+  status: varchar("status").default("pending_review"),
+  version: integer("version").default(1),
+  requestedBy: varchar("requested_by"),
+  discoveredAt: timestamp("discovered_at"),
+  approvedAt: timestamp("approved_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  industryIdx: index("analysis_patterns_industry_idx").on(table.industry),
+  goalIdx: index("analysis_patterns_goal_idx").on(table.goal),
+  statusIdx: index("analysis_patterns_status_idx").on(table.status),
+  schemaSignatureIdx: index("analysis_patterns_schema_signature_idx").on(table.dataSchemaSignature),
+}));
+
+// Source citations associated with analysis patterns
+export const analysisPatternSources = pgTable("analysis_pattern_sources", {
+  id: varchar("id").primaryKey().notNull(),
+  patternId: varchar("pattern_id").notNull(),
+  sourceType: varchar("source_type").default("web").notNull(),
+  sourceUrl: text("source_url"),
+  title: varchar("title"),
+  synopsis: text("synopsis"),
+  confidence: integer("confidence").default(0),
+  metadata: jsonb("metadata").default("{}"),
+  retrievedAt: timestamp("retrieved_at").defaultNow().notNull(),
+}, (table) => ({
+  patternIdx: index("analysis_pattern_sources_pattern_idx").on(table.patternId),
+  sourceTypeIdx: index("analysis_pattern_sources_source_type_idx").on(table.sourceType),
+  patternFk: foreignKey({
+    columns: [table.patternId],
+    foreignColumns: [analysisPatterns.id],
+    name: "analysis_pattern_sources_pattern_id_fk",
+  }).onDelete("cascade"),
+}));
+
+// Mapping between curated templates and discovered analysis patterns
+export const templatePatterns = pgTable("template_patterns", {
+  id: varchar("id").primaryKey().notNull(),
+  templateId: varchar("template_id").notNull(),
+  patternId: varchar("pattern_id").notNull(),
+  relevanceScore: integer("relevance_score").default(0),
+  metadata: jsonb("metadata").default("{}"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  templateIdx: index("template_patterns_template_idx").on(table.templateId),
+  patternIdx: index("template_patterns_pattern_idx").on(table.patternId),
+  templatePatternUnique: uniqueIndex("template_patterns_template_pattern_unique").on(table.templateId, table.patternId),
+  templateFk: foreignKey({
+    columns: [table.templateId],
+    foreignColumns: [artifactTemplates.id],
+    name: "template_patterns_template_id_fk",
+  }).onDelete("cascade"),
+  patternFk: foreignKey({
+    columns: [table.patternId],
+    foreignColumns: [analysisPatterns.id],
+    name: "template_patterns_pattern_id_fk",
+  }).onDelete("cascade"),
+}));
+
 // Analysis subscriptions for recurring analysis
 export const analysisSubscriptions = pgTable("analysis_subscriptions", {
   id: varchar("id").primaryKey().notNull(),
@@ -1108,6 +1386,24 @@ export const insertGeneratedArtifactSchema = createInsertSchema(generatedArtifac
   updatedAt: true,
 });
 
+export const insertAnalysisPatternSchema = createInsertSchema(analysisPatterns).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  approvedAt: true,
+  discoveredAt: true,
+});
+
+export const insertAnalysisPatternSourceSchema = createInsertSchema(analysisPatternSources).omit({
+  id: true,
+  retrievedAt: true,
+});
+
+export const insertTemplatePatternSchema = createInsertSchema(templatePatterns).omit({
+  id: true,
+  createdAt: true,
+});
+
 export const insertAnalysisSubscriptionSchema = createInsertSchema(analysisSubscriptions).omit({
   id: true,
   createdAt: true,
@@ -1191,6 +1487,12 @@ export const insertAgentCheckpointSchema = createInsertSchema(agentCheckpoints).
 export const insertDatasetVersionSchema = createInsertSchema(datasetVersions).omit({
   id: true,
   createdAt: true,
+});
+
+export const insertAnalysisPlanSchemaDb = createInsertSchema(analysisPlans).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
 });
 
 // In-memory storage class (Singleton Pattern)
@@ -1517,6 +1819,12 @@ export type DecisionAudit = typeof decisionAudits.$inferSelect;
 export type InsertDecisionAudit = z.infer<typeof insertDecisionAuditSchema>;
 export type GeneratedArtifact = typeof generatedArtifacts.$inferSelect;
 export type InsertGeneratedArtifact = z.infer<typeof insertGeneratedArtifactSchema>;
+export type AnalysisPattern = typeof analysisPatterns.$inferSelect;
+export type InsertAnalysisPattern = z.infer<typeof insertAnalysisPatternSchema>;
+export type AnalysisPatternSource = typeof analysisPatternSources.$inferSelect;
+export type InsertAnalysisPatternSource = z.infer<typeof insertAnalysisPatternSourceSchema>;
+export type TemplatePattern = typeof templatePatterns.$inferSelect;
+export type InsertTemplatePattern = z.infer<typeof insertTemplatePatternSchema>;
 export type AnalysisSubscription = typeof analysisSubscriptions.$inferSelect;
 export type InsertAnalysisSubscription = z.infer<typeof insertAnalysisSubscriptionSchema>;
 export type TemplateFeedback = typeof templateFeedback.$inferSelect;
@@ -1525,6 +1833,166 @@ export type ServiceWorkflow = typeof serviceWorkflows.$inferSelect;
 export type InsertServiceWorkflow = z.infer<typeof insertServiceWorkflowSchema>;
 export type DataUpload = typeof dataUploads.$inferSelect;
 export type InsertDataUpload = z.infer<typeof insertDataUploadSchema>;
+export type AnalysisPlanRow = typeof analysisPlans.$inferSelect;
+export type InsertAnalysisPlanRow = typeof analysisPlans.$inferInsert;
+
+// Analysis plan content schemas shared across services
+export const analysisStepSchema = z.object({
+  stepNumber: z.number().int().positive(),
+  name: z.string().min(1).max(200),
+  description: z.string().min(1).max(1000),
+  method: z.string().min(1).max(100),
+  inputs: z.array(z.string()).default([]),
+  expectedOutputs: z.array(z.string()).default([]),
+  tools: z.array(z.string()).default([]),
+  estimatedDuration: z.string().max(50),
+  confidence: z.number().min(0).max(100),
+});
+export type AnalysisStep = z.infer<typeof analysisStepSchema>;
+
+export const dataAssessmentSchema = z.object({
+  qualityScore: z.number().min(0).max(100),
+  completenessScore: z.number().min(0).max(100),
+  recordCount: z.number().int().nonnegative(),
+  columnCount: z.number().int().positive(),
+  missingData: z.array(z.string()).default([]),
+  recommendedTransformations: z.array(z.string()).default([]),
+  infrastructureNeeds: z.object({
+    useSpark: z.boolean(),
+    estimatedMemoryGB: z.number().positive(),
+    parallelizable: z.boolean(),
+  }),
+  estimatedProcessingTime: z.string().max(50),
+});
+export type DataAssessment = z.infer<typeof dataAssessmentSchema>;
+
+export const mlModelSpecSchema = z.object({
+  modelType: z.string().max(50),
+  algorithm: z.string().max(100),
+  targetVariable: z.string().max(100),
+  features: z.array(z.string()),
+  expectedAccuracy: z.string().max(50),
+  trainingTime: z.string().max(50),
+  interpretability: z.string().max(100).optional(),
+});
+export type MLModelSpec = z.infer<typeof mlModelSpecSchema>;
+
+export const visualizationSpecSchema = z.object({
+  type: z.string().max(50),
+  title: z.string().max(200),
+  description: z.string().max(500),
+  dataFields: z.array(z.string()).optional(),
+});
+export type VisualizationSpec = z.infer<typeof visualizationSpecSchema>;
+
+export const businessContextSchema = z.object({
+  industryBenchmarks: z.array(z.string()).default([]),
+  relevantKPIs: z.array(z.string()).default([]),
+  complianceRequirements: z.array(z.string()).default([]),
+  reportingStandards: z.array(z.string()).default([]),
+  recommendations: z.array(z.string()).default([]),
+});
+export type BusinessContext = z.infer<typeof businessContextSchema>;
+
+export const costBreakdownSchema = z.object({
+  total: z.number().nonnegative(),
+  breakdown: z.record(z.number().nonnegative()),
+});
+export type CostBreakdown = z.infer<typeof costBreakdownSchema>;
+
+export const agentContributionSchema = z.object({
+  completedAt: z.string().datetime(),
+  contribution: z.string().max(500),
+  duration: z.number().nonnegative().optional(),
+  status: z.enum(["success", "partial", "failed"]),
+  error: z.string().optional(),
+});
+export type AgentContribution = z.infer<typeof agentContributionSchema>;
+
+export const analysisPlanSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  createdBy: z.string().default("pm_agent"),
+  version: z.number().int().positive().default(1),
+  executiveSummary: z.string().min(50).max(2000),
+  dataAssessment: dataAssessmentSchema,
+  analysisSteps: z.array(analysisStepSchema).min(1),
+  visualizations: z.array(visualizationSpecSchema).default([]),
+  businessContext: businessContextSchema.optional(),
+  mlModels: z.array(mlModelSpecSchema).default([]),
+  estimatedCost: costBreakdownSchema,
+  estimatedDuration: z.string().max(50),
+  complexity: z.enum(["low", "medium", "high", "very_high"]),
+  risks: z.array(z.string()).default([]),
+  recommendations: z.array(z.string()).default([]),
+  agentContributions: z.record(agentContributionSchema),
+  status: AnalysisPlanStatusEnum,
+  approvedAt: z.date().optional(),
+  approvedBy: z.string().optional(),
+  rejectionReason: z.string().optional(),
+  modificationsRequested: z.string().optional(),
+  executedAt: z.date().optional(),
+  executionCompletedAt: z.date().optional(),
+  actualCost: costBreakdownSchema.optional(),
+  actualDuration: z.string().optional(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
+export const insertAnalysisPlanSchema = analysisPlanSchema.omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  approvedAt: true,
+  executedAt: true,
+  executionCompletedAt: true,
+});
+
+export type AnalysisPlan = z.infer<typeof analysisPlanSchema>;
+export type InsertAnalysisPlan = z.infer<typeof insertAnalysisPlanSchema>;
+
+// Knowledge graph tables powering the business-agent knowledge base
+export const knowledgeNodes = pgTable("knowledge_nodes", {
+  id: varchar("id").primaryKey().$defaultFn(() => nanoid()),
+  type: varchar("type", { length: 50 }).notNull(),
+  label: varchar("label", { length: 200 }).notNull(),
+  summary: text("summary"),
+  attributes: jsonb("attributes").notNull().default(sql`'{}'::jsonb`),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  typeLabelIdx: index("knowledge_nodes_type_label_idx").on(table.type, table.label),
+  typeLabelUnique: uniqueIndex("knowledge_nodes_type_label_unique").on(table.type, table.label),
+}));
+
+export const knowledgeEdges = pgTable("knowledge_edges", {
+  id: varchar("id").primaryKey().$defaultFn(() => nanoid()),
+  sourceId: varchar("source_id").notNull(),
+  targetId: varchar("target_id").notNull(),
+  relationship: varchar("relationship", { length: 100 }).notNull(),
+  weight: doublePrecision("weight").default(1),
+  attributes: jsonb("attributes").notNull().default(sql`'{}'::jsonb`),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  sourceTargetIdx: index("knowledge_edges_source_target_idx").on(table.sourceId, table.targetId),
+  relationshipIdx: index("knowledge_edges_relationship_idx").on(table.relationship),
+  sourceFk: foreignKey({
+    columns: [table.sourceId],
+    foreignColumns: [knowledgeNodes.id],
+    name: "knowledge_edges_source_id_fk",
+  }).onDelete("cascade"),
+  targetFk: foreignKey({
+    columns: [table.targetId],
+    foreignColumns: [knowledgeNodes.id],
+    name: "knowledge_edges_target_id_fk",
+  }).onDelete("cascade"),
+}));
+
+export type KnowledgeNode = typeof knowledgeNodes.$inferSelect;
+export type InsertKnowledgeNode = typeof knowledgeNodes.$inferInsert;
+export type KnowledgeEdge = typeof knowledgeEdges.$inferSelect;
+export type InsertKnowledgeEdge = typeof knowledgeEdges.$inferInsert;
 
 // Journey Tracking Schemas - Added for step-by-step user journey management
 export const journeySchema = z.object({
@@ -2141,21 +2609,45 @@ export const registerResponseSchema = z.object({
   token: z.string(),
 });
 
+const technicalQueryContextSchema = z.object({
+  data: z.any().optional(),
+  schema: z.any().optional(),
+  requirements: z.array(z.string()).optional(),
+  code: z.string().optional(),
+  error: z.string().optional(),
+  userId: z.string().optional(),
+  projectId: z.string().optional(),
+}).passthrough();
+
+const technicalQueryParametersSchema = z.object({
+  model: z.string().optional(),
+  technicalLevel: z.string().optional(),
+  temperature: z.number().optional(),
+  targetVariable: z.string().optional(),
+  variables: z.array(z.string()).optional(),
+  features: z.array(z.string()).optional(),
+  covariates: z.array(z.string()).optional(),
+  performancePriority: z.string().optional(),
+  realTime: z.boolean().optional(),
+  interactive: z.boolean().optional(),
+  chartType: z.string().optional(),
+  title: z.string().optional(),
+  xAxis: z.string().optional(),
+  yAxis: z.string().optional(),
+  exportFormats: z.array(z.string()).optional(),
+  targetColumn: z.string().optional(),
+  mlParams: z.record(z.any()).optional(),
+  useAutoML: z.boolean().optional(),
+  enableExplainability: z.boolean().optional(),
+  dataSize: z.union([z.number(), z.string()]).optional(),
+  styling: z.string().optional(),
+}).catchall(z.any());
+
 export const TechnicalQuery = z.object({
   type: z.string(),
   prompt: z.string(),
-  context: z.object({
-    data: z.any().optional(),
-    schema: z.any().optional(),
-    requirements: z.array(z.string()).optional(),
-    code: z.string().optional(),
-    error: z.string().optional(),
-  }).optional(),
-  parameters: z.object({
-    model: z.string().optional(),
-    technicalLevel: z.string().optional(),
-    temperature: z.number().optional(),
-  }).optional(),
+  context: technicalQueryContextSchema.optional(),
+  parameters: technicalQueryParametersSchema.optional(),
   metadata: z.object({
     language: z.string().optional(),
     framework: z.string().optional(),
