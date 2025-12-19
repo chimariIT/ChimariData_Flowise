@@ -15,6 +15,8 @@ import { validateProductionReadiness } from './services/production-validator';
 import { initializeAgents } from './services/agent-initialization';
 import { initializeTools } from './services/tool-initialization';
 import { registerCoreTools } from './services/mcp-tool-registry';
+import { initializePythonWorkerPool } from './services/python-worker-pool';
+import { SocketManager } from './socket-manager';
 
 const app = express();
 
@@ -104,6 +106,18 @@ let server: Server;
   }
 
   // ========================================
+  // INITIALIZE PYTHON WORKER POOL
+  // ========================================
+  console.log('🐍 Initializing Python worker pool for performance optimization...');
+  try {
+    await initializePythonWorkerPool();
+    console.log('✅ Python worker pool ready (8-12s savings per analysis)');
+  } catch (error) {
+    console.warn('⚠️  Python worker pool initialization failed, will fall back to process spawning:', error);
+    // Non-fatal error, continue with degraded performance
+  }
+
+  // ========================================
   // INITIALIZE AGENTS AND TOOLS
   // ========================================
   console.log('🤖 Initializing agents and tools...');
@@ -125,12 +139,12 @@ let server: Server;
     // Initialize agents first
     initializationState.agentInitializationCalled = true;
     const agentStartTime = Date.now();
-    
+
     const agentResults = await initializeAgents();
     initializationState.agentsInitialized = true;
     initializationState.agentInitializationTime = new Date();
     initializationState.agentCount = agentResults.successCount;
-    
+
     console.log(`✅ Initialized ${agentResults.successCount} agents:`);
     agentResults.registered.forEach(agent => {
       console.log(`  - ${agent.name} (${agent.capabilities.join(', ')})`);
@@ -147,17 +161,17 @@ let server: Server;
     // Initialize tools
     initializationState.toolInitializationCalled = true;
     const toolStartTime = Date.now();
-    
+
     // Register core MCP tools first (including ML/LLM tools)
     console.log('🛠️ Registering core MCP tools...');
     registerCoreTools();
     console.log('✅ Core MCP tools registered');
-    
+
     const toolResults = await initializeTools();
     initializationState.toolsInitialized = true;
     initializationState.toolInitializationTime = new Date();
     initializationState.toolCount = toolResults.successCount;
-    
+
     console.log(`✅ Initialized ${toolResults.successCount} tools in ${toolResults.categories.length} categories`);
     toolResults.categories.forEach(category => {
       console.log(`  - ${category.name}: ${category.tools} tools`);
@@ -169,7 +183,7 @@ let server: Server;
         console.warn(`  - ${failure.name}: ${failure.error}`);
         initializationState.errors.push(`Tool ${failure.name}: ${failure.error}`);
       });
-      
+
       // ✅ Fail fast in production if critical tools failed
       // Critical tools required for core analysis functionality
       const criticalTools = [
@@ -178,9 +192,9 @@ let server: Server;
         'spark_data_processor',      // Large-scale data processing
         'visualization_engine'       // Visualization generation
       ];
-      
+
       // Check for critical tool failures
-      const criticalFailures = toolResults.failed.filter(f => 
+      const criticalFailures = toolResults.failed.filter(f =>
         criticalTools.some(ct => {
           const toolName = f.name.toLowerCase();
           const criticalName = ct.toLowerCase();
@@ -188,14 +202,14 @@ let server: Server;
           return toolName === criticalName || toolName.includes(criticalName.replace(/_/g, ' '));
         })
       );
-      
+
       // Also check if any critical tools are missing from registered tools
       const registeredToolNames = toolResults.categories
         .flatMap(cat => {
           // Tool names might not be directly available, check initialization results
           return [];
         });
-      
+
       if (criticalFailures.length > 0 && process.env.NODE_ENV === 'production') {
         console.error(`🔴 CRITICAL: Failed to initialize ${criticalFailures.length} critical tool(s):`);
         criticalFailures.forEach(failure => {
@@ -236,7 +250,7 @@ let server: Server;
   function getInitializationState() {
     return initializationState;
   }
-  
+
   // Make it available globally
   (global as any).getInitializationState = getInitializationState;
 
@@ -249,8 +263,94 @@ let server: Server;
   // Initialize realtime server
   const realtimeServer = new RealtimeServer(wss);
 
+  // Initialize SocketManager (DEPRECATED - kept for backwards compatibility)
+  // New features should use RealtimeServer (native WebSocket) instead
+  // See socket-manager.ts for migration instructions
+  SocketManager.getInstance().initialize(server);
+
+  // FIX 7.1: Initialize RealtimeAgentBridge to forward agent events to WebSocket
+  try {
+    const { getAgentBridge } = await import('./services/agents/realtime-agent-bridge');
+    const redisUrl = process.env.REDIS_URL || undefined;
+    const agentBridge = getAgentBridge(realtimeServer, redisUrl);
+    console.log('✅ Real-Time Agent Bridge initialized');
+
+    // Store reference for other services to use
+    (global as any).agentBridge = agentBridge;
+  } catch (error) {
+    console.error('❌ Failed to initialize Real-Time Agent Bridge:', error);
+  }
+
+  // Setup transformation queue WebSocket bridge
+  // FIX: Production Readiness - Use native WebSocket (RealtimeServer) instead of Socket.IO
+  try {
+    const { getTransformationQueue } = await import('./services/transformation-queue');
+    const queue = getTransformationQueue();
+
+    // Helper to create transformation events in RealtimeEvent format
+    const createTransformationEvent = (projectId: string, type: string, data: any) => ({
+      type: 'progress' as const,
+      sourceType: 'analysis' as const,
+      sourceId: projectId,
+      userId: 'system',
+      projectId,
+      timestamp: new Date(),
+      data: { transformationType: type, ...data }
+    });
+
+    // Bridge queue events to native WebSocket
+    queue.on('jobQueued', (job) => {
+      realtimeServer.broadcastToProject(job.projectId, createTransformationEvent(job.projectId, 'queued', {
+        jobId: job.jobId,
+        status: job.status,
+        priority: job.priority
+      }));
+    });
+
+    queue.on('jobStarted', (job) => {
+      realtimeServer.broadcastToProject(job.projectId, createTransformationEvent(job.projectId, 'started', {
+        jobId: job.jobId,
+        status: job.status
+      }));
+    });
+
+    queue.on('jobProgress', (data) => {
+      const projectId = data.jobId?.split('-')[1] || 'unknown';
+      realtimeServer.broadcastToProject(projectId, createTransformationEvent(projectId, 'progress', data));
+    });
+
+    queue.on('jobCompleted', (job) => {
+      realtimeServer.broadcastToProject(job.projectId, createTransformationEvent(job.projectId, 'completed', {
+        jobId: job.jobId,
+        status: job.status,
+        result: job.result
+      }));
+    });
+
+    queue.on('jobFailed', (job) => {
+      realtimeServer.broadcastToProject(job.projectId, createTransformationEvent(job.projectId, 'failed', {
+        jobId: job.jobId,
+        status: job.status,
+        error: job.error
+      }));
+    });
+
+    queue.on('jobRetrying', (job) => {
+      realtimeServer.broadcastToProject(job.projectId, createTransformationEvent(job.projectId, 'retrying', {
+        jobId: job.jobId,
+        status: job.status,
+        retryCount: job.retryCount,
+        maxRetries: job.maxRetries
+      }));
+    });
+
+    console.log('✅ Transformation queue WebSocket bridge initialized (native WebSocket)');
+  } catch (error) {
+    console.error('❌ Failed to setup transformation queue WebSocket bridge:', error);
+  }
+
   // Initialize agent orchestrator with realtime server
-  (projectAgentOrchestrator as any).realtimeServer = realtimeServer;
+  // (projectAgentOrchestrator as any).realtimeServer = realtimeServer; // Deprecated in favor of SocketManager
 
   server.on('upgrade', (request, socket, head) => {
     try {
@@ -339,6 +439,9 @@ let server: Server;
     const onListen = () => {
       const boundHost = host || '::';
       log(`serving on ${boundHost}:${port}`);
+
+      // NOTE: SocketManager is deprecated, initialized earlier at server startup
+      // New features should use RealtimeServer (native WebSocket) instead
     };
 
     server.listen({ port, host, ipv6Only: false }, onListen);

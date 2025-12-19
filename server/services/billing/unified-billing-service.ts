@@ -17,7 +17,7 @@
 
 import Stripe from 'stripe';
 import { db } from '../../db';
-import { subscriptionTierPricing, users } from '../../../shared/schema';
+import { subscriptionTierPricing, users, stripeUsageRecords, projects } from '../../../shared/schema';
 import { PricingService } from '../pricing';
 import { getPricingDataService } from '../pricing-data-service';
 import { mlLLMUsageTracker } from '../ml-llm-usage-tracker';
@@ -32,6 +32,7 @@ import {
   FeatureComplexity,
   JourneyType,
   UserRole,
+  normalizeJourneyType,
 } from '../../../shared/canonical-types';
 import * as crypto from 'crypto';
 
@@ -565,15 +566,15 @@ export class UnifiedBillingService {
   private parseAllowedJourneys(tierId: string): JourneyType[] {
     switch (tierId) {
       case 'trial':
-        return ['ai_guided'];
+        return ['non-tech'];
       case 'starter':
-        return ['ai_guided', 'template_based'];
+        return ['non-tech', 'business'];
       case 'professional':
-        return ['ai_guided', 'template_based', 'self_service'];
+        return ['non-tech', 'business', 'technical'];
       case 'enterprise':
-        return ['ai_guided', 'template_based', 'self_service', 'consultation'];
+        return ['non-tech', 'business', 'technical', 'consultation'];
       default:
-        return ['ai_guided'];
+        return ['non-tech'];
     }
   }
 
@@ -617,7 +618,7 @@ export class UnifiedBillingService {
           maxComputeMinutes: 30,
           maxProjects: 1,
           maxDatasetsPerProject: 1,
-          allowedJourneys: ['ai_guided'],
+          allowedJourneys: ['non-tech'],
           featureQuotas: {
             data_upload: { small: 5, medium: 0, large: 0, extra_large: 0 },
             statistical_analysis: { small: 3, medium: 0, large: 0, extra_large: 0 },
@@ -655,7 +656,7 @@ export class UnifiedBillingService {
           maxComputeMinutes: 300,
           maxProjects: 5,
           maxDatasetsPerProject: 3,
-          allowedJourneys: ['ai_guided', 'template_based'],
+          allowedJourneys: ['non-tech', 'business'],
           featureQuotas: {
             data_upload: { small: 50, medium: 10, large: 0, extra_large: 0 },
             statistical_analysis: { small: 30, medium: 5, large: 0, extra_large: 0 },
@@ -693,7 +694,7 @@ export class UnifiedBillingService {
           maxComputeMinutes: 3000,
           maxProjects: 25,
           maxDatasetsPerProject: 10,
-          allowedJourneys: ['ai_guided', 'template_based', 'self_service'],
+          allowedJourneys: ['non-tech', 'business', 'technical'],
           featureQuotas: {
             data_upload: { small: 500, medium: 100, large: 10, extra_large: 0 },
             statistical_analysis: { small: 300, medium: 50, large: 10, extra_large: 0 },
@@ -741,7 +742,7 @@ export class UnifiedBillingService {
           maxComputeMinutes: -1,
           maxProjects: -1,
           maxDatasetsPerProject: -1,
-          allowedJourneys: ['ai_guided', 'template_based', 'self_service', 'consultation'],
+          allowedJourneys: ['non-tech', 'business', 'technical', 'consultation'],
           featureQuotas: {
             data_upload: { small: -1, medium: -1, large: -1, extra_large: -1 },
             statistical_analysis: { small: -1, medium: -1, large: -1, extra_large: -1 },
@@ -1064,8 +1065,8 @@ export class UnifiedBillingService {
       request.journeyType === 'business'
         ? 'business'
         : request.journeyType === 'non-tech'
-        ? 'non-tech'
-        : 'technical';
+          ? 'non-tech'
+          : 'technical';
 
     const dataSizeMB = request.dataSizeMB ?? (typeof request.dataVolume === 'number' ? request.dataVolume * 1024 : 0);
 
@@ -1249,7 +1250,7 @@ export class UnifiedBillingService {
         : tierConfig.stripePriceIds.yearly;
 
       // Create subscription within database transaction
-  const result = await db.transaction(async (tx: typeof db) => {
+      const result = await db.transaction(async (tx: typeof db) => {
         // Create Stripe subscription
         const subscription = await this.stripe.subscriptions.create({
           customer: customerId!,
@@ -1289,6 +1290,89 @@ export class UnifiedBillingService {
   }
 
   /**
+   * Create Stripe Checkout Session for one-off payment
+   */
+  async createCheckoutSession(
+    projectId: string,
+    userId: string,
+    amount: number,
+    currency: string = 'usd',
+    metadata: Record<string, string> = {}
+  ): Promise<{ sessionId: string; url: string }> {
+    try {
+      const [user] = await db.select().from(users).where(eq(users.id, userId));
+      if (!user) {
+        throw new Error('User not found');
+      }
+
+      let customerId = user.stripeCustomerId;
+      if (!customerId) {
+        const customer = await this.stripe.customers.create({
+          email: user.email,
+          name: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
+          metadata: { userId },
+        });
+        customerId = customer.id;
+
+        // Update user with new customer ID
+        await db.update(users)
+          .set({ stripeCustomerId: customerId })
+          .where(eq(users.id, userId));
+      }
+
+      // FIX: Production Readiness - Map user-selected payment method to Stripe types
+      // Note: PayPal and bank transfers require Stripe dashboard configuration
+      type StripePaymentMethodType = 'card' | 'paypal' | 'us_bank_account';
+      const paymentMethodMap: Record<string, StripePaymentMethodType[]> = {
+        card: ['card'],
+        paypal: ['paypal'],  // Requires PayPal to be enabled in Stripe dashboard
+        bank: ['us_bank_account'],  // Requires ACH to be enabled in Stripe dashboard
+      };
+      const selectedMethod = metadata.paymentMethod || 'card';
+      const paymentMethodTypes = paymentMethodMap[selectedMethod] || ['card'];
+
+      const session = await this.stripe.checkout.sessions.create({
+        customer: customerId,
+        payment_method_types: paymentMethodTypes,
+        line_items: [
+          {
+            price_data: {
+              currency: currency.toLowerCase(),
+              product_data: {
+                name: 'Analysis Project Execution',
+                description: `Payment for project ${projectId}`,
+              },
+              unit_amount: Math.round(amount * 100), // Convert to cents
+            },
+            quantity: 1,
+          },
+        ],
+        mode: 'payment',
+        success_url: `${process.env.APP_URL || 'http://localhost:5000'}/projects/${projectId}?payment=success&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${process.env.APP_URL || 'http://localhost:5000'}/projects/${projectId}?payment=cancelled`,
+        metadata: {
+          projectId,
+          userId,
+          type: 'one_off_analysis',
+          ...metadata
+        },
+      });
+
+      if (!session.url) {
+        throw new Error('Failed to generate checkout URL');
+      }
+
+      return {
+        sessionId: session.id,
+        url: session.url
+      };
+    } catch (error: any) {
+      console.error('Create checkout session error:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Cancel subscription
    */
   async cancelSubscription(
@@ -1301,7 +1385,7 @@ export class UnifiedBillingService {
         return { success: false, error: 'No active subscription found' };
       }
 
-  await db.transaction(async (tx: typeof db) => {
+      await db.transaction(async (tx: typeof db) => {
         // Cancel Stripe subscription
         if (immediate) {
           await this.stripe.subscriptions.cancel(user.stripeSubscriptionId!);
@@ -1346,7 +1430,7 @@ export class UnifiedBillingService {
         return { success: false, error: 'Invalid target tier' };
       }
 
-  await db.transaction(async (tx: typeof db) => {
+      await db.transaction(async (tx: typeof db) => {
         // Update Stripe subscription
         const subscription = await this.stripe.subscriptions.retrieve(user.stripeSubscriptionId!);
         await this.stripe.subscriptions.update(user.stripeSubscriptionId!, {
@@ -1376,6 +1460,247 @@ export class UnifiedBillingService {
   }
 
   // ==========================================
+  // METERED BILLING / USAGE REPORTING
+  // ==========================================
+
+  /**
+   * FIX A5: Report usage to Stripe for metered billing
+   * Creates a usage record in Stripe and tracks it locally
+   *
+   * @param userId - User who incurred the usage
+   * @param quantity - Usage quantity (units depend on billing model)
+   * @param action - Type of action (e.g., 'analysis_execution', 'data_processing')
+   * @param metadata - Additional context about the usage
+   * @returns Result with success status and record ID
+   */
+  async reportUsageToStripe(
+    userId: string,
+    quantity: number,
+    action: string,
+    metadata: {
+      projectId?: string;
+      analysisType?: string;
+      description?: string;
+      [key: string]: any;
+    } = {}
+  ): Promise<{ success: boolean; recordId?: string; error?: string }> {
+    try {
+      // Get user's subscription info
+      const [user] = await db.select().from(users).where(eq(users.id, userId));
+      if (!user) {
+        return { success: false, error: 'User not found' };
+      }
+
+      // Check if user has an active subscription with metered billing
+      if (!user.stripeSubscriptionId || user.subscriptionStatus !== 'active') {
+        console.log(`[Billing] User ${userId} has no active subscription, skipping Stripe usage report`);
+        // Still record locally for tracking
+        return await this.recordLocalUsage(userId, quantity, action, metadata, 'pending', 'No active subscription');
+      }
+
+      // Get the subscription item ID for metered billing
+      const subscriptionItemId = await this.getMeteredSubscriptionItemId(user.stripeSubscriptionId);
+      if (!subscriptionItemId) {
+        console.log(`[Billing] No metered subscription item found for user ${userId}`);
+        return await this.recordLocalUsage(userId, quantity, action, metadata, 'pending', 'No metered subscription item');
+      }
+
+      // Generate idempotency key to prevent duplicate reports
+      const idempotencyKey = `${userId}_${action}_${metadata.projectId || 'no-project'}_${Date.now()}`;
+
+      // Create usage record in Stripe
+      // FIX: Use type assertion for createUsageRecord as it exists at runtime but types may be outdated
+      try {
+        const usageRecord = await (this.stripe.subscriptionItems as any).createUsageRecord(
+          subscriptionItemId,
+          {
+            quantity,
+            timestamp: Math.floor(Date.now() / 1000), // Unix timestamp
+            action: 'increment', // Add to existing usage
+          },
+          {
+            idempotencyKey,
+          }
+        );
+
+        // Record successful usage in local database
+        const [record] = await db.insert(stripeUsageRecords).values({
+          userId,
+          subscriptionItemId,
+          stripeRecordId: usageRecord.id,
+          quantity,
+          idempotencyKey,
+          timestamp: new Date(),
+          projectId: metadata.projectId || null,
+          analysisType: metadata.analysisType || null,
+          action,
+          status: 'reported',
+          metadata: metadata,
+          reportedAt: new Date(),
+        }).returning();
+
+        console.log(`[Billing] Usage reported to Stripe: ${quantity} units for ${action} (record: ${record.id})`);
+
+        return { success: true, recordId: record.id };
+      } catch (stripeError: any) {
+        // Record failed attempt locally
+        const result = await this.recordLocalUsage(
+          userId,
+          quantity,
+          action,
+          { ...metadata, subscriptionItemId },
+          'failed',
+          stripeError.message
+        );
+
+        console.error(`[Billing] Failed to report usage to Stripe:`, stripeError.message);
+        return { success: false, recordId: result.recordId, error: stripeError.message };
+      }
+    } catch (error: any) {
+      console.error('[Billing] reportUsageToStripe error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Record usage locally (for tracking when Stripe reporting fails or is unavailable)
+   */
+  private async recordLocalUsage(
+    userId: string,
+    quantity: number,
+    action: string,
+    metadata: Record<string, any>,
+    status: 'pending' | 'reported' | 'failed' | 'cancelled',
+    errorMessage?: string
+  ): Promise<{ success: boolean; recordId?: string }> {
+    try {
+      const idempotencyKey = `${userId}_${action}_${metadata.projectId || 'no-project'}_${Date.now()}`;
+
+      const [record] = await db.insert(stripeUsageRecords).values({
+        userId,
+        subscriptionItemId: metadata.subscriptionItemId || 'local-tracking',
+        quantity,
+        idempotencyKey,
+        timestamp: new Date(),
+        projectId: metadata.projectId || null,
+        analysisType: metadata.analysisType || null,
+        action,
+        status,
+        errorMessage: errorMessage || null,
+        metadata,
+      }).returning();
+
+      return { success: true, recordId: record.id };
+    } catch (error: any) {
+      console.error('[Billing] Failed to record local usage:', error);
+      return { success: false };
+    }
+  }
+
+  /**
+   * Get the metered subscription item ID from a subscription
+   * Looks for items with metered billing (usage_type: 'metered')
+   */
+  private async getMeteredSubscriptionItemId(subscriptionId: string): Promise<string | null> {
+    try {
+      const subscription = await this.stripe.subscriptions.retrieve(subscriptionId, {
+        expand: ['items.data.price'],
+      });
+
+      // Find a metered price item
+      for (const item of subscription.items.data) {
+        const price = item.price;
+        if (price && typeof price === 'object' && price.recurring?.usage_type === 'metered') {
+          return item.id;
+        }
+      }
+
+      // If no metered item found, return the first item (for subscriptions with usage-based add-ons)
+      if (subscription.items.data.length > 0) {
+        return subscription.items.data[0].id;
+      }
+
+      return null;
+    } catch (error: any) {
+      console.error('[Billing] Failed to get metered subscription item:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Retry pending usage reports
+   * Called periodically to retry failed Stripe reports
+   */
+  async retryPendingUsageReports(): Promise<{ processed: number; succeeded: number; failed: number }> {
+    let processed = 0;
+    let succeeded = 0;
+    let failed = 0;
+
+    try {
+      // Get pending records
+      const pendingRecords = await db.select()
+        .from(stripeUsageRecords)
+        .where(eq(stripeUsageRecords.status, 'pending'));
+
+      for (const record of pendingRecords) {
+        processed++;
+
+        // Get user's current subscription item
+        const [user] = await db.select().from(users).where(eq(users.id, record.userId));
+        if (!user?.stripeSubscriptionId || user.subscriptionStatus !== 'active') {
+          continue; // Skip if no active subscription
+        }
+
+        const subscriptionItemId = await this.getMeteredSubscriptionItemId(user.stripeSubscriptionId);
+        if (!subscriptionItemId) {
+          continue;
+        }
+
+        try {
+          // FIX: Use type assertion for createUsageRecord as it exists at runtime but types may be outdated
+          const usageRecord = await (this.stripe.subscriptionItems as any).createUsageRecord(
+            subscriptionItemId,
+            {
+              quantity: record.quantity,
+              timestamp: Math.floor(record.timestamp.getTime() / 1000),
+              action: 'increment',
+            },
+            {
+              idempotencyKey: record.idempotencyKey,
+            }
+          );
+
+          // Update record as successful
+          await db.update(stripeUsageRecords)
+            .set({
+              status: 'reported',
+              stripeRecordId: usageRecord.id,
+              subscriptionItemId,
+              reportedAt: new Date(),
+              errorMessage: null,
+            })
+            .where(eq(stripeUsageRecords.id, record.id));
+
+          succeeded++;
+        } catch (error: any) {
+          // Update error message
+          await db.update(stripeUsageRecords)
+            .set({
+              errorMessage: error.message,
+            })
+            .where(eq(stripeUsageRecords.id, record.id));
+
+          failed++;
+        }
+      }
+    } catch (error: any) {
+      console.error('[Billing] retryPendingUsageReports error:', error);
+    }
+
+    return { processed, succeeded, failed };
+  }
+
+  // ==========================================
   // WEBHOOK HANDLING
   // ==========================================
 
@@ -1398,7 +1723,7 @@ export class UnifiedBillingService {
       console.log(`Processing webhook: ${event.type}`);
 
       // Process event within transaction
-  await db.transaction(async (tx: typeof db) => {
+      await db.transaction(async (tx: typeof db) => {
         switch (event.type) {
           case 'customer.subscription.created':
           case 'customer.subscription.updated':
@@ -1505,6 +1830,8 @@ export class UnifiedBillingService {
     minimumTier?: string;
   }> {
     try {
+      const canonicalJourneyType = normalizeJourneyType(journeyType);
+
       // Get user with subscription details
       const [user] = await db.select().from(users).where(eq(users.id, userId));
       if (!user) {
@@ -1526,8 +1853,9 @@ export class UnifiedBillingService {
         };
       }
 
-      // Check if journey type is allowed
-      const allowed = tierConfig.quotas.allowedJourneys.includes(journeyType);
+      // Check if journey type is allowed (normalize tier config as well)
+      const allowedJourneys = tierConfig.quotas.allowedJourneys.map((jt) => normalizeJourneyType(jt));
+      const allowed = allowedJourneys.includes(canonicalJourneyType);
 
       if (allowed) {
         return {
@@ -1541,7 +1869,7 @@ export class UnifiedBillingService {
 
       if (!allowed && bypassBilling) {
         console.warn(
-          `[Billing] Bypassing journey access requirements for ${journeyType} (tier: ${user.subscriptionTier})`
+          `[Billing] Bypassing journey access requirements for ${canonicalJourneyType} (tier: ${user.subscriptionTier})`
         );
         return {
           allowed: true,
@@ -1550,20 +1878,20 @@ export class UnifiedBillingService {
         };
       }
 
-      // Determine minimum tier needed
-      let minimumTier = 'starter';
-      if (journeyType === 'self_service') {
+      // Determine minimum tier needed for this canonical journey
+      let minimumTier: SubscriptionTier = 'starter';
+      if (canonicalJourneyType === 'technical') {
         minimumTier = 'professional';
-      } else if (journeyType === 'consultation') {
+      } else if (canonicalJourneyType === 'consultation' || canonicalJourneyType === 'custom') {
         minimumTier = 'enterprise';
-      } else if (journeyType === 'template_based') {
+      } else {
         minimumTier = 'starter';
       }
 
       return {
         allowed: false,
         requiresUpgrade: true,
-        message: `${journeyType} journey requires ${minimumTier} tier or higher`,
+        message: `${canonicalJourneyType} journey requires ${minimumTier} tier or higher`,
         minimumTier
       };
     } catch (error: any) {
@@ -1595,7 +1923,7 @@ export class UnifiedBillingService {
   }> {
     try {
       await this.ensureConfigurationsLoaded();
-  return await db.transaction(async (tx: typeof db) => {
+      return await db.transaction(async (tx: typeof db) => {
         // Lock user row to guarantee atomic updates under concurrency
         await tx.execute(sql`SELECT ${users.id} FROM ${users} WHERE ${users.id} = ${userId} FOR UPDATE`);
 
@@ -1658,9 +1986,8 @@ export class UnifiedBillingService {
           };
         } else {
           // Exceeded quota - calculate overage cost
-          const overageQuantity = newUsed - quota;
-          const overagePricing = tierConfig.overagePricing.featureOveragePricing[featureId];
-
+            const overageQuantity = newUsed - quota;
+            const overagePricing = tierConfig.overagePricing.featureOveragePricing[featureId];
           if (!overagePricing) {
             return {
               allowed: false,
@@ -1692,7 +2019,28 @@ export class UnifiedBillingService {
             })
             .where(eq(users.id, userId));
 
-          // TODO: Create invoice item in Stripe for overage charges
+          // FIX: Production Readiness - Create invoice item in Stripe for overage charges
+          try {
+            const [user] = await tx.select().from(users).where(eq(users.id, userId));
+            if (user?.stripeCustomerId && cost > 0) {
+              await this.stripe.invoiceItems.create({
+                customer: user.stripeCustomerId,
+                amount: Math.round(cost * 100), // Convert to cents
+                currency: 'usd',
+                description: `Overage charge: ${featureId} (${complexity}) - ${overageQuantity} units`,
+                metadata: {
+                  featureId,
+                  complexity,
+                  overageQuantity: String(overageQuantity),
+                  ratePerUnit: String(overagePricing[complexity])
+                }
+              });
+              console.log(`💰 [Overage] Created Stripe invoice item for $${cost.toFixed(2)} - ${featureId}`);
+            }
+          } catch (stripeError) {
+            // Log but don't block - user can still be invoiced later
+            console.warn(`⚠️ [Overage] Failed to create Stripe invoice item:`, stripeError);
+          }
 
           return {
             allowed: true, // Allow but charge
@@ -1879,19 +2227,98 @@ export class UnifiedBillingService {
 
   /**
    * Calculate billing with capacity tracking (for compatibility)
+   * FIX 5.1: Returns correct structure with success and billing properties
    */
   async calculateBillingWithCapacity(userId: string, usage: any): Promise<any> {
     await this.ensureConfigurationsLoaded();
     const userTier = await this.getUserTier(userId);
     const usageMetrics = await this.getUsageMetricsSimple(userId);
-    
+    const tierConfig = this.getTierConfig(userTier);
+
+    // Extract journey parameters from usage
+    const journeyType = usage?.journeyType || 'descriptive_stats';
+    const datasetSizeMB = usage?.datasetSizeMB || 0;
+
+    // Calculate costs based on journey type and data size
+    // Base costs by journey type complexity
+    const baseCostByJourney: Record<string, number> = {
+      'descriptive_stats': 5.00,
+      'diagnostic': 10.00,
+      'predictive': 25.00,
+      'prescriptive': 50.00,
+      'quick_insight': 2.50,
+      'deep_dive': 15.00
+    };
+
+    const baseCost = baseCostByJourney[journeyType] || 5.00;
+
+    // Data size cost: $0.01 per MB for first 100MB, $0.005 per MB after
+    const dataSizeCost = datasetSizeMB <= 100
+      ? datasetSizeMB * 0.01
+      : (100 * 0.01) + ((datasetSizeMB - 100) * 0.005);
+
+    // Subscription tier credits (free tier gets less, pro/enterprise get more)
+    const subscriptionCredits: Record<string, number> = {
+      'free': 0,
+      'basic': 5.00,
+      'pro': 15.00,
+      'enterprise': 50.00
+    };
+    const credits = subscriptionCredits[userTier] || 0;
+
+    // Calculate final cost
+    const totalBeforeCredits = baseCost + dataSizeCost;
+    const finalCost = Math.max(0, totalBeforeCredits - credits);
+
+    // Capacity tracking
+    const capacityUsed = (usageMetrics as any)?.totalDataUsageMB || 0;
+    const capacityLimit = tierConfig?.quotas?.maxDataUploadsMB || 1000;
+    const capacityRemaining = Math.max(0, capacityLimit - capacityUsed);
+    const utilizationPercentage = capacityLimit > 0 ? (capacityUsed / capacityLimit) * 100 : 0;
+
+    // Build breakdown
+    const breakdown = [
+      {
+        item: `${journeyType.replace(/_/g, ' ')} analysis`,
+        cost: baseCost,
+        capacityUsed: 0,
+        capacityRemaining
+      },
+      {
+        item: `Data processing (${datasetSizeMB.toFixed(2)} MB)`,
+        cost: dataSizeCost,
+        capacityUsed: datasetSizeMB,
+        capacityRemaining: Math.max(0, capacityRemaining - datasetSizeMB)
+      }
+    ];
+
+    if (credits > 0) {
+      breakdown.push({
+        item: `${userTier} tier credits`,
+        cost: -credits,
+        capacityUsed: 0,
+        capacityRemaining
+      });
+    }
+
     return {
+      success: true,
+      billing: {
+        baseCost,
+        dataSizeCost,
+        subscriptionCredits: credits,
+        finalCost,
+        capacityUsed,
+        capacityRemaining,
+        utilizationPercentage,
+        breakdown
+      },
+      // Legacy properties for backward compatibility
       userId,
       tier: userTier,
       usage: usageMetrics,
-      cost: 0, // Simplified for now
-      capacityUsed: (usageMetrics as any)?.totalDataUsageMB || 0,
-      capacityLimit: this.getTierConfig(userTier)?.quotas.maxDataUploadsMB || 0
+      cost: finalCost,
+      capacityLimit
     };
   }
 
@@ -1903,13 +2330,13 @@ export class UnifiedBillingService {
     const userTier = await this.getUserTier(userId);
     const usageMetrics = await this.getUsageMetricsSimple(userId);
     const tierConfig = this.getTierConfig(userTier);
-    
+
     return {
       userId,
       tier: userTier,
       capacityUsed: (usageMetrics as any)?.totalDataUsageMB || 0,
       capacityLimit: tierConfig?.quotas.maxDataUploadsMB || 0,
-      percentageUsed: tierConfig ? 
+      percentageUsed: tierConfig ?
         (((usageMetrics as any)?.totalDataUsageMB || 0) / tierConfig.quotas.maxDataUploadsMB) * 100 : 0
     };
   }
@@ -1955,13 +2382,29 @@ export class UnifiedBillingService {
    * Get user usage by ID
    */
   async getUserUsage(userId: string): Promise<any> {
-    // This would typically fetch from database
-    // For now, return mock usage
-    return {
-      dataUploadsMB: 0,
-      toolExecutions: 0,
-      aiQueries: 0
-    };
+    try {
+      // Import UsageTrackingService for real usage data
+      const { UsageTrackingService } = await import('../usage-tracking');
+      const usage = await UsageTrackingService.getCurrentUsage(userId);
+
+      return {
+        dataUploadsMB: usage.dataVolumeMB || 0,
+        toolExecutions: usage.codeGenerations || 0,
+        aiQueries: usage.aiQueries || 0,
+        // Additional metrics from usage tracking
+        dataUploads: usage.dataUploads || 0,
+        projectsCreated: usage.projectsCreated || 0,
+        visualizationsGenerated: usage.visualizationsGenerated || 0
+      };
+    } catch (error) {
+      console.error('[BillingService] Error fetching user usage:', error);
+      // Fallback to zeros if service fails
+      return {
+        dataUploadsMB: 0,
+        toolExecutions: 0,
+        aiQueries: 0
+      };
+    }
   }
 
   /**
@@ -1973,16 +2416,74 @@ export class UnifiedBillingService {
   }
 
   /**
+   * Get Stripe invoices for a customer
+   * FIX: Production Readiness - Added for billing_query_handler real data
+   */
+  async getStripeInvoices(stripeCustomerId: string, limit: number = 10): Promise<any[]> {
+    if (!stripeCustomerId) {
+      return [];
+    }
+
+    try {
+      const invoices = await this.stripe.invoices.list({
+        customer: stripeCustomerId,
+        limit,
+      });
+
+      return invoices.data.map((invoice) => ({
+        id: invoice.id,
+        number: invoice.number,
+        status: invoice.status,
+        amount: (invoice.amount_due || 0) / 100, // Convert from cents to dollars
+        currency: invoice.currency?.toUpperCase() || 'USD',
+        created: new Date(invoice.created * 1000).toISOString(),
+        dueDate: invoice.due_date ? new Date(invoice.due_date * 1000).toISOString() : null,
+        paid: invoice.paid,
+        paidAt: invoice.status_transitions?.paid_at
+          ? new Date(invoice.status_transitions.paid_at * 1000).toISOString()
+          : null,
+        hostedInvoiceUrl: invoice.hosted_invoice_url,
+        invoicePdf: invoice.invoice_pdf,
+        description: invoice.description,
+        lines: invoice.lines?.data?.map((line) => ({
+          description: line.description,
+          amount: (line.amount || 0) / 100,
+          quantity: line.quantity,
+        })) || [],
+      }));
+    } catch (error) {
+      console.error('[BillingService] Error fetching Stripe invoices:', error);
+      return [];
+    }
+  }
+
+  /**
    * Get usage metrics (simple version)
    */
   async getUsageMetricsSimple(userId: string): Promise<any> {
-    // This would typically fetch from database
-    // For now, return mock metrics
-    return {
-      totalDataUsageMB: 0,
-      totalToolExecutions: 0,
-      totalAIQueries: 0
-    };
+    try {
+      // Import UsageTrackingService for real usage data
+      const { UsageTrackingService } = await import('../usage-tracking');
+      const usage = await UsageTrackingService.getCurrentUsage(userId);
+
+      return {
+        totalDataUsageMB: usage.dataVolumeMB || 0,
+        totalToolExecutions: usage.codeGenerations || 0,
+        totalAIQueries: usage.aiQueries || 0,
+        // Extended metrics
+        totalDataUploads: usage.dataUploads || 0,
+        totalProjects: usage.projectsCreated || 0,
+        totalVisualizations: usage.visualizationsGenerated || 0
+      };
+    } catch (error) {
+      console.error('[BillingService] Error fetching usage metrics:', error);
+      // Fallback to zeros if service fails
+      return {
+        totalDataUsageMB: 0,
+        totalToolExecutions: 0,
+        totalAIQueries: 0
+      };
+    }
   }
 
   /**
@@ -1992,7 +2493,7 @@ export class UnifiedBillingService {
     try {
       const now = new Date();
       const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-      
+
       const mlUsage = await mlLLMUsageTracker.getUserUsage(
         userId,
         startOfMonth,
@@ -2117,7 +2618,7 @@ export class UnifiedBillingService {
    */
   private async checkLLMQuota(userId: string, toolName: string, userTier: string): Promise<any> {
     if (toolName.includes('llm')) {
-  return await mlLLMUsageTracker.checkLLMFineTuningQuota(userId, userTier);
+      return await mlLLMUsageTracker.checkLLMFineTuningQuota(userId, userTier);
     }
     return { allowed: true };
   }
@@ -2191,7 +2692,7 @@ export class UnifiedBillingService {
     try {
       const user = await this.getUser(userId);
       const usage = await this.getUserUsage(userId);
-      
+
       return {
         dataUsage: {
           totalUploadSizeMB: usage.dataUploadsMB || 0
@@ -2217,14 +2718,14 @@ let billingService: UnifiedBillingService | null = null;
 
 export function getBillingService(): UnifiedBillingService {
   if (!billingService) {
-  const stripeSecretKey = process.env.STRIPE_SECRET_KEY || 'stripe_test_key_placeholder';
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || 'whsec_placeholder';
-    
+    const stripeSecretKey = process.env.STRIPE_SECRET_KEY || 'stripe_test_key_placeholder';
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || 'whsec_placeholder';
+
     // Log warning if using development keys
     if (stripeSecretKey === 'stripe_test_key_placeholder') {
       console.warn('⚠️  Using development Stripe key. Set STRIPE_SECRET_KEY for production.');
     }
-    
+
     billingService = new UnifiedBillingService({
       stripeSecretKey,
       webhookSecret,

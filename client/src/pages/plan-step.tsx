@@ -26,10 +26,13 @@ import {
   Eye,
   Settings,
   Sparkles,
-  ArrowRight
+  ArrowRight,
+  RefreshCw
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/lib/api";
+// FIX: Production Readiness - Import useProject for SSOT journey progress
+import { useProject } from "@/hooks/useProject";
 import type {
   DataAssessment,
   AnalysisStep,
@@ -83,6 +86,9 @@ export default function PlanStep({
   const projectId = propProjectId || params.projectId;
   const { toast } = useToast();
 
+  // FIX: Production Readiness - Use useProject hook for SSOT journey progress
+  const { journeyProgress, updateProgress } = useProject(projectId);
+
   // State management
   const [plan, setPlan] = useState<AnalysisPlan | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -119,11 +125,17 @@ export default function PlanStep({
     };
   }, [plan?.status, isCreatingPlan]);
 
-  const loadPlan = async () => {
+  const loadPlan = async (retryCount: number = 0) => {
+    const MAX_RETRIES = 3;
     try {
       setIsLoading(true);
       setPlanError(null);
-      setCreationStartTime(Date.now());
+
+      // Only set creation start time on first attempt
+      if (retryCount === 0) {
+        setCreationStartTime(Date.now());
+      }
+
       const response = await apiClient.get(`/api/projects/${projectId}/plan`);
 
       // Handle both wrapped { success: true, plan } and direct plan responses
@@ -135,7 +147,7 @@ export default function PlanStep({
           setCreationStartTime(null);
         }
         setPlanError(null);
-        console.log('✅ Plan loaded successfully:', planData.id || planData.projectId);
+        console.log('✅ Plan loaded successfully:', planData.id || planData.projectId, 'Status:', planData.status);
       } else {
         // No plan exists, trigger creation
         console.log('📋 No plan found, creating new plan...');
@@ -149,13 +161,18 @@ export default function PlanStep({
         // No plan exists, trigger creation
         console.log('📋 Plan not found (404), creating new plan...');
         await createPlan();
+      } else if (retryCount < MAX_RETRIES) {
+        // Retry on non-404 errors up to MAX_RETRIES times
+        console.warn(`⚠️ Error loading plan (attempt ${retryCount + 1}/${MAX_RETRIES}):`, error.message);
+        await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1))); // Exponential backoff
+        return loadPlan(retryCount + 1);
       } else {
-        console.error('❌ Error loading plan:', error);
+        console.error('❌ Error loading plan after', MAX_RETRIES, 'retries:', error);
         setPlanError(error.message || "Failed to load analysis plan");
         setCreationStartTime(null);
         toast({
           title: "Error Loading Plan",
-          description: error.message || "Failed to load analysis plan",
+          description: error.message || "Failed to load analysis plan after multiple attempts. Please try again.",
           variant: "destructive"
         });
       }
@@ -169,6 +186,7 @@ export default function PlanStep({
     try {
       setIsCreatingPlan(true);
       setPlanError(null);
+      setCreationStartTime(Date.now());
       toast({
         title: "Creating Analysis Plan",
         description: "Coordinating with Data Engineer, Data Scientist, and Business Expert agents...",
@@ -186,10 +204,23 @@ export default function PlanStep({
         clearTimeout(timeoutId);
 
         if (response?.success) {
-          // Plan creation initiated, start polling for progress
-          if (response.planId) {
-            // Plan created immediately (unlikely but possible)
-            await loadPlan();
+          console.log('✅ Plan creation initiated successfully');
+
+          // If plan was created immediately, load it
+          if (response.planId && response.plan) {
+            setPlan(response.plan);
+            setCreationStartTime(null);
+            toast({
+              title: "Analysis Plan Ready",
+              description: "Your analysis plan has been created and is ready for review.",
+            });
+          } else if (response.planId) {
+            // Plan creation initiated, poll until ready
+            console.log('📋 Plan creation in progress, polling for updates...');
+            // Start polling via the useEffect hook
+          } else {
+            // No planId returned, wait for polling to find it
+            console.log('📋 Plan creation in progress, waiting for completion...');
           }
         } else {
           throw new Error(response?.error || 'Plan creation returned no data');
@@ -206,15 +237,13 @@ export default function PlanStep({
       console.error('❌ Plan creation failed:', error);
       setPlanError(error.response?.data?.error || error.message || "Failed to create analysis plan");
       setCreationStartTime(null);
+      setIsCreatingPlan(false);
+      setIsLoading(false);
       toast({
         title: "Error Creating Plan",
         description: error.response?.data?.error || error.message || "Failed to create analysis plan",
         variant: "destructive"
       });
-    } finally {
-      // ✅ ALWAYS reset creating state to prevent stuck UI
-      setIsCreatingPlan(false);
-      setIsLoading(false);  // ✅ Also reset parent loading state
     }
   };
 
@@ -231,9 +260,26 @@ export default function PlanStep({
           setIsCreatingPlan(false);
           setCreationStartTime(null);
         }
+
+        // ✅ FIX: Check for all failure statuses including 'rejected' (which backend uses on error)
+        const failureStatuses = ['failed', 'error', 'rejected', 'cancelled'];
+        if (failureStatuses.includes(response.progress?.status)) {
+          console.log(`❌ [Plan Progress] Plan creation failed with status: ${response.progress?.status}`);
+          setIsCreatingPlan(false);
+          setCreationStartTime(null);
+          const errorMessage = response.progress?.error ||
+                              response.progress?.rejectionReason ||
+                              `Plan creation ${response.progress?.status}. Please retry.`;
+          setPlanError(errorMessage);
+          toast({
+            title: "Plan Creation Failed",
+            description: errorMessage,
+            variant: "destructive"
+          });
+        }
       }
     } catch (error) {
-      // Silently fail progress checks
+      // Silently fail progress checks to avoid spamming the user
       console.error('Progress check failed:', error);
     }
   };
@@ -267,7 +313,20 @@ export default function PlanStep({
     setRequirementsConfirmed(false);
   }, [plan?.id]);
 
-  const isPlanStuck = creationStartTime !== null && pendingElapsedMs > 30_000;
+  // ✅ Plan is stuck if it's been pending for more than 45 seconds (30s + 15s buffer)
+  const isPlanStuck = creationStartTime !== null && pendingElapsedMs > 45_000;
+
+  // ✅ Auto-detect stuck plans and offer recovery after 60 seconds
+  useEffect(() => {
+    if (isPlanStuck && pendingElapsedMs > 60_000 && (plan?.status === 'pending' || isCreatingPlan)) {
+      console.warn('⚠️  Plan creation stuck for >60 seconds, suggesting retry');
+      toast({
+        title: "Plan Creation Delayed",
+        description: "Plan creation is taking longer than expected. Please try the Retry button below.",
+        variant: "destructive"
+      });
+    }
+  }, [isPlanStuck, pendingElapsedMs, plan?.status, isCreatingPlan]);
   const requiredDataFields = useMemo(() => {
     if (!plan) return [];
     const stepInputs = plan.analysisSteps?.flatMap(step => step.inputs || []) ?? [];
@@ -312,6 +371,19 @@ export default function PlanStep({
         });
 
         setPlan({ ...plan, status: 'approved', approvedAt: new Date().toISOString() });
+
+        // FIX: Production Readiness - Update journeyProgress SSOT with plan approval
+        // Uses schema-defined fields: analysisPlanId, planApprovedAt
+        try {
+          updateProgress({
+            currentStep: 'plan',
+            analysisPlanId: plan.id,
+            planApprovedAt: new Date().toISOString(),
+          });
+          console.log('✅ [SSOT] Updated journeyProgress with plan approval');
+        } catch (progressError) {
+          console.warn('⚠️ Failed to update journeyProgress with plan approval:', progressError);
+        }
 
         // Navigate to next step
         if (onNext) onNext();
@@ -468,6 +540,21 @@ export default function PlanStep({
               </div>
             </div>
 
+            {/* GAP 4 FIX: Display real-time progress message */}
+            {planProgress?.progressMessage && (
+              <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="flex items-center gap-2 text-blue-800 font-medium">
+                  <Sparkles className="h-4 w-4 animate-pulse" />
+                  {planProgress.progressMessage}
+                </div>
+                {planProgress.currentStep > 0 && planProgress.totalSteps > 0 && (
+                  <div className="text-sm text-blue-600 mt-1">
+                    Step {planProgress.currentStep} of {planProgress.totalSteps}
+                  </div>
+                )}
+              </div>
+            )}
+
             {planProgress?.estimatedTimeRemaining && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Clock className="h-4 w-4" />
@@ -479,17 +566,26 @@ export default function PlanStep({
               <div className="p-4 border border-orange-200 rounded-lg bg-orange-50 space-y-3">
                 <div className="flex items-center gap-2 text-orange-800 font-medium">
                   <AlertCircle className="h-4 w-4" />
-                  This is taking longer than expected.
+                  Plan creation is taking longer than expected
                 </div>
                 <p className="text-sm text-orange-800">
-                  Our agents usually finish within 30 seconds. You can retry plan creation or try again later if the issue persists.
+                  Our agents usually finish within 30-45 seconds. This delay might be due to:
+                </p>
+                <ul className="text-sm text-orange-800 list-disc list-inside space-y-1">
+                  <li>Complex dataset requiring additional analysis</li>
+                  <li>Server load or temporary service disruption</li>
+                  <li>Large number of user questions to process</li>
+                </ul>
+                <p className="text-sm text-orange-700 font-medium">
+                  You can retry plan creation or continue waiting. The system will keep trying in the background.
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <Button onClick={handleForcePlanRegeneration} disabled={isCreatingPlan}>
+                    <RefreshCw className="h-4 w-4 mr-2" />
                     Retry Plan Creation
                   </Button>
-                  <Button variant="outline" onClick={() => setIsCreatingPlan(false)}>
-                    Cancel
+                  <Button variant="outline" onClick={() => { setIsCreatingPlan(false); setPlan(null); }}>
+                    Cancel & Go Back
                   </Button>
                 </div>
               </div>
@@ -517,7 +613,7 @@ export default function PlanStep({
             <Button onClick={createPlan} disabled={!projectId}>
               Retry Plan Creation
             </Button>
-            <Button variant="outline" onClick={loadPlan} disabled={!projectId}>
+            <Button variant="outline" onClick={() => loadPlan()} disabled={!projectId}>
               Refresh
             </Button>
           </CardContent>
@@ -693,7 +789,7 @@ export default function PlanStep({
                 <div className="text-sm font-medium mb-2">Relevant KPIs</div>
                 {businessContext?.relevantKPIs?.length ? (
                   <ul className="list-disc list-inside text-sm text-muted-foreground space-y-1">
-                    {businessContext.relevantKPIs.map((kpi, idx) => (
+                    {businessContext.relevantKPIs.map((kpi: string, idx: number) => (
                       <li key={idx}>{kpi}</li>
                     ))}
                   </ul>
@@ -706,12 +802,12 @@ export default function PlanStep({
                 <div className="text-sm font-medium mb-2">Compliance & Reporting</div>
                 {businessContext?.complianceRequirements?.length || businessContext?.reportingStandards?.length ? (
                   <div className="flex flex-wrap gap-2">
-                    {businessContext?.complianceRequirements?.map((item, idx) => (
+                    {businessContext?.complianceRequirements?.map((item: string, idx: number) => (
                       <Badge key={`compliance-${idx}`} variant="secondary">
                         {item}
                       </Badge>
                     ))}
-                    {businessContext?.reportingStandards?.map((item, idx) => (
+                    {businessContext?.reportingStandards?.map((item: string, idx: number) => (
                       <Badge key={`standard-${idx}`} variant="outline">
                         {item}
                       </Badge>
@@ -726,7 +822,7 @@ export default function PlanStep({
                 <div>
                   <div className="text-sm font-medium mb-2">Business Recommendations</div>
                   <ul className="list-disc list-inside text-sm text-muted-foreground space-y-1">
-                    {businessContext.recommendations.map((rec, idx) => (
+                    {businessContext.recommendations.map((rec: string, idx: number) => (
                       <li key={idx}>{rec}</li>
                     ))}
                   </ul>
@@ -737,7 +833,7 @@ export default function PlanStep({
                 <div>
                   <div className="text-sm font-medium mb-2">Industry Benchmarks</div>
                   <ul className="list-disc list-inside text-sm text-muted-foreground space-y-1">
-                    {businessContext.industryBenchmarks.map((benchmark, idx) => (
+                    {businessContext.industryBenchmarks.map((benchmark: string, idx: number) => (
                       <li key={idx}>{benchmark}</li>
                     ))}
                   </ul>
@@ -1238,12 +1334,21 @@ export default function PlanStep({
               Previous Step
             </Button>
           )}
-          {onNext && plan.status === 'approved' && (
-            <Button onClick={onNext} className="ml-auto">
-              Continue to Execution
-              <ArrowRight className="h-4 w-4 ml-2" />
-            </Button>
-          )}
+          <div className="flex items-center gap-3 ml-auto">
+            {/* Allow users to skip if plan generation is incomplete but they want to proceed */}
+            {onNext && plan.status !== 'approved' && plan.status !== 'ready' && (
+              <Button variant="outline" onClick={onNext}>
+                Skip to Execution
+                <ArrowRight className="h-4 w-4 ml-2" />
+              </Button>
+            )}
+            {onNext && plan.status === 'approved' && (
+              <Button onClick={onNext}>
+                Continue to Execution
+                <ArrowRight className="h-4 w-4 ml-2" />
+              </Button>
+            )}
+          </div>
         </div>
       )}
     </div>
