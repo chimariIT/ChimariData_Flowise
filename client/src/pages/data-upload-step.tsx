@@ -691,16 +691,19 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
     }
 
     // Persist all Step 1 outputs to journeyProgress
+    // [DATA CONTINUITY FIX] Preserve fullData that backend already saved
     try {
       updateProgress({
         currentStep: 'prepare',
         completedSteps: [...(journeyProgress?.completedSteps || []), 'data'],
         uploadedDatasetIds: uploadedFileIds,
         joinedData: {
+          // Preserve fullData from backend (saved by GET /datasets endpoint)
+          ...(journeyProgress?.joinedData || {}),
           preview: joinedPreview,
           schema: joinedPreviewSchema || undefined,
-          totalRowCount: aggregatedValidation?.totalRows || joinedPreview.length,
-          joinInsights: joinInsights || undefined,
+          totalRowCount: aggregatedValidation?.totalRows || journeyProgress?.joinedData?.fullRowCount || joinedPreview.length,
+          joinInsights: joinInsights || journeyProgress?.joinedData?.joinInsights || undefined,
           columnCount: joinedPreviewColumns.length,
           rowCount: joinedPreview.length,
         },

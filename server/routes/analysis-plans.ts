@@ -10,6 +10,8 @@ import { eq, and, desc } from 'drizzle-orm';
 import { ProjectManagerAgent } from '../services/project-manager-agent';
 import { getMessageBroker } from '../services/agents/message-broker';
 import { nanoid } from 'nanoid';
+import { normalizeJourneyType } from '@shared/canonical-types';
+import { parseJourneyProgress } from '../utils/journey-progress';
 
 const router = Router();
 const STALE_PLAN_THRESHOLD_MS = 2 * 60 * 1000; // 2 minutes
@@ -114,6 +116,28 @@ router.post('/:projectId/plan/create', ensureAuthenticated, async (req, res) => 
       timestamp: new Date().toISOString()
     });
 
+    // [DATA CONTINUITY FIX] Extract journeyProgress to use transformed data and previous step outputs
+    const journeyProgress = parseJourneyProgress((project as any)?.journeyProgress || {}) as any;
+
+    // Prioritize transformed data over original data (Step 4→5 data flow)
+    const transformedData = journeyProgress?.transformationStepData?.transformedData ||
+                           journeyProgress?.joinedData?.fullData ||
+                           project.data || [];
+
+    // Use joined schema or transformed schema over original
+    const effectiveSchema = journeyProgress?.joinedData?.schema ||
+                           journeyProgress?.transformationStepData?.schema ||
+                           project.schema || {};
+
+    // Extract user questions and analysis goal from journeyProgress (Step 2→5 data flow)
+    const userQuestions = journeyProgress?.userQuestions?.map((q: any) => q.text || q) || [];
+    const analysisGoal = journeyProgress?.analysisGoal || project.objectives || '';
+    const requirementsDocument = journeyProgress?.requirementsDocument || null;
+    const transformationDocument = journeyProgress?.transformationDocument || null;
+
+    console.log(`📋 [STEP 4→5 FIX] Using ${transformedData.length} rows (${journeyProgress?.transformationStepData ? 'transformed' : journeyProgress?.joinedData ? 'joined' : 'original'} data)`);
+    console.log(`📋 [STEP 4→5 FIX] Schema has ${Object.keys(effectiveSchema).length} columns, ${userQuestions.length} user questions`);
+
     // ✅ SLA: Plan creation must complete in under 30 seconds for <1 minute total journey lifecycle
     const PLAN_CREATION_TIMEOUT = 30 * 1000; // 30 seconds (reduced from 5 minutes for SLA compliance)
     const planPromise = projectManagerAgent.createAnalysisPlan({
@@ -122,11 +146,21 @@ router.post('/:projectId/plan/create', ensureAuthenticated, async (req, res) => 
       project: {
         id: project.id,
         name: project.name || '',
-        journeyType: project.journeyType || 'ai_guided',
-        data: project.data || [],
-        schema: project.schema || {},
-        objectives: project.objectives || '',
+        journeyType: normalizeJourneyType(project.journeyType as string | null),
+        data: transformedData,  // [FIX] Use transformed data from Step 4
+        schema: effectiveSchema, // [FIX] Use joined/transformed schema
+        objectives: analysisGoal, // [FIX] Use analysis goal from Step 2
         businessContext: project.businessContext || {},
+      },
+      // [DATA CONTINUITY] Pass previous step artifacts for context
+      journeyContext: {
+        userQuestions,
+        analysisGoal,
+        requirementsDocument,
+        transformationDocument,
+        audience: journeyProgress?.audience || null,
+        dataQualityApproved: journeyProgress?.dataQualityApproved || false,
+        completedSteps: journeyProgress?.completedSteps || [],
       }
     });
 
@@ -378,9 +412,12 @@ router.post('/:projectId/plan/:planId/approve', ensureAuthenticated, async (req,
     }
 
     const now = new Date();
-    const planCostTotal = plan.estimatedCost?.total ?? 0;
-    const lockedCost = Number.isFinite(planCostTotal) ? planCostTotal : 0;
-    const lockedCostString = lockedCost > 0 ? lockedCost.toFixed(2) : null;
+
+    // Use CostTrackingService to lock the estimated cost
+    if (plan.estimatedCost) {
+      const { costTrackingService } = await import('../services/cost-tracking');
+      await costTrackingService.lockEstimatedCost(projectId, plan.estimatedCost);
+    }
 
     await db.transaction(async (tx: any) => {
       await tx.update(analysisPlans)
@@ -395,9 +432,7 @@ router.post('/:projectId/plan/:planId/approve', ensureAuthenticated, async (req,
       await tx.update(projects)
         .set({
           approvedPlanId: planId,
-          lockedCostEstimate: lockedCostString,
-          costBreakdown: plan.estimatedCost ?? null,
-          totalCostIncurred: '0.00',
+          // Cost fields are handled by lockEstimatedCost above
           analysisExecutedAt: null,
           analysisBilledAt: null,
           analysisResults: null,
@@ -520,7 +555,7 @@ router.post('/:projectId/plan/:planId/reject', ensureAuthenticated, async (req, 
     // For now, just updating the plan status to rejected
     console.log(`❌ Plan ${planId} rejected by user ${userId}: ${reason}`);
     console.log(`⚠️ Plan regeneration not yet implemented - plan status set to rejected`);
-    
+
     return res.json({
       success: true,
       message: 'Analysis plan rejected. Plan regeneration feature needs implementation.',
@@ -611,9 +646,11 @@ router.get('/:projectId/plan/progress', ensureAuthenticated, async (req, res) =>
     // Extract agent progress from agentContributions
     const contributions = plan.agentContributions as Record<string, any> || {};
 
+    // FIX #33: Include rejectionReason in progress response so frontend can display error
     const progress = {
       planId: plan.id,
       status: plan.status,
+      rejectionReason: plan.rejectionReason || null, // FIX: Return rejection reason for failed/rejected plans
       agentProgress: {
         dataEngineer: contributions.data_engineer?.status || 'pending',
         dataScientist: contributions.data_scientist?.status || 'pending',

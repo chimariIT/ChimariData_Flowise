@@ -246,6 +246,17 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       setSavedGoal(journeyProgress.analysisGoal);
     }
 
+    // [STEP 5→6 FIX] First check if there's an approved plan with analysisSteps
+    // The plan step saves analysisPlanId and sets planApproved=true when user approves
+    const planApproved = (journeyProgress as any).planApproved;
+    const analysisPlanId = (journeyProgress as any).analysisPlanId;
+
+    if (planApproved && analysisPlanId) {
+      console.log('✅ [Execute] Using APPROVED PLAN from Step 5:', { analysisPlanId, planApproved });
+      // The plan's analysisSteps should be used - fetch them if not already loaded
+      // This will be handled by a separate effect below that loads the plan
+    }
+
     // Load requirements/analysisPath - FIX: Check both nested and flat structure
     // Prepare step saves to journeyProgress.requirementsDocument, not directly on journeyProgress
     const reqDoc = (journeyProgress as any).requirementsDocument;
@@ -265,8 +276,8 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         gaps: reqDoc?.gaps || (journeyProgress as any).gaps || [],
       });
 
-      // Auto-select analyses if nothing selected
-      if (selectedAnalyses.length === 0) {
+      // Auto-select analyses if nothing selected (only if no approved plan)
+      if (selectedAnalyses.length === 0 && !planApproved) {
         const recommendedTypes = analysisPath
           .map((a: any) => a.analysisType?.toLowerCase().replace(/\s+/g, '-'))
           .filter((t: string) => t);
@@ -341,10 +352,66 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     loadRequirementsDocument();
   }, [resolvedProjectId, projectLoading, journeyProgress, requirementsDocument]);
 
+  // [STEP 5→6 FIX] Load approved plan from Step 5 and use its analysisSteps
+  const [approvedPlan, setApprovedPlan] = useState<any>(null);
+  useEffect(() => {
+    if (!resolvedProjectId || !journeyProgress) return;
+
+    const planApproved = (journeyProgress as any).planApproved;
+    const analysisPlanId = (journeyProgress as any).analysisPlanId;
+
+    if (!planApproved || !analysisPlanId) {
+      console.log('📋 [Execute] No approved plan found, will use requirements document');
+      return;
+    }
+
+    const loadApprovedPlan = async () => {
+      try {
+        console.log(`📋 [STEP 5→6 FIX] Loading approved plan: ${analysisPlanId}`);
+        const response = await apiClient.get(`/api/projects/${resolvedProjectId}/plan`);
+
+        if (response?.plan || response?.data?.plan) {
+          const plan = response.plan || response.data.plan;
+          setApprovedPlan(plan);
+
+          // Use plan's analysisSteps for execution
+          if (plan.analysisSteps?.length > 0) {
+            const plannedAnalyses = plan.analysisSteps.map((step: any) =>
+              step.method?.toLowerCase().replace(/\s+/g, '-') ||
+              step.type?.toLowerCase() ||
+              step.name?.toLowerCase().replace(/\s+/g, '-')
+            ).filter((t: string) => t);
+
+            if (plannedAnalyses.length > 0 && selectedAnalyses.length === 0) {
+              console.log('✅ [STEP 5→6 FIX] Using analyses from APPROVED PLAN:', plannedAnalyses);
+              setSelectedAnalyses(plannedAnalyses);
+            }
+          }
+
+          // Also store expected cost from plan
+          if (plan.estimatedCost) {
+            console.log('💰 [Execute] Expected cost from approved plan:', plan.estimatedCost.total);
+          }
+        }
+      } catch (error) {
+        console.warn('⚠️ [Execute] Could not load approved plan:', error);
+        // Fall back to requirements document
+      }
+    };
+
+    loadApprovedPlan();
+  }, [resolvedProjectId, journeyProgress, selectedAnalyses.length]);
+
   // Fetch schema and generate smart recommendations
   // P1-4 FIX: Only generate new recommendations if no locked selections from Prepare step
   useEffect(() => {
     if (!resolvedProjectId) return;
+
+    // Skip if we have an approved plan (loaded above)
+    if (approvedPlan?.analysisSteps?.length > 0) {
+      console.log('📋 [P1-4] Skipping smart recommendations - using approved plan');
+      return;
+    }
 
     // Skip if we already have locked selections from Prepare step (SSOT)
     if (journeyProgress?.selectedAnalysisTypes && journeyProgress.selectedAnalysisTypes.length > 0) {

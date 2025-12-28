@@ -703,6 +703,58 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
         </Card>
       )}
 
+      {/* [STEP 1→2 FIX] Show data summary from Step 1 */}
+      {journeyProgress?.uploadedDatasetIds && journeyProgress.uploadedDatasetIds.length > 0 && (
+        <Card className="border-emerald-200 bg-emerald-50">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-emerald-900">
+              <CheckCircle className="w-5 h-5" />
+              Data Ready for Analysis
+            </CardTitle>
+            <CardDescription className="text-emerald-700">
+              Here's what you uploaded in Step 1
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="text-center p-3 bg-white rounded-lg border border-emerald-100">
+                <p className="text-2xl font-bold text-emerald-900">{journeyProgress.uploadedDatasetIds.length}</p>
+                <p className="text-sm text-emerald-600">Dataset(s)</p>
+              </div>
+              {journeyProgress.joinedData?.totalRowCount && (
+                <div className="text-center p-3 bg-white rounded-lg border border-emerald-100">
+                  <p className="text-2xl font-bold text-emerald-900">{journeyProgress.joinedData.totalRowCount.toLocaleString()}</p>
+                  <p className="text-sm text-emerald-600">Total Rows</p>
+                </div>
+              )}
+              {journeyProgress.joinedData?.columnCount && (
+                <div className="text-center p-3 bg-white rounded-lg border border-emerald-100">
+                  <p className="text-2xl font-bold text-emerald-900">{journeyProgress.joinedData.columnCount}</p>
+                  <p className="text-sm text-emerald-600">Columns</p>
+                </div>
+              )}
+              {journeyProgress.dataQualityApproved && (
+                <div className="text-center p-3 bg-white rounded-lg border border-emerald-100">
+                  <div className="flex items-center justify-center gap-1">
+                    <Shield className="w-4 h-4 text-emerald-600" />
+                    <span className="text-sm font-medium text-emerald-900">Quality OK</span>
+                  </div>
+                  <p className="text-xs text-emerald-600">Data approved</p>
+                </div>
+              )}
+            </div>
+            {journeyProgress.piiDecision?.excludedColumns && journeyProgress.piiDecision.excludedColumns.length > 0 && (
+              <div className="mt-3 p-2 bg-amber-50 border border-amber-200 rounded-lg">
+                <p className="text-sm text-amber-800">
+                  <Shield className="w-4 h-4 inline mr-1" />
+                  {journeyProgress.piiDecision.excludedColumns.length} column(s) excluded for privacy
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Journey Type Info */}
       <Card className={`border-${journeyInfo.color}-200 bg-${journeyInfo.color}-50`}>
         <CardHeader>

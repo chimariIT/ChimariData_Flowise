@@ -978,6 +978,105 @@ return (
       </CardContent>
     </Card>
 
+    {/* [DATA CONTINUITY] Prepare Step Summary - Show artifacts from Step 2 */}
+    {journeyProgress && (journeyProgress.analysisGoal || journeyProgress.userQuestions?.length || requiredDataElements) && (
+      <Card className="border-emerald-200 bg-gradient-to-r from-emerald-50 to-teal-50">
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-emerald-900">
+            <TrendingUp className="w-5 h-5" />
+            From Prepare Step: Your Analysis Plan
+          </CardTitle>
+          <CardDescription className="text-emerald-700">
+            Review the goals and recommendations from the previous step
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Analysis Goal */}
+          {journeyProgress.analysisGoal && (
+            <div className="p-3 bg-white rounded-lg border border-emerald-100">
+              <h4 className="text-sm font-semibold text-emerald-900 mb-1 flex items-center gap-2">
+                <CheckCircle className="w-4 h-4" />
+                Analysis Goal
+              </h4>
+              <p className="text-sm text-gray-700">{journeyProgress.analysisGoal}</p>
+            </div>
+          )}
+
+          {/* User Questions */}
+          {journeyProgress.userQuestions && journeyProgress.userQuestions.length > 0 && (
+            <div className="p-3 bg-white rounded-lg border border-emerald-100">
+              <h4 className="text-sm font-semibold text-emerald-900 mb-2 flex items-center gap-2">
+                <Info className="w-4 h-4" />
+                Your Questions ({journeyProgress.userQuestions.length})
+              </h4>
+              <ul className="space-y-1">
+                {journeyProgress.userQuestions.slice(0, 5).map((q: any, idx: number) => (
+                  <li key={idx} className="text-sm text-gray-700 flex items-start gap-2">
+                    <span className="text-emerald-600 font-medium">{idx + 1}.</span>
+                    <span>{q.text || q}</span>
+                  </li>
+                ))}
+                {journeyProgress.userQuestions.length > 5 && (
+                  <li className="text-sm text-emerald-600">+{journeyProgress.userQuestions.length - 5} more questions</li>
+                )}
+              </ul>
+            </div>
+          )}
+
+          {/* Recommended Analysis Approaches - from requirementsDocument.analysisPath */}
+          {requiredDataElements?.analysisPath && requiredDataElements.analysisPath.length > 0 && (
+            <div className="p-3 bg-white rounded-lg border border-emerald-100">
+              <h4 className="text-sm font-semibold text-emerald-900 mb-2 flex items-center gap-2">
+                <BarChart3 className="w-4 h-4" />
+                Recommended Analysis Approaches
+              </h4>
+              <div className="flex flex-wrap gap-2">
+                {requiredDataElements.analysisPath.map((analysis: any, idx: number) => (
+                  <Badge key={idx} variant="outline" className="bg-emerald-50 text-emerald-800 border-emerald-200">
+                    {analysis.type || analysis.method || analysis.name || analysis}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Required Data Elements Summary */}
+          {requiredElements.length > 0 && (
+            <div className="p-3 bg-white rounded-lg border border-emerald-100">
+              <h4 className="text-sm font-semibold text-emerald-900 mb-1 flex items-center gap-2">
+                <Database className="w-4 h-4" />
+                Required Data Elements
+              </h4>
+              <p className="text-sm text-gray-700">
+                {requiredElements.length} data element(s) identified for your analysis.
+                Map these to your dataset columns in the <strong>Elements</strong> tab below.
+              </p>
+            </div>
+          )}
+
+          {/* Audience Context */}
+          {journeyProgress.audience?.primary && (
+            <div className="p-3 bg-white rounded-lg border border-emerald-100">
+              <h4 className="text-sm font-semibold text-emerald-900 mb-1 flex items-center gap-2">
+                <Eye className="w-4 h-4" />
+                Target Audience
+              </h4>
+              <p className="text-sm text-gray-700">
+                Primary: <Badge variant="outline" className="ml-1">{journeyProgress.audience.primary}</Badge>
+                {journeyProgress.audience.secondary?.length > 0 && (
+                  <span className="ml-2">
+                    Secondary: {journeyProgress.audience.secondary.map((a: string, i: number) => (
+                      <Badge key={i} variant="outline" className="ml-1">{a}</Badge>
+                    ))}
+                  </span>
+                )}
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    )}
+
     {/* Detailed Verification Tabs - Moved to Top */}
     <Card>
       <Tabs defaultValue="preview" className="w-full">

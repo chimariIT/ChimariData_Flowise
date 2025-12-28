@@ -649,6 +649,50 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
         </Card>
       )}
 
+      {/* [STEP 6→7 FIX] Show actual key findings from analysis results */}
+      {(journeyProgress as any)?.analysisResults && Array.isArray((journeyProgress as any).analysisResults) && (journeyProgress as any).analysisResults.length > 0 && (
+        <Card className="border-emerald-200 bg-gradient-to-r from-emerald-50 to-teal-50">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-emerald-900">
+              <CheckCircle className="w-5 h-5" />
+              Key Findings from Your Analysis
+            </CardTitle>
+            <CardDescription className="text-emerald-700">
+              Here's a preview of what was discovered in your data
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {((journeyProgress as any).analysisResults as any[]).slice(0, 3).map((result: any, idx: number) => (
+                <div key={idx} className="p-3 bg-white rounded-lg border border-emerald-100">
+                  <div className="flex items-start gap-3">
+                    <Badge variant="outline" className="bg-emerald-100 text-emerald-800 shrink-0">
+                      {result.type || result.analysisType || 'Analysis'}
+                    </Badge>
+                    <div className="flex-1">
+                      {result.title && <p className="font-medium text-emerald-900">{result.title}</p>}
+                      {result.summary && <p className="text-sm text-emerald-700 mt-1">{result.summary.slice(0, 150)}{result.summary.length > 150 ? '...' : ''}</p>}
+                      {result.keyFindings && Array.isArray(result.keyFindings) && result.keyFindings.length > 0 && (
+                        <ul className="mt-2 text-sm text-emerald-600 list-disc list-inside">
+                          {result.keyFindings.slice(0, 2).map((finding: string, i: number) => (
+                            <li key={i}>{finding.slice(0, 80)}{finding.length > 80 ? '...' : ''}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {(journeyProgress as any).analysisResults.length > 3 && (
+                <p className="text-sm text-emerald-600 text-center">
+                  + {(journeyProgress as any).analysisResults.length - 3} more results available after payment
+                </p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Results Teaser - Preview of what they'll get */}
       <Card className="border-indigo-200 bg-gradient-to-r from-indigo-50 to-purple-50">
         <CardHeader>

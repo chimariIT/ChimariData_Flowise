@@ -324,15 +324,40 @@ export default function DataTransformationStep({
             if (journeyProgress?.requirementsDocument) {
                 console.log('📋 [Transformation] Using requirementsDocument from journeyProgress (SSOT)');
                 setRequiredDataElements(journeyProgress.requirementsDocument);
-                
-                // Use joined schema for mappings (from journeyProgress or merged schema)
-                const schemaForMappings = mergedSchemaForMappings || currentSchema;
-                if (schemaForMappings && Object.keys(schemaForMappings).length > 0) {
-                    const primaryDataset = datasetList[0]?.dataset || datasetList[0];
-                    const existingMetadata = primaryDataset?.ingestionMetadata?.transformationMetadata;
-                    if (!existingMetadata?.mappings || existingMetadata.mappings.length === 0) {
-                        // Generate mappings using joined schema and requirementsDocument
-                        await generateMappings(journeyProgress.requirementsDocument, schemaForMappings);
+
+                // [DATA CONTINUITY FIX] Check if Step 3 (Verification) already created mappings
+                // Mappings are stored in requiredDataElements[].sourceColumn by data-verification-step
+                const reqDoc = journeyProgress.requirementsDocument;
+                const elementsWithMappings = reqDoc?.requiredDataElements?.filter(
+                    (el: any) => el.sourceColumn && el.sourceColumn !== ''
+                ) || [];
+                const hasMappingsFromVerification = elementsWithMappings.length > 0;
+
+                if (hasMappingsFromVerification) {
+                    // [STEP 3→4 FIX] Use mappings from Verification step instead of regenerating
+                    console.log(`✅ [Transformation] Using ${elementsWithMappings.length} verified mappings from Step 3 (Verification)`);
+                    const existingMappings: TransformationMapping[] = reqDoc.requiredDataElements.map((el: any) => ({
+                        targetElement: el.name || el.elementName || '',
+                        targetType: el.type || el.dataType || 'string',
+                        sourceColumn: el.sourceColumn || null,
+                        confidence: el.confidence ?? (el.sourceColumn ? 0.9 : 0),
+                        transformationRequired: el.transformationRequired ?? !!el.suggestedTransformation,
+                        suggestedTransformation: el.suggestedTransformation || el.transformation || '',
+                        userDefinedLogic: el.userDefinedLogic || '',
+                        relatedQuestions: el.relatedQuestions || [],
+                        elementId: el.id || el.elementId
+                    }));
+                    setTransformationMappings(existingMappings);
+                } else {
+                    // No mappings from Verification - generate new ones
+                    const schemaForMappings = mergedSchemaForMappings || currentSchema;
+                    if (schemaForMappings && Object.keys(schemaForMappings).length > 0) {
+                        const primaryDataset = datasetList[0]?.dataset || datasetList[0];
+                        const existingMetadata = primaryDataset?.ingestionMetadata?.transformationMetadata;
+                        if (!existingMetadata?.mappings || existingMetadata.mappings.length === 0) {
+                            console.log('📋 [Transformation] No verified mappings found, generating from requirementsDocument');
+                            await generateMappings(journeyProgress.requirementsDocument, schemaForMappings);
+                        }
                     }
                 }
             } else {
@@ -841,6 +866,7 @@ export default function DataTransformationStep({
             queryClient.invalidateQueries({ queryKey: ["project", pid] });
 
             // Update journeyProgress with transformation results (SSOT)
+            // [DATA CONTINUITY FIX] Include transformation summary for downstream steps
             updateProgress({
                 transformationMappings: enhancedMappings.map(m => ({
                     sourceElementId: m.elementId || m.targetElement,
@@ -850,6 +876,16 @@ export default function DataTransformationStep({
                     appliedAt: new Date().toISOString()
                 })),
                 transformedSchema: result.preview.schema || currentSchema,
+                // [NEW] Add transformation summary for Plan and Execute steps
+                transformationStepData: {
+                    transformedRowCount: result.rowCount || result.preview?.data?.length || 0,
+                    transformedColumnCount: Object.keys(result.preview?.schema || {}).length,
+                    transformationStepsApplied: transformationSteps.length,
+                    schema: result.preview?.schema || currentSchema,
+                    // Note: Full transformedData is stored in dataset.ingestionMetadata by backend
+                    executedAt: new Date().toISOString(),
+                    joinApplied: allDatasets.length > 1 && joinConfig.enabled
+                },
                 currentStep: 'plan' // Move to next suggested step
             });
         } catch (error: any) {
@@ -948,6 +984,7 @@ export default function DataTransformationStep({
         }
 
         // Mark step as complete and save transformation data
+        // [DATA CONTINUITY FIX] Preserve existing transformationStepData from executeTransformations
         try {
             updateProgress({
                 currentStep: 'plan',
@@ -963,6 +1000,15 @@ export default function DataTransformationStep({
                     }))
                     : (journeyProgress?.transformationMappings || []),
                 transformedSchema: transformedPreview?.schema || currentSchema || journeyProgress?.transformedSchema,
+                // Preserve transformationStepData if already set, otherwise create minimal summary
+                transformationStepData: (journeyProgress as any)?.transformationStepData || {
+                    transformedRowCount: transformedPreview?.data?.length || (journeyProgress as any)?.joinedData?.totalRowCount || 0,
+                    transformedColumnCount: Object.keys(transformedPreview?.schema || currentSchema || {}).length,
+                    transformationStepsApplied: transformationMappings.length,
+                    schema: transformedPreview?.schema || currentSchema,
+                    executedAt: new Date().toISOString(),
+                    joinApplied: allDatasets.length > 1
+                },
                 stepTimestamps: {
                     ...(journeyProgress?.stepTimestamps || {}),
                     transformationCompleted: new Date().toISOString()
