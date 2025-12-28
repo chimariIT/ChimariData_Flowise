@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { apiClient } from "@/lib/api";
 import BillingCapacityDisplay from "@/components/BillingCapacityDisplay";
-import { useProjectSession } from "@/hooks/useProjectSession";
+import { useProject } from "@/hooks/useProject";
 import { useJourneyState } from "@/hooks/useJourneyState";
 
 interface PricingStepProps {
@@ -70,8 +70,17 @@ const pickNumber = (...values: unknown[]) => {
   return 0;
 };
 
-const mapCapacityBlock = (block: any): Record<string, number> | null => {
-  if (!block || typeof block !== 'object') return null;
+const mapCapacityBlock = (block: any): Record<string, number> => {
+  if (!block || typeof block !== 'object') {
+    // Return default zeros instead of null to prevent crashes
+    return {
+      dataVolumeMB: 0,
+      aiInsights: 0,
+      analysisComponents: 0,
+      visualizations: 0,
+      fileUploads: 0,
+    };
+  }
   return {
     dataVolumeMB: pickNumber(block.dataVolumeMB, block.dataMB, block.data, block.volumeMB),
     aiInsights: pickNumber(block.aiInsights, block.ai, block.aiQueries),
@@ -96,15 +105,15 @@ const normalizeBillingBreakdown = (
 
   const normalizedItems = Array.isArray(raw?.breakdown)
     ? raw.breakdown.map((item: any, index: number) => ({
-        description: item.description || item.item || `Line item ${index + 1}`,
-        cost: toCents(item.cost, 0),
-        capacityImpact: item.capacityImpact
-          ? {
-              used: mapCapacityBlock(item.capacityImpact.used) || undefined,
-              remaining: mapCapacityBlock(item.capacityImpact.remaining) || undefined,
-            }
-          : undefined,
-      }))
+      description: item.description || item.item || `Line item ${index + 1}`,
+      cost: toCents(item.cost, 0),
+      capacityImpact: item.capacityImpact
+        ? {
+          used: mapCapacityBlock(item.capacityImpact.used) || undefined,
+          remaining: mapCapacityBlock(item.capacityImpact.remaining) || undefined,
+        }
+        : undefined,
+    }))
     : [];
 
   return {
@@ -127,17 +136,17 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
   const [billingError, setBillingError] = useState<string | null>(null);
   const [billingBreakdown, setBillingBreakdown] = useState<NormalizedBreakdown | null>(null);
   const [currentTier, setCurrentTier] = useState<string>('');
+  const [paymentProcessing, setPaymentProcessing] = useState<boolean>(false);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
 
-  // 🔒 CRITICAL: Use server-validated session data ONLY
+  // 🔒 SSOT: Use useProject hook instead of useProjectSession
   const {
-    session,
-    getExecuteData,
-    loading: sessionLoading
-  } = useProjectSession({
-    journeyType: journeyType as 'non-tech' | 'business' | 'technical' | 'consultation' | 'custom'
-  });
+    projectId,
+    journeyProgress,
+    updateProgress,
+    isLoading: projectLoading
+  } = useProject(localStorage.getItem('currentProjectId') || undefined);
 
-  const projectId = session?.projectId ?? null;
   const {
     data: journeyState,
     isLoading: journeyStateLoading,
@@ -157,7 +166,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
         };
       case 'business':
         return {
-          title: "Business Analysis Pricing", 
+          title: "Business Analysis Pricing",
           description: "Pricing for business template-based analysis",
           basePrice: 39,
           icon: DollarSign,
@@ -206,81 +215,77 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
     let warning: string | null = null;
     let summary: AnalysisSummary = { ...defaultAnalysisSummary };
 
-    if (session) {
-      if (!session.serverValidated) {
-        warning = '⚠️ SECURITY: Execution results have NOT been validated by the server. Pricing may be inaccurate. Please re-run your analysis.';
-        console.error('SECURITY ALERT: Attempting to use unvalidated execution results for pricing');
+    // 1. Priority: journeyProgress.executionSummary (SSOT)
+    if (journeyProgress?.executionSummary) {
+      const summaryData = journeyProgress.executionSummary;
+      summary = {
+        totalAnalyses: summaryData.totalAnalyses || 1,
+        dataSize: summaryData.dataSize || 1000,
+        complexity: summaryData.complexity || 'moderate',
+        executionTime: summaryData.executionTime || '5 minutes',
+        resultsGenerated: summaryData.resultsGenerated || (summaryData.insightsFound || 0) + (summaryData.recommendationsFound || 0),
+        insightsFound: summaryData.insightsFound || 0
+      };
+
+      if (!journeyProgress.analysisResultsId) {
+        warning = '⚠️ SECURITY: Execution results missing analysisResultsId. Results may be unvalidated.';
       }
 
-      const serverData = getExecuteData();
-      if (serverData) {
-        summary = {
-          totalAnalyses: serverData.totalAnalyses || serverData.selectedAnalyses?.length || 1,
-          dataSize: serverData.dataSize || serverData.resultsGenerated || 1000,
-          complexity: serverData.complexity || 'moderate',
-          executionTime: serverData.executionTime || '5 minutes',
-          resultsGenerated: serverData.resultsGenerated || 0,
-          insightsFound: serverData.insightsFound || 0
-        };
-        return { summary, warning };
-      }
+      return { summary, warning };
     }
 
-    try {
-      const cached = localStorage.getItem('chimari_execution_results');
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        warning = warning ?? 'Using cached data. For accurate pricing, please ensure your analysis completed successfully.';
-        console.warn('⚠️  Using localStorage fallback (not server-validated)');
-        summary = {
-          totalAnalyses: parsed.totalAnalyses || parsed.selectedAnalyses?.length || 1,
-          dataSize: parsed.dataSize || parsed.resultsGenerated || 1000,
-          complexity: parsed.complexity || 'moderate',
-          executionTime: parsed.executionTime || '5 minutes',
-          resultsGenerated: parsed.resultsGenerated || 0,
-          insightsFound: parsed.insightsFound || 0
-        };
-        return { summary, warning };
-      }
-    } catch (error) {
-      console.error('Failed to load execution results:', error);
-      warning = warning ?? '⚠️ We could not load your execution results. Please rerun analysis before payment.';
+    // 2. Fallback: Check if execution was completed but summary not saved
+    if (journeyProgress?.executionCompletedAt && !journeyProgress?.executionSummary) {
+      warning = '⚠️ Execution completed but summary not available. Please refresh the page.';
+      // Use defaults but indicate execution happened
+      summary = {
+        ...defaultAnalysisSummary,
+        totalAnalyses: 1, // Assume at least one analysis was run
+      };
+      return { summary, warning };
     }
 
-    warning = warning ?? '⚠️ No execution results found. Please run analysis before viewing pricing.';
+    // 3. No execution yet
+    warning = '⚠️ No execution results found. Please run analysis before viewing pricing.';
     return { summary, warning };
-  }, [session, getExecuteData]);
+  }, [journeyProgress]);
 
   // Compute dataset size in MB from rows (rough estimate: 10,000 rows ~ 100 MB)
-  const datasetSizeMB = useMemo(() =>
-    Math.max(1, Math.round(analysisResults.dataSize / 100)),
-    [analysisResults.dataSize]
-  );
+  // If dataSize is already in MB, use it directly; otherwise convert from rows
+  const datasetSizeMB = useMemo(() => {
+    const size = analysisResults.dataSize || 0;
+    // If size is less than 1000, assume it's already in MB; otherwise assume it's row count
+    if (size < 1000) {
+      return Math.max(1, size);
+    }
+    // Convert rows to MB (rough estimate: 10,000 rows ~ 100 MB)
+    return Math.max(1, Math.round(size / 100));
+  }, [analysisResults.dataSize]);
 
-  const calculatePricing = () => {
+  const calculatePricing = useMemo(() => {
     let basePrice = journeyInfo.basePrice;
-    
+
     // Data size multiplier (per MB)
     const dataSizeCost = Math.max(0, (analysisResults.dataSize - 1000) * 0.001); // $0.001 per MB over 1GB
-    
+
     // Complexity multiplier
     let complexityMultiplier = 1.0;
     if (analysisResults.complexity === 'moderate') complexityMultiplier = 1.2;
     if (analysisResults.complexity === 'complex') complexityMultiplier = 1.5;
     if (analysisResults.complexity === 'expert') complexityMultiplier = 2.0;
-    
+
     // Analysis count multiplier (per analysis)
     let analysisMultiplier = 1.0;
     if (analysisResults.totalAnalyses > 2) analysisMultiplier = 1.1;
     if (analysisResults.totalAnalyses > 4) analysisMultiplier = 1.2;
-    
+
     // Calculate per-analysis cost
     const perAnalysisCost = Math.round((basePrice + dataSizeCost) * complexityMultiplier * analysisMultiplier);
-    
-    return perAnalysisCost;
-  };
 
-  const finalPrice = calculatePricing();
+    return perAnalysisCost;
+  }, [journeyInfo.basePrice, analysisResults.dataSize, analysisResults.complexity, analysisResults.totalAnalyses]);
+
+  const finalPrice = calculatePricing;
 
   const toCents = (amount: unknown): number | null => {
     if (amount === null || amount === undefined) return null;
@@ -443,10 +448,101 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
     { id: 'bank', name: 'Bank Transfer', icon: CreditCard, description: 'Direct bank transfer' }
   ];
 
-  const handlePayment = () => {
-    // Mock payment processing
-    console.log('Processing payment...');
-    if (onNext) onNext();
+  const handlePayment = async () => {
+    // Validate we have required data before proceeding
+    if (!projectId) {
+      setPaymentError('No project selected. Please start a new analysis journey.');
+      return;
+    }
+
+    if (!selectedPlan) {
+      setPaymentError('Please select a pricing plan.');
+      return;
+    }
+
+    // Enterprise plan requires contact sales
+    if (selectedPlan === 'enterprise') {
+      window.location.href = '/contact-sales?plan=enterprise';
+      return;
+    }
+
+    // Get the final amount to charge
+    const amountCents = authoritativeCostCents;
+    if (!amountCents || amountCents <= 0) {
+      setPaymentError('Unable to determine payment amount. Please refresh and try again.');
+      return;
+    }
+
+    setPaymentProcessing(true);
+    setPaymentError(null);
+
+    try {
+      // Call the payment endpoint to create Stripe checkout session
+      // This endpoint returns a session with checkout URL for redirect flow
+      // FIX: Production Readiness - Pass selected payment method to backend
+      const response: any = await apiClient.post('/api/payment/create-checkout-session', {
+        projectId,
+        paymentMethod,  // Pass selected payment method (card, paypal, bank)
+      });
+
+      // Check for errors in response
+      if (response?.error) {
+        throw new Error(response.error);
+      }
+
+      // Check if we got a Stripe checkout URL
+      if (response?.url) {
+        // Redirect to Stripe Checkout
+        window.location.href = response.url;
+        return;
+      }
+
+      // Alternative: If we got a session ID but no URL (older Stripe integration)
+      if (response?.id && !response?.url) {
+        // Construct checkout URL from session ID
+        const checkoutUrl = `https://checkout.stripe.com/pay/${response.id}`;
+        window.location.href = checkoutUrl;
+        return;
+      }
+
+      // If payment was free (covered by subscription credits)
+      if (amountCents === 0) {
+        // Payment not required - mark step as complete and proceed to next step
+        try {
+          updateProgress({
+            currentStep: 'results',
+            completedSteps: [...(journeyProgress?.completedSteps || []), 'pricing'],
+            paymentStatus: 'paid',
+            paymentCompletedAt: new Date().toISOString(),
+            stepTimestamps: {
+              ...(journeyProgress?.stepTimestamps || {}),
+              pricingCompleted: new Date().toISOString()
+            }
+          });
+        } catch (progressError) {
+          console.warn('Failed to update pricing step completion:', progressError);
+          // Continue anyway - webhook or other mechanism may handle it
+        }
+        
+        if (onNext) onNext();
+        return;
+      }
+
+      // NOTE: For paid payments that redirect to Stripe, step completion is handled by:
+      // 1. Stripe webhook that processes payment success (sets paymentStatus: 'paid', paymentCompletedAt)
+      // 2. User return from Stripe checkout (may need additional handling in success page)
+      // This ensures payment completion is tracked before marking step complete
+
+      // Fallback: If no URL and no session ID, something went wrong
+      throw new Error('Payment session created but no checkout URL received.');
+
+    } catch (error: any) {
+      console.error('Payment error:', error);
+      const errorMessage = error?.message || error?.error || 'Payment processing failed. Please try again.';
+      setPaymentError(errorMessage);
+    } finally {
+      setPaymentProcessing(false);
+    }
   };
 
   return (
@@ -465,7 +561,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
       </Card>
 
       {/* 🔒 Server Validation Status */}
-      {session?.serverValidated && (
+      {journeyProgress?.analysisResultsId && (
         <Card className="border-green-200 bg-green-50">
           <CardContent className="py-4">
             <div className="flex items-center gap-3">
@@ -541,17 +637,56 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
         </Card>
       )}
 
-      {/* Session Loading Indicator */}
-      {sessionLoading && (
+      {/* Project Loading Indicator */}
+      {projectLoading && (
         <Card className="border-blue-200 bg-blue-50">
           <CardContent className="py-3">
             <div className="flex items-center gap-2 text-sm text-blue-800">
               <Shield className="w-4 h-4 animate-pulse" />
-              <span>Synchronizing session data from server...</span>
+              <span>Synchronizing project data from server...</span>
             </div>
           </CardContent>
         </Card>
       )}
+
+      {/* Results Teaser - Preview of what they'll get */}
+      <Card className="border-indigo-200 bg-gradient-to-r from-indigo-50 to-purple-50">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-indigo-900">
+            <Zap className="w-5 h-5" />
+            Results Preview
+          </CardTitle>
+          <CardDescription className="text-indigo-700">
+            Here's what you'll unlock after payment
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+            <div className="text-center p-3 bg-white rounded-lg border border-indigo-100">
+              <p className="text-2xl font-bold text-indigo-900">{analysisResults.insightsFound}</p>
+              <p className="text-sm text-indigo-600">Key Insights</p>
+            </div>
+            <div className="text-center p-3 bg-white rounded-lg border border-indigo-100">
+              <p className="text-2xl font-bold text-indigo-900">{analysisResults.resultsGenerated}</p>
+              <p className="text-sm text-indigo-600">Recommendations</p>
+            </div>
+            <div className="text-center p-3 bg-white rounded-lg border border-indigo-100">
+              <p className="text-2xl font-bold text-indigo-900">{analysisResults.totalAnalyses}</p>
+              <p className="text-sm text-indigo-600">Visualizations</p>
+            </div>
+            <div className="text-center p-3 bg-white rounded-lg border border-indigo-100">
+              <p className="text-2xl font-bold text-indigo-900">3+</p>
+              <p className="text-sm text-indigo-600">Export Formats</p>
+            </div>
+          </div>
+          <div className="p-3 bg-indigo-100/50 rounded-lg border border-indigo-200">
+            <p className="text-sm text-indigo-800 flex items-center gap-2">
+              <Shield className="w-4 h-4" />
+              <span>Full access to insights, recommendations, and downloadable reports after payment</span>
+            </p>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Analysis Summary */}
       <Card>
@@ -583,7 +718,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
               <p className="text-sm text-gray-600">Results Generated</p>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-2">
             <Badge variant="secondary" className="bg-green-100 text-green-800">
               {analysisResults.totalAnalyses} analyses
@@ -684,10 +819,11 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
       {/* Capacity & Billing Visualization */}
       {billingBreakdown && (
         <div>
-          <BillingCapacityDisplay 
-            breakdown={billingBreakdown} 
+          <BillingCapacityDisplay
+            breakdown={billingBreakdown as any}
             currentTier={currentTier || 'trial'}
             showDetailedBreakdown={false}
+            overrideFinalCost={lockedCostCents ?? billingBreakdown.totalCost}
           />
         </div>
       )}
@@ -708,13 +844,11 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
             {pricingPlans.map((plan) => (
               <div
                 key={plan.id}
-                className={`p-6 border rounded-lg cursor-pointer transition-all ${
-                  selectedPlan === plan.id
-                    ? 'border-blue-500 bg-blue-50'
-                    : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-                } ${plan.popular ? 'ring-2 ring-blue-500' : ''} ${
-                  plan.locked && plan.id !== 'per-analysis' ? 'pointer-events-none opacity-60' : ''
-                }`}
+                className={`p-6 border rounded-lg cursor-pointer transition-all ${selectedPlan === plan.id
+                  ? 'border-blue-500 bg-blue-50'
+                  : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                  } ${plan.popular ? 'ring-2 ring-blue-500' : ''} ${plan.locked && plan.id !== 'per-analysis' ? 'pointer-events-none opacity-60' : ''
+                  }`}
                 onClick={() => {
                   if (plan.locked && plan.id !== 'per-analysis') return;
                   setSelectedPlan(plan.id);
@@ -735,7 +869,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
                     )}
                   </div>
                 </div>
-                
+
                 <ul className="space-y-2 text-sm">
                   {plan.features.map((feature, index) => (
                     <li key={index} className="flex items-center gap-2">
@@ -744,7 +878,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
                     </li>
                   ))}
                 </ul>
-                
+
                 {selectedPlan === plan.id && (
                   <div className="mt-4 text-center">
                     <CheckCircle className="w-5 h-5 text-blue-600 mx-auto" />
@@ -773,11 +907,10 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
               {paymentMethods.map((method) => (
                 <div
                   key={method.id}
-                  className={`p-4 border rounded-lg cursor-pointer transition-all ${
-                    paymentMethod === method.id
-                      ? 'border-blue-500 bg-blue-50'
-                      : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-                  }`}
+                  className={`p-4 border rounded-lg cursor-pointer transition-all ${paymentMethod === method.id
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                    }`}
                   onClick={() => setPaymentMethod(method.id as any)}
                 >
                   <div className="flex items-center gap-3">
@@ -857,15 +990,37 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
                     : pricingPlans.find(p => p.id === selectedPlan)?.priceDisplay || 'Contact Sales'}
                 </span>
               </div>
-              
-              <Button 
+
+              {/* Payment Error Display */}
+              {paymentError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg mb-4">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-medium text-red-900">Payment Error</p>
+                      <p className="text-sm text-red-700">{paymentError}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <Button
                 onClick={handlePayment}
                 className="w-full bg-blue-600 hover:bg-blue-700 text-white mt-4"
-                disabled={!selectedPlan}
+                disabled={!selectedPlan || paymentProcessing || !projectId}
               >
-                <CreditCard className="w-4 h-4 mr-2" />
-                Complete Payment
-                <ArrowRight className="w-4 h-4 ml-2" />
+                {paymentProcessing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Processing Payment...
+                  </>
+                ) : (
+                  <>
+                    <CreditCard className="w-4 h-4 mr-2" />
+                    Complete Payment
+                    <ArrowRight className="w-4 h-4 ml-2" />
+                  </>
+                )}
               </Button>
             </div>
           </CardContent>

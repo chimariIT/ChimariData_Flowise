@@ -19,16 +19,22 @@ import {
   Lightbulb,
   Shield,
   ShieldCheck,
+  ArrowRight,
   Loader2
 } from "lucide-react";
-import { useProjectSession } from "@/hooks/useProjectSession";
+import { useProject } from "@/hooks/useProject";
 import { CheckpointDialog } from "@/components/CheckpointDialog";
 import { apiClient } from "@/lib/api";
 import type { JourneyTemplate } from '@shared/journey-templates';
 import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import AgentCheckpoints from "@/components/agent-checkpoints";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { ExecutionProgressTracker } from "@/components/ExecutionProgressTracker";
+import type { AnalysisExecutionState, ExecutionStep } from "@shared/progress-types";
+import { SmartDefaultsService, type DatasetSchema, type AnalysisRecommendation } from "@/lib/smart-defaults";
+import { realtimeClient } from "@/lib/realtime";
 
 interface ExecuteStepProps {
   journeyType: string;
@@ -38,8 +44,28 @@ interface ExecuteStepProps {
 
 export default function ExecuteStep({ journeyType, onNext, onPrevious }: ExecuteStepProps) {
   const { toast } = useToast();
-  const [executionStatus, setExecutionStatus] = useState<'idle' | 'configuring' | 'running' | 'completed' | 'error'>('idle');
-  const [executionProgress, setExecutionProgress] = useState(0);
+  const { projectId, project, journeyProgress, updateProgress, isUpdating, isLoading: projectLoading } = useProject(localStorage.getItem('currentProjectId') || undefined);
+
+  // const [executionStatus, setExecutionStatus] = useState<'idle' | 'configuring' | 'running' | 'completed' | 'error'>('idle');
+  // const [executionProgress, setExecutionProgress] = useState(0);
+
+  const [executionState, setExecutionState] = useState<AnalysisExecutionState>({
+    status: 'idle',
+    overallProgress: 0,
+    currentStep: { id: 'init', name: 'Ready to Start', status: 'pending', description: 'Waiting to start analysis...' },
+    completedSteps: [],
+    pendingSteps: [],
+    analysisTypes: [],
+    startedAt: new Date().toISOString(),
+    executionId: '',
+    projectId: '',
+    totalSteps: 0
+  });
+
+  // Derived status for backward compatibility
+  const executionStatus = executionState.status === 'initializing' ? 'configuring' : executionState.status;
+  const executionProgress = executionState.overallProgress;
+
   const [selectedAnalyses, setSelectedAnalyses] = useState<string[]>([]);
   const [executionResults, setExecutionResults] = useState<any>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
@@ -47,7 +73,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewData, setPreviewData] = useState<any>(null);
   const [artifactLoading, setArtifactLoading] = useState(false);
-  const [selectedScenario, setSelectedScenario] = useState<string | null>(null);
+  const [selectedScenario, setSelectedScenario] = useState<string[]>([]);
   const [scenarioQuestion, setScenarioQuestion] = useState<string>("");
   const [suggestedScenarios, setSuggestedScenarios] = useState<Array<{ id: string; title: string; description: string; analyses: string[] }>>([]);
   const [scenarioSource, setScenarioSource] = useState<'internal' | 'external' | null>(null);
@@ -56,37 +82,73 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
   const [primaryBusinessTemplate, setPrimaryBusinessTemplate] = useState<string>("");
   const [savedQuestions, setSavedQuestions] = useState<string[]>([]);
   const [savedGoal, setSavedGoal] = useState<string>("");
-  useEffect(() => {
-    try {
-      const stored = JSON.parse(localStorage.getItem('chimari_analysis_questions') || '[]');
-      if (Array.isArray(stored) && stored.length > 0) {
-        const filtered = stored
-          .map((q: any) => (typeof q === 'string' ? q.trim() : ''))
-          .filter((q: string) => q.length > 0)
-          .slice(0, 6);
-        setSavedQuestions(filtered);
-      }
-    } catch {
-      setSavedQuestions([]);
-    }
 
-    const goal = localStorage.getItem('chimari_analysis_goal') || "";
-    if (goal) {
-      setSavedGoal(goal);
-    }
-  }, []);
+  // Smart Defaults State
+  const [datasetSchema, setDatasetSchema] = useState<DatasetSchema | null>(null);
+  const [smartRecommendations, setSmartRecommendations] = useState<AnalysisRecommendation[]>([]);
+
+  // GAP D: Requirements document with analysisPath and questionAnswerMapping
+  const [requirementsDocument, setRequirementsDocument] = useState<any>(null);
+
+  // Note: Questions loading moved below after session is available
 
   useEffect(() => {
     if (!scenarioQuestion && savedQuestions.length > 0) {
       setScenarioQuestion(savedQuestions[0]);
-      setSelectedScenario(`user-${0}`);
+      setSelectedScenario([`user-${0}`]);
     }
   }, [scenarioQuestion, savedQuestions]);
 
-  const resolvedProjectId = session?.projectId ?? localStorage.getItem('currentProjectId');
   const [loadingServerResults, setLoadingServerResults] = useState(false);
   const [resultsError, setResultsError] = useState<string | null>(null);
 
+  const inferAnalysesForQuestion = (question: string): string[] => {
+    const q = question.toLowerCase();
+    const analyses = new Set<string>(['descriptive']);
+    if (/(trend|time|month|week|year|season)/.test(q)) analyses.add('time-series');
+    if (/(impact|effect|improve|drive|increase|decrease|predict|churn|attrition)/.test(q)) analyses.add('regression');
+    if (/(relationship|correlat|association|compare|versus|vs)/.test(q)) analyses.add('correlation');
+    if (/(segment|cluster|group|persona)/.test(q)) analyses.add('clustering');
+    if (/(classification|classify|category)/.test(q)) analyses.add('classification');
+    return Array.from(analyses);
+  };
+
+  const personalizedScenarios: Array<{ id: string; title: string; description: string; analyses: string[]; example?: string; source?: 'user' | 'system' }> = savedQuestions.map((question, index) => ({
+    id: `user-${index}`,
+    title: question.length > 60 ? `${question.slice(0, 57)}…` : question,
+    description: 'Based on the questions you entered earlier',
+    analyses: inferAnalysesForQuestion(question),
+    example: question,
+    source: 'user'
+  }));
+  const [validationStatus, setValidationStatus] = useState<'pending' | 'validating' | 'validated' | 'failed'>('pending');
+  const [showCheckpoint, setShowCheckpoint] = useState(false);
+  const [checkpointApproved, setCheckpointApproved] = useState(false);
+
+  // Agent recommendation state
+  const [agentRecommendations, setAgentRecommendations] = useState<any | null>(null);
+  const [useAgentConfig, setUseAgentConfig] = useState(true); // Default to using agent recommendations
+
+  const resolvedProjectId = projectId;
+
+  useEffect(() => {
+    if (!journeyProgress) return;
+
+    // Load questions from journeyProgress (Master)
+    if (journeyProgress.userQuestions && journeyProgress.userQuestions.length > 0) {
+      const questions = journeyProgress.userQuestions.map(q => q.text).filter(t => t && t.trim().length > 0).slice(0, 6);
+      if (questions.length > 0) {
+        setSavedQuestions(questions);
+      }
+    }
+
+    // Load goal from journeyProgress (Master)
+    if (journeyProgress.analysisGoal) {
+      setSavedGoal(journeyProgress.analysisGoal);
+    }
+  }, [journeyProgress]);
+
+  // Load analysis results from server if available
   useEffect(() => {
     if (!resolvedProjectId || executionResults || executionStatus === 'running') {
       return;
@@ -100,13 +162,13 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         const response = await apiClient.getAnalysisResults(resolvedProjectId);
         if (!cancelled && response?.results) {
           setExecutionResults(response.results);
-          setExecutionStatus('completed');
+          setExecutionState(prev => ({
+            ...prev,
+            status: 'completed',
+            overallProgress: 100,
+            currentStep: { ...prev.currentStep, status: 'completed', description: 'Analysis loaded from server.' }
+          }));
           setValidationStatus('validated');
-          try {
-            localStorage.setItem('chimari_execution_results', JSON.stringify(response.results));
-          } catch {
-            // ignore storage failures
-          }
         }
       } catch (error: any) {
         if (cancelled) return;
@@ -126,103 +188,253 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     return () => { cancelled = true; };
   }, [resolvedProjectId, executionResults, executionStatus]);
 
-  const inferAnalysesForQuestion = (question: string): string[] => {
-    const q = question.toLowerCase();
-    const analyses = new Set<string>(['descriptive']);
-    if (/(trend|time|month|week|year|season)/.test(q)) analyses.add('time-series');
-    if (/(impact|effect|improve|drive|increase|decrease|predict|churn|attrition)/.test(q)) analyses.add('regression');
-    if (/(relationship|correlat|association|compare|versus|vs)/.test(q)) analyses.add('correlation');
-    if (/(segment|cluster|group|persona)/.test(q)) analyses.add('clustering');
-    if (/(classification|classify|category)/.test(q)) analyses.add('classification');
-    return Array.from(analyses);
-  };
-
-  const personalizedScenarios = savedQuestions.map((question, index) => ({
-    id: `user-${index}`,
-    title: question.length > 60 ? `${question.slice(0, 57)}…` : question,
-    description: 'Based on the questions you entered earlier',
-    analyses: inferAnalysesForQuestion(question),
-    example: question,
-    source: 'user' as const
-  }));
-  const [validationStatus, setValidationStatus] = useState<'pending' | 'validating' | 'validated' | 'failed'>('pending');
-  const [showCheckpoint, setShowCheckpoint] = useState(false);
-  const [checkpointApproved, setCheckpointApproved] = useState(false);
-
-  // Agent recommendation state
-  const [agentRecommendations, setAgentRecommendations] = useState<any | null>(null);
-  const [useAgentConfig, setUseAgentConfig] = useState(true); // Default to using agent recommendations
-
-  // Secure server-side session with integrity validation
-  const {
-    session,
-    updateStep,
-    validateExecution,
-    getExecuteData,
-    loading: sessionLoading,
-    error: sessionError
-  } = useProjectSession({
-    journeyType: journeyType as 'non-tech' | 'business' | 'technical' | 'consultation' | 'custom'
-  });
-
-  // Load templates and fetch their configurations (Phase 3 - Task 3.2)
+  // WebSocket Integration for Real-time Progress (using native WebSocket client)
   useEffect(() => {
-    if (journeyType !== 'business') return;
+    if (!resolvedProjectId || executionStatus === 'completed') return;
 
-    // Load template data from multiple sources for reliability
-    try {
-      const saved = localStorage.getItem('chimari_business_templates');
-      if (saved) {
-        const templates = JSON.parse(saved);
-        setSelectedBusinessTemplates(templates);
-        console.log('Loaded business templates from localStorage:', templates);
-      }
-    } catch (error) {
-      console.error('Failed to load templates from localStorage:', error);
-    }
+    // Subscribe to execution progress events for this project using native WebSocket
+    const handleProgress = (event: any) => {
+      const data = event.data || event;
+      if (data.projectId === resolvedProjectId || event.sourceId === resolvedProjectId) {
+        setExecutionState(prev => ({
+          ...prev,
+          status: data.status || prev.status,
+          overallProgress: data.overallProgress ?? prev.overallProgress,
+          currentStep: data.currentStep || prev.currentStep,
+          completedSteps: data.completedSteps || prev.completedSteps
+        }));
 
-    try {
-      const primary = localStorage.getItem('chimari_business_primary_template');
-      if (primary) {
-        setPrimaryBusinessTemplate(primary);
-        console.log('Loaded primary template:', primary);
-      }
-    } catch (error) {
-      console.error('Failed to load primary template:', error);
-    }
-
-    // Also try to load from session data
-    const executeData = getExecuteData();
-    if (executeData?.selectedTemplates) {
-      setSelectedBusinessTemplates(executeData.selectedTemplates);
-      console.log('Loaded templates from session:', executeData.selectedTemplates);
-    }
-  }, [journeyType, getExecuteData]);
-
-  // Load agent recommendations from localStorage and auto-populate configuration
-  useEffect(() => {
-    try {
-      const savedRecommendations = localStorage.getItem('acceptedRecommendations');
-      if (savedRecommendations) {
-        const recommendations = JSON.parse(savedRecommendations);
-        setAgentRecommendations(recommendations);
-
-        console.log('🤖 Loaded agent recommendations:', recommendations);
-
-        // Auto-populate recommended analyses if user hasn't made changes yet
-        if (selectedAnalyses.length === 0 && recommendations.recommendedAnalyses?.length > 0) {
-          setSelectedAnalyses(recommendations.recommendedAnalyses);
-          console.log('✅ Auto-selected analyses from agent recommendations:', recommendations.recommendedAnalyses);
+        if (data.status === 'completed') {
+          setValidationStatus('validated');
+          // Trigger result reload
+          setExecutionResults(null);
         }
       }
-    } catch (error) {
-      console.error('Failed to load agent recommendations:', error);
+    };
+
+    // Subscribe to project-specific events using the native WebSocket realtime client
+    const unsubscribe = realtimeClient.subscribe(
+      `project:${resolvedProjectId}`,
+      handleProgress,
+      { persistent: true }
+    );
+
+    // Also subscribe to execution_progress events
+    const unsubscribeProgress = realtimeClient.subscribe(
+      'type:execution',
+      handleProgress,
+      { persistent: true }
+    );
+
+    return () => {
+      unsubscribe();
+      unsubscribeProgress();
+    };
+  }, [resolvedProjectId, executionStatus]);
+
+  // Sync from journeyProgress (SSOT)
+  useEffect(() => {
+    if (!journeyProgress) return;
+
+    // Load questions from journeyProgress
+    if (journeyProgress.userQuestions && journeyProgress.userQuestions.length > 0) {
+      setSavedQuestions(journeyProgress.userQuestions.map(q => q.text).slice(0, 6));
     }
-  }, []); // Run once on mount
+
+    // Load goal
+    if (journeyProgress.analysisGoal) {
+      setSavedGoal(journeyProgress.analysisGoal);
+    }
+
+    // Load requirements/analysisPath - FIX: Check both nested and flat structure
+    // Prepare step saves to journeyProgress.requirementsDocument, not directly on journeyProgress
+    const reqDoc = (journeyProgress as any).requirementsDocument;
+    const analysisPath = reqDoc?.analysisPath || (journeyProgress as any).analysisPath || [];
+
+    if (analysisPath.length > 0) {
+      console.log('📋 [Execute] Loading requirements from journeyProgress:', {
+        hasReqDoc: !!reqDoc,
+        analysisPathLength: analysisPath.length
+      });
+
+      setRequirementsDocument({
+        analysisPath: analysisPath,
+        requiredDataElements: reqDoc?.requiredDataElements || (journeyProgress as any).requiredDataElements || [],
+        questionAnswerMapping: reqDoc?.questionAnswerMapping || (journeyProgress as any).questionAnswerMapping || [],
+        completeness: reqDoc?.completeness || (journeyProgress as any).completeness || 0,
+        gaps: reqDoc?.gaps || (journeyProgress as any).gaps || [],
+      });
+
+      // Auto-select analyses if nothing selected
+      if (selectedAnalyses.length === 0) {
+        const recommendedTypes = analysisPath
+          .map((a: any) => a.analysisType?.toLowerCase().replace(/\s+/g, '-'))
+          .filter((t: string) => t);
+        if (recommendedTypes.length > 0) {
+          setSelectedAnalyses(recommendedTypes);
+        }
+      }
+    }
+
+    // Load agent recommendations (MOVED to consolidated effect below)
+  }, [journeyProgress]);
+
+  // GAP D: Load requirements document with analysisPath and questionAnswerMapping (fallback if not in context)
+  useEffect(() => {
+    // CRITICAL FIX: Wait for project to finish loading before making decisions
+    if (projectLoading) {
+      console.log('[Execute] Waiting for project to load...');
+      return;
+    }
+
+    // Skip API call if we already have data from context
+    if (requirementsDocument?.analysisPath?.length > 0) {
+      console.log('[Execute] Skipping API call - requirements already loaded from context');
+      return;
+    }
+
+    // CRITICAL FIX: Also check journeyProgress before making API call
+    // The previous useEffect should have loaded from journeyProgress, but if journeyProgress is still loading, wait
+    if (!journeyProgress && !resolvedProjectId) return;
+
+    // If journeyProgress exists but doesn't have requirementsDocument, try API as fallback
+    const hasRequirementsInProgress = (journeyProgress as any)?.requirementsDocument;
+    if (hasRequirementsInProgress) {
+      console.log('[Execute] Requirements exist in journeyProgress, should have been loaded by previous effect');
+      return; // Previous effect should handle this
+    }
+
+    if (!resolvedProjectId) return;
+
+    const loadRequirementsDocument = async () => {
+      try {
+        console.log(`📊 [Execute] Loading requirements document from API for project ${resolvedProjectId} (fallback)`);
+        const response = await apiClient.get(`/api/projects/${resolvedProjectId}/required-data-elements`);
+
+        if (response?.document) {
+          setRequirementsDocument(response.document);
+          console.log('✅ [Execute] Requirements document loaded from API:', {
+            analysisPath: response.document.analysisPath?.length || 0,
+            questionAnswerMapping: response.document.questionAnswerMapping?.length || 0,
+            completeness: response.document.completeness
+          });
+
+          // Auto-select analyses from DS recommendations if not already selected
+          if (selectedAnalyses.length === 0 && response.document.analysisPath?.length > 0) {
+            const recommendedTypes = response.document.analysisPath
+              .map((a: any) => a.analysisType?.toLowerCase().replace(/\s+/g, '-'))
+              .filter((t: string) => t);
+            if (recommendedTypes.length > 0) {
+              setSelectedAnalyses(recommendedTypes);
+              console.log('✅ [Execute] Auto-selected DS-recommended analyses:', recommendedTypes);
+            }
+          }
+        } else {
+          console.warn('⚠️ [Execute] No requirements document in API response');
+        }
+      } catch (error) {
+        console.warn('⚠️ [Execute] Could not load requirements document:', error);
+        // Don't fail - continue with default analyses
+      }
+    };
+
+    loadRequirementsDocument();
+  }, [resolvedProjectId, projectLoading, journeyProgress, requirementsDocument]);
+
+  // Fetch schema and generate smart recommendations
+  // P1-4 FIX: Only generate new recommendations if no locked selections from Prepare step
+  useEffect(() => {
+    if (!resolvedProjectId) return;
+
+    // Skip if we already have locked selections from Prepare step (SSOT)
+    if (journeyProgress?.selectedAnalysisTypes && journeyProgress.selectedAnalysisTypes.length > 0) {
+      console.log('📋 [P1-4] Using locked analysis selections from Prepare step:', journeyProgress.selectedAnalysisTypes);
+      return;
+    }
+
+    const loadSchemaAndRecommend = async () => {
+      try {
+        const response = await apiClient.getProjectDatasets(resolvedProjectId);
+        if (response?.datasets && response.datasets.length > 0) {
+          // Use the first dataset for now
+          const dataset = response.datasets[0];
+          // Transform API response to DatasetSchema
+          const schema: DatasetSchema = {
+            columns: dataset.schema?.columns || [],
+            rowCount: dataset.rowCount
+          };
+          setDatasetSchema(schema);
+
+          const recs = SmartDefaultsService.recommendAnalysisTypes(schema);
+          setSmartRecommendations(recs);
+
+          // Auto-select top recommendation if nothing selected and no locked selections
+          if (selectedAnalyses.length === 0 && recs.length > 0 && recs[0].confidence > 0.8) {
+            // Optional: Auto-select or just highlight
+            // setSelectedAnalyses([recs[0].type]);
+            toast({
+              title: "Analysis Recommended",
+              description: `Based on your data, we recommend ${recs[0].type.replace('_', ' ')} analysis.`,
+            });
+          }
+        }
+      } catch (error) {
+        console.error("Failed to load dataset schema for smart defaults:", error);
+      }
+    };
+
+    loadSchemaAndRecommend();
+  }, [resolvedProjectId, journeyProgress?.selectedAnalysisTypes]);
+
+  // Load business templates from journeyProgress
+  useEffect(() => {
+    if (journeyProgress?.selectedAnalysisTypes) {
+      setSelectedBusinessTemplates(journeyProgress.selectedAnalysisTypes);
+    }
+  }, [journeyType, journeyProgress]);
+
+  useEffect(() => {
+    if (journeyProgress?.agentRecommendations && journeyProgress.agentRecommendations.length > 0) {
+      const rec = journeyProgress.agentRecommendations[0];
+      const legacyFormat = {
+        recommendedAnalyses: rec.suggestedAnalyses || [],
+        reasoning: rec.reasoning || ""
+      };
+      setAgentRecommendations(legacyFormat);
+
+      if (selectedAnalyses.length === 0 && legacyFormat.recommendedAnalyses.length > 0) {
+        setSelectedAnalyses(legacyFormat.recommendedAnalyses);
+      }
+    }
+  }, [journeyProgress, selectedAnalyses.length]);
 
   // Fetch template configurations and auto-fill recommended analyses (Phase 3 - Task 3.2)
+  // P1-4 FIX: Don't override locked selections from Prepare step
   useEffect(() => {
     if (journeyType !== 'business' || !primaryBusinessTemplate) return;
+
+    // Skip if we have locked selections from Prepare step (SSOT)
+    if (journeyProgress?.selectedAnalysisTypes && journeyProgress.selectedAnalysisTypes.length > 0) {
+      console.log('📋 [P1-4] Skipping template config - using locked selections from Prepare step');
+      return;
+    }
+
+    // [GAP D FIX] Prioritize analysis selection from Requirements Document (the 'Plan')
+    if (journeyProgress?.requirementsDocument?.analysisPath?.length) {
+      const analyses = journeyProgress.requirementsDocument.analysisPath;
+      const analysisIds = analyses.map((a: any) =>
+        a.analysisType?.toLowerCase().replace(/\s+/g, '-') ||
+        a.analysisName?.toLowerCase().replace(/\s+/g, '-') ||
+        a.type?.toLowerCase() // fallback
+      ).filter(Boolean);
+
+      if (analysisIds.length > 0) {
+        console.log('📋 [Execute] Auto-selecting analyses from Requirements Plan:', analysisIds);
+        setSelectedAnalyses(analysisIds);
+        // Don't return here, might still want to fetch template config for other metadata, 
+        // but we've acted on the SSOT plan.
+      }
+    }
 
     const fetchTemplateConfig = async () => {
       try {
@@ -235,8 +447,12 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
           if (data.success && data.config) {
             console.log('Template config loaded:', data.config);
 
-            // Auto-fill recommended analyses (but don't override agent recommendations)
-            if (!agentRecommendations && data.config.recommendedAnalyses && data.config.recommendedAnalyses.length > 0) {
+            // Auto-fill recommended analyses (but don't override agent recommendations or locked selections)
+            // [GAP D FIX] Don't override if we just loaded from requirementsDocument
+            if (!agentRecommendations &&
+              !journeyProgress?.requirementsDocument?.analysisPath?.length &&
+              data.config.recommendedAnalyses &&
+              data.config.recommendedAnalyses.length > 0) {
               setSelectedAnalyses(data.config.recommendedAnalyses);
               console.log('Auto-selected analyses from template:', data.config.recommendedAnalyses);
             }
@@ -249,7 +465,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     };
 
     fetchTemplateConfig();
-  }, [journeyType, primaryBusinessTemplate, agentRecommendations]);
+  }, [journeyType, primaryBusinessTemplate, agentRecommendations, journeyProgress?.selectedAnalysisTypes, journeyProgress?.requirementsDocument]);
 
   const getJourneyTypeInfo = () => {
     switch (journeyType) {
@@ -262,7 +478,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         };
       case 'business':
         return {
-          title: "Business Analysis Execution", 
+          title: "Business Analysis Execution",
           description: "Execute analysis using business templates and best practices",
           icon: BarChart3,
           color: "green"
@@ -369,36 +585,69 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     ];
   };
 
-  const analysisOptions = getAnalysisOptions();
+  const baseAnalysisOptions = getAnalysisOptions();
+
+  // CONSISTENCY FIX: When requirements are locked, prioritize showing recommended analyses
+  // This ensures users see the SAME analyses promised in Prepare step
+  const analysisOptions = useMemo(() => {
+    const recommendedAnalyses = requirementsDocument?.analysisPath || [];
+
+    if (recommendedAnalyses.length === 0) {
+      return baseAnalysisOptions;
+    }
+
+    // Map recommended analyses to their IDs (normalize for matching)
+    const recommendedIds = recommendedAnalyses.map((a: any) =>
+      a.analysisType?.toLowerCase().replace(/\s+/g, '-') ||
+      a.analysisName?.toLowerCase().replace(/\s+/g, '-') ||
+      ''
+    ).filter(Boolean);
+
+    // Enrich analysis options with "isRecommended" flag
+    const enrichedOptions = baseAnalysisOptions.map(opt => ({
+      ...opt,
+      isRecommended: recommendedIds.includes(opt.id.toLowerCase())
+    }));
+
+    // Sort: recommended first, then others
+    return enrichedOptions.sort((a, b) => {
+      if (a.isRecommended && !b.isRecommended) return -1;
+      if (!a.isRecommended && b.isRecommended) return 1;
+      return 0;
+    });
+  }, [baseAnalysisOptions, requirementsDocument?.analysisPath]);
+
+  // Count how many recommended analyses exist
+  const recommendedCount = analysisOptions.filter((a: any) => a.isRecommended).length;
 
   // Non-tech scenario presets in plain language → mapped to analyses
-  const scenarioPresets: Array<{ id: string; title: string; description: string; analyses: string[]; example?: string; source?: 'user' | 'system' }>= [
+  const scenarioPresets: Array<{ id: string; title: string; description: string; analyses: string[]; example?: string; source?: 'user' | 'system' }> = [
     {
       id: 'policy-attrition',
       title: 'Policy impact on employee attrition',
       description: 'Check if a policy change increased employee departures',
-      analyses: ['descriptive','correlation','regression','time-series'],
+      analyses: ['descriptive', 'correlation', 'regression', 'time-series'],
       example: 'Is there evidence of employee attrition due to the new remote work policy?'
     },
     {
       id: 'campaign-effectiveness',
       title: 'Marketing campaign effectiveness',
       description: 'Determine if a recent campaign drove sales lift',
-      analyses: ['descriptive','time-series','regression'],
+      analyses: ['descriptive', 'time-series', 'regression'],
       example: 'Did the April campaign increase weekly sales?'
     },
     {
       id: 'pricing-churn',
       title: 'Pricing change effect on churn',
       description: 'Assess if pricing changes impacted customer churn',
-      analyses: ['descriptive','correlation','classification','regression'],
+      analyses: ['descriptive', 'correlation', 'classification', 'regression'],
       example: 'Did the price adjustment affect churn rates?'
     },
     {
       id: 'operations-sla',
       title: 'Operational changes and SLA breaches',
       description: 'See if schedule changes affected SLA breaches',
-      analyses: ['descriptive','correlation','time-series'],
+      analyses: ['descriptive', 'correlation', 'time-series'],
       example: 'Did staffing changes increase SLA breaches?'
     }
   ];
@@ -417,7 +666,38 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     setIsSuggesting(true);
     const t = setTimeout(async () => {
       try {
-        const resp = await apiClient.post('/api/analysis/suggest-scenarios', { question: scenarioQuestion });
+        // Fetch project data to get schema context
+        let schema: Record<string, any> | undefined;
+        let dataContext: any = {};
+
+        if (resolvedProjectId) {
+          try {
+            const projectData = await apiClient.getProjectDatasets(resolvedProjectId);
+            const dataset = projectData?.datasets?.[0]?.dataset;
+            if (dataset?.schema) {
+              schema = dataset.schema || {};
+              // Ensure schema is an object before using Object methods
+              const safeSchema = schema || {};
+              dataContext = {
+                columnNames: Object.keys(safeSchema),
+                rowCount: dataset.rowCount || dataset.recordCount,
+                hasTimeSeries: Object.values(safeSchema).some((type: any) =>
+                  typeof type === 'string' && (type.includes('date') || type.includes('time'))
+                )
+              };
+            }
+          } catch (dataError) {
+            console.warn('Could not fetch project data for context:', dataError);
+          }
+        }
+
+        const resp = await apiClient.post('/api/analysis/suggest-scenarios', {
+          question: scenarioQuestion,
+          schema,
+          goals: savedGoal ? [savedGoal] : [],
+          previousQuestions: savedQuestions,
+          dataContext
+        });
         if (!cancelled) {
           setSuggestedScenarios(resp?.scenarios || []);
           setScenarioSource(resp?.source || null);
@@ -433,18 +713,26 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     }, 450);
 
     return () => { cancelled = true; clearTimeout(t); };
-  }, [scenarioQuestion, journeyType]);
+  }, [scenarioQuestion, journeyType, resolvedProjectId, savedGoal, savedQuestions]);
 
   const handleAnalysisToggle = (analysisId: string) => {
-    setSelectedAnalyses(prev => 
-      prev.includes(analysisId) 
+    setSelectedAnalyses(prev =>
+      prev.includes(analysisId)
         ? prev.filter(id => id !== analysisId)
         : [...prev, analysisId]
     );
   };
 
   const handleExecuteAnalysis = async () => {
-    if (selectedAnalyses.length === 0) return;
+    // CRITICAL FIX: Show feedback when no analyses selected instead of silent return
+    if (selectedAnalyses.length === 0) {
+      toast({
+        title: "No Analysis Selected",
+        description: "Please select at least one analysis type before executing.",
+        variant: "destructive"
+      });
+      return;
+    }
 
     // Phase 3 - Task 3.3: Show checkpoint dialog first
     if (!checkpointApproved) {
@@ -452,34 +740,70 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       return;
     }
 
-    setExecutionStatus('configuring');
-    setExecutionProgress(0);
+    setExecutionState({
+      status: 'initializing',
+      overallProgress: 0,
+      currentStep: { id: 'config', name: 'Configuring Analysis', status: 'running', description: 'Preparing analysis parameters...' },
+      completedSteps: [],
+      pendingSteps: selectedAnalyses.map(id => ({ id, name: id, status: 'pending', description: 'Pending execution...' })),
+      analysisTypes: selectedAnalyses,
+      startedAt: new Date().toISOString(),
+      executionId: '',
+      projectId: resolvedProjectId || '',
+      totalSteps: selectedAnalyses.length + 2
+    });
 
-    // Persist execution context for backend/agents to read later if needed
+
+    // Update business context if needed
     if (journeyType === 'business') {
-      const context = {
-        templates: selectedBusinessTemplates,
-        primaryTemplate: primaryBusinessTemplate
-      };
-      try { localStorage.setItem('chimari_execute_business_context', JSON.stringify(context)); } catch {}
+      updateProgress({
+        businessContext: {
+          selectedTemplates: selectedBusinessTemplates,
+          primaryTemplate: primaryBusinessTemplate
+        }
+      });
     }
 
     try {
-      // Get current project ID from localStorage or context
-      const currentProjectId = getCurrentProjectId();
-      
-      if (!currentProjectId) {
+      if (!projectId) {
         console.error('No project ID found');
-        setExecutionStatus('error');
+        setExecutionState(prev => ({ ...prev, status: 'failed', error: 'No project ID found' }));
+        // CRITICAL FIX: Show toast so user knows what went wrong
+        toast({
+          title: "Project Not Found",
+          description: "No project ID found. Please go back to Data Upload and ensure your project is created.",
+          variant: "destructive"
+        });
         return;
       }
 
-      console.log(`🚀 Executing real analysis for project ${currentProjectId}`);
+      console.log(`🚀 Executing real analysis for project ${projectId}`);
       console.log(`📊 Analysis types: ${selectedAnalyses.join(', ')}`);
 
       // Call the REAL analysis execution API
-      setExecutionStatus('running');
-      setExecutionProgress(10);
+      // Update journeyProgress that execution has started
+      updateProgress({
+        executionStartedAt: new Date().toISOString(),
+        executionConfig: {
+          selectedAnalyses,
+          confirmedAt: new Date().toISOString(),
+          executionParams: {
+            journeyType,
+            templateContext: journeyType === 'business' ? {
+              selectedTemplates: selectedBusinessTemplates,
+              primaryTemplate: primaryBusinessTemplate
+            } : undefined
+          }
+        }
+      });
+
+      setExecutionState(prev => ({
+        ...prev,
+        status: 'running',
+        overallProgress: 10,
+        currentStep: { id: 'execution', name: 'Executing Analysis', status: 'running', description: 'Sending request to analysis engine...' }
+      }));
+
 
       // Get authentication token
       const token = localStorage.getItem('auth_token');
@@ -490,27 +814,40 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         headers['Authorization'] = `Bearer ${token}`;
       }
 
+      // GAP D: Include analysisPath and questionAnswerMapping from requirements document
       const response = await fetch('/api/analysis-execution/execute', {
         method: 'POST',
         headers,
         credentials: 'include',
         body: JSON.stringify({
-          projectId: currentProjectId,
+          projectId: projectId,
           analysisTypes: selectedAnalyses,
           journeyType: journeyType,
+          // GAP D: Pass DS-recommended analyses and question mappings
+          analysisPath: requirementsDocument?.analysisPath || [],
+          questionAnswerMapping: requirementsDocument?.questionAnswerMapping || [],
           templateContext: journeyType === 'business' ? {
             selectedTemplates: selectedBusinessTemplates,
             primaryTemplate: primaryBusinessTemplate
           } : undefined
         })
       });
+      console.log('🚀 [Execute] Sent analysisPath:', requirementsDocument?.analysisPath?.length || 0, 'analyses');
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
+        const errorData = await response.json().catch(() => null);
+        const errorMessage = errorData?.error
+          || errorData?.message
+          || `Analysis execution failed (HTTP ${response.status}). Please check your data and try again.`;
+        throw new Error(errorMessage);
       }
 
-      setExecutionProgress(50);
+      setExecutionState(prev => ({
+        ...prev,
+        overallProgress: 50,
+        currentStep: { id: 'processing', name: 'Processing Results', status: 'running', description: 'Analyzing returned data...' }
+      }));
+
 
       const data = await response.json();
 
@@ -526,13 +863,20 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       console.log('✅ Analysis completed successfully');
       console.log(`📈 Results: ${data.results?.insightCount || 0} insights, ${data.results?.recommendationCount || 0} recommendations`);
 
-      setExecutionProgress(100);
-      setExecutionStatus('completed');
+      setExecutionState(prev => ({
+        ...prev,
+        status: 'completed',
+        overallProgress: 100,
+        currentStep: { id: 'complete', name: 'Analysis Complete', status: 'completed', description: 'All steps finished successfully.' },
+        completedSteps: [...prev.completedSteps, prev.currentStep]
+      }));
+
 
       const payload = data.results;
       setExecutionResults(payload);
 
       // Store execution summary for pricing/session validation
+      // Add comprehensive null checks to prevent crashes
       const pricingSummary = {
         totalAnalyses: payload?.analysisTypes?.length ?? payload?.summary?.totalAnalyses ?? selectedAnalyses.length,
         executionTime: payload?.summary?.executionTime ?? (payload?.executionTimeSeconds ? `${payload.executionTimeSeconds}s` : '0s'),
@@ -543,44 +887,55 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         dataSize: payload?.dataRowsProcessed ?? payload?.summary?.dataRowsProcessed ?? 0,
         datasetCount: payload?.metadata?.datasetCount ?? payload?.datasetCount ?? 1,
         selectedAnalyses,
+        // Add extra null checks for estimatedCost calculation
         estimatedCost: payload?.cost ?? payload?.costBreakdown?.total ?? payload?.estimatedCost?.total ?? 0
       };
 
-      // 🔒 SECURITY: Save to server AND validate integrity
+      // Update journeyProgress with results (SSOT)
       try {
-        // Save to server session
-        await updateStep('execute', pricingSummary);
-
-        // Server-side validation to prevent tampering
-        setValidationStatus('validating');
-        const isValid = await validateExecution(pricingSummary);
-
-        if (isValid) {
-          setValidationStatus('validated');
-          console.log('✅ Execution results validated by server');
-        } else {
-          setValidationStatus('failed');
-          console.error('❌ Server validation failed');
-          alert('⚠️ Results validation failed. Please re-run your analysis.');
-          setExecutionStatus('error');
-          return;
-        }
+        updateProgress({
+          executionCompletedAt: new Date().toISOString(),
+          analysisResultsId: data.results?.id || data.results?.analysisId,
+          artifactIds: data.results?.artifactIds || [],
+          executionSummary: {
+            totalAnalyses: pricingSummary.totalAnalyses,
+            dataSize: pricingSummary.dataSize,
+            executionTime: pricingSummary.executionTime,
+            resultsGenerated: pricingSummary.resultsGenerated,
+            insightsFound: pricingSummary.insightsFound,
+            recommendationsFound: pricingSummary.recommendationsFound,
+            qualityScore: pricingSummary.qualityScore,
+            datasetCount: pricingSummary.datasetCount
+          },
+          costEstimate: {
+            amount: pricingSummary.estimatedCost,
+            currency: 'USD',
+            lockedAt: new Date().toISOString(),
+          }
+        });
 
         // Backwards compatibility: Also cache in localStorage
         localStorage.setItem('chimari_execution_results', JSON.stringify(payload));
 
       } catch (error) {
-        console.error('Failed to save/validate execution results:', error);
-        setValidationStatus('failed');
-        // Don't fail the execution, just warn
-        console.warn('Server save/validation failed, data cached locally only');
+        console.error('Failed to save execution results to progress:', error);
       }
 
     } catch (error: any) {
       console.error('❌ Analysis execution error:', error);
-      setExecutionStatus('error');
-      setExecutionProgress(0);
-      alert(`Analysis failed: ${error.message}`);
+      const errorMsg = error?.message || 'Analysis execution failed. Please try again.';
+      setExecutionState(prev => ({
+        ...prev,
+        status: 'failed',
+        error: errorMsg,
+        currentStep: { ...prev.currentStep, status: 'failed', error: errorMsg }
+      }));
+
+      toast({
+        title: "Analysis Failed",
+        description: errorMsg,
+        variant: "destructive"
+      });
     }
   };
 
@@ -670,19 +1025,21 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     console.log('Analysis plan approved', feedback ? `with feedback: ${feedback}` : '');
     setCheckpointApproved(true);
     setShowCheckpoint(false);
-    // Store approval decision in project history
+    // Store approval decision in project history (SSOT)
     try {
-      const approvalRecord = {
+      const history = journeyProgress?.checkpointHistory || [];
+      const newRecord = {
         timestamp: new Date().toISOString(),
-        approved: true,
+        type: 'approval' as const,
         feedback: feedback || '',
         analysesSelected: selectedAnalyses
       };
-      const existingHistory = JSON.parse(localStorage.getItem('chimari_checkpoint_history') || '[]');
-      existingHistory.push(approvalRecord);
-      localStorage.setItem('chimari_checkpoint_history', JSON.stringify(existingHistory));
+
+      updateProgress({
+        checkpointHistory: [...history, newRecord]
+      });
     } catch (error) {
-      console.error('Failed to store approval record:', error);
+      console.error('Failed to update checkpoint history:', error);
     }
     // Trigger execution
     setTimeout(() => handleExecuteAnalysis(), 100);
@@ -691,19 +1048,21 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
   const handleCheckpointModify = (modifications: string) => {
     console.log('Modification requested:', modifications);
     setShowCheckpoint(false);
-    // Store modification request
+    // Store modification request (SSOT)
     try {
-      const modificationRecord = {
+      const history = journeyProgress?.checkpointHistory || [];
+      const newRecord = {
         timestamp: new Date().toISOString(),
-        approved: false,
+        type: 'modification' as const,
         modifications,
         analysesSelected: selectedAnalyses
       };
-      const existingHistory = JSON.parse(localStorage.getItem('chimari_checkpoint_history') || '[]');
-      existingHistory.push(modificationRecord);
-      localStorage.setItem('chimari_checkpoint_history', JSON.stringify(existingHistory));
+
+      updateProgress({
+        checkpointHistory: [...history, newRecord]
+      });
     } catch (error) {
-      console.error('Failed to store modification record:', error);
+      console.error('Failed to update checkpoint history:', error);
     }
     // Show message to user
     alert(`Your modification request has been recorded:\n\n"${modifications}"\n\nPlease adjust your analysis selection and try again.`);
@@ -713,12 +1072,27 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     setShowCheckpoint(false);
   };
 
-  // For non-tech, selecting a scenario auto-selects mapped analyses
+  // For non-tech, selecting a scenario toggles it and accumulates analyses
   const handleSelectScenario = (scenarioId: string) => {
-    setSelectedScenario(scenarioId);
+    setSelectedScenario(prev => {
+      const isCurrentlySelected = prev.includes(scenarioId);
+      const newSelection = isCurrentlySelected
+        ? prev.filter(id => id !== scenarioId)
+        : [...prev, scenarioId];
+
+      // Accumulate analyses from all selected scenarios
+      const allSelectedPresets = newSelection
+        .map(id => suggestedScenarios.find(s => s.id === id) || scenarioPresets.find(s => s.id === id))
+        .filter(Boolean);
+
+      const accumulatedAnalyses = [...new Set(allSelectedPresets.flatMap(preset => preset?.analyses || []))];
+      setSelectedAnalyses(accumulatedAnalyses);
+
+      return newSelection;
+    });
+
     const preset = (suggestedScenarios.find(s => s.id === scenarioId) || scenarioPresets.find(s => s.id === scenarioId));
     if (preset) {
-      setSelectedAnalyses(preset.analyses);
       // Only scenario presets have examples, suggested scenarios don't
       const presetWithExample = preset as { example?: string };
       if (!scenarioQuestion && presetWithExample.example) setScenarioQuestion(presetWithExample.example);
@@ -729,7 +1103,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     switch (executionStatus) {
       case 'completed':
         return <CheckCircle className="w-5 h-5 text-green-600" />;
-      case 'error':
+      case 'failed':
         return <AlertCircle className="w-5 h-5 text-red-600" />;
       case 'running':
         return <Zap className="w-5 h-5 text-blue-600 animate-pulse" />;
@@ -748,7 +1122,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         return 'Running analysis...';
       case 'completed':
         return 'Analysis completed successfully!';
-      case 'error':
+      case 'failed':
         return 'Analysis failed. Please try again.';
       default:
         return 'Ready to execute';
@@ -837,11 +1211,11 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     const quality = previewData.qualityScore ?? previewData.summary?.qualityScore ?? executionSummary.qualityScore;
     const avgConfidence = previewData.insights?.length
       ? Math.round(
-          previewData.insights.reduce(
-            (sum: number, insight: any) => sum + (insight.confidence || 60),
-            0
-          ) / previewData.insights.length
-        )
+        previewData.insights.reduce(
+          (sum: number, insight: any) => sum + (insight.confidence || 60),
+          0
+        ) / previewData.insights.length
+      )
       : quality;
 
     return {
@@ -1001,76 +1375,69 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         </CardHeader>
       </Card>
 
-      {/* Non-tech scenario-based entry */}
-      {journeyType === 'non-tech' && (
-        <Card>
+      {/* REMOVED: Question clarifications section - moved to Verification step */}
+
+      {/* FIX #26: DS Recommendations from Requirements Document */}
+      {requirementsDocument?.analysisPath && requirementsDocument.analysisPath.length > 0 && (
+        <Card className="border-2 border-purple-300 bg-gradient-to-r from-purple-50 to-indigo-50">
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <MessageCircle className="w-5 h-5" />
-              🔍 Refine Your Analysis Questions
+            <CardTitle className="flex items-center gap-2 text-purple-900">
+              <Brain className="w-6 h-6 text-purple-600" />
+              Data Scientist Recommended Analyses
             </CardTitle>
-            <CardDescription>
-              Now let's get specific. Describe the exact outcome you want to understand.
+            <CardDescription className="text-purple-700">
+              Based on your goals and data, our Data Scientist agent recommends these {requirementsDocument.analysisPath.length} analyses
             </CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">
-                <p className="text-sm font-medium text-blue-900 mb-1">💡 Your Project Goal:</p>
-                <p className="text-sm text-blue-700 italic">
-                  {savedGoal || localStorage.getItem('chimari_analysis_goal') || 'Not specified'}
-                </p>
-              </div>
-              <Label htmlFor="scenario-question">Specific question to answer:</Label>
-              <input
-                id="scenario-question"
-                type="text"
-                value={scenarioQuestion}
-                onChange={(e) => setScenarioQuestion(e.target.value)}
-                placeholder={
-                  savedQuestions.length > 0
-                    ? `Ex: ${savedQuestions[0]}`
-                    : "For example: 'Is there evidence of employee attrition due to the new policy?'"
-                }
-                className="w-full rounded-md border px-3 py-2 text-sm"
-              />
-              {isSuggesting && (
-                <div className="text-xs text-blue-600">Analyzing your question…</div>
-              )}
-              <div className="grid md:grid-cols-2 gap-3">
-                {scenarioOptions.map((s) => (
-                  <div
-                    key={`suggested-${s.id}`}
-                    className={`p-3 border rounded-lg cursor-pointer transition-all ${selectedScenario === s.id ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'}`}
-                    onClick={() => handleSelectScenario(s.id)}
-                    data-testid={`scenario-suggested-${s.id}`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-medium text-gray-900">{s.title}</p>
-                        <p className="text-sm text-gray-600">{s.description}</p>
-                      </div>
-                      <Badge
-                        variant="secondary"
-                        className={
-                          s.source === 'user' || scenarioSource === 'internal'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : 'bg-amber-100 text-amber-800'
-                        }
-                      >
-                        {s.source === 'user' || scenarioSource === 'internal' ? 'Your question' : 'Suggested'}
-                      </Badge>
-                    </div>
+          <CardContent className="space-y-3">
+            {requirementsDocument.analysisPath.map((analysis: any, index: number) => (
+              <div key={analysis.analysisId || index} className="flex items-start gap-3 p-3 bg-white rounded-lg border border-purple-200">
+                <Badge variant="outline" className="mt-1 bg-purple-100 text-purple-700 shrink-0">
+                  {index + 1}
+                </Badge>
+                <div className="flex-1">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-medium text-sm text-gray-900">{analysis.analysisName}</h4>
+                    <Badge className="bg-blue-100 text-blue-800 text-xs">
+                      ~{analysis.estimatedDuration || '5-10 min'}
+                    </Badge>
                   </div>
-                ))}
-              </div>
-
-              {selectedAnalyses.length > 0 && (
-                <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
-                  AI will run: {selectedAnalyses.map(id => analysisOptions.find(a => a.id === id)?.name || id).join(', ')}
+                  <p className="text-xs text-gray-600 mt-1">{analysis.description}</p>
+                  {analysis.techniques && analysis.techniques.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {analysis.techniques.slice(0, 3).map((technique: string, idx: number) => (
+                        <Badge key={idx} variant="secondary" className="text-xs">
+                          {technique}
+                        </Badge>
+                      ))}
+                      {analysis.techniques.length > 3 && (
+                        <Badge variant="secondary" className="text-xs">+{analysis.techniques.length - 3} more</Badge>
+                      )}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              </div>
+            ))}
+            {requirementsDocument.questionAnswerMapping && requirementsDocument.questionAnswerMapping.length > 0 && (
+              <div className="mt-4 p-3 bg-purple-100/50 rounded-lg border border-purple-200">
+                <p className="text-sm font-medium text-purple-900 mb-2">
+                  {requirementsDocument.questionAnswerMapping.length} question(s) linked to these analyses
+                </p>
+                <ul className="space-y-1">
+                  {requirementsDocument.questionAnswerMapping.slice(0, 3).map((mapping: any, idx: number) => (
+                    <li key={idx} className="text-xs text-purple-800 flex items-start gap-2">
+                      <span className="text-purple-600">•</span>
+                      <span>{mapping.questionText || mapping.question}</span>
+                    </li>
+                  ))}
+                  {requirementsDocument.questionAnswerMapping.length > 3 && (
+                    <li className="text-xs text-purple-600 ml-4">
+                      +{requirementsDocument.questionAnswerMapping.length - 3} more questions
+                    </li>
+                  )}
+                </ul>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -1111,9 +1478,9 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
                 <p className="text-xs text-gray-600 mb-1">Complexity</p>
                 <Badge className={
                   agentRecommendations.analysisComplexity === 'low' ? 'bg-green-100 text-green-800' :
-                  agentRecommendations.analysisComplexity === 'medium' ? 'bg-blue-100 text-blue-800' :
-                  agentRecommendations.analysisComplexity === 'high' ? 'bg-orange-100 text-orange-800' :
-                  'bg-red-100 text-red-800'
+                    agentRecommendations.analysisComplexity === 'medium' ? 'bg-blue-100 text-blue-800' :
+                      agentRecommendations.analysisComplexity === 'high' ? 'bg-orange-100 text-orange-800' :
+                        'bg-red-100 text-red-800'
                 }>
                   {agentRecommendations.analysisComplexity?.toUpperCase() || 'N/A'}
                 </Badge>
@@ -1190,25 +1557,26 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         </Card>
       )}
 
+
       {/* Analysis Selection */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <BarChart3 className="w-5 h-5" />
             {journeyType === 'business' && selectedBusinessTemplates.length > 0
-              ? 'Select Business Template Workflow Steps'
+              ? 'Business Template Analysis Steps'
               : agentRecommendations
-              ? 'Review & Adjust Recommended Analyses'
-              : 'Select Analyses'}
+                ? 'Recommended Analyses'
+                : 'Analysis Plan'}
           </CardTitle>
           <CardDescription>
             {agentRecommendations
-              ? '✅ Analyses below were auto-selected based on agent recommendations. You can adjust them if needed.'
+              ? 'These analyses were selected based on your goals from the Plan step.'
               : journeyType === 'non-tech'
-              ? '✨ Our AI has recommended these analyses based on your goals. You can adjust the selection below.'
-              : journeyType === 'business' && selectedBusinessTemplates.length > 0
-              ? '📋 Select workflow steps from your chosen business templates. These are pre-configured for your industry and use case.'
-              : 'Choose which analyses to run on your data'}
+                ? 'These analyses were recommended based on your goals. To change them, go back to the Plan step.'
+                : journeyType === 'business' && selectedBusinessTemplates.length > 0
+                  ? 'Pre-configured workflow steps for your selected business templates.'
+                  : 'Analyses to run on your data based on your Plan configuration.'}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -1231,48 +1599,90 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
                 </div>
               </div>
             )}
+            {/* CONSISTENCY: Show locked requirements indicator */}
+            {recommendedCount > 0 && (
+              <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+                <p className="text-sm text-green-800 flex items-center gap-2">
+                  <CheckCircle className="w-4 h-4" />
+                  <span>
+                    <strong>{recommendedCount} analyses recommended</strong> based on your goals in the Prepare step.
+                    These will remain consistent throughout your journey.
+                  </span>
+                </p>
+              </div>
+            )}
+
             <div className="grid gap-3">
-              {analysisOptions.map((analysis) => (
-                <div
-                  key={analysis.id}
-                  className={`p-4 border rounded-lg cursor-pointer transition-all ${
-                    selectedAnalyses.includes(analysis.id)
+              {analysisOptions.map((analysis: any) => {
+                const recommendation = smartRecommendations.find(r => r.type === analysis.id.replace('-', '_'));
+                // CONSISTENCY: Check both smartRecommendations AND locked requirements
+                const isFromSmartRec = !!recommendation;
+                const isFromLockedReqs = analysis.isRecommended === true;
+                const isRecommended = isFromSmartRec || isFromLockedReqs;
+
+                return (
+                  <div
+                    key={analysis.id}
+                    className={`p-4 border rounded-lg transition-all ${selectedAnalyses.includes(analysis.id)
                       ? 'border-blue-500 bg-blue-50'
-                      : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-                  }`}
-                  onClick={() => handleAnalysisToggle(analysis.id)}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <h4 className="font-medium text-gray-900">{analysis.name}</h4>
-                        <Badge variant="outline" className="text-xs">
-                          {analysis.duration}
-                        </Badge>
+                      : isFromLockedReqs
+                        ? 'border-green-300 bg-green-50/30'  // Green for locked recommendations
+                        : isRecommended
+                          ? 'border-blue-300 bg-blue-50/30'
+                          : 'border-gray-200 bg-gray-50/50'
+                      }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <h4 className="font-medium text-gray-900">{analysis.name}</h4>
+                          <Badge variant="outline" className="text-xs">
+                            {analysis.duration}
+                          </Badge>
+                          {isFromLockedReqs && (
+                            <Badge className="bg-green-100 text-green-800 border-green-200 hover:bg-green-200">
+                              ✓ From Your Goals
+                            </Badge>
+                          )}
+                          {isFromSmartRec && !isFromLockedReqs && (
+                            <Badge className="bg-blue-100 text-blue-800 border-blue-200 hover:bg-blue-200">
+                              AI Recommended
+                            </Badge>
+                          )}
+                        </div>
+                        <p className="text-sm text-gray-600 mt-1">{analysis.description}</p>
+                        {isFromSmartRec && (
+                          <p className="text-xs text-blue-700 mt-1 flex items-center gap-1">
+                            <Lightbulb className="w-3 h-3" />
+                            {recommendation?.reason}
+                          </p>
+                        )}
                       </div>
-                      <p className="text-sm text-gray-600 mt-1">{analysis.description}</p>
+                      {selectedAnalyses.includes(analysis.id) && (
+                        <CheckCircle className="w-5 h-5 text-blue-600" />
+                      )}
                     </div>
-                    {selectedAnalyses.includes(analysis.id) && (
-                      <CheckCircle className="w-5 h-5 text-blue-600" />
-                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
-            
+
             {selectedAnalyses.length > 0 && (
               <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm font-medium text-blue-900">
-                      {selectedAnalyses.length} analysis{selectedAnalyses.length > 1 ? 'es' : ''} selected
+                      {selectedAnalyses.length} analysis{selectedAnalyses.length > 1 ? 'es' : ''} will run
                     </p>
                     <p className="text-xs text-blue-700">
                       Estimated duration: {getEstimatedDuration()}
                     </p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      To modify analysis selection, return to the Plan step.
+                    </p>
                   </div>
                   <Badge variant="secondary" className="bg-blue-100 text-blue-800">
-                    {selectedAnalyses.length} selected
+                    Ready to execute
                   </Badge>
                 </div>
               </div>
@@ -1349,12 +1759,20 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
                 </p>
                 <Button
                   onClick={() => {
-                    // For non-tech: if no explicit analyses selected, pick defaults
+                    // FIX: Production Readiness - Show confirmation before auto-selecting defaults
                     if (journeyType === 'non-tech' && selectedAnalyses.length === 0) {
-                      const defaults = ['descriptive','correlation','regression'];
-                      setSelectedAnalyses(defaults);
-                      // Delay execute slightly to allow state update
-                      setTimeout(() => handleExecuteAnalysis(), 50);
+                      const defaults = ['descriptive', 'correlation', 'regression'];
+                      // Show what will be selected before executing
+                      const confirmed = window.confirm(
+                        `No analyses selected. Would you like to run the recommended analyses?\n\n` +
+                        `• Descriptive Statistics\n• Correlation Analysis\n• Regression Analysis\n\n` +
+                        `Click OK to proceed or Cancel to select manually.`
+                      );
+                      if (confirmed) {
+                        setSelectedAnalyses(defaults);
+                        // Delay execute slightly to allow state update
+                        setTimeout(() => handleExecuteAnalysis(), 50);
+                      }
                       return;
                     }
                     handleExecuteAnalysis();
@@ -1369,22 +1787,11 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
             )}
 
             {(executionStatus === 'configuring' || executionStatus === 'running') && (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between text-sm">
-                  <span>Execution Progress</span>
-                  <span>{Math.round(executionProgress)}%</span>
-                </div>
-                <Progress value={executionProgress} className="h-2" />
-                
-                <div className="text-center">
-                  <div className="flex items-center justify-center gap-2 text-blue-600">
-                    <Clock className="w-4 h-4" />
-                    <span className="text-sm">
-                      {executionStatus === 'configuring' ? 'Configuring...' : 'Running analysis...'}
-                    </span>
-                  </div>
-                </div>
-              </div>
+              <ExecutionProgressTracker
+                executionState={executionState}
+                projectId={resolvedProjectId || undefined}
+                onStateChange={setExecutionState}
+              />
             )}
 
             {executionStatus === 'completed' && executionResults && (
@@ -1437,7 +1844,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
                     <p className="text-sm text-green-700">Quality Score</p>
                   </div>
                 </div>
-                
+
                 <div className="flex items-center justify-center gap-4">
                   <Button
                     variant="outline"
@@ -1485,7 +1892,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
             <p className="text-sm text-green-800 font-medium mb-3">
               ✅ Your analysis has been completed successfully! Results are ready for review and pricing.
             </p>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 mb-4">
               <Badge variant="secondary" className="bg-green-100 text-green-800">
                 {executionSummary.totalAnalyses} analyses completed
               </Badge>
@@ -1496,8 +1903,156 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
                 {executionSummary.qualityScore}% quality score
               </Badge>
             </div>
+            {onNext && (
+              <Button
+                onClick={async () => {
+                  // Validate project exists
+                  if (!projectId) {
+                    toast({
+                      title: "Project Not Found",
+                      description: "No project ID found. Please go back to previous step.",
+                      variant: "destructive"
+                    });
+                    return;
+                  }
+
+                  // Validate execution is completed
+                  if (executionStatus !== 'completed') {
+                    toast({
+                      title: "Execution Not Complete",
+                      description: "Please wait for execution to complete before continuing.",
+                      variant: "destructive"
+                    });
+                    return;
+                  }
+
+                  // Mark step as complete and save execution data
+                  try {
+                    updateProgress({
+                      currentStep: 'pricing',
+                      completedSteps: [...(journeyProgress?.completedSteps || []), 'execute'],
+                      executionCompletedAt: new Date().toISOString(),
+                      executionId: executionState.executionId || journeyProgress?.executionId,
+                      executionSummary: journeyProgress?.executionSummary || (executionResults ? {
+                        totalAnalyses: executionState.analysisTypes?.length || 0,
+                        resultsGenerated: executionResults?.results?.length || 0,
+                        datasetCount: 1, // Could be enhanced with actual count
+                      } : undefined),
+                      stepTimestamps: {
+                        ...(journeyProgress?.stepTimestamps || {}),
+                        executeCompleted: new Date().toISOString()
+                      }
+                    });
+
+                    // Navigate to next step
+                    if (onNext) {
+                      onNext();
+                    }
+                  } catch (error: any) {
+                    console.error('Failed to save execute step progress:', error);
+                    toast({
+                      title: "Error Saving Progress",
+                      description: error.message || "Failed to save step completion. Please try again.",
+                      variant: "destructive"
+                    });
+                  }
+                }}
+                className="bg-green-600 hover:bg-green-700 w-full"
+                size="lg"
+                disabled={isUpdating}
+              >
+                {isUpdating ? (
+                  <>
+                    <span className="animate-spin mr-2">⏳</span>
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    Continue to Billing & Payment
+                    <ArrowRight className="w-4 h-4 ml-2" />
+                  </>
+                )}
+              </Button>
+            )}
           </CardContent>
         </Card>
+      )}
+
+      {projectId && (
+        <div className="mt-6">
+          <AgentCheckpoints projectId={projectId} />
+        </div>
+      )}
+
+      {/* Navigation Buttons */}
+      {(onNext || onPrevious) && (
+        <div className="flex items-center justify-between pt-4 border-t">
+          {onPrevious && (
+            <Button variant="outline" onClick={onPrevious}>
+              Previous Step
+            </Button>
+          )}
+          {onNext && executionStatus === 'completed' && (
+            <Button
+              onClick={async () => {
+                // Validate project exists
+                if (!projectId) {
+                  toast({
+                    title: "Project Not Found",
+                    description: "No project ID found. Please go back to previous step.",
+                    variant: "destructive"
+                  });
+                  return;
+                }
+
+                // Mark step as complete and save execution data
+                try {
+                  updateProgress({
+                    currentStep: 'pricing',
+                    completedSteps: [...(journeyProgress?.completedSteps || []), 'execute'],
+                    executionCompletedAt: new Date().toISOString(),
+                    executionId: executionState.executionId || journeyProgress?.executionId,
+                    executionSummary: journeyProgress?.executionSummary || (executionResults ? {
+                      totalAnalyses: executionState.analysisTypes?.length || 0,
+                      resultsGenerated: executionResults?.results?.length || 0,
+                      datasetCount: 1,
+                    } : undefined),
+                    stepTimestamps: {
+                      ...(journeyProgress?.stepTimestamps || {}),
+                      executeCompleted: new Date().toISOString()
+                    }
+                  });
+
+                  // Navigate to next step
+                  if (onNext) {
+                    onNext();
+                  }
+                } catch (error: any) {
+                  console.error('Failed to save execute step progress:', error);
+                  toast({
+                    title: "Error Saving Progress",
+                    description: error.message || "Failed to save step completion. Please try again.",
+                    variant: "destructive"
+                  });
+                }
+              }}
+              className="ml-auto bg-blue-600 hover:bg-blue-700"
+              disabled={isUpdating}
+            >
+              {isUpdating ? (
+                <>
+                  <span className="animate-spin mr-2">⏳</span>
+                  Saving...
+                </>
+              ) : (
+                <>
+                  Continue to Billing & Payment
+                  <ArrowRight className="w-4 h-4 ml-2" />
+                </>
+              )}
+            </Button>
+          )}
+        </div>
       )}
     </div>
   );

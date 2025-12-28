@@ -83,7 +83,9 @@ export default function PlanStep({
   renderAsContent = false
 }: PlanStepProps) {
   const params = useParams();
-  const projectId = propProjectId || params.projectId;
+  // CRITICAL FIX: Check localStorage as fallback (consistent with other steps)
+  // JourneyWizard doesn't pass projectId prop, and URL may not have it
+  const projectId = propProjectId || params.projectId || localStorage.getItem('currentProjectId') || undefined;
   const { toast } = useToast();
 
   // FIX: Production Readiness - Use useProject hook for SSOT journey progress
@@ -107,6 +109,16 @@ export default function PlanStep({
   useEffect(() => {
     if (projectId) {
       loadPlan();
+    } else {
+      // CRITICAL FIX: If no projectId, stop loading and show error
+      // This prevents infinite "Loading analysis plan..." screen
+      setIsLoading(false);
+      setPlanError("No project found. Please go back to Data Upload and start a new project.");
+      toast({
+        title: "Project Not Found",
+        description: "No project ID found. Please ensure you have uploaded data before viewing the analysis plan.",
+        variant: "destructive"
+      });
     }
   }, [projectId]);
 
@@ -350,11 +362,19 @@ export default function PlanStep({
   };
 
   const handleApprovePlan = async () => {
-    if (!plan) return;
+    // CRITICAL FIX: Show feedback instead of silent return
+    if (!plan) {
+      toast({
+        title: "No Plan Available",
+        description: "Please wait for the analysis plan to be generated before approving.",
+        variant: "destructive"
+      });
+      return;
+    }
     if (!requirementsConfirmed) {
       toast({
         title: "Confirm data requirements",
-        description: "Please confirm the required data elements before approving the plan.",
+        description: "Please check the checkbox to confirm the required data elements before approving the plan.",
         variant: "destructive"
       });
       return;
@@ -374,15 +394,28 @@ export default function PlanStep({
 
         // FIX: Production Readiness - Update journeyProgress SSOT with plan approval
         // Uses schema-defined fields: analysisPlanId, planApprovedAt
+        // Mark step as complete and advance to next step
         try {
           updateProgress({
-            currentStep: 'plan',
+            currentStep: 'execute',
+            completedSteps: [...(journeyProgress?.completedSteps || []), 'plan'],
             analysisPlanId: plan.id,
             planApprovedAt: new Date().toISOString(),
+            planApproved: true,
+            stepTimestamps: {
+              ...(journeyProgress?.stepTimestamps || {}),
+              planCompleted: new Date().toISOString()
+            }
           });
-          console.log('✅ [SSOT] Updated journeyProgress with plan approval');
+          console.log('✅ [SSOT] Updated journeyProgress with plan approval and step completion');
         } catch (progressError) {
           console.warn('⚠️ Failed to update journeyProgress with plan approval:', progressError);
+          toast({
+            title: "Error Saving Progress",
+            description: "Plan approved but failed to save completion status. Please refresh the page.",
+            variant: "destructive"
+          });
+          return;
         }
 
         // Navigate to next step

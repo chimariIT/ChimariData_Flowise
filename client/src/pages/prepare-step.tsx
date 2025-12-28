@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
+import { useLocation, useRoute } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
@@ -15,25 +16,53 @@ import {
   BarChart3,
   Shield,
   AlertCircle,
-  Users,
-  Building,
-  TrendingUp,
-  Database,
-  FileText
+  Users
 } from "lucide-react";
-import { useProjectSession } from "@/hooks/useProjectSession";
+import { useProject } from "@/hooks/useProject";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Checkbox } from "@/components/ui/checkbox";
 import { AgentChatInterface } from "@/components/agent-chat-interface";
 import { AudienceDefinitionSection } from "@/components/AudienceDefinitionSection";
 import { PMAgentClarificationDialog } from "@/components/PMAgentClarificationDialog";
+import { RequiredDataElementsDisplay } from "@/components/RequiredDataElementsDisplay";
 import { apiClient } from "@/lib/api";
+import { useToast } from "@/hooks/use-toast";
+import { useJourneyDataOptional } from "@/contexts/JourneyDataContext";
+import { useQueryClient } from "@tanstack/react-query";
 
 interface PrepareStepProps {
   journeyType: string;
+  onNext?: () => void;
+  onPrevious?: () => void;
 }
 
-export default function PrepareStep({ journeyType }: PrepareStepProps) {
+// Simple debounce hook
+function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [value, delay]);
+  return debouncedValue;
+}
+
+export default function PrepareStep({ journeyType, onNext, onPrevious }: PrepareStepProps) {
+  const [location, setLocation] = useLocation();
+
+  // Use shared journey context for data continuity between steps
+  const journeyContext = useJourneyDataOptional();
+
+  // Extract projectId from URL query params manually since wouter's useRoute might not be set up for query params here
+  const getProjectIdFromUrl = () => {
+    const searchParams = new URLSearchParams(window.location.search);
+    return searchParams.get('projectId');
+  };
+
+  const urlProjectId = getProjectIdFromUrl();
   const [analysisGoal, setAnalysisGoal] = useState("");
   const [businessQuestions, setBusinessQuestions] = useState("");
   const [selectedTemplates, setSelectedTemplates] = useState<string[]>([]);
@@ -43,8 +72,17 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
   const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
 
-  // Audience definition state
-  const [primaryAudience, setPrimaryAudience] = useState<string>("mixed");
+  // Audience definition state - default based on journey type
+  const getDefaultAudienceForJourneyType = (jt: string) => {
+    switch (jt) {
+      case 'non-tech': return 'ceo';
+      case 'business': return 'business_manager';
+      case 'technical': return 'data_analyst';
+      case 'consultation': return 'consultant';
+      default: return 'mixed';
+    }
+  };
+  const [primaryAudience, setPrimaryAudience] = useState<string>(() => getDefaultAudienceForJourneyType(journeyType));
   const [secondaryAudiences, setSecondaryAudiences] = useState<string[]>([]);
   const [decisionContext, setDecisionContext] = useState("");
 
@@ -59,100 +97,265 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
   const [loadingClarification, setLoadingClarification] = useState(false);
   const [clarificationCompleted, setClarificationCompleted] = useState(false);
 
-  // Multi-Agent Dataset Recommendations state
-  const [datasetAdvice, setDatasetAdvice] = useState<any>(null);
-  const [loadingDatasetAdvice, setLoadingDatasetAdvice] = useState(false);
-  const [datasetAdviceError, setDatasetAdviceError] = useState<string | null>(null);
+  // GAP F: Researcher Agent state for template recommendations
+  const [researcherRecommendations, setResearcherRecommendations] = useState<{
+    template?: any;
+    confidence?: number;
+    marketDemand?: string;
+    implementationComplexity?: string;
+  } | null>(null);
+  const [loadingResearcher, setLoadingResearcher] = useState(false);
 
-  // Secure server-side session management
-  const {
-    session,
-    updateStep,
-    getPrepareData,
-    loading: sessionLoading,
-    error: sessionError
-  } = useProjectSession({
-    journeyType: journeyType as 'non-tech' | 'business' | 'technical' | 'consultation' | 'custom'
-  });
+  // Required Data Elements state
+  const [requiredDataElements, setRequiredDataElements] = useState<any>(null);
+  const [loadingDataElements, setLoadingDataElements] = useState(false);
+  const [dataElementsError, setDataElementsError] = useState<string | null>(null);
 
-  // Load existing session data on mount
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  // Centralized project data and state (DEC-003)
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(() => urlProjectId || localStorage.getItem('currentProjectId'));
+  const { project, journeyProgress, updateProgress, isLoading: projectLoading, isUpdating } = useProject(currentProjectId || undefined);
+
+  // Track if this is a fresh start
+  const [isNewJourney, setIsNewJourney] = useState(false);
+
+  // FIX: Prevent infinite re-render loops (API polling storm)
+  const isUpdatingRef = useRef(false);
+
+  // Clear prefilled data when starting a new journey (Fix: old data showing in new journeys)
   useEffect(() => {
-    const existingData = getPrepareData();
-    console.log('Loading session data:', existingData);
-    if (existingData) {
-      setAnalysisGoal(existingData.analysisGoal || '');
-      setBusinessQuestions(existingData.businessQuestions || '');
-      if (existingData.selectedTemplates && existingData.selectedTemplates.length > 0) {
-        console.log('Setting templates from session:', existingData.selectedTemplates);
-        setSelectedTemplates(existingData.selectedTemplates);
-      }
-      // Load audience data
-      if (existingData.audience) {
-        setPrimaryAudience(existingData.audience.primaryAudience || 'mixed');
-        setSecondaryAudiences(existingData.audience.secondaryAudiences || []);
-        setDecisionContext(existingData.audience.decisionContext || '');
-      }
+    const searchParams = new URLSearchParams(window.location.search);
+    if (searchParams.get('new') === 'true') {
+      // Clear all cached journey data for fresh start
+      localStorage.removeItem('chimari_analysis_goal');
+      localStorage.removeItem('chimari_analysis_goals');
+      localStorage.removeItem('chimari_analysis_questions');
+      localStorage.removeItem('chimari_business_templates');
+      localStorage.removeItem('chimari_business_questions');
+      localStorage.removeItem('currentProjectId');
+      // Reset form state
+      setAnalysisGoal('');
+      setBusinessQuestions('');
+      setSelectedTemplates([]);
+      setPrimaryAudience('mixed');
+      setSecondaryAudiences([]);
+      setDecisionContext('');
+      setIsNewJourney(true);
+      console.log('🧹 Cleared ALL prefilled data for new journey (including session)');
+      // Remove the ?new=true from URL to prevent re-clearing on navigation
+      const cleanUrl = window.location.pathname;
+      window.history.replaceState({}, '', cleanUrl);
     }
-  }, [getPrepareData]);
+  }, []);
+
+  // Initialize project ID from URL or localStorage
+  useEffect(() => {
+    if (urlProjectId) {
+      localStorage.setItem('currentProjectId', urlProjectId);
+      setCurrentProjectId(urlProjectId);
+    }
+  }, [urlProjectId]);
+
+
+  // Debounced session updates
+  const debouncedGoal = useDebounce(analysisGoal, 500);
+  const debouncedQuestions = useDebounce(businessQuestions, 500);
+
+  // Track if initial hydration has been done (prevents infinite loop)
+  const hasHydratedRef = useRef(false);
+  const lastHydratedProgressIdRef = useRef<string | null>(null);
+
+  // Synchronize local form state with journeyProgress (SSOT) - ONLY ONCE on initial load
+  useEffect(() => {
+    if (isNewJourney) {
+      console.log('🚫 Skipping hydration - new journey started');
+      return;
+    }
+
+    // Skip if currently updating to prevent write-back loops
+    if (isUpdatingRef.current) return;
+
+    // Skip if already hydrated from this journeyProgress version
+    const progressId = journeyProgress?.analysisGoal || '';
+    if (hasHydratedRef.current && progressId === lastHydratedProgressIdRef.current) {
+      return;
+    }
+
+    if (journeyProgress) {
+      // Only hydrate fields that haven't been filled yet by user
+      if (journeyProgress.analysisGoal && !analysisGoal) {
+        setAnalysisGoal(journeyProgress.analysisGoal);
+      }
+      if (journeyProgress.userQuestions?.length && !businessQuestions) {
+        setBusinessQuestions(journeyProgress.userQuestions.map(q => q.text).join('\n'));
+      }
+      if (journeyProgress.audience) {
+        if (!primaryAudience || primaryAudience === getDefaultAudienceForJourneyType(journeyType)) {
+          setPrimaryAudience(journeyProgress.audience.primary || getDefaultAudienceForJourneyType(journeyType));
+        }
+        if (secondaryAudiences.length === 0 && journeyProgress.audience.secondary?.length) {
+          setSecondaryAudiences(journeyProgress.audience.secondary);
+        }
+        if (!decisionContext && journeyProgress.audience.decisionContext) {
+          setDecisionContext(journeyProgress.audience.decisionContext);
+        }
+      }
+
+      // Mark as hydrated with current progress version
+      hasHydratedRef.current = true;
+      lastHydratedProgressIdRef.current = progressId;
+      console.log('✅ [SSOT] Hydrated prepare step from journeyProgress');
+    }
+  }, [isNewJourney, journeyProgress, journeyType]); // Removed analysisGoal/businessQuestions from deps to prevent re-trigger
 
   // Auto-save to server (replaces localStorage)
-  useEffect(() => {
-    if (session && (analysisGoal || businessQuestions || selectedTemplates.length > 0 || primaryAudience || decisionContext)) {
-      const saveData = async () => {
-        try {
-          await updateStep('prepare', {
-            analysisGoal,
-            businessQuestions,
-            selectedTemplates,
-            audience: {
-              primaryAudience,
-              secondaryAudiences,
-              decisionContext
-            },
-            timestamp: new Date().toISOString()
-          });
-        } catch (error) {
-          console.error('Failed to save prepare data:', error);
-        }
-      };
+  // FIX: Use session?.id instead of session to prevent infinite loop
+  // (updateStep updates session object reference, which would re-trigger this effect)
+  // Auto-save to journeyProgress (SSOT)
+  // P0-2 FIX: Added isSaving state and lastSavedRef to prevent infinite loops
+  const [isSaving, setIsSaving] = useState(false);
+  const lastSavedRef = useRef<string>('');
 
-      // Debounce server saves (save 500ms after user stops typing)
-      const timeoutId = setTimeout(saveData, 500);
-      return () => clearTimeout(timeoutId);
+  useEffect(() => {
+    if (!currentProjectId) return;
+    if (!analysisGoal && !businessQuestions && !decisionContext) return;
+    if (isSaving) return;
+    if (isUpdatingRef.current) return;
+
+    // Create a signature of current values to compare
+    const currentQuestions = businessQuestions
+      .split('\n')
+      .map((q, i) => ({ id: `q-${i}`, text: q.trim() }))
+      .filter(q => q.text.length > 0);
+
+    const dataToSave = JSON.stringify({
+      goal: analysisGoal || '',
+      questions: currentQuestions.map(q => q.text),
+      audience: {
+        primary: primaryAudience,
+        secondary: secondaryAudiences,
+        decisionContext
+      }
+    });
+
+    // Skip if data hasn't changed from last saved
+    if (dataToSave === lastSavedRef.current) return;
+
+    // Also check against server state to avoid unnecessary updates
+    const serverQuestions = journeyProgress?.userQuestions || [];
+    const questionsChanged = JSON.stringify(currentQuestions.map(q => q.text)) !== JSON.stringify(serverQuestions.map(q => q.text));
+    const goalChanged = (analysisGoal || '') !== (journeyProgress?.analysisGoal || '');
+    const audienceChanged =
+      (primaryAudience || '') !== (journeyProgress?.audience?.primary || '') ||
+      JSON.stringify(secondaryAudiences || []) !== JSON.stringify(journeyProgress?.audience?.secondary || []) ||
+      (decisionContext || '') !== (journeyProgress?.audience?.decisionContext || '');
+
+    if (!questionsChanged && !goalChanged && !audienceChanged) {
+      // Update lastSavedRef to current state to prevent re-checking
+      lastSavedRef.current = dataToSave;
+      return;
     }
-  }, [analysisGoal, businessQuestions, selectedTemplates, primaryAudience, secondaryAudiences, decisionContext, session, updateStep]);
+
+    const saveData = async () => {
+      try {
+        setIsSaving(true);
+        isUpdatingRef.current = true;
+        lastSavedRef.current = dataToSave;
+
+        await updateProgress({
+          analysisGoal,
+          userQuestions: currentQuestions,
+          audience: {
+            primary: primaryAudience,
+            secondary: secondaryAudiences,
+            decisionContext
+          },
+          currentStep: 'prepare'
+        });
+      } catch (error) {
+        console.error('Failed to save prepare data:', error);
+        // On error, reset lastSavedRef to allow retry
+        lastSavedRef.current = '';
+      } finally {
+        // Add a small delay before clearing the lock to allow server response to settle
+        setTimeout(() => {
+          isUpdatingRef.current = false;
+          setIsSaving(false);
+        }, 500);
+      }
+    };
+
+    const timeoutId = setTimeout(saveData, 2000); // Debounce to 2s to reduce frequency
+    return () => clearTimeout(timeoutId);
+  }, [analysisGoal, businessQuestions, primaryAudience, secondaryAudiences, decisionContext, currentProjectId, isSaving, updateProgress]); // Removed journeyProgress from deps to prevent re-trigger
 
   // Backwards compatibility: Also cache in localStorage for offline access
   useEffect(() => {
     if (analysisGoal) {
-      try { localStorage.setItem('chimari_analysis_goal', analysisGoal); } catch {}
+      try { localStorage.setItem('chimari_analysis_goal', analysisGoal); } catch { }
     }
   }, [analysisGoal]);
 
   useEffect(() => {
     if (businessQuestions) {
-      try { localStorage.setItem('chimari_business_questions', businessQuestions); } catch {}
+      try { localStorage.setItem('chimari_business_questions', businessQuestions); } catch { }
     }
   }, [businessQuestions]);
 
-  // Save goals and questions for agent recommendations
+  // Track last saved values to prevent infinite loops for localStorage saves
+  const lastSavedLocalStorageRef = useRef<string>('');
+  const saveLocalStorageTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Save goals and questions for agent recommendations (with ROBUST infinite loop prevention)
+  // P0-2 FIX: Improved debounce and signature checking
   useEffect(() => {
-    if (analysisGoal && businessQuestions) {
+    if (!analysisGoal || !businessQuestions) return;
+
+    // Create a signature of current values
+    const currentSignature = `${analysisGoal}::${businessQuestions}`;
+
+    // Skip if nothing changed (prevents infinite loop)
+    if (currentSignature === lastSavedLocalStorageRef.current) return;
+
+    // Clear any pending save timeout to debounce
+    if (saveLocalStorageTimeoutRef.current) {
+      clearTimeout(saveLocalStorageTimeoutRef.current);
+    }
+
+    // Debounce the save operation by 1 second
+    saveLocalStorageTimeoutRef.current = setTimeout(() => {
       try {
+        // Double-check the signature hasn't changed during debounce
+        const checkSignature = `${analysisGoal}::${businessQuestions}`;
+        if (checkSignature === lastSavedLocalStorageRef.current) {
+          return; // Already saved
+        }
+
         // Extract questions from the business questions text
         const questions = businessQuestions
           .split('\n')
           .map(q => q.trim())
           .filter(q => q.length > 0);
-        
+
         // Save in the format expected by agent recommendations
         localStorage.setItem('chimari_analysis_goals', JSON.stringify([analysisGoal]));
         localStorage.setItem('chimari_analysis_questions', JSON.stringify(questions));
-        console.log('💾 Saved goals and questions for agent recommendations:', { goals: [analysisGoal], questions });
+
+        // Update ref AFTER successful save to prevent re-trigger
+        lastSavedLocalStorageRef.current = checkSignature;
       } catch (error) {
         console.error('Failed to save goals/questions for agent recommendations:', error);
       }
-    }
+    }, 1000); // 1 second debounce
+
+    // Cleanup timeout on unmount or re-run
+    return () => {
+      if (saveLocalStorageTimeoutRef.current) {
+        clearTimeout(saveLocalStorageTimeoutRef.current);
+      }
+    };
   }, [analysisGoal, businessQuestions]);
 
   // Fetch AI question suggestions for non-tech users
@@ -200,7 +403,7 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
         };
       case 'business':
         return {
-          title: "Business Analysis Preparation", 
+          title: "Business Analysis Preparation",
           description: "Define your business questions and select relevant templates",
           icon: Target,
           color: "green"
@@ -244,28 +447,27 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
         const { apiClient } = await import("@/lib/api");
         const caps = await apiClient.getEnhancedCapabilities();
         console.log('Enhanced capabilities response:', caps);
-        
+
         const list = Array.isArray(caps?.businessTemplates) ? caps.businessTemplates : [];
         console.log('Business templates list:', list);
-        
+
         if (!cancelled) {
-          const mapped = list.map((t: any) => ({ 
-            id: t.templateId || t.id, 
-            name: t.name, 
-            description: t.description || (t.sections?.[0]?.description) || '' 
+          const mapped = list.map((t: any) => ({
+            id: t.templateId || t.id,
+            name: t.name,
+            description: t.description || (t.sections?.[0]?.description) || ''
           }));
           console.log('Mapped templates:', mapped);
-          
+
           setAvailableTemplates(mapped);
-          
-          // Only restore from localStorage if no session data exists
-          const sessionData = getPrepareData();
-          if (!sessionData?.selectedTemplates || sessionData.selectedTemplates.length === 0) {
-          const saved = localStorage.getItem('chimari_business_templates');
+
+          // Only restore from localStorage if no journeyProgress data exists
+          if (!journeyProgress?.selectedAnalysisTypes || journeyProgress.selectedAnalysisTypes.length === 0) {
+            const saved = localStorage.getItem('chimari_business_templates');
             console.log('Saved templates from localStorage:', saved);
-            
-          if (saved) {
-              try { 
+
+            if (saved) {
+              try {
                 const parsed = JSON.parse(saved);
                 console.log('Parsed saved templates:', parsed);
                 setSelectedTemplates(parsed);
@@ -274,7 +476,8 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
               }
             }
           } else {
-            console.log('Using session data instead of localStorage:', sessionData.selectedTemplates);
+            console.log('Using journeyProgress instead of localStorage:', journeyProgress.selectedAnalysisTypes);
+            setSelectedTemplates(journeyProgress.selectedAnalysisTypes);
           }
         }
       } catch (e: any) {
@@ -289,32 +492,17 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
   }, [journeyType]);
 
   const handleTemplateToggle = (templateId: string) => {
-    console.log('Toggling template:', templateId);
-    console.log('Current selected templates:', selectedTemplates);
-    
     setSelectedTemplates(prev => {
       const next = prev.includes(templateId)
         ? prev.filter(id => id !== templateId)
         : [...prev, templateId];
-      
-      console.log('New selected templates:', next);
-      
-      // Persist selection to localStorage for later steps (execute/results)
-      try { 
-        localStorage.setItem('chimari_business_templates', JSON.stringify(next));
-        console.log('Saved to localStorage:', next);
-        
-        // Also save to session for server-side persistence
-        if (session) {
-          updateStep('prepare', {
-            analysisGoal,
-            businessQuestions,
-            selectedTemplates: next,
-            timestamp: new Date().toISOString()
-          }).catch(console.error);
-        }
-      } catch (error) {
-        console.error('Failed to save templates:', error);
+
+      // Persist selection to journeyProgress (SSOT)
+      if (currentProjectId) {
+        updateProgress({
+          selectedAnalysisTypes: next,
+          currentStep: 'prepare'
+        });
       }
       return next;
     });
@@ -327,62 +515,190 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
     return analysisGoal.trim() && businessQuestions.trim();
   };
 
-  // Fetch dataset recommendations from multi-agent consultation
-  const fetchDatasetRecommendations = async (clarificationAnswers: Record<string, string>) => {
-    if (!session?.id || !analysisGoal.trim()) {
-      console.warn('Cannot fetch dataset recommendations: missing session or goal');
+  // Generate required data elements from goals/questions
+  const generateDataRequirements = async () => {
+    // CRITICAL FIX: Use currentProjectId from useProject hook (most reliable source)
+    // Also check URL and localStorage as fallbacks
+    const projectId = currentProjectId || urlProjectId || localStorage.getItem('currentProjectId');
+
+    // CRITICAL FIX: Check both state and journeyProgress for goal (state might not be updated yet)
+    const effectiveGoal = analysisGoal.trim() || (journeyProgress as any)?.analysisGoal || '';
+    
+    if (!projectId) {
+      console.warn('Cannot generate data requirements: missing project ID', {
+        currentProjectId,
+        urlProjectId,
+        localStorageId: localStorage.getItem('currentProjectId')
+      });
       return;
     }
 
-    setLoadingDatasetAdvice(true);
-    setDatasetAdviceError(null);
+    if (!effectiveGoal.trim()) {
+      console.warn('Cannot generate data requirements: missing goal', {
+        analysisGoalState: analysisGoal,
+        journeyProgressGoal: (journeyProgress as any)?.analysisGoal
+      });
+      return;
+    }
+
+    setLoadingDataElements(true);
+    setDataElementsError(null);
 
     try {
-      console.log('🔄 Fetching dataset recommendations from multi-agent consultation...');
-
-      // Use apiClient to ensure correct API base URL (localhost:5000)
-      const data = await apiClient.post('/api/project-manager/recommend-datasets', {
-        sessionId: session.id,
-        analysisGoal,
-        businessQuestions,
-        clarificationAnswers
+      console.log('📋 Generating required data elements from goals/questions...', {
+        projectId,
+        goal: effectiveGoal,
+        goalSource: analysisGoal.trim() ? 'state' : 'journeyProgress'
       });
 
-      if (data.success) {
-        setDatasetAdvice(data.advice);
-        console.log('✅ Dataset recommendations received:', data.advice);
+      // CRITICAL FIX: Use effectiveGoal (from state or journeyProgress) instead of just analysisGoal state
+      const userGoals = effectiveGoal.split('.').map((g: string) => g.trim()).filter((g: string) => g);
+      // Also check journeyProgress for questions if businessQuestions state is empty
+      const effectiveQuestions = businessQuestions.trim() || 
+                                  (journeyProgress as any)?.userQuestions?.map((q: any) => q.text).join('\n') || '';
+      const userQuestions = effectiveQuestions.split('\n').map((q: string) => q.trim()).filter((q: string) => q);
+
+      if (userQuestions.length > 0) {
+        try {
+          // Update journeyProgress with goals and questions (SSOT)
+          // CRITICAL FIX: Use effectiveGoal to ensure we save the correct goal (from state or journeyProgress)
+          updateProgress({
+            analysisGoal: effectiveGoal,
+            userQuestions: userQuestions.map((q: string, i: number) => ({ id: `q-${i}`, text: q })),
+            currentStep: 'prepare'
+          });
+          console.log('✅ [SSOT] Persisted goals and questions to journeyProgress');
+        } catch (persistError) {
+          console.warn('⚠️ Failed to persist questions to journeyProgress, continuing anyway:', persistError);
+        }
+
+        // FIX: Production Readiness - Also save questions to project_questions table
+        // This ensures analysis execution can link answers back to questions with stable IDs
+        try {
+          await apiClient.post(`/api/projects/${projectId}/questions`, {
+            questions: userQuestions
+          });
+          console.log('✅ [Evidence Chain] Saved questions to project_questions table for analysis linking');
+        } catch (questionsError) {
+          console.warn('⚠️ Failed to save questions to project_questions table:', questionsError);
+          // Continue anyway - analysis can still work with fallback
+        }
+      }
+
+      // GAP F: Call Researcher Agent to find matching templates BEFORE generating requirements
+      // This helps guide the DS agent with relevant analysis patterns
+      setLoadingResearcher(true);
+      try {
+        console.log('🔍 [GAP F] Calling Researcher Agent to find relevant templates...');
+        const researcherResponse = await apiClient.post(`/api/projects/${projectId}/recommend-templates`, {
+          businessGoals: userGoals,
+          userQuestions,
+          journeyType
+        });
+
+        if (researcherResponse.success && researcherResponse.recommendations) {
+          setResearcherRecommendations(researcherResponse.recommendations);
+          console.log('✅ [GAP F] Researcher found template recommendations:', researcherResponse.recommendations);
+        }
+      } catch (researcherError) {
+        console.warn('⚠️ [GAP F] Researcher agent not available, continuing without template recommendations:', researcherError);
+      } finally {
+        setLoadingResearcher(false);
+      }
+
+      // Now generate requirements (DS + BA + PM agents collaborate)
+      const data = await apiClient.post(`/api/projects/${projectId}/generate-data-requirements`, {
+        userGoals,
+        userQuestions,
+        // GAP F: Pass researcher recommendations to help guide DS analysis planning
+        researcherContext: researcherRecommendations
+      });
+
+      if (data.success && data.document) {
+        setRequiredDataElements(data.document);
+
+        // CRITICAL FIX: Backend endpoint already stores requirementsDocument AND sets requirementsLocked: true
+        // We should NOT call updateProgress immediately because it can race with the backend's atomic JSONB update
+        // Wait a bit for the backend's atomic JSONB update to complete before calling updateProgress
+        
+        // Wait for backend's atomic JSONB update to complete (prevents race condition)
+        await new Promise(resolve => setTimeout(resolve, 300));
+        
+        // Refresh project data to verify lock was set
+        try {
+          const verifyProject = await apiClient.get(`/api/projects/${projectId}`);
+          const verifyProgress = (verifyProject as any)?.journeyProgress;
+          const isLocked = verifyProgress?.requirementsLocked === true;
+          const hasDocument = !!verifyProgress?.requirementsDocument;
+          
+          if (isLocked && hasDocument) {
+            console.log('✅ [SSOT] Verified: Requirements document locked successfully by backend');
+            // Update local state to match backend
+            setRequiredDataElements(verifyProgress.requirementsDocument);
+            // CRITICAL FIX: Invalidate React Query cache so Verification step sees the updated requirementsDocument
+            queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+            console.log('✅ [SSOT] Invalidated project query cache to refresh requirementsDocument');
+          } else {
+            console.warn('⚠️ [SSOT] Warning: Requirements document not locked yet - backend may still be processing, retrying...');
+            // Retry after another delay
+            setTimeout(async () => {
+              try {
+                const retryProject = await apiClient.get(`/api/projects/${projectId}`);
+                const retryProgress = (retryProject as any)?.journeyProgress;
+                if (retryProgress?.requirementsLocked === true && retryProgress?.requirementsDocument) {
+                  console.log('✅ [SSOT] Verified on retry: Requirements document locked successfully');
+                  setRequiredDataElements(retryProgress.requirementsDocument);
+                  // CRITICAL FIX: Invalidate cache on retry as well
+                  queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+                }
+              } catch (retryError) {
+                console.warn('⚠️ Could not verify requirements lock status on retry:', retryError);
+              }
+            }, 500);
+          }
+        } catch (verifyError) {
+          console.warn('⚠️ Could not verify requirements lock status:', verifyError);
+        }
+        
+        // Only update currentStep AFTER verifying lock is set (backend handles requirementsDocument)
+        // The PATCH endpoint now has protection to preserve the lock
+        await updateProgress({
+          currentStep: 'prepare'
+        });
+
+        console.log('✅ [SSOT] Generated data requirements - backend will persist and lock the document');
       } else {
-        throw new Error(data.error || 'Unknown error');
+        throw new Error('Invalid response from server');
       }
     } catch (error: any) {
-      console.error('Failed to fetch dataset recommendations:', error);
-      setDatasetAdviceError(error.message || 'Failed to get recommendations');
+      console.error('Failed to generate data requirements:', error);
+      setDataElementsError(error.message || 'Failed to generate data requirements');
+      toast({
+        title: "Error",
+        description: "Failed to generate data requirements. Please try again.",
+        variant: "destructive"
+      });
     } finally {
-      setLoadingDatasetAdvice(false);
+      setLoadingDataElements(false);
     }
   };
 
+  // NOTE: Data requirements are now generated AFTER PM clarifications are submitted
+  // See onConfirm callback in PMAgentClarificationDialog below
+
   return (
     <div className="space-y-6">
-      {/* Secure Session Indicator */}
-      {session && (
+      {/* Project Status Indicator */}
+      {project && (
         <Card className="border-green-200 bg-green-50">
           <CardContent className="py-3">
             <div className="flex items-center gap-2 text-sm text-green-800">
               <Shield className="w-4 h-4" />
               <span>
-                <strong>Secure Session Active</strong> - Your data is encrypted and saved to the server.
-                {sessionLoading && <span className="ml-2 text-green-600">Saving...</span>}
+                <strong>Project Connected</strong> - Your progress is automatically synced to the server.
+                {isUpdating && <span className="ml-2 text-green-600">Syncing...</span>}
               </span>
             </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {sessionError && (
-        <Card className="border-red-200 bg-red-50">
-          <CardContent className="py-3 text-red-800 text-sm">
-            ⚠️ Session sync error: {sessionError}. Your data is still cached locally.
           </CardContent>
         </Card>
       )}
@@ -424,7 +740,7 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
                 rows={4}
               />
             </div>
-            
+
             {journeyType === 'non-tech' && (
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                 <div className="flex items-center gap-2 mb-2">
@@ -443,7 +759,7 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
                 )}
 
                 {!loadingSuggestions && aiSuggestions.length === 0 && analysisGoal.length < 10 && (
-                <p className="text-sm text-blue-700">
+                  <p className="text-sm text-blue-700">
                     Type at least 10 characters in your goal to get AI-powered question suggestions.
                   </p>
                 )}
@@ -523,7 +839,7 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
                 💡 Tip: Start broad here. Our AI will help you refine specific questions in the Analysis step.
               </p>
             </div>
-            
+
             {journeyType === 'technical' && (
               <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
                 <div className="flex items-center gap-2 mb-2">
@@ -538,6 +854,38 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
           </div>
         </CardContent>
       </Card>
+
+      {/* Required Data Elements Display */}
+      {loadingDataElements && (
+        <Card className="border-blue-200 bg-blue-50">
+          <CardContent className="py-8">
+            <div className="flex items-center justify-center gap-3">
+              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+              <span className="text-blue-900">Analyzing your goals and identifying required data elements...</span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {requiredDataElements && !loadingDataElements && (
+        <RequiredDataElementsDisplay
+          analysisPath={requiredDataElements.analysisPath || []}
+          requiredDataElements={requiredDataElements.requiredDataElements || []}
+          completeness={requiredDataElements.completeness}
+          status={requiredDataElements.status}
+        />
+      )}
+
+      {dataElementsError && (
+        <Card className="border-red-200 bg-red-50">
+          <CardContent className="py-4">
+            <div className="flex items-center gap-2 text-red-800">
+              <AlertCircle className="w-5 h-5" />
+              <span>Failed to generate data requirements: {dataElementsError}</span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* PM Agent Clarification (Optional) */}
       <Card className="border-indigo-200 bg-gradient-to-br from-indigo-50 to-purple-50">
@@ -600,7 +948,7 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
                         headers: { 'Content-Type': 'application/json' },
                         credentials: 'include',
                         body: JSON.stringify({
-                          sessionId: session?.id,
+                          projectId: currentProjectId,
                           analysisGoal,
                           businessQuestions,
                           journeyType
@@ -664,7 +1012,7 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
           ) : (
             <div className="space-y-4">
               <AgentChatInterface
-                projectId={session?.projectId ?? undefined}
+                projectId={currentProjectId ?? undefined}
                 conversationId={conversationId}
                 initialGoals={analysisGoal ? [analysisGoal] : []}
                 onGoalsConfirmed={(goals) => {
@@ -694,132 +1042,6 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
         </CardContent>
       </Card>
 
-      {/* Dataset Recommendations from Multi-Agent Consultation */}
-      {clarificationCompleted && (
-        <Card className="border-emerald-200 bg-gradient-to-br from-emerald-50 to-teal-50">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Users className="w-5 h-5 text-emerald-600" />
-              📊 Expert Team Recommendations
-            </CardTitle>
-            <CardDescription>
-              Our Business, Data Engineering, and Data Science agents have consulted and provided advice
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {loadingDatasetAdvice ? (
-              <div className="flex items-center justify-center py-8">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-600"></div>
-                <span className="ml-2 text-gray-700">Coordinating with expert agents...</span>
-              </div>
-            ) : datasetAdviceError ? (
-              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <AlertCircle className="w-4 h-4 text-red-600" />
-                  <span className="text-sm font-medium text-red-900">Failed to get recommendations</span>
-                </div>
-                <p className="text-sm text-red-700">{datasetAdviceError}</p>
-              </div>
-            ) : datasetAdvice ? (
-              <div className="space-y-6">
-                {/* Natural Language Advice */}
-                <div className="bg-white border border-emerald-200 rounded-lg p-4">
-                  <div className="flex items-start gap-3 mb-3">
-                    <div className="bg-emerald-100 rounded-full p-2">
-                      <Brain className="w-5 h-5 text-emerald-600" />
-                    </div>
-                    <div className="flex-1">
-                      <h4 className="text-sm font-semibold text-gray-900 mb-2">
-                        What Our Expert Team Recommends
-                      </h4>
-                      <div className="prose prose-sm max-w-none text-gray-700 whitespace-pre-line">
-                        {datasetAdvice.naturalLanguageAdvice}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Recommended Datasets */}
-                {datasetAdvice.recommendedDatasets && datasetAdvice.recommendedDatasets.length > 0 && (
-                  <div>
-                    <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                      <Database className="w-4 h-4 text-emerald-600" />
-                      Recommended Datasets
-                    </h4>
-                    <div className="space-y-3">
-                      {datasetAdvice.recommendedDatasets.map((ds: any, idx: number) => (
-                        <div key={idx} className="border-l-4 border-emerald-500 bg-white rounded-r-lg p-3">
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="flex-1">
-                              <div className="font-medium text-gray-900">{ds.name}</div>
-                              <div className="text-sm text-gray-600 mt-1">{ds.description}</div>
-                            </div>
-                            <Badge
-                              variant={ds.priority === 'Required' ? 'default' : 'secondary'}
-                              className={ds.priority === 'Required' ? 'bg-emerald-600' : ''}
-                            >
-                              {ds.priority}
-                            </Badge>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Data Quality Expectations */}
-                {datasetAdvice.qualityExpectations && datasetAdvice.qualityExpectations.length > 0 && (
-                  <div>
-                    <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                      <CheckCircle className="w-4 h-4 text-emerald-600" />
-                      Data Quality Expectations
-                    </h4>
-                    <ul className="space-y-2 text-sm text-gray-700">
-                      {datasetAdvice.qualityExpectations.map((exp: string, idx: number) => (
-                        <li key={idx} className="flex items-start gap-2">
-                          <span className="text-emerald-600 mt-1">✓</span>
-                          <span>{exp}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {/* Data Requirements */}
-                {datasetAdvice.dataRequirements && datasetAdvice.dataRequirements.length > 0 && (
-                  <div>
-                    <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                      <FileText className="w-4 h-4 text-emerald-600" />
-                      Data Requirements
-                    </h4>
-                    <ul className="space-y-2 text-sm text-gray-700">
-                      {datasetAdvice.dataRequirements.map((req: string, idx: number) => (
-                        <li key={idx} className="flex items-start gap-2">
-                          <span className="text-emerald-600 mt-1">•</span>
-                          <span>{req}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {/* Next Step Prompt */}
-                <div className="bg-gradient-to-r from-emerald-100 to-teal-100 border border-emerald-300 rounded-lg p-4">
-                  <div className="flex items-center gap-2 mb-2">
-                    <ArrowRight className="w-4 h-4 text-emerald-700" />
-                    <span className="text-sm font-semibold text-emerald-900">Ready to Upload Your Data?</span>
-                  </div>
-                  <p className="text-sm text-emerald-800">
-                    Proceed to the next step to upload your data. We'll automatically analyze its quality,
-                    detect any PII, and help you prepare it for analysis.
-                  </p>
-                </div>
-              </div>
-            ) : null}
-          </CardContent>
-        </Card>
-      )}
-
       {/* Business Templates (for business journey) */}
       {journeyType === 'business' && (
         <Card>
@@ -843,9 +1065,9 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
                 <AlertCircle className="w-8 h-8 text-red-500 mx-auto mb-2" />
                 <p className="text-red-600 mb-2">Failed to load templates</p>
                 <p className="text-sm text-gray-500">{templateError}</p>
-                <Button 
-                  variant="outline" 
-                  size="sm" 
+                <Button
+                  variant="outline"
+                  size="sm"
                   onClick={() => window.location.reload()}
                   className="mt-2"
                 >
@@ -859,36 +1081,35 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
                 <p className="text-sm text-gray-500">Templates will be loaded automatically</p>
               </div>
             ) : (
-            <div className="grid gap-3">
+              <div className="grid gap-3">
                 {availableTemplates.map((template, index) => (
-                <div
-                  key={`template-${template.id}-${index}`}
-                  className={`p-4 border rounded-lg cursor-pointer transition-all ${
-                    selectedTemplates.includes(template.id)
+                  <div
+                    key={`template-${template.id}-${index}`}
+                    className={`p-4 border rounded-lg cursor-pointer transition-all ${selectedTemplates.includes(template.id)
                       ? 'border-green-500 bg-green-50'
                       : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-                  }`}
-                  onClick={() => {
-                    console.log('Template clicked:', template.id, template.name);
-                    handleTemplateToggle(template.id);
-                  }}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex-1">
-                      <h4 className="font-medium text-gray-900">{template.name}</h4>
-                      {template.description && (
-                        <p className="text-sm text-gray-600 mt-1">{template.description}</p>
+                      }`}
+                    onClick={() => {
+                      console.log('Template clicked:', template.id, template.name);
+                      handleTemplateToggle(template.id);
+                    }}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1">
+                        <h4 className="font-medium text-gray-900">{template.name}</h4>
+                        {template.description && (
+                          <p className="text-sm text-gray-600 mt-1">{template.description}</p>
+                        )}
+                      </div>
+                      {selectedTemplates.includes(template.id) && (
+                        <CheckCircle className="w-5 h-5 text-green-600" />
                       )}
                     </div>
-                    {selectedTemplates.includes(template.id) && (
-                      <CheckCircle className="w-5 h-5 text-green-600" />
-                    )}
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
             )}
-            
+
             {selectedTemplates.length > 0 && (
               <div className="mt-4">
                 <Label>Selected Templates:</Label>
@@ -974,7 +1195,7 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
               </div>
             )}
           </div>
-          
+
           {isFormValid() && (
             <div className="mt-4 p-3 bg-green-100 border border-green-300 rounded-lg">
               <p className="text-sm text-green-800 font-medium">
@@ -1033,41 +1254,168 @@ export default function PrepareStep({ journeyType }: PrepareStepProps) {
         }}
         onConfirm={async (answers, refinedGoal) => {
           try {
-            // Update session with clarification results
-            await fetch(`/api/project-manager/update-goal-after-clarification`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              credentials: 'include',
-              body: JSON.stringify({
-                sessionId: session?.id,
-                refinedGoal: refinedGoal || analysisGoal,
-                answersToQuestions: answers,
-                confirmedUnderstanding: refinedGoal ? refinedGoal : clarificationData
-              })
-            });
-
-            // Update local state
+            // CRITICAL FIX: Close dialog first and update local state regardless of projectId
+            // This prevents user from being stuck if projectId is missing
             if (refinedGoal) {
               setAnalysisGoal(refinedGoal);
             }
-
             setClarificationCompleted(true);
             setShowClarificationDialog(false);
             setClarificationData(null);
 
-            console.log('✅ Clarification saved successfully');
+            // Check for projectId and warn if missing
+            const effectiveProjectId = currentProjectId || urlProjectId || localStorage.getItem('currentProjectId');
+            if (!effectiveProjectId) {
+              console.warn('⚠️ [Clarification] No project ID found - clarification saved locally but not persisted');
+              toast({
+                title: "Clarification Saved Locally",
+                description: "No project found. Your answers are saved. Please ensure a project is created before proceeding.",
+                variant: "default"
+              });
+              return;
+            }
 
-            // *** TRIGGER MULTI-AGENT DATASET CONSULTATION ***
-            // After clarification is complete, get dataset recommendations
-            await fetchDatasetRecommendations(answers);
+            // Update journeyProgress with refined goal and answers (SSOT)
+            updateProgress({
+              analysisGoal: refinedGoal || analysisGoal,
+              // Store clarification answers in a way that matches schema if needed,
+              // for now we'll just update the goal
+              currentStep: 'prepare'
+            });
+
+            console.log('✅ Clarification saved to journeyProgress');
+
+            // Generate required data elements based on goals/questions
+            // Wrap in try-catch so dialog stays closed even if this fails
+            try {
+              await generateDataRequirements();
+            } catch (genError) {
+              console.warn('⚠️ [Clarification] Failed to generate requirements, user can proceed manually:', genError);
+              toast({
+                title: "Requirements Generation Delayed",
+                description: "Clarification saved. Requirements will be generated when you proceed to the next step.",
+                variant: "default"
+              });
+            }
           } catch (error: any) {
             console.error('Failed to save clarification:', error);
-            alert('Failed to save clarification. Please try again.');
+            // Still close the dialog so user isn't stuck
+            setShowClarificationDialog(false);
+            setClarificationData(null);
+            toast({
+              title: "Error Saving Clarification",
+              description: error.message || "Failed to save clarification. Please try again.",
+              variant: "destructive"
+            });
           }
         }}
         clarificationData={clarificationData}
         isLoading={loadingClarification}
       />
+
+      {/* Navigation Buttons */}
+      {(onNext || onPrevious) && (
+        <div className="flex items-center justify-between pt-6 border-t mt-6">
+          {onPrevious && (
+            <Button variant="outline" onClick={onPrevious}>
+              <ArrowRight className="w-4 h-4 mr-2 rotate-180" />
+              Previous Step
+            </Button>
+          )}
+          {onNext && (
+            <Button
+              onClick={async () => {
+                // Validate required fields
+                if (!analysisGoal.trim()) {
+                  toast({
+                    title: "Analysis Goal Required",
+                    description: "Please enter an analysis goal before continuing.",
+                    variant: "destructive"
+                  });
+                  return;
+                }
+
+                if (!businessQuestions.trim()) {
+                  toast({
+                    title: "Business Questions Required",
+                    description: "Please enter at least one business question before continuing.",
+                    variant: "destructive"
+                  });
+                  return;
+                }
+
+                // Auto-generate requirements document before proceeding
+                // This ensures Verification, Transformation, and Execute steps have data
+                if (!requiredDataElements && analysisGoal.trim() && businessQuestions.trim()) {
+                  console.log('📋 [Auto-Generate] Generating requirements before navigation...');
+                  try {
+                    await generateDataRequirements();
+                  } catch (error) {
+                    console.warn('⚠️ [Auto-Generate] Failed to generate requirements, proceeding anyway:', error);
+                  }
+                }
+
+                // Prepare step data
+                const currentQuestions = businessQuestions.split('\n').filter(q => q.trim()).map((q, i) => ({
+                  id: `q-${i}`,
+                  text: q.trim()
+                }));
+
+                // Mark step as complete and save all step data
+                try {
+                  updateProgress({
+                    currentStep: 'data-verification',
+                    completedSteps: [...(journeyProgress?.completedSteps || []), 'prepare'],
+                    analysisGoal: analysisGoal.trim(),
+                    userQuestions: currentQuestions,
+                    audience: {
+                      primary: primaryAudience,
+                      secondary: secondaryAudiences,
+                      decisionContext: decisionContext.trim() || undefined
+                    },
+                    selectedAnalysisTypes: selectedTemplates,
+                    stepTimestamps: {
+                      ...(journeyProgress?.stepTimestamps || {}),
+                      prepareCompleted: new Date().toISOString()
+                    }
+                  });
+
+                  // Navigate to next step
+                  if (onNext) {
+                    onNext();
+                  }
+                } catch (error: any) {
+                  console.error('Failed to save prepare step progress:', error);
+                  toast({
+                    title: "Error Saving Progress",
+                    description: error.message || "Failed to save step completion. Please try again.",
+                    variant: "destructive"
+                  });
+                }
+              }}
+              className="ml-auto bg-blue-600 hover:bg-blue-700"
+              disabled={!analysisGoal.trim() || !businessQuestions.trim() || loadingDataElements || isUpdating}
+            >
+              {loadingDataElements ? (
+                <>
+                  <span className="animate-spin mr-2">⏳</span>
+                  Generating Requirements...
+                </>
+              ) : isUpdating ? (
+                <>
+                  <span className="animate-spin mr-2">⏳</span>
+                  Saving...
+                </>
+              ) : (
+                <>
+                  Continue to Data Verification
+                  <ArrowRight className="w-4 h-4 ml-2" />
+                </>
+              )}
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
