@@ -270,10 +270,23 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
     try {
       setIsRefreshingPreview(true);
       const response = await apiClient.getProjectDatasets(currentProjectId);
-      const joinedRows = Array.isArray(response?.joinedPreview) ? response.joinedPreview : [];
+
+      // Primary source: API response
+      let joinedRows = Array.isArray(response?.joinedPreview) ? response.joinedPreview : [];
+      let joinedSchema = response?.joinedSchema || null;
+      let insights = response?.joinInsights || null;
+
+      // [DATA CONTINUITY FIX] Fallback: Load from journeyProgress if API didn't return preview
+      if (joinedRows.length === 0 && journeyProgress?.joinedData?.preview) {
+        console.log('📋 [Preview] Using journeyProgress.joinedData.preview as fallback');
+        joinedRows = journeyProgress.joinedData.preview;
+        joinedSchema = journeyProgress.joinedData.schema || joinedSchema;
+        insights = journeyProgress.joinedData.joinInsights || insights;
+      }
+
       setJoinedPreview(joinedRows);
-      setJoinedPreviewSchema(response?.joinedSchema || null);
-      setJoinInsights(response?.joinInsights || null);
+      setJoinedPreviewSchema(joinedSchema);
+      setJoinInsights(insights);
 
       const datasets = response?.datasets || [];
       if (datasets.length > 0) {
@@ -355,7 +368,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
     } finally {
       setIsRefreshingPreview(false);
     }
-  }, [currentProjectId, projectName, projectDescription]);
+  }, [currentProjectId, projectName, projectDescription, journeyProgress]);
 
   // Initialize projectId from localStorage on mount
   // Clear project state when starting a new journey
