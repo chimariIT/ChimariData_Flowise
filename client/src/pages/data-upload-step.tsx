@@ -650,28 +650,47 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
   };
 
   const handleContinue = async () => {
-    // Validate project exists
-    if (!currentProjectId) {
-      toast({
-        title: "Project Not Created",
-        description: "Please upload at least one file to create your project.",
-        variant: "destructive"
-      });
-      return;
+    // Validate project exists - check both state and localStorage for resilience
+    let effectiveProjectId = currentProjectId;
+    if (!effectiveProjectId) {
+      // Fallback: check localStorage in case state was lost during re-render
+      const storedProjectId = localStorage.getItem('currentProjectId');
+      if (storedProjectId) {
+        console.log('📋 [Data Upload] Recovered projectId from localStorage:', storedProjectId);
+        effectiveProjectId = storedProjectId;
+        setCurrentProjectId(storedProjectId); // Sync state
+      } else {
+        toast({
+          title: "Project Not Created",
+          description: "Please upload at least one file to create your project.",
+          variant: "destructive"
+        });
+        return;
+      }
     }
 
-    // Validate files uploaded
-    if (!uploadedFileIds || uploadedFileIds.length === 0) {
-      toast({
-        title: "No Files Uploaded",
-        description: "Please upload at least one file before continuing.",
-        variant: "destructive"
-      });
-      return;
+    // Validate files uploaded - also check journeyProgress as fallback
+    const effectiveFileIds = uploadedFileIds?.length > 0
+      ? uploadedFileIds
+      : (journeyProgress?.uploadedDatasetIds || []);
+
+    if (!effectiveFileIds || effectiveFileIds.length === 0) {
+      // Last resort: check if we have joined data (indicates files were processed)
+      if (joinedPreview?.length > 0 || journeyProgress?.joinedData?.preview?.length > 0) {
+        console.log('📋 [Data Upload] Files detected via joined data, proceeding...');
+      } else {
+        toast({
+          title: "No Files Uploaded",
+          description: "Please upload at least one file before continuing.",
+          variant: "destructive"
+        });
+        return;
+      }
     }
 
-    // Validate PII review completed
-    if (!piiReviewCompleted) {
+    // Validate PII review completed - also check journeyProgress
+    const piiCompleted = piiReviewCompleted || (journeyProgress?.piiDecision != null) || (journeyProgress?.piiDecisionsByFile && Object.keys(journeyProgress.piiDecisionsByFile).length > 0);
+    if (!piiCompleted) {
       toast({
         title: "PII Review Required",
         description: "Please complete the PII review for all uploaded files before continuing.",
@@ -680,8 +699,9 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
       return;
     }
 
-    // Validate data quality approved
-    if (!dataQualityApproved) {
+    // Validate data quality approved - also check journeyProgress
+    const qualityApproved = dataQualityApproved || journeyProgress?.dataQualityApproved;
+    if (!qualityApproved) {
       toast({
         title: "Data Quality Approval Required",
         description: "Please approve the data quality before continuing.",
@@ -696,7 +716,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
       updateProgress({
         currentStep: 'prepare',
         completedSteps: [...(journeyProgress?.completedSteps || []), 'data'],
-        uploadedDatasetIds: uploadedFileIds,
+        uploadedDatasetIds: effectiveFileIds.length > 0 ? effectiveFileIds : uploadedFileIds,
         joinedData: {
           // Preserve fullData from backend (saved by GET /datasets endpoint)
           ...(journeyProgress?.joinedData || {}),
