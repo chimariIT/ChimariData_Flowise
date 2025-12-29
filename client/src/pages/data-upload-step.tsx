@@ -689,7 +689,9 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
 
     if (!effectiveFileIds || effectiveFileIds.length === 0) {
       // Last resort: check if we have joined data (indicates files were processed)
-      if (joinedPreview?.length > 0 || journeyProgress?.joinedData?.preview?.length > 0) {
+      const hasJoinedPreview = joinedPreview?.length > 0;
+      const hasStoredPreview = (journeyProgress?.joinedData?.preview?.length ?? 0) > 0;
+      if (hasJoinedPreview || hasStoredPreview) {
         console.log('📋 [Data Upload] Files detected via joined data, proceeding...');
       } else {
         toast({
@@ -735,7 +737,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
           ...(journeyProgress?.joinedData || {}),
           preview: joinedPreview,
           schema: joinedPreviewSchema || undefined,
-          totalRowCount: aggregatedValidation?.totalRows || journeyProgress?.joinedData?.fullRowCount || joinedPreview.length,
+          totalRowCount: aggregatedValidation?.totalRows || journeyProgress?.joinedData?.totalRowCount || joinedPreview.length,
           joinInsights: joinInsights || journeyProgress?.joinedData?.joinInsights || undefined,
           columnCount: joinedPreviewColumns.length,
           rowCount: joinedPreview.length,
