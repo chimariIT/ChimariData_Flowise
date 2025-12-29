@@ -13,6 +13,7 @@ interface PIIDetectionDialogProps {
   onDecision: (requiresPII: boolean, anonymizeData: boolean, selectedColumns: string[]) => void;
   projectId?: string | null;
   onToolkitApplied?: () => void;
+  fileName?: string | null; // File name for per-file PII decisions
   piiResult: {
     detectedPII: Array<{
       column: string;
@@ -25,7 +26,7 @@ interface PIIDetectionDialogProps {
   };
 }
 
-export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult, projectId, onToolkitApplied }: PIIDetectionDialogProps) {
+export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult, projectId, onToolkitApplied, fileName }: PIIDetectionDialogProps) {
   const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
   const [anonymizeData, setAnonymizeData] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
@@ -34,8 +35,8 @@ export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult, pro
   if (!isOpen) return null;
 
   const handleColumnToggle = (column: string) => {
-    setSelectedColumns(prev => 
-      prev.includes(column) 
+    setSelectedColumns(prev =>
+      prev.includes(column)
         ? prev.filter(c => c !== column)
         : [...prev, column]
     );
@@ -81,7 +82,11 @@ export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult, pro
               <div>
                 <CardTitle className="text-xl">Personal Information Detected</CardTitle>
                 <CardDescription>
-                  We found potentially sensitive information in your dataset
+                  {fileName ? (
+                    <>We found potentially sensitive information in <strong>{fileName}</strong></>
+                  ) : (
+                    <>We found potentially sensitive information in your dataset</>
+                  )}
                 </CardDescription>
               </div>
             </div>
@@ -90,13 +95,13 @@ export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult, pro
             </Button>
           </div>
         </CardHeader>
-        
+
         <CardContent className="space-y-6">
           {/* Risk Level */}
           <div className="flex items-center gap-2">
             <span className="font-medium">Risk Level:</span>
-            <Badge className={getRiskColor(piiResult.riskLevel)}>
-              {piiResult.riskLevel.toUpperCase()}
+            <Badge className={getRiskColor(piiResult?.riskLevel)}>
+              {(piiResult?.riskLevel || 'UNKNOWN').toUpperCase()}
             </Badge>
           </div>
 
@@ -104,30 +109,30 @@ export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult, pro
           <div>
             <h3 className="font-semibold mb-3">Detected Personal Information</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {piiResult.detectedPII.map((pii, index) => (
+              {(piiResult?.detectedPII || []).map((pii, index) => (
                 <Card key={index} className="border-l-4 border-l-yellow-500">
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between mb-2">
-                      <h4 className="font-medium">{pii.column}</h4>
+                      <h4 className="font-medium">{pii?.column || 'Unknown Column'}</h4>
                       <Badge variant="outline">
-                        {(pii.confidence * 100).toFixed(0)}% confident
+                        {(isNaN(Number(pii?.confidence)) ? 80 : Math.round((pii?.confidence ?? 0.8) * 100))}% confident
                       </Badge>
                     </div>
-                    
+
                     <div className="space-y-2">
                       <div className="flex flex-wrap gap-1">
-                        {pii.types.map((type, typeIndex) => (
+                        {(pii?.types || []).map((type, typeIndex) => (
                           <Badge key={typeIndex} className={getPIITypeColor(type)}>
                             {type.replace('_', ' ')}
                           </Badge>
                         ))}
                       </div>
-                      
-                      {showDetails && pii.examples.length > 0 && (
+
+                      {showDetails && (pii?.examples || []).length > 0 && (
                         <div className="mt-2 p-2 bg-gray-50 rounded text-sm">
                           <p className="font-medium text-gray-700 mb-1">Examples:</p>
                           <ul className="list-disc pl-4 text-gray-600">
-                            {pii.examples.slice(0, 3).map((example, exampleIndex) => (
+                            {(pii?.examples || []).slice(0, 3).map((example, exampleIndex) => (
                               <li key={exampleIndex} className="truncate">
                                 {example}
                               </li>
@@ -140,10 +145,10 @@ export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult, pro
                 </Card>
               ))}
             </div>
-            
-            <Button 
-              variant="outline" 
-              size="sm" 
+
+            <Button
+              variant="outline"
+              size="sm"
               className="mt-3"
               onClick={() => setShowDetails(!showDetails)}
             >
@@ -153,11 +158,11 @@ export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult, pro
           </div>
 
           {/* Recommendations */}
-          {piiResult.recommendations.length > 0 && (
+          {(piiResult?.recommendations || []).length > 0 && (
             <div>
               <h3 className="font-semibold mb-2">Recommendations</h3>
               <ul className="space-y-1 text-sm text-gray-600">
-                {piiResult.recommendations.map((rec, index) => (
+                {(piiResult?.recommendations || []).map((rec, index) => (
                   <li key={index} className="flex items-start gap-2">
                     <Shield className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
                     {rec}
@@ -174,15 +179,15 @@ export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult, pro
               Choose which columns containing PII you want to include in your analysis:
             </p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-              {piiResult.detectedPII.map((pii, index) => (
+              {(piiResult?.detectedPII || []).map((pii, index) => (
                 <div key={index} className="flex items-center space-x-2">
                   <Checkbox
                     id={`pii-${index}`}
-                    checked={selectedColumns.includes(pii.column)}
-                    onCheckedChange={() => handleColumnToggle(pii.column)}
+                    checked={selectedColumns.includes(pii?.column || '')}
+                    onCheckedChange={() => handleColumnToggle(pii?.column || '')}
                   />
                   <Label htmlFor={`pii-${index}`} className="text-sm">
-                    {pii.column}
+                    {pii?.column || 'Unknown'}
                   </Label>
                 </div>
               ))}
@@ -235,7 +240,7 @@ export function PIIDetectionDialog({ isOpen, onClose, onDecision, piiResult, pro
         isOpen={showAnonymizationToolkit}
         onClose={() => setShowAnonymizationToolkit(false)}
         projectId={projectId || ''}
-        piiColumns={piiResult.detectedPII.map(pii => pii.column)}
+        piiColumns={(piiResult?.detectedPII || []).map(pii => pii?.column || '').filter(Boolean)}
         onApplied={onToolkitApplied}
       />
     </div>
