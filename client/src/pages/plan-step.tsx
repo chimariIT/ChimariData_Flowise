@@ -89,7 +89,7 @@ export default function PlanStep({
   const { toast } = useToast();
 
   // FIX: Production Readiness - Use useProject hook for SSOT journey progress
-  const { journeyProgress, updateProgress } = useProject(projectId);
+  const { journeyProgress, updateProgress, updateProgressAsync, queryClient } = useProject(projectId);
 
   // State management
   const [plan, setPlan] = useState<AnalysisPlan | null>(null);
@@ -395,8 +395,9 @@ export default function PlanStep({
         // FIX: Production Readiness - Update journeyProgress SSOT with plan approval
         // Uses schema-defined fields: analysisPlanId, planApprovedAt
         // Mark step as complete and advance to next step
+        // FIX: Use async version and await before navigation to prevent race condition
         try {
-          updateProgress({
+          await updateProgressAsync({
             currentStep: 'execute',
             completedSteps: [...(journeyProgress?.completedSteps || []), 'plan'],
             analysisPlanId: plan.id,
@@ -407,6 +408,10 @@ export default function PlanStep({
               planCompleted: new Date().toISOString()
             }
           });
+
+          // Force cache refresh before navigation
+          await queryClient.refetchQueries({ queryKey: ["project", projectId] });
+
           console.log('✅ [SSOT] Updated journeyProgress with plan approval and step completion');
         } catch (progressError) {
           console.warn('⚠️ Failed to update journeyProgress with plan approval:', progressError);
@@ -418,7 +423,7 @@ export default function PlanStep({
           return;
         }
 
-        // Navigate to next step
+        // Navigate to next step (only after data is persisted)
         if (onNext) onNext();
       }
     } catch (error: any) {
@@ -450,9 +455,14 @@ export default function PlanStep({
       });
 
       if (response?.success) {
+        // FIX Issue #8: Handle regenerated plan from backend
+        const hasNewPlan = response.newPlanId;
+
         toast({
-          title: "Plan Rejected",
-          description: "The PM agent will regenerate the plan based on your feedback.",
+          title: hasNewPlan ? "Plan Regenerated" : "Plan Rejected",
+          description: hasNewPlan
+            ? "A new plan has been generated based on your feedback."
+            : response.message || "Please create a new plan manually.",
         });
 
         setPlan({ ...plan, status: 'rejected', rejectionReason });
@@ -461,7 +471,16 @@ export default function PlanStep({
         setModificationsRequested('');
 
         // Reload plan to get regenerated version
-        setTimeout(() => loadPlan(), 2000);
+        // FIX Phase 3: Backend already completed DB write when it returned response
+        // No delay needed - loadPlan can be called immediately
+        if (hasNewPlan) {
+          // Backend returned newPlanId, meaning it's already in DB - load immediately
+          await loadPlan();
+        } else {
+          // No new plan was generated - show loading and try to load what exists
+          setIsLoading(true);
+          await loadPlan();
+        }
       }
     } catch (error: any) {
       toast({

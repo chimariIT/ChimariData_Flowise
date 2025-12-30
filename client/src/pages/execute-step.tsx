@@ -20,7 +20,8 @@ import {
   Shield,
   ShieldCheck,
   ArrowRight,
-  Loader2
+  Loader2,
+  RefreshCw
 } from "lucide-react";
 import { useProject } from "@/hooks/useProject";
 import { CheckpointDialog } from "@/components/CheckpointDialog";
@@ -44,7 +45,8 @@ interface ExecuteStepProps {
 
 export default function ExecuteStep({ journeyType, onNext, onPrevious }: ExecuteStepProps) {
   const { toast } = useToast();
-  const { projectId, project, journeyProgress, updateProgress, isUpdating, isLoading: projectLoading } = useProject(localStorage.getItem('currentProjectId') || undefined);
+  // FIX Phase 3: Use updateProgressAsync for proper async handling
+  const { projectId, project, journeyProgress, updateProgress, updateProgressAsync, isUpdating, isLoading: projectLoading } = useProject(localStorage.getItem('currentProjectId') || undefined);
 
   // const [executionStatus, setExecutionStatus] = useState<'idle' | 'configuring' | 'running' | 'completed' | 'error'>('idle');
   // const [executionProgress, setExecutionProgress] = useState(0);
@@ -791,6 +793,19 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
   };
 
   const handleExecuteAnalysis = async () => {
+    // FIX Phase 3 - Checkpoint Enforcement: Verify plan was approved
+    const planApproved = journeyProgress?.planApproved === true;
+    const planApprovedAt = journeyProgress?.planApprovedAt;
+
+    if (!planApproved && journeyType !== 'non-tech') {
+      toast({
+        title: "Plan Approval Required",
+        description: "Please go back to the Plan step and approve the analysis plan before execution.",
+        variant: "destructive"
+      });
+      return;
+    }
+
     // CRITICAL FIX: Show feedback when no analyses selected instead of silent return
     if (selectedAnalyses.length === 0) {
       toast({
@@ -882,24 +897,47 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       }
 
       // GAP D: Include analysisPath and questionAnswerMapping from requirements document
-      const response = await fetch('/api/analysis-execution/execute', {
-        method: 'POST',
-        headers,
-        credentials: 'include',
-        body: JSON.stringify({
-          projectId: projectId,
-          analysisTypes: selectedAnalyses,
-          journeyType: journeyType,
-          // GAP D: Pass DS-recommended analyses and question mappings
-          analysisPath: requirementsDocument?.analysisPath || [],
-          questionAnswerMapping: requirementsDocument?.questionAnswerMapping || [],
-          templateContext: journeyType === 'business' ? {
-            selectedTemplates: selectedBusinessTemplates,
-            primaryTemplate: primaryBusinessTemplate
-          } : undefined
-        })
-      });
+      // FIX Issue #9: Include analysisSteps from approved plan
+      // FIX Phase 3: Add execution timeout (5 minutes for complex analyses)
+      const EXECUTION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+        console.warn('⏱️ Analysis execution timed out after 5 minutes');
+      }, EXECUTION_TIMEOUT_MS);
+
+      let response: Response;
+      try {
+        response = await fetch('/api/analysis-execution/execute', {
+          method: 'POST',
+          headers,
+          credentials: 'include',
+          signal: controller.signal,
+          body: JSON.stringify({
+            projectId: projectId,
+            analysisTypes: selectedAnalyses,
+            journeyType: journeyType,
+            // GAP D: Pass DS-recommended analyses and question mappings
+            analysisPath: requirementsDocument?.analysisPath || [],
+            questionAnswerMapping: requirementsDocument?.questionAnswerMapping || [],
+            // FIX Issue #9: Pass the full analysisSteps from the approved plan
+            analysisSteps: approvedPlan?.analysisSteps || [],
+            templateContext: journeyType === 'business' ? {
+              selectedTemplates: selectedBusinessTemplates,
+              primaryTemplate: primaryBusinessTemplate
+            } : undefined
+          })
+        });
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        if (fetchError.name === 'AbortError') {
+          throw new Error('Analysis execution timed out after 5 minutes. Your analysis may be processing in the background - please check back in a few minutes.');
+        }
+        throw fetchError;
+      }
+      clearTimeout(timeoutId);
       console.log('🚀 [Execute] Sent analysisPath:', requirementsDocument?.analysisPath?.length || 0, 'analyses');
+      console.log('📋 [Issue #9 Fix] Sent analysisSteps:', approvedPlan?.analysisSteps?.length || 0, 'steps from plan');
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => null);
@@ -1088,7 +1126,8 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
   };
 
   // Phase 3 - Task 3.3: Checkpoint handlers
-  const handleCheckpointApprove = (feedback?: string) => {
+  // FIX Phase 3: Remove hardcoded delay by using async/await properly
+  const handleCheckpointApprove = async (feedback?: string) => {
     console.log('Analysis plan approved', feedback ? `with feedback: ${feedback}` : '');
     setCheckpointApproved(true);
     setShowCheckpoint(false);
@@ -1102,14 +1141,16 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         analysesSelected: selectedAnalyses
       };
 
-      updateProgress({
+      // Use async version and await it before triggering execution
+      await updateProgressAsync({
         checkpointHistory: [...history, newRecord]
       });
+      console.log('✅ [Phase 3 Fix] Checkpoint history updated, now executing analysis');
     } catch (error) {
       console.error('Failed to update checkpoint history:', error);
     }
-    // Trigger execution
-    setTimeout(() => handleExecuteAnalysis(), 100);
+    // Trigger execution immediately - no artificial delay needed
+    handleExecuteAnalysis();
   };
 
   const handleCheckpointModify = (modifications: string) => {
@@ -1418,12 +1459,37 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         </Card>
       )}
 
+      {/* FIX Phase 3: Add retry option for results loading errors */}
       {resultsError && (
         <Card className="border-red-200 bg-red-50">
           <CardContent className="py-3">
-            <div className="flex items-center gap-2 text-sm text-red-800">
-              <AlertCircle className="w-4 h-4" />
-              <span>{resultsError}</span>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm text-red-800">
+                <AlertCircle className="w-4 h-4" />
+                <span>{resultsError}</span>
+              </div>
+              <Button
+                onClick={() => {
+                  setResultsError(null);
+                  setLoadingServerResults(true);
+                  if (resolvedProjectId) {
+                    apiClient.getAnalysisResults(resolvedProjectId)
+                      .then((response) => {
+                        if (response?.results) {
+                          setExecutionResults(response.results);
+                        }
+                      })
+                      .catch((err) => setResultsError(err.message || 'Failed to load results'))
+                      .finally(() => setLoadingServerResults(false));
+                  }
+                }}
+                variant="outline"
+                size="sm"
+                className="border-red-300 text-red-700 hover:bg-red-100"
+              >
+                <RefreshCw className="w-3 h-3 mr-1" />
+                Retry
+              </Button>
             </div>
           </CardContent>
         </Card>
@@ -1861,6 +1927,58 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
               />
             )}
 
+            {/* FIX Phase 3: Add proper error recovery UI for failed execution */}
+            {executionStatus === 'failed' && (
+              <div className="space-y-4">
+                <div className="p-4 bg-red-50 border-2 border-red-300 rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-red-800">
+                      <AlertCircle className="w-5 h-5" />
+                      <div>
+                        <span className="font-semibold">Analysis Execution Failed</span>
+                        <p className="text-sm mt-1">{executionState.error || 'An unexpected error occurred. Please try again.'}</p>
+                      </div>
+                    </div>
+                    <Button
+                      onClick={() => {
+                        // Reset state and allow retry
+                        setExecutionState({
+                          status: 'idle',
+                          overallProgress: 0,
+                          currentStep: { id: 'init', name: 'Ready to Retry', status: 'pending', description: 'Click Execute Analysis to try again...' },
+                          completedSteps: [],
+                          pendingSteps: [],
+                          analysisTypes: selectedAnalyses,
+                          startedAt: new Date().toISOString(),
+                          executionId: '',
+                          projectId: resolvedProjectId || '',
+                          totalSteps: 0,
+                          error: undefined
+                        });
+                        toast({
+                          title: "Ready to Retry",
+                          description: "Click 'Execute Analysis' to try again."
+                        });
+                      }}
+                      variant="outline"
+                      className="border-red-300 text-red-700 hover:bg-red-100"
+                    >
+                      <RefreshCw className="w-4 h-4 mr-2" />
+                      Try Again
+                    </Button>
+                  </div>
+                  <div className="mt-3 text-sm text-red-700">
+                    <p><strong>Troubleshooting tips:</strong></p>
+                    <ul className="list-disc list-inside mt-1 space-y-1">
+                      <li>Ensure your data has been properly uploaded and verified</li>
+                      <li>Check that at least one analysis type is selected</li>
+                      <li>Try refreshing the page and re-running the analysis</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {executionStatus === 'completed' && executionResults && (
               <div className="space-y-4">
                 {/* Server Validation Status */}
@@ -1883,12 +2001,32 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
                   </div>
                 )}
 
+                {/* FIX Phase 3: Add retry button for validation failures */}
                 {validationStatus === 'failed' && (
                   <div className="p-3 bg-red-50 border-2 border-red-300 rounded-lg">
-                    <div className="flex items-center gap-2 text-red-800">
-                      <AlertCircle className="w-5 h-5" />
-                      <span className="font-semibold">⚠️ Validation Failed</span>
-                      <span className="text-sm">- Please re-run analysis or contact support</span>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-red-800">
+                        <AlertCircle className="w-5 h-5" />
+                        <span className="font-semibold">Validation Failed</span>
+                        <span className="text-sm">- Results could not be verified with server</span>
+                      </div>
+                      <Button
+                        onClick={() => {
+                          setValidationStatus('validating');
+                          // Re-trigger validation by fetching results again
+                          if (resolvedProjectId) {
+                            apiClient.getAnalysisResults(resolvedProjectId)
+                              .then(() => setValidationStatus('validated'))
+                              .catch(() => setValidationStatus('failed'));
+                          }
+                        }}
+                        variant="outline"
+                        size="sm"
+                        className="border-red-300 text-red-700 hover:bg-red-100"
+                      >
+                        <RefreshCw className="w-4 h-4 mr-1" />
+                        Retry Validation
+                      </Button>
                     </div>
                   </div>
                 )}

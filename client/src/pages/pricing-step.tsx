@@ -3,6 +3,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   DollarSign,
   CheckCircle,
@@ -12,12 +14,15 @@ import {
   ArrowRight,
   ShieldCheck,
   AlertTriangle,
-  Loader2
+  Loader2,
+  ThumbsUp,
+  Info
 } from "lucide-react";
 import { apiClient } from "@/lib/api";
 import BillingCapacityDisplay from "@/components/BillingCapacityDisplay";
 import { useProject } from "@/hooks/useProject";
 import { useJourneyState } from "@/hooks/useJourneyState";
+import { useToast } from "@/hooks/use-toast";
 
 interface PricingStepProps {
   journeyType: string;
@@ -138,6 +143,11 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
   const [currentTier, setCurrentTier] = useState<string>('');
   const [paymentProcessing, setPaymentProcessing] = useState<boolean>(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
+
+  // Cost confirmation checkpoint state (U2A2A2U pattern)
+  const [showCostConfirmation, setShowCostConfirmation] = useState<boolean>(false);
+  const [costConfirmed, setCostConfirmed] = useState<boolean>(false);
+  const { toast } = useToast();
 
   // 🔒 SSOT: Use useProject hook instead of useProjectSession
   const {
@@ -298,11 +308,27 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
   const spentCostCents = useMemo(() => toCents(journeyState?.costs?.spent), [journeyState]);
   const remainingCostCents = useMemo(() => toCents(journeyState?.costs?.remaining), [journeyState]);
 
+  // FIX Issue #10: Unified cost calculation with clear source hierarchy
+  // Priority: 1. Server-locked cost from plan, 2. Server billing calculation, 3. Client fallback (with warning)
   const authoritativeCostCents = useMemo(() => {
-    if (lockedCostCents !== null) return lockedCostCents;
-    if (typeof billingBreakdown?.totalCost === 'number') return billingBreakdown.totalCost;
+    if (lockedCostCents !== null) {
+      console.log('💰 [Issue #10 Fix] Using server-locked cost from plan:', lockedCostCents / 100);
+      return lockedCostCents;
+    }
+    if (typeof billingBreakdown?.totalCost === 'number') {
+      console.log('💰 [Issue #10 Fix] Using server billing calculation:', billingBreakdown.totalCost / 100);
+      return billingBreakdown.totalCost;
+    }
+    // Fallback to client-side calculation - warn about potential mismatch
+    console.warn('⚠️ [Issue #10 Fix] Using client-side fallback pricing. Server cost not available.');
+    console.warn('⚠️ [Issue #10 Fix] This may differ from actual server pricing. User should see "estimate" label.');
     return Math.round(finalPrice * 100);
   }, [lockedCostCents, billingBreakdown?.totalCost, finalPrice]);
+
+  // Track if we're using estimated vs locked pricing
+  const isEstimatedPricing = useMemo(() => {
+    return lockedCostCents === null && typeof billingBreakdown?.totalCost !== 'number';
+  }, [lockedCostCents, billingBreakdown?.totalCost]);
 
   const pricingPlans = useMemo(() => {
     const perAnalysisPriceDisplay = formatCurrency(authoritativeCostCents, true);
@@ -442,11 +468,160 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
     };
   }, [projectId, journeyType, datasetSizeMB, finalPrice]);
 
+  // Handle payment success/cancel URL parameters (after Stripe redirect)
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const paymentStatus = urlParams.get('payment');
+    const sessionId = urlParams.get('session_id');
+
+    if (!paymentStatus || !projectId) return;
+
+    const handlePaymentCallback = async () => {
+      if (paymentStatus === 'success' && sessionId) {
+        // Verify payment with backend
+        try {
+          setPaymentProcessing(true);
+          const response = await apiClient.post('/api/payment/verify-session', {
+            sessionId,
+            projectId
+          });
+
+          if (response.success && response.paymentStatus === 'paid') {
+            toast({
+              title: "Payment Successful!",
+              description: "Your payment has been verified. Redirecting to results...",
+            });
+
+            // Clear URL parameters
+            window.history.replaceState({}, document.title, window.location.pathname);
+
+            // Navigate to dashboard after short delay
+            setTimeout(() => {
+              if (onNext) {
+                onNext();
+              }
+            }, 1500);
+          } else if (response.paymentStatus === 'pending') {
+            toast({
+              title: "Payment Processing",
+              description: "Your payment is still being processed. Please wait...",
+            });
+          } else {
+            toast({
+              title: "Payment Issue",
+              description: response.message || "There was an issue with your payment. Please try again.",
+              variant: "destructive"
+            });
+          }
+        } catch (error: any) {
+          console.error('Payment verification error:', error);
+          toast({
+            title: "Verification Failed",
+            description: "Could not verify payment. Please contact support if you were charged.",
+            variant: "destructive"
+          });
+        } finally {
+          setPaymentProcessing(false);
+        }
+      } else if (paymentStatus === 'cancelled') {
+        // Handle cancelled payment
+        toast({
+          title: "Payment Cancelled",
+          description: "You cancelled the payment. You can try again when ready.",
+          variant: "default"
+        });
+
+        // Clear URL parameters
+        window.history.replaceState({}, document.title, window.location.pathname);
+
+        // Notify backend about cancellation
+        try {
+          await apiClient.post('/api/payment/cancel', { projectId });
+        } catch (e) {
+          console.warn('Failed to notify backend of cancellation:', e);
+        }
+      }
+    };
+
+    handlePaymentCallback();
+  }, [projectId, onNext, toast]);
+
   const paymentMethods = [
     { id: 'card', name: 'Credit/Debit Card', icon: CreditCard, description: 'Visa, Mastercard, American Express' },
     { id: 'paypal', name: 'PayPal', icon: CreditCard, description: 'Pay with your PayPal account' },
     { id: 'bank', name: 'Bank Transfer', icon: CreditCard, description: 'Direct bank transfer' }
   ];
+
+  // Cost confirmation checkpoint handler (U2A2A2U pattern)
+  const handleConfirmCost = () => {
+    setCostConfirmed(true);
+    setShowCostConfirmation(false);
+    toast({
+      title: "Cost Confirmed",
+      description: "You have approved the cost breakdown. Proceeding to payment...",
+    });
+    // After confirmation, proceed with actual payment
+    processPayment();
+  };
+
+  // Actual payment processing (called after cost confirmation)
+  const processPayment = async () => {
+    setPaymentProcessing(true);
+    setPaymentError(null);
+
+    try {
+      // Call the payment endpoint to create Stripe checkout session
+      const response: any = await apiClient.post('/api/payment/create-checkout-session', {
+        projectId,
+        paymentMethod,
+        costConfirmed: true, // Indicate cost was explicitly confirmed
+      });
+
+      if (response?.error) {
+        throw new Error(response.error);
+      }
+
+      if (response?.url) {
+        window.location.href = response.url;
+        return;
+      }
+
+      if (response?.id && !response?.url) {
+        const checkoutUrl = `https://checkout.stripe.com/pay/${response.id}`;
+        window.location.href = checkoutUrl;
+        return;
+      }
+
+      // If payment was free (covered by subscription credits)
+      if (authoritativeCostCents === 0) {
+        try {
+          updateProgress({
+            currentStep: 'results',
+            completedSteps: [...(journeyProgress?.completedSteps || []), 'pricing'],
+            paymentStatus: 'paid',
+            paymentCompletedAt: new Date().toISOString(),
+            stepTimestamps: {
+              ...(journeyProgress?.stepTimestamps || {}),
+              pricingCompleted: new Date().toISOString()
+            }
+          });
+        } catch (progressError) {
+          console.warn('Failed to update pricing step completion:', progressError);
+        }
+
+        if (onNext) onNext();
+        return;
+      }
+
+      throw new Error('Payment session created but no checkout URL received.');
+    } catch (error: any) {
+      console.error('Payment error:', error);
+      const errorMessage = error?.message || error?.error || 'Payment processing failed. Please try again.';
+      setPaymentError(errorMessage);
+    } finally {
+      setPaymentProcessing(false);
+    }
+  };
 
   const handlePayment = async () => {
     // Validate we have required data before proceeding
@@ -473,76 +648,14 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
       return;
     }
 
-    setPaymentProcessing(true);
-    setPaymentError(null);
-
-    try {
-      // Call the payment endpoint to create Stripe checkout session
-      // This endpoint returns a session with checkout URL for redirect flow
-      // FIX: Production Readiness - Pass selected payment method to backend
-      const response: any = await apiClient.post('/api/payment/create-checkout-session', {
-        projectId,
-        paymentMethod,  // Pass selected payment method (card, paypal, bank)
-      });
-
-      // Check for errors in response
-      if (response?.error) {
-        throw new Error(response.error);
-      }
-
-      // Check if we got a Stripe checkout URL
-      if (response?.url) {
-        // Redirect to Stripe Checkout
-        window.location.href = response.url;
-        return;
-      }
-
-      // Alternative: If we got a session ID but no URL (older Stripe integration)
-      if (response?.id && !response?.url) {
-        // Construct checkout URL from session ID
-        const checkoutUrl = `https://checkout.stripe.com/pay/${response.id}`;
-        window.location.href = checkoutUrl;
-        return;
-      }
-
-      // If payment was free (covered by subscription credits)
-      if (amountCents === 0) {
-        // Payment not required - mark step as complete and proceed to next step
-        try {
-          updateProgress({
-            currentStep: 'results',
-            completedSteps: [...(journeyProgress?.completedSteps || []), 'pricing'],
-            paymentStatus: 'paid',
-            paymentCompletedAt: new Date().toISOString(),
-            stepTimestamps: {
-              ...(journeyProgress?.stepTimestamps || {}),
-              pricingCompleted: new Date().toISOString()
-            }
-          });
-        } catch (progressError) {
-          console.warn('Failed to update pricing step completion:', progressError);
-          // Continue anyway - webhook or other mechanism may handle it
-        }
-        
-        if (onNext) onNext();
-        return;
-      }
-
-      // NOTE: For paid payments that redirect to Stripe, step completion is handled by:
-      // 1. Stripe webhook that processes payment success (sets paymentStatus: 'paid', paymentCompletedAt)
-      // 2. User return from Stripe checkout (may need additional handling in success page)
-      // This ensures payment completion is tracked before marking step complete
-
-      // Fallback: If no URL and no session ID, something went wrong
-      throw new Error('Payment session created but no checkout URL received.');
-
-    } catch (error: any) {
-      console.error('Payment error:', error);
-      const errorMessage = error?.message || error?.error || 'Payment processing failed. Please try again.';
-      setPaymentError(errorMessage);
-    } finally {
-      setPaymentProcessing(false);
+    // U2A2A2U Checkpoint: Require explicit cost confirmation before payment
+    if (!costConfirmed) {
+      setShowCostConfirmation(true);
+      return;
     }
+
+    // If already confirmed, proceed directly
+    processPayment();
   };
 
   return (
@@ -613,11 +726,17 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
             )}
             {!journeyStateLoading && !journeyStateFetching && (
               <div className="grid gap-4 md:grid-cols-3">
-                <div className="rounded-lg border border-blue-100 bg-white p-3">
-                  <p className="text-xs text-blue-700">Locked estimate</p>
-                  <p className="text-lg font-semibold text-blue-900" data-testid="pricing-locked-cost">
+                <div className={`rounded-lg border p-3 ${isEstimatedPricing ? 'border-yellow-200 bg-yellow-50' : 'border-blue-100 bg-white'}`}>
+                  {/* FIX Issue #10: Show different label for estimated vs locked pricing */}
+                  <p className={`text-xs ${isEstimatedPricing ? 'text-yellow-700' : 'text-blue-700'}`}>
+                    {isEstimatedPricing ? 'Estimated cost *' : 'Locked cost'}
+                  </p>
+                  <p className={`text-lg font-semibold ${isEstimatedPricing ? 'text-yellow-900' : 'text-blue-900'}`} data-testid="pricing-locked-cost">
                     {formatCurrency(lockedCostCents ?? authoritativeCostCents, true)}
                   </p>
+                  {isEstimatedPricing && (
+                    <p className="text-xs text-yellow-600 mt-1">* Final cost calculated at checkout</p>
+                  )}
                 </div>
                 <div className="rounded-lg border border-blue-100 bg-white p-3">
                   <p className="text-xs text-blue-700">Spent to date</p>
@@ -1070,6 +1189,88 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
           </CardContent>
         </Card>
       )}
+
+      {/* Cost Confirmation Checkpoint Dialog (U2A2A2U Pattern) */}
+      <Dialog open={showCostConfirmation} onOpenChange={setShowCostConfirmation}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Info className="w-5 h-5 text-blue-600" />
+              Confirm Cost Before Payment
+            </DialogTitle>
+            <DialogDescription>
+              Please review and confirm the cost breakdown before proceeding to payment.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <Alert className="border-blue-200 bg-blue-50">
+              <Info className="h-4 w-4 text-blue-600" />
+              <AlertDescription className="text-blue-800">
+                This is a checkpoint to ensure you understand and approve the costs before payment.
+              </AlertDescription>
+            </Alert>
+
+            <div className="rounded-lg border p-4 space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-gray-600">Selected Plan</span>
+                <span className="font-medium">{pricingPlans.find(p => p.id === selectedPlan)?.name}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-gray-600">Journey Type</span>
+                <span className="font-medium capitalize">{journeyType}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-gray-600">Data Processed</span>
+                <span className="font-medium">{analysisResults.dataSize.toLocaleString()} rows</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-gray-600">Analyses Executed</span>
+                <span className="font-medium">{analysisResults.totalAnalyses}</span>
+              </div>
+              <Separator />
+              <div className="flex justify-between items-center text-lg font-semibold">
+                <span>Total Amount</span>
+                <span className="text-blue-600">
+                  {formatCurrency(authoritativeCostCents, true)}
+                </span>
+              </div>
+              {billingBreakdown && billingBreakdown.subscriptionCredits > 0 && (
+                <div className="text-sm text-green-600 text-center">
+                  Includes {formatCurrency(billingBreakdown.subscriptionCredits, true)} in subscription credits applied
+                </div>
+              )}
+            </div>
+
+            <div className="bg-gray-50 p-3 rounded-lg">
+              <p className="text-sm text-gray-700">
+                By clicking "Confirm and Proceed", you acknowledge that:
+              </p>
+              <ul className="mt-2 text-sm text-gray-600 list-disc list-inside space-y-1">
+                <li>You have reviewed the cost breakdown above</li>
+                <li>You authorize the payment amount shown</li>
+                <li>You understand this is for one-time analysis access</li>
+              </ul>
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setShowCostConfirmation(false)}
+            >
+              Review Again
+            </Button>
+            <Button
+              onClick={handleConfirmCost}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              <ThumbsUp className="w-4 h-4 mr-2" />
+              Confirm and Proceed
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

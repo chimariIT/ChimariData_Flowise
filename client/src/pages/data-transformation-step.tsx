@@ -7,16 +7,16 @@ import { Textarea } from '@/components/ui/textarea';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { RefreshCw, ArrowRight, ArrowLeft, CheckCircle, AlertCircle, Info, XCircle } from 'lucide-react';
+import { RefreshCw, ArrowRight, ArrowLeft, CheckCircle, AlertCircle, Info, XCircle, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { apiClient } from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
 import AgentCheckpoints from '@/components/agent-checkpoints';
 import { useJourneyDataOptional } from '@/contexts/JourneyDataContext';
 import { useProject } from '@/hooks/useProject';
 import { JourneyProgress } from '@shared/schema';
-import { useQueryClient } from '@tanstack/react-query';
 
 interface DataTransformationStepProps {
     journeyType: string;
@@ -54,14 +54,13 @@ export default function DataTransformationStep({
 }: DataTransformationStepProps) {
     const { toast } = useToast();
     const [, setLocation] = useLocation();
-    const queryClient = useQueryClient();
 
     // Use shared journey context for data continuity between steps
     const journeyContext = useJourneyDataOptional();
 
     // Centralized project data and state (DEC-003)
     const [pid, setPid] = useState<string | null>(() => localStorage.getItem('currentProjectId'));
-    const { project, journeyProgress, updateProgress, isLoading: projectLoading, isUpdating } = useProject(pid || undefined);
+    const { project, journeyProgress, updateProgress, updateProgressAsync, queryClient, isLoading: projectLoading, isUpdating } = useProject(pid || undefined);
 
     const [requiredDataElements, setRequiredDataElements] = useState<any>(null);
     const [currentSchema, setCurrentSchema] = useState<any>(null);
@@ -77,6 +76,11 @@ export default function DataTransformationStep({
         foreignKeys: []
     });
     const [userQuestions, setUserQuestions] = useState<string[]>([]); // Actual user questions from project
+
+    // Checkpoint approval state (U2A2A2U - user must approve before proceeding)
+    const [transformationApproved, setTransformationApproved] = useState(false);
+    const [showApprovalDialog, setShowApprovalDialog] = useState(false);
+    const [checkpointId, setCheckpointId] = useState<string | null>(null);
 
     // Synchronize local state with journeyProgress (SSOT)
     useEffect(() => {
@@ -861,6 +865,35 @@ export default function DataTransformationStep({
 
             setTransformedPreview(result.preview);
 
+            // Create checkpoint for user approval (U2A2A2U pattern)
+            try {
+                const checkpointResponse = await apiClient.post(`/api/projects/${pid}/checkpoints`, {
+                    stage: 'transformation_review',
+                    agentId: 'data_engineer',
+                    message: `Data transformation completed. ${result.rowCount || result.preview?.data?.length || 0} rows transformed with ${transformationSteps.length} transformation rules applied.`,
+                    artifacts: [
+                        {
+                            type: 'transformation_summary',
+                            data: {
+                                rowCount: result.rowCount || result.preview?.data?.length || 0,
+                                columnCount: Object.keys(result.preview?.schema || {}).length,
+                                transformationSteps: transformationSteps.length,
+                                joinApplied: allDatasets.length > 1 && joinConfig.enabled
+                            }
+                        }
+                    ],
+                    requiresApproval: true
+                });
+
+                if (checkpointResponse.checkpointId) {
+                    setCheckpointId(checkpointResponse.checkpointId);
+                    setShowApprovalDialog(true);
+                }
+                console.log('✅ [Checkpoint] Transformation checkpoint created:', checkpointResponse.checkpointId);
+            } catch (checkpointError) {
+                console.warn('⚠️ Checkpoint creation failed (non-blocking):', checkpointError);
+            }
+
             // CRITICAL FIX: Invalidate cache after backend updates transformed data
             // The backend may have updated journeyProgress or dataset data directly
             queryClient.invalidateQueries({ queryKey: ["project", pid] });
@@ -956,12 +989,77 @@ export default function DataTransformationStep({
         return true; // No join needed, proceed
     };
 
+    // Handle checkpoint approval
+    const handleApproveCheckpoint = async () => {
+        if (!pid || !checkpointId) return;
+
+        try {
+            await apiClient.post(`/api/projects/${pid}/checkpoints/${checkpointId}/feedback`, {
+                approved: true,
+                feedback: 'Transformation approved by user'
+            });
+            setTransformationApproved(true);
+            setShowApprovalDialog(false);
+            toast({
+                title: "Transformation Approved",
+                description: "You can now proceed to the Analysis Plan step.",
+            });
+        } catch (error) {
+            console.error('Checkpoint approval failed:', error);
+        }
+    };
+
+    const handleRejectCheckpoint = async () => {
+        if (!pid || !checkpointId) return;
+
+        try {
+            await apiClient.post(`/api/projects/${pid}/checkpoints/${checkpointId}/feedback`, {
+                approved: false,
+                feedback: 'Transformation rejected - user wants to revise'
+            });
+            setShowApprovalDialog(false);
+            toast({
+                title: "Transformation Rejected",
+                description: "Please revise your transformations and try again.",
+                variant: "destructive"
+            });
+        } catch (error) {
+            console.error('Checkpoint rejection failed:', error);
+        }
+    };
+
     const handleNext = async () => {
         // Validate project exists
         if (!pid) {
             toast({
                 title: "Project Not Found",
                 description: "No project ID found. Please go back to Data Upload step.",
+                variant: "destructive"
+            });
+            return;
+        }
+
+        // FIX Phase 3 - Checkpoint Enforcement: Verify data quality was approved
+        const dataQualityApproved = journeyProgress?.dataQualityApproved === true;
+        if (!dataQualityApproved) {
+            toast({
+                title: "Data Quality Approval Required",
+                description: "Please go back to the Verification step and approve data quality before proceeding.",
+                variant: "destructive"
+            });
+            return;
+        }
+
+        // Check if transformation has been executed and approved (U2A2A2U checkpoint)
+        if (transformedPreview && !transformationApproved) {
+            // Check if there's already a pending checkpoint
+            if (checkpointId) {
+                setShowApprovalDialog(true);
+                return;
+            }
+            toast({
+                title: "Approval Required",
+                description: "Please approve the transformation results before continuing.",
                 variant: "destructive"
             });
             return;
@@ -985,8 +1083,9 @@ export default function DataTransformationStep({
 
         // Mark step as complete and save transformation data
         // [DATA CONTINUITY FIX] Preserve existing transformationStepData from executeTransformations
+        // FIX: Use async version and await before navigation to prevent race condition
         try {
-            updateProgress({
+            await updateProgressAsync({
                 currentStep: 'plan',
                 completedSteps: [...(journeyProgress?.completedSteps || []), 'transformation'],
                 // Save transformation mappings if they exist (may have been saved during execution, but ensure they're persisted)
@@ -1015,7 +1114,10 @@ export default function DataTransformationStep({
                 }
             });
 
-            // Navigate to next step
+            // Force cache refresh before navigation
+            await queryClient.refetchQueries({ queryKey: ["project", pid] });
+
+            // Navigate to next step (only after data is persisted)
             if (onNext) {
                 onNext();
             } else {
@@ -1492,6 +1594,66 @@ export default function DataTransformationStep({
                     <AgentCheckpoints projectId={pid} />
                 </div>
             )}
+
+            {/* Transformation Approval Dialog (U2A2A2U checkpoint) */}
+            <Dialog open={showApprovalDialog} onOpenChange={setShowApprovalDialog}>
+                <DialogContent className="sm:max-w-[500px]">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <CheckCircle className="w-5 h-5 text-green-600" />
+                            Approve Data Transformation
+                        </DialogTitle>
+                        <DialogDescription>
+                            The Data Engineer has completed the transformation. Please review the results before proceeding.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="py-4 space-y-4">
+                        {transformedPreview && (
+                            <div className="bg-gray-50 rounded-lg p-4 space-y-2">
+                                <h4 className="font-medium text-sm">Transformation Summary</h4>
+                                <div className="grid grid-cols-2 gap-4 text-sm">
+                                    <div>
+                                        <span className="text-gray-500">Rows:</span>{' '}
+                                        <span className="font-medium">{transformedPreview.data?.length || 0}</span>
+                                    </div>
+                                    <div>
+                                        <span className="text-gray-500">Columns:</span>{' '}
+                                        <span className="font-medium">{Object.keys(transformedPreview.schema || {}).length}</span>
+                                    </div>
+                                    <div>
+                                        <span className="text-gray-500">Transformations:</span>{' '}
+                                        <span className="font-medium">{transformationMappings.filter(m => m.transformationRequired).length}</span>
+                                    </div>
+                                    <div>
+                                        <span className="text-gray-500">Join Applied:</span>{' '}
+                                        <span className="font-medium">{allDatasets.length > 1 && joinConfig.enabled ? 'Yes' : 'No'}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        <Alert>
+                            <Info className="h-4 w-4" />
+                            <AlertDescription>
+                                By approving, you confirm that the transformed data is ready for analysis.
+                                You can go back and revise transformations if needed.
+                            </AlertDescription>
+                        </Alert>
+                    </div>
+
+                    <DialogFooter className="gap-2">
+                        <Button variant="outline" onClick={handleRejectCheckpoint}>
+                            <ThumbsDown className="w-4 h-4 mr-2" />
+                            Revise
+                        </Button>
+                        <Button onClick={handleApproveCheckpoint} className="bg-green-600 hover:bg-green-700">
+                            <ThumbsUp className="w-4 h-4 mr-2" />
+                            Approve & Continue
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }

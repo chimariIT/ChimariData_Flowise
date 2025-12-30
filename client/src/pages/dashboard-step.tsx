@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { useProject } from "@/hooks/useProject";
 import { apiClient } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
+import { realtimeClient } from "@/lib/realtime";
 import {
   Receipt,
   Download,
@@ -26,7 +27,8 @@ import {
   Loader2,
   AlertCircle,
   Copy,
-  Database
+  Database,
+  RefreshCw
 } from "lucide-react";
 import UserQuestionAnswers from "@/components/UserQuestionAnswers";
 import AudienceTranslatedResults from "@/components/AudienceTranslatedResults";
@@ -56,14 +58,29 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
   const [artifacts, setArtifacts] = useState<any[]>([]);
   const [artifactsLoading, setArtifactsLoading] = useState(true);
   const [artifactsError, setArtifactsError] = useState<string | null>(null);
+  // FIX Phase 3: Track artifact polling state for exponential backoff
+  const [artifactRetryCount, setArtifactRetryCount] = useState(0);
+  const artifactPollingRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Sync audience and load results when project is available
+  // FIX Issue #11: Consolidated data loading with clear source precedence
+  // Priority: 1. Fresh API data, 2. JourneyProgress cache, 3. Empty state
   useEffect(() => {
     if (journeyProgress?.audience?.primary) {
       setAudience(journeyProgress.audience.primary);
     }
 
     if (projectId) {
+      // Step 1: Show cached data from journeyProgress immediately (if available)
+      // This provides instant feedback while fresh data loads
+      const cachedResults = (journeyProgress as any)?.analysisResults;
+      if (cachedResults && !analysisResults) {
+        console.log('📋 [Issue #11 Fix] Using cached results from journeyProgress while loading fresh data');
+        setAnalysisResults(cachedResults);
+        setInsights(cachedResults.insights || []);
+        setRecommendations(cachedResults.recommendations || []);
+      }
+
+      // Step 2: Fetch fresh data from API (will override cached data)
       loadResults(projectId);
       loadArtifacts(projectId);
     } else if (!projectLoading) {
@@ -72,34 +89,96 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
     }
   }, [projectId, journeyProgress, projectLoading]);
 
+  // FIX: Critical Fix #4 - Listen for artifact completion WebSocket events
+  useEffect(() => {
+    if (!projectId) return;
+
+    const handleArtifactCompletion = (event: any) => {
+      // Filter for artifact completion events for this project
+      if (
+        event.type === 'job_complete' &&
+        event.data?.eventType === 'artifacts_complete' &&
+        event.projectId === projectId
+      ) {
+        console.log('📦 [Dashboard] Artifacts completed via WebSocket:', event.data);
+
+        // Refresh artifacts list
+        loadArtifacts(projectId);
+
+        // Show toast notification
+        toast({
+          title: "Artifacts Ready",
+          description: `${event.data.artifactCount || 'Your'} analysis artifacts are now available for download.`,
+        });
+      }
+    };
+
+    // Subscribe to realtime events
+    const unsubscribe = realtimeClient.subscribe('job', handleArtifactCompletion);
+    console.log('🔌 [Dashboard] Subscribed to artifact completion events for project:', projectId);
+
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+        console.log('🔌 [Dashboard] Unsubscribed from artifact completion events');
+      }
+    };
+  }, [projectId, toast]);
+
   async function loadResults(pid: string) {
     try {
       setIsLoading(true);
-      console.log(`📖 Loading analysis results for project ${pid}`);
+      console.log(`📖 [Issue #11 Fix] Loading analysis results for project ${pid}`);
 
       // ✅ Use apiClient which includes auth headers
       const data = await apiClient.get(`/api/analysis-execution/results/${pid}`);
 
       if (data.success && data.results) {
-        console.log('✅ Results loaded successfully');
+        console.log('✅ [Issue #11 Fix] Results loaded from API (authoritative source)');
+        console.log(`   Insights: ${data.results.insights?.length || 0}, Recommendations: ${data.results.recommendations?.length || 0}`);
         setAnalysisResults(data.results);
         setInsights(data.results.insights || []);
         setRecommendations(data.results.recommendations || []);
+        setError(null); // Clear any previous errors
       } else {
         throw new Error('No results found');
       }
 
     } catch (err: any) {
-      console.error('❌ Error loading results:', err);
-      setError(err.message);
+      console.error('❌ [Issue #11 Fix] Error loading results from API:', err);
+      // FIX Issue #11: Fallback to journeyProgress cache if API fails
+      const cachedResults = (journeyProgress as any)?.analysisResults;
+      if (cachedResults) {
+        console.log('📋 [Issue #11 Fix] Using cached results from journeyProgress as fallback');
+        setAnalysisResults(cachedResults);
+        setInsights(cachedResults.insights || []);
+        setRecommendations(cachedResults.recommendations || []);
+        setError(null);
+      } else {
+        setError(err.message);
+      }
     } finally {
       setIsLoading(false);
     }
   }
 
-  async function loadArtifacts(pid: string) {
+  // FIX Phase 3: Artifact polling with exponential backoff
+  const MAX_ARTIFACT_RETRIES = 5;
+  const BASE_RETRY_DELAY_MS = 3000; // 3 seconds base
+
+  async function loadArtifacts(pid: string, isRetry = false) {
+    // Clear any existing polling timer
+    if (artifactPollingRef.current) {
+      clearTimeout(artifactPollingRef.current);
+      artifactPollingRef.current = null;
+    }
+
     setArtifactsLoading(true);
-    setArtifactsError(null);
+    if (!isRetry) {
+      setArtifactsError(null);
+      setArtifactRetryCount(0);
+    }
+
     try {
       const response = await apiClient.getProjectArtifacts(pid);
       const normalized = (response?.artifacts || []).map((artifact: any, index: number) => {
@@ -118,15 +197,60 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
           createdAt: artifact.createdAt,
         };
       });
-      setArtifacts(normalized);
+
+      if (normalized.length > 0) {
+        // Artifacts found - stop polling
+        setArtifacts(normalized);
+        setArtifactsError(null);
+        setArtifactRetryCount(0);
+        console.log(`✅ [Dashboard] Loaded ${normalized.length} artifacts`);
+      } else if (artifactRetryCount < MAX_ARTIFACT_RETRIES) {
+        // No artifacts yet - schedule retry with exponential backoff
+        const retryDelay = BASE_RETRY_DELAY_MS * Math.pow(2, artifactRetryCount);
+        console.log(`📦 [Dashboard] No artifacts yet, retry ${artifactRetryCount + 1}/${MAX_ARTIFACT_RETRIES} in ${retryDelay / 1000}s`);
+        setArtifactsError(`Artifacts are generating... (attempt ${artifactRetryCount + 1}/${MAX_ARTIFACT_RETRIES})`);
+        setArtifacts([]);
+        setArtifactRetryCount(prev => prev + 1);
+
+        artifactPollingRef.current = setTimeout(() => {
+          loadArtifacts(pid, true);
+        }, retryDelay);
+      } else {
+        // Max retries reached
+        console.log('⚠️ [Dashboard] Max artifact retries reached');
+        setArtifacts([]);
+        setArtifactsError('Artifacts are taking longer than expected. You can manually refresh or wait for the notification.');
+      }
     } catch (err: any) {
       console.error('Failed to load artifacts:', err);
       setArtifacts([]);
-      setArtifactsError(err?.message || 'Artifacts are still generating. Please check back shortly.');
+
+      if (artifactRetryCount < MAX_ARTIFACT_RETRIES) {
+        // Error occurred - schedule retry with exponential backoff
+        const retryDelay = BASE_RETRY_DELAY_MS * Math.pow(2, artifactRetryCount);
+        console.log(`❌ [Dashboard] Artifact load error, retry ${artifactRetryCount + 1}/${MAX_ARTIFACT_RETRIES} in ${retryDelay / 1000}s`);
+        setArtifactsError(`Error loading artifacts, retrying... (attempt ${artifactRetryCount + 1}/${MAX_ARTIFACT_RETRIES})`);
+        setArtifactRetryCount(prev => prev + 1);
+
+        artifactPollingRef.current = setTimeout(() => {
+          loadArtifacts(pid, true);
+        }, retryDelay);
+      } else {
+        setArtifactsError(err?.message || 'Failed to load artifacts after multiple attempts.');
+      }
     } finally {
       setArtifactsLoading(false);
     }
   }
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (artifactPollingRef.current) {
+        clearTimeout(artifactPollingRef.current);
+      }
+    };
+  }, []);
 
   const getJourneyTypeInfo = () => {
     switch (journeyType) {
@@ -903,8 +1027,20 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
                   Generating artifact list…
                 </div>
               ) : artifactsError ? (
-                <div className="rounded-md border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-800">
-                  {artifactsError}
+                /* FIX Phase 3: Add retry button for artifact loading errors */
+                <div className="rounded-md border border-yellow-200 bg-yellow-50 p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-yellow-800">{artifactsError}</span>
+                    <Button
+                      onClick={() => projectId && loadArtifacts(projectId)}
+                      variant="outline"
+                      size="sm"
+                      className="border-yellow-300 text-yellow-700 hover:bg-yellow-100"
+                    >
+                      <RefreshCw className="w-3 h-3 mr-1" />
+                      Retry
+                    </Button>
+                  </div>
                 </div>
               ) : artifacts.length === 0 ? (
                 <p className="text-sm text-gray-600">

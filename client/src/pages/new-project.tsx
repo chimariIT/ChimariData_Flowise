@@ -67,7 +67,8 @@ export default function NewProjectPage() {
       setTemplateReady(true);
 
       // 3) Navigate to workflow transparency for this project
-      setTimeout(() => setLocation(`/projects/${projectId}/workflow`), 400);
+      // FIX Phase 3: No delay needed - navigate immediately after template generation
+      setLocation(`/projects/${projectId}/workflow`);
     } catch (err: any) {
       setError(err?.message || 'Failed to create project');
     } finally {
