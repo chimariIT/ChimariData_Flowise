@@ -1,6 +1,6 @@
 # Architecture Guide
 
-**Part of ChimariData Documentation** | [← Back to Main](../CLAUDE.md)
+**Part of ChimariData Documentation** | [← Back to Main](../CLAUDE.md) | **Last Updated**: December 10, 2025
 
 This document covers the high-level architecture, technology stack, data models, API structure, and deployment considerations.
 
@@ -8,11 +8,13 @@ This document covers the high-level architecture, technology stack, data models,
 
 ## 📋 Table of Contents
 
+- [Data Flow Architecture](#data-flow-architecture)
 - [Technology Stack](#technology-stack)
 - [Directory Structure](#directory-structure)
 - [Frontend Architecture](#frontend-architecture)
 - [Backend Architecture](#backend-architecture)
 - [Database Schema](#database-schema)
+- [Planned Architecture Improvements](#planned-architecture-improvements) ← **NEW**
 - [Data Storage Architecture](#data-storage-architecture)
 - [API Routes](#api-routes)
 - [Security & Authentication](#security--authentication)
@@ -21,6 +23,151 @@ This document covers the high-level architecture, technology stack, data models,
 - [Production Deployment](#production-deployment)
 - [Platform-Specific Notes](#platform-specific-notes)
 - [Known Issues](#known-issues)
+
+---
+
+## Data Flow Architecture
+
+### Complete Pipeline Overview
+
+The platform follows a structured data pipeline from upload to analysis results:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                           CHIMARIDATA DATA PIPELINE                                       │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────┐    ┌──────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   UPLOAD    │───▶│   PREPARE    │───▶│   TRANSFORM     │───▶│    ANALYZE      │
+│   (Data)    │    │ (Verification)│   │ (Data Elements) │    │  (Execution)    │
+└─────────────┘    └──────────────┘    └─────────────────┘    └─────────────────┘
+      │                  │                     │                      │
+      ▼                  ▼                     ▼                      ▼
+┌─────────────┐    ┌──────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│ datasets    │    │ PII Analysis │    │ Transformed     │    │ Analysis        │
+│ table       │    │ Schema       │    │ Data Storage    │    │ Results         │
+│             │    │ Validation   │    │                 │    │ Artifacts       │
+└─────────────┘    └──────────────┘    └─────────────────┘    └─────────────────┘
+```
+
+### Data Storage Locations
+
+**Upload Phase**:
+- Raw data → `datasets.data` (JSONB column)
+- Schema → `datasets.schema` (auto-detected)
+- Preview → `datasets.preview` (first N rows)
+- File ref → `uploads/originals/{projectId}_{timestamp}_{filename}`
+
+**Verification Phase**:
+- PII analysis → `datasets.piiAnalysis`
+- Quality metrics → `datasets.ingestionMetadata.qualityMetrics`
+- Validation status → `projects.status` = 'ready'
+
+**Transformation Phase**:
+- Transformed data → `datasets.ingestionMetadata.transformedData`
+- Join configuration → `datasets.ingestionMetadata.joinConfig`
+- Mapping rules → `datasets.ingestionMetadata.mappings`
+
+**Analysis Phase**:
+- Results → `projects.analysisResults`
+- Artifacts → `project_artifacts` table + `uploads/artifacts/{projectId}/`
+- Q&A pairs → `projects.analysisResults.questionAnswers`
+
+### Multi-Dataset Joining
+
+```
+Dataset A                     Dataset B
+┌────────────────────┐       ┌────────────────────┐
+│ employee_id (PK)   │       │ emp_id (FK)        │
+│ name               │──────▶│ engagement_score   │
+│ department         │       │ survey_date        │
+└────────────────────┘       └────────────────────┘
+            │                         │
+            └─────────┬───────────────┘
+                      ▼
+              ┌───────────────┐
+              │ Joined Data   │
+              │ (Analysis-    │
+              │  ready)       │
+              └───────────────┘
+```
+
+**Join Key Auto-Detection** (`data-transformation-step.tsx`):
+- Matches columns with patterns: `*_id`, `*_key`, `*_code`, `employee_id`, `user_id`
+- Compares column names across datasets
+- Suggests join configuration with confidence scores
+
+**Join Configuration Structure**:
+```typescript
+interface JoinConfig {
+  enabled: boolean;
+  type: 'left' | 'inner' | 'outer' | 'right';
+  foreignKeys: Array<{
+    sourceDataset: string;
+    sourceColumn: string;
+    targetDataset: string;
+    targetColumn: string;
+  }>;
+}
+```
+
+### Analysis Data Source Priority
+
+**Location**: `server/services/analysis-execution.ts`
+
+The analysis execution service uses transformed data with the following priority:
+
+```typescript
+// Priority 1: Transformed data from transformation step
+dataset.ingestionMetadata.transformedData
+
+// Priority 2: Transformed data in nested metadata
+dataset.metadata.transformedData
+
+// Priority 3: Fall back to original upload data
+dataset.data || dataset.preview || []
+```
+
+### Real-Time Progress Updates
+
+```
+┌──────────────┐     WebSocket      ┌──────────────┐
+│   Browser    │◄──────────────────▶│   Server     │
+│   Client     │                    │   (ws lib)   │
+└──────────────┘                    └──────────────┘
+       │                                   │
+       │  analysis:progress                │
+       │◄──────────────────────────────────│
+       │  analysis:complete                │
+       │◄──────────────────────────────────│
+       │  checkpoint:request               │
+       │◄──────────────────────────────────│
+       │  agent:message                    │
+       │◄──────────────────────────────────│
+```
+
+**Client**: `client/src/lib/realtime.ts`
+**Server**: `server/services/agents/realtime-agent-bridge.ts`
+**Broker**: `server/services/agents/agent-message-broker.ts`
+
+### Journey State Flow
+
+```
+project-setup → data-upload → data-verification → data-transformation
+                                                         │
+                                                         ▼
+                results ← results-preview ← execute ← plan
+```
+
+**Journey State Manager** (`server/services/journey-state-manager.ts`):
+```typescript
+// Complete a step
+await journeyStateManager.completeStep(projectId, 'data-verification');
+
+// Get current state
+const state = await journeyStateManager.getState(projectId);
+// { currentStep: 'data-transformation', completedSteps: [...], progress: 0.5 }
+```
 
 ---
 
@@ -439,7 +586,7 @@ class RealtimeServer {
 
 **Editing Schema**:
 1. Modify `shared/schema.ts` using Zod
-2. **CRITICAL**: Run `npm run db:push` (uses `drizzle-kit push`)
+2. **CRITICAL**: Run `npm run db:push` (uses `drizzle-kit up:pg`)
 3. Test migration with sample data
 4. Update API endpoints and frontend
 
@@ -447,6 +594,155 @@ class RealtimeServer {
 - SQL migration files in `migrations/` directory
 - Run with `npm run db:migrate`
 - Project-specific: `npm run db:migrate:project-states`
+
+---
+
+## Planned Architecture Improvements
+
+**Status**: Design Complete | **Target**: 4-6 weeks to stability
+
+The platform is undergoing architectural refactoring to address technical debt. See [ARCHITECTURE_REFACTORING_ANALYSIS.md](../ARCHITECTURE_REFACTORING_ANALYSIS.md) for full analysis.
+
+### 1. pgvector + Strict Validation Architecture
+
+**Design Document**: [PGVECTOR_VALIDATION_ARCHITECTURE.md](../PGVECTOR_VALIDATION_ARCHITECTURE.md)
+
+**Key Changes**:
+- **pgvector extension** - Enable semantic search for questions, insights, and answers
+- **Strict Zod validation** - Fail-fast validation at API boundaries
+- **Normalized tables** - Replace JSONB agent results with proper relational tables
+- **Embedding service** - Generate and store vector embeddings for semantic matching
+
+**New Tables (Planned)**:
+```sql
+-- Questions with embeddings for semantic search
+project_questions (id, project_id, text, embedding vector(1536), requirements JSONB, answer JSONB)
+
+-- Normalized agent execution tracking
+agent_executions (id, project_id, agent_type, status, started_at, completed_at, tokens_used)
+
+-- Data engineer outputs (not JSONB)
+de_quality_reports (id, execution_id, dataset_id, quality_score, row_count, column_count)
+
+-- Analysis results with proper columns
+ds_analysis_results (id, execution_id, analysis_type, p_value, coefficient, r_squared, confidence)
+
+-- Insights with embeddings
+insights (id, analysis_result_id, finding, embedding vector(1536), confidence)
+
+-- Question answers with evidence chain
+question_answers (id, question_id, answer_text, embedding vector(1536), confidence, generated_by)
+```
+
+### 2. Single Source of Truth Consolidation
+
+**Current Problem**: Data exists in 3-8 locations depending on entity type.
+
+| Entity | Current Locations | Target Location |
+|--------|-------------------|-----------------|
+| Questions | session, project, localStorage | `project_questions` table |
+| Transformations | 8 different JSONB locations | `datasets.transformed_data` + `datasets.active_version` |
+| Journey State | 5 different fields | `projects.journey_state` (single JSONB) |
+| Checkpoints | In-memory Map + DB | Database only (no memory) |
+
+### 3. Question-to-Answer Pipeline
+
+**Design Document**: [ARCHITECTURE_DESIGN_AND_IMPLEMENTATION.md](../ARCHITECTURE_DESIGN_AND_IMPLEMENTATION.md)
+
+**Question Lifecycle**:
+```
+1. User enters question (prepare-step)
+   → Creates ProjectQuestion with stable ID: q_{projectId}_{index}
+
+2. Requirements generation
+   → Updates question.requirements with dataElements, recommendedAnalyses
+
+3. Transformation mapping
+   → Updates question.transformation with mappings, columnsUsed
+
+4. Analysis execution
+   → Updates question.analysis with insightIds, techniquesUsed
+
+5. Answer generation
+   → Updates question.answer with text, confidence, evidenceChain
+```
+
+### 4. Agent Checkpoint DB-First Architecture
+
+**Current Problem**: Checkpoints stored in-memory Map, lost on server restart.
+
+**Target Architecture**:
+```typescript
+// All checkpoints go to DB first
+class CheckpointManager {
+  async createCheckpoint(checkpoint): Promise<string>;     // DB write
+  async getCheckpoints(projectId): Promise<Checkpoint[]>;  // DB read (cached)
+  async approveCheckpoint(id, feedback): Promise<void>;    // Atomic DB update
+}
+
+// No in-memory state - DB is source of truth
+```
+
+### 5. Semantic Data Pipeline (IMPLEMENTED - Dec 2025)
+
+**Status**: ✅ Implemented | **Design Document**: [VECTOR_DATA_PIPELINE_DESIGN.md](VECTOR_DATA_PIPELINE_DESIGN.md)
+
+The semantic data pipeline uses vector embeddings to create semantic linkages from questions → data elements → transformations → analysis. This replaces brittle keyword-based matching with meaning-based similarity.
+
+**New Database Tables**:
+```sql
+-- Data elements with semantic descriptions and embeddings
+data_elements (id, project_id, element_name, element_type, data_type,
+               semantic_description, embedding JSONB, source_dataset_id,
+               source_column, is_available, analysis_roles[])
+
+-- Transformation definitions with semantic descriptions
+transformation_definitions (id, project_id, transformation_name, transformation_type,
+                           semantic_description, embedding JSONB, source_elements[],
+                           target_elements[], config JSONB, execution_order, depends_on[],
+                           status)
+
+-- Question-to-element semantic links
+question_element_links (id, question_id, element_id, similarity_score, link_type, reasoning)
+
+-- Element-to-transformation links
+element_transformation_links (id, element_id, transformation_id, similarity_score, link_type)
+```
+
+**Service**: `server/services/semantic-data-pipeline.ts`
+**API Endpoints**: `server/routes/semantic-pipeline.ts`
+
+**Key Methods**:
+| Method | Purpose |
+|--------|---------|
+| `extractDataElements()` | Extract semantic elements from datasets, generate embeddings |
+| `linkQuestionsToElements()` | Link questions to elements via cosine similarity (≥0.5 threshold) |
+| `inferTransformations()` | Auto-detect joins, aggregations, filters from question semantics |
+| `buildEvidenceChain()` | Create Q→E→T traceability for answers |
+| `getTransformationPlan()` | Get complete transformation plan with related questions |
+
+**API Endpoints**:
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/semantic-pipeline/:id/run-full-pipeline` | POST | Run complete semantic pipeline |
+| `/api/semantic-pipeline/:id/extract-elements` | POST | Extract data elements from datasets |
+| `/api/semantic-pipeline/:id/link-questions` | POST | Link questions to elements |
+| `/api/semantic-pipeline/:id/infer-transformations` | POST | Infer required transformations |
+| `/api/semantic-pipeline/:id/transformation-plan` | GET | Get transformation plan |
+| `/api/semantic-pipeline/:id/evidence-chain/:qId` | GET | Get evidence chain for question |
+
+### 6. Migration Plan
+
+| Phase | Component | Effort | Status |
+|-------|-----------|--------|--------|
+| 1 | Enable pgvector extension | 1 day | Planned |
+| 2 | Create normalized tables | 1-2 days | ✅ Done |
+| 3 | Add Zod validation middleware | 2-3 days | Planned |
+| 4 | Migrate existing data | 1-2 days | Planned |
+| 5 | Generate embeddings | 1-2 days | ✅ Done (via semantic pipeline) |
+| 6 | Switch services to V2 | 1-2 days | Planned |
+
+**Total Estimated Effort**: 15-20 days
 
 ---
 
@@ -499,6 +795,41 @@ const datasets = await db.select()
 - Complex multi-table joins
 
 **→ See**: [SPARK_FULL_SETUP_GUIDE.md](../SPARK_FULL_SETUP_GUIDE.md)
+
+### Journey Session Data Normalization
+
+```
+prepare-step.tsx → project-session routes           →   journey-state-manager  → dashboards/agents
+                     (project_sessions table)           (`projects.journeyProgress` JSON)
+```
+
+- **`project_sessions`** (`shared/schema.ts`) is the server-authoritative record for every multi-step journey. Each phase writes into the JSON buckets (`prepareData`, `dataUploadData`, `executeData`, `workflowState`) so we no longer depend on `localStorage` or scattered columns.
+- **`project_questions`** stores each business question with ordering, status, and embeddings. Services such as `analysis-execution.ts` and `server/routes/semantic-pipeline.ts` already query this table, so it is the single source of truth for question text.
+- **`projects.journeyProgress`** captures the durable journey summary (`status`, `currentPhase`, `phaseCompletionStatus`, `goals[]`). Dashboards, billing, and support tooling should hydrate from this JSON rather than bespoke columns like `journeyStatus`.
+- **`JourneyExecutionMachine`** persists transient orchestration state through `project_sessions.workflowState`, then emits normalized snapshots via `journey-state-manager`. When a session links to a project, `journeyProgress` keeps only the summarized view needed for resumes, analytics, and approvals.
+
+**Field responsibilities**:
+
+| Concern | Runtime store | Durable store | Consumers |
+|---------|---------------|---------------|-----------|
+| Analysis goal text | `project_sessions.prepareData.analysisGoal` | `projects.journeyProgress.goals[]` | Template selection, recommendation agents, billing guardrails |
+| Business questions | `project_sessions.prepareData.businessQuestions` | `project_questions` rows | Project Manager agent, DS agent, dashboards |
+| Journey step/phase | `project_sessions.currentStep` + `workflowState` | `projects.journeyProgress.status` + `stepCompletionStatus` | Journey UI, checkpoint system, billing |
+| Agent execution state | `project_sessions.workflowState` | `agent_executions` + `projects.journeyProgress.phaseCompletionStatus` | Agent orchestrator, realtime fan-out |
+
+### Legacy Field Decommission Plan
+
+| Legacy field/table | Successor | Migration notes |
+|--------------------|-----------|-----------------|
+| `projects.analysis_goals` | `project_sessions.prepareData.analysisGoal` → `projects.journeyProgress.goals[]` | Backfill the JSONB goals array for existing projects, update `analysis-execution.ts` & `template.ts` to read from `project_sessions` when present, then drop the column after one release. |
+| `projects.business_questions` | `project_questions` rows + `project_sessions.prepareData.businessQuestions` | Split newline or comma-delimited strings into ordered rows, persist edits in the session, and treat the table as the only query source for agents/tests. |
+| `projects."journeyStatus"` | `project_sessions.currentStep` + `projects.journeyProgress.status` | Dashboards should compute status from the JSON block; add a fallback getter that derives it from `journeyStatus` during the cutover to avoid regressions. |
+| `journey_execution_states` table | `project_sessions.workflowState` + summarized `journeyProgress` | Wire `JourneyExecutionMachine.persistState/restoreState` to the session table so restarts never consult the deprecated table; once the hooks land, archive the standalone table. |
+
+**Rollout guardrails**
+- Run `npm run db:push` after updating `shared/schema.ts` to ensure the JSON columns stay in sync.
+- Add dual-write shims inside `project-session` routes so QA can flip `DISABLE_LEGACY_JOURNEY_FIELDS=true` in `.env` and run `npm run test:user-journeys` before the final drop.
+- Monitor `PROJECT_DASHBOARD_ISSUES_AND_FIXES.md` KPIs (resume rate, paused journeys) to confirm the normalized data feeds every widget before removing the legacy schema.
 
 ---
 
@@ -905,9 +1236,18 @@ docker-compose -f docker-compose.dev.yml up -d
 npm run dev
 ```
 
+**Python Environment Setup**:
+```bash
+# Install Python 3.8+ and verify
+python --version  # or python3 --version
+
+# Install required dependencies
+pip install -r python/requirements.txt
+```
+
 **Common Windows Issues**:
 - Bash tool errors: Ensure Git Bash or WSL is in PATH
-- Python scripts: Require Python 3.8+ in PATH
+- Python scripts: Require Python 3.8+ in PATH, may need to use `python` instead of `python3`
 - Long paths: Enable long path support in Windows
 - Port conflicts: Check ports 5000 (server) and 5173 (client)
 - TypeScript compilation: Large codebase requires 8GB heap
@@ -920,6 +1260,17 @@ npm run dev
 ---
 
 ## Known Issues
+
+### Recent Bug Fixes (Dec 8, 2025) ✅
+
+| Issue | Fix Applied | File(s) Modified |
+|-------|-------------|------------------|
+| Data Verification Continue button not working | Created `PUT /api/projects/:id/verify` endpoint | `server/routes/project.ts` |
+| Export Report returning 404 | Created `GET /api/projects/:id/export/report` endpoint | `server/routes/project.ts` |
+| Step-by-Step Analysis 404 | Fixed URL from `/api/step-by-step-analysis` to `/api/ai/step-by-step-analysis` | `client/src/lib/api.ts` |
+| Checkpoint Feedback 500 errors | Improved error handling (404 for missing checkpoints) | `server/routes/project.ts` |
+| Multi-Dataset Join failing | Added auto-detection of join keys and JoinConfig | `client/src/pages/data-transformation-step.tsx` |
+| Analysis using raw data | Analysis now prioritizes transformed data | `server/services/analysis-execution.ts` |
 
 ### 1. Mock Data Visible to Users 🔴 CRITICAL
 

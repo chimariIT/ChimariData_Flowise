@@ -1,0 +1,101 @@
+# Task: Review and Enhance Comprehensive Journey Fix Plan
+
+- [x] Initial review of `docs/COMPREHENSIVE_JOURNEY_FIX_PLAN.md` <!-- id: 0 -->
+- [x] Research existing project data structure and persistence <!-- id: 1 -->
+    - [x] Check `server/db/schema.ts` for project table definitions <!-- id: 2 -->
+    - [x] Initial review of `docs/COMPRE_JOURNEY_FIX_PLAN.md` <!-- id: 0 -->
+- [x] Research existing project data structure and persistence <!-- id: 1 -->
+- [x] Provide critique and additional technical details in the fix plan <!-- id: 5 -->
+- [x] Analyze and incorporate Claude's additional points (Migration, Performance, etc.) <!-- id: 8 -->
+- [x] Update documentation and task checklist in the fix plan <!-- id: 9 -->
+- [x] Review expanded platform plan from Claude <!-- id: 11 -->
+- [x] Initialize `docs/DESIGN_DECISIONS.md` <!-- id: 14 -->
+- [x] **Phase 0: Architecture Alignment & Shared Planning** <!-- id: 50 -->
+    - [x] Review Claude's integrated design (Vector, Discovery, Orchestration) <!-- id: 51 -->
+    - [x] Sync Phase 1 implementation plan with DEC-009 order <!-- id: 52 -->
+- [x] **Phase 1: Critical Data Continuity** <!-- id: 15 -->
+    - [x] [Claude] Define `JourneyProgress` Zod schema in `shared/schema.ts` (DEC-001) <!-- id: 100 -->
+        - Added comprehensive interface with all journey state fields
+        - Includes `semanticReferences` for DEC-006 vector integration
+        - Added `createEmptyJourneyProgress()` helper
+        - Location: `shared/schema.ts` lines 237-404
+    - [x] [Claude] Implement `PATCH /api/projects/:id/progress` (JSONB Merge) (DEC-004) <!-- id: 19 -->
+        - Added endpoint at `server/routes/project.ts` lines 6247-6339
+        - Deep merge function for atomic JSONB updates
+        - Uses raw SQL for race condition prevention
+        - Includes step timestamp tracking
+    - [x] [Claude] Implement Lazy Migration in `storage.getProject` (DEC-002) <!-- id: 20 -->
+        - Added `migrateJourneyProgressIfNeeded()` method at `server/storage.ts` lines 1401-1596
+        - Migrates stepCompletionStatus, lastAccessedStep, project_sessions data
+        - Migrates dataset IDs from project_datasets table
+        - Marks migration with `migratedFromLegacy: true` to prevent re-migration
+        - Error-safe: returns original project if migration fails
+    - [x] [Gemini] Create/Update `useProject` hook (deprecate `useProjectSession`) (DEC-003) <!-- id: 16 -->
+        - Added `useProject(projectId)` with TanStack Query integration
+        - Provides typed `journeyProgress` and `updateProgress` mutation
+        - Location: `client/src/hooks/useProject.ts`
+    - [x] [Gemini] Migrate `DataStep` to read/write `journeyProgress` <!-- id: 17 -->
+        - Migrated PII decisions and dataset metadata
+        - Removed legacy `localStorage` usage
+    - [x] [Gemini] Update `VerificationStep` and `TransformationStep` to read schema from SSOT <!-- id: 18 -->
+        - `DataVerificationStep.tsx`: Migrated PII approvals and quality status
+        - `DataTransformationStep.tsx`: Migrated mappings and join configurations
+    - [x] [Gemini] Refactor Execution and Results steps for SSOT (Phase 1 Final)
+        - [x] Refactor `ExecuteStep.tsx` (Removed localStorage fallbacks)
+        - [x] Refactor `ResultsPreviewStep.tsx` (Standardized projectId)
+        - [x] Refactor `ResultsStep.tsx` (Integrated EvidenceChainUI)
+        - [x] Refactor `PricingStep.tsx` (Removed localStorage fallbacks)
+        - [x] Refactor `DataTransformationStep.tsx` (SSOT question loading)
+    - [x] [Gemini] Refactor `PrepareStep.tsx` for SSOT (DEC-005)
+        - Migrated goals, questions, templates, and audience
+        - Replaced `useProjectSession` with `useProject`
+- [x] **Phase 2: Tool Discovery & Vector Integration** <!-- id: 21 -->
+    - [x] [Claude] Populate capability metadata in `MCPToolRegistry` (DEC-008) <!-- id: 53 -->
+        - Added capabilities to `comprehensive_ml_pipeline`, `enhanced_visualization_engine`, `plotly_generator`
+        - Added capabilities to `automl_optimizer`, `ml_library_selector`
+        - Added capabilities to `llm_fine_tuning`, `lora_fine_tuning`
+        - Total: 15+ tools now have complete capability metadata for dynamic discovery
+        - Location: `server/services/mcp-tool-registry.ts`
+    - [x] [Claude] Integrate Semantic references in `journeyProgress` (DEC-006) <!-- id: 54 -->
+        - Updated `server/routes/semantic-pipeline.ts` to store semantic IDs in journeyProgress
+        - Each endpoint now stores relevant IDs: extract-elements → dataElementIds, link-questions → questionElementLinkIds, infer-transformations → transformationIds
+        - Full pipeline endpoint (`run-full-pipeline`) stores all three ID types
+        - IDs are preserved in `journeyProgress.requirementsDocument.semanticReferences`
+        - Non-blocking: API responses returned even if journeyProgress update fails
+    - [x] [Gemini] Build Evidence Chain UI ("How We Answered") (DEC-007) <!-- id: 22 -->
+        - Implemented `EvidenceChainUI.tsx` with semantic data elements and logic chain.
+        - Integrated "How We Answered" trigger into `ResultsStep.tsx`.
+        - Verified traceability path Question → Evidence → Logic.
+- [x] **Phase 3: Agentic Orchestration Reliability** <!-- id: 55 -->
+    - [x] [Claude] Implement `TemplateLibrarySearch` tool <!-- id: 56 -->
+        - Implemented `handleTemplateLibraryManager` in `server/services/agent-tool-handlers.ts`
+        - Operations: search, retrieve, getByIndustry, getByJourneyType, recommend
+        - Uses `TemplateService` for database queries
+    - [x] [Claude] Implement `CheckpointManager` tool <!-- id: 57 -->
+        - Implemented `handleCheckpointManager` in `server/services/agent-tool-handlers.ts`
+        - Operations: create, getStatus, updateStatus, listPending
+        - Queries `agent_checkpoints` table via storage layer
+- [x] **Phase 4-5: Hardening, Admin & Final E2E** <!-- id: 24 -->
+    - [x] [Claude] Build Technical State Viewer (Admin UI for `journeyProgress` inspection)
+        - [x] Integrate basic inspector tab in Admin Dashboard
+        - [x] Add Audit Log (DEC-010) and Pipeline Insights views
+            - Added `GET /api/admin/projects/:projectId/decision-trail` API endpoint
+            - Displays decision audits with agent, decision type, reasoning, confidence, impact
+        - [x] Implement Admin Controls (Reset, Force Sync, Atomic Merge Test)
+            - `POST /api/admin/projects/:projectId/force-sync` - Triggers lazy migration (DEC-002)
+            - `POST /api/admin/projects/:projectId/reset-phase` - Reset to specific journey phase
+            - `POST /api/admin/projects/:projectId/atomic-merge-test` - Validates JSONB merge (DEC-004)
+        - [x] Add "Active Agents" real-time monitor
+            - `GET /api/admin/agents/active` - Returns active agents with metrics
+            - Auto-refreshes every 5 seconds in UI
+    - [ ] [Gemini] "Zero-Loss" Journey Stress Test (Browser-based persistence verification)
+    - [ ] [Gemini] Final performance audit of `useProject` and `PATCH` updates
+- [ ] **Final E2E Validation** <!-- id: 26 -->
+
+---
+
+### Resolved Issues (Gemini)
+- [x] **TypeScript Errors**: All critical errors in `data-step.tsx`, `execute-step.tsx`, `prepare-step.tsx`, `results-step.tsx`, and `data-transformation-step.tsx` have been resolved.
+- [x] **Import Paths**: Corrected all `@/shared/schema` imports to `@shared/schema`.
+- [x] **Hook Enhancement**: Added `projectId` to the `useProject` hook return object for easier access across components.
+- [x] **Schema Alignment**: Verified and fixed all property mismatches (e.g., `primary` vs `primaryAudience`, `costEstimate` nesting).

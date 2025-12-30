@@ -1,6 +1,6 @@
 # Billing & Admin Guide
 
-**Part of ChimariData Documentation** | [← Back to Main](../CLAUDE.md)
+**Part of ChimariData Documentation** | [← Back to Main](../CLAUDE.md) | **Last Updated**: November 30, 2025
 
 This document covers subscription tiers, pricing models, billing integration, admin features, and payment processing.
 

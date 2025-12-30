@@ -1,6 +1,6 @@
 # Agentic System Guide
 
-**Part of ChimariData Documentation** | [← Back to Main](../CLAUDE.md)
+**Part of ChimariData Documentation** | [← Back to Main](../CLAUDE.md) | **Last Updated**: December 10, 2025
 
 This document covers the multi-agent architecture, tool-based system, MCP integration, agent coordination, and development patterns.
 
@@ -13,10 +13,12 @@ This document covers the multi-agent architecture, tool-based system, MCP integr
 - [Available Agents](#available-agents)
 - [Tool-Based Architecture](#tool-based-architecture)
 - [Agent Coordination](#agent-coordination)
+- [Agent Checkpoints](#agent-checkpoints) ← **NEW**
 - [WebSocket Communication](#websocket-communication)
 - [Message Broker](#message-broker)
 - [Agent Development](#agent-development)
 - [Tool Development](#tool-development)
+- [Planned Improvements](#planned-improvements) ← **NEW**
 - [Debugging Agents](#debugging-agents)
 
 ---
@@ -385,11 +387,318 @@ shared/schema.ts (Database State)
 
 ---
 
+## Agent Checkpoints
+
+### Overview
+
+Agent checkpoints are approval points where agents pause execution to collect user feedback before proceeding. They enable human-in-the-loop control over the analysis pipeline.
+
+### Current Implementation
+
+**Location**: `server/services/project-agent-orchestrator.ts`
+
+```typescript
+// Checkpoint storage (CURRENT - dual state)
+private checkpoints = new Map<string, AgentCheckpoint[]>();  // In-memory
+
+// Checkpoints also stored in database via storage.createAgentCheckpoint()
+```
+
+### Known Issues
+
+⚠️ **Critical Problem**: Checkpoints are stored in BOTH in-memory Map AND database, leading to:
+- **State loss on restart**: In-memory checkpoints lost when server restarts
+- **Race conditions**: Memory and DB can diverge
+- **Inconsistent reads**: Components may read from different sources
+
+### Checkpoint Lifecycle
+
+```
+1. Agent creates checkpoint
+   → Stored in-memory Map
+   → Stored in database (agent_checkpoints table)
+   → Emitted via WebSocket to frontend
+
+2. User reviews checkpoint in UI
+   → Component: client/src/components/agent-checkpoints.tsx
+   → Tab: "Agents" tab in project dashboard
+
+3. User approves/rejects
+   → PUT /api/projects/:id/checkpoints/:checkpointId/feedback
+   → Updates status in database
+   → Triggers workflow continuation
+
+4. Next step execution
+   → Agent reads checkpoint status
+   → Continues or re-executes based on feedback
+```
+
+### Checkpoint Types
+
+| Type | Purpose | Requires User Action |
+|------|---------|---------------------|
+| `data_quality` | Data validation results | Yes - approve schema |
+| `analysis_plan` | Proposed analysis approach | Yes - approve or modify |
+| `transformation` | Data transformation preview | Yes - approve mappings |
+| `results_preview` | Preliminary results | Yes - validate before final |
+| `info` | Progress update | No - informational only |
+
+### API Endpoints
+
+```typescript
+// Get checkpoints for project
+GET /api/projects/:projectId/checkpoints
+
+// Submit feedback on checkpoint
+PUT /api/projects/:projectId/checkpoints/:checkpointId/feedback
+Body: { approved: boolean, feedback?: string }
+
+// Approve all pending checkpoints
+POST /api/projects/:projectId/approve-all-checkpoints
+```
+
+### Database Schema
+
+```sql
+-- agent_checkpoints table (shared/schema.ts)
+CREATE TABLE agent_checkpoints (
+  id TEXT PRIMARY KEY,
+  project_id TEXT REFERENCES projects(id),
+  checkpoint_type TEXT NOT NULL,
+  agent_type TEXT NOT NULL,
+  step_name TEXT,
+  step_index INTEGER,
+  title TEXT,
+  description TEXT,
+  data JSONB,
+  status TEXT DEFAULT 'pending',  -- pending, approved, rejected
+  user_feedback TEXT,
+  created_at TIMESTAMP DEFAULT NOW(),
+  resolved_at TIMESTAMP
+);
+```
+
+### Dec 10, 2025 Fixes Applied
+
+✅ **Issue #12 & #13 Fixed**: Journey restart now clears database checkpoints
+
+**File**: `server/services/project-agent-orchestrator.ts` (lines 1128-1150, 1266-1268)
+
+```typescript
+// cleanupProjectAgents() now deletes from DB
+async cleanupProjectAgents(projectId: string, deleteFromDatabase = true): Promise<void> {
+  // Clear in-memory
+  this.checkpoints.delete(projectId);
+  this.executionMachines.delete(projectId);
+
+  // Clear database checkpoints
+  if (deleteFromDatabase) {
+    await storage.deleteProjectCheckpoints(projectId);
+  }
+}
+```
+
+---
+
+## PM Agent Coordination Workflow (Dec 12, 2025)
+
+### Overview
+
+The Project Manager (PM) Agent acts as the **supervisor and primary coordinator** for all agent activity. This pattern ensures consistent orchestration where PM delegates work to specialized agents and synthesizes their outputs.
+
+### PM as Coordinator Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                      PROJECT MANAGER AGENT                               │
+│              (Supervisor - Orchestrates All Agent Activity)              │
+└──────────────────────────────────────────────────────────────────────────┘
+                   │
+       ┌──────────┼──────────┬──────────┬──────────┐
+       ▼          ▼          ▼          ▼          ▼
+  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐
+  │RESEARCHER│ │   DS    │ │   DE    │ │   BA    │ │Technical│
+  │  Agent  │ │  Agent  │ │  Agent  │ │  Agent  │ │   AI    │
+  └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘
+```
+
+### Coordinated Workflow Steps
+
+| Step | PM Action | Target Agent | Output |
+|------|-----------|--------------|--------|
+| 1 | User enters questions and goals | - | `businessQuestions[]`, `analysisGoal` |
+| 2 | "Find matching templates" | Researcher | `templates[]`, `analysisPatterns[]`, `workflows[]` |
+| 3 | "Identify analysis types based on researcher patterns" | Data Scientist | `analysisPath[]`, `requiredDataElements[]` |
+| 4 | "Prepare data for DS's analysis requirements" | Data Engineer | `transformationPlan`, `qualityReport`, `joinStrategy` |
+| 5 | "Review and approve transformation plan" | User | Approved/modified plan |
+| 6 | "Execute approved transformations" | Data Engineer | Transformed datasets |
+| 7 | "Execute analysis on prepared data" | Data Scientist | `insights[]`, `recommendations[]`, `visualizations[]` |
+| 8 | "Package results for user's audience" | BA + DS | `translatedResults[]`, `artifacts[]`, `deliverables[]` |
+
+### Agent Types in Journey Templates
+
+**Location**: `shared/journey-templates.ts`
+
+```typescript
+// Extended agent enum for PM coordination
+agent: z.enum([
+  'technical_ai_agent',
+  'business_agent',
+  'project_manager',
+  'data_engineer',
+  'template_research_agent',  // GAP F: Template/pattern recommendations
+  'data_scientist'            // GAP G: Analysis planning
+])
+```
+
+### Orchestrator Implementation
+
+**Location**: `server/services/project-agent-orchestrator.ts`
+
+```typescript
+// Agent instances for PM coordination
+private templateResearchAgent: TemplateResearchAgent;
+private dataScientistAgent: DataScientistAgent;
+
+// Extended AgentCheckpoint type
+agentType: 'project_manager' | 'technical_ai' | 'business' |
+           'data_engineer' | 'template_researcher' | 'data_scientist';
+
+// Case handlers in executeStepByAgent()
+case 'template_research_agent':
+  // Researcher finds templates/patterns matching user questions
+  const researchResult = await this.templateResearchAgent.researchTemplate({
+    industry, businessGoals, keywords, complexityLevel
+  });
+  return { template, confidence, marketDemand, implementationComplexity };
+
+case 'data_scientist':
+  // DS identifies analysis types based on researcher patterns
+  const dsRecommendation = await this.dataScientistAgent.recommendAnalysisConfig({
+    userQuestions, analysisGoal, datasetMetadata, data, recordCount
+  });
+  return { recommendedAnalyses, complexity, requiredColumns, rationale };
+```
+
+### Frontend Integration
+
+**Location**: `client/src/pages/prepare-step.tsx`
+
+The frontend calls the Researcher Agent BEFORE generating requirements:
+
+```typescript
+// GAP F: Call Researcher Agent to find templates before requirements generation
+const researcherResponse = await apiClient.post(
+  `/api/projects/${projectId}/recommend-templates`,
+  { businessGoals, userQuestions, journeyType }
+);
+
+// Use researcher recommendations to guide requirements generation
+if (researcherResponse.success && researcherResponse.recommendations) {
+  setResearcherRecommendations(researcherResponse.recommendations);
+}
+```
+
+### API Endpoints for Agent Coordination
+
+| Endpoint | Purpose | Agent |
+|----------|---------|-------|
+| `POST /api/projects/:id/recommend-templates` | Get template recommendations | Researcher |
+| `GET /api/projects/:id/required-data-elements` | Get requirements with analysisPath | DS + BA + PM |
+| `POST /api/projects/:id/execute-transformations` | Execute approved transformations | DE |
+| `POST /api/analysis-execution/execute` | Run analysis with analysisPath | DS |
+
+### Data Flow Through Coordination
+
+```
+User Questions
+     │
+     ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ RESEARCHER AGENT: Find relevant templates/patterns              │
+│ Output: { template, confidence, marketDemand }                  │
+└─────────────────────────────────────────────────────────────────┘
+     │
+     ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ DATA SCIENTIST AGENT: Identify analysis types                   │
+│ Input: User questions + researcher patterns                     │
+│ Output: { analysisPath[], requiredDataElements[] }              │
+└─────────────────────────────────────────────────────────────────┘
+     │
+     ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ DATA ENGINEER AGENT: Prepare data                               │
+│ Input: DS requirements + uploaded datasets                      │
+│ Output: { transformationPlan, joinStrategy, qualityReport }     │
+└─────────────────────────────────────────────────────────────────┘
+     │
+     ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ ANALYSIS EXECUTION: Run prioritized analyses                    │
+│ Input: Transformed data + analysisPath                          │
+│ Output: { insights[], recommendations[], visualizations[] }     │
+└─────────────────────────────────────────────────────────────────┘
+     │
+     ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ RESULTS: Use questionAnswerMapping for evidence chain           │
+│ Output: Answers linked to questions with full traceability      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Evidence Chain (Question → Answer Traceability)
+
+**Location**: `server/services/question-answer-service.ts`, `client/src/components/UserQuestionAnswers.tsx`
+
+Each answer includes an evidence chain showing:
+- **Data Used**: Which data elements contributed
+- **Analyses Run**: Which analysis types were executed
+- **Transformations Applied**: What data preparation was done
+- **Supporting Insights**: Linked insight IDs
+
+```typescript
+// Evidence chain structure
+{
+  questionId: string,
+  questionText: string,
+  answer: string,
+  evidenceChain: {
+    dataElements: string[],
+    analyses: string[],
+    insights: string[],
+    transformationsApplied: string[]
+  }
+}
+```
+
+---
+
 ## WebSocket Communication
 
-**Location**: `server/realtime.ts`, `client/src/lib/api.ts`
+**Location**: `server/realtime.ts`, `client/src/lib/realtime.ts`, `client/src/lib/api.ts`
+
+### Architecture Flow
+
+The real-time system follows this flow for agent-to-user communication:
+
+```
+Agent Execution (server/services/agents/)
+  ↓
+Realtime Bridge publishes event (server/services/agents/realtime-bridge.ts)
+  ↓
+Message Broker coordinates (server/services/agents/agent-message-broker.ts)
+  ↓
+WebSocket Server broadcasts (server/index.ts via ws library)
+  ↓
+Client receives event (client/src/lib/realtime.ts)
+  ↓
+UI updates in real-time (client/src/pages/*.tsx)
+```
 
 ### Server-Side API
+
+**Location**: `server/realtime.ts`
 
 ```typescript
 class RealtimeServer {
@@ -401,11 +710,12 @@ class RealtimeServer {
 
 ### Client-Side Connection
 
-**Location**: `client/src/lib/api.ts`
+**Location**: `client/src/lib/realtime.ts`
 
 - WebSocket connection established on user authentication
 - Automatic reconnection handling
 - Real-time updates for: agent messages, project state, analysis progress
+- Event listeners for specific message types
 
 ### Message Types
 
@@ -418,6 +728,10 @@ class RealtimeServer {
 | `error:notification` | Real-time error alerts | Python script failed |
 
 **Critical Pattern**: Always use WebSocket for agent-user interaction, never HTTP polling.
+
+### Debugging WebSocket Issues
+
+See [CLAUDE.md - Common Debugging Scenarios](../CLAUDE.md#common-debugging-scenarios) for troubleshooting WebSocket agent messages not appearing.
 
 ---
 
@@ -634,6 +948,148 @@ npm run test:e2e-tools
 
 5. **Add UI Component** in `client/src/components/`
 6. **Test Integration** with unit and E2E tests
+
+---
+
+## Planned Improvements
+
+**Status**: Design Complete | **Target**: 4-6 weeks
+
+The agent system is undergoing refactoring to address coordination issues. See [ARCHITECTURE_REFACTORING_ANALYSIS.md](../ARCHITECTURE_REFACTORING_ANALYSIS.md) for full analysis.
+
+### 1. Database-First Checkpoint Architecture
+
+**Problem**: Checkpoints stored in both in-memory Map AND database leads to state inconsistency.
+
+**Target Architecture**:
+```typescript
+// ALL state goes to database first
+class CheckpointManager {
+  // Create - DB write first
+  async createCheckpoint(checkpoint: AgentCheckpoint): Promise<string> {
+    const id = await db.insert(agentCheckpoints).values(checkpoint);
+    // In-memory cache invalidated
+    this.cache.delete(checkpoint.projectId);
+    return id;
+  }
+
+  // Read - DB read with caching
+  async getCheckpoints(projectId: string): Promise<AgentCheckpoint[]> {
+    if (!this.cache.has(projectId)) {
+      const checkpoints = await db.select().from(agentCheckpoints).where(...);
+      this.cache.set(projectId, checkpoints);
+    }
+    return this.cache.get(projectId);
+  }
+
+  // Update - Atomic DB operation
+  async approveCheckpoint(id: string, feedback: string): Promise<void> {
+    await db.transaction(async (tx) => {
+      await tx.update(agentCheckpoints).set({ status: 'approved', feedback });
+      // Trigger next step in same transaction
+    });
+    this.cache.delete(/* projectId */);
+  }
+}
+```
+
+### 2. True Multi-Agent Coordination
+
+**Problem**: Agents don't see each other's results - no shared context.
+
+**Target Architecture**:
+```typescript
+// Agent results stored in database
+interface AgentResult {
+  id: string;
+  projectId: string;
+  agentType: 'data_engineer' | 'data_scientist' | 'business' | 'pm';
+  input: any;
+  output: any;
+  createdAt: Date;
+}
+
+// Agents read previous results before executing
+class AgentCoordinator {
+  async getAgentContext(projectId: string, agentType: string): Promise<AgentContext> {
+    // Get all previous agent results
+    const previousResults = await db.select()
+      .from(agentResults)
+      .where(eq(agentResults.projectId, projectId));
+
+    return {
+      dataEngineerAssessment: previousResults.find(r => r.agentType === 'data_engineer')?.output,
+      dataScientistRecommendations: previousResults.find(r => r.agentType === 'data_scientist')?.output,
+      // ... other agent results
+    };
+  }
+}
+```
+
+### 3. Approval Gating for Workflow Steps
+
+**Problem**: Journey continues even without user approval on required checkpoints (Issue #17).
+
+**Target Behavior**:
+```typescript
+// Steps with requiresApproval: true block until approved
+async executeJourneyStep(projectId: string, stepId: string): Promise<void> {
+  const step = getStepDefinition(stepId);
+
+  // Execute agent work
+  const checkpoint = await agent.execute(context);
+
+  if (step.requiresApproval) {
+    // Create blocking checkpoint
+    await checkpointManager.createBlockingCheckpoint({
+      ...checkpoint,
+      blocking: true,
+      timeoutMinutes: 60
+    });
+
+    // DO NOT continue to next step
+    // User must explicitly approve via API
+    return;
+  }
+
+  // Non-blocking steps continue automatically
+  await this.advanceToNextStep(projectId);
+}
+```
+
+### 4. Evidence Chain for Question Answers
+
+**Problem**: Answers can't trace back to source data/analysis (Issue #13).
+
+**Target Architecture**:
+```typescript
+interface QuestionAnswer {
+  questionId: string;           // Stable ID: q_{projectId}_{index}
+  answerText: string;
+  confidence: number;           // 0-100
+
+  // Full evidence chain
+  evidenceChain: {
+    dataElementIds: string[];   // Which columns were used
+    transformationIds: string[];// Which transformations applied
+    insightIds: string[];       // Which insights support the answer
+  };
+
+  // Semantic matching (with pgvector)
+  embedding: number[];          // Vector for semantic search
+}
+```
+
+### Migration Priority
+
+| Priority | Component | Effort | Impact |
+|----------|-----------|--------|--------|
+| 1 | DB-first checkpoints | 5-7 days | Fixes approval workflow |
+| 2 | Agent result storage | 3-4 days | Enables multi-agent context |
+| 3 | Approval gating | 2-3 days | Fixes Issue #17 |
+| 4 | Evidence chain | 3-4 days | Fixes Issue #13 |
+
+**Total Estimated Effort**: 13-18 days
 
 ---
 

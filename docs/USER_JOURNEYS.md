@@ -1,6 +1,6 @@
 # User Journeys Guide
 
-**Part of ChimariData Documentation** | [← Back to Main](../CLAUDE.md)
+**Part of ChimariData Documentation** | [← Back to Main](../CLAUDE.md) | **Last Updated**: December 8, 2025
 
 This document covers journey types, workflow steps, analysis components, Python integration, AI services, and Spark processing.
 
@@ -11,6 +11,7 @@ This document covers journey types, workflow steps, analysis components, Python 
 - [Journey Framework](#journey-framework)
 - [Journey Types](#journey-types)
 - [Journey Steps](#journey-steps)
+- [Data Pipeline Integration](#data-pipeline-integration) ← **NEW**
 - [Journey Artifacts](#journey-artifacts)
 - [Analysis Components](#analysis-components)
 - [Python-TypeScript Bridge](#python-typescript-bridge)
@@ -350,6 +351,239 @@ Every user journey begins with:
 
 ---
 
+## Data Pipeline Integration
+
+### Data Flow Through Journey Steps
+
+The data pipeline ensures that user inputs, agent recommendations, and transformations flow correctly through each journey step:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                         DATA FLOW THROUGH JOURNEY STEPS                                   │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+
+ STEP 1-2: UPLOAD              STEP 3: VERIFICATION         STEP 4: TRANSFORMATION
+┌──────────────────────┐      ┌──────────────────────┐     ┌──────────────────────┐
+│ • Raw file upload    │      │ • Schema validation  │     │ • Data mappings      │
+│ • Schema detection   │─────▶│ • PII analysis       │────▶│ • Join configuration │
+│ • Quality metrics    │      │ • User approval      │     │ • Transformed output │
+└──────────────────────┘      └──────────────────────┘     └──────────────────────┘
+         │                            │                             │
+         ▼                            ▼                             ▼
+   datasets.data               datasets.piiAnalysis        datasets.ingestionMetadata
+   datasets.schema             projects.status='ready'         .transformedData
+
+ STEP 5: PLANNING              STEP 6: EXECUTION            STEP 7-8: RESULTS
+┌──────────────────────┐      ┌──────────────────────┐     ┌──────────────────────┐
+│ • Analysis goals     │      │ • Uses transformed   │     │ • Analysis insights  │
+│ • Agent recommendations│────▶│   data (priority 1)  │────▶│ • Q&A pairs         │
+│ • Cost estimation    │      │ • Python execution   │     │ • Artifacts          │
+└──────────────────────┘      └──────────────────────┘     └──────────────────────┘
+         │                            │                             │
+         ▼                            ▼                             ▼
+   analysis_plans table        projects.analysisResults    project_artifacts table
+```
+
+### Critical Data Handoffs
+
+#### Upload → Verification
+
+**What's passed**:
+- `datasets.data` - Full dataset rows
+- `datasets.schema` - Auto-detected column types
+- `datasets.preview` - First N rows for display
+
+**Agent activity**:
+- Data Engineer assesses quality
+- PII Processor detects sensitive fields
+- Quality metrics calculated
+
+**User approval**: Schema validation confirmation
+
+---
+
+#### Verification → Transformation
+
+**What's passed**:
+- Validated schema
+- PII analysis results
+- Quality score
+
+**Endpoint**: `PUT /api/projects/:id/verify`
+
+**Journey state update**:
+```typescript
+await journeyStateManager.completeStep(projectId, 'data-verification');
+```
+
+---
+
+#### Transformation → Analysis
+
+**What's passed**:
+- `datasets.ingestionMetadata.transformedData` - Transformed rows
+- `datasets.ingestionMetadata.mappings` - Source-to-target mappings
+- `datasets.ingestionMetadata.joinConfig` - Multi-dataset join config
+
+**Multi-Dataset Join Configuration**:
+```typescript
+interface JoinConfig {
+  enabled: boolean;
+  type: 'left' | 'inner' | 'outer' | 'right';
+  foreignKeys: Array<{
+    sourceDataset: string;
+    sourceColumn: string;
+    targetDataset: string;
+    targetColumn: string;
+  }>;
+}
+```
+
+**Auto-detection patterns** (for join keys):
+- `*_id` (e.g., `employee_id`, `user_id`)
+- `*_key` (e.g., `account_key`)
+- `*_code` (e.g., `department_code`)
+- Exact column name matches
+
+---
+
+### Semantic Data Pipeline Integration (NEW - Dec 2025)
+
+The semantic pipeline uses vector embeddings to automatically link user questions to relevant data elements and infer required transformations. This replaces brittle keyword matching with meaning-based similarity.
+
+**Pipeline Flow**:
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                         SEMANTIC DATA PIPELINE                                            │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+
+ STEP 1: DATA UPLOAD            STEP 2: QUESTIONS               STEP 3: TRANSFORMATION
+┌──────────────────────┐       ┌──────────────────────┐        ┌──────────────────────┐
+│ Extract Data         │       │ Link Questions to    │        │ Infer Required       │
+│ Elements             │──────▶│ Elements via         │───────▶│ Transformations      │
+│ + Generate Embeddings│       │ Cosine Similarity    │        │ (Joins, Aggregates)  │
+└──────────────────────┘       └──────────────────────┘        └──────────────────────┘
+         │                              │                               │
+         ▼                              ▼                               ▼
+   data_elements table          question_element_links          transformation_definitions
+   (semantic descriptions)       (similarity ≥ 0.5)             (auto-inferred configs)
+
+                                  STEP 4: EVIDENCE CHAIN
+                              ┌──────────────────────────────┐
+                              │ Question → Elements →        │
+                              │ Transformations → Results    │
+                              │ (Full Traceability)          │
+                              └──────────────────────────────┘
+```
+
+**Integration Points by Journey Step**:
+
+| Journey Step | Semantic Pipeline Action | API Endpoint |
+|--------------|--------------------------|--------------|
+| Data Upload | Extract data elements, generate embeddings | `POST /api/semantic-pipeline/:id/extract-elements` |
+| Prepare (Questions) | Link questions to elements | `POST /api/semantic-pipeline/:id/link-questions` |
+| Transform | Get inferred transformation plan | `POST /api/semantic-pipeline/:id/infer-transformations` |
+| Execute | Use transformation plan for analysis | (Uses plan from previous step) |
+| Results | Display evidence chain per question | `GET /api/semantic-pipeline/:id/evidence-chain/:qId` |
+
+**Full Pipeline Execution** (single call):
+```typescript
+// Run complete semantic pipeline
+const response = await fetch(`/api/semantic-pipeline/${projectId}/run-full-pipeline`, {
+  method: 'POST',
+  headers: { 'Authorization': `Bearer ${token}` }
+});
+
+// Response includes:
+// - elementsExtracted: number of data elements found
+// - questionsLinked: questions with element matches
+// - transformationsInferred: auto-detected joins, aggregations, filters
+```
+
+**Evidence Chain for Answer Traceability**:
+```typescript
+// Get evidence chain for a specific question
+const chain = await fetch(`/api/semantic-pipeline/${projectId}/evidence-chain/${questionId}`);
+
+// Returns:
+{
+  question: { id: 'q_123', text: 'What is avg engagement by dept?' },
+  elements: [
+    { elementName: 'engagement_score', linkType: 'aggregates', relevance: 0.89 },
+    { elementName: 'department', linkType: 'groups_by', relevance: 0.85 }
+  ],
+  transformations: [
+    { name: 'Join on employee_id', type: 'join', status: 'applied' },
+    { name: 'Aggregate engagement_score', type: 'aggregate', status: 'applied' }
+  ]
+}
+```
+
+---
+
+#### Analysis → Results
+
+**Data source priority** (`analysis-execution.ts`):
+1. `dataset.ingestionMetadata.transformedData` - Transformed data (preferred)
+2. `dataset.metadata.transformedData` - Alternative location
+3. `dataset.data || dataset.preview` - Fallback to raw data
+
+**What's stored**:
+- `projects.analysisResults` - Full analysis output
+- `projects.analysisResults.questionAnswers` - AI-generated Q&A pairs
+- `project_artifacts` table - Generated files (PDF, PPTX, CSV, JSON)
+
+### User Input Preservation
+
+User inputs from each step are preserved and used in later steps:
+
+| User Input | Stored In | Used By |
+|------------|-----------|---------|
+| Analysis goals | `projects.description`, `analysis_plans.goals` | Plan generation, Q&A generation |
+| Business questions | `projects.analysisResults.userQuestions` | AI Q&A service, Results display |
+| Schema edits | `datasets.schema` | Transformation logic |
+| Mapping approvals | `datasets.ingestionMetadata.mappings` | Data transformation |
+| Join configuration | `datasets.ingestionMetadata.joinConfig` | Multi-dataset joining |
+| Transformation rules | `datasets.ingestionMetadata.transformationRules` | Analysis execution |
+
+### Agent Recommendations Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                         AGENT RECOMMENDATIONS → USER APPROVAL → EXECUTION                 │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+
+Agent Recommendations          User Review                    Applied to Data
+┌──────────────────────┐      ┌──────────────────────┐     ┌──────────────────────┐
+│ Data Engineer:       │      │ • View recommendations│     │ Transformation step: │
+│ - Required elements  │─────▶│ • Approve/modify     │────▶│ - Apply mappings     │
+│ - Quality thresholds │      │ - Edit mappings      │     │ - Execute joins      │
+│                      │      │ - Adjust join config │     │ - Store transformed  │
+│ Data Scientist:      │      │                      │     │                      │
+│ - Analysis types     │      │ • Checkpoint approval│     │ Analysis step:       │
+│ - ML models          │      │   (if required)      │     │ - Use transformed    │
+│                      │      │                      │     │   data for analysis  │
+│ PM Agent:            │      │                      │     │                      │
+│ - Unified plan       │      │                      │     │                      │
+└──────────────────────┘      └──────────────────────┘     └──────────────────────┘
+```
+
+### WebSocket Events for Progress
+
+Real-time updates during journey progression:
+
+| Event | When Triggered | Payload |
+|-------|----------------|---------|
+| `data:uploaded` | File upload complete | `{ datasetId, schema, rowCount }` |
+| `data:verified` | Verification approved | `{ projectId, qualityScore }` |
+| `data:transformed` | Transformation complete | `{ transformedRows, joinedDatasets }` |
+| `analysis:progress` | During analysis | `{ step, progress, message }` |
+| `analysis:complete` | Analysis finished | `{ insights, recommendations }` |
+| `artifact:generated` | Artifact created | `{ artifactId, type, downloadUrl }` |
+| `checkpoint:request` | User approval needed | `{ checkpointId, agentType, question }` |
+
+---
+
 ## Journey Artifacts
 
 ### Non-Tech Journey Artifacts
@@ -558,9 +792,10 @@ if __name__ == "__main__":
 
 - ✅ Python scripts must output JSON to stdout for TypeScript parsing
 - ✅ Use `server/services/enhanced-python-processor.ts` for advanced error handling
-- ✅ All Python dependencies must be in `requirements.txt`
+- ✅ All Python dependencies must be in `python/requirements.txt`
 - ✅ Scripts receive input via command-line JSON argument
 - ✅ Set `PYTHON_SCRIPT_TIMEOUT` environment variable (default: 300000ms)
+- ✅ Python 3.8+ must be installed and in PATH (see [CLAUDE.md - Python Environment](../CLAUDE.md#python-environment))
 
 ### Error Handling
 
