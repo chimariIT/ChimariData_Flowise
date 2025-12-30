@@ -5368,7 +5368,7 @@ router.post("/:id/generate-data-requirements", ensureAuthenticated, requireOwner
             const project = await storage.getProject(projectId);
             if (project) {
                 // CRITICAL FIX: parseJourneyProgress expects journeyProgress JSONB, not the entire project object
-                const journeyProgress = parseJourneyProgress((project as any)?.journeyProgress || project?.journeyProgress || {});
+                const journeyProgress = parseJourneyProgress((project as any)?.journeyProgress || {});
                 const requirementsDoc = {
                     ...document,
                     generatedAt: new Date().toISOString(),
@@ -5377,18 +5377,20 @@ router.post("/:id/generate-data-requirements", ensureAuthenticated, requireOwner
                 
                 // Use atomic JSONB merge to preserve existing journeyProgress fields while setting lock
                 // This prevents race conditions if frontend calls updateProgress simultaneously
+                const lockedAtTimestamp = new Date().toISOString();
+                const projectIdForLock = String(projectId);
                 await db.execute(
                     sql`UPDATE projects
                         SET journey_progress = COALESCE(journey_progress, '{}'::jsonb)
                             || jsonb_build_object(
                                 'requirementsDocument', ${JSON.stringify(requirementsDoc)}::jsonb,
-                                'requirementsLocked', to_jsonb(true),
-                                'requirementsLockedAt', to_jsonb(${new Date().toISOString()})
+                                'requirementsLocked', true,
+                                'requirementsLockedAt', ${lockedAtTimestamp}::text
                             ),
                             updated_at = NOW()
-                        WHERE id = ${projectId}`
+                        WHERE id = ${projectIdForLock}::text`
                 );
-                
+
                 console.log(`💾🔒 [P1-4 FIX] Stored and LOCKED requirements document in journeyProgress for project ${projectId} (atomic JSONB merge)`);
             }
         } catch (persistError) {
@@ -5457,7 +5459,7 @@ router.get("/:id/required-data-elements", ensureAuthenticated, requireOwnership(
         // FIX: First check journeyProgress.requirementsDocument (set by generate-data-requirements)
         const project = await storage.getProject(projectId);
         // CRITICAL FIX: parseJourneyProgress expects journeyProgress JSONB, not the entire project object
-        const journeyProgress = parseJourneyProgress((project as any)?.journeyProgress || project?.journeyProgress || {});
+        const journeyProgress = parseJourneyProgress((project as any)?.journeyProgress || {});
         const storedRequirements = (journeyProgress as any).requirementsDocument;
         const isLocked = (journeyProgress as any).requirementsLocked === true;
 
@@ -5618,99 +5620,86 @@ router.get("/:id/required-data-elements", ensureAuthenticated, requireOwnership(
             });
         }
 
-        // Check legacy location first, but prefer journeyProgress (checked above)
+        // Check legacy location (dataset.ingestionMetadata.dataRequirementsDocument)
         let doc = ingestionMetadata?.dataRequirementsDocument;
 
-        // Only regenerate if NOT locked and document doesn't exist
-        if (!doc && !storedRequirements && !isLocked) {
-            console.log(`🔄 [Required Elements] No stored document found (not locked), generating for project ${projectId}`, {
-                hasLegacyDoc: !!doc,
-                hasStoredRequirements: !!storedRequirements,
-                isLocked: false,
-                action: 'ALLOWING_REGENERATION'
+        // CRITICAL FIX: NEVER regenerate elements - only use stored data or migrate from legacy
+        // The Preparation step is the ONLY place where elements should be generated
+        if (doc && !storedRequirements) {
+            // Legacy document exists but not in journeyProgress - MIGRATE it
+            console.log(`🔄 [Required Elements] Migrating legacy document to journeyProgress for project ${projectId}`, {
+                legacyElementsCount: doc.requiredDataElements?.length || 0,
+                action: 'MIGRATING_LEGACY_TO_SSOT'
             });
 
-            // Get project goals and questions from journeyProgress
-            const userGoals: string[] = [];
-            const userQuestions: string[] = [];
-
-            // Try to get goals from journeyProgress
-            if ((journeyProgress as any)?.goals?.length > 0) {
-                userGoals.push(...(journeyProgress as any).goals);
-            }
-            if ((journeyProgress as any)?.questions?.length > 0) {
-                userQuestions.push(...(journeyProgress as any).questions);
-            }
-
-            // If no explicit goals, generate from effective (possibly joined) schema
-            if (userGoals.length === 0) {
-                const columns = Object.keys(effectiveSchema);
-                userGoals.push(`Analyze the available dataset with ${columns.length} columns to identify patterns and insights`);
-            }
-
-            // Build dataset metadata for requirement generation using effective schema
-            const datasetMetadata = {
-                schema: effectiveSchema,
-                rowCount: totalRowCount,
-                fileName: datasets.length > 1
-                    ? `${datasets.length} datasets (joined)`
-                    : ((dataset as any).originalFileName || 'Unknown'),
-                columns: Object.keys(effectiveSchema),
-                columnTypes: Object.entries(effectiveSchema).reduce((acc: any, [col, type]: [string, any]) => {
-                    acc[col] = type?.type || type || 'text';
-                    return acc;
-                }, {})
-            };
-
-            // Generate requirements using the tool via tool registry
-            const toolResult = await executeTool(
-                'required_data_elements_tool',
-                'data_scientist',
-                {
-                    operation: 'defineRequirements',
-                    projectId,
-                    userGoals,
-                    userQuestions,
-                    datasetMetadata
-                },
-                { userId, projectId }
-            );
-
-            if (toolResult.status === 'error') {
-                throw new Error(toolResult.error || 'Failed to generate data requirements');
-            }
-
-            doc = toolResult.result;
-
-            // Store for future use AND LOCK to prevent regeneration
-            // CRITICAL: Use atomic JSONB update to prevent race conditions with frontend updateProgress calls
-            // This ensures users see consistent recommendations throughout their journey
+            // Migrate to journeyProgress and lock
             const requirementsDoc = {
                 ...doc,
                 generatedAt: doc.generatedAt || new Date().toISOString(),
-                version: doc.version || 1
+                version: doc.version || 1,
+                migratedFromLegacy: true,
+                migratedAt: new Date().toISOString()
             };
-            
+
+            const lockedAtTimestamp = new Date().toISOString();
+            const projectIdForMigration = String(projectId);
             await db.execute(
                 sql`UPDATE projects
                     SET journey_progress = COALESCE(journey_progress, '{}'::jsonb)
                         || jsonb_build_object(
                             'requirementsDocument', ${JSON.stringify(requirementsDoc)}::jsonb,
-                            'requirementsLocked', to_jsonb(true),
-                            'requirementsLockedAt', to_jsonb(${new Date().toISOString()})
+                            'requirementsLocked', true,
+                            'requirementsLockedAt', ${lockedAtTimestamp}::text
                         ),
                         updated_at = NOW()
-                    WHERE id = ${projectId}`
+                    WHERE id = ${projectIdForMigration}::text`
             );
 
-            console.log(`✅🔒 [Required Elements] Auto-generated, stored, and LOCKED requirements with ${doc.requiredDataElements?.length || 0} elements, ${doc.analysisPath?.length || 0} analyses (atomic JSONB merge)`);
+            console.log(`✅🔒 [Required Elements] Migrated and LOCKED legacy requirements with ${doc.requiredDataElements?.length || 0} elements`);
+        } else if (!doc && !storedRequirements) {
+            // NO document exists anywhere - user needs to complete Preparation step
+            // DO NOT regenerate - return error directing user to Preparation step
+            clearTimeout(timeoutId);
+            if (responded) return;
+            responded = true;
+
+            console.log(`⚠️ [Required Elements] No requirements document found for project ${projectId}`, {
+                hasLegacyDoc: false,
+                hasStoredRequirements: false,
+                action: 'REQUIRING_PREPARATION_STEP'
+            });
+
+            return res.json({
+                success: false,
+                document: null,
+                error: 'preparation_required',
+                message: 'Please complete the Preparation step first to define your analysis goals and generate required data elements.',
+                requiresPreparation: true,
+                // Provide minimal structure for frontend to work with
+                defaultElements: {
+                    requiredDataElements: [],
+                    analysisPath: [],
+                    completeness: {
+                        readyForExecution: false,
+                        totalElements: 0,
+                        elementsMapped: 0,
+                        elementsMissing: 0,
+                        gaps: []
+                    },
+                    gaps: [{
+                        severity: 'high',
+                        type: 'preparation_required',
+                        description: 'Required data elements have not been generated. Please complete the Preparation step to define your analysis goals.'
+                    }]
+                }
+            });
         }
 
         // R2 FIX: Include questionAnswerMapping and other fields needed by transformation step
         // Refresh project to get updated journeyProgress with lock status
         const updatedProject = await storage.getProject(projectId);
         // CRITICAL FIX: parseJourneyProgress expects journeyProgress JSONB, not the entire project object
-        const updatedProgress = parseJourneyProgress((updatedProject as any)?.journeyProgress || updatedProject?.journeyProgress || {});
+        const updatedProgress = parseJourneyProgress((updatedProject as any)?.journeyProgress || {});
         const isLockedAfterUpdate = (updatedProgress as any).requirementsLocked === true;
 
         clearTimeout(timeoutId);
@@ -5766,6 +5755,139 @@ router.get("/:id/required-data-elements", ensureAuthenticated, requireOwnership(
     }
 });
 
+// Data Engineer mapping endpoint - Maps existing elements to source fields
+// CRITICAL: This does NOT regenerate elements - only maps them to available data sources
+router.post("/:id/map-data-elements", ensureAuthenticated, requireOwnership('project'), async (req, res) => {
+    try {
+        const { id: projectId } = req.params;
+        const userId = (req.user as any)?.id;
+
+        if (!userId) {
+            return res.status(401).json({ success: false, error: 'User authentication required' });
+        }
+
+        console.log(`🔧 [Data Engineer] Mapping data elements to source fields for project ${projectId}`);
+
+        // Get project and requirements document
+        const project = await storage.getProject(projectId);
+        if (!project) {
+            return res.status(404).json({ success: false, error: 'Project not found' });
+        }
+
+        const journeyProgress = parseJourneyProgress((project as any)?.journeyProgress || {});
+        const requirementsDoc = (journeyProgress as any).requirementsDocument;
+
+        if (!requirementsDoc || !requirementsDoc.requiredDataElements) {
+            return res.status(400).json({
+                success: false,
+                error: 'preparation_required',
+                message: 'Requirements document not found. Please complete the Preparation step first.',
+                requiresPreparation: true
+            });
+        }
+
+        // Get dataset schema
+        const datasets = await storage.getProjectDatasets(projectId);
+        if (!datasets || datasets.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'No datasets found. Please upload data first.'
+            });
+        }
+
+        // Use joined schema if available, otherwise merge all dataset schemas
+        const joinedSchema = (journeyProgress as any)?.joinedData?.schema;
+        let effectiveSchema: Record<string, any> = {};
+        let totalRowCount = 0;
+
+        if (joinedSchema && Object.keys(joinedSchema).length > 0) {
+            effectiveSchema = joinedSchema;
+            totalRowCount = (journeyProgress as any)?.joinedData?.totalRowCount || 0;
+        } else if (datasets.length > 1) {
+            for (const ds of datasets) {
+                const dsSchema = (ds.dataset as any).schema || {};
+                totalRowCount += (ds.dataset as any).recordCount || 0;
+                for (const [col, type] of Object.entries(dsSchema)) {
+                    if (!effectiveSchema[col]) {
+                        effectiveSchema[col] = type;
+                    }
+                }
+            }
+        } else {
+            effectiveSchema = (datasets[0].dataset as any).schema || {};
+            totalRowCount = (datasets[0].dataset as any).recordCount || 0;
+        }
+
+        // Get preview data for better matching
+        const previewData = (journeyProgress as any)?.joinedData?.preview ||
+                           (datasets[0].dataset as any).preview || [];
+
+        // Call Data Engineer tool to map elements to source fields
+        const toolResult = await executeTool(
+            'required_data_elements_tool',
+            'data_engineer',
+            {
+                operation: 'mapDatasetToRequirements',
+                document: requirementsDoc,
+                dataset: {
+                    fileName: datasets.length > 1
+                        ? `${datasets.length} datasets (joined)`
+                        : ((datasets[0].dataset as any).originalFileName || 'Dataset'),
+                    rowCount: totalRowCount,
+                    schema: effectiveSchema,
+                    preview: previewData.slice(0, 10) // Limit preview for performance
+                }
+            },
+            { userId, projectId }
+        );
+
+        if (toolResult.status === 'error') {
+            console.error(`❌ [Data Engineer] Mapping failed:`, toolResult.error);
+            return res.status(500).json({
+                success: false,
+                error: toolResult.error || 'Failed to map data elements'
+            });
+        }
+
+        const mappedDocument = toolResult.result;
+
+        // Update journeyProgress with the mapped document
+        // CRITICAL: Preserve the lock status
+        const projectIdForUpdate = String(projectId);
+        await db.execute(
+            sql`UPDATE projects
+                SET journey_progress = COALESCE(journey_progress, '{}'::jsonb)
+                    || jsonb_build_object(
+                        'requirementsDocument', ${JSON.stringify(mappedDocument)}::jsonb,
+                        'dataElementsMappedAt', ${new Date().toISOString()}::text
+                    ),
+                    updated_at = NOW()
+                WHERE id = ${projectIdForUpdate}::text`
+        );
+
+        console.log(`✅ [Data Engineer] Mapped ${mappedDocument.completeness?.elementsMapped || 0}/${mappedDocument.completeness?.totalElements || 0} elements to source fields`);
+
+        res.json({
+            success: true,
+            document: mappedDocument,
+            mappingStats: {
+                totalElements: mappedDocument.completeness?.totalElements || 0,
+                elementsMapped: mappedDocument.completeness?.elementsMapped || 0,
+                elementsMissing: mappedDocument.completeness?.elementsMissing || 0,
+                gapsFound: mappedDocument.gaps?.length || 0
+            },
+            message: `Successfully mapped ${mappedDocument.completeness?.elementsMapped || 0} data elements to source fields`
+        });
+
+    } catch (error: any) {
+        console.error('Error mapping data elements:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message || 'Failed to map data elements'
+        });
+    }
+});
+
 // CONSISTENCY: Explicit endpoint to unlock and regenerate requirements
 // Use this when user explicitly wants to change their goals/questions and get new recommendations
 router.post("/:id/unlock-requirements", ensureAuthenticated, requireOwnership('project'), async (req, res) => {
@@ -5775,7 +5897,7 @@ router.post("/:id/unlock-requirements", ensureAuthenticated, requireOwnership('p
 
         const project = await storage.getProject(projectId);
         // CRITICAL FIX: parseJourneyProgress expects journeyProgress JSONB, not the entire project object
-        const journeyProgress = parseJourneyProgress((project as any)?.journeyProgress || project?.journeyProgress || {});
+        const journeyProgress = parseJourneyProgress((project as any)?.journeyProgress || {});
 
         // Unlock requirements
         const updatedProgress: any = {
@@ -5954,7 +6076,7 @@ router.put("/:id/verify", ensureAuthenticated, async (req, res) => {
         // Get current project
         const project = accessCheck.project;
         // CRITICAL FIX: parseJourneyProgress expects journeyProgress JSONB, not the entire project object
-        const currentJourneyProgress = parseJourneyProgress((project as any)?.journeyProgress || project?.journeyProgress || {});
+        const currentJourneyProgress = parseJourneyProgress((project as any)?.journeyProgress || {});
 
         // Update journeyProgress with verification data
         // FIX: Ensure completedSteps is an array before spreading (may be {} if empty)
@@ -6013,7 +6135,7 @@ router.post("/:id/create-mapping-document", ensureAuthenticated, requireOwnershi
         }
 
         // CRITICAL FIX: parseJourneyProgress expects journeyProgress JSONB, not the entire project object
-        const journeyProgress = parseJourneyProgress((project as any)?.journeyProgress || project?.journeyProgress || {});
+        const journeyProgress = parseJourneyProgress((project as any)?.journeyProgress || {});
         const requirementsDoc = (journeyProgress as any).requirementsDocument;
 
         if (!requirementsDoc) {
@@ -6145,12 +6267,13 @@ router.post("/:id/create-mapping-document", ensureAuthenticated, requireOwnershi
         };
 
         // Use atomic JSONB update to prevent race conditions
+        const projectIdStr = String(projectId);
         await db.execute(
             sql`UPDATE projects
                 SET journey_progress = COALESCE(journey_progress, '{}'::jsonb)
                     || jsonb_build_object('mappingDocument', ${JSON.stringify(mappingDocument)}::jsonb),
                     updated_at = NOW()
-                WHERE id = ${projectId}`
+                WHERE id = ${projectIdStr}::text`
         );
 
         const mappedCount = elementMappingsArray.filter((m: any) => m.sourceColumn).length;
@@ -6604,7 +6727,7 @@ router.get('/:id/datasets', ensureAuthenticated, async (req, res) => {
         // [DATA CONTINUITY FIX] Load stored joined data from journeyProgress
         const project = await storage.getProject(id);
         // CRITICAL FIX: parseJourneyProgress expects journeyProgress JSONB, not the entire project object
-        const journeyProgress = parseJourneyProgress((project as any)?.journeyProgress || project?.journeyProgress || {});
+        const journeyProgress = parseJourneyProgress((project as any)?.journeyProgress || {});
         const projectMetadata = (project as any)?.metadata || {};
 
         // Get stored joined data (persisted by first datasets endpoint)
@@ -6701,7 +6824,7 @@ router.patch('/:id/progress', ensureAuthenticated, async (req, res) => {
 
         // Parse existing journeyProgress
         // CRITICAL FIX: parseJourneyProgress expects journeyProgress JSONB, not the entire project object
-        const existingProgress = parseJourneyProgress((project as any)?.journeyProgress || project?.journeyProgress || {});
+        const existingProgress = parseJourneyProgress((project as any)?.journeyProgress || {});
 
         // IMMUTABLE ARTIFACTS: Exclude artifact fields from updates - they can only be created via dedicated endpoints
         // These fields are immutable once created and should never be modified via generic PATCH
@@ -6759,11 +6882,12 @@ router.patch('/:id/progress', ensureAuthenticated, async (req, res) => {
         }
 
         // Use raw SQL for atomic JSONB update to prevent race conditions
+        const projectIdForUpdate = String(id);
         await db.execute(
             sql`UPDATE projects
                 SET journey_progress = ${JSON.stringify(mergedProgress)}::jsonb,
                     updated_at = NOW()
-                WHERE id = ${id}`
+                WHERE id = ${projectIdForUpdate}::text`
         );
 
         // Fetch updated project
@@ -7468,13 +7592,14 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
 
         // Update journeyProgress with NEW transformationDocument (mappingDocument remains unchanged)
         // Also store transformedData at project level for analysis service compatibility
+        const projectIdForTransform = String(projectId);
         await db.execute(
             sql`UPDATE projects
                 SET journey_progress = COALESCE(journey_progress, '{}'::jsonb)
                     || jsonb_build_object('transformationDocument', ${JSON.stringify(transformationDocument)}::jsonb),
                     transformed_data = ${JSON.stringify(workingData)}::jsonb,
                     updated_at = NOW()
-                WHERE id = ${projectId}`
+                WHERE id = ${projectIdForTransform}::text`
         );
 
         // Also update project.transformedData and project.transformations for legacy compatibility

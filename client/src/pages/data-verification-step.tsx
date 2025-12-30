@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -72,6 +73,8 @@ export default function DataVerificationStep({
   // Centralized project data and state (DEC-003)
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(() => localStorage.getItem('currentProjectId'));
   const { project, journeyProgress, updateProgress, isLoading: projectLoading, isUpdating } = useProject(currentProjectId || undefined);
+  const queryClient = useQueryClient();
+  const hasRefreshedOnMount = useRef(false);
 
   // Local data state (some will be migrated to journeyProgress/project from hook)
   const [projectData, setProjectData] = useState<any>(null);
@@ -93,6 +96,9 @@ export default function DataVerificationStep({
 
   // FIX #30: Multi-dataset tab selection - allows viewing each dataset individually
   const [selectedDatasetIndex, setSelectedDatasetIndex] = useState<number>(-1); // -1 = joined view
+
+  // CRITICAL: Track when force refresh completes to prevent fallback race condition
+  const [hasCompletedRefresh, setHasCompletedRefresh] = useState(false);
 
   const computedQualityScore = (() => {
     // If we have it in journeyProgress, prioritize it
@@ -233,9 +239,9 @@ export default function DataVerificationStep({
       confidence: el.confidence
     }));
 
-    console.log(`📋 [P1-3 DEBUG] Mapped ${mapped.length} required elements for DataElementsMappingUI (expected ~15 from prepare step)`);
-    if (mapped.length < 10) {
-      console.warn(`⚠️ [P1-3 DEBUG] WARNING: Only ${mapped.length} elements mapped, expected more. Check requirementsDocument structure.`);
+    console.log(`📋 [Data Elements] Loaded ${mapped.length} required elements for mapping`);
+    if (mapped.length === 0) {
+      console.warn(`⚠️ [Data Elements] No elements found - Preparation step may not have completed`);
     }
     return mapped;
   }, [requiredDataElements]);
@@ -295,12 +301,20 @@ export default function DataVerificationStep({
   useEffect(() => {
     // Skip if:
     // 1. Project is still loading (useProject hasn't finished)
-    // 2. We already have data elements from journeyProgress (SSOT)
-    // 3. We already have data elements from a previous fetch
-    // 4. No project ID available
+    // 2. Force refresh hasn't completed yet (wait for fresh data)
+    // 3. We already have data elements from journeyProgress (SSOT)
+    // 4. We already have data elements from a previous fetch
+    // 5. No project ID available
     // Wait for journeyProgress to fully load before making any decisions
     if (projectLoading || !currentProjectId) {
       console.log('⏳ [SSOT] Waiting for journeyProgress to load...');
+      return;
+    }
+
+    // CRITICAL: Wait for force refresh to complete before checking for fallback
+    // This prevents race condition where fallback runs before refresh brings fresh data
+    if (!hasCompletedRefresh) {
+      console.log('⏳ [SSOT] Waiting for force refresh to complete before fallback check...');
       return;
     }
 
@@ -332,26 +346,61 @@ export default function DataVerificationStep({
 
     // Last resort: Fetch from API only if requirements are NOT locked
     // This handles edge cases where Prepare step wasn't completed
+    // FIX: Added retry logic with exponential backoff for resilience
     const fetchFallback = async () => {
-      try {
-        console.log('⚠️ [Fallback] journeyProgress loaded but no requirementsDocument (not locked), fetching from API...');
-        const dataElementsResponse = await apiClient.get(`/api/projects/${currentProjectId}/required-data-elements`);
-        if (dataElementsResponse.success && dataElementsResponse.document) {
-          setRequiredDataElements(dataElementsResponse.document);
-          console.log('✅ [Fallback] Loaded from API:', dataElementsResponse.document?.requiredDataElements?.length || 0, 'elements');
+      const MAX_RETRIES = 2;
+      const BASE_DELAY = 2000; // 2 seconds
+
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        try {
+          if (attempt > 0) {
+            console.log(`⚠️ [Fallback] Retry attempt ${attempt}/${MAX_RETRIES}...`);
+            await new Promise(r => setTimeout(r, BASE_DELAY * attempt));
+          } else {
+            console.log('⚠️ [Fallback] journeyProgress loaded but no requirementsDocument (not locked), fetching from API...');
+          }
+
+          const dataElementsResponse = await apiClient.get(`/api/projects/${currentProjectId}/required-data-elements`);
+
+          // Check if preparation is required (elements don't exist)
+          if (dataElementsResponse.error === 'preparation_required' || dataElementsResponse.requiresPreparation) {
+            console.log('⚠️ [Fallback] Preparation step required - elements not yet generated, redirecting...');
+            toast({
+              title: "Preparation Required",
+              description: "Redirecting to Preparation step to define your analysis goals and data requirements.",
+              variant: "destructive"
+            });
+            // Redirect to Preparation step
+            if (onPrevious) {
+              setTimeout(() => onPrevious(), 1500); // Small delay to show toast
+            }
+            return; // Exit - don't retry
+          }
+
+          if (dataElementsResponse.success && dataElementsResponse.document) {
+            setRequiredDataElements(dataElementsResponse.document);
+            console.log('✅ [Fallback] Loaded from API:', dataElementsResponse.document?.requiredDataElements?.length || 0, 'elements');
+            return; // Success - exit retry loop
+          }
+        } catch (error: any) {
+          console.warn(`❌ [Fallback] Attempt ${attempt + 1} failed:`, error.message || error);
+          if (attempt === MAX_RETRIES) {
+            toast({
+              title: "Preparation Required",
+              description: "Redirecting to Preparation step to define your analysis goals and data requirements.",
+              variant: "destructive"
+            });
+            // Redirect to Preparation step
+            if (onPrevious) {
+              setTimeout(() => onPrevious(), 1500);
+            }
+          }
         }
-      } catch (error) {
-        console.warn('❌ [Fallback] Required data elements not available from API:', error);
-        toast({
-          title: "Warning",
-          description: "Could not load required data elements. Please complete the Preparation step first.",
-          variant: "destructive"
-        });
       }
     };
 
     fetchFallback();
-  }, [projectLoading, currentProjectId, journeyProgress?.requirementsDocument, requiredDataElements]);
+  }, [projectLoading, currentProjectId, journeyProgress?.requirementsDocument, requiredDataElements, (journeyProgress as any)?.requirementsLocked, hasCompletedRefresh]);
 
   // Load project data on mount or when ID changes
   useEffect(() => {
@@ -359,6 +408,99 @@ export default function DataVerificationStep({
       loadProjectData(currentProjectId);
     }
   }, [currentProjectId]);
+
+  // FIX: Force refresh project data when entering verification step
+  // This ensures we get the latest requirementsDocument from prepare step
+  // CRITICAL: Must complete BEFORE fallback logic runs
+  useEffect(() => {
+    const forceRefresh = async () => {
+      if (currentProjectId && !projectLoading && !hasRefreshedOnMount.current) {
+        hasRefreshedOnMount.current = true;
+        console.log('🔄 [Verification] Force refreshing project data on mount...');
+        try {
+          await queryClient.refetchQueries({ queryKey: ["project", currentProjectId] });
+          console.log('✅ [Verification] Force refresh completed');
+        } catch (err) {
+          console.warn('⚠️ [Verification] Force refresh failed:', err);
+        }
+        setHasCompletedRefresh(true);
+      } else if (hasRefreshedOnMount.current && !hasCompletedRefresh) {
+        // Already started refresh, mark as completed
+        setHasCompletedRefresh(true);
+      }
+    };
+    forceRefresh();
+  }, [currentProjectId, projectLoading, queryClient, hasCompletedRefresh]);
+
+  // State for Data Engineer mapping
+  const [isMappingElements, setIsMappingElements] = useState(false);
+  const [hasMappedElements, setHasMappedElements] = useState(false);
+
+  // Data Engineer mapping: Trigger mapping when elements are loaded but not yet mapped to source fields
+  useEffect(() => {
+    const triggerDataEngineerMapping = async () => {
+      // Skip if:
+      // 1. No project ID
+      // 2. No required data elements loaded
+      // 3. Already mapping or already mapped
+      // 4. Elements already have source fields mapped
+      if (!currentProjectId || !requiredDataElements || isMappingElements || hasMappedElements) {
+        return;
+      }
+
+      // Check if elements need mapping (no sourceField set)
+      const elements = requiredDataElements.requiredDataElements || [];
+      const needsMapping = elements.some((el: any) => !el.sourceField && !el.sourceAvailable);
+
+      if (!needsMapping) {
+        console.log('✅ [Data Engineer] Elements already mapped to source fields');
+        setHasMappedElements(true);
+        return;
+      }
+
+      console.log(`🔧 [Data Engineer] Triggering mapping for ${elements.length} elements...`);
+      setIsMappingElements(true);
+
+      try {
+        const response = await apiClient.post(`/api/projects/${currentProjectId}/map-data-elements`, {});
+
+        if (response.success && response.document) {
+          console.log(`✅ [Data Engineer] Mapping complete:`, response.mappingStats);
+          setRequiredDataElements(response.document);
+          setHasMappedElements(true);
+
+          // Refresh project data to get updated journeyProgress
+          queryClient.invalidateQueries({ queryKey: ["project", currentProjectId] });
+
+          toast({
+            title: "Data Mapping Complete",
+            description: `Mapped ${response.mappingStats?.elementsMapped || 0} of ${response.mappingStats?.totalElements || 0} data elements to source fields.`,
+          });
+        } else if (response.error === 'preparation_required' || response.requiresPreparation) {
+          console.log('⚠️ [Data Engineer] Preparation required, redirecting...');
+          toast({
+            title: "Preparation Required",
+            description: "Redirecting to Preparation step to define your analysis goals.",
+            variant: "destructive"
+          });
+          if (onPrevious) {
+            setTimeout(() => onPrevious(), 1500);
+          }
+        }
+      } catch (error: any) {
+        console.error('❌ [Data Engineer] Mapping failed:', error);
+        toast({
+          title: "Mapping Error",
+          description: error.message || "Failed to map data elements. Please try again.",
+          variant: "destructive"
+        });
+      } finally {
+        setIsMappingElements(false);
+      }
+    };
+
+    triggerDataEngineerMapping();
+  }, [currentProjectId, requiredDataElements, isMappingElements, hasMappedElements, queryClient, onPrevious, toast]);
 
   const loadProjectData = async (projectId: string) => {
     try {
