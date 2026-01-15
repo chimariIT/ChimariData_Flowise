@@ -23,6 +23,8 @@ import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 
+import { SocketManager } from '../socket-manager';
+
 // ============================================================================
 // Types and Interfaces
 // ============================================================================
@@ -33,6 +35,7 @@ export interface TransformationConfig {
   parameters: Record<string, any>;
   outputFormat?: 'json' | 'csv' | 'parquet' | 'avro';
   optimizationHint?: 'speed' | 'memory' | 'balanced';
+  projectId?: string;
 }
 
 export interface TransformationInput {
@@ -158,7 +161,7 @@ export class IntelligentDataTransformer {
     // Determine best technology based on dataset size and operation
     const technology = this.selectTechnology(rowCount, config.operation, config.optimizationHint);
 
-    console.log(`🔄 Transformation: ${config.operation} | Rows: ${rowCount.toLocaleString()} | Technology: ${technology.toUpperCase()}`);
+    console.log(`🔄 Transformation: ${config.operation} | Rows: ${rowCount.toLocaleString()} | Technology: ${technology.toUpperCase()} `);
 
     try {
       let result: any;
@@ -177,7 +180,7 @@ export class IntelligentDataTransformer {
           result = await this.transformWithSpark(config);
           break;
         default:
-          throw new Error(`Unknown technology: ${technology}`);
+          throw new Error(`Unknown technology: ${technology} `);
       }
 
       return {
@@ -320,7 +323,7 @@ export class IntelligentDataTransformer {
     const filtered = data.filter(row => {
       try {
         // Support dynamic condition evaluation
-        return new Function('row', `return ${condition}`)(row);
+        return new Function('row', `return ${condition} `)(row);
       } catch {
         return false;
       }
@@ -372,7 +375,7 @@ export class IntelligentDataTransformer {
 
     const calculated = data.map(row => ({
       ...row,
-      [columnName]: new Function('row', `return ${expression}`)(row)
+      [columnName]: new Function('row', `return ${expression} `)(row)
     }));
 
     return { data: calculated, optimizations };
@@ -412,24 +415,24 @@ export class IntelligentDataTransformer {
 
           switch (func) {
             case 'sum':
-              result[`${agg.column}_${func}`] = values.reduce((a, b) => a + b, 0);
+              result[`${agg.column}_${func} `] = values.reduce((a, b) => a + b, 0);
               break;
             case 'avg':
-              result[`${agg.column}_${func}`] = values.reduce((a, b) => a + b, 0) / values.length;
+              result[`${agg.column}_${func} `] = values.reduce((a, b) => a + b, 0) / values.length;
               break;
             case 'count':
-              result[`${agg.column}_${func}`] = values.length;
+              result[`${agg.column}_${func} `] = values.length;
               break;
             case 'min':
-              result[`${agg.column}_${func}`] = Math.min(...values);
+              result[`${agg.column}_${func} `] = Math.min(...values);
               break;
             case 'max':
-              result[`${agg.column}_${func}`] = Math.max(...values);
+              result[`${agg.column}_${func} `] = Math.max(...values);
               break;
             case 'std':
               const mean = values.reduce((a, b) => a + b, 0) / values.length;
               const variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length;
-              result[`${agg.column}_${func}`] = Math.sqrt(variance);
+              result[`${agg.column}_${func} `] = Math.sqrt(variance);
               break;
           }
         }
@@ -548,19 +551,19 @@ export class IntelligentDataTransformer {
           if (vals.length > 0) {
             switch (aggFunc) {
               case 'sum':
-                result[`${col}_${valueKey}`] = vals.reduce((a, b) => a + b, 0);
+                result[`${col}_${valueKey} `] = vals.reduce((a, b) => a + b, 0);
                 break;
               case 'mean':
-                result[`${col}_${valueKey}`] = vals.reduce((a, b) => a + b, 0) / vals.length;
+                result[`${col}_${valueKey} `] = vals.reduce((a, b) => a + b, 0) / vals.length;
                 break;
               case 'count':
-                result[`${col}_${valueKey}`] = vals.length;
+                result[`${col}_${valueKey} `] = vals.length;
                 break;
               case 'min':
-                result[`${col}_${valueKey}`] = Math.min(...vals);
+                result[`${col}_${valueKey} `] = Math.min(...vals);
                 break;
               case 'max':
-                result[`${col}_${valueKey}`] = Math.max(...vals);
+                result[`${col}_${valueKey} `] = Math.max(...vals);
                 break;
             }
           }
@@ -594,7 +597,7 @@ export class IntelligentDataTransformer {
         return { data: [{ format: 'excel', content: buffer }], optimizations };
 
       default:
-        throw new Error(`Unsupported target format: ${targetFormat}`);
+        throw new Error(`Unsupported target format: ${targetFormat} `);
     }
   }
 
@@ -606,6 +609,16 @@ export class IntelligentDataTransformer {
     // Try Polars first (5-10x faster), fallback to Pandas if it fails
     if (usePolars) {
       try {
+        // Emit Polars start event if projectId is available in config
+        if (config.projectId) {
+          SocketManager.getInstance().emitToProject(config.projectId, 'execution_progress', {
+            projectId: config.projectId,
+            status: 'running',
+            overallProgress: 30,
+            currentStep: { id: 'polars_transform', name: 'Polars Transformation', status: 'running', description: 'Accelerating data transformation with Polars...' }
+          });
+        }
+
         const pythonScript = this.generatePolarsScript(config);
         const result = await this.executePythonScript(pythonScript, config.inputData);
         result.technology = 'polars';
@@ -652,22 +665,22 @@ df = pl.DataFrame(data)
       case 'group_by':
         const agg = params as AggregationConfig;
         const aggExprs = agg.aggregations.flatMap(a =>
-          a.functions.map(f => `pl.col('${a.column}').${f}().alias('${a.column}_${f}')`)
+          a.functions.map(f => `pl.col('${a.column}').${f} ().alias('${a.column}_${f}')`)
         ).join(', ');
         script += `
 result_df = df.group_by(${JSON.stringify(agg.groupBy)}).agg([${aggExprs}])
-`;
+  `;
         break;
 
       case 'pivot':
         const pivot = params as PivotConfig;
         script += `
 result_df = df.pivot(
-    index=${JSON.stringify(pivot.index)},
-    on='${pivot.columns}',
-    values=${JSON.stringify(pivot.values)}
+  index = ${JSON.stringify(pivot.index)},
+  on = '${pivot.columns}',
+  values = ${JSON.stringify(pivot.values)}
 )
-`;
+  `;
         break;
 
       case 'join_datasets':
@@ -676,19 +689,19 @@ result_df = df.pivot(
 # Polars join - requires second dataframe
 # For now, return original dataframe
 result_df = df
-`;
+  `;
         break;
 
       case 'remove_duplicates':
         const dedup = params.columns || null;
         if (dedup) {
           script += `
-result_df = df.unique(subset=${JSON.stringify(dedup)})
-`;
+result_df = df.unique(subset = ${JSON.stringify(dedup)})
+  `;
         } else {
           script += `
 result_df = df.unique()
-`;
+  `;
         }
         break;
 
@@ -696,19 +709,19 @@ result_df = df.unique()
         script += `
 # Note: condition would need to be translated to Polars expression
 result_df = df
-`;
+  `;
         break;
 
       default:
         script += `
 result_df = df
-`;
+  `;
     }
 
     script += `
 # Output result as JSON
 print(result_df.write_json())
-`;
+  `;
 
     return script;
   }
@@ -731,7 +744,7 @@ data = json.loads(sys.stdin.read())
 df = pd.DataFrame(data)
 
 # Perform transformation
-`;
+  `;
 
     switch (operation) {
       case 'group_by':
@@ -742,37 +755,37 @@ df = pd.DataFrame(data)
         }, {} as any);
         script += `
 result_df = df.groupby(${JSON.stringify(agg.groupBy)}).agg(${JSON.stringify(aggDict)}).reset_index()
-`;
+  `;
         break;
 
       case 'pivot':
         const pivot = params as PivotConfig;
         script += `
 result_df = df.pivot_table(
-    index=${JSON.stringify(pivot.index)},
-    columns='${pivot.columns}',
-    values=${JSON.stringify(pivot.values)},
-    aggfunc='${pivot.aggFunc || 'sum'}'
+  index = ${JSON.stringify(pivot.index)},
+  columns = '${pivot.columns}',
+  values = ${JSON.stringify(pivot.values)},
+  aggfunc = '${pivot.aggFunc || 'sum'}'
 ).reset_index()
-`;
+  `;
         break;
 
       case 'join_datasets':
         script += `
 # Placeholder for join - requires multiple dataframes
 result_df = df
-`;
+    `;
         break;
 
       default:
         script += `
 result_df = df
-`;
+  `;
     }
 
     script += `
 # Output result as JSON
-print(result_df.to_json(orient='records'))
+print(result_df.to_json(orient = 'records'))
 `;
 
     return script;
@@ -795,13 +808,13 @@ print(result_df.to_json(orient='records'))
 
       python.on('close', (code) => {
         if (code !== 0) {
-          reject(new Error(`Python script failed: ${stderr}`));
+          reject(new Error(`Python script failed: ${stderr} `));
         } else {
           try {
             const data = JSON.parse(stdout);
             resolve({ data, optimizations: ['pandas-processing'] });
           } catch (e) {
-            reject(new Error(`Failed to parse Python output: ${e}`));
+            reject(new Error(`Failed to parse Python output: ${e} `));
           }
         }
       });

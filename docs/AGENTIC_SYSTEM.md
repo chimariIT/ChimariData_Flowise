@@ -393,23 +393,39 @@ shared/schema.ts (Database State)
 
 Agent checkpoints are approval points where agents pause execution to collect user feedback before proceeding. They enable human-in-the-loop control over the analysis pipeline.
 
-### Current Implementation
+### Current Implementation (Updated January 2026)
 
-**Location**: `server/services/project-agent-orchestrator.ts`
+**Status**: ✅ DB-First Implementation Complete
+
+**Location**: `server/storage.ts` (storage methods), `server/routes/project.ts` (API endpoints)
 
 ```typescript
-// Checkpoint storage (CURRENT - dual state)
-private checkpoints = new Map<string, AgentCheckpoint[]>();  // In-memory
+// All checkpoints use storage.createAgentCheckpoint() - DB is source of truth
+await storage.createAgentCheckpoint({
+  projectId,
+  stepName: 'quality_validation',  // Workflow step identifier
+  agentType: 'data_engineer',      // project_manager, data_engineer, data_scientist, business
+  status: 'pending',               // pending, approved, rejected, completed
+  message: 'Agent message to user',
+  data: { /* structured JSONB data */ },
+  requiresUserInput: true
+});
 
-// Checkpoints also stored in database via storage.createAgentCheckpoint()
+// Read checkpoints from DB
+const checkpoints = await storage.getProjectCheckpoints(projectId);
+
+// Update checkpoint with user feedback
+await storage.updateAgentCheckpoint(checkpointId, {
+  status: 'approved',
+  userFeedback: 'User feedback text'
+});
 ```
 
-### Known Issues
+### Architecture Notes
 
-⚠️ **Critical Problem**: Checkpoints are stored in BOTH in-memory Map AND database, leading to:
-- **State loss on restart**: In-memory checkpoints lost when server restarts
-- **Race conditions**: Memory and DB can diverge
-- **Inconsistent reads**: Components may read from different sources
+- **DB-First**: All checkpoints stored in `agent_checkpoints` table (no in-memory Map)
+- **Field Names**: Use `stepName` (not `stage`), `agentType` (not `agentId`), `data` (not `metadata`)
+- **Data Field**: JSONB type - pass objects directly, not JSON.stringify()
 
 ### Checkpoint Lifecycle
 
@@ -460,22 +476,21 @@ POST /api/projects/:projectId/approve-all-checkpoints
 ### Database Schema
 
 ```sql
--- agent_checkpoints table (shared/schema.ts)
+-- agent_checkpoints table (shared/schema.ts:1041)
 CREATE TABLE agent_checkpoints (
-  id TEXT PRIMARY KEY,
-  project_id TEXT REFERENCES projects(id),
-  checkpoint_type TEXT NOT NULL,
-  agent_type TEXT NOT NULL,
-  step_name TEXT,
-  step_index INTEGER,
-  title TEXT,
-  description TEXT,
-  data JSONB,
-  status TEXT DEFAULT 'pending',  -- pending, approved, rejected
-  user_feedback TEXT,
-  created_at TIMESTAMP DEFAULT NOW(),
-  resolved_at TIMESTAMP
+  id VARCHAR PRIMARY KEY,
+  project_id VARCHAR NOT NULL,         -- FK to projects
+  agent_type VARCHAR NOT NULL,         -- project_manager, data_engineer, data_scientist, business
+  step_name VARCHAR NOT NULL,          -- Workflow step identifier
+  status VARCHAR DEFAULT 'pending',    -- pending, in_progress, waiting_approval, approved, completed, rejected
+  message TEXT NOT NULL,               -- Agent message to user
+  data JSONB,                          -- Additional structured data (not stringified)
+  user_feedback TEXT,                  -- User's feedback/response
+  requires_user_input BOOLEAN DEFAULT FALSE,
+  timestamp TIMESTAMP DEFAULT NOW(),
+  created_at TIMESTAMP DEFAULT NOW()
 );
+-- Indexes: project_id, status, agent_type
 ```
 
 ### Dec 10, 2025 Fixes Applied

@@ -82,12 +82,20 @@ export class EnhancedDatabasePool {
       this.pool = new Pool(poolConfig);
       this.drizzleDb = drizzle(this.pool, { schema });
       
-      // Initialize database optimization service
-      this.dbOptimizer = new DatabaseOptimizationService(this.pool, {
-        slowQueryThreshold: this.config.slowQueryThreshold || 1000,
-        healthCheckInterval: 300000, // 5 minutes
-        optimizationInterval: 600000  // 10 minutes
-      });
+      // Initialize database optimization service (disabled in development by default)
+      const enableDbOptimizer = process.env.ENABLE_DB_OPTIMIZER === 'true' ||
+        (process.env.NODE_ENV === 'production' && process.env.ENABLE_DB_OPTIMIZER !== 'false');
+
+      if (enableDbOptimizer) {
+        this.dbOptimizer = new DatabaseOptimizationService(this.pool, {
+          slowQueryThreshold: this.config.slowQueryThreshold || 1000,
+          healthCheckInterval: process.env.NODE_ENV === 'production' ? 300000 : 900000, // 5 min prod, 15 min dev
+          optimizationInterval: process.env.NODE_ENV === 'production' ? 600000 : 1800000  // 10 min prod, 30 min dev
+        });
+        console.log('📊 Database optimizer enabled');
+      } else {
+        console.log('📊 Database optimizer disabled (set ENABLE_DB_OPTIMIZER=true to enable)');
+      }
       
       this.setupEventHandlers();
       this.startHealthMonitoring();

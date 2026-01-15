@@ -1,6 +1,7 @@
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useJourneyState } from '@/hooks/useJourneyState';
+import { vi, describe, it, expect, beforeEach } from 'vitest';
 
 const getJourneyStateMock = vi.fn();
 
@@ -12,7 +13,7 @@ vi.mock('@/lib/api', () => ({
 
 const createWrapper = () => {
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, cacheTime: 0 } }
+    defaultOptions: { queries: { retry: false, gcTime: 0 } }
   });
 
   return ({ children }: { children: React.ReactNode }) => (
@@ -59,4 +60,3 @@ describe('useJourneyState', () => {
     expect(getJourneyStateMock).not.toHaveBeenCalled();
   });
 });
-

@@ -19,6 +19,9 @@ export interface JourneyExecutionState {
   totalSteps: number;
   lastError?: string;
   lastUpdated: number;
+  lastActivity?: Date;
+  startTime?: Date;
+  endTime?: Date;
 }
 
 interface MachineOptions {
@@ -234,6 +237,31 @@ export class JourneyExecutionMachine {
 
   reset(projectId: string): void {
     this.states.delete(projectId);
+  }
+
+  /**
+   * Solution A: Restore state directly from a saved state object
+   * Used for crash recovery when resuming a project
+   */
+  async restoreFromSavedState(projectId: string, savedState: JourneyExecutionState): Promise<void> {
+    // Restore the state with deep copy
+    const restoredState: JourneyExecutionState = {
+      ...savedState,
+      completedSteps: [...(savedState.completedSteps || [])],
+      // Ensure dates are proper Date objects
+      lastActivity: savedState.lastActivity
+        ? new Date(savedState.lastActivity as any)
+        : undefined,
+      startTime: savedState.startTime
+        ? new Date(savedState.startTime as any)
+        : undefined,
+      endTime: savedState.endTime
+        ? new Date(savedState.endTime as any)
+        : undefined
+    };
+
+    this.states.set(projectId, restoredState);
+    console.log(`🔄 [JourneyExecutionMachine] Restored state for project ${projectId}: status=${restoredState.status}`);
   }
 
   private requireState(projectId: string): JourneyExecutionState {

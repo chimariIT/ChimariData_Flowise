@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { CheckCircle, AlertCircle, Edit, Check } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { CheckCircle, AlertCircle, Edit, Check, Info, Database } from "lucide-react";
 import { SchemaAnalysis } from "./SchemaAnalysis";
 
 interface SchemaValidationDialogProps {
@@ -13,6 +14,10 @@ interface SchemaValidationDialogProps {
   onConfirm: (schema: Record<string, string>) => void;
   detectedSchema: Record<string, string>;
   sampleData?: Record<string, any>[];
+  /** Indicates if this schema is from joined datasets (multiple files merged) */
+  isJoinedSchema?: boolean;
+  /** Number of datasets that were joined to create this schema */
+  datasetCount?: number;
 }
 
 export function SchemaValidationDialog({
@@ -20,7 +25,9 @@ export function SchemaValidationDialog({
   onClose,
   onConfirm,
   detectedSchema,
-  sampleData = []
+  sampleData = [],
+  isJoinedSchema = false,
+  datasetCount = 1
 }: SchemaValidationDialogProps) {
   const [editedSchema, setEditedSchema] = useState<Record<string, string>>(detectedSchema);
   const [editingColumn, setEditingColumn] = useState<string | null>(null);
@@ -73,6 +80,17 @@ export function SchemaValidationDialog({
             Review and edit the detected data types for your columns. This ensures accurate analysis.
           </DialogDescription>
         </DialogHeader>
+
+        {/* Joined Schema Indicator */}
+        {isJoinedSchema && datasetCount > 1 && (
+          <Alert className="mb-4 bg-blue-50 border-blue-200">
+            <Database className="h-4 w-4 text-blue-500" />
+            <AlertDescription className="ml-2">
+              Showing <strong>joined schema</strong> from {datasetCount} datasets ({Object.keys(detectedSchema).length} total columns).
+              Column names from secondary datasets may be prefixed to avoid conflicts.
+            </AlertDescription>
+          </Alert>
+        )}
 
         <ScrollArea className="max-h-[60vh]">
           <div className="space-y-6">

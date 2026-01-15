@@ -85,9 +85,25 @@ router.post('/stripe', async (req: Request, res: Response) => {
  * GET /api/webhooks/stripe/test
  * Test endpoint to verify webhook configuration
  *
- * IMPORTANT: Remove or protect this endpoint in production
+ * SECURITY: Protected with admin authentication
  */
 router.get('/stripe/test', async (req: Request, res: Response) => {
+  // Check if user is authenticated and is admin
+  if (!req.user) {
+    return res.status(401).json({
+      error: 'Authentication required',
+      message: 'You must be logged in to access this endpoint',
+    });
+  }
+
+  // Check admin role
+  if (!(req.user as any).role || (req.user as any).role !== 'admin') {
+    return res.status(403).json({
+      error: 'Admin access required',
+      message: 'This endpoint is restricted to administrators',
+    });
+  }
+
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
   if (!webhookSecret) {
@@ -99,13 +115,14 @@ router.get('/stripe/test', async (req: Request, res: Response) => {
         '2. Create a new webhook endpoint',
         '3. Copy the signing secret',
         '4. Add to .env: STRIPE_WEBHOOK_SECRET=whsec_...',
-      ],
+      ]
     });
   }
 
   res.json({
     configured: true,
     webhookSecretPrefix: webhookSecret.substring(0, 10) + '...',
+    stripeKeyConfigured: !!process.env.STRIPE_SECRET_KEY,
     environment: process.env.NODE_ENV || 'development',
     instructions: {
       localTesting: [

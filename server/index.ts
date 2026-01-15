@@ -20,12 +20,40 @@ import { SocketManager } from './socket-manager';
 
 const app = express();
 
-// Apply security middleware first
-app.use(securityHeaders);
+// CRITICAL: Handle CORS preflight requests BEFORE any other middleware
+// This fixes the "Method PATCH is not allowed" CORS error
+// Must run before Helmet/securityHeaders which can interfere with preflight responses
+app.options('*', (req, res, next) => {
+  const origin = req.headers.origin;
+  // Allow localhost and production origins
+  if (!origin || origin.includes('localhost') || origin.includes('127.0.0.1') ||
+      origin.includes('chimaridata.com')) {
+    res.header('Access-Control-Allow-Origin', origin || '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, authorization, X-Forwarded-Authorization, x-forwarded-authorization, X-Requested-With, X-Customer-Context');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    res.header('Access-Control-Max-Age', '86400');
+    return res.sendStatus(204);
+  }
+  next();
+});
+
+// Now apply CORS middleware for non-preflight requests
 app.use(cors(corsConfig));
+
+// Apply security middleware after CORS
+app.use(securityHeaders);
 app.use(securityLogging);
 
-// Body parsing middleware
+// ========================================
+// CRITICAL: Stripe Webhook Raw Body Parsing
+// ========================================
+// Stripe webhooks require raw body for signature verification
+// This MUST be registered BEFORE express.json() which parses the body
+// The raw body is needed to compute HMAC signature for security
+app.use('/api/webhooks/stripe', express.raw({ type: 'application/json' }));
+
+// Body parsing middleware (for all other routes)
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: false, limit: '10mb' }));
 
@@ -281,6 +309,15 @@ let server: Server;
     console.error('❌ Failed to initialize Real-Time Agent Bridge:', error);
   }
 
+  // FIX: Critical Fix #4 - Connect artifact generator to realtime server for completion notifications
+  try {
+    const { setRealtimeServer } = await import('./services/artifact-generator');
+    setRealtimeServer(realtimeServer);
+    console.log('✅ Artifact Generator connected to RealtimeServer for completion notifications');
+  } catch (error) {
+    console.error('❌ Failed to connect Artifact Generator to RealtimeServer:', error);
+  }
+
   // Setup transformation queue WebSocket bridge
   // FIX: Production Readiness - Use native WebSocket (RealtimeServer) instead of Socket.IO
   try {
@@ -388,29 +425,27 @@ let server: Server;
   app.use('/api/analysis', ...securityMiddleware);
   app.use('/api/ai', ...securityMiddleware);
 
-  // Register API routes FIRST - before static file serving
-  app.use('/api', apiRouter);
-
-  // Register performance monitoring routes
-  const performanceWebhooks = await import('./routes/performance-webhooks.js');
-  app.use('/api/performance', performanceWebhooks.default);
-
-  // Register health check routes with dynamic import to maintain lazy loading pattern
+  // Register health check routes FIRST - these must be public and not require auth
   // Health.ts uses lazy loading internally for SparkProcessor, PythonProcessor, and Redis
-  // to avoid initialization issues if services aren't available. Dynamic import here
-  // prevents any potential circular dependencies and matches the performance-webhooks pattern.
+  // to avoid initialization issues if services aren't available.
   try {
-    // Use TypeScript-friendly import without .js extension in development
     const healthRoutes = await import('./routes/health');
     if (healthRoutes && healthRoutes.default) {
       app.use('/api', healthRoutes.default);
+      console.log('✅ Health routes registered (public endpoints)');
     } else {
       console.error('⚠️  Health routes default export is undefined');
-      console.error('Health routes module keys:', healthRoutes ? Object.keys(healthRoutes) : 'module is null');
     }
   } catch (error) {
     console.error('⚠️  Failed to import health routes:', error instanceof Error ? error.message : String(error));
   }
+
+  // Register performance monitoring routes (before main API router)
+  const performanceWebhooks = await import('./routes/performance-webhooks.js');
+  app.use('/api/performance', performanceWebhooks.default);
+
+  // Register main API routes - includes auth-protected routes
+  app.use('/api', apiRouter);
 
   // Serve static files and setup frontend routing AFTER API routes
   if (app.get("env") === "development" && !process.env.VITE_SEPARATED) {
@@ -421,6 +456,23 @@ let server: Server;
   }
   // In development with VITE_SEPARATED=true, we don't serve frontend files
   // The Vite dev server handles that on port 5173
+  // PHASE 9 FIX: But we DO need to redirect client-side routes to Vite
+  if (app.get("env") === "development" && process.env.VITE_SEPARATED) {
+    app.get('*', (req, res, next) => {
+      // Skip API routes
+      if (req.path.startsWith('/api')) {
+        return next();
+      }
+      // Skip static assets
+      if (req.path.match(/\.(js|css|png|jpg|svg|ico|json|woff|woff2|ttf|eot|map)$/)) {
+        return next();
+      }
+      // Redirect client-side routes to Vite dev server
+      const viteUrl = `http://localhost:5173${req.originalUrl}`;
+      console.log(`[SPA] Redirecting ${req.path} to Vite: ${viteUrl}`);
+      res.redirect(302, viteUrl);
+    });
+  }
 
   // Error handler should be LAST
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

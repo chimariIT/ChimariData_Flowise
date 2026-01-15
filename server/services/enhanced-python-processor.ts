@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { getPythonWorkerPool } from './python-worker-pool';
 
 interface PythonCommandResult {
   code: number;
@@ -304,6 +305,19 @@ except Exception as e:
   }
 
   async executePythonScript(script: string, env: NodeJS.ProcessEnv = {}, timeoutMs = 15000): Promise<PythonExecutionResult> {
+    // Try to use Python worker pool for 8-12s performance improvement
+    try {
+      const pool = getPythonWorkerPool();
+      if (pool['isInitialized']) {
+        console.log('🚀 Using Python worker pool (fast execution)');
+        return await pool.executeScript(script, timeoutMs);
+      }
+    } catch (poolError) {
+      console.warn('⚠️  Worker pool unavailable, falling back to process spawn:', poolError);
+    }
+
+    // Fallback to traditional process spawning
+    console.log('🐌 Using process spawn (slower fallback)');
     const result = await this.runPythonCommand(['-c', script], timeoutMs, env);
 
     if (result.code !== 0 || result.timedOut) {
@@ -384,11 +398,29 @@ except Exception as e:
       let stderr = '';
       let settled = false;
 
+      // Graceful termination with escalation
       const timeout = setTimeout(() => {
         if (!settled) {
+          console.log(`⏰ Python process timeout after ${timeoutMs}ms - attempting graceful termination`);
+
+          // Step 1: Try SIGTERM (graceful)
+          pythonProcess.kill('SIGTERM');
+
+          // Step 2: Escalate to SIGKILL after 5 seconds if still running
+          const forceKillTimeout = setTimeout(() => {
+            if (!settled && !pythonProcess.killed) {
+              console.warn(`⚠️ Force-killing Python process after graceful termination failed`);
+              pythonProcess.kill('SIGKILL');
+            }
+          }, 5000);
+
+          // Clean up force-kill timeout if process exits naturally
+          pythonProcess.once('exit', () => {
+            clearTimeout(forceKillTimeout);
+          });
+
           settled = true;
-          pythonProcess.kill();
-          resolve({ code: -1, stdout, stderr: stderr || 'Process timeout', timedOut: true });
+          resolve({ code: -1, stdout, stderr: stderr || 'Process timeout - terminated gracefully', timedOut: true });
         }
       }, timeoutMs);
 

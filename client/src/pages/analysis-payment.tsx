@@ -10,7 +10,7 @@ import { ArrowLeft, Calculator, Clock, Database, BarChart3, Zap, Crown, Eye, Shi
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { ResultsPreview } from '@/components/results-preview';
-import { useProjectSession } from '@/hooks/useProjectSession';
+import { useProject } from '@/hooks/useProject';
 import { useJourneyState } from '@/hooks/useJourneyState';
 
 // Load Stripe with development fallback
@@ -24,15 +24,17 @@ if (stripePublicKey === 'pk_test_development_key') {
   console.warn('⚠️  Using development Stripe key. Set VITE_STRIPE_PUBLIC_KEY for production.');
 }
 
+interface ProjectDataInput {
+  name: string;
+  recordCount: number;
+  dataSizeMB: number;
+  schema: any;
+  questions: string[];
+}
+
 interface AnalysisPaymentProps {
   projectId: string;
-  projectData: {
-    name: string;
-    recordCount: number;
-    dataSizeMB: number;
-    schema: any;
-    questions: string[];
-  };
+  projectData?: ProjectDataInput;  // Made optional - will fetch from API if not provided
   onBack: () => void;
   onSuccess: () => void;
 }
@@ -78,14 +80,14 @@ const AnalysisPaymentForm = ({ projectId, onSuccess }: { projectId: string; anal
         window.location.href = '/auth';
         return;
       }
-      
+
       // Verify token is still valid
       const authCheck = await fetch('/api/auth/user', {
         headers: {
           'Authorization': `Bearer ${token}`
         }
       });
-      
+
       if (!authCheck.ok) {
         // Token expired, clear it and redirect
         localStorage.removeItem('auth_token');
@@ -133,9 +135,9 @@ const AnalysisPaymentForm = ({ projectId, onSuccess }: { projectId: string; anal
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
       <PaymentElement />
-      <Button 
-        type="submit" 
-        className="w-full" 
+      <Button
+        type="submit"
+        className="w-full"
         disabled={!stripe || isProcessing}
         size="lg"
       >
@@ -155,7 +157,7 @@ const AnalysisPaymentForm = ({ projectId, onSuccess }: { projectId: string; anal
   );
 };
 
-export default function AnalysisPaymentPage({ projectId, projectData, onBack, onSuccess }: AnalysisPaymentProps) {
+export default function AnalysisPaymentPage({ projectId, projectData: providedProjectData, onBack, onSuccess }: AnalysisPaymentProps) {
   const [analysisType, setAnalysisType] = useState<'standard' | 'advanced' | 'custom'>('standard');
   const [pricing, setPricing] = useState<PricingData | null>(null);
   const [dataComplexity, setDataComplexity] = useState<string>('');
@@ -165,6 +167,48 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
   const [intentMetrics, setIntentMetrics] = useState<{ lockedCostCents?: number; spentCostCents?: number; remainingCostCents?: number; payableCents?: number } | null>(null);
   const [audienceContext, setAudienceContext] = useState<any>(null);
   const { toast } = useToast();
+
+  // 🔒 SSOT: Use useProject hook instead of useProjectSession
+  const {
+    project,
+    journeyProgress,
+    isLoading: projectLoading
+  } = useProject(projectId);
+
+  // PHASE 10 FIX: Derive projectData from project if not provided
+  const projectData: ProjectDataInput = useMemo(() => {
+    if (providedProjectData) {
+      return providedProjectData;
+    }
+
+    // Build from project and journeyProgress
+    const jp = journeyProgress || {};
+    const joinedData = jp.joinedData || {};
+
+    // Get questions from various sources
+    const questions: string[] = [];
+    if (Array.isArray(jp.userQuestions)) {
+      jp.userQuestions.forEach((q: any) => {
+        if (typeof q === 'string') questions.push(q);
+        else if (q?.text) questions.push(q.text);
+      });
+    }
+
+    // Get record count from joinedData or datasets
+    const recordCount = joinedData.rowCount || joinedData.recordCount || (project as any)?.recordCount || 0;
+
+    // Estimate data size (rough: 1 row ~ 0.001 MB)
+    const dataSizeMB = Math.max(1, Math.ceil(recordCount / 1000));
+
+    return {
+      name: (project as any)?.name || 'Unnamed Project',
+      recordCount,
+      dataSizeMB,
+      schema: joinedData.schema || {},
+      questions
+    };
+  }, [providedProjectData, project, journeyProgress]);
+
   const {
     data: journeyState,
     isLoading: journeyStateLoading,
@@ -250,6 +294,30 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
     setIsCalculating(true);
     setIntentMetrics(null);
     try {
+      // PHASE 11 FIX: First check for locked cost from SSOT (journeyState or journeyProgress)
+      const lockedCost = journeyState?.costs?.estimated ||
+                         (journeyProgress as any)?.lockedCostEstimate;
+
+      if (typeof lockedCost === 'number' && lockedCost > 0) {
+        console.log(`✅ [Payment] Using locked cost from SSOT: $${lockedCost.toFixed(2)}`);
+        setPricing({
+          finalPrice: lockedCost,
+          priceInCents: Math.round(lockedCost * 100),
+          breakdown: {
+            basePrice: lockedCost,
+            dataSizeCharge: 0,
+            complexityCharge: 0,
+            questionsCharge: 0,
+            analysisTypeCharge: 0
+          },
+          source: 'locked'
+        });
+        setDataComplexity(projectData.recordCount > 100000 ? 'complex' : projectData.recordCount > 10000 ? 'moderate' : 'simple');
+        setIsCalculating(false);
+        return;
+      }
+
+      // Only call API if no locked cost exists
       const response = await apiRequest("POST", "/api/analysis-payment/calculate", {
         dataSizeMB: projectData.dataSizeMB,
         questionsCount: projectData.questions.length,
@@ -315,14 +383,14 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
         window.location.href = '/auth';
         return;
       }
-      
+
       // Verify token is still valid
       const authCheck = await fetch('/api/auth/user', {
         headers: {
           'Authorization': `Bearer ${token}`
         }
       });
-      
+
       if (!authCheck.ok) {
         // Token expired, clear it and redirect
         localStorage.removeItem('auth_token');
@@ -355,7 +423,7 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
         questionsCount: projectData.questions.length,
         payableCents: amountForIntent
       });
-      
+
       const data = await response.json();
       if (!data?.success) {
         toast({
@@ -377,7 +445,7 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
       });
     } catch (error: any) {
       console.error("Payment creation error:", error);
-      
+
       let errorMessage = "Failed to create payment. Please try again.";
       if (error.message?.includes("401")) {
         errorMessage = "Authentication expired. Please sign in again.";
@@ -388,7 +456,7 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
       } else if (error.message?.includes("409")) {
         errorMessage = "Payment amount mismatch detected. Refresh the page and retry.";
       }
-      
+
       toast({
         title: "Payment Error",
         description: errorMessage,
@@ -398,55 +466,33 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
   };
 
   useEffect(() => {
-    calculatePricing();
+    // PHASE 11 FIX: Re-calculate pricing when journeyState or journeyProgress loads
+    // to ensure locked cost is picked up from SSOT
+    if (!journeyStateLoading && !projectLoading) {
+      calculatePricing();
+    }
     loadAudienceContext();
-  }, [analysisType]);
+  }, [analysisType, journeyState?.costs?.estimated, (journeyProgress as any)?.lockedCostEstimate, journeyStateLoading, projectLoading]);
 
-  const loadAudienceContext = async () => {
-    try {
-      // Try to get audience context from project session
-      const response = await fetch(`/api/project-session/${projectId}`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        }
-      });
-      
-      if (response.ok) {
-        const sessionData = await response.json();
-        if (sessionData?.prepare?.audience) {
-          setAudienceContext({
-            primaryAudience: sessionData.prepare.audience.primaryAudience || 'mixed',
-            secondaryAudiences: sessionData.prepare.audience.secondaryAudiences || [],
-            decisionContext: sessionData.prepare.audience.decisionContext || '',
-            journeyType: 'business'
-          });
-        } else {
-          // Default audience context
-          setAudienceContext({
-            primaryAudience: 'mixed',
-            secondaryAudiences: [],
-            decisionContext: '',
-            journeyType: 'business'
-          });
-        }
-      } else {
-        // Default audience context
-        setAudienceContext({
-          primaryAudience: 'mixed',
-          secondaryAudiences: [],
-          decisionContext: '',
-          journeyType: 'business'
-        });
-      }
-    } catch (error) {
-      console.warn('Could not load audience context, using defaults');
+  const loadAudienceContext = () => {
+    // 🔒 Priority: journeyProgress (SSOT)
+    if (journeyProgress) {
       setAudienceContext({
-        primaryAudience: 'mixed',
-        secondaryAudiences: [],
-        decisionContext: '',
+        primaryAudience: journeyProgress.audience?.primary || 'mixed',
+        secondaryAudiences: journeyProgress.audience?.secondary || [],
+        decisionContext: journeyProgress.audience?.decisionContext || '',
         journeyType: 'business'
       });
+      return;
     }
+
+    // Fallback defaults
+    setAudienceContext({
+      primaryAudience: 'mixed',
+      secondaryAudiences: [],
+      decisionContext: '',
+      journeyType: 'business'
+    });
   };
 
   const handleShowPreview = () => {
@@ -578,7 +624,7 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
                     ))}
                   </SelectContent>
                 </Select>
-                
+
                 {selectedOption && (
                   <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
                     <div className="flex items-center gap-2 mb-2">
@@ -672,18 +718,18 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
 
             {pricing && !clientSecret && (
               <div className="space-y-3">
-                <Button 
-                  onClick={handleShowPreview} 
-                  className="w-full" 
+                <Button
+                  onClick={handleShowPreview}
+                  className="w-full"
                   size="lg"
                   variant="outline"
                 >
                   <Eye className="w-4 h-4 mr-2" />
                   Preview Results
                 </Button>
-                <Button 
-                  onClick={createPaymentIntent} 
-                  className="w-full" 
+                <Button
+                  onClick={createPaymentIntent}
+                  className="w-full"
                   size="lg"
                 >
                   <Zap className="w-4 h-4 mr-2" />
@@ -702,10 +748,10 @@ export default function AnalysisPaymentPage({ projectId, projectData, onBack, on
                 </CardHeader>
                 <CardContent>
                   <Elements stripe={stripePromise} options={{ clientSecret }}>
-                    <AnalysisPaymentForm 
-                      projectId={projectId} 
+                    <AnalysisPaymentForm
+                      projectId={projectId}
                       analysisType={analysisType}
-                      onSuccess={onSuccess} 
+                      onSuccess={onSuccess}
                     />
                   </Elements>
                 </CardContent>

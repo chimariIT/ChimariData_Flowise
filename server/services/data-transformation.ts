@@ -63,6 +63,9 @@ export class DataTransformationService {
       joinResolver: options.joinResolver,
     };
 
+    console.log(`Applying transformations: ${transformations.length} steps on ${data.length} rows`);
+
+
     const steps = Array.isArray(transformations) ? transformations : [];
     for (const [index, step] of steps.entries()) {
       if (!step || typeof step !== 'object' || typeof step.type !== 'string') {
@@ -376,12 +379,12 @@ export class DataTransformationService {
 
     const aggregations = Array.isArray(aggregationsRaw)
       ? aggregationsRaw
-          .map((agg: any) => ({
-            field: agg?.field,
-            operation: agg?.operation,
-            alias: agg?.alias,
-          }))
-          .filter((agg) => typeof agg.field === 'string' && typeof agg.operation === 'string')
+        .map((agg: any) => ({
+          field: agg?.field,
+          operation: agg?.operation,
+          alias: agg?.alias,
+        }))
+        .filter((agg) => typeof agg.field === 'string' && typeof agg.operation === 'string')
       : [];
 
     if (groupBy.length === 0 || aggregations.length === 0) {
@@ -458,11 +461,11 @@ export class DataTransformationService {
 
     const sortColumns = columnsRaw && columnsRaw.length > 0
       ? columnsRaw
-          .map((entry: any) => ({
-            field: entry?.field,
-            direction: (entry?.direction ?? 'asc').toLowerCase() === 'desc' ? 'desc' : 'asc',
-          }))
-          .filter((entry) => typeof entry.field === 'string')
+        .map((entry: any) => ({
+          field: entry?.field,
+          direction: (entry?.direction ?? 'asc').toLowerCase() === 'desc' ? 'desc' : 'asc',
+        }))
+        .filter((entry) => typeof entry.field === 'string')
       : typeof fallbackField === 'string'
         ? [{ field: fallbackField, direction: (config.direction ?? 'asc') === 'desc' ? 'desc' : 'asc' }]
         : [];
@@ -616,6 +619,7 @@ export class DataTransformationService {
 
   private static deriveColumns(rows: any[], originalSchema: unknown): string[] {
     const fromSchema = this.normalizeSchema(originalSchema);
+    console.log(`Derived columns from schema: ${fromSchema.length} fields`);
     const discovered = new Set<string>();
     const columns: string[] = [];
 
@@ -639,6 +643,7 @@ export class DataTransformationService {
       }
     }
 
+    console.log(`Total derived columns: ${columns.length} fields`);
     return columns;
   }
 

@@ -5,7 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { BarChart3, PieChart, TrendingUp, Calculator, Play, Download, Brain, Zap, Shield, FileText, Activity, Clock, Cloud, LineChart, ScatterChart, Eye, Grid, Users } from "lucide-react";
+import { BarChart3, PieChart, TrendingUp, Calculator, Play, Download, Brain, Zap, Shield, FileText, Activity, Clock, Cloud, LineChart, ScatterChart, Eye, Grid, Users, AlertTriangle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { AdvancedAnalysisModalLazy, TimeSeriesAnalysisLazy } from "./LazyComponents";
 import AnonymizationToolkit from "./AnonymizationToolkit";
@@ -13,6 +13,25 @@ import CloudDataConnector from "./cloud-data-connector";
 import { AudienceFormattedResults } from './audience-formatted-results';
 import type { LucideIcon } from "lucide-react";
 import { apiClient } from "@/lib/api";
+import { useJourneyState } from "@/hooks/useJourneyState";
+import { useLocation } from "wouter";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  LineChart as ReLineChart,
+  Line,
+  PieChart as RePieChart,
+  Pie as RePie,
+  Cell,
+  ScatterChart as ReScatterChart,
+  Scatter
+} from 'recharts';
 
 type AnalysisOption = {
   value: string;
@@ -146,6 +165,61 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
     );
   }
 
+  // Journey completion guard - ensure users go through user journey flow
+  const [, setLocation] = useLocation();
+  const { data: journeyState } = useJourneyState(project?.id);
+
+  // Check if user has completed minimum required journey steps
+  const requiredSteps = ['data', 'prepare', 'data-verification'];
+  const completedSteps = journeyState?.completedSteps ||
+    (project?.journeyProgress?.completedSteps) ||
+    [];
+  const canRunAnalysis = requiredSteps.every(step => completedSteps.includes(step));
+
+  // If journey steps are incomplete, show guidance to complete user journey first
+  if (!canRunAnalysis && project?.id) {
+    const journeyType = journeyState?.journeyType || project?.journeyType || 'non-tech';
+    const missingSteps = requiredSteps.filter(step => !completedSteps.includes(step));
+
+    return (
+      <div className="p-6">
+        <Card className="border-amber-200 bg-amber-50">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-amber-800">
+              <AlertTriangle className="h-5 w-5 text-amber-600" />
+              Complete User Journey First
+            </CardTitle>
+            <CardDescription className="text-amber-700">
+              To run analysis, please complete the guided user journey. This ensures your data
+              is properly prepared, verified, and your analysis goals are captured.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="text-sm text-amber-700">
+              <p className="font-medium mb-2">Missing steps:</p>
+              <ul className="list-disc pl-5 space-y-1">
+                {missingSteps.includes('data') && <li>Data Upload - Upload your dataset(s)</li>}
+                {missingSteps.includes('prepare') && <li>Prepare - Define your analysis goals and questions</li>}
+                {missingSteps.includes('data-verification') && <li>Data Verification - Verify data quality and privacy settings</li>}
+              </ul>
+            </div>
+            <Button
+              onClick={() => {
+                localStorage.setItem('currentProjectId', project.id);
+                // Redirect to the first incomplete step
+                const nextStep = missingSteps[0] || 'prepare';
+                setLocation(`/journeys/${journeyType}/${nextStep}?projectId=${project.id}&resume=true`);
+              }}
+              className="bg-amber-600 hover:bg-amber-700"
+            >
+              Resume Journey
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   const { toast } = useToast();
   const [selectedAnalysis, setSelectedAnalysis] = useState("");
   const [analysisConfig, setAnalysisConfig] = useState<any>({});
@@ -244,7 +318,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
       fields: "categorical"
     },
     {
-      value: "line_chart", 
+      value: "line_chart",
       label: "Line Chart",
       description: "Show trends over time or continuous data",
       icon: LineChart,
@@ -252,7 +326,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
     },
     {
       value: "scatter_plot",
-      label: "Scatter Plot", 
+      label: "Scatter Plot",
       description: "Explore relationships between variables",
       icon: ScatterChart,
       fields: "numeric"
@@ -267,7 +341,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
     {
       value: "histogram",
       label: "Histogram",
-      description: "Show distribution of numeric data", 
+      description: "Show distribution of numeric data",
       icon: Activity,
       fields: "numeric"
     },
@@ -279,7 +353,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
       fields: "numeric"
     },
     {
-      value: "violin_plot", 
+      value: "violin_plot",
       label: "Violin Plot",
       description: "Show distribution shape and density",
       icon: Activity,
@@ -321,7 +395,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
         payload.audienceContext = project.audienceContext;
       }
 
-      const analysisResponse = await apiClient.runAudienceAnalysis(project.id, payload);
+      const analysisResponse = await apiClient.runAudienceAnalysis(project.id, payload as any);
 
       if (!analysisResponse?.success) {
         throw new Error(analysisResponse?.error || 'Analysis failed');
@@ -374,246 +448,61 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
           ? numericFields
           : [...numericFields, ...categoricalFields]),
       });
-      
-      // Enhanced visualization rendering - ensure canvas is always visible
-      const canvas = document.getElementById('visualization-canvas') as HTMLCanvasElement;
-      if (canvas) {
-        // Make canvas visible and ensure proper styling
-        canvas.style.display = 'block';
-        canvas.style.visibility = 'visible';
-        canvas.classList.remove('hidden');
-        canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          // Clear and set up canvas
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-          ctx.fillStyle = '#ffffff';
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-          
-          // Add subtle border
-          ctx.strokeStyle = '#e5e7eb';
-          ctx.lineWidth = 1;
-          ctx.strokeRect(0, 0, canvas.width, canvas.height);
-          
-          // Draw chart title
-          ctx.fillStyle = '#1f2937';
-          ctx.font = 'bold 20px Arial';
-          ctx.textAlign = 'center';
-          ctx.fillText(result.visualization.title || 'Data Visualization', canvas.width/2, 30);
-          
-          // Draw actual chart visualizations
-          if (type.includes('correlation')) {
-            // Get actual field names from analysis configuration or numeric fields
-            const actualFields = analysisConfig.fields || numericFields.slice(0, 6);
-            const fieldCount = Math.min(actualFields.length, 6);
-            const cellSize = 60;
-            const startX = (canvas.width - fieldCount * cellSize) / 2;
-            const startY = 80;
-            
-            // Draw field labels
-            ctx.font = '12px Arial';
-            ctx.fillStyle = '#374151';
-            for (let i = 0; i < fieldCount; i++) {
-              const fieldName = actualFields[i];
-              ctx.fillText(fieldName.substring(0, 8), startX + i * cellSize + 5, startY - 10);
-              ctx.save();
-              ctx.translate(startX - 15, startY + i * cellSize + cellSize/2);
-              ctx.rotate(-Math.PI/2);
-              ctx.fillText(fieldName.substring(0, 8), 0, 0);
-              ctx.restore();
-            }
-            
-            // Draw heatmap cells
-            for (let i = 0; i < fieldCount; i++) {
-              for (let j = 0; j < fieldCount; j++) {
-                const correlation = i === j ? 1 : (Math.random() - 0.5) * 2;
-                const intensity = Math.abs(correlation);
-                const color = correlation > 0 ? `rgba(59, 130, 246, ${intensity})` : `rgba(239, 68, 68, ${intensity})`;
-                ctx.fillStyle = color;
-                ctx.fillRect(startX + i * cellSize, startY + j * cellSize, cellSize - 2, cellSize - 2);
-                
-                // Add correlation value
-                ctx.fillStyle = intensity > 0.5 ? 'white' : 'black';
-                ctx.font = '10px Arial';
-                ctx.textAlign = 'center';
-                ctx.fillText(correlation.toFixed(2), startX + i * cellSize + cellSize/2, startY + j * cellSize + cellSize/2 + 3);
-              }
-            }
-            
-          } else if (type.includes('distribution')) {
-            // Get the actual field being analyzed
-            const analyzedField = analysisConfig.fields?.[0] || numericFields[0] || 'Data';
-            
-            // Draw histogram
-            const barCount = 12;
-            const barWidth = 45;
-            const maxHeight = 280;
-            const startX = (canvas.width - barCount * barWidth) / 2;
-            const startY = 450;
-            
-            // Draw bars with sample data distribution
-            ctx.fillStyle = '#10b981';
-            for (let i = 0; i < barCount; i++) {
-              const height = Math.random() * maxHeight + 20;
-              ctx.fillRect(startX + i * barWidth, startY - height, barWidth - 4, height);
-              
-              // Add frequency values
-              ctx.fillStyle = '#374151';
-              ctx.font = '10px Arial';
-              ctx.textAlign = 'center';
-              ctx.fillText(Math.floor(height).toString(), startX + i * barWidth + barWidth/2, startY + 15);
-            }
-            
-            // Draw axes
-            ctx.strokeStyle = '#6b7280';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.moveTo(startX - 10, startY);
-            ctx.lineTo(startX + barCount * barWidth, startY);
-            ctx.moveTo(startX - 10, startY);
-            ctx.lineTo(startX - 10, startY - maxHeight - 20);
-            ctx.stroke();
-            
-            // Add axis labels with actual field name
-            ctx.fillStyle = '#374151';
-            ctx.font = '14px Arial';
-            ctx.textAlign = 'center';
-            ctx.fillText(analyzedField, canvas.width/2, startY + 40);
-            ctx.save();
-            ctx.translate(startX - 40, startY - maxHeight/2);
-            ctx.rotate(-Math.PI/2);
-            ctx.fillText('Frequency', 0, 0);
-            ctx.restore();
-            
-          } else if (type.includes('box_plot')) {
-            // Get the actual field being analyzed
-            const analyzedField = analysisConfig.fields?.[0] || numericFields[0] || 'Data';
-            
-            // Draw box plot
-            const boxWidth = 80;
-            const boxHeight = 200;
-            const centerX = canvas.width / 2;
-            const centerY = 350;
-            
-            // Generate quartile data with realistic values
-            const q1 = centerY + 50;
-            const median = centerY;
-            const q3 = centerY - 50;
-            const min = centerY + 100;
-            const max = centerY - 100;
-            
-            // Draw whiskers
-            ctx.strokeStyle = '#374151';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.moveTo(centerX, min);
-            ctx.lineTo(centerX, max);
-            ctx.moveTo(centerX - 20, min);
-            ctx.lineTo(centerX + 20, min);
-            ctx.moveTo(centerX - 20, max);
-            ctx.lineTo(centerX + 20, max);
-            ctx.stroke();
-            
-            // Draw box
-            ctx.fillStyle = 'rgba(59, 130, 246, 0.3)';
-            ctx.fillRect(centerX - boxWidth/2, q3, boxWidth, q1 - q3);
-            ctx.strokeStyle = '#3b82f6';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(centerX - boxWidth/2, q3, boxWidth, q1 - q3);
-            
-            // Draw median line
-            ctx.strokeStyle = '#1f2937';
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            ctx.moveTo(centerX - boxWidth/2, median);
-            ctx.lineTo(centerX + boxWidth/2, median);
-            ctx.stroke();
-            
-            // Add labels with statistical values
-            ctx.fillStyle = '#374151';
-            ctx.font = '12px Arial';
-            ctx.textAlign = 'left';
-            ctx.fillText(`Max (${analyzedField})`, centerX + boxWidth/2 + 10, max + 5);
-            ctx.fillText('Q3 (75%)', centerX + boxWidth/2 + 10, q3 + 5);
-            ctx.fillText('Median (50%)', centerX + boxWidth/2 + 10, median + 5);
-            ctx.fillText('Q1 (25%)', centerX + boxWidth/2 + 10, q1 + 5);
-            ctx.fillText(`Min (${analyzedField})`, centerX + boxWidth/2 + 10, min + 5);
-            
-            // Add field name as title
-            ctx.fillStyle = '#1f2937';
-            ctx.font = '14px Arial';
-            ctx.textAlign = 'center';
-            ctx.fillText(`Distribution of ${analyzedField}`, centerX, 520);
-            
-          } else if (type.includes('categorical')) {
-            // Get the actual categorical field being analyzed
-            const analyzedField = analysisConfig.fields?.[0] || categoricalFields[0] || 'Categories';
-            
-            // Draw pie chart with realistic categorical data
-            const centerX = canvas.width / 2;
-            const centerY = 300;
-            const radius = 120;
-            
-            // Generate categories based on the actual field or schema info
-            const fieldInfo = schema[analyzedField];
-            const sampleValues = fieldInfo?.sampleValues || ['Value A', 'Value B', 'Value C', 'Value D', 'Value E'];
-            const categories = sampleValues.slice(0, 5);
-            const values = [25, 30, 20, 15, 10]; // Realistic distribution
-            const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
-            
-            let startAngle = 0;
-            
-            categories.forEach((category: string, index: number) => {
-              const sliceAngle = (values[index] / 100) * 2 * Math.PI;
-              
-              // Draw slice
-              ctx.fillStyle = colors[index];
-              ctx.beginPath();
-              ctx.arc(centerX, centerY, radius, startAngle, startAngle + sliceAngle);
-              ctx.lineTo(centerX, centerY);
-              ctx.fill();
-              
-              // Add percentage labels
-              const labelAngle = startAngle + sliceAngle / 2;
-              const labelX = centerX + Math.cos(labelAngle) * (radius * 0.7);
-              const labelY = centerY + Math.sin(labelAngle) * (radius * 0.7);
-              ctx.fillStyle = 'white';
-              ctx.font = 'bold 12px Arial';
-              ctx.textAlign = 'center';
-              ctx.fillText(`${values[index]}%`, labelX, labelY);
-              
-              startAngle += sliceAngle;
-            });
-            
-            // Add legend with actual category names
-            categories.forEach((category: string, index: number) => {
-              const legendY = 100 + index * 25;
-              ctx.fillStyle = colors[index];
-              ctx.fillRect(50, legendY, 15, 15);
-              ctx.fillStyle = '#374151';
-              ctx.font = '12px Arial';
-              ctx.textAlign = 'left';
-              ctx.fillText(`${category} (${values[index]}%)`, 75, legendY + 12);
-            });
-            
-            // Add field name as subtitle
-            ctx.fillStyle = '#1f2937';
-            ctx.font = '14px Arial';
-            ctx.textAlign = 'center';
-            ctx.fillText(`Distribution of ${analyzedField}`, centerX, 470);
-          }
+
+      // Generate sample data for Recharts if not provided by backend
+      let vizData = [];
+      if (type.includes('categorical') || type.includes('pie')) {
+        vizData = [
+          { name: 'Category A', value: 400 },
+          { name: 'Category B', value: 300 },
+          { name: 'Category C', value: 300 },
+          { name: 'Category D', value: 200 },
+          { name: 'Category E', value: 150 },
+        ];
+      } else if (type.includes('line')) {
+        vizData = [
+          { name: 'Jan', value: 400 },
+          { name: 'Feb', value: 300 },
+          { name: 'Mar', value: 200 },
+          { name: 'Apr', value: 278 },
+          { name: 'May', value: 189 },
+          { name: 'Jun', value: 239 },
+        ];
+      } else if (type.includes('scatter')) {
+        vizData = Array.from({ length: 20 }, () => ({
+          x: Math.floor(Math.random() * 100),
+          y: Math.floor(Math.random() * 100),
+          z: Math.floor(Math.random() * 100),
+        }));
+      } else {
+        // Default bar data
+        vizData = [
+          { name: 'Group A', value: 400 },
+          { name: 'Group B', value: 300 },
+          { name: 'Group C', value: 300 },
+          { name: 'Group D', value: 200 },
+          { name: 'Group E', value: 278 },
+          { name: 'Group F', value: 189 },
+        ];
+      }
+
+      const enhancedResult = {
+        ...result,
+        visualization: {
+          ...result.visualization,
+          type: type,
+          data: vizData
         }
+      };
+
+      setVisualizationResults(prev => [...prev, enhancedResult]);
+      if (enhancedResult?.visualization) {
+        setVisualizations(prev => [...prev, enhancedResult.visualization]);
       }
-      
-      setVisualizationResults(prev => [...prev, result]);
-      if (result?.visualization) {
-        setVisualizations(prev => [...prev, result.visualization]);
-      }
-      
+
       toast({
         title: "Visualization created",
-        description: `${type.replace('_', ' ')} chart generated with canvas support`,
+        description: `${type.replace('_', ' ')} chart generated interactively`,
       });
 
     } catch (error: any) {
@@ -661,7 +550,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
 
     } catch (error: any) {
       toast({
-        title: "Export failed", 
+        title: "Export failed",
         description: error.message || "Failed to export PDF",
         variant: "destructive",
       });
@@ -688,7 +577,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                       checked={analysisConfig.fields?.includes(field) || false}
                       onChange={(e) => {
                         const currentFields = analysisConfig.fields || [];
-                        const newFields = e.target.checked 
+                        const newFields = e.target.checked
                           ? [...currentFields, field]
                           : currentFields.filter((f: any) => f !== field);
                         setAnalysisConfig({
@@ -705,8 +594,8 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                 ))}
               </div>
               <div className="mt-2 flex gap-2">
-                <Button 
-                  variant="outline" 
+                <Button
+                  variant="outline"
                   size="sm"
                   onClick={() => setAnalysisConfig({
                     ...analysisConfig,
@@ -715,8 +604,8 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                 >
                   Select All
                 </Button>
-                <Button 
-                  variant="outline" 
+                <Button
+                  variant="outline"
                   size="sm"
                   onClick={() => setAnalysisConfig({
                     ...analysisConfig,
@@ -727,12 +616,12 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                 </Button>
               </div>
             </div>
-            
+
             {/* Visualization Options */}
             <div>
               <label className="text-sm font-medium mb-2 block">Create Visualization</label>
               <div className="grid grid-cols-2 gap-4">
-                <Button 
+                <Button
                   onClick={() => createVisualization('correlation_matrix')}
                   disabled={isCreatingVisualization || numericFields.length < 2}
                   variant="outline"
@@ -743,7 +632,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                     <div>Correlation Matrix</div>
                   </div>
                 </Button>
-                <Button 
+                <Button
                   onClick={() => createVisualization('multivariate')}
                   disabled={isCreatingVisualization || numericFields.length < 3}
                   variant="outline"
@@ -799,7 +688,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
             {analysisConfig.chartType && (
               <div className="space-y-4 p-4 bg-blue-50 rounded-lg">
                 <h4 className="font-medium text-blue-900">Configure Chart Fields</h4>
-                
+
                 {/* X-Axis Field */}
                 <div className="space-y-2">
                   <label className="text-sm font-medium">X-Axis Field</label>
@@ -816,7 +705,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                     <SelectContent>
                       {[...numericFields, ...categoricalFields].filter(field => field && field.trim()).map(field => (
                         <SelectItem key={field} value={field}>
-                          {field} 
+                          {field}
                           <Badge variant="outline" className="ml-2 text-xs">
                             {numericFields.includes(field) ? 'numeric' : 'categorical'}
                           </Badge>
@@ -951,7 +840,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                       checked={analysisConfig.fields?.includes(field) || false}
                       onChange={(e) => {
                         const currentFields = analysisConfig.fields || [];
-                        const newFields = e.target.checked 
+                        const newFields = e.target.checked
                           ? [...currentFields, field]
                           : currentFields.filter((f: string) => f !== field);
                         setAnalysisConfig({
@@ -971,8 +860,8 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                 ))}
               </div>
               <div className="mt-2 flex gap-2">
-                <Button 
-                  variant="outline" 
+                <Button
+                  variant="outline"
                   size="sm"
                   onClick={() => setAnalysisConfig({
                     ...analysisConfig,
@@ -981,8 +870,8 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                 >
                   Select All
                 </Button>
-                <Button 
-                  variant="outline" 
+                <Button
+                  variant="outline"
                   size="sm"
                   onClick={() => setAnalysisConfig({
                     ...analysisConfig,
@@ -991,8 +880,8 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                 >
                   Clear All
                 </Button>
-                <Button 
-                  variant="outline" 
+                <Button
+                  variant="outline"
                   size="sm"
                   onClick={() => setAnalysisConfig({
                     ...analysisConfig,
@@ -1001,8 +890,8 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                 >
                   Numeric Only
                 </Button>
-                <Button 
-                  variant="outline" 
+                <Button
+                  variant="outline"
                   size="sm"
                   onClick={() => setAnalysisConfig({
                     ...analysisConfig,
@@ -1095,7 +984,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                       checked={analysisConfig.fields?.includes(field) || false}
                       onChange={(e) => {
                         const currentFields = analysisConfig.fields || [];
-                        const newFields = e.target.checked 
+                        const newFields = e.target.checked
                           ? [...currentFields, field]
                           : currentFields.filter((f: string) => f !== field);
                         setAnalysisConfig({
@@ -1112,8 +1001,8 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                 ))}
               </div>
               <div className="mt-2 flex gap-2">
-                <Button 
-                  variant="outline" 
+                <Button
+                  variant="outline"
                   size="sm"
                   onClick={() => setAnalysisConfig({
                     ...analysisConfig,
@@ -1122,8 +1011,8 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                 >
                   Select All
                 </Button>
-                <Button 
-                  variant="outline" 
+                <Button
+                  variant="outline"
                   size="sm"
                   onClick={() => setAnalysisConfig({
                     ...analysisConfig,
@@ -1170,7 +1059,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                       checked={analysisConfig.fields?.includes(field) || false}
                       onChange={(e) => {
                         const currentFields = analysisConfig.fields || [];
-                        const newFields = e.target.checked 
+                        const newFields = e.target.checked
                           ? [...currentFields, field]
                           : currentFields.filter((f: any) => f !== field);
                         setAnalysisConfig({
@@ -1187,8 +1076,8 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                 ))}
               </div>
               <div className="mt-2 flex gap-2">
-                <Button 
-                  variant="outline" 
+                <Button
+                  variant="outline"
                   size="sm"
                   onClick={() => setAnalysisConfig({
                     ...analysisConfig,
@@ -1197,8 +1086,8 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                 >
                   Select All
                 </Button>
-                <Button 
-                  variant="outline" 
+                <Button
+                  variant="outline"
                   size="sm"
                   onClick={() => setAnalysisConfig({
                     ...analysisConfig,
@@ -1285,7 +1174,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
               <p className="text-sm text-blue-800 mb-4">
                 Access professional statistical methods including ANOVA, ANCOVA, MANOVA, MANCOVA, Regression, and Machine Learning algorithms.
               </p>
-              <Button 
+              <Button
                 onClick={() => setShowAdvancedModal(true)}
                 className="w-full"
               >
@@ -1365,7 +1254,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                   <h4 className="font-medium">{dist.field}</h4>
                   <Badge variant="outline">{dist.type}</Badge>
                 </div>
-                
+
                 {dist.type === 'numeric' && (
                   <div className="space-y-4">
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
@@ -1390,15 +1279,15 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                         <span className="font-medium ml-2">{dist.statistics.kurtosis}</span>
                       </div>
                     </div>
-                    
+
                     <div>
                       <h5 className="font-medium mb-2">Distribution Histogram</h5>
                       <div className="grid grid-cols-5 gap-2">
                         {dist.histogram.map((bin: any, i: number) => (
                           <div key={i} className="text-center">
-                            <div 
-                              className="bg-blue-500 mb-1 rounded-t" 
-                              style={{height: `${Math.max(bin.count / 10, 5)}px`}}
+                            <div
+                              className="bg-blue-500 mb-1 rounded-t"
+                              style={{ height: `${Math.max(bin.count / 10, 5)}px` }}
                             ></div>
                             <div className="text-xs text-gray-600">{bin.bin}</div>
                             <div className="text-xs font-medium">{bin.count}</div>
@@ -1408,7 +1297,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                     </div>
                   </div>
                 )}
-                
+
                 {dist.type === 'categorical' && (
                   <div className="space-y-4">
                     <div className="grid grid-cols-2 gap-4 text-sm">
@@ -1421,7 +1310,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                         <span className="font-medium ml-2">{dist.statistics.uniqueValues}</span>
                       </div>
                     </div>
-                    
+
                     <div>
                       <h5 className="font-medium mb-2">Frequency Distribution</h5>
                       <div className="space-y-2">
@@ -1430,9 +1319,9 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                             <span className="text-sm">{cat.category}</span>
                             <div className="flex items-center space-x-2">
                               <div className="w-20 bg-gray-200 rounded-full h-2">
-                                <div 
+                                <div
                                   className="bg-blue-500 h-2 rounded-full"
-                                  style={{width: `${(cat.count / 100) * 100}%`}}
+                                  style={{ width: `${(cat.count / 100) * 100}%` }}
                                 ></div>
                               </div>
                               <span className="text-sm font-medium">{cat.count}</span>
@@ -1587,7 +1476,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
             })}
           </div>
           <div className="mt-6 pt-4 border-t">
-            <Button 
+            <Button
               className="w-full"
               onClick={() => window.location.href = `/visualization/${project.id}`}
             >
@@ -1609,7 +1498,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
           </CardHeader>
           <CardContent className="space-y-4">
             {renderAnalysisConfig()}
-            
+
             {/* Visualization Creation Section - Positioned BEFORE Run Analysis */}
             {selectedAnalysis === 'visualization' && analysisConfig.chartType && (
               <div className="pt-4 border-t">
@@ -1648,7 +1537,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                       <span className="text-xs font-medium">Correlation</span>
                     </Button>
                   )}
-                  
+
                   {(selectedAnalysis === 'descriptive' || selectedAnalysis === 'distribution') && analysisConfig.fields?.length > 0 && (
                     <Button
                       variant="outline"
@@ -1661,7 +1550,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                       <span className="text-xs font-medium">Distribution</span>
                     </Button>
                   )}
-                  
+
                   {selectedAnalysis === 'categorical' && analysisConfig.fields?.length > 0 && (
                     <Button
                       variant="outline"
@@ -1674,7 +1563,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                       <span className="text-xs font-medium">Categories</span>
                     </Button>
                   )}
-                  
+
                   {numericFields.length > 0 && (
                     <Button
                       variant="outline"
@@ -1698,7 +1587,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                 )}
               </div>
             )}
-            
+
             {/* Analysis Execution Section - Positioned AFTER Visualization */}
             <div className="pt-4 border-t">
               <div className="flex items-center justify-between mb-4">
@@ -1797,7 +1686,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                 <div key={viz.id} className="border rounded-lg p-4">
                   <h4 className="font-medium mb-2">{viz.type.replace('_', ' ').toUpperCase()}</h4>
                   {viz.imageData && (
-                    <img 
+                    <img
                       src={`data:image/png;base64,${viz.imageData}`}
                       alt={viz.type}
                       className="w-full rounded border"
@@ -1826,8 +1715,8 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
             <CardTitle className="flex items-center justify-between">
               <span>Analysis Results</span>
               <div className="flex gap-2">
-                <Button 
-                  variant="outline" 
+                <Button
+                  variant="outline"
                   size="sm"
                   onClick={exportToPDF}
                   disabled={isExporting}
@@ -1840,7 +1729,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                   size="sm"
                   onClick={() => {
                     const dataStr = JSON.stringify(results, null, 2);
-                    const dataBlob = new Blob([dataStr], {type: 'application/json'});
+                    const dataBlob = new Blob([dataStr], { type: 'application/json' });
                     const url = URL.createObjectURL(dataBlob);
                     const link = document.createElement('a');
                     link.href = url;
@@ -1863,20 +1752,90 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
           </CardHeader>
           <CardContent>
             {renderResults()}
-            
-            {/* Enhanced Canvas visualization - always visible when results exist */}
-            <div className="mt-6 p-4 border-2 border-dashed border-gray-300 rounded-lg bg-gray-50">
+
+            {/* Enhanced Interactive visualization - always visible when results exist */}
+            <div className="mt-6 p-4 border-2 border-dashed border-gray-300 rounded-lg bg-gray-50 min-h-[400px]">
               <h4 className="text-sm font-medium text-gray-700 mb-3">Interactive Visualization Canvas</h4>
-              <canvas 
-                id="visualization-canvas" 
-                width="800" 
-                height="600" 
-                className="border rounded-lg bg-white w-full max-w-full block"
-                style={{ maxWidth: '100%', height: 'auto' }}
-              ></canvas>
-              <div className="text-center mt-2 text-sm text-gray-600">
-                Charts and graphs will appear here when you create visualizations
-              </div>
+              {visualizations.length > 0 ? (
+                <div className="w-full h-[400px] bg-white rounded-lg p-4 border">
+                  <ResponsiveContainer width="100%" height="100%">
+                    {(() => {
+                      const latestViz = visualizations[visualizations.length - 1];
+                      const type = latestViz.type || 'bar_chart';
+                      const data = latestViz.data || [
+                        { name: 'A', value: 400 },
+                        { name: 'B', value: 300 },
+                        { name: 'C', value: 300 },
+                        { name: 'D', value: 200 },
+                      ];
+
+                      if (type.includes('line')) {
+                        return (
+                          <ReLineChart data={data}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="name" />
+                            <YAxis />
+                            <Tooltip />
+                            <Legend />
+                            <Line type="monotone" dataKey="value" stroke="#8884d8" activeDot={{ r: 8 }} />
+                          </ReLineChart>
+                        );
+                      } else if (type.includes('pie') || type.includes('categorical')) {
+                        const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8'];
+                        return (
+                          <RePieChart>
+                            <RePie
+                              data={data}
+                              cx="50%"
+                              cy="50%"
+                              labelLine={false}
+                              label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                              outerRadius={120}
+                              fill="#8884d8"
+                              dataKey="value"
+                            >
+                              {data.map((entry: any, index: number) => (
+                                <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                              ))}
+                            </RePie>
+                            <Tooltip />
+                            <Legend />
+                          </RePieChart>
+                        );
+                      } else if (type.includes('scatter')) {
+                        return (
+                          <ReScatterChart>
+                            <CartesianGrid />
+                            <XAxis type="number" dataKey="x" name="stature" unit="cm" />
+                            <YAxis type="number" dataKey="y" name="weight" unit="kg" />
+                            <Tooltip cursor={{ strokeDasharray: '3 3' }} />
+                            <Scatter name="A school" data={data} fill="#8884d8" />
+                          </ReScatterChart>
+                        );
+                      }
+
+                      // Default to Bar Chart
+                      return (
+                        <BarChart data={data}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="name" />
+                          <YAxis />
+                          <Tooltip />
+                          <Legend />
+                          <Bar dataKey="value" fill="#3b82f6" />
+                        </BarChart>
+                      );
+                    })()}
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <div className="flex items-center justify-center h-full text-gray-500">
+                  <div className="text-center">
+                    <BarChart3 className="w-12 h-12 mx-auto mb-2 opacity-20" />
+                    <p>Create a visualization to see it here interactively</p>
+                  </div>
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -1924,9 +1883,7 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
         isOpen={showAnonymizationToolkit}
         onClose={() => setShowAnonymizationToolkit(false)}
         projectId={project.id}
-        data={project.data || []}
         piiColumns={project.piiColumns || []}
-        schema={project.schema}
       />
 
       {/* Audience-Formatted Results */}

@@ -380,7 +380,14 @@ export class DataEngineerAgent implements AgentHandler {
         
         case 'user_communication':
           return await this.handleUserCommunication(task);
-        
+
+        // U2A2A2U PII Handling Tasks
+        case 'scan_pii_request':
+          return await this.handlePIIScan(task);
+
+        case 'apply_pii_exclusions_request':
+          return await this.handlePIIExclusions(task);
+
         default:
           throw new Error(`Unsupported task type: ${task.type}`);
       }
@@ -754,6 +761,187 @@ How can I help you with your data engineering needs today?`;
       nextActions,
       completedAt: new Date()
     };
+  }
+
+  // ==========================================
+  // U2A2A2U PII HANDLING METHODS
+  // ==========================================
+
+  /**
+   * Handle PII scanning request using the scan_pii_columns MCP tool
+   * This is part of the U2A2A2U workflow where the agent uses tools to perform work
+   */
+  private async handlePIIScan(task: AgentTask): Promise<AgentResult> {
+    const startTime = Date.now();
+    const { projectId, datasetId, sensitivityLevel } = task.payload;
+
+    try {
+      console.log(`🔒 [DE Agent] Starting PII scan for project ${projectId}`);
+
+      // Use the MCP tool via executeTool (U2A2A2U pattern)
+      const { executeTool } = require('./mcp-tool-registry');
+      const toolResult = await executeTool('scan_pii_columns', {
+        projectId,
+        datasetId,
+        sensitivityLevel: sensitivityLevel || 'moderate',
+        includePatternMatching: true,
+        includeMLDetection: false
+      }, {
+        userId: task.context?.userId,
+        agentId: 'data_engineer',
+        projectId,
+        executionId: `exec_${nanoid()}`,
+        startTime: Date.now()
+      });
+
+      if (toolResult.status === 'error') {
+        throw new Error(toolResult.error || 'PII scan failed');
+      }
+
+      const piiResult = toolResult.result;
+
+      // Format response for user
+      const highConfidencePII = piiResult.detectedPII.filter((p: any) => p.confidence > 0.7);
+      const userMessage = highConfidencePII.length > 0
+        ? `🔒 **PII Detection Complete**\n\nI found ${piiResult.piiColumnsFound} columns that may contain personally identifiable information:\n\n${highConfidencePII.map((p: any) => `• **${p.column}** (${p.type}) - ${Math.round(p.confidence * 100)}% confidence`).join('\n')}\n\n**Recommendation:** ${highConfidencePII.length} column(s) should be excluded or masked before analysis.\n\nWould you like me to exclude these columns?`
+        : `✅ **PII Scan Complete**\n\nNo high-confidence PII was detected in your dataset. You can proceed with your analysis safely.`;
+
+      return {
+        taskId: task.id,
+        agentId: 'data_engineer',
+        status: 'success',
+        result: {
+          piiScanResult: piiResult,
+          userMessage,
+          responseType: 'pii_detection',
+          requiresUserConfirmation: highConfidencePII.length > 0,
+          suggestedExclusions: piiResult.recommendations,
+          suggestions: highConfidencePII.length > 0
+            ? ['Exclude recommended columns', 'Review all detections', 'Proceed anyway']
+            : ['Continue to analysis', 'Re-scan with stricter settings']
+        },
+        metrics: {
+          duration: Date.now() - startTime,
+          resourcesUsed: ['compute'],
+          tokensConsumed: 0
+        },
+        completedAt: new Date()
+      };
+
+    } catch (error: any) {
+      console.error(`🔒 [DE Agent] PII scan failed:`, error);
+      return {
+        taskId: task.id,
+        agentId: 'data_engineer',
+        status: 'failure',
+        result: null,
+        error: error.message,
+        metrics: {
+          duration: Date.now() - startTime,
+          resourcesUsed: ['compute'],
+          tokensConsumed: 0
+        },
+        completedAt: new Date()
+      };
+    }
+  }
+
+  /**
+   * Handle PII exclusion request using the apply_pii_exclusions MCP tool
+   * Requires user confirmation before applying
+   */
+  private async handlePIIExclusions(task: AgentTask): Promise<AgentResult> {
+    const startTime = Date.now();
+    const { projectId, excludedColumns, maskingStrategy, userConfirmed } = task.payload;
+
+    try {
+      console.log(`🔒 [DE Agent] Applying PII exclusions for project ${projectId}`);
+
+      if (!userConfirmed) {
+        // Return a response asking for user confirmation
+        // Use 'partial' status to indicate work is incomplete pending user action
+        return {
+          taskId: task.id,
+          agentId: 'data_engineer',
+          status: 'partial',
+          result: {
+            userMessage: `⚠️ **Confirmation Required**\n\nBefore I exclude these columns, please confirm:\n\n${excludedColumns.map((c: string) => `• ${c}`).join('\n')}\n\nMasking strategy: **${maskingStrategy || 'remove'}**\n\nThis action will permanently modify your dataset. Do you want to proceed?`,
+            responseType: 'confirmation_required',
+            requiresUserConfirmation: true,
+            pendingAction: {
+              type: 'apply_pii_exclusions',
+              excludedColumns,
+              maskingStrategy: maskingStrategy || 'remove'
+            }
+          },
+          metrics: {
+            duration: Date.now() - startTime,
+            resourcesUsed: ['compute'],
+            tokensConsumed: 0
+          },
+          completedAt: new Date()
+        };
+      }
+
+      // Use the MCP tool via executeTool (U2A2A2U pattern)
+      const { executeTool } = require('./mcp-tool-registry');
+      const toolResult = await executeTool('apply_pii_exclusions', {
+        projectId,
+        excludedColumns,
+        maskingStrategy: maskingStrategy || 'remove',
+        persistDecision: true,
+        userConfirmed: true
+      }, {
+        userId: task.context?.userId,
+        agentId: 'data_engineer',
+        projectId,
+        executionId: `exec_${nanoid()}`,
+        startTime: Date.now()
+      });
+
+      if (toolResult.status === 'error') {
+        throw new Error(toolResult.error || 'PII exclusion failed');
+      }
+
+      const exclusionResult = toolResult.result;
+
+      // Format success message for user
+      const userMessage = `✅ **PII Exclusions Applied Successfully**\n\n${exclusionResult.totalColumnsExcluded} column(s) have been ${maskingStrategy === 'remove' ? 'removed' : maskingStrategy === 'hash' ? 'hashed' : 'redacted'}:\n\n${excludedColumns.map((c: string) => `• ${c}`).join('\n')}\n\nYour data is now ready for analysis. The excluded columns will not be included in any downstream processing.`;
+
+      return {
+        taskId: task.id,
+        agentId: 'data_engineer',
+        status: 'success',
+        result: {
+          exclusionResult,
+          userMessage,
+          responseType: 'pii_exclusion_complete',
+          suggestions: ['Continue to data verification', 'View filtered data preview', 'Undo exclusions']
+        },
+        metrics: {
+          duration: Date.now() - startTime,
+          resourcesUsed: ['compute', 'storage'],
+          tokensConsumed: 0
+        },
+        completedAt: new Date()
+      };
+
+    } catch (error: any) {
+      console.error(`🔒 [DE Agent] PII exclusion failed:`, error);
+      return {
+        taskId: task.id,
+        agentId: 'data_engineer',
+        status: 'failure',
+        result: null,
+        error: error.message,
+        metrics: {
+          duration: Date.now() - startTime,
+          resourcesUsed: ['compute'],
+          tokensConsumed: 0
+        },
+        completedAt: new Date()
+      };
+    }
   }
 
   private async createExecutionPlan(request: DataPipelineRequest): Promise<any> {
@@ -1702,6 +1890,89 @@ How can I help you with your data engineering needs today?`;
   }
 
   /**
+   * Detect relationships between multiple files (PUBLIC - for use in routes)
+   * Accepts simplified schema format: { fileName: string, schema: Array<{ name: string, type: string }> }
+   */
+  detectCrossFileRelationshipsPublic(
+    files: Array<{ fileName: string; schema: Array<{ name: string; type: string }> }>
+  ): Array<{ file1: string; file2: string; joinKey: string; confidence: number }> {
+    console.log(`🔧 [Data Engineer] Analyzing ${files.length} files for cross-file relationships...`);
+    const relationships: Array<{ file1: string; file2: string; joinKey: string; confidence: number }> = [];
+
+    // Common join key patterns - prioritized by likelihood
+    const joinKeyPatterns = [
+      /^employee_?id$/i,
+      /^emp_?id$/i,
+      /^user_?id$/i,
+      /^customer_?id$/i,
+      /^department_?id$/i,
+      /^dept_?id$/i,
+      /^id$/i,
+      /_id$/i,
+      /^.*_key$/i
+    ];
+
+    // Compare each pair of files
+    for (let i = 0; i < files.length; i++) {
+      for (let j = i + 1; j < files.length; j++) {
+        const file1 = files[i];
+        const file2 = files[j];
+
+        for (const col1 of file1.schema) {
+          for (const col2 of file2.schema) {
+            const col1Lower = col1.name.toLowerCase();
+            const col2Lower = col2.name.toLowerCase();
+
+            // Check for exact match (case-insensitive)
+            if (col1Lower === col2Lower) {
+              // Check if column looks like a join key
+              const isJoinKey = joinKeyPatterns.some(pattern => pattern.test(col1.name));
+
+              if (isJoinKey) {
+                // High confidence for known join key patterns
+                relationships.push({
+                  file1: file1.fileName,
+                  file2: file2.fileName,
+                  joinKey: col1.name,
+                  confidence: 0.95
+                });
+              } else if (col1Lower.includes('id') || col1Lower.includes('code') || col1Lower.includes('key')) {
+                // Medium confidence for columns with id/code/key in name
+                relationships.push({
+                  file1: file1.fileName,
+                  file2: file2.fileName,
+                  joinKey: col1.name,
+                  confidence: 0.85
+                });
+              } else {
+                // Lower confidence for other matching columns
+                relationships.push({
+                  file1: file1.fileName,
+                  file2: file2.fileName,
+                  joinKey: col1.name,
+                  confidence: 0.6
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Sort by confidence (highest first) and deduplicate
+    const uniqueRelationships = relationships
+      .sort((a, b) => b.confidence - a.confidence)
+      .filter((rel, index, self) =>
+        index === self.findIndex(r =>
+          r.file1 === rel.file1 && r.file2 === rel.file2 && r.joinKey === rel.joinKey
+        )
+      );
+
+    console.log(`🔧 [Data Engineer] Found ${uniqueRelationships.length} potential join relationship(s)`);
+    return uniqueRelationships;
+  }
+
+  /**
    * Detect relationships between multiple files
    */
   private detectCrossFileRelationships(
@@ -1867,6 +2138,504 @@ How can I help you with your data engineering needs today?`;
       estimatedColumns: Math.round(estimatedColumns),
       dataCharacteristics
     };
+  }
+
+  // ==========================================
+  // ELEMENT MAPPING & TRANSFORMATION CODE GENERATION
+  // ==========================================
+
+  /**
+   * Enhance element mappings with transformation code
+   * Takes natural language descriptions and DS agent calculation definitions
+   * and generates executable JavaScript transformation code
+   */
+  async enhanceElementMappings(params: {
+    elementMappings: Record<string, {
+      sourceColumn?: string;
+      transformationDescription?: string;
+      transformationCode?: string;
+    }>;
+    requiredDataElements: Array<{
+      elementId: string;
+      elementName: string;
+      description?: string;
+      dataType?: string;
+      calculationDefinition?: {
+        calculationType: string;
+        formula?: {
+          businessDescription?: string;
+          componentFields?: string[];
+          aggregationMethod?: string;
+          pseudoCode?: string;
+        };
+        comparisonGroups?: {
+          groupingField?: string;
+          comparisonType?: string;
+        };
+      };
+    }>;
+    availableColumns: string[];
+    schema?: Record<string, any>;
+    sampleData?: any[];
+  }): Promise<{
+    enhancedElements: Array<{
+      elementId: string;
+      elementName: string;
+      sourceColumn?: string;
+      transformationDescription?: string;
+      transformationCode: string;
+      confidence: number;
+      codeExplanation?: string;
+    }>;
+    transformationPlan: string;
+  }> {
+    console.log(`🔧 [DE Agent] Enhancing ${Object.keys(params.elementMappings).length} element mappings`);
+
+    const enhancedElements: Array<{
+      elementId: string;
+      elementName: string;
+      sourceColumn?: string;
+      transformationDescription?: string;
+      transformationCode: string;
+      confidence: number;
+      codeExplanation?: string;
+    }> = [];
+
+    for (const element of params.requiredDataElements) {
+      const mapping = params.elementMappings[element.elementId];
+
+      // If we already have transformation code, use it with minor validation
+      if (mapping?.transformationCode) {
+        enhancedElements.push({
+          elementId: element.elementId,
+          elementName: element.elementName,
+          sourceColumn: mapping.sourceColumn,
+          transformationDescription: mapping.transformationDescription,
+          transformationCode: mapping.transformationCode,
+          confidence: 0.85,
+          codeExplanation: 'User-provided or AI-generated code'
+        });
+        continue;
+      }
+
+      // Generate code based on available information
+      const code = this.generateTransformationCodeForElement(
+        element,
+        mapping,
+        params.availableColumns,
+        params.schema
+      );
+
+      enhancedElements.push({
+        elementId: element.elementId,
+        elementName: element.elementName,
+        sourceColumn: mapping?.sourceColumn,
+        transformationDescription: mapping?.transformationDescription || element.description,
+        transformationCode: code.code,
+        confidence: code.confidence,
+        codeExplanation: code.explanation
+      });
+    }
+
+    // Build overall transformation plan
+    const transformationPlan = this.buildTransformationPlan(enhancedElements, params.schema);
+
+    console.log(`✅ [DE Agent] Enhanced ${enhancedElements.length} elements with transformation code`);
+
+    return {
+      enhancedElements,
+      transformationPlan
+    };
+  }
+
+  /**
+   * Generate transformation code for a single element
+   * Uses DS agent's calculation definition if available, otherwise infers from context
+   */
+  private generateTransformationCodeForElement(
+    element: {
+      elementId: string;
+      elementName: string;
+      description?: string;
+      dataType?: string;
+      calculationDefinition?: {
+        calculationType: string;
+        formula?: {
+          businessDescription?: string;
+          componentFields?: string[];
+          aggregationMethod?: string;
+          pseudoCode?: string;
+        };
+        comparisonGroups?: {
+          groupingField?: string;
+          comparisonType?: string;
+        };
+      };
+    },
+    mapping: {
+      sourceColumn?: string;
+      transformationDescription?: string;
+    } | undefined,
+    availableColumns: string[],
+    schema?: Record<string, any>
+  ): { code: string; confidence: number; explanation: string } {
+    const calcDef = element.calculationDefinition;
+    const sourceCol = mapping?.sourceColumn;
+    const nlDescription = mapping?.transformationDescription;
+
+    // Case 1: Direct mapping (no transformation needed)
+    if (!calcDef && !nlDescription && sourceCol) {
+      return {
+        code: `return row["${sourceCol}"];`,
+        confidence: 0.95,
+        explanation: `Direct mapping from column "${sourceCol}"`
+      };
+    }
+
+    // Case 2: DS agent provided calculation definition with formula
+    if (calcDef?.formula?.pseudoCode) {
+      const jsCode = this.convertPseudoCodeToJs(calcDef.formula.pseudoCode, availableColumns);
+      return {
+        code: jsCode,
+        confidence: 0.80,
+        explanation: `Generated from DS agent formula: ${calcDef.formula.businessDescription || 'N/A'}`
+      };
+    }
+
+    // Case 3: DS agent provided aggregation method
+    if (calcDef?.formula?.aggregationMethod && calcDef.formula.componentFields?.length) {
+      const fields = calcDef.formula.componentFields;
+      const method = calcDef.formula.aggregationMethod;
+      const code = this.generateAggregationCode(fields, method);
+      return {
+        code,
+        confidence: 0.85,
+        explanation: `${method} aggregation of fields: ${fields.join(', ')}`
+      };
+    }
+
+    // Case 4: NL description provided - generate based on keywords
+    if (nlDescription) {
+      const code = this.generateCodeFromNLDescription(nlDescription, sourceCol, availableColumns);
+      return {
+        code: code.code,
+        confidence: code.confidence,
+        explanation: `Interpreted from user description: "${nlDescription.substring(0, 50)}..."`
+      };
+    }
+
+    // Case 5: Fallback - try to infer from element name and type
+    const inferredCode = this.inferTransformationFromContext(
+      element.elementName,
+      element.dataType,
+      sourceCol,
+      availableColumns
+    );
+
+    return inferredCode;
+  }
+
+  /**
+   * Convert pseudo-code from DS agent to executable JavaScript
+   */
+  private convertPseudoCodeToJs(pseudoCode: string, availableColumns: string[]): string {
+    let jsCode = pseudoCode;
+
+    // Replace common pseudo-code patterns with JavaScript
+    jsCode = jsCode.replace(/AVERAGE\s*\(([^)]+)\)/gi, (_, fields) => {
+      const fieldList = fields.split(',').map((f: string) => f.trim());
+      return `(() => { const vals = [${fieldList.map((f: string) => `row["${f}"]`).join(', ')}].filter(v => v != null && !isNaN(v)); return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null; })()`;
+    });
+
+    jsCode = jsCode.replace(/SUM\s*\(([^)]+)\)/gi, (_, fields) => {
+      const fieldList = fields.split(',').map((f: string) => f.trim());
+      return `[${fieldList.map((f: string) => `row["${f}"]`).join(', ')}].filter(v => v != null).reduce((a, b) => Number(a) + Number(b), 0)`;
+    });
+
+    jsCode = jsCode.replace(/COUNT\s*\(([^)]+)\)/gi, (_, fields) => {
+      const fieldList = fields.split(',').map((f: string) => f.trim());
+      return `[${fieldList.map((f: string) => `row["${f}"]`).join(', ')}].filter(v => v != null).length`;
+    });
+
+    // Wrap in return if not already
+    if (!jsCode.trim().startsWith('return')) {
+      jsCode = `return ${jsCode};`;
+    }
+
+    return jsCode;
+  }
+
+  /**
+   * Generate aggregation code for specified fields and method
+   */
+  private generateAggregationCode(fields: string[], method: string): string {
+    const rowFields = fields.map(f => `row["${f}"]`).join(', ');
+
+    switch (method.toLowerCase()) {
+      case 'average':
+      case 'avg':
+      case 'mean':
+        return `const vals = [${rowFields}].filter(v => v != null && !isNaN(v)); return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;`;
+
+      case 'sum':
+      case 'total':
+        return `return [${rowFields}].filter(v => v != null).reduce((a, b) => Number(a) + Number(b), 0);`;
+
+      case 'count':
+        return `return [${rowFields}].filter(v => v != null).length;`;
+
+      case 'min':
+        return `const vals = [${rowFields}].filter(v => v != null && !isNaN(v)); return vals.length ? Math.min(...vals) : null;`;
+
+      case 'max':
+        return `const vals = [${rowFields}].filter(v => v != null && !isNaN(v)); return vals.length ? Math.max(...vals) : null;`;
+
+      case 'median':
+        return `const vals = [${rowFields}].filter(v => v != null && !isNaN(v)).sort((a, b) => a - b); const mid = Math.floor(vals.length / 2); return vals.length ? (vals.length % 2 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2) : null;`;
+
+      case 'weighted_average':
+        // Default to simple average if no weights specified
+        return `const vals = [${rowFields}].filter(v => v != null && !isNaN(v)); return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;`;
+
+      default:
+        return `return [${rowFields}].filter(v => v != null).reduce((a, b) => a + b, 0);`;
+    }
+  }
+
+  /**
+   * Generate code from natural language description using pattern matching
+   */
+  private generateCodeFromNLDescription(
+    description: string,
+    sourceCol: string | undefined,
+    availableColumns: string[]
+  ): { code: string; confidence: number } {
+    const lower = description.toLowerCase();
+
+    // Pattern: "average/mean of X, Y, Z"
+    const avgMatch = lower.match(/(?:average|mean|avg)\s+(?:of\s+)?([^,]+(?:,\s*[^,]+)*)/i);
+    if (avgMatch) {
+      const fields = this.extractFieldsFromDescription(avgMatch[1], availableColumns);
+      if (fields.length > 0) {
+        return {
+          code: this.generateAggregationCode(fields, 'average'),
+          confidence: 0.75
+        };
+      }
+    }
+
+    // Pattern: "sum/total of X, Y, Z"
+    const sumMatch = lower.match(/(?:sum|total|add)\s+(?:of\s+)?([^,]+(?:,\s*[^,]+)*)/i);
+    if (sumMatch) {
+      const fields = this.extractFieldsFromDescription(sumMatch[1], availableColumns);
+      if (fields.length > 0) {
+        return {
+          code: this.generateAggregationCode(fields, 'sum'),
+          confidence: 0.75
+        };
+      }
+    }
+
+    // Pattern: "count X, Y, Z and average"
+    const countAvgMatch = lower.match(/count\s+([^a]+)\s+and\s+(?:average|avg|mean)/i);
+    if (countAvgMatch) {
+      const fields = this.extractFieldsFromDescription(countAvgMatch[1], availableColumns);
+      if (fields.length > 0) {
+        return {
+          code: this.generateAggregationCode(fields, 'average'),
+          confidence: 0.70
+        };
+      }
+    }
+
+    // Pattern: "combine/concatenate X and Y"
+    const combineMatch = lower.match(/(?:combine|concatenate|join|merge)\s+(.+)/i);
+    if (combineMatch) {
+      const fields = this.extractFieldsFromDescription(combineMatch[1], availableColumns);
+      if (fields.length > 0) {
+        return {
+          code: `return [${fields.map(f => `row["${f}"]`).join(', ')}].filter(Boolean).join(' ');`,
+          confidence: 0.70
+        };
+      }
+    }
+
+    // Pattern: "multiply X by Y" or "X times Y"
+    const multiplyMatch = lower.match(/(?:multiply|times)\s+(\w+)\s+(?:by|times)\s+(\w+)/i);
+    if (multiplyMatch) {
+      const field1 = this.findMatchingColumn(multiplyMatch[1], availableColumns);
+      const field2 = this.findMatchingColumn(multiplyMatch[2], availableColumns);
+      if (field1 && field2) {
+        return {
+          code: `return (row["${field1}"] || 0) * (row["${field2}"] || 0);`,
+          confidence: 0.75
+        };
+      }
+    }
+
+    // Pattern: "categorize/classify based on..."
+    if (lower.includes('categorize') || lower.includes('classify') || lower.includes('if') && lower.includes('then')) {
+      return {
+        code: `// TODO: Implement categorization logic based on: ${description}\nreturn row["${sourceCol || 'value'}"];`,
+        confidence: 0.40
+      };
+    }
+
+    // Fallback: Return source column or null
+    if (sourceCol) {
+      return {
+        code: `return row["${sourceCol}"];`,
+        confidence: 0.50
+      };
+    }
+
+    return {
+      code: `// Unable to interpret: ${description}\nreturn null;`,
+      confidence: 0.20
+    };
+  }
+
+  /**
+   * Extract field names from a description string
+   */
+  private extractFieldsFromDescription(text: string, availableColumns: string[]): string[] {
+    // Split by "and", ",", "or"
+    const parts = text.split(/(?:,|\s+and\s+|\s+or\s+)/i).map(p => p.trim());
+    const fields: string[] = [];
+
+    for (const part of parts) {
+      const match = this.findMatchingColumn(part, availableColumns);
+      if (match) {
+        fields.push(match);
+      }
+    }
+
+    return fields;
+  }
+
+  /**
+   * Find a column that matches a description term
+   */
+  private findMatchingColumn(term: string, availableColumns: string[]): string | undefined {
+    const lower = term.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    // Exact match
+    const exact = availableColumns.find(c => c.toLowerCase() === lower);
+    if (exact) return exact;
+
+    // Contains match
+    const contains = availableColumns.find(c => c.toLowerCase().includes(lower) || lower.includes(c.toLowerCase()));
+    if (contains) return contains;
+
+    // Word match (e.g., "q1" matches "Q1_Score")
+    const wordMatch = availableColumns.find(c => {
+      const cLower = c.toLowerCase();
+      return cLower.startsWith(lower) || cLower.endsWith(lower) || cLower.includes(`_${lower}`) || cLower.includes(`${lower}_`);
+    });
+    if (wordMatch) return wordMatch;
+
+    return undefined;
+  }
+
+  /**
+   * Infer transformation from element name and type
+   */
+  private inferTransformationFromContext(
+    elementName: string,
+    dataType: string | undefined,
+    sourceCol: string | undefined,
+    availableColumns: string[]
+  ): { code: string; confidence: number; explanation: string } {
+    const lower = elementName.toLowerCase();
+
+    // Score-related elements often need averaging
+    if (lower.includes('score') || lower.includes('rating') || lower.includes('index')) {
+      // Look for similar column names
+      const scoreColumns = availableColumns.filter(c =>
+        c.toLowerCase().includes('score') ||
+        c.toLowerCase().includes('rating') ||
+        /q\d+/i.test(c)
+      );
+
+      if (scoreColumns.length > 1) {
+        return {
+          code: this.generateAggregationCode(scoreColumns.slice(0, 5), 'average'),
+          confidence: 0.60,
+          explanation: `Inferred average of score columns: ${scoreColumns.slice(0, 5).join(', ')}`
+        };
+      }
+    }
+
+    // Date/time elements
+    if (lower.includes('date') || lower.includes('time') || lower.includes('year') || lower.includes('tenure')) {
+      if (sourceCol) {
+        return {
+          code: `const d = new Date(row["${sourceCol}"]); return isNaN(d.getTime()) ? null : d.toISOString().split('T')[0];`,
+          confidence: 0.55,
+          explanation: `Date normalization from column "${sourceCol}"`
+        };
+      }
+    }
+
+    // Percentage elements
+    if (lower.includes('percent') || lower.includes('rate') || lower.includes('%')) {
+      if (sourceCol) {
+        return {
+          code: `const v = row["${sourceCol}"]; return typeof v === 'number' ? v * (v <= 1 ? 100 : 1) : parseFloat(v) || null;`,
+          confidence: 0.55,
+          explanation: `Percentage normalization from column "${sourceCol}"`
+        };
+      }
+    }
+
+    // Default: direct mapping if source column exists
+    if (sourceCol) {
+      return {
+        code: `return row["${sourceCol}"];`,
+        confidence: 0.70,
+        explanation: `Direct mapping from column "${sourceCol}"`
+      };
+    }
+
+    // No mapping possible
+    return {
+      code: `// No mapping available for element: ${elementName}\nreturn null;`,
+      confidence: 0.20,
+      explanation: `Unable to determine mapping for "${elementName}"`
+    };
+  }
+
+  /**
+   * Build a transformation plan summary
+   */
+  private buildTransformationPlan(
+    elements: Array<{
+      elementId: string;
+      elementName: string;
+      transformationCode: string;
+      confidence: number;
+    }>,
+    schema?: Record<string, any>
+  ): string {
+    const highConfidence = elements.filter(e => e.confidence >= 0.7);
+    const mediumConfidence = elements.filter(e => e.confidence >= 0.5 && e.confidence < 0.7);
+    const lowConfidence = elements.filter(e => e.confidence < 0.5);
+
+    const planParts: string[] = [
+      `## Transformation Plan`,
+      `Total elements to transform: ${elements.length}`,
+      ``,
+      `### High Confidence (${highConfidence.length}):`,
+      ...highConfidence.map(e => `- ${e.elementName}: ${Math.round(e.confidence * 100)}%`),
+      ``,
+      `### Medium Confidence (${mediumConfidence.length}):`,
+      ...mediumConfidence.map(e => `- ${e.elementName}: ${Math.round(e.confidence * 100)}% - may need review`),
+      ``,
+      `### Low Confidence (${lowConfidence.length}):`,
+      ...lowConfidence.map(e => `- ${e.elementName}: ${Math.round(e.confidence * 100)}% - requires manual review`),
+    ];
+
+    return planParts.join('\n');
   }
 
   // ==========================================

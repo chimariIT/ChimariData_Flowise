@@ -333,4 +333,96 @@ export class WorkflowService {
       errors,
     };
   }
+
+  /**
+   * P1-2: Validate step transition requirements for consolidated journey
+   * This ensures data availability before users can proceed to the next step
+   */
+  static validateStepTransition(
+    fromStep: string,
+    toStep: string,
+    projectData: {
+      datasets?: any[];
+      journeyProgress?: any;
+      analysisResults?: any;
+      requirementsDocument?: any;
+    }
+  ): { canProceed: boolean; missingRequirements: string[]; warnings: string[] } {
+    const missingRequirements: string[] = [];
+    const warnings: string[] = [];
+
+    // Define step order for validation
+    const stepOrder = ['data', 'prepare', 'data-verification', 'data-transformation', 'plan', 'execute', 'pricing', 'results'];
+    const fromIndex = stepOrder.indexOf(fromStep);
+    const toIndex = stepOrder.indexOf(toStep);
+
+    // Allow going back to any previous step
+    if (toIndex < fromIndex) {
+      return { canProceed: true, missingRequirements: [], warnings: [] };
+    }
+
+    // Validate based on target step
+    switch (toStep) {
+      case 'prepare':
+        // Requires datasets to be uploaded
+        if (!projectData.datasets || projectData.datasets.length === 0) {
+          missingRequirements.push('At least one dataset must be uploaded');
+        }
+        break;
+
+      case 'data-verification':
+        // Requires datasets and goals/questions from prepare step
+        if (!projectData.datasets || projectData.datasets.length === 0) {
+          missingRequirements.push('At least one dataset must be uploaded');
+        }
+        if (!projectData.journeyProgress?.userGoal && !projectData.requirementsDocument?.userGoals?.length) {
+          warnings.push('Analysis goal is recommended for better results');
+        }
+        break;
+
+      case 'data-transformation':
+        // Requires data quality check to be completed
+        if (!projectData.journeyProgress?.piiDecision && !projectData.journeyProgress?.piiDecisionsByFile) {
+          warnings.push('PII decisions should be reviewed before transformation');
+        }
+        if (!projectData.journeyProgress?.dataQuality) {
+          warnings.push('Data quality should be reviewed');
+        }
+        break;
+
+      case 'plan':
+        // Requires requirements document
+        if (!projectData.requirementsDocument && !projectData.journeyProgress?.requirementsDocument) {
+          missingRequirements.push('Requirements document must be generated');
+        }
+        break;
+
+      case 'execute':
+        // Requires analysis plan to be approved
+        if (!projectData.journeyProgress?.analysisPlan && !projectData.journeyProgress?.analysisPath) {
+          missingRequirements.push('Analysis plan must be generated');
+        }
+        break;
+
+      case 'pricing':
+        // Requires execution to be started/completed
+        if (!projectData.analysisResults && !projectData.journeyProgress?.executionStarted) {
+          missingRequirements.push('Analysis execution must be started');
+        }
+        break;
+
+      case 'results':
+        // Requires execution to be completed
+        if (!projectData.analysisResults) {
+          missingRequirements.push('Analysis must be completed');
+        }
+        break;
+    }
+
+    return {
+      canProceed: missingRequirements.length === 0,
+      missingRequirements,
+      warnings
+    };
+  }
 }

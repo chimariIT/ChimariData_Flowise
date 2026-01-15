@@ -8,12 +8,12 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { 
-  Users, 
-  Settings, 
-  BarChart3, 
-  DollarSign, 
-  Bot, 
+import {
+  Users,
+  Settings,
+  BarChart3,
+  DollarSign,
+  Bot,
   Wrench,
   TrendingUp,
   Activity,
@@ -24,7 +24,8 @@ import {
   ArrowLeft,
   AlertTriangle,
   MessageSquare,
-  Receipt
+  Receipt,
+  Calculator
 } from "lucide-react";
 import AdminDashboard from "./admin-dashboard";
 import AgentManagement from "./agent-management";
@@ -33,6 +34,8 @@ import ToolsManagement from "./tools-management";
 import Consultations from "./consultations";
 import ConsultationPricing from "./consultation-pricing";
 import PricingServicesAdmin from "./pricing-services";
+import ProjectStateInspector from "./project-state-inspector";
+import AnalysisPricing from "./analysis-pricing";
 
 interface AdminLayoutProps {
   user?: any;
@@ -115,8 +118,8 @@ export default function AdminLayout({ user }: AdminLayoutProps) {
                 You don't have permission to access the admin panel. Please contact your administrator.
               </AlertDescription>
             </Alert>
-            <Button 
-              onClick={() => setLocation('/dashboard')} 
+            <Button
+              onClick={() => setLocation('/dashboard')}
               className="w-full mt-4"
               variant="outline"
             >
@@ -152,8 +155,8 @@ export default function AdminLayout({ user }: AdminLayoutProps) {
                 You don't have permission to access the admin panel. Please contact your administrator.
               </AlertDescription>
             </Alert>
-            <Button 
-              onClick={() => setLocation('/dashboard')} 
+            <Button
+              onClick={() => setLocation('/dashboard')}
               className="w-full mt-4"
               variant="outline"
             >
@@ -173,9 +176,9 @@ export default function AdminLayout({ user }: AdminLayoutProps) {
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
-              <Button 
-                variant="ghost" 
-                size="sm" 
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => setLocation("/dashboard")}
               >
                 <ArrowLeft className="w-4 h-4 mr-2" />
@@ -201,7 +204,7 @@ export default function AdminLayout({ user }: AdminLayoutProps) {
       {/* Main Content */}
       <div className="container mx-auto px-4 py-6">
         <Tabs value={activeTab} onValueChange={handleTabChange}>
-          <TabsList className="grid w-full grid-cols-7 mb-6">
+          <TabsList className="grid w-full grid-cols-9 mb-6">
             <TabsTrigger value="dashboard" className="flex items-center gap-2">
               <BarChart3 className="w-4 h-4" />
               Dashboard
@@ -213,6 +216,10 @@ export default function AdminLayout({ user }: AdminLayoutProps) {
             <TabsTrigger value="service-pricing" className="flex items-center gap-2">
               <DollarSign className="w-4 h-4" />
               Service Pricing
+            </TabsTrigger>
+            <TabsTrigger value="analysis-pricing" className="flex items-center gap-2">
+              <TrendingUp className="w-4 h-4" />
+              Analysis Pricing
             </TabsTrigger>
             <TabsTrigger value="consultations" className="flex items-center gap-2">
               <MessageSquare className="w-4 h-4" />
@@ -230,6 +237,10 @@ export default function AdminLayout({ user }: AdminLayoutProps) {
               <Wrench className="w-4 h-4" />
               Tools
             </TabsTrigger>
+            <TabsTrigger value="state-inspector" className="flex items-center gap-2">
+              <Activity className="w-4 h-4" />
+              State Inspector
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="dashboard">
@@ -242,6 +253,10 @@ export default function AdminLayout({ user }: AdminLayoutProps) {
 
           <TabsContent value="service-pricing">
             <PricingServicesAdmin onBack={() => setActiveTab('dashboard')} />
+          </TabsContent>
+
+          <TabsContent value="analysis-pricing">
+            <AnalysisPricing onBack={() => setActiveTab('dashboard')} />
           </TabsContent>
 
           <TabsContent value="consultations">
@@ -258,6 +273,10 @@ export default function AdminLayout({ user }: AdminLayoutProps) {
 
           <TabsContent value="tools-management">
             <ToolsManagement />
+          </TabsContent>
+
+          <TabsContent value="state-inspector">
+            <ProjectStateInspector />
           </TabsContent>
         </Tabs>
       </div>

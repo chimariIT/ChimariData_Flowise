@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { ProjectManagerAgent } from '../services/project-manager-agent';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { normalizeQuestions, normalizeQuestion } from '../utils/question-normalizer';
 
 const router = Router();
 
@@ -120,9 +121,9 @@ router.post('/clarify-goal', async (req, res) => {
 async function generateClarifyingQuestion(goal: string, previousResponses?: string): Promise<string> {
   // Use AI to generate contextual questions
   // For now, return common clarifying questions based on goal keywords
-  
+
   const lowerGoal = goal.toLowerCase();
-  
+
   if (lowerGoal.includes('customer') || lowerGoal.includes('user')) {
     return 'What specific customer behavior or characteristic are you trying to understand?';
   } else if (lowerGoal.includes('sales') || lowerGoal.includes('revenue')) {
@@ -142,7 +143,7 @@ async function generateClarifyingQuestion(goal: string, previousResponses?: stri
 async function generateSuggestions(goal: string, userResponse: string): Promise<string[]> {
   const lowerGoal = goal.toLowerCase();
   const lowerResponse = userResponse.toLowerCase();
-  
+
   // Generate contextual suggestions
   const allSuggestions = [
     'Customer segmentation and profiling',
@@ -154,10 +155,10 @@ async function generateSuggestions(goal: string, userResponse: string): Promise<
     'Root cause analysis for identified issues',
     'Optimization recommendations'
   ];
-  
+
   // Select relevant suggestions based on goal and response
   const relevantSuggestions: string[] = [];
-  
+
   if (lowerGoal.includes('customer') || lowerResponse.includes('customer')) {
     relevantSuggestions.push(allSuggestions[0]);
   }
@@ -170,9 +171,9 @@ async function generateSuggestions(goal: string, userResponse: string): Promise<
   if (lowerGoal.includes('predict') || lowerGoal.includes('forecast')) {
     relevantSuggestions.push(allSuggestions[3]);
   }
-  
+
   // Always include at least 3 suggestions
-  return relevantSuggestions.length >= 3 
+  return relevantSuggestions.length >= 3
     ? relevantSuggestions.slice(0, 3)
     : [...relevantSuggestions, ...allSuggestions.slice(0, 3 - relevantSuggestions.length)];
 }
@@ -185,7 +186,7 @@ async function summarizeClarifiedGoal(originalGoal: string, userResponse: string
   if (!userResponse || userResponse.trim() === '') {
     return originalGoal;
   }
-  
+
   return `${originalGoal}. Specifically focusing on: ${userResponse}`;
 }
 
@@ -211,11 +212,11 @@ function identifyChanges(originalGoal: string, clarifiedGoal: string): string[] 
  */
 function identifyDataRequirements(goal: string, questions: string[] | string | undefined): string[] {
   const requirements: string[] = [];
-  const lowerGoal = goal.toLowerCase();
+  const lowerGoal = normalizeQuestion(goal).toLowerCase();
 
-  // Ensure questions is an array
-  const questionArray = Array.isArray(questions) ? questions : [];
-  const allText = [goal, ...questionArray].join(' ').toLowerCase();
+  // Ensure questions is an array and normalize them
+  const questionArray = normalizeQuestions(questions);
+  const allText = [lowerGoal, ...questionArray].join(' ').toLowerCase();
 
   // Common data requirements based on keywords
   if (allText.includes('customer') || allText.includes('user')) {
@@ -255,9 +256,10 @@ function identifyDataRequirements(goal: string, questions: string[] | string | u
  * Estimate complexity based on goal and questions
  */
 function estimateComplexity(goal: string, questions: string[] | string | undefined): string {
-  // Ensure questions is an array
-  const questionArray = Array.isArray(questions) ? questions : [];
-  const allText = [goal, ...questionArray].join(' ').toLowerCase();
+  // Ensure questions is an array and normalize them
+  const questionArray = normalizeQuestions(questions);
+  const normalizedGoal = normalizeQuestion(goal);
+  const allText = [normalizedGoal, ...questionArray].join(' ').toLowerCase();
   let complexityScore = 0;
 
   // Increase complexity for advanced analysis types
@@ -412,7 +414,7 @@ function generateClarifyingQuestionsFallback(goal: string, questionArray: string
   // Extract key subject from goal for more contextual questions
   // Use a smarter extraction that looks for the main subject
   let subject = 'this analysis';
-  
+
   // Common patterns for extracting subject
   const patterns = [
     { keywords: ['customer', 'user', 'client'], subject: 'customer behavior analysis' },
@@ -436,14 +438,14 @@ function generateClarifyingQuestionsFallback(goal: string, questionArray: string
   // If still generic, extract meaningful noun phrases from goal
   if (subject === 'this analysis') {
     // Filter out first-person pronouns and common verbs
-    const stopWords = ['i', 'want', 'to', 'need', 'have', 'will', 'should', 'would', 'can', 'could', 
-                       'understand', 'analyze', 'analyze', 'analyze', 'what', 'how', 'why', 'where', 'when',
-                       'what', 'the', 'this', 'that', 'these', 'those', 'a', 'an', 'is', 'are', 'am'];
-    
+    const stopWords = ['i', 'want', 'to', 'need', 'have', 'will', 'should', 'would', 'can', 'could',
+      'understand', 'analyze', 'analyze', 'analyze', 'what', 'how', 'why', 'where', 'when',
+      'what', 'the', 'this', 'that', 'these', 'those', 'a', 'an', 'is', 'are', 'am'];
+
     const words = goal.split(/\s+/)
       .filter(word => !stopWords.includes(word.toLowerCase()))
       .filter(word => word.length > 2); // Remove short words
-    
+
     if (words.length >= 2) {
       // Take first 2-3 meaningful words
       const significantWords = words.slice(0, 3).join(' ');
@@ -526,9 +528,9 @@ function generateClarifyingQuestionsFallback(goal: string, questionArray: string
  */
 function identifySuggestedFocus(goal: string, questions: string[] | string | undefined): string[] {
   const focusAreas: string[] = [];
-  const lowerGoal = goal.toLowerCase();
-  const questionArray = Array.isArray(questions) ? questions : [];
-  const allText = [goal, ...questionArray].join(' ').toLowerCase();
+  const normalizedGoal = normalizeQuestion(goal);
+  const questionArray = normalizeQuestions(questions);
+  const allText = [normalizedGoal, ...questionArray].join(' ').toLowerCase();
 
   // Identify focus areas based on content
   if (allText.includes('customer') || allText.includes('user')) {
@@ -636,9 +638,11 @@ router.post('/suggest-questions', async (req, res) => {
 });
 
 /**
- * Update project goal after clarification
- * Frontend: POST /api/project-manager/update-goal-after-clarification
+ * DEPRECATED: This endpoint is superseded by the authenticated version in project-manager.ts
+ * The proper endpoint handles sessionId correctly and saves to projectSessions table
+ * Keeping this commented out to avoid route conflicts
  */
+/*
 router.post('/update-goal-after-clarification', async (req, res) => {
   try {
     const { projectId, clarifiedGoal, refinedQuestions, clarification } = req.body;
@@ -654,8 +658,37 @@ router.post('/update-goal-after-clarification', async (req, res) => {
     const { storage } = require('../storage');
     await storage.updateProject(projectId, {
       description: clarifiedGoal || undefined,
-      // Store clarification in project metadata if needed
+      clarification: clarification || undefined
     });
+
+    // Log decision to audit trail
+    const { db } = require('../db');
+    const { decisionAudits } = require('@shared/schema');
+    const { nanoid } = require('nanoid');
+
+    if (db && decisionAudits) {
+      try {
+        await db.insert(decisionAudits).values({
+          id: nanoid(),
+          projectId,
+          agent: 'project_manager',
+          decisionType: 'goal_clarification',
+          decision: `Clarified Analysis Goal: ${clarifiedGoal}`,
+          reasoning: `User clarified goal through PM agent interaction. Refined questions: ${JSON.stringify(refinedQuestions || [])}`,
+          alternatives: JSON.stringify([]),
+          confidence: 100,
+          context: JSON.stringify({ clarification }),
+          userInput: clarifiedGoal,
+          impact: 'high',
+          reversible: true,
+          timestamp: new Date()
+        });
+        console.log('✅ Logged goal clarification decision');
+      } catch (logError) {
+        console.error('Failed to log decision:', logError);
+        // Continue - do not fail request
+      }
+    }
 
     res.json({
       success: true,
@@ -670,6 +703,7 @@ router.post('/update-goal-after-clarification', async (req, res) => {
     });
   }
 });
+*/
 
 export default router;
 

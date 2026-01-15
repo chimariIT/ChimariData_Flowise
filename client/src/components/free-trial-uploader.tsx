@@ -290,19 +290,24 @@ export default function FreeTrialUploader() {
         </CardHeader>
         <CardContent>
           <div className="grid gap-3">
-            {Object.entries(schema).slice(0, 8).map(([fieldName, fieldInfo]: [string, any]) => (
-              <div key={fieldName} className="flex items-center justify-between p-3 border rounded-lg">
-                <div>
-                  <h4 className="font-medium text-gray-900">{fieldName}</h4>
-                  {fieldInfo.sampleValues && (
-                    <p className="text-sm text-gray-500 mt-1">
-                      Sample: {fieldInfo.sampleValues.slice(0, 2).join(', ')}
-                    </p>
-                  )}
+            {Object.entries(schema).slice(0, 8).map(([fieldName, fieldInfo]: [string, any]) => {
+              // FIX: Handle both string and object schema formats
+              const fieldType = typeof fieldInfo === 'string' ? fieldInfo : (fieldInfo?.type || fieldInfo?.dataType || 'unknown');
+              const sampleValues = typeof fieldInfo === 'object' ? fieldInfo?.sampleValues : null;
+              return (
+                <div key={fieldName} className="flex items-center justify-between p-3 border rounded-lg">
+                  <div>
+                    <h4 className="font-medium text-gray-900">{fieldName}</h4>
+                    {sampleValues && Array.isArray(sampleValues) && (
+                      <p className="text-sm text-gray-500 mt-1">
+                        Sample: {sampleValues.slice(0, 2).join(', ')}
+                      </p>
+                    )}
+                  </div>
+                  <Badge variant="outline">{fieldType}</Badge>
                 </div>
-                <Badge variant="outline">{fieldInfo.type}</Badge>
-              </div>
-            ))}
+              );
+            })}
             {Object.keys(schema).length > 8 && (
               <p className="text-sm text-gray-500 text-center">
                 ...and {Object.keys(schema).length - 8} more columns

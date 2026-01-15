@@ -89,7 +89,10 @@ export function DataQualityCheckpoint({
         <div className="flex items-center justify-between p-4 bg-white rounded-lg border">
           <div>
             <h4 className="text-sm font-medium text-gray-600 mb-1">Overall Quality Score</h4>
-            <p className="text-xs text-gray-500">Based on completeness, consistency, and validity</p>
+            <p className="text-xs text-gray-500">Based on completeness, consistency, validity, and accuracy</p>
+            <p className="text-xs text-gray-400 mt-1">
+              Formula: (Completeness + Consistency + Validity + Accuracy) / 4
+            </p>
           </div>
           <div className="text-right">
             <p className={`text-3xl font-bold ${getScoreColor(qualityScore)}`}>
@@ -238,6 +241,9 @@ export function DataQualityCheckpoint({
     </Card>
   );
 }
+
+
+
 
 
 

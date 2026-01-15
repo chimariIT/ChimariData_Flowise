@@ -3,6 +3,7 @@
 
 import { db } from '../db';
 import { sql } from 'drizzle-orm';
+import { semanticSearchService } from './semantic-search-service';
 
 export interface TemplateStep {
   id: string;
@@ -32,6 +33,18 @@ export interface Template {
   createdBy?: string;
   createdAt: Date;
   updatedAt: Date;
+  targetRole?: string;
+  targetSeniority?: string;
+  targetMaturity?: string;
+  artifactTypes?: string[];
+  visualizationTypes?: string[];
+  narrativeStyle?: string;
+  contentDepth?: string;
+  interactivityLevel?: string;
+  useCases?: string[];
+  deliveryFormat?: string[];
+  priority?: number;
+  usageCount?: number;
 }
 
 export interface TemplateFilter {
@@ -41,6 +54,8 @@ export interface TemplateFilter {
   isSystem?: boolean;
   isActive?: boolean;
   searchTerm?: string;
+  limit?: number;
+  minSimilarity?: number;
 }
 
 export class TemplateService {
@@ -89,7 +104,7 @@ export class TemplateService {
     query += ` ORDER BY industry, name`;
 
     const result = await db.execute(sql.raw(query));
-    return result.rows.map(row => this.mapRowToTemplate(row));
+    return result.rows.map((row: any) => this.mapRowToTemplate(row));
   }
 
   /**
@@ -141,7 +156,7 @@ export class TemplateService {
       ORDER BY name;
     `));
 
-    return result.rows.map(row => this.mapRowToTemplate(row));
+    return result.rows.map((row: any) => this.mapRowToTemplate(row));
   }
 
   /**
@@ -156,7 +171,7 @@ export class TemplateService {
       ORDER BY industry, name;
     `));
 
-    return result.rows.map(row => this.mapRowToTemplate(row));
+    return result.rows.map((row: any) => this.mapRowToTemplate(row));
   }
 
   /**
@@ -169,7 +184,7 @@ export class TemplateService {
       ORDER BY industry, name;
     `));
 
-    return result.rows.map(row => this.mapRowToTemplate(row));
+    return result.rows.map((row: any) => this.mapRowToTemplate(row));
   }
 
   /**
@@ -188,7 +203,7 @@ export class TemplateService {
     query += ` ORDER BY created_at DESC`;
 
     const result = await db.execute(sql.raw(query));
-    return result.rows.map(row => this.mapRowToTemplate(row));
+    return result.rows.map((row: any) => this.mapRowToTemplate(row));
   }
 
   /**
@@ -237,18 +252,64 @@ export class TemplateService {
    * Search templates
    */
   static async searchTemplates(searchTerm: string): Promise<Template[]> {
+    return this.searchTemplatesWithFilters(searchTerm, {});
+  }
+
+  static async searchTemplatesWithFilters(searchTerm: string, filter: TemplateFilter): Promise<Template[]> {
+    const vectorAvailable = await semanticSearchService.isPgVectorAvailable();
+    const limit = filter.limit ?? 20;
+    const minSimilarity = filter.minSimilarity ?? 0.6;
+
+    if (vectorAvailable) {
+      const results = await semanticSearchService.findSimilarTemplates(searchTerm, {
+        limit,
+        minSimilarity,
+        journeyType: filter.journeyType,
+        industry: filter.industry,
+        persona: filter.persona,
+        isSystem: filter.isSystem,
+        isActive: filter.isActive ?? true,
+      });
+
+      if (results.length > 0) {
+        return results.map((r) => this.mapRowToTemplate(r.item));
+      }
+    }
+
+    return this.searchTemplatesWithIlike(searchTerm, filter);
+  }
+
+  private static async searchTemplatesWithIlike(searchTerm: string, filter: TemplateFilter): Promise<Template[]> {
     const safeTerm = searchTerm.replace(/'/g, "''");
+    const conditions: string[] = ['is_active = true'];
+
+    if (filter.journeyType) {
+      conditions.push(`journey_type = '${filter.journeyType}'`);
+    }
+    if (filter.industry) {
+      conditions.push(`industry = '${filter.industry}'`);
+    }
+    if (filter.persona) {
+      conditions.push(`persona = '${filter.persona}'`);
+    }
+    if (filter.isSystem !== undefined) {
+      conditions.push(`is_system = ${filter.isSystem}`);
+    }
+
+    conditions.push(`(
+      name ILIKE '%${safeTerm}%' OR
+      title ILIKE '%${safeTerm}%' OR
+      summary ILIKE '%${safeTerm}%' OR
+      description ILIKE '%${safeTerm}%' OR
+      industry ILIKE '%${safeTerm}%'
+    )`);
+
+    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
     const result = await db.execute(sql.raw(`
       SELECT *
       FROM artifact_templates
-      WHERE is_active = true
-      AND (
-        name ILIKE '%${safeTerm}%' OR
-        title ILIKE '%${safeTerm}%' OR
-        summary ILIKE '%${safeTerm}%' OR
-        description ILIKE '%${safeTerm}%' OR
-        industry ILIKE '%${safeTerm}%'
-      )
+      ${whereClause}
       ORDER BY
         CASE
           WHEN LOWER(name) = LOWER('${safeTerm}') THEN 1
@@ -256,10 +317,11 @@ export class TemplateService {
           WHEN LOWER(title) LIKE LOWER('%${safeTerm}%') THEN 3
           ELSE 4
         END,
-        name;
+        name
+      LIMIT ${filter.limit ?? 50};
     `));
 
-    return result.rows.map(row => this.mapRowToTemplate(row));
+    return result.rows.map((row: any) => this.mapRowToTemplate(row));
   }
 
   /**
@@ -285,7 +347,19 @@ export class TemplateService {
       isActive: row.is_active !== false,
       createdBy: row.created_by,
       createdAt: new Date(row.created_at),
-      updatedAt: new Date(row.updated_at)
+      updatedAt: new Date(row.updated_at),
+      targetRole: row.target_role,
+      targetSeniority: row.target_seniority,
+      targetMaturity: row.target_maturity,
+      artifactTypes: row.artifact_types || [],
+      visualizationTypes: row.visualization_types || [],
+      narrativeStyle: row.narrative_style,
+      contentDepth: row.content_depth,
+      interactivityLevel: row.interactivity_level,
+      useCases: row.use_cases || [],
+      deliveryFormat: row.delivery_format || [],
+      priority: typeof row.priority === 'number' ? row.priority : (row.priority ? parseInt(row.priority, 10) : undefined),
+      usageCount: typeof row.usage_count === 'number' ? row.usage_count : (row.usage_count ? parseInt(row.usage_count, 10) : undefined),
     };
   }
 

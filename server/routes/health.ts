@@ -40,9 +40,22 @@ async function getRedisClient() {
   try {
     const Redis = await import('ioredis');
     const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
-    return new Redis.default(redisUrl);
+    const client = new Redis.default(redisUrl, {
+      lazyConnect: true,
+      maxRetriesPerRequest: 1,
+      retryStrategy: () => null, // Don't retry
+      connectTimeout: 2000
+    });
+
+    // Add error handler to prevent unhandled error events
+    client.on('error', () => {
+      // Silently ignore errors - we'll handle them via the ping check
+    });
+
+    await client.connect();
+    return client;
   } catch (error) {
-    console.warn('Redis client not available:', error instanceof Error ? error.message : String(error));
+    // Silently return null - Redis is optional in development
     return null;
   }
 }

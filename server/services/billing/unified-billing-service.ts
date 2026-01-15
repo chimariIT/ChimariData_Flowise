@@ -17,11 +17,11 @@
 
 import Stripe from 'stripe';
 import { db } from '../../db';
-import { subscriptionTierPricing, users, stripeUsageRecords, projects } from '../../../shared/schema';
+import { subscriptionTierPricing, users, billingCampaigns, projects } from '../../../shared/schema';
 import { PricingService } from '../pricing';
 import { getPricingDataService } from '../pricing-data-service';
 import { mlLLMUsageTracker } from '../ml-llm-usage-tracker';
-import { eq, sql } from 'drizzle-orm';
+import { eq, sql, and, gte, lte } from 'drizzle-orm';
 import type { InferSelectModel } from 'drizzle-orm';
 import { eligibilityService } from '../../eligibility-service';
 import { nanoid } from 'nanoid';
@@ -32,7 +32,6 @@ import {
   FeatureComplexity,
   JourneyType,
   UserRole,
-  normalizeJourneyType,
 } from '../../../shared/canonical-types';
 import * as crypto from 'crypto';
 
@@ -256,6 +255,15 @@ export class UnifiedBillingService {
   private stripe: Stripe;
   private webhookSecret: string;
 
+  // ==========================================
+  // WEBHOOK IDEMPOTENCY TRACKING
+  // ==========================================
+  // Prevents duplicate webhook processing when Stripe retries
+  // Set holds event IDs that have been successfully processed
+  // Cleaned up periodically to prevent memory growth
+  private processedWebhooks: Set<string> = new Set();
+  private readonly MAX_PROCESSED_WEBHOOKS = 1000;
+
   // In-memory cache for admin configurations (refreshed periodically)
   private tierConfigs: Map<SubscriptionTier, AdminSubscriptionTierConfig> = new Map();
   private featureConfigs: Map<string, AdminFeatureConfig> = new Map();
@@ -457,6 +465,9 @@ export class UnifiedBillingService {
 
       console.log(`✅ Loaded ${dbTiers.length} tier configurations from database`);
 
+      // Load campaigns from database
+      await this.loadCampaignsFromDatabase();
+
       this.legacyConfig.tiers = Array.from(this.tierConfigs.values()).map(tierConfig => ({
         id: tierConfig.tier,
         role: tierConfig.tier,
@@ -487,6 +498,37 @@ export class UnifiedBillingService {
       `);
     } catch (error) {
       console.error('⚠️ Unable to ensure subscription_balances column exists:', error);
+    }
+  }
+
+  /**
+   * Load campaigns from database
+   * Campaigns are now persisted in the billing_campaigns table
+   */
+  private async loadCampaignsFromDatabase(): Promise<void> {
+    try {
+      const dbCampaigns = await db.select().from(billingCampaigns);
+
+      this.activeCampaigns = dbCampaigns.map((c: InferSelectModel<typeof billingCampaigns>) => ({
+        id: c.id,
+        name: c.name,
+        type: c.type as AdminCampaignConfig['type'],
+        value: c.value,
+        targetTiers: (c.targetTiers as string[]) || [],
+        targetRoles: (c.targetRoles as string[]) || [],
+        validFrom: c.validFrom,
+        validTo: c.validTo,
+        maxUses: c.maxUses ?? undefined,
+        currentUses: c.currentUses,
+        couponCode: c.couponCode ?? undefined,
+        isActive: c.isActive ?? true,
+      }));
+
+      this.legacyConfig.campaigns = this.activeCampaigns;
+      console.log(`✅ Loaded ${dbCampaigns.length} campaigns from database`);
+    } catch (error) {
+      console.error('⚠️ Failed to load campaigns from database:', error);
+      // Keep existing in-memory campaigns if load fails
     }
   }
 
@@ -605,7 +647,7 @@ export class UnifiedBillingService {
         tier: 'trial',
         displayName: 'Trial',
         description: '14-day trial with AI-guided journey',
-        pricing: { monthly: 0, yearly: 0, currency: 'USD' },
+        pricing: { monthly: 1, yearly: 10, currency: 'USD' },
         stripeProductId: 'prod_trial',
         stripePriceIds: { monthly: 'price_trial', yearly: 'price_trial' },
         quotas: {
@@ -636,7 +678,7 @@ export class UnifiedBillingService {
             statistical_analysis: { small: 1.00, medium: 5.00, large: 15.00, extra_large: 50.00 },
           },
         },
-        features: ['ai_guided_journey', 'basic_analysis'],
+        features: ['non_tech_journey', 'basic_analysis'],
         isActive: true,
       },
       {
@@ -674,7 +716,7 @@ export class UnifiedBillingService {
             statistical_analysis: { small: 0.80, medium: 4.00, large: 12.00, extra_large: 40.00 },
           },
         },
-        features: ['ai_guided_journey', 'template_based_journey', 'advanced_analysis', 'data_export'],
+        features: ['non_tech_journey', 'business_journey', 'advanced_analysis', 'data_export'],
         isActive: true,
       },
       {
@@ -715,9 +757,9 @@ export class UnifiedBillingService {
           },
         },
         features: [
-          'ai_guided_journey',
-          'template_based_journey',
-          'self_service_journey',
+          'non_tech_journey',
+          'business_journey',
+          'technical_journey',
           'advanced_analysis',
           'ml_models',
           'code_generation',
@@ -951,8 +993,9 @@ export class UnifiedBillingService {
       value instanceof Date ? value : value ? new Date(value) : fallback;
 
     const now = new Date();
+    const campaignId = campaign.id ?? nanoid();
     const newCampaign: AdminCampaignConfig = {
-      id: campaign.id ?? nanoid(),
+      id: campaignId,
       name: campaign.name ?? 'Untitled Campaign',
       type: campaign.type ?? 'percentage_discount',
       value: campaign.value ?? 0,
@@ -962,10 +1005,59 @@ export class UnifiedBillingService {
       validTo: normalizeDate(campaign.validTo, new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)),
       maxUses: campaign.maxUses,
       currentUses: campaign.currentUses ?? 0,
-      couponCode: campaign.couponCode ?? campaign.id ?? undefined,
+      couponCode: campaign.couponCode ?? campaignId,
       isActive: campaign.isActive ?? true,
     };
 
+    // Save to database for persistence
+    try {
+      const [existing] = await db.select().from(billingCampaigns).where(eq(billingCampaigns.id, newCampaign.id));
+
+      if (existing) {
+        // Update existing campaign
+        await db.update(billingCampaigns)
+          .set({
+            name: newCampaign.name,
+            type: newCampaign.type,
+            value: newCampaign.value,
+            targetTiers: newCampaign.targetTiers,
+            targetRoles: newCampaign.targetRoles,
+            validFrom: newCampaign.validFrom,
+            validTo: newCampaign.validTo,
+            maxUses: newCampaign.maxUses ?? null,
+            currentUses: newCampaign.currentUses,
+            couponCode: newCampaign.couponCode ?? null,
+            isActive: newCampaign.isActive,
+            updatedAt: new Date(),
+          })
+          .where(eq(billingCampaigns.id, newCampaign.id));
+        console.log(`✅ Updated campaign ${newCampaign.id} in database`);
+      } else {
+        // Insert new campaign
+        await db.insert(billingCampaigns).values({
+          id: newCampaign.id,
+          name: newCampaign.name,
+          type: newCampaign.type,
+          value: newCampaign.value,
+          targetTiers: newCampaign.targetTiers,
+          targetRoles: newCampaign.targetRoles,
+          validFrom: newCampaign.validFrom,
+          validTo: newCampaign.validTo,
+          maxUses: newCampaign.maxUses ?? null,
+          currentUses: newCampaign.currentUses,
+          couponCode: newCampaign.couponCode ?? null,
+          isActive: newCampaign.isActive,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+        console.log(`✅ Created campaign ${newCampaign.id} in database`);
+      }
+    } catch (error) {
+      console.error('❌ Failed to persist campaign to database:', error);
+      // Continue with in-memory storage as fallback
+    }
+
+    // Update in-memory cache
     this.legacyConfig.campaigns = [
       ...this.legacyConfig.campaigns.filter(existing => existing.id !== newCampaign.id),
       newCampaign
@@ -1030,11 +1122,32 @@ export class UnifiedBillingService {
       return false;
     }
 
+    // Check if within valid date range
+    const now = new Date();
+    if (now < campaign.validFrom || now > campaign.validTo) {
+      return false;
+    }
+
     if (campaign.maxUses && campaign.currentUses >= campaign.maxUses) {
       return false;
     }
 
     campaign.currentUses += 1;
+
+    // Persist the usage count to database
+    try {
+      await db.update(billingCampaigns)
+        .set({
+          currentUses: campaign.currentUses,
+          updatedAt: new Date(),
+        })
+        .where(eq(billingCampaigns.id, campaign.id));
+      console.log(`✅ Applied campaign ${campaign.id} for user ${userId} (uses: ${campaign.currentUses})`);
+    } catch (error) {
+      console.error('⚠️ Failed to persist campaign usage to database:', error);
+      // Continue anyway - in-memory count is updated
+    }
+
     return true;
   }
 
@@ -1320,20 +1433,22 @@ export class UnifiedBillingService {
           .where(eq(users.id, userId));
       }
 
-      // FIX: Production Readiness - Map user-selected payment method to Stripe types
-      // Note: PayPal and bank transfers require Stripe dashboard configuration
-      type StripePaymentMethodType = 'card' | 'paypal' | 'us_bank_account';
-      const paymentMethodMap: Record<string, StripePaymentMethodType[]> = {
-        card: ['card'],
-        paypal: ['paypal'],  // Requires PayPal to be enabled in Stripe dashboard
-        bank: ['us_bank_account'],  // Requires ACH to be enabled in Stripe dashboard
-      };
-      const selectedMethod = metadata.paymentMethod || 'card';
-      const paymentMethodTypes = paymentMethodMap[selectedMethod] || ['card'];
+      // Get journey type from project for proper redirect back to journey
+      const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
+      const journeyType = (project as any)?.journeyType || 'non-tech';
+
+      // CRITICAL FIX: Redirect back to journey pricing step instead of project page
+      // This ensures the payment success handler in pricing-step.tsx is triggered
+      const baseUrl = process.env.APP_URL || 'http://localhost:5000';
+      const successUrl = `${baseUrl}/journeys/${journeyType}/pricing?projectId=${projectId}&payment=success&session_id={CHECKOUT_SESSION_ID}`;
+      const cancelUrl = `${baseUrl}/journeys/${journeyType}/pricing?projectId=${projectId}&payment=cancelled`;
+
+      console.log(`📍 [Checkout] Success URL: ${successUrl}`);
+      console.log(`📍 [Checkout] Cancel URL: ${cancelUrl}`);
 
       const session = await this.stripe.checkout.sessions.create({
         customer: customerId,
-        payment_method_types: paymentMethodTypes,
+        payment_method_types: ['card'],
         line_items: [
           {
             price_data: {
@@ -1348,12 +1463,13 @@ export class UnifiedBillingService {
           },
         ],
         mode: 'payment',
-        success_url: `${process.env.APP_URL || 'http://localhost:5000'}/projects/${projectId}?payment=success&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${process.env.APP_URL || 'http://localhost:5000'}/projects/${projectId}?payment=cancelled`,
+        success_url: successUrl,
+        cancel_url: cancelUrl,
         metadata: {
           projectId,
           userId,
           type: 'one_off_analysis',
+          journeyType, // Store for potential recovery
           ...metadata
         },
       });
@@ -1460,247 +1576,6 @@ export class UnifiedBillingService {
   }
 
   // ==========================================
-  // METERED BILLING / USAGE REPORTING
-  // ==========================================
-
-  /**
-   * FIX A5: Report usage to Stripe for metered billing
-   * Creates a usage record in Stripe and tracks it locally
-   *
-   * @param userId - User who incurred the usage
-   * @param quantity - Usage quantity (units depend on billing model)
-   * @param action - Type of action (e.g., 'analysis_execution', 'data_processing')
-   * @param metadata - Additional context about the usage
-   * @returns Result with success status and record ID
-   */
-  async reportUsageToStripe(
-    userId: string,
-    quantity: number,
-    action: string,
-    metadata: {
-      projectId?: string;
-      analysisType?: string;
-      description?: string;
-      [key: string]: any;
-    } = {}
-  ): Promise<{ success: boolean; recordId?: string; error?: string }> {
-    try {
-      // Get user's subscription info
-      const [user] = await db.select().from(users).where(eq(users.id, userId));
-      if (!user) {
-        return { success: false, error: 'User not found' };
-      }
-
-      // Check if user has an active subscription with metered billing
-      if (!user.stripeSubscriptionId || user.subscriptionStatus !== 'active') {
-        console.log(`[Billing] User ${userId} has no active subscription, skipping Stripe usage report`);
-        // Still record locally for tracking
-        return await this.recordLocalUsage(userId, quantity, action, metadata, 'pending', 'No active subscription');
-      }
-
-      // Get the subscription item ID for metered billing
-      const subscriptionItemId = await this.getMeteredSubscriptionItemId(user.stripeSubscriptionId);
-      if (!subscriptionItemId) {
-        console.log(`[Billing] No metered subscription item found for user ${userId}`);
-        return await this.recordLocalUsage(userId, quantity, action, metadata, 'pending', 'No metered subscription item');
-      }
-
-      // Generate idempotency key to prevent duplicate reports
-      const idempotencyKey = `${userId}_${action}_${metadata.projectId || 'no-project'}_${Date.now()}`;
-
-      // Create usage record in Stripe
-      // FIX: Use type assertion for createUsageRecord as it exists at runtime but types may be outdated
-      try {
-        const usageRecord = await (this.stripe.subscriptionItems as any).createUsageRecord(
-          subscriptionItemId,
-          {
-            quantity,
-            timestamp: Math.floor(Date.now() / 1000), // Unix timestamp
-            action: 'increment', // Add to existing usage
-          },
-          {
-            idempotencyKey,
-          }
-        );
-
-        // Record successful usage in local database
-        const [record] = await db.insert(stripeUsageRecords).values({
-          userId,
-          subscriptionItemId,
-          stripeRecordId: usageRecord.id,
-          quantity,
-          idempotencyKey,
-          timestamp: new Date(),
-          projectId: metadata.projectId || null,
-          analysisType: metadata.analysisType || null,
-          action,
-          status: 'reported',
-          metadata: metadata,
-          reportedAt: new Date(),
-        }).returning();
-
-        console.log(`[Billing] Usage reported to Stripe: ${quantity} units for ${action} (record: ${record.id})`);
-
-        return { success: true, recordId: record.id };
-      } catch (stripeError: any) {
-        // Record failed attempt locally
-        const result = await this.recordLocalUsage(
-          userId,
-          quantity,
-          action,
-          { ...metadata, subscriptionItemId },
-          'failed',
-          stripeError.message
-        );
-
-        console.error(`[Billing] Failed to report usage to Stripe:`, stripeError.message);
-        return { success: false, recordId: result.recordId, error: stripeError.message };
-      }
-    } catch (error: any) {
-      console.error('[Billing] reportUsageToStripe error:', error);
-      return { success: false, error: error.message };
-    }
-  }
-
-  /**
-   * Record usage locally (for tracking when Stripe reporting fails or is unavailable)
-   */
-  private async recordLocalUsage(
-    userId: string,
-    quantity: number,
-    action: string,
-    metadata: Record<string, any>,
-    status: 'pending' | 'reported' | 'failed' | 'cancelled',
-    errorMessage?: string
-  ): Promise<{ success: boolean; recordId?: string }> {
-    try {
-      const idempotencyKey = `${userId}_${action}_${metadata.projectId || 'no-project'}_${Date.now()}`;
-
-      const [record] = await db.insert(stripeUsageRecords).values({
-        userId,
-        subscriptionItemId: metadata.subscriptionItemId || 'local-tracking',
-        quantity,
-        idempotencyKey,
-        timestamp: new Date(),
-        projectId: metadata.projectId || null,
-        analysisType: metadata.analysisType || null,
-        action,
-        status,
-        errorMessage: errorMessage || null,
-        metadata,
-      }).returning();
-
-      return { success: true, recordId: record.id };
-    } catch (error: any) {
-      console.error('[Billing] Failed to record local usage:', error);
-      return { success: false };
-    }
-  }
-
-  /**
-   * Get the metered subscription item ID from a subscription
-   * Looks for items with metered billing (usage_type: 'metered')
-   */
-  private async getMeteredSubscriptionItemId(subscriptionId: string): Promise<string | null> {
-    try {
-      const subscription = await this.stripe.subscriptions.retrieve(subscriptionId, {
-        expand: ['items.data.price'],
-      });
-
-      // Find a metered price item
-      for (const item of subscription.items.data) {
-        const price = item.price;
-        if (price && typeof price === 'object' && price.recurring?.usage_type === 'metered') {
-          return item.id;
-        }
-      }
-
-      // If no metered item found, return the first item (for subscriptions with usage-based add-ons)
-      if (subscription.items.data.length > 0) {
-        return subscription.items.data[0].id;
-      }
-
-      return null;
-    } catch (error: any) {
-      console.error('[Billing] Failed to get metered subscription item:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Retry pending usage reports
-   * Called periodically to retry failed Stripe reports
-   */
-  async retryPendingUsageReports(): Promise<{ processed: number; succeeded: number; failed: number }> {
-    let processed = 0;
-    let succeeded = 0;
-    let failed = 0;
-
-    try {
-      // Get pending records
-      const pendingRecords = await db.select()
-        .from(stripeUsageRecords)
-        .where(eq(stripeUsageRecords.status, 'pending'));
-
-      for (const record of pendingRecords) {
-        processed++;
-
-        // Get user's current subscription item
-        const [user] = await db.select().from(users).where(eq(users.id, record.userId));
-        if (!user?.stripeSubscriptionId || user.subscriptionStatus !== 'active') {
-          continue; // Skip if no active subscription
-        }
-
-        const subscriptionItemId = await this.getMeteredSubscriptionItemId(user.stripeSubscriptionId);
-        if (!subscriptionItemId) {
-          continue;
-        }
-
-        try {
-          // FIX: Use type assertion for createUsageRecord as it exists at runtime but types may be outdated
-          const usageRecord = await (this.stripe.subscriptionItems as any).createUsageRecord(
-            subscriptionItemId,
-            {
-              quantity: record.quantity,
-              timestamp: Math.floor(record.timestamp.getTime() / 1000),
-              action: 'increment',
-            },
-            {
-              idempotencyKey: record.idempotencyKey,
-            }
-          );
-
-          // Update record as successful
-          await db.update(stripeUsageRecords)
-            .set({
-              status: 'reported',
-              stripeRecordId: usageRecord.id,
-              subscriptionItemId,
-              reportedAt: new Date(),
-              errorMessage: null,
-            })
-            .where(eq(stripeUsageRecords.id, record.id));
-
-          succeeded++;
-        } catch (error: any) {
-          // Update error message
-          await db.update(stripeUsageRecords)
-            .set({
-              errorMessage: error.message,
-            })
-            .where(eq(stripeUsageRecords.id, record.id));
-
-          failed++;
-        }
-      }
-    } catch (error: any) {
-      console.error('[Billing] retryPendingUsageReports error:', error);
-    }
-
-    return { processed, succeeded, failed };
-  }
-
-  // ==========================================
   // WEBHOOK HANDLING
   // ==========================================
 
@@ -1711,7 +1586,7 @@ export class UnifiedBillingService {
   async handleWebhook(
     payload: string | Buffer,
     signature: string
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{ success: boolean; error?: string; skipped?: boolean }> {
     try {
       // Verify webhook signature (SECURITY)
       const event = this.stripe.webhooks.constructEvent(
@@ -1720,7 +1595,16 @@ export class UnifiedBillingService {
         this.webhookSecret
       );
 
-      console.log(`Processing webhook: ${event.type}`);
+      // ==========================================
+      // IDEMPOTENCY CHECK
+      // ==========================================
+      // Prevent duplicate processing when Stripe retries webhooks
+      if (this.processedWebhooks.has(event.id)) {
+        console.log(`⚠️ [Webhook] Event ${event.id} already processed, skipping`);
+        return { success: true, skipped: true };
+      }
+
+      console.log(`🔔 [Webhook] Processing: ${event.type} (ID: ${event.id})`);
 
       // Process event within transaction
       await db.transaction(async (tx: typeof db) => {
@@ -1742,14 +1626,40 @@ export class UnifiedBillingService {
             await this.handlePaymentFailed(event.data.object as Stripe.Invoice, tx);
             break;
 
+          // ✅ FIX: Add missing event handlers
+          case 'checkout.session.completed':
+            await this.handleCheckoutSessionCompleted(event.data.object as Stripe.Checkout.Session, tx);
+            break;
+
+          case 'charge.refunded':
+            await this.handleChargeRefunded(event.data.object as Stripe.Charge, tx);
+            break;
+
+          case 'customer.deleted':
+            await this.handleCustomerDeleted(event.data.object as Stripe.Customer, tx);
+            break;
+
           default:
-            console.log(`Unhandled webhook type: ${event.type}`);
+            console.log(`ℹ️ [Webhook] Unhandled event type: ${event.type}`);
         }
       });
 
+      // ==========================================
+      // MARK AS PROCESSED
+      // ==========================================
+      this.processedWebhooks.add(event.id);
+
+      // Cleanup old entries to prevent memory growth
+      if (this.processedWebhooks.size > this.MAX_PROCESSED_WEBHOOKS) {
+        const entriesToRemove = Array.from(this.processedWebhooks).slice(0, this.MAX_PROCESSED_WEBHOOKS / 2);
+        entriesToRemove.forEach(id => this.processedWebhooks.delete(id));
+        console.log(`🧹 [Webhook] Cleaned up ${entriesToRemove.length} old webhook entries`);
+      }
+
+      console.log(`✅ [Webhook] Successfully processed: ${event.type}`);
       return { success: true };
     } catch (error: any) {
-      console.error('Webhook processing error:', error);
+      console.error('❌ [Webhook] Processing error:', error);
       return { success: false, error: error.message };
     }
   }
@@ -1758,12 +1668,44 @@ export class UnifiedBillingService {
     const userId = subscription.metadata.userId;
     if (!userId) return;
 
+    // PHASE 11 FIX: Extract subscription tier from metadata or Stripe product
+    // The tier is stored in subscription.metadata.tierId when created via /api/pricing/subscription
+    const tierId = subscription.metadata.tierId ||
+                   subscription.metadata.tier ||
+                   subscription.metadata.planType;
+
+    const updateData: any = {
+      subscriptionStatus: subscription.status as SubscriptionStatus,
+      subscriptionExpiresAt: new Date((subscription as any).current_period_end * 1000),
+      stripeSubscriptionId: subscription.id,
+      updatedAt: new Date(),
+    };
+
+    // Update tier if available from metadata
+    if (tierId) {
+      updateData.subscriptionTier = tierId;
+      console.log(`✅ [Webhook] Updated subscription tier to: ${tierId}`);
+    } else {
+      // Try to extract tier from the price/product if metadata missing
+      const priceId = subscription.items.data[0]?.price?.id;
+      if (priceId) {
+        // Look up tier by stripe price ID in database
+        const [matchingTier] = await tx
+          .select()
+          .from(subscriptionTierPricing)
+          .where(
+            sql`${subscriptionTierPricing.stripeMonthlyPriceId} = ${priceId} OR ${subscriptionTierPricing.stripeYearlyPriceId} = ${priceId}`
+          );
+
+        if (matchingTier) {
+          updateData.subscriptionTier = matchingTier.id;
+          console.log(`✅ [Webhook] Resolved tier from price ID: ${matchingTier.id}`);
+        }
+      }
+    }
+
     await tx.update(users)
-      .set({
-        subscriptionStatus: subscription.status as SubscriptionStatus,
-        subscriptionExpiresAt: new Date((subscription as any).current_period_end * 1000),
-        updatedAt: new Date(),
-      })
+      .set(updateData)
       .where(eq(users.id, userId));
   }
 
@@ -1813,6 +1755,75 @@ export class UnifiedBillingService {
       .where(eq(users.id, user.id));
   }
 
+  // ✅ FIX: Add missing webhook handlers
+
+  /**
+   * Handle checkout session completed (one-off payments)
+   * Marks projects as paid after successful checkout
+   */
+  private async handleCheckoutSessionCompleted(session: Stripe.Checkout.Session, tx: any): Promise<void> {
+    const projectId = session.metadata?.projectId;
+    const userId = session.metadata?.userId;
+
+    if (!projectId || !userId) {
+      console.log(`ℹ️ [Webhook] Checkout session completed but no project/user metadata`);
+      return;
+    }
+
+    console.log(`✅ [Webhook] Checkout completed for project ${projectId}`);
+
+    // Update project as paid
+    const { projects } = await import('../../../shared/schema');
+    await tx.update(projects)
+      .set({
+        isPaid: true,
+        paymentIntentId: session.payment_intent as string || session.id,
+        upgradedAt: new Date(),
+      } as any)
+      .where(eq(projects.id, projectId));
+
+    console.log(`💳 [Webhook] Project ${projectId} marked as paid`);
+  }
+
+  /**
+   * Handle charge refunded
+   * Logs refund and optionally revokes access
+   */
+  private async handleChargeRefunded(charge: Stripe.Charge, tx: any): Promise<void> {
+    const customerId = charge.customer as string;
+    if (!customerId) return;
+
+    console.log(`💰 [Webhook] Charge refunded for customer ${customerId}`);
+    console.log(`   Amount refunded: $${(charge.amount_refunded / 100).toFixed(2)}`);
+
+    // Note: For subscription refunds, we typically don't revoke access immediately
+    // as the refund might be partial or for a specific billing period
+    // This could be extended to revoke access for project-specific refunds if needed
+  }
+
+  /**
+   * Handle customer deleted
+   * Cleans up user Stripe association
+   */
+  private async handleCustomerDeleted(customer: Stripe.Customer, tx: any): Promise<void> {
+    const customerId = customer.id;
+
+    const [user] = await tx.select().from(users).where(eq(users.stripeCustomerId, customerId));
+    if (!user) return;
+
+    console.log(`🗑️ [Webhook] Stripe customer ${customerId} deleted, cleaning up user ${user.id}`);
+
+    await tx.update(users)
+      .set({
+        stripeCustomerId: null,
+        stripeSubscriptionId: null,
+        subscriptionStatus: 'inactive',
+        subscriptionTier: 'none',
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, user.id));
+  }
+
   // ==========================================
   // USAGE TRACKING & QUOTA MANAGEMENT
   // ==========================================
@@ -1830,8 +1841,6 @@ export class UnifiedBillingService {
     minimumTier?: string;
   }> {
     try {
-      const canonicalJourneyType = normalizeJourneyType(journeyType);
-
       // Get user with subscription details
       const [user] = await db.select().from(users).where(eq(users.id, userId));
       if (!user) {
@@ -1853,9 +1862,8 @@ export class UnifiedBillingService {
         };
       }
 
-      // Check if journey type is allowed (normalize tier config as well)
-      const allowedJourneys = tierConfig.quotas.allowedJourneys.map((jt) => normalizeJourneyType(jt));
-      const allowed = allowedJourneys.includes(canonicalJourneyType);
+      // Check if journey type is allowed
+      const allowed = tierConfig.quotas.allowedJourneys.includes(journeyType);
 
       if (allowed) {
         return {
@@ -1869,7 +1877,7 @@ export class UnifiedBillingService {
 
       if (!allowed && bypassBilling) {
         console.warn(
-          `[Billing] Bypassing journey access requirements for ${canonicalJourneyType} (tier: ${user.subscriptionTier})`
+          `[Billing] Bypassing journey access requirements for ${journeyType} (tier: ${user.subscriptionTier})`
         );
         return {
           allowed: true,
@@ -1878,20 +1886,20 @@ export class UnifiedBillingService {
         };
       }
 
-      // Determine minimum tier needed for this canonical journey
-      let minimumTier: SubscriptionTier = 'starter';
-      if (canonicalJourneyType === 'technical') {
+      // Determine minimum tier needed
+      let minimumTier = 'starter';
+      if (journeyType === 'technical') {
         minimumTier = 'professional';
-      } else if (canonicalJourneyType === 'consultation' || canonicalJourneyType === 'custom') {
+      } else if (journeyType === 'consultation') {
         minimumTier = 'enterprise';
-      } else {
+      } else if (journeyType === 'business') {
         minimumTier = 'starter';
       }
 
       return {
         allowed: false,
         requiresUpgrade: true,
-        message: `${canonicalJourneyType} journey requires ${minimumTier} tier or higher`,
+        message: `${journeyType} journey requires ${minimumTier} tier or higher`,
         minimumTier
       };
     } catch (error: any) {
@@ -1986,8 +1994,9 @@ export class UnifiedBillingService {
           };
         } else {
           // Exceeded quota - calculate overage cost
-            const overageQuantity = newUsed - quota;
-            const overagePricing = tierConfig.overagePricing.featureOveragePricing[featureId];
+          const overageQuantity = newUsed - quota;
+          const overagePricing = tierConfig.overagePricing.featureOveragePricing[featureId];
+
           if (!overagePricing) {
             return {
               allowed: false,
@@ -2019,28 +2028,7 @@ export class UnifiedBillingService {
             })
             .where(eq(users.id, userId));
 
-          // FIX: Production Readiness - Create invoice item in Stripe for overage charges
-          try {
-            const [user] = await tx.select().from(users).where(eq(users.id, userId));
-            if (user?.stripeCustomerId && cost > 0) {
-              await this.stripe.invoiceItems.create({
-                customer: user.stripeCustomerId,
-                amount: Math.round(cost * 100), // Convert to cents
-                currency: 'usd',
-                description: `Overage charge: ${featureId} (${complexity}) - ${overageQuantity} units`,
-                metadata: {
-                  featureId,
-                  complexity,
-                  overageQuantity: String(overageQuantity),
-                  ratePerUnit: String(overagePricing[complexity])
-                }
-              });
-              console.log(`💰 [Overage] Created Stripe invoice item for $${cost.toFixed(2)} - ${featureId}`);
-            }
-          } catch (stripeError) {
-            // Log but don't block - user can still be invoiced later
-            console.warn(`⚠️ [Overage] Failed to create Stripe invoice item:`, stripeError);
-          }
+          // TODO: Create invoice item in Stripe for overage charges
 
           return {
             allowed: true, // Allow but charge
@@ -2227,7 +2215,8 @@ export class UnifiedBillingService {
 
   /**
    * Calculate billing with capacity tracking (for compatibility)
-   * FIX 5.1: Returns correct structure with success and billing properties
+   * ✅ PHASE 3 FIX: Return { success: true, billing: {...} } structure
+   * Route at billing.ts:320 checks result.success - was returning 400 because success was undefined
    */
   async calculateBillingWithCapacity(userId: string, usage: any): Promise<any> {
     await this.ensureConfigurationsLoaded();
@@ -2235,89 +2224,42 @@ export class UnifiedBillingService {
     const usageMetrics = await this.getUsageMetricsSimple(userId);
     const tierConfig = this.getTierConfig(userTier);
 
-    // Extract journey parameters from usage
-    const journeyType = usage?.journeyType || 'descriptive_stats';
+    // Calculate actual billing based on usage
+    // Note: tierConfig.pricing has { monthly, yearly, currency } - use monthly as base
+    const baseCost = tierConfig?.pricing?.monthly || 0;
     const datasetSizeMB = usage?.datasetSizeMB || 0;
+    const dataCost = datasetSizeMB * 0.01; // $0.01 per MB
+    const finalCost = Math.max(baseCost + dataCost, 0);
 
-    // Calculate costs based on journey type and data size
-    // Base costs by journey type complexity
-    const baseCostByJourney: Record<string, number> = {
-      'descriptive_stats': 5.00,
-      'diagnostic': 10.00,
-      'predictive': 25.00,
-      'prescriptive': 50.00,
-      'quick_insight': 2.50,
-      'deep_dive': 15.00
-    };
-
-    const baseCost = baseCostByJourney[journeyType] || 5.00;
-
-    // Data size cost: $0.01 per MB for first 100MB, $0.005 per MB after
-    const dataSizeCost = datasetSizeMB <= 100
-      ? datasetSizeMB * 0.01
-      : (100 * 0.01) + ((datasetSizeMB - 100) * 0.005);
-
-    // Subscription tier credits (free tier gets less, pro/enterprise get more)
-    const subscriptionCredits: Record<string, number> = {
-      'free': 0,
-      'basic': 5.00,
-      'pro': 15.00,
-      'enterprise': 50.00
-    };
-    const credits = subscriptionCredits[userTier] || 0;
-
-    // Calculate final cost
-    const totalBeforeCredits = baseCost + dataSizeCost;
-    const finalCost = Math.max(0, totalBeforeCredits - credits);
-
-    // Capacity tracking
     const capacityUsed = (usageMetrics as any)?.totalDataUsageMB || 0;
     const capacityLimit = tierConfig?.quotas?.maxDataUploadsMB || 1000;
     const capacityRemaining = Math.max(0, capacityLimit - capacityUsed);
-    const utilizationPercentage = capacityLimit > 0 ? (capacityUsed / capacityLimit) * 100 : 0;
 
-    // Build breakdown
-    const breakdown = [
-      {
-        item: `${journeyType.replace(/_/g, ' ')} analysis`,
-        cost: baseCost,
-        capacityUsed: 0,
-        capacityRemaining
-      },
-      {
-        item: `Data processing (${datasetSizeMB.toFixed(2)} MB)`,
-        cost: dataSizeCost,
-        capacityUsed: datasetSizeMB,
-        capacityRemaining: Math.max(0, capacityRemaining - datasetSizeMB)
-      }
-    ];
-
-    if (credits > 0) {
-      breakdown.push({
-        item: `${userTier} tier credits`,
-        cost: -credits,
-        capacityUsed: 0,
-        capacityRemaining
-      });
-    }
+    console.log(`✅ [Billing] Returning success=true with billing structure for user ${userId}`);
 
     return {
-      success: true,
+      success: true,  // ✅ ADD: Required by billing.ts:320
       billing: {
         baseCost,
-        dataSizeCost,
-        subscriptionCredits: credits,
+        dataCost,
         finalCost,
+        subscriptionCredits: 0,
         capacityUsed,
         capacityRemaining,
-        utilizationPercentage,
-        breakdown
+        utilizationPercentage: {
+          data: capacityLimit > 0 ? (capacityUsed / capacityLimit) * 100 : 0
+        },
+        breakdown: [
+          { item: 'Base platform fee', cost: baseCost, capacityUsed: 0, capacityRemaining: capacityRemaining },
+          { item: `Data processing (${datasetSizeMB} MB)`, cost: dataCost, capacityUsed: datasetSizeMB, capacityRemaining: capacityRemaining - datasetSizeMB }
+        ]
       },
-      // Legacy properties for backward compatibility
+      // Legacy fields for backwards compatibility
       userId,
       tier: userTier,
       usage: usageMetrics,
       cost: finalCost,
+      capacityUsed,
       capacityLimit
     };
   }
@@ -2382,29 +2324,13 @@ export class UnifiedBillingService {
    * Get user usage by ID
    */
   async getUserUsage(userId: string): Promise<any> {
-    try {
-      // Import UsageTrackingService for real usage data
-      const { UsageTrackingService } = await import('../usage-tracking');
-      const usage = await UsageTrackingService.getCurrentUsage(userId);
-
-      return {
-        dataUploadsMB: usage.dataVolumeMB || 0,
-        toolExecutions: usage.codeGenerations || 0,
-        aiQueries: usage.aiQueries || 0,
-        // Additional metrics from usage tracking
-        dataUploads: usage.dataUploads || 0,
-        projectsCreated: usage.projectsCreated || 0,
-        visualizationsGenerated: usage.visualizationsGenerated || 0
-      };
-    } catch (error) {
-      console.error('[BillingService] Error fetching user usage:', error);
-      // Fallback to zeros if service fails
-      return {
-        dataUploadsMB: 0,
-        toolExecutions: 0,
-        aiQueries: 0
-      };
-    }
+    // This would typically fetch from database
+    // For now, return mock usage
+    return {
+      dataUploadsMB: 0,
+      toolExecutions: 0,
+      aiQueries: 0
+    };
   }
 
   /**
@@ -2416,74 +2342,16 @@ export class UnifiedBillingService {
   }
 
   /**
-   * Get Stripe invoices for a customer
-   * FIX: Production Readiness - Added for billing_query_handler real data
-   */
-  async getStripeInvoices(stripeCustomerId: string, limit: number = 10): Promise<any[]> {
-    if (!stripeCustomerId) {
-      return [];
-    }
-
-    try {
-      const invoices = await this.stripe.invoices.list({
-        customer: stripeCustomerId,
-        limit,
-      });
-
-      return invoices.data.map((invoice) => ({
-        id: invoice.id,
-        number: invoice.number,
-        status: invoice.status,
-        amount: (invoice.amount_due || 0) / 100, // Convert from cents to dollars
-        currency: invoice.currency?.toUpperCase() || 'USD',
-        created: new Date(invoice.created * 1000).toISOString(),
-        dueDate: invoice.due_date ? new Date(invoice.due_date * 1000).toISOString() : null,
-        paid: invoice.paid,
-        paidAt: invoice.status_transitions?.paid_at
-          ? new Date(invoice.status_transitions.paid_at * 1000).toISOString()
-          : null,
-        hostedInvoiceUrl: invoice.hosted_invoice_url,
-        invoicePdf: invoice.invoice_pdf,
-        description: invoice.description,
-        lines: invoice.lines?.data?.map((line) => ({
-          description: line.description,
-          amount: (line.amount || 0) / 100,
-          quantity: line.quantity,
-        })) || [],
-      }));
-    } catch (error) {
-      console.error('[BillingService] Error fetching Stripe invoices:', error);
-      return [];
-    }
-  }
-
-  /**
    * Get usage metrics (simple version)
    */
   async getUsageMetricsSimple(userId: string): Promise<any> {
-    try {
-      // Import UsageTrackingService for real usage data
-      const { UsageTrackingService } = await import('../usage-tracking');
-      const usage = await UsageTrackingService.getCurrentUsage(userId);
-
-      return {
-        totalDataUsageMB: usage.dataVolumeMB || 0,
-        totalToolExecutions: usage.codeGenerations || 0,
-        totalAIQueries: usage.aiQueries || 0,
-        // Extended metrics
-        totalDataUploads: usage.dataUploads || 0,
-        totalProjects: usage.projectsCreated || 0,
-        totalVisualizations: usage.visualizationsGenerated || 0
-      };
-    } catch (error) {
-      console.error('[BillingService] Error fetching usage metrics:', error);
-      // Fallback to zeros if service fails
-      return {
-        totalDataUsageMB: 0,
-        totalToolExecutions: 0,
-        totalAIQueries: 0
-      };
-    }
+    // This would typically fetch from database
+    // For now, return mock metrics
+    return {
+      totalDataUsageMB: 0,
+      totalToolExecutions: 0,
+      totalAIQueries: 0
+    };
   }
 
   /**

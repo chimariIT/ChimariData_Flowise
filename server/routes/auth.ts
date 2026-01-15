@@ -9,7 +9,7 @@ import { storage } from '../services/storage';
 import { tokenStorage } from '../token-storage';
 import { EmailService } from '../email-service';
 
-import { 
+import {
     GoogleDriveService,
     FileProcessor,
     PIIAnalyzer,
@@ -23,10 +23,10 @@ import { performanceWebhookService } from '../services/performance-webhook-servi
 import type { InsertDataProject, JourneyType } from "../../shared/schema.js";
 import { getAuthHeader } from '../utils/auth-headers';
 
-const VALID_PROJECT_JOURNEYS: JourneyType[] = ["ai_guided", "template_based", "self_service", "consultation", "custom"];
+const VALID_PROJECT_JOURNEYS: JourneyType[] = ["non-tech", "business", "technical", "consultation", "custom"];
 
 const normalizeProjectJourneyType = (value: unknown): JourneyType => {
-    return VALID_PROJECT_JOURNEYS.includes(value as JourneyType) ? (value as JourneyType) : "ai_guided";
+    return VALID_PROJECT_JOURNEYS.includes(value as JourneyType) ? (value as JourneyType) : "non-tech";
 };
 
 const normalizeExpressUser = (user: any): Record<string, any> => ({
@@ -44,7 +44,7 @@ router.use((req, res, next) => {
     res.on('finish', () => {
         const duration = Date.now() - start;
         const status = res.statusCode >= 500 ? 'error' : res.statusCode >= 400 ? 'warning' : 'success';
-        
+
         // Log to console
         console.log(`🔐 Auth ${req.method} ${req.path} - ${duration}ms (${res.statusCode})`);
         if (duration > 1000) {
@@ -99,7 +99,7 @@ router.post("/login", async (req, res) => {
 
         // Get user by email
         const dbStart = Date.now();
-    const user = await storage.getUserByEmail(normalizedEmail);
+        const user = await storage.getUserByEmail(normalizedEmail);
         const dbTime = Date.now() - dbStart;
 
         if (user && user.hashedPassword) {
@@ -265,7 +265,7 @@ router.get("/user", async (req, res) => {
 
         const token = authHeader.substring(7);
         const tokenData = tokenStorage.validateToken(token);
-        
+
         if (!tokenData) {
             return res.status(401).json({ error: "Invalid token" });
         }
@@ -324,10 +324,10 @@ router.post('/refresh', async (req, res) => {
 
 // Configure multer for file uploads
 const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 100 * 1024 * 1024, // 100MB limit for paid features
-  },
+    storage: multer.memoryStorage(),
+    limits: {
+        fileSize: 100 * 1024 * 1024, // 100MB limit for paid features
+    },
 });
 
 // Removed old tokenStore - now using tokenStorage
@@ -353,108 +353,108 @@ const upload = multer({
  */
 export const ensureAuthenticated = async (req: Request, res: Response, next: NextFunction) => {
     try {
-            // Debug: Log all headers for upload requests
-            const isUploadRequest = req.path === '/upload' || req.url.includes('/upload') || req.url.includes('/projects/upload');
-            const derivedAuthHeader = getAuthHeader(req);
-            if (isUploadRequest) {
-                console.log('🔍 Upload request authentication check:', {
-                    path: req.path,
-                    url: req.url,
-                    method: req.method,
-                    hasAuthHeader: !!derivedAuthHeader,
-                    authHeaderPreview: derivedAuthHeader?.substring(0, 30),
-                    rawAuthorizationHeader: req.headers.authorization?.substring(0, 30),
-                    forwardedAuthorizationHeader: typeof req.headers['x-forwarded-authorization'] === 'string'
-                        ? (req.headers['x-forwarded-authorization'] as string).substring(0, 30)
-                        : undefined,
-                    hasSession: !!req.isAuthenticated?.(),
-                    contentType: req.headers['content-type']?.substring(0, 50),
-                    allHeaderKeys: Object.keys(req.headers).filter(k => k.toLowerCase().includes('auth') || k.toLowerCase().includes('authorization'))
-                });
-            }
+        // Debug: Log all headers for upload requests
+        const isUploadRequest = req.path === '/upload' || req.url.includes('/upload') || req.url.includes('/projects/upload');
+        const derivedAuthHeader = getAuthHeader(req);
+        if (isUploadRequest) {
+            console.log('🔍 Upload request authentication check:', {
+                path: req.path,
+                url: req.url,
+                method: req.method,
+                hasAuthHeader: !!derivedAuthHeader,
+                authHeaderPreview: derivedAuthHeader?.substring(0, 30),
+                rawAuthorizationHeader: req.headers.authorization?.substring(0, 30),
+                forwardedAuthorizationHeader: typeof req.headers['x-forwarded-authorization'] === 'string'
+                    ? (req.headers['x-forwarded-authorization'] as string).substring(0, 30)
+                    : undefined,
+                hasSession: !!req.isAuthenticated?.(),
+                contentType: req.headers['content-type']?.substring(0, 50),
+                allHeaderKeys: Object.keys(req.headers).filter(k => k.toLowerCase().includes('auth') || k.toLowerCase().includes('authorization'))
+            });
+        }
 
-            // Check session-based authentication first
-            if (req.isAuthenticated && req.isAuthenticated()) {
-                // If user is already attached, ensure identifiers are normalized then proceed
-                if (req.user) {
-                    const sessionUser: any = req.user;
-                    const resolvedId = sessionUser.id || sessionUser.userId;
+        // Check session-based authentication first
+        if (req.isAuthenticated && req.isAuthenticated()) {
+            // If user is already attached, ensure identifiers are normalized then proceed
+            if (req.user) {
+                const sessionUser: any = req.user;
+                const resolvedId = sessionUser.id || sessionUser.userId;
 
-                    if (resolvedId) {
-                        sessionUser.userId = resolvedId;
-                        req.userId = resolvedId;
-                    }
-
-                    if (isUploadRequest) {
-                        console.log('✅ Session-based authentication successful for upload');
-                    }
-                    return next();
+                if (resolvedId) {
+                    sessionUser.userId = resolvedId;
+                    req.userId = resolvedId;
                 }
 
-                // Session authenticated but user not attached - this should not happen with proper Passport config
-                // but we'll handle it gracefully
-                console.warn('Session authenticated but user not attached, checking bearer token as fallback');
+                if (isUploadRequest) {
+                    console.log('✅ Session-based authentication successful for upload');
+                }
+                return next();
             }
 
-      // Check Bearer token authentication
-      // Debug: Log ALL headers to see what's actually coming in
-            console.log('🔍 [AUTH DEBUG] All request headers:', JSON.stringify(req.headers, null, 2));
-            console.log('🔍 [AUTH DEBUG] Derived authorization header:', derivedAuthHeader);
-            console.log('🔍 [AUTH DEBUG] Raw authorization variants:', {
-                authorization: req.headers.authorization,
-                forwarded: req.headers['x-forwarded-authorization']
-            });
-            console.log('🔍 [AUTH DEBUG] Headers keys:', Object.keys(req.headers));
-
-            const authHeader = derivedAuthHeader;
-      if (authHeader && authHeader.startsWith('Bearer ')) {
-        const token = authHeader.substring(7).trim();
-
-        // Additional validation: ensure token isn't empty after extraction
-        if (!token || token === '') {
-          console.error('❌ Authentication failed: Empty token after Bearer extraction', {
-            authHeaderLength: authHeader.length,
-            extractedTokenLength: token.length
-          });
-          return res.status(401).json({ error: "Authentication required" });
+            // Session authenticated but user not attached - this should not happen with proper Passport config
+            // but we'll handle it gracefully
+            console.warn('Session authenticated but user not attached, checking bearer token as fallback');
         }
 
-                const tokenData = tokenStorage.validateToken(token);
-                if (tokenData) {
-                    const user = await storage.getUser(tokenData.userId);
-                    if (user) {
-                        req.user = normalizeExpressUser(user);
-                        req.userId = user.id;
-                        if (isUploadRequest) {
-                            console.log('✅ Bearer token authentication successful for upload:', {
-                                userId: user.id,
-                                email: user.email
-                            });
-                        }
-                        return next();
-                    } else {
-                        console.error('❌ Authentication failed: User not found for token', {
-                            userId: tokenData.userId
+        // Check Bearer token authentication
+        // Debug: Log ALL headers to see what's actually coming in
+        console.log('🔍 [AUTH DEBUG] All request headers:', JSON.stringify(req.headers, null, 2));
+        console.log('🔍 [AUTH DEBUG] Derived authorization header:', derivedAuthHeader);
+        console.log('🔍 [AUTH DEBUG] Raw authorization variants:', {
+            authorization: req.headers.authorization,
+            forwarded: req.headers['x-forwarded-authorization']
+        });
+        console.log('🔍 [AUTH DEBUG] Headers keys:', Object.keys(req.headers));
+
+        const authHeader = derivedAuthHeader;
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+            const token = authHeader.substring(7).trim();
+
+            // Additional validation: ensure token isn't empty after extraction
+            if (!token || token === '') {
+                console.error('❌ Authentication failed: Empty token after Bearer extraction', {
+                    authHeaderLength: authHeader.length,
+                    extractedTokenLength: token.length
+                });
+                return res.status(401).json({ error: "Authentication required" });
+            }
+
+            const tokenData = tokenStorage.validateToken(token);
+            if (tokenData) {
+                const user = await storage.getUser(tokenData.userId);
+                if (user) {
+                    req.user = normalizeExpressUser(user);
+                    req.userId = user.id;
+                    if (isUploadRequest) {
+                        console.log('✅ Bearer token authentication successful for upload:', {
+                            userId: user.id,
+                            email: user.email
                         });
                     }
+                    return next();
+                } else {
+                    console.error('❌ Authentication failed: User not found for token', {
+                        userId: tokenData.userId
+                    });
+                }
+            } else {
+                console.error('❌ Authentication failed: Invalid token', {
+                    tokenPreview: token.substring(0, 20) + '...',
+                    tokenLength: token.length
+                });
+            }
         } else {
-          console.error('❌ Authentication failed: Invalid token', {
-            tokenPreview: token.substring(0, 20) + '...',
-            tokenLength: token.length
-          });
+            console.error('❌ Authentication failed: No valid authorization header', {
+                hasAuthHeader: !!authHeader,
+                authHeaderType: typeof authHeader,
+                authHeaderValue: authHeader ? authHeader.substring(0, 50) : 'null'
+            });
         }
-      } else {
-        console.error('❌ Authentication failed: No valid authorization header', {
-          hasAuthHeader: !!authHeader,
-          authHeaderType: typeof authHeader,
-          authHeaderValue: authHeader ? authHeader.substring(0, 50) : 'null'
-        });
-      }
 
-            res.status(401).json({ error: "Authentication required" });
+        res.status(401).json({ error: "Authentication required" });
     } catch (error) {
-      console.error('❌ Authentication error:', error);
-      res.status(401).json({ error: "Authentication required" });
+        console.error('❌ Authentication error:', error);
+        res.status(401).json({ error: "Authentication required" });
     }
 };
 
@@ -499,32 +499,32 @@ router.post("/logout", ensureAuthenticated, async (req, res) => {
  */
 export const unifiedAuth = async (req: Request, res: Response, next: NextFunction) => {
     try {
-      if (req.isAuthenticated && req.isAuthenticated()) {
-        return next();
-      }
-    const authHeader = getAuthHeader(req);
-      if (authHeader && authHeader.startsWith('Bearer ')) {
-        const token = authHeader.substring(7);
-        try {
-                    const tokenData = tokenStorage.validateToken(token);
-                    if (tokenData) {
-                        const user = await storage.getUser(tokenData.userId);
-                        if (user) {
-                            const normalizedUser = normalizeExpressUser(user) as any;
-                            normalizedUser.userId = user.id;
-                            req.user = normalizedUser;
-                            req.userId = user.id;
-                            return next();
-                        }
-          }
-        } catch (error) {
-          console.error('Token validation error:', error);
+        if (req.isAuthenticated && req.isAuthenticated()) {
+            return next();
         }
-      }
-      res.status(401).json({ error: 'Authentication required' });
+        const authHeader = getAuthHeader(req);
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+            const token = authHeader.substring(7);
+            try {
+                const tokenData = tokenStorage.validateToken(token);
+                if (tokenData) {
+                    const user = await storage.getUser(tokenData.userId);
+                    if (user) {
+                        const normalizedUser = normalizeExpressUser(user) as any;
+                        normalizedUser.userId = user.id;
+                        req.user = normalizedUser;
+                        req.userId = user.id;
+                        return next();
+                    }
+                }
+            } catch (error) {
+                console.error('Token validation error:', error);
+            }
+        }
+        res.status(401).json({ error: 'Authentication required' });
     } catch (error) {
-      console.error('Authentication error:', error);
-      res.status(401).json({ error: 'Authentication required' });
+        console.error('Authentication error:', error);
+        res.status(401).json({ error: 'Authentication required' });
     }
 };
 
@@ -596,45 +596,45 @@ router.post("/login-test", async (req, res) => {
 // Google Drive integration endpoints
 router.get("/google-drive/auth-url", (req, res) => {
     try {
-      const authUrl = GoogleDriveService.getAuthUrl();
-      res.json({ authUrl });
+        const authUrl = GoogleDriveService.getAuthUrl();
+        res.json({ authUrl });
     } catch (error: any) {
-      res.status(500).json({ error: error.message });
+        res.status(500).json({ error: error.message });
     }
 });
 
 router.post("/google-drive/callback", async (req, res) => {
     try {
-      const { code } = req.body;
-      const tokens = await GoogleDriveService.getTokenFromCode(code);
-      res.json({ tokens });
+        const { code } = req.body;
+        const tokens = await GoogleDriveService.getTokenFromCode(code);
+        res.json({ tokens });
     } catch (error: any) {
-      res.status(500).json({ error: error.message });
+        res.status(500).json({ error: error.message });
     }
 });
 
 // PII consent endpoint
 router.post("/pii-consent", async (req, res) => {
     try {
-      const { projectId, consent, detectedPII } = req.body;
-      
-      const project = await storage.getProject(projectId);
-      if (!project) {
-        return res.status(404).json({ error: "Project not found" });
-      }
+        const { projectId, consent, detectedPII } = req.body;
 
-      const updatedProject = await storage.updateProject(projectId, {
-        piiAnalysis: {
-          ...project.piiAnalysis,
-          detectedPII,
-          userConsent: consent,
-          consentTimestamp: new Date()
+        const project = await storage.getProject(projectId);
+        if (!project) {
+            return res.status(404).json({ error: "Project not found" });
         }
-      });
 
-      res.json({ success: true, project: updatedProject });
+        const updatedProject = await storage.updateProject(projectId, {
+            piiAnalysis: {
+                ...project.piiAnalysis,
+                detectedPII,
+                userConsent: consent,
+                consentTimestamp: new Date()
+            }
+        });
+
+        res.json({ success: true, project: updatedProject });
     } catch (error: any) {
-      res.status(500).json({ error: error.message });
+        res.status(500).json({ error: error.message });
     }
 });
 
@@ -662,11 +662,11 @@ router.post("/pii-consent", async (req, res) => {
  */
 router.post("/pii-decision", unifiedAuth, (req, res, next) => {
     if (req.get('Content-Type')?.includes('application/json')) {
-      next();
+        next();
     } else {
-      upload.single('file')(req, res, next);
+        upload.single('file')(req, res, next);
     }
-  }, async (req, res) => {
+}, async (req, res) => {
     try {
         let isJsonRequest = req.get('Content-Type')?.includes('application/json');
         if (isJsonRequest) {
@@ -694,9 +694,9 @@ router.post("/pii-decision", unifiedAuth, (req, res, next) => {
                     originalData: processedData.data,
                     originalSchema: processedData.schema,
                     overriddenColumns: anonymizationConfig?.overriddenColumns || []
-                });
-                finalData = piiProcessingResult.finalData;
-                updatedSchema = piiProcessingResult.updatedSchema;
+                } as any);
+                finalData = (piiProcessingResult as any).finalData;
+                updatedSchema = (piiProcessingResult as any).updatedSchema;
             }
             processedData.schema = updatedSchema;
             const actualDecision = anonymizationConfig?.bypassPII ? 'bypassed' : decision;
@@ -789,9 +789,9 @@ router.post("/pii-decision", unifiedAuth, (req, res, next) => {
                 originalData: processedData.data,
                 originalSchema: processedData.schema,
                 overriddenColumns: anonymizationConfig?.overriddenColumns || []
-            });
-            const finalData = piiProcessingResult.finalData;
-            const updatedSchema = piiProcessingResult.updatedSchema;
+            } as any);
+            const finalData = (piiProcessingResult as any).finalData;
+            const updatedSchema = (piiProcessingResult as any).updatedSchema;
             const { descriptiveStats, datasetSummary, relationships } = FileProcessor.createDataProfile(finalData || [], updatedSchema || {});
             const project = await storage.createProject({
                 userId: (req.user as any)?.id || 'anonymous',
@@ -874,9 +874,9 @@ router.post("/trial-pii-decision", async (req, res) => {
             originalData: processedData.data,
             originalSchema: processedData.schema,
             overriddenColumns: anonymizationConfig?.overriddenColumns || []
-        });
-        const finalData = piiProcessingResult.finalData;
-        const updatedSchema = piiProcessingResult.updatedSchema;
+        } as any);
+        const finalData = (piiProcessingResult as any).finalData;
+        const updatedSchema = (piiProcessingResult as any).updatedSchema;
         const trialResults = await PythonProcessor.processTrial(`trial_${Date.now()}`, {
             preview: finalData.slice(0, 100),
             schema: updatedSchema,
@@ -906,17 +906,17 @@ router.post("/trial-pii-decision", async (req, res) => {
 // Unique identifier selection endpoint
 router.post("/unique-identifiers", async (req, res) => {
     try {
-      const { projectId, identifiers } = req.body;
-      const project = await storage.getProject(projectId);
-      if (!project) {
-        return res.status(404).json({ error: "Project not found" });
-      }
-      const updatedProject = await storage.updateProject(projectId, {
-        uniqueIdentifiers: identifiers
-      });
-      res.json({ success: true, project: updatedProject });
+        const { projectId, identifiers } = req.body;
+        const project = await storage.getProject(projectId);
+        if (!project) {
+            return res.status(404).json({ error: "Project not found" });
+        }
+        const updatedProject = await storage.updateProject(projectId, {
+            uniqueIdentifiers: identifiers
+        });
+        res.json({ success: true, project: updatedProject });
     } catch (error: any) {
-      res.status(500).json({ error: error.message });
+        res.status(500).json({ error: error.message });
     }
 });
 
@@ -1092,9 +1092,9 @@ router.post("/setup-admin", async (req, res) => {
         const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
 
         if (!normalizedEmail || !password || !firstName || !lastName) {
-            return res.status(400).json({ 
+            return res.status(400).json({
                 success: false,
-                error: "Email, password, firstName, and lastName are required" 
+                error: "Email, password, firstName, and lastName are required"
             });
         }
 
@@ -1162,10 +1162,10 @@ router.post("/setup-admin", async (req, res) => {
         });
     } catch (error: any) {
         console.error('Admin setup error:', error);
-        res.status(500).json({ 
+        res.status(500).json({
             success: false,
-            error: "Admin setup failed", 
-            details: error.message 
+            error: "Admin setup failed",
+            details: error.message
         });
     }
 });

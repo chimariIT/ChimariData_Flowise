@@ -17,12 +17,13 @@ class MultiAIService {
 
   private initializeProviders() {
     // 1. Gemini Provider (Primary) - ChimariData Default
-    if (process.env.GEMINI_API_KEY) {
-      const gemini = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      
+    const googleApiKey = process.env.GOOGLE_AI_API_KEY || process.env.GEMINI_API_KEY;
+    if (googleApiKey) {
+      const gemini = new GoogleGenAI({ apiKey: googleApiKey });
+
       this.providers.push({
         name: 'Gemini',
-        isAvailable: () => !!process.env.GEMINI_API_KEY,
+        isAvailable: () => !!(process.env.GOOGLE_AI_API_KEY || process.env.GEMINI_API_KEY),
         analyze: async (question: string, dataContext: any) => {
           const prompt = this.buildAnalysisPrompt(question, dataContext);
           const response = await gemini.models.generateContent({
@@ -96,8 +97,43 @@ Please provide a comprehensive analysis addressing the question. Include:
 Format your response clearly with headers and bullet points for readability.`;
   }
 
+  // LLM Health Check - check which providers are available and functional
+  async performLLMHealthCheck(): Promise<{
+    healthy: boolean;
+    availableProviders: string[];
+    warnings: string[];
+  }> {
+    const availableProviders: string[] = [];
+    const warnings: string[] = [];
+
+    for (const provider of this.providers) {
+      if (provider.isAvailable()) {
+        availableProviders.push(provider.name);
+      }
+    }
+
+    if (availableProviders.length === 0) {
+      warnings.push('No AI providers available - analysis may fail');
+      console.warn(`⚠️ [LLMHealthCheck] No AI providers available`);
+      return { healthy: false, availableProviders, warnings };
+    }
+
+    console.log(`✅ [LLMHealthCheck] ${availableProviders.length} provider(s) available: ${availableProviders.join(', ')}`);
+    return { healthy: true, availableProviders, warnings };
+  }
+
+  // Get available provider count for quick check
+  getAvailableProviderCount(): number {
+    return this.providers.filter(p => p.isAvailable()).length;
+  }
+
   // Main analysis method with try-catch fallback: Gemini → OpenAI → Anthropic
   async analyzeWithFallback(question: string, dataContext: any): Promise<{ result: string; provider: string }> {
+    // Quick health check before analysis
+    if (this.getAvailableProviderCount() === 0) {
+      throw new Error('No AI providers available. Please configure at least one API key (GOOGLE_AI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY).');
+    }
+
     const errors: string[] = [];
     
     // Try each provider in order

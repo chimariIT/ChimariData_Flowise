@@ -2485,7 +2485,7 @@ router.post('/projects', async (req: Request, res: Response) => {
       userId: userId,
       name,
       description: description || '',
-      journeyType: journeyType || 'ai_guided',
+      journeyType: journeyType || 'non-tech',
       metadata: {
         createdByAdminId: adminId,
         createdByAdminAt: new Date().toISOString()

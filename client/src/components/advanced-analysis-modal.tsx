@@ -95,80 +95,9 @@ export default function AdvancedAnalysisModal({
   });
   const [isRunning, setIsRunning] = useState(false);
   const [results, setResults] = useState<any>(null);
-  const { toast } = useToast();
+  const { toast} = useToast();
 
-  const pipelineOverview = useMemo(() => {
-    const question = analysisConfig.question.trim() || 'Not specified';
-    const targetLabel = selectedAnalysisType?.multipleTargets
-      ? `${analysisConfig.targetVariables.length} target(s)`
-      : analysisConfig.targetVariable || 'Not selected';
-    const covariateCount = analysisConfig.covariates.length;
-    const status = isRunning
-      ? 'Running analysis'
-      : results
-        ? 'Analysis complete'
-        : 'Awaiting configuration';
-    const pathLabel = analysisPath === 'statistical'
-      ? 'Statistical'
-      : analysisPath === 'machine_learning'
-        ? 'Machine Learning'
-        : 'Agentic';
-    const outputs = {
-      findings: results?.results?.keyFindings?.length ?? 0,
-      recommendations: results?.results?.recommendations?.length ?? 0,
-      visuals: results?.results?.visualizations?.length ?? 0
-    };
-
-    return {
-      datasetId: projectId,
-      question,
-      pathLabel,
-      analysisName: selectedAnalysisType?.name || 'Not selected',
-      targetLabel,
-      covariateCount,
-      status,
-      outputs
-    };
-  }, [
-    projectId,
-    analysisConfig.question,
-    analysisConfig.targetVariable,
-    analysisConfig.targetVariables,
-    analysisConfig.covariates,
-    analysisPath,
-    selectedAnalysisType?.name,
-    selectedAnalysisType?.multipleTargets,
-    isRunning,
-    results
-  ]);
-
-  if (!isOpen) return null;
-
-  const availableVariables = schema ? Object.keys(schema) : [];
-  const numericVariables = availableVariables.filter(variable => 
-    schema[variable]?.type === 'number' || schema[variable]?.type === 'integer'
-  );
-  const categoricalVariables = availableVariables.filter(variable => 
-    schema[variable]?.type === 'text' || schema[variable]?.type === 'string' || schema[variable]?.type === 'boolean'
-  );
-  
-  // For factor variables, include both categorical and numeric variables
-  // (numeric variables can be treated as factors in some analyses)
-  const factorVariables = availableVariables.filter(variable => 
-    schema[variable]?.type === 'text' || 
-    schema[variable]?.type === 'string' || 
-    schema[variable]?.type === 'boolean' || 
-    schema[variable]?.type === 'number' || 
-    schema[variable]?.type === 'integer'
-  );
-  
-  // Debug logging
-  console.log('Advanced Analysis Modal - Schema:', schema);
-  console.log('Available variables:', availableVariables);
-  console.log('Numeric variables:', numericVariables);
-  console.log('Categorical variables:', categoricalVariables);
-  console.log('Factor variables:', factorVariables);
-
+  // Define analysis types before using in useMemo
   const analysisTypes: Record<'statistical' | 'machine_learning' | 'agentic', AnalysisTypeItem[]> = {
     statistical: [
       {
@@ -298,6 +227,80 @@ export default function AdvancedAnalysisModal({
   };
 
   const selectedAnalysisType: AnalysisTypeItem | undefined = analysisTypes[analysisPath]?.find(t => t.id === analysisType);
+
+  const pipelineOverview = useMemo(() => {
+    const question = analysisConfig.question.trim() || 'Not specified';
+    const targetLabel = selectedAnalysisType?.multipleTargets
+      ? `${analysisConfig.targetVariables.length} target(s)`
+      : analysisConfig.targetVariable || 'Not selected';
+    const covariateCount = analysisConfig.covariates.length;
+    const status = isRunning
+      ? 'Running analysis'
+      : results
+        ? 'Analysis complete'
+        : 'Awaiting configuration';
+    const pathLabel = analysisPath === 'statistical'
+      ? 'Statistical'
+      : analysisPath === 'machine_learning'
+        ? 'Machine Learning'
+        : 'Agentic';
+    const outputs = {
+      findings: results?.results?.keyFindings?.length ?? 0,
+      recommendations: results?.results?.recommendations?.length ?? 0,
+      visuals: results?.results?.visualizations?.length ?? 0
+    };
+
+    return {
+      datasetId: projectId,
+      question,
+      pathLabel,
+      analysisName: selectedAnalysisType?.name || 'Not selected',
+      targetLabel,
+      covariateCount,
+      status,
+      outputs
+    };
+  }, [
+    projectId,
+    analysisConfig.question,
+    analysisConfig.targetVariable,
+    analysisConfig.targetVariables,
+    analysisConfig.covariates,
+    analysisPath,
+    selectedAnalysisType?.name,
+    selectedAnalysisType?.multipleTargets,
+    isRunning,
+    results
+  ]);
+
+  if (!isOpen) return null;
+
+  const availableVariables = schema ? Object.keys(schema) : [];
+  const numericVariables = availableVariables.filter(variable => 
+    schema[variable]?.type === 'number' || schema[variable]?.type === 'integer'
+  );
+  const categoricalVariables = availableVariables.filter(variable => 
+    schema[variable]?.type === 'text' || schema[variable]?.type === 'string' || schema[variable]?.type === 'boolean'
+  );
+  
+  // For factor variables, include both categorical and numeric variables
+  // (numeric variables can be treated as factors in some analyses)
+  const factorVariables = availableVariables.filter(variable => 
+    schema[variable]?.type === 'text' || 
+    schema[variable]?.type === 'string' || 
+    schema[variable]?.type === 'boolean' || 
+    schema[variable]?.type === 'number' || 
+    schema[variable]?.type === 'integer'
+  );
+  
+  // Debug logging
+  console.log('Advanced Analysis Modal - Schema:', schema);
+  console.log('Available variables:', availableVariables);
+  console.log('Numeric variables:', numericVariables);
+  console.log('Categorical variables:', categoricalVariables);
+  console.log('Factor variables:', factorVariables);
+
+  // Note: analysisTypes and selectedAnalysisType are now defined before useMemo hook
 
   const handleVariableSelection = (variable: string, type: 'multivariate' | 'covariates' | 'targets' | 'descriptive') => {
     if (type === 'multivariate') {

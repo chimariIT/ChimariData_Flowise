@@ -46,11 +46,11 @@ export interface JourneyState {
 }
 
 const PROJECT_TO_TEMPLATE: Record<JourneyType, JourneyTemplateJourneyType> = {
-  ai_guided: 'non-tech',
-  template_based: 'business',
-  self_service: 'technical',
-  consultation: 'consultation',
-  custom: 'consultation',
+  'non-tech': 'non-tech',
+  'business': 'business',
+  'technical': 'technical',
+  'consultation': 'consultation',
+  'custom': 'consultation', // Custom uses consultation template as fallback
 };
 
 function mapJourneyType(journeyType: string | null | undefined): JourneyTemplateJourneyType {
@@ -110,11 +110,11 @@ function calculateTimeRemaining(template: JourneyTemplate, currentStepIndex: num
   // If 60+ seconds, convert to minutes with seconds for precision
   const minutes = Math.floor(totalSeconds / 60);
   const remainingSeconds = totalSeconds % 60;
-  
+
   if (remainingSeconds === 0) {
     return `${minutes} minute${minutes !== 1 ? 's' : ''}`;
   }
-  
+
   // Show both minutes and seconds for clarity
   return `${minutes}m ${remainingSeconds}s`;
 }
@@ -133,6 +133,10 @@ export class JourneyStateManager {
     const currentStep = template.steps[boundedIndex];
     const percent = Math.round((completedSteps.length / template.steps.length) * 100);
 
+    // If all steps are completed, don't show time remaining
+    const isFullyComplete = completedSteps.length >= template.steps.length;
+    const timeRemaining = isFullyComplete ? undefined : calculateTimeRemaining(template, boundedIndex);
+
     return {
       templateId: template.id,
       currentStepId: currentStep?.id ?? template.steps[template.steps.length - 1].id,
@@ -142,7 +146,7 @@ export class JourneyStateManager {
       completedSteps,
       percentComplete: Math.min(percent, 100),
       lastStepCompletedAt: new Date().toISOString(),
-      estimatedTimeRemaining: calculateTimeRemaining(template, boundedIndex),
+      estimatedTimeRemaining: timeRemaining,
     };
   }
 
@@ -241,7 +245,9 @@ export class JourneyStateManager {
     const stepsWithIndex = template.steps.map((step, index) => ({ ...step, index }));
 
     const completedSteps = Array.isArray(progress?.completedSteps) ? progress!.completedSteps : [];
-    const percentComplete = progress?.percentComplete ?? 0;
+    // Recalculate percent complete to ensure it matches current template
+    const calculatedPercent = Math.round((completedSteps.length / template.steps.length) * 100);
+    const percentComplete = Math.min(calculatedPercent, 100);
     const currentStepIndex = progress?.currentStepIndex ?? 0;
     const currentStep = stepsWithIndex[currentStepIndex] ?? stepsWithIndex[stepsWithIndex.length - 1];
 

@@ -48,14 +48,14 @@ export interface MetricRecommendations {
 }
 
 export interface AlignmentScore {
-  score: number;
-  alignmentFactors: Array<{
-    factor: string;
-    aligned: boolean;
-    impact: string;
-  }>;
-  gaps: string[];
-  suggestions: string[];
+    score: number;
+    alignmentFactors: Array<{
+        factor: string;
+        aligned: boolean;
+        impact: string;
+    }>;
+    gaps: string[];
+    suggestions: string[];
 }
 
 // ==========================================
@@ -103,9 +103,9 @@ interface RegulatoryFramework {
 
 function buildGoalExtractionPrompt(userDescription: string, journeyType: string, context: BusinessContext): string {
     const journeyPersona = {
-      guided: "You are a helpful data analysis assistant for non-technical users. Your goal is to provide clear, step-by-step guidance.",
-      business: "You are a strategic business consultant. You help users leverage data to solve common business problems using established templates and frameworks.",
-      technical: "You are an expert data scientist. You provide advanced analytical options and technical guidance to data professionals."
+        guided: "You are a helpful data analysis assistant for non-technical users. Your goal is to provide clear, step-by-step guidance.",
+        business: "You are a strategic business consultant. You help users leverage data to solve common business problems using established templates and frameworks.",
+        technical: "You are an expert data scientist. You provide advanced analytical options and technical guidance to data professionals."
     }[journeyType] || "You are a general data analysis assistant.";
 
     let prompt = `${journeyPersona}\n\n`;
@@ -158,223 +158,223 @@ function buildGoalExtractionPrompt(userDescription: string, journeyType: string,
 Focus on providing practical, actionable recommendations that align with the user's journey type and business context. Ensure the output is a single, valid JSON object with no extra text or explanations.`;
 
     return prompt;
-  }
+}
 
 function parseGoalExtractionResponse(aiResponse: string, journeyType: string): any {
     try {
-      // First try to parse as JSON directly
-      let parsedResponse;
-      try {
-        parsedResponse = JSON.parse(aiResponse);
-      } catch {
-        // If direct JSON parsing fails, try to extract JSON from the response
-        const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          parsedResponse = JSON.parse(jsonMatch[0]);
-        } else {
-          throw new Error("No valid JSON found in AI response");
+        // First try to parse as JSON directly
+        let parsedResponse;
+        try {
+            parsedResponse = JSON.parse(aiResponse);
+        } catch {
+            // If direct JSON parsing fails, try to extract JSON from the response
+            const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+                parsedResponse = JSON.parse(jsonMatch[0]);
+            } else {
+                throw new Error("No valid JSON found in AI response");
+            }
         }
-      }
 
-      // Validate and provide defaults for required fields
-            const result = {
-        goals: parsedResponse.goals || [
-          {
-            goal: "Understand key insights from the data",
-            description: "Analyze the dataset to identify important patterns and trends",
-            priority: "high" as const,
-            category: "business_insight" as const
-          }
-        ],
-        questions: parsedResponse.questions || [
-          {
-            question: "What are the main patterns in this dataset?",
-            type: "descriptive" as const,
-            complexity: "basic" as const,
-            dataRequirements: ["Quantitative data", "Clean dataset"]
-          }
-        ],
-        analysisPaths: parsedResponse.analysisPaths || [
-          {
-            name: "Exploratory Data Analysis",
-            type: "statistical" as const,
-            description: "Comprehensive overview of data patterns, distributions, and relationships",
-            complexity: "basic" as const,
-            estimatedDuration: "2-4 hours",
-            expectedOutcomes: ["Data overview", "Key statistics", "Initial insights"],
-            requiredFeatures: ["preparation", "analysis", "visualization"],
-            confidence: 85
-          }
-        ],
-                dataRequirements: {
-          estimatedColumns: parsedResponse.dataRequirements?.estimatedColumns || 10,
-          estimatedRows: parsedResponse.dataRequirements?.estimatedRows || 1000,
-          requiredDataTypes: parsedResponse.dataRequirements?.requiredDataTypes || ["Numerical", "Categorical"],
-          qualityRequirements: parsedResponse.dataRequirements?.qualityRequirements || ["Clean data", "Consistent formatting"]
-        },
-                recommendedFeatures: parsedResponse.recommendedFeatures || ["preparation", "analysis", "visualization"],
-                decisionFramework: parsedResponse.decisionFramework || (journeyType === 'business' ? {
-                    executiveSummary: "This analysis supports a clear business decision with quantified KPI and financial impacts.",
-                    kpis: ["Revenue", "Gross Margin", "Conversion Rate"],
-                    financialImpact: {
-                        revenueImpact: "Potential +5-10% revenue uplift",
-                        costImpact: "Operational cost reduction of 2-4%",
-                        roiEstimate: "Estimated 150-200% ROI over 6 months",
-                        breakEven: "Break-even in ~8-12 weeks"
+        // Validate and provide defaults for required fields
+        const result = {
+            goals: parsedResponse.goals || [
+                {
+                    goal: "Understand key insights from the data",
+                    description: "Analyze the dataset to identify important patterns and trends",
+                    priority: "high" as const,
+                    category: "business_insight" as const
+                }
+            ],
+            questions: parsedResponse.questions || [
+                {
+                    question: "What are the main patterns in this dataset?",
+                    type: "descriptive" as const,
+                    complexity: "basic" as const,
+                    dataRequirements: ["Quantitative data", "Clean dataset"]
+                }
+            ],
+            analysisPaths: parsedResponse.analysisPaths || [
+                {
+                    name: "Exploratory Data Analysis",
+                    type: "statistical" as const,
+                    description: "Comprehensive overview of data patterns, distributions, and relationships",
+                    complexity: "basic" as const,
+                    estimatedDuration: "2-4 hours",
+                    expectedOutcomes: ["Data overview", "Key statistics", "Initial insights"],
+                    requiredFeatures: ["preparation", "analysis", "visualization"],
+                    confidence: 85
+                }
+            ],
+            dataRequirements: {
+                estimatedColumns: parsedResponse.dataRequirements?.estimatedColumns || 10,
+                estimatedRows: parsedResponse.dataRequirements?.estimatedRows || 1000,
+                requiredDataTypes: parsedResponse.dataRequirements?.requiredDataTypes || ["Numerical", "Categorical"],
+                qualityRequirements: parsedResponse.dataRequirements?.qualityRequirements || ["Clean data", "Consistent formatting"]
+            },
+            recommendedFeatures: parsedResponse.recommendedFeatures || ["preparation", "analysis", "visualization"],
+            decisionFramework: parsedResponse.decisionFramework || (journeyType === 'business' ? {
+                executiveSummary: "This analysis supports a clear business decision with quantified KPI and financial impacts.",
+                kpis: ["Revenue", "Gross Margin", "Conversion Rate"],
+                financialImpact: {
+                    revenueImpact: "Potential +5-10% revenue uplift",
+                    costImpact: "Operational cost reduction of 2-4%",
+                    roiEstimate: "Estimated 150-200% ROI over 6 months",
+                    breakEven: "Break-even in ~8-12 weeks"
+                },
+                options: [
+                    {
+                        option: "Option A: Optimize pricing tiers",
+                        expectedImpact: "Increase ARPU with minimal churn impact",
+                        kpiMovement: ["ARPU ↑", "Churn ↔/↑ slightly"],
+                        risks: ["Customer sensitivity to price changes"],
+                        requiredActions: ["Price experiment", "Monitor cohort churn"]
                     },
-                    options: [
-                        {
-                            option: "Option A: Optimize pricing tiers",
-                            expectedImpact: "Increase ARPU with minimal churn impact",
-                            kpiMovement: ["ARPU ↑", "Churn ↔/↑ slightly"],
-                            risks: ["Customer sensitivity to price changes"],
-                            requiredActions: ["Price experiment", "Monitor cohort churn"]
-                        },
-                        {
-                            option: "Option B: Target high-LTV segments",
-                            expectedImpact: "Better marketing efficiency and conversion",
-                            kpiMovement: ["CAC ↓", "LTV ↑"],
-                            risks: ["Narrower audience reach"],
-                            requiredActions: ["Refine targeting", "Adjust creatives"]
-                        }
-                    ],
-                    recommendedAction: {
-                        action: "Run a 4-week pricing experiment in top segments",
-                        rationale: "Highest ROI with manageable risk based on historical elasticity",
-                        expectedOutcome: "+6% revenue with stable churn",
-                        timeline: "8-12 weeks to full rollout"
+                    {
+                        option: "Option B: Target high-LTV segments",
+                        expectedImpact: "Better marketing efficiency and conversion",
+                        kpiMovement: ["CAC ↓", "LTV ↑"],
+                        risks: ["Narrower audience reach"],
+                        requiredActions: ["Refine targeting", "Adjust creatives"]
                     }
-                } : undefined)
-      };
+                ],
+                recommendedAction: {
+                    action: "Run a 4-week pricing experiment in top segments",
+                    rationale: "Highest ROI with manageable risk based on historical elasticity",
+                    expectedOutcome: "+6% revenue with stable churn",
+                    timeline: "8-12 weeks to full rollout"
+                }
+            } : undefined)
+        };
 
-      return result;
+        return result;
 
     } catch (error) {
-      console.error('Failed to parse AI response:', error);
-      console.error('AI Response was:', aiResponse);
-      
-      // Return fallback response based on journey type
-      return getFallbackGoalExtraction(journeyType);
+        console.error('Failed to parse AI response:', error);
+        console.error('AI Response was:', aiResponse);
+
+        // Return fallback response based on journey type
+        return getFallbackGoalExtraction(journeyType);
     }
-  }
+}
 
 function getFallbackGoalExtraction(journeyType: string): any {
     const fallbacks: { [key: string]: any } = {
-      'non-tech': {
-        goals: [
-          {
-            goal: "Understand your data patterns",
-            description: "Get clear insights about what your data shows using guided analysis",
-            priority: "high" as const,
-            category: "business_insight" as const
-          }
-        ],
-        questions: [
-          {
-            question: "What are the key trends in my data?",
-            type: "descriptive" as const,
-            complexity: "basic" as const,
-            dataRequirements: ["Historical data", "Key metrics"]
-          }
-        ],
-        analysisPaths: [
-          {
-            name: "Guided Data Exploration",
-            type: "business_intelligence" as const,
-            description: "Step-by-step analysis with AI guidance perfect for business users",
-            complexity: "basic" as const,
-            estimatedDuration: "1-2 hours",
-            expectedOutcomes: ["Business insights", "Key trends", "Actionable recommendations"],
-            requiredFeatures: ["preparation", "analysis", "ai_insights"],
-            confidence: 90
-          }
-        ],
-        dataRequirements: {
-          estimatedColumns: 5,
-          estimatedRows: 500,
-          requiredDataTypes: ["Business metrics", "Time data"],
-          qualityRequirements: ["Complete records", "Business-relevant data"]
+        'non-tech': {
+            goals: [
+                {
+                    goal: "Understand your data patterns",
+                    description: "Get clear insights about what your data shows using guided analysis",
+                    priority: "high" as const,
+                    category: "business_insight" as const
+                }
+            ],
+            questions: [
+                {
+                    question: "What are the key trends in my data?",
+                    type: "descriptive" as const,
+                    complexity: "basic" as const,
+                    dataRequirements: ["Historical data", "Key metrics"]
+                }
+            ],
+            analysisPaths: [
+                {
+                    name: "Guided Data Exploration",
+                    type: "business_intelligence" as const,
+                    description: "Step-by-step analysis with AI guidance perfect for business users",
+                    complexity: "basic" as const,
+                    estimatedDuration: "1-2 hours",
+                    expectedOutcomes: ["Business insights", "Key trends", "Actionable recommendations"],
+                    requiredFeatures: ["preparation", "analysis", "ai_insights"],
+                    confidence: 90
+                }
+            ],
+            dataRequirements: {
+                estimatedColumns: 5,
+                estimatedRows: 500,
+                requiredDataTypes: ["Business metrics", "Time data"],
+                qualityRequirements: ["Complete records", "Business-relevant data"]
+            },
+            recommendedFeatures: ["preparation", "analysis", "ai_insights"]
         },
-        recommendedFeatures: ["preparation", "analysis", "ai_insights"]
-      },
-      business: {
-        goals: [
-          {
-            goal: "Apply proven business analysis templates",
-            description: "Use pre-built analysis frameworks for common business scenarios",
-            priority: "high" as const,
-            category: "business_insight" as const
-          }
-        ],
-        questions: [
-          {
-            question: "How does my business performance compare to benchmarks?",
-            type: "diagnostic" as const,
-            complexity: "intermediate" as const,
-            dataRequirements: ["Performance metrics", "Historical data"]
-          }
-        ],
-        analysisPaths: [
-          {
-            name: "Business Performance Dashboard",
-            type: "business_intelligence" as const,
-            description: "Pre-built templates for sales, marketing, and operational analysis",
-            complexity: "intermediate" as const,
-            estimatedDuration: "2-3 hours",
-            expectedOutcomes: ["Performance metrics", "Trend analysis", "Business recommendations"],
-            requiredFeatures: ["preparation", "analysis", "visualization"],
-            confidence: 85
-          }
-        ],
-        dataRequirements: {
-          estimatedColumns: 15,
-          estimatedRows: 2000,
-          requiredDataTypes: ["Business metrics", "Time series", "Categorical data"],
-          qualityRequirements: ["Consistent metrics", "Regular time intervals"]
+        business: {
+            goals: [
+                {
+                    goal: "Apply proven business analysis templates",
+                    description: "Use pre-built analysis frameworks for common business scenarios",
+                    priority: "high" as const,
+                    category: "business_insight" as const
+                }
+            ],
+            questions: [
+                {
+                    question: "How does my business performance compare to benchmarks?",
+                    type: "diagnostic" as const,
+                    complexity: "intermediate" as const,
+                    dataRequirements: ["Performance metrics", "Historical data"]
+                }
+            ],
+            analysisPaths: [
+                {
+                    name: "Business Performance Dashboard",
+                    type: "business_intelligence" as const,
+                    description: "Pre-built templates for sales, marketing, and operational analysis",
+                    complexity: "intermediate" as const,
+                    estimatedDuration: "2-3 hours",
+                    expectedOutcomes: ["Performance metrics", "Trend analysis", "Business recommendations"],
+                    requiredFeatures: ["preparation", "analysis", "visualization"],
+                    confidence: 85
+                }
+            ],
+            dataRequirements: {
+                estimatedColumns: 15,
+                estimatedRows: 2000,
+                requiredDataTypes: ["Business metrics", "Time series", "Categorical data"],
+                qualityRequirements: ["Consistent metrics", "Regular time intervals"]
+            },
+            recommendedFeatures: ["preparation", "analysis", "visualization"]
         },
-        recommendedFeatures: ["preparation", "analysis", "visualization"]
-      },
-      technical: {
-        goals: [
-          {
-            goal: "Perform advanced statistical analysis",
-            description: "Apply sophisticated analytical techniques with full customization",
-            priority: "high" as const,
-            category: "exploration" as const
-          }
-        ],
-        questions: [
-          {
-            question: "What complex relationships exist in my data?",
-            type: "predictive" as const,
-            complexity: "advanced" as const,
-            dataRequirements: ["Large dataset", "Multiple variables", "Clean data"]
-          }
-        ],
-        analysisPaths: [
-          {
-            name: "Advanced Statistical Modeling",
-            type: "machine_learning" as const,
-            description: "Custom statistical models with full parameter control",
-            complexity: "advanced" as const,
-            estimatedDuration: "4-8 hours",
-            expectedOutcomes: ["Statistical models", "Predictive insights", "Technical documentation"],
-            requiredFeatures: ["preparation", "data_processing", "analysis", "ai_insights"],
-            confidence: 80
-          }
-        ],
-        dataRequirements: {
-          estimatedColumns: 25,
-          estimatedRows: 10000,
-          requiredDataTypes: ["Numerical data", "Multiple variables", "Time series"],
-          qualityRequirements: ["High data quality", "Complete cases", "Validated measurements"]
-        },
-        recommendedFeatures: ["preparation", "data_processing", "analysis", "ai_insights"]
-      }
+        technical: {
+            goals: [
+                {
+                    goal: "Perform advanced statistical analysis",
+                    description: "Apply sophisticated analytical techniques with full customization",
+                    priority: "high" as const,
+                    category: "exploration" as const
+                }
+            ],
+            questions: [
+                {
+                    question: "What complex relationships exist in my data?",
+                    type: "predictive" as const,
+                    complexity: "advanced" as const,
+                    dataRequirements: ["Large dataset", "Multiple variables", "Clean data"]
+                }
+            ],
+            analysisPaths: [
+                {
+                    name: "Advanced Statistical Modeling",
+                    type: "machine_learning" as const,
+                    description: "Custom statistical models with full parameter control",
+                    complexity: "advanced" as const,
+                    estimatedDuration: "4-8 hours",
+                    expectedOutcomes: ["Statistical models", "Predictive insights", "Technical documentation"],
+                    requiredFeatures: ["preparation", "data_processing", "analysis", "ai_insights"],
+                    confidence: 80
+                }
+            ],
+            dataRequirements: {
+                estimatedColumns: 25,
+                estimatedRows: 10000,
+                requiredDataTypes: ["Numerical data", "Multiple variables", "Time series"],
+                qualityRequirements: ["High data quality", "Complete cases", "Validated measurements"]
+            },
+            recommendedFeatures: ["preparation", "data_processing", "analysis", "ai_insights"]
+        }
     };
 
     return fallbacks[journeyType] || fallbacks['non-tech'];
-  }
+}
 export class BusinessAgent {
     private chimaridataAI: ChimaridataAI;
     private knowledgeGraph: KnowledgeGraphService;
@@ -389,9 +389,9 @@ export class BusinessAgent {
      */
     async processTask(task: any, projectId: string): Promise<any> {
         const { stepName, dependency, project, previousResults } = task;
-        
+
         console.log(`Business Agent processing task: ${stepName} for project ${projectId}`);
-        
+
         try {
             switch (stepName) {
                 // Consultation methods for multi-agent coordination
@@ -438,7 +438,7 @@ export class BusinessAgent {
 
     private async generateBusinessReport(project: any, previousResults: any, metadata: any): Promise<any> {
         console.log('Generating business report...');
-        
+
         return {
             reportType: 'business_summary',
             summary: 'Business analysis completed successfully',
@@ -450,7 +450,7 @@ export class BusinessAgent {
 
     private async performBusinessAnalysis(project: any, previousResults: any, metadata: any): Promise<any> {
         console.log('Performing business analysis...');
-        
+
         return {
             analysisType: 'business_insights',
             insights: ['Insight 1', 'Insight 2'],
@@ -461,7 +461,7 @@ export class BusinessAgent {
 
     private async generateRecommendations(project: any, previousResults: any, metadata: any): Promise<any> {
         console.log('Generating business recommendations...');
-        
+
         return {
             recommendations: [
                 { title: 'Recommendation 1', priority: 'high', impact: 'revenue' },
@@ -473,7 +473,7 @@ export class BusinessAgent {
 
     private async performComplianceCheck(project: any, metadata: any): Promise<any> {
         console.log('Performing compliance check...');
-        
+
         return {
             complianceStatus: 'compliant',
             checkedFrameworks: ['GDPR', 'SOX'],
@@ -630,8 +630,8 @@ export class BusinessAgent {
         const sanitizedGoals = goals.filter(goal => typeof goal === 'string' && goal.trim().length > 0);
         const sanitizedAnalysisTypes = analysisTypes.filter(type => typeof type === 'string' && type.trim().length > 0);
 
-    const industryTemplate = industry ? await this.getIndustryTemplate(industry) : undefined;
-    const regulatoryFrameworks = industry ? await this.getApplicableRegulations(industry) : [];
+        const industryTemplate = industry ? await this.getIndustryTemplate(industry) : undefined;
+        const regulatoryFrameworks = industry ? await this.getApplicableRegulations(industry) : [];
 
         const metricSuggestions = await this.suggestBusinessMetrics(
             industry || 'general',
@@ -729,11 +729,11 @@ export class BusinessAgent {
             };
         }
 
-    const industryTemplate = await this.getIndustryTemplate(industry);
-    const applicableRegulations = await this.getApplicableRegulations(industry);
+        const industryTemplate = await this.getIndustryTemplate(industry);
+        const applicableRegulations = await this.getApplicableRegulations(industry);
 
-    const insights: string[] = [];
-    const recommendedTemplates: any[] = [];
+        const insights: string[] = [];
+        const recommendedTemplates: any[] = [];
 
         if (industryTemplate) {
             // Generate industry-specific insights
@@ -779,7 +779,7 @@ export class BusinessAgent {
     }
 
     async validateRegulatoryCompliance(analysis: any, industry: string): Promise<any> {
-    const regulations = await this.getApplicableRegulations(industry);
+        const regulations = await this.getApplicableRegulations(industry);
         const complianceReport: {
             overallCompliance: 'compliant' | 'attention_required';
             warnings: string[];
@@ -844,7 +844,7 @@ export class BusinessAgent {
     }
 
     async generateBusinessKPIs(industry: string, analysisType: string): Promise<any> {
-    const industryTemplate = await this.getIndustryTemplate(industry);
+        const industryTemplate = await this.getIndustryTemplate(industry);
 
         if (!industryTemplate) {
             return {
@@ -901,6 +901,49 @@ export class BusinessAgent {
                 kpis.benchmarks = [
                     { metric: 'OEE', target: '>85%', industry_average: '78%' },
                     { metric: 'Defect rate', target: '<1%', industry_average: '2.3%' }
+                ];
+                break;
+
+            case 'hr':
+            case 'human_resources':
+            case 'employee_engagement':
+            case 'workforce':
+            case 'talent':
+            case 'people':
+                kpis.primaryKPIs = ['Employee retention rate', 'Employee engagement score', 'Turnover rate', 'Employee satisfaction index'];
+                kpis.secondaryKPIs = ['Time to hire', 'Training completion rate', 'Absenteeism rate', 'Internal promotion rate', 'Performance review completion'];
+                kpis.benchmarks = [
+                    { metric: 'Turnover rate', target: '<15%', industry_average: '18%' },
+                    { metric: 'Engagement score', target: '>75%', industry_average: '68%' },
+                    { metric: 'Time to hire', target: '<30 days', industry_average: '42 days' },
+                    { metric: 'Employee satisfaction', target: '>80%', industry_average: '72%' }
+                ];
+                break;
+
+            case 'education':
+            case 'academic':
+            case 'school':
+            case 'university':
+            case 'learning':
+                kpis.primaryKPIs = ['Student retention rate', 'Graduation rate', 'Student satisfaction score', 'Academic achievement'];
+                kpis.secondaryKPIs = ['Course completion rate', 'Teacher effectiveness score', 'Employment placement rate', 'Parent satisfaction'];
+                kpis.benchmarks = [
+                    { metric: 'Graduation rate', target: '>85%', industry_average: '78%' },
+                    { metric: 'Student satisfaction', target: '>80%', industry_average: '72%' },
+                    { metric: 'Retention rate', target: '>90%', industry_average: '85%' }
+                ];
+                break;
+
+            case 'nonprofit':
+            case 'non_profit':
+            case 'ngo':
+            case 'charity':
+                kpis.primaryKPIs = ['Donor retention rate', 'Program effectiveness', 'Mission impact score', 'Volunteer engagement'];
+                kpis.secondaryKPIs = ['Cost per beneficiary', 'Fundraising efficiency', 'Overhead ratio', 'Community reach'];
+                kpis.benchmarks = [
+                    { metric: 'Donor retention', target: '>45%', industry_average: '40%' },
+                    { metric: 'Overhead ratio', target: '<25%', industry_average: '28%' },
+                    { metric: 'Program efficiency', target: '>75%', industry_average: '70%' }
                 ];
                 break;
 
@@ -1041,7 +1084,7 @@ export class BusinessAgent {
         industry: string
     ): Promise<BusinessImpactReport> {
         console.log(`💼 Business Agent: Assessing business impact for ${industry || 'general'} industry`);
-        
+
         // Handle null/undefined inputs gracefully
         if (!goals || !Array.isArray(goals)) {
             return {
@@ -1068,38 +1111,38 @@ export class BusinessAgent {
                 complianceConsiderations: ['Standard compliance considerations apply']
             };
         }
-        
+
         const benefits: string[] = [];
         const risks: string[] = [];
         const recommendations: string[] = [];
         let businessValue: 'high' | 'medium' | 'low' = 'medium';
-        
+
         // Analyze goals for business value
         const goalsLower = goals.map(g => g.toLowerCase()).join(' ');
-        
+
         if (goalsLower.includes('segment') || goalsLower.includes('customer')) {
             benefits.push('Customer segmentation enables targeted marketing campaigns');
             benefits.push('Improved customer retention through personalized experiences');
             businessValue = 'high';
             recommendations.push('Schedule monthly segmentation updates to track changes');
         }
-        
+
         if (goalsLower.includes('revenue') || goalsLower.includes('sales') || goalsLower.includes('profit')) {
             benefits.push('Direct revenue impact through optimized pricing and sales strategies');
             businessValue = 'high';
             recommendations.push('Track ROI metrics for implemented recommendations');
         }
-        
+
         if (goalsLower.includes('churn') || goalsLower.includes('retention')) {
             benefits.push('Reduced customer acquisition costs through improved retention');
             risks.push('Churn prediction requires continuous model updates');
             businessValue = 'high';
         }
-        
+
         // Industry-specific considerations
         if (industry) {
             const industryLower = industry.toLowerCase();
-            
+
             if (industryLower.includes('retail')) {
                 if (proposedApproach.method === 'rfm_analysis') {
                     benefits.push('RFM analysis is proven standard in retail industry');
@@ -1108,32 +1151,32 @@ export class BusinessAgent {
                 }
                 recommendations.push('Integrate with existing CRM and marketing automation tools');
             }
-            
+
             if (industryLower.includes('finance') || industryLower.includes('banking')) {
                 risks.push('Financial data requires strict regulatory compliance (GDPR, SOX)');
                 recommendations.push('Ensure all analysis meets regulatory requirements');
             }
-            
+
             if (industryLower.includes('healthcare')) {
                 risks.push('Healthcare data subject to HIPAA regulations');
                 recommendations.push('Implement proper data anonymization and access controls');
             }
         }
-        
+
         // Calculate alignment scores
         const goalsAlignment = benefits.length / Math.max(goals.length, 1);
         const industryAlignment = industry ? 0.90 : 0.70;
         const bestPracticesAlignment = proposedApproach.method?.includes('standard') ||
-                                      proposedApproach.method?.includes('proven') ? 0.90 : 0.75;
-        
+            proposedApproach.method?.includes('proven') ? 0.90 : 0.75;
+
         // Overall alignment score (return as number for API compatibility)
         const overallAlignment = (goalsAlignment + industryAlignment + bestPracticesAlignment) / 3;
-        
+
         // Determine expected ROI
         const expectedROI = overallAlignment > 0.85 ? 'High' :
-                           overallAlignment > 0.70 ? 'Medium to High' :
-                           overallAlignment > 0.55 ? 'Medium' : 'Low to Medium';
-        
+            overallAlignment > 0.70 ? 'Medium to High' :
+                overallAlignment > 0.55 ? 'Medium' : 'Low to Medium';
+
         return {
             businessValue,
             confidence: 0.88,
@@ -1249,6 +1292,76 @@ export class BusinessAgent {
             });
         }
 
+        // HR/Employee engagement goals - check goals for HR keywords
+        if (goalsLower.includes('employee') || goalsLower.includes('engagement') ||
+            goalsLower.includes('workforce') || goalsLower.includes('hr') ||
+            goalsLower.includes('staff') || goalsLower.includes('turnover') ||
+            goalsLower.includes('retention rate') || goalsLower.includes('satisfaction')) {
+            pushMetric(primaryMetrics, {
+                name: 'Employee Engagement Score',
+                description: 'Composite measure of employee commitment and satisfaction',
+                calculation: 'Weighted average of survey responses across engagement dimensions',
+                businessImpact: 'Higher engagement correlates with productivity, retention, and business performance'
+            });
+
+            pushMetric(primaryMetrics, {
+                name: 'Employee Turnover Rate',
+                description: 'Percentage of employees who leave within a period',
+                calculation: '(Employees who left / Average total employees) × 100',
+                businessImpact: 'Lower turnover reduces hiring costs and preserves institutional knowledge'
+            });
+
+            pushMetric(primaryMetrics, {
+                name: 'Employee Satisfaction Index',
+                description: 'Overall satisfaction score from employee surveys',
+                calculation: 'Average satisfaction rating across all survey dimensions',
+                businessImpact: 'Satisfied employees are more productive and less likely to leave'
+            });
+
+            pushMetric(secondaryMetrics, {
+                name: 'Time to Hire',
+                description: 'Average days from job posting to offer acceptance',
+                calculation: 'Sum of days to fill positions / Number of positions filled'
+            });
+
+            pushMetric(secondaryMetrics, {
+                name: 'Absenteeism Rate',
+                description: 'Percentage of scheduled work time missed',
+                calculation: '(Absent days / Total scheduled days) × 100'
+            });
+
+            pushMetric(secondaryMetrics, {
+                name: 'Internal Promotion Rate',
+                description: 'Percentage of open positions filled internally',
+                calculation: '(Internal hires / Total hires) × 100'
+            });
+        }
+
+        // Education goals
+        if (goalsLower.includes('student') || goalsLower.includes('graduation') ||
+            goalsLower.includes('academic') || goalsLower.includes('learning') ||
+            goalsLower.includes('teacher') || goalsLower.includes('school')) {
+            pushMetric(primaryMetrics, {
+                name: 'Student Retention Rate',
+                description: 'Percentage of students who continue enrollment',
+                calculation: '(Returning students / Previous enrollment) × 100',
+                businessImpact: 'Higher retention indicates program value and student satisfaction'
+            });
+
+            pushMetric(primaryMetrics, {
+                name: 'Graduation Rate',
+                description: 'Percentage of students completing their program',
+                calculation: '(Graduates / Initial cohort) × 100',
+                businessImpact: 'Key indicator of program effectiveness and student success'
+            });
+
+            pushMetric(secondaryMetrics, {
+                name: 'Course Completion Rate',
+                description: 'Percentage of enrolled students completing courses',
+                calculation: '(Completed enrollments / Total enrollments) × 100'
+            });
+        }
+
         if (industryLower.includes('retail') || industryLower.includes('ecommerce')) {
             pushMetric(primaryMetrics, {
                 name: 'Average Order Value (AOV)',
@@ -1321,14 +1434,14 @@ export class BusinessAgent {
         businessGoals: string[]
     ): Promise<AlignmentScore> {
         console.log(`💼 Business Agent: Validating alignment with ${businessGoals.length} business goals`);
-        
+
         const alignmentFactors: AlignmentScore['alignmentFactors'] = [];
         const gaps: string[] = [];
         const suggestions: string[] = [];
         let score = 0.73; // Start with base alignment score (adjusted to account for typical deductions)
-        
+
         const goalsLower = businessGoals.map(g => g.toLowerCase()).join(' ');
-        
+
         // Check if technical approach addresses business goals
         if (technicalApproach.type === 'segmentation' || technicalApproach.method?.includes('segment')) {
             if (goalsLower.includes('segment') || goalsLower.includes('customer') || goalsLower.includes('target')) {
@@ -1344,7 +1457,7 @@ export class BusinessAgent {
                 score -= 0.10; // Decrease for mismatch
             }
         }
-        
+
         // Check for clustering analysis alignment
         if (technicalApproach.analyses?.includes('clustering')) {
             if (goalsLower.includes('segment') || goalsLower.includes('group') || goalsLower.includes('cluster')) {
@@ -1360,7 +1473,7 @@ export class BusinessAgent {
                 score -= 0.05; // Minor mismatch
             }
         }
-        
+
         if (technicalApproach.type === 'prediction' || technicalApproach.type === 'forecasting') {
             if (goalsLower.includes('forecast') || goalsLower.includes('predict') || goalsLower.includes('future')) {
                 alignmentFactors.push({
@@ -1375,7 +1488,7 @@ export class BusinessAgent {
                 score -= 0.05;
             }
         }
-        
+
         // Check for ROI considerations
         if (goalsLower.includes('revenue') || goalsLower.includes('profit') || goalsLower.includes('cost')) {
             alignmentFactors.push({
@@ -1389,7 +1502,7 @@ export class BusinessAgent {
             suggestions.push('Define success metrics in terms of revenue, cost savings, or efficiency gains');
             score -= 0.03;
         }
-        
+
         // Check for actionability
         if (technicalApproach.outputs?.includes('recommendations') || technicalApproach.outputs?.includes('actions')) {
             alignmentFactors.push({
@@ -1403,13 +1516,253 @@ export class BusinessAgent {
             suggestions.push('Add recommendation generation to technical approach');
             score -= 0.05;
         }
-        
+
         return {
             score: Math.max(0.0, Math.min(0.95, score)), // Ensure score is between 0 and 0.95
             alignmentFactors,
             gaps,
             suggestions
         };
+    }
+
+    // ==========================================
+    // WEEK 2: AUDIENCE TRANSLATION METHODS
+    // ==========================================
+
+    /**
+     * Translate analysis results to audience-specific language
+     * Auto-triggered after DS agent completes analysis
+     */
+    async translateResults(params: {
+        results: any;
+        audience: string; // 'executive' | 'technical' | 'mixed'
+        decisionContext?: string;
+    }): Promise<any> {
+        const { results, audience, decisionContext } = params;
+
+        console.log(`📊 [BA Agent] Translating results for ${audience} audience`);
+
+        try {
+            // Translate insights to audience language
+            const translatedInsights = await this.translateInsights(
+                results.insights || [],
+                audience,
+                decisionContext
+            );
+
+            // Generate executive summary
+            const executiveSummary = await this.generateExecutiveSummary(
+                results,
+                audience
+            );
+
+            // Tailor recommendations to audience
+            const audienceRecommendations = await this.tailorRecommendations(
+                results.recommendations || [],
+                audience
+            );
+
+            console.log(`✅ [BA Agent] Translation complete: ${translatedInsights.length} insights, ${audienceRecommendations.length} recommendations`);
+
+            return {
+                ...results,
+                insights: translatedInsights,
+                recommendations: audienceRecommendations,
+                executiveSummary,
+                translatedFor: audience,
+                translatedAt: new Date().toISOString()
+            };
+        } catch (error) {
+            console.error(`❌ [BA Agent] Translation failed:`, error);
+            // Return original results on error
+            return {
+                ...results,
+                translationError: 'Failed to translate results',
+                translatedFor: audience,
+                translatedAt: new Date().toISOString()
+            };
+        }
+    }
+
+    /**
+     * Translate insights to audience-specific language
+     */
+    private async translateInsights(
+        insights: any[],
+        audience: string,
+        decisionContext?: string
+    ): Promise<any[]> {
+        if (!insights || insights.length === 0) {
+            return [];
+        }
+
+        const audiencePrompts = {
+            executive: 'Translate to executive language: focus on business impact, ROI, strategic implications. Avoid technical jargon. Use terms like "revenue opportunity", "market positioning", "competitive advantage".',
+            technical: 'Translate to technical language: include statistical details, methodology, technical accuracy. Use precise terminology like "correlation coefficient", "confidence interval", "p-value".',
+            mixed: 'Translate to balanced language: accessible to both business and technical readers. Explain key terms in parentheses. Balance business impact with technical rigor.'
+        };
+
+        const prompt = audiencePrompts[audience as keyof typeof audiencePrompts] || audiencePrompts.mixed;
+
+        console.log(`🔄 [BA Agent] Translating ${insights.length} insights for ${audience} audience`);
+
+        // Translate each insight
+        const translatedInsights = await Promise.all(
+            insights.map(async (insight, index) => {
+                try {
+                    // Build translation prompt
+                    const translationPrompt = `${prompt}
+
+Original insight:
+Title: ${insight.title || `Insight ${index + 1}`}
+Description: ${insight.description || insight.summary || 'No description'}
+${insight.value ? `Value: ${insight.value}` : ''}
+${insight.impact ? `Impact: ${insight.impact}` : ''}
+
+Translate this insight while preserving the core message. Return JSON with: { title, description }`;
+
+                    const response = await this.chimaridataAI.generateText({
+                        prompt: translationPrompt,
+                        maxTokens: 500,
+                        temperature: 0.3 // Lower temperature for more consistent translations
+                    });
+
+                    // Try to parse JSON response
+                    let translation;
+                    try {
+                        translation = JSON.parse(response.text);
+                    } catch {
+                        // Fallback: use original if parsing fails
+                        translation = {
+                            title: insight.title || `Insight ${index + 1}`,
+                            description: response.text || insight.description
+                        };
+                    }
+
+                    return {
+                        ...insight,
+                        title: translation.title || insight.title,
+                        description: translation.description || insight.description,
+                        originalTitle: insight.title,
+                        originalDescription: insight.description,
+                        translatedFor: audience
+                    };
+                } catch (error) {
+                    console.warn(`⚠️ [BA Agent] Failed to translate insight ${index + 1}, using original`);
+                    return {
+                        ...insight,
+                        translatedFor: audience,
+                        translationFailed: true
+                    };
+                }
+            })
+        );
+
+        return translatedInsights;
+    }
+
+    /**
+     * Generate executive summary of analysis results
+     */
+    private async generateExecutiveSummary(
+        results: any,
+        audience: string
+    ): Promise<string> {
+        const summaryPrompts = {
+            executive: 'Create a concise executive summary (3-5 sentences) highlighting key business impacts, ROI potential, and actionable recommendations. Focus on strategic value.',
+            technical: 'Create a comprehensive technical summary including key findings, methodology overview, statistical significance, and technical recommendations.',
+            mixed: 'Create a balanced summary accessible to both business and technical readers, highlighting key findings and their business implications.'
+        };
+
+        const prompt = summaryPrompts[audience as keyof typeof summaryPrompts] || summaryPrompts.mixed;
+
+        try {
+            const insightCount = results.insights?.length || 0;
+            const recommendationCount = results.recommendations?.length || 0;
+
+            const summaryPrompt = `${prompt}
+
+Analysis results:
+- ${insightCount} insights discovered
+- ${recommendationCount} recommendations generated
+${results.insights?.slice(0, 5).map((i: any, idx: number) => `\n${idx + 1}. ${i.title || 'Insight'}: ${i.description || i.summary || ''}`).join('') || ''}
+
+Generate a ${audience} summary of these results.`;
+
+            const response = await this.chimaridataAI.generateText({
+                prompt: summaryPrompt,
+                maxTokens: 300,
+                temperature: 0.4
+            });
+
+            return response.text;
+        } catch (error) {
+            console.warn(`⚠️ [BA Agent] Failed to generate executive summary, using fallback`);
+            return `Analysis complete with ${results.insights?.length || 0} insights and ${results.recommendations?.length || 0} recommendations.`;
+        }
+    }
+
+    /**
+     * Tailor recommendations to audience
+     */
+    private async tailorRecommendations(
+        recommendations: any[],
+        audience: string
+    ): Promise<any[]> {
+        if (!recommendations || recommendations.length === 0) {
+            return [];
+        }
+
+        const tailoringPrompts = {
+            executive: 'Reframe as strategic business recommendations with clear ROI and implementation timeline. Use action-oriented language.',
+            technical: 'Provide detailed technical implementation steps, including tools, methodologies, and technical considerations.',
+            mixed: 'Balance business value with technical feasibility. Include both strategic rationale and implementation approach.'
+        };
+
+        const prompt = tailoringPrompts[audience as keyof typeof tailoringPrompts] || tailoringPrompts.mixed;
+
+        console.log(`🎯 [BA Agent] Tailoring ${recommendations.length} recommendations for ${audience} audience`);
+
+        const tailoredRecommendations = await Promise.all(
+            recommendations.map(async (rec, index) => {
+                try {
+                    const tailoringPrompt = `${prompt}
+
+Original recommendation:
+${typeof rec === 'string' ? rec : rec.recommendation || rec.title || rec.description || `Recommendation ${index + 1}`}
+
+Tailor this recommendation for ${audience} audience. Keep it concise (1-2 sentences).`;
+
+                    const response = await this.chimaridataAI.generateText({
+                        prompt: tailoringPrompt,
+                        maxTokens: 200,
+                        temperature: 0.3
+                    });
+
+                    if (typeof rec === 'string') {
+                        return {
+                            recommendation: response.text,
+                            original: rec,
+                            translatedFor: audience
+                        };
+                    }
+
+                    return {
+                        ...rec,
+                        recommendation: response.text,
+                        original: rec.recommendation || rec.title || rec.description,
+                        translatedFor: audience
+                    };
+                } catch (error) {
+                    console.warn(`⚠️ [BA Agent] Failed to tailor recommendation ${index + 1}, using original`);
+                    return typeof rec === 'string'
+                        ? { recommendation: rec, translatedFor: audience, translationFailed: true }
+                        : { ...rec, translatedFor: audience, translationFailed: true };
+                }
+            })
+        );
+
+        return tailoredRecommendations;
     }
 }
 

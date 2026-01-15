@@ -116,13 +116,13 @@ export function CheckpointDialog({
                 <Badge variant="secondary">{analysisSteps.length} steps</Badge>
               </div>
 
-              {estimatedCost !== undefined && (
+              {estimatedCost !== undefined && estimatedCost !== null && (
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <AlertTriangle className="w-4 h-4 text-gray-500" />
                     <span className="text-sm text-gray-600">Estimated Cost:</span>
                   </div>
-                  <Badge variant="secondary">${estimatedCost.toFixed(2)}</Badge>
+                  <Badge variant="secondary">${(estimatedCost || 0).toFixed(2)}</Badge>
                 </div>
               )}
             </CardContent>

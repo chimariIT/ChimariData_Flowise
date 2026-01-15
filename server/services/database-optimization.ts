@@ -555,16 +555,26 @@ export class DatabaseOptimizationService {
    * Check disk and storage health
    */
   private async checkDiskHealth(): Promise<DatabaseHealthCheck['diskHealth']> {
+    // Optimized query: calculate size once using a subquery/CTE to avoid triple evaluation
     const tableSizeResult = await this.pool.query(`
+      WITH table_sizes AS (
+        SELECT
+          schemaname,
+          relname as tablename,
+          pg_total_relation_size(quote_ident(schemaname)||'.'||quote_ident(relname)) as size_bytes,
+          n_tup_ins + n_tup_upd + n_tup_del as total_modifications,
+          n_live_tup as row_count
+        FROM pg_stat_user_tables
+      )
       SELECT
         schemaname,
-        relname as tablename,
-        pg_size_pretty(pg_total_relation_size(quote_ident(schemaname)||'.'||quote_ident(relname))) as size,
-        pg_total_relation_size(quote_ident(schemaname)||'.'||quote_ident(relname)) as size_bytes,
-        n_tup_ins + n_tup_upd + n_tup_del as total_modifications,
-        n_live_tup as row_count
-      FROM pg_stat_user_tables
-      ORDER BY pg_total_relation_size(quote_ident(schemaname)||'.'||quote_ident(relname)) DESC
+        tablename,
+        pg_size_pretty(size_bytes) as size,
+        size_bytes,
+        total_modifications,
+        row_count
+      FROM table_sizes
+      ORDER BY size_bytes DESC
       LIMIT 20
     `);
     

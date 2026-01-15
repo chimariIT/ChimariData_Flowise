@@ -172,7 +172,7 @@ export class RealtimeClient {
 
   private handleOpen(): void {
     this.log('WebSocket connection established');
-    
+
     // Clear connection timeout
     if (this.connectionTimer) {
       clearTimeout(this.connectionTimer);
@@ -182,6 +182,13 @@ export class RealtimeClient {
     this.setConnectionState('connected');
     this.stats.totalConnections++;
     this.stats.lastConnected = new Date();
+
+    // Solution C: Request state sync after reconnection
+    if (this.reconnectAttempts > 0) {
+      this.log('[Solution C] Reconnected - requesting state synchronization');
+      this.requestStateSyncForActiveProjects();
+    }
+
     this.reconnectAttempts = 0;
 
     // Resubscribe to persistent subscriptions
@@ -214,6 +221,18 @@ export class RealtimeClient {
 
       if (data.type === 'pong') {
         this.log('Heartbeat pong received');
+        return;
+      }
+
+      // Solution C: Handle state sync response
+      if (data.type === 'state_sync') {
+        this.log('[Solution C] Received state sync:', data.data);
+        this.handleStateSync(data);
+        return;
+      }
+
+      if (data.type === 'state_sync_error') {
+        this.error('[Solution C] State sync failed:', data.data?.error);
         return;
       }
 
@@ -421,6 +440,102 @@ export class RealtimeClient {
         channels: channels,
       });
     }
+  }
+
+  /**
+   * Solution C: Request state synchronization for active projects after reconnection.
+   * Extracts project IDs from subscribed channels and requests their current state.
+   */
+  private requestStateSyncForActiveProjects(): void {
+    // Extract project IDs from subscriptions (format: "project:{projectId}")
+    const projectIds = new Set<string>();
+
+    this.persistentSubscriptions.forEach(channel => {
+      const match = channel.match(/^project:([a-zA-Z0-9_-]+)$/);
+      if (match) {
+        projectIds.add(match[1]);
+      }
+    });
+
+    if (projectIds.size > 0) {
+      this.log(`[Solution C] Requesting state sync for ${projectIds.size} project(s)`);
+
+      projectIds.forEach(projectId => {
+        this.sendMessage({
+          type: 'request_state_sync',
+          projectId: projectId,
+        });
+      });
+    }
+  }
+
+  /**
+   * Solution C: Public method to request state sync for a specific project.
+   * Can be called manually when a component needs the latest state.
+   */
+  public requestStateSync(projectId: string): void {
+    if (this.connectionState === 'connected') {
+      this.log(`[Solution C] Requesting state sync for project ${projectId}`);
+      this.sendMessage({
+        type: 'request_state_sync',
+        projectId: projectId,
+      });
+    } else {
+      this.log(`[Solution C] Cannot request state sync - not connected`);
+    }
+  }
+
+  /**
+   * Solution C: Handle state sync response from server.
+   * Emits a special event that components can listen to for state updates.
+   */
+  private handleStateSync(data: any): void {
+    const projectId = data.data?.projectId;
+    if (!projectId) return;
+
+    // Emit to project-specific listeners
+    const channel = `project:${projectId}`;
+    const listeners = this.eventListeners.get(channel);
+    if (listeners) {
+      const syncEvent = {
+        type: 'state_sync',
+        sourceType: 'analysis' as const,
+        sourceId: projectId,
+        userId: data.userId || 'system',
+        timestamp: new Date(data.timestamp),
+        data: data.data
+      };
+
+      listeners.forEach(handler => {
+        try {
+          handler(syncEvent as any);
+        } catch (error) {
+          this.error('State sync handler error:', error);
+        }
+      });
+    }
+
+    // Also emit to state_sync specific listeners
+    const syncListeners = this.eventListeners.get('state_sync');
+    if (syncListeners) {
+      syncListeners.forEach(handler => {
+        try {
+          handler(data as any);
+        } catch (error) {
+          this.error('State sync handler error:', error);
+        }
+      });
+    }
+
+    // Invalidate React Query cache for the project
+    try {
+      queryClient.invalidateQueries({ queryKey: [`/api/projects/${projectId}`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/projects/${projectId}/checkpoints`] });
+    } catch (error) {
+      this.error('Failed to invalidate React Query cache after state sync:', error);
+    }
+
+    this.log(`[Solution C] State sync processed for project ${projectId}`);
   }
 
   private handleVisibilityChange(): void {

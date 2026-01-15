@@ -32,6 +32,8 @@ interface AnalysisMetadata {
   timestamp: string;
   dataSize: number;
   columnCount: number;
+  columns?: any[];
+  journeyType?: string;
 }
 
 export function AudienceFormattedResults({ projectId, analysisId, onBack }: AudienceFormattedResultsProps) {
@@ -92,7 +94,7 @@ export function AudienceFormattedResults({ projectId, analysisId, onBack }: Audi
 
   const handleAudienceChange = async (newAudience: string) => {
     if (newAudience === selectedAudience) return;
-    
+
     setRefreshing(true);
     try {
       await loadAnalysisResults(newAudience);
@@ -174,7 +176,7 @@ export function AudienceFormattedResults({ projectId, analysisId, onBack }: Audi
               </p>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-3">
             <Select value={selectedAudience} onValueChange={handleAudienceChange} disabled={refreshing}>
               <SelectTrigger className="w-48">
@@ -197,7 +199,7 @@ export function AudienceFormattedResults({ projectId, analysisId, onBack }: Audi
                 })}
               </SelectContent>
             </Select>
-            
+
             {onBack && (
               <Button variant="outline" onClick={onBack}>
                 ← Back
@@ -249,7 +251,7 @@ export function AudienceFormattedResults({ projectId, analysisId, onBack }: Audi
                   <span className="font-medium">Analysis:</span> {metadata?.analysisType || 'Unknown'}
                 </li>
                 <li>
-                  <span className="font-medium">Journey:</span> {audienceContext?.journeyType || metadata?.journeyType || 'ai_guided'}
+                  <span className="font-medium">Journey:</span> {audienceContext?.journeyType || metadata?.journeyType || 'non-tech'}
                 </li>
                 <li>
                   <span className="font-medium">Executed:</span> {pipelineTimestamp}
@@ -340,8 +342,8 @@ export function AudienceFormattedResults({ projectId, analysisId, onBack }: Audi
                     <div key={index} className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">{viz.title || `Visualization ${index + 1}`}</h4>
                       {viz.image && (
-                        <img 
-                          src={`data:image/png;base64,${viz.image}`} 
+                        <img
+                          src={`data:image/png;base64,${viz.image}`}
                           alt={viz.title || `Visualization ${index + 1}`}
                           className="w-full h-auto rounded"
                         />
@@ -520,7 +522,7 @@ export function AudienceFormattedResults({ projectId, analysisId, onBack }: Audi
                   </div>
                   <div className="flex-1">
                     <div className="w-full bg-gray-200 rounded-full h-2">
-                      <div 
+                      <div
                         className="bg-blue-600 h-2 rounded-full transition-all duration-300"
                         style={{ width: `${formattedResults.confidence * 100}%` }}
                       />

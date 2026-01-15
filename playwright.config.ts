@@ -10,10 +10,18 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, '.env') });
 dotenv.config({ path: path.resolve(__dirname, '.env.playwright'), override: true });
 
+const skipWebServer = process.env.PLAYWRIGHT_SKIP_WEBSERVER === '1';
+console.log(
+  '[Playwright Config] PLAYWRIGHT_SKIP_WEBSERVER:',
+  process.env.PLAYWRIGHT_SKIP_WEBSERVER,
+  'skipWebServer:',
+  skipWebServer
+);
+
 /**
  * See https://playwright.dev/docs/test-configuration.
  */
-export default defineConfig({
+const baseConfig = defineConfig({
   testDir: './tests',
   testMatch: ['**/*.spec.ts', '**/*.test.ts'],
   testIgnore: ['**/unit/**', '**/integration/**', '**/performance/**'],
@@ -93,12 +101,18 @@ export default defineConfig({
    * We check the backend health endpoint to ensure both servers are ready,
    * since the backend is critical for API calls (auth, data, etc.).
    */
-  webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:5000/api/health', // Check backend health endpoint (requires both servers)
-    reuseExistingServer: true,  // Always reuse to avoid conflicts
-    timeout: 240 * 1000, // 4 minutes for both servers to start
-    stdout: 'pipe',
-    stderr: 'pipe',
-  },
+  ...(skipWebServer
+    ? {}
+    : {
+        webServer: {
+          command: 'npm run dev',
+          url: 'http://localhost:5000/api/health', // Check backend health endpoint (requires both servers)
+          reuseExistingServer: true,  // Always reuse to avoid conflicts
+          timeout: 240 * 1000, // 4 minutes for both servers to start
+          stdout: 'pipe',
+          stderr: 'pipe',
+        },
+      }),
 });
+
+export default baseConfig;

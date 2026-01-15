@@ -291,31 +291,31 @@ router.post("/step-by-step-analysis",
     AIAccessControlService.validateAIFeatureAccess('advanced_analysis'),
     AIAccessControlService.trackAIFeatureUsage('advanced_analysis'),
     async (req: Request, res: Response) => {
-    try {
-        const { projectId, analysisType, analysisPath, config } = req.body;
-        if (!projectId) {
-            return res.status(400).json({ error: "Project ID is required" });
-        }
-        const project = await storage.getProject(projectId);
-        if (!project) {
-            return res.status(404).json({ error: "Project not found" });
-        }
-        const result = await MCPAIService.performStepByStepAnalysis(project, analysisType, analysisPath, config);
-        await storage.updateProject(projectId, {
-            [`analysis_${analysisType}`]: {
-                question: config.question,
-                targetVariable: config.targetVariable,
-                multivariateVariables: config.multivariateVariables,
-                analysisType: config.analysisType,
-                results: result,
-                analysisPath: analysisPath,
+        try {
+            const { projectId, analysisType, analysisPath, config } = req.body;
+            if (!projectId) {
+                return res.status(400).json({ error: "Project ID is required" });
             }
-        });
-        res.json({ success: true, result });
-    } catch (error: any) {
-        res.status(500).json({ error: error.message });
-    }
-});
+            const project = await storage.getProject(projectId);
+            if (!project) {
+                return res.status(404).json({ error: "Project not found" });
+            }
+            const result = await MCPAIService.performStepByStepAnalysis(project, analysisType, analysisPath, config);
+            await storage.updateProject(projectId, {
+                [`analysis_${analysisType}`]: {
+                    question: config.question,
+                    targetVariable: config.targetVariable,
+                    multivariateVariables: config.multivariateVariables,
+                    analysisType: config.analysisType,
+                    results: result,
+                    analysisPath: analysisPath,
+                }
+            });
+            res.json({ success: true, result });
+        } catch (error: any) {
+            res.status(500).json({ error: error.message });
+        }
+    });
 
 // Time series analysis endpoint
 router.post("/projects/:projectId/time-series", ensureAuthenticated, async (req: Request, res: Response) => {
@@ -351,149 +351,149 @@ router.post("/ai-insights",
     AIAccessControlService.validateAIFeatureAccess('basic_analysis'),
     AIAccessControlService.trackAIFeatureUsage('basic_analysis'),
     async (req: Request, res: Response) => {
-    try {
-        const { projectId } = req.body;
-        if (!projectId) {
-            return res.status(400).json({ error: "Project ID is required" });
-        }
-        const project = await storage.getProject(projectId);
-        if (!project) {
-            return res.status(404).json({ error: "Project not found" });
-        }
-        const dataset = await storage.getDatasetForProject(projectId);
+        try {
+            const { projectId } = req.body;
+            if (!projectId) {
+                return res.status(400).json({ error: "Project ID is required" });
+            }
+            const project = await storage.getProject(projectId);
+            if (!project) {
+                return res.status(404).json({ error: "Project not found" });
+            }
+            const dataset = await storage.getDatasetForProject(projectId);
 
-        const role = typeof req.body.role === 'string' && req.body.role.trim().length
-            ? req.body.role.trim()
-            : 'data analyst';
-        const question = typeof req.body.question === 'string' && req.body.question.trim().length
-            ? req.body.question.trim()
-            : undefined;
-        const instructions = typeof req.body.instructions === 'string' && req.body.instructions.trim().length
-            ? req.body.instructions.trim()
-            : undefined;
-        const focusInput = req.body.focusAreas ?? req.body.questions ?? [];
-        const focusAreas = ensureArray<any>(focusInput)
-            .map(item => {
-                if (typeof item === 'string') {
-                    return item.trim();
-                }
-                if (item === undefined || item === null) {
-                    return '';
-                }
-                if (typeof item === 'object') {
-                    return JSON.stringify(item);
-                }
-                return String(item);
-            })
-            .filter(Boolean);
+            const role = typeof req.body.role === 'string' && req.body.role.trim().length
+                ? req.body.role.trim()
+                : 'data analyst';
+            const question = typeof req.body.question === 'string' && req.body.question.trim().length
+                ? req.body.question.trim()
+                : undefined;
+            const instructions = typeof req.body.instructions === 'string' && req.body.instructions.trim().length
+                ? req.body.instructions.trim()
+                : undefined;
+            const focusInput = req.body.focusAreas ?? req.body.questions ?? [];
+            const focusAreas = ensureArray<any>(focusInput)
+                .map(item => {
+                    if (typeof item === 'string') {
+                        return item.trim();
+                    }
+                    if (item === undefined || item === null) {
+                        return '';
+                    }
+                    if (typeof item === 'object') {
+                        return JSON.stringify(item);
+                    }
+                    return String(item);
+                })
+                .filter(Boolean);
 
-        const sampleRows = buildSampleRows(project, dataset);
-        const schema = coerceJson(project.schema ?? dataset?.schema);
-    const analysisResults = coerceJson((project as any).analysisResults ?? (dataset as any)?.analysisResults);
-        const summaryStats = isObject(analysisResults) && analysisResults.summary ? analysisResults.summary : analysisResults;
-        const recordCount = typeof project.recordCount === 'number'
-            ? project.recordCount
-            : typeof dataset?.recordCount === 'number'
-                ? dataset.recordCount
-                : sampleRows.length || undefined;
+            const sampleRows = buildSampleRows(project, dataset);
+            const schema = coerceJson(project.schema ?? dataset?.schema);
+            const analysisResults = coerceJson((project as any).analysisResults ?? (dataset as any)?.analysisResults);
+            const summaryStats = isObject(analysisResults) && analysisResults.summary ? analysisResults.summary : analysisResults;
+            const recordCount = typeof project.recordCount === 'number'
+                ? project.recordCount
+                : typeof dataset?.recordCount === 'number'
+                    ? dataset.recordCount
+                    : sampleRows.length || undefined;
 
-        const prompt = buildInsightPrompt({
-            role,
-            question,
-            instructions,
-            recordCount,
-            schema,
-            sampleRows,
-            summaryStats,
-            focusAreas,
-        });
-
-        const aiStart = Date.now();
-        const aiResult = await aiProvider.generateInsights(
-            {
+            const prompt = buildInsightPrompt({
+                role,
+                question,
+                instructions,
                 recordCount,
                 schema,
                 sampleRows,
                 summaryStats,
                 focusAreas,
-                projectName: project.name,
-                journeyType: (project as any).journeyType,
-            },
-            question ? 'guided_question' : 'auto_overview',
-            prompt
-        );
-
-        if (!aiResult.success) {
-            return res.status(502).json({
-                success: false,
-                projectId,
-                provider: aiResult.provider,
-                error: aiResult.error || 'Unable to generate insights with available providers',
             });
+
+            const aiStart = Date.now();
+            const aiResult = await aiProvider.generateInsights(
+                {
+                    recordCount,
+                    schema,
+                    sampleRows,
+                    summaryStats,
+                    focusAreas,
+                    projectName: project.name,
+                    journeyType: (project as any).journeyType,
+                },
+                question ? 'guided_question' : 'auto_overview',
+                prompt
+            );
+
+            if (!aiResult.success) {
+                return res.status(502).json({
+                    success: false,
+                    projectId,
+                    provider: aiResult.provider,
+                    error: aiResult.error || 'Unable to generate insights with available providers',
+                });
+            }
+
+            const parsed = extractJsonSnippet(aiResult.insights);
+            const structured = normalizeStructuredInsights(parsed, aiResult.insights.trim());
+            if (question && !structured.answer) {
+                structured.answer = structured.summary;
+            }
+            structured.highlights = structured.highlights.slice(0, 6);
+            structured.recommendations = structured.recommendations.slice(0, 6);
+            structured.nextSteps = structured.nextSteps.slice(0, 5);
+            structured.followUps = structured.followUps.slice(0, 5);
+            structured.warnings = structured.warnings.slice(0, 5);
+
+            const latencyMs = Date.now() - aiStart;
+            const generatedAt = new Date().toISOString();
+            const mode: 'auto' | 'question' = question ? 'question' : 'auto';
+
+            const record: InsightRecord = {
+                mode,
+                question: question ?? null,
+                provider: aiResult.provider,
+                generatedAt,
+                latencyMs,
+                rawText: aiResult.insights,
+                insights: structured,
+            };
+
+            const existingState = isObject((project as any).aiInsights) ? ((project as any).aiInsights as Record<string, any>) : {};
+            const existingHistory = Array.isArray(existingState.history)
+                ? existingState.history.filter((entry: unknown) => isObject(entry)) as InsightRecord[]
+                : [];
+            const nextHistory = mode === 'question'
+                ? [record, ...existingHistory].slice(0, 15)
+                : existingHistory;
+            const nextState: Record<string, unknown> = {
+                ...existingState,
+                lastUpdated: generatedAt,
+                provider: aiResult.provider,
+                history: nextHistory,
+            };
+            if (mode === 'auto') {
+                nextState.auto = record;
+            } else if (existingState.auto) {
+                nextState.auto = existingState.auto;
+            }
+
+            await storage.updateProject(projectId, { aiInsights: nextState });
+
+            res.json({
+                success: true,
+                projectId,
+                mode,
+                provider: aiResult.provider,
+                question: question ?? null,
+                insights: structured,
+                rawText: aiResult.insights,
+                latencyMs,
+                generatedAt,
+            });
+        } catch (error: any) {
+            console.error('Failed to generate AI insights', error);
+            res.status(500).json({ error: 'Failed to generate AI insights' });
         }
-
-        const parsed = extractJsonSnippet(aiResult.insights);
-        const structured = normalizeStructuredInsights(parsed, aiResult.insights.trim());
-        if (question && !structured.answer) {
-            structured.answer = structured.summary;
-        }
-        structured.highlights = structured.highlights.slice(0, 6);
-        structured.recommendations = structured.recommendations.slice(0, 6);
-        structured.nextSteps = structured.nextSteps.slice(0, 5);
-        structured.followUps = structured.followUps.slice(0, 5);
-        structured.warnings = structured.warnings.slice(0, 5);
-
-        const latencyMs = Date.now() - aiStart;
-        const generatedAt = new Date().toISOString();
-        const mode: 'auto' | 'question' = question ? 'question' : 'auto';
-
-        const record: InsightRecord = {
-            mode,
-            question: question ?? null,
-            provider: aiResult.provider,
-            generatedAt,
-            latencyMs,
-            rawText: aiResult.insights,
-            insights: structured,
-        };
-
-        const existingState = isObject((project as any).aiInsights) ? ((project as any).aiInsights as Record<string, any>) : {};
-        const existingHistory = Array.isArray(existingState.history)
-            ? existingState.history.filter((entry: unknown) => isObject(entry)) as InsightRecord[]
-            : [];
-        const nextHistory = mode === 'question'
-            ? [record, ...existingHistory].slice(0, 15)
-            : existingHistory;
-        const nextState: Record<string, unknown> = {
-            ...existingState,
-            lastUpdated: generatedAt,
-            provider: aiResult.provider,
-            history: nextHistory,
-        };
-        if (mode === 'auto') {
-            nextState.auto = record;
-        } else if (existingState.auto) {
-            nextState.auto = existingState.auto;
-        }
-
-        await storage.updateProject(projectId, { aiInsights: nextState });
-
-        res.json({
-            success: true,
-            projectId,
-            mode,
-            provider: aiResult.provider,
-            question: question ?? null,
-            insights: structured,
-            rawText: aiResult.insights,
-            latencyMs,
-            generatedAt,
-        });
-    } catch (error: any) {
-        console.error('Failed to generate AI insights', error);
-        res.status(500).json({ error: 'Failed to generate AI insights' });
-    }
-});
+    });
 
 // AI role and actions endpoints
 router.get("/ai-roles", (req: Request, res: Response) => {
@@ -505,12 +505,22 @@ router.get("/ai-roles", (req: Request, res: Response) => {
     }
 });
 
-// Technical AI Agent Routes
+// DEPRECATED: Technical AI Agent Routes
+// Technical AI Agent is now only used internally by Data Scientist Agent
+// These routes are kept for backward compatibility but should use Data Scientist Agent tools instead
 router.get("/technical-ai/models", ensureAuthenticated, (req: Request, res: Response) => {
     try {
+        // Note: Technical AI Agent is internal service, not exposed directly
+        // Consider using Data Scientist Agent tools via MCP tool registry instead
         const models = technicalAIAgent.getAvailableModels();
         const capabilities = technicalAIAgent.getCapabilities();
-        res.json({ success: true, models, capabilities });
+        res.json({ 
+            success: true, 
+            models, 
+            capabilities,
+            deprecated: true,
+            note: 'Technical AI Agent is an internal service. Use Data Scientist Agent tools instead.'
+        });
     } catch (error: any) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -522,39 +532,39 @@ router.post("/analysis/extract-goals",
     AIAccessControlService.validateAIFeatureAccess('basic_analysis'),
     AIAccessControlService.trackAIFeatureUsage('basic_analysis'),
     async (req: Request, res: Response) => {
-    try {
-        const requestData = goalExtractionRequestSchema.parse(req.body);
-        const { userDescription, journeyType, context } = requestData;
-        const userId = (req.user as any)?.id;
-        const user = await storage.getUser(userId);
-        // canUserRequestAIInsight expects (userTier, currentInsights)
-        if (!canUserRequestAIInsight(user?.subscriptionTier || 'none', 0)) {
-            return res.status(403).json({ success: false, error: "AI goal extraction requires a paid plan. Please upgrade your subscription." });
-        }
-        
-        const startTime = Date.now();
-        const extractedData = await businessAgent.extractGoals(userDescription, journeyType, (context || {}) as BusinessContext);
+        try {
+            const requestData = goalExtractionRequestSchema.parse(req.body);
+            const { userDescription, journeyType, context } = requestData;
+            const userId = (req.user as any)?.id;
+            const user = await storage.getUser(userId);
+            // canUserRequestAIInsight expects (userTier, currentInsights)
+            if (!canUserRequestAIInsight(user?.subscriptionTier || 'none', 0)) {
+                return res.status(403).json({ success: false, error: "AI goal extraction requires a paid plan. Please upgrade your subscription." });
+            }
 
-        const extractionId = `goal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        const response: GoalExtractionResponse = {
-            success: true,
-            extractionId,
-            extractedGoals: extractedData.goals,
-            businessQuestions: extractedData.questions,
-            suggestedAnalysisPaths: extractedData.analysisPaths,
-            dataRequirements: extractedData.dataRequirements,
-            recommendedFeatures: extractedData.recommendedFeatures,
-            aiProvider: 'chimaridata-ai',
-            processingTimeMs: Date.now() - startTime
-        };
-        res.json(response);
-    } catch (error: any) {
-        if ((error as any).name === 'ZodError') {
-            return res.status(400).json({ success: false, error: "Invalid request data", details: (error as any).errors });
+            const startTime = Date.now();
+            const extractedData = await businessAgent.extractGoals(userDescription, journeyType, (context || {}) as BusinessContext);
+
+            const extractionId = `goal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            const response: GoalExtractionResponse = {
+                success: true,
+                extractionId,
+                extractedGoals: extractedData.goals,
+                businessQuestions: extractedData.questions,
+                suggestedAnalysisPaths: extractedData.analysisPaths,
+                dataRequirements: extractedData.dataRequirements,
+                recommendedFeatures: extractedData.recommendedFeatures,
+                aiProvider: 'chimaridata-ai',
+                processingTimeMs: Date.now() - startTime
+            };
+            res.json(response);
+        } catch (error: any) {
+            if ((error as any).name === 'ZodError') {
+                return res.status(400).json({ success: false, error: "Invalid request data", details: (error as any).errors });
+            }
+            res.status(500).json({ success: false, error: "Failed to extract goals.", details: error.message });
         }
-        res.status(500).json({ success: false, error: "Failed to extract goals.", details: error.message });
-    }
-});
+    });
 
 // New AI feature endpoints
 
@@ -746,5 +756,324 @@ router.get("/analytics/usage", ensureAuthenticated, async (req: Request, res: Re
         res.status(500).json({ success: false, error: error.message });
     }
 });
+
+// Chat query endpoint
+router.post("/query",
+    ensureAuthenticated,
+    AIAccessControlService.validateAIFeatureAccess('basic_analysis'),
+    AIAccessControlService.trackAIFeatureUsage('basic_analysis'),
+    async (req: Request, res: Response) => {
+        try {
+            const { projectId, query } = req.body;
+            if (!projectId) {
+                return res.status(400).json({ error: "Project ID is required" });
+            }
+            if (!query) {
+                return res.status(400).json({ error: "Query is required" });
+            }
+
+            const project = await storage.getProject(projectId);
+            if (!project) {
+                return res.status(404).json({ error: "Project not found" });
+            }
+            const dataset = await storage.getDatasetForProject(projectId);
+
+            // Reuse the logic from ai-insights but adapted for chat
+            const role = 'data analyst';
+            const question = query;
+            const focusAreas: string[] = [];
+
+            const sampleRows = buildSampleRows(project, dataset);
+            const schema = coerceJson(project.schema ?? dataset?.schema);
+            const analysisResults = coerceJson((project as any).analysisResults ?? (dataset as any)?.analysisResults);
+            const summaryStats = isObject(analysisResults) && analysisResults.summary ? analysisResults.summary : analysisResults;
+            const recordCount = typeof project.recordCount === 'number'
+                ? project.recordCount
+                : typeof dataset?.recordCount === 'number'
+                    ? dataset.recordCount
+                    : sampleRows.length || undefined;
+
+            const prompt = buildInsightPrompt({
+                role,
+                question,
+                recordCount,
+                schema,
+                sampleRows,
+                summaryStats,
+                focusAreas,
+            });
+
+            const aiResult = await aiProvider.generateInsights(
+                {
+                    recordCount,
+                    schema,
+                    sampleRows,
+                    summaryStats,
+                    focusAreas,
+                    projectName: project.name,
+                    journeyType: (project as any).journeyType,
+                },
+                'guided_question',
+                prompt
+            );
+
+            if (!aiResult.success) {
+                return res.status(502).json({
+                    success: false,
+                    projectId,
+                    provider: aiResult.provider,
+                    error: aiResult.error || 'Unable to generate response',
+                });
+            }
+
+            // Parse the result to get the answer or summary
+            const parsed = extractJsonSnippet(aiResult.insights);
+            const structured = normalizeStructuredInsights(parsed, aiResult.insights.trim());
+            const responseText = structured.answer || structured.summary || aiResult.insights;
+
+            res.json({
+                success: true,
+                response: responseText,
+                provider: aiResult.provider,
+                usage: {
+                    // Mock usage data for now, or fetch from service if available
+                    remaining: 100, // Placeholder
+                    quota: 100,
+                    current: 0
+                }
+            });
+        } catch (error: any) {
+            console.error('Failed to process AI query', error);
+            res.status(500).json({ error: 'Failed to process AI query' });
+        }
+    });
+
+/**
+ * Interpret Natural Language Transformation
+ * Converts user's natural language description into transformation code
+ *
+ * POST /api/ai/interpret-transformation
+ * Body: {
+ *   description: string,           // Natural language like "Average Q1, Q2, Q3 scores"
+ *   elementName: string,           // Target element name (e.g., "engagement_score")
+ *   sourceColumns: string[],       // Available columns in dataset
+ *   schema: object,                // Dataset schema
+ *   calculationDefinition?: object // DS agent's recommendation (optional)
+ * }
+ */
+router.post("/interpret-transformation",
+    ensureAuthenticated,
+    AIAccessControlService.validateAIFeatureAccess('basic_analysis'),
+    AIAccessControlService.trackAIFeatureUsage('basic_analysis'),
+    async (req: Request, res: Response) => {
+        try {
+            const {
+                description,
+                elementName,
+                sourceColumns,
+                schema,
+                calculationDefinition,
+                sampleData
+            } = req.body;
+
+            if (!description || typeof description !== 'string') {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Natural language description is required'
+                });
+            }
+
+            if (!elementName) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Element name is required'
+                });
+            }
+
+            console.log(`🤖 [NL Transform] Interpreting: "${description}" for element: ${elementName}`);
+
+            // Build context for the AI
+            const contextParts: string[] = [
+                `Target Data Element: ${elementName}`,
+                `User's Description: "${description}"`,
+            ];
+
+            if (sourceColumns?.length) {
+                contextParts.push(`Available Columns: ${sourceColumns.join(', ')}`);
+            }
+
+            if (schema) {
+                const schemaStr = typeof schema === 'object'
+                    ? JSON.stringify(limitSchema(schema), null, 2)
+                    : String(schema);
+                contextParts.push(`Dataset Schema:\n${schemaStr}`);
+            }
+
+            if (calculationDefinition) {
+                contextParts.push(`Data Scientist Recommendation:\n${JSON.stringify(calculationDefinition, null, 2)}`);
+            }
+
+            if (sampleData?.length) {
+                const sample = sampleData.slice(0, 3);
+                contextParts.push(`Sample Data (first 3 rows):\n${JSON.stringify(sample, null, 2)}`);
+            }
+
+            const prompt = `You are a data transformation expert. Convert the following natural language description into executable transformation code.
+
+${contextParts.join('\n\n')}
+
+IMPORTANT REQUIREMENTS:
+1. Generate JavaScript/TypeScript code that can be executed on each row of data
+2. The code should be a function body that receives a 'row' object and returns the transformed value
+3. Handle null/undefined values gracefully
+4. If the description mentions averaging, counting, or aggregating multiple fields, generate appropriate code
+5. If the Data Scientist recommendation is provided, use it as guidance for the calculation logic
+
+EXAMPLES:
+- "Average Q1, Q2, Q3 scores" → "const scores = [row.Q1, row.Q2, row.Q3].filter(v => v != null && !isNaN(v)); return scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;"
+- "Combine first and last name" → "return [row.first_name, row.last_name].filter(Boolean).join(' ');"
+- "Calculate tenure in years" → "const hire = new Date(row.hire_date); const now = new Date(); return Math.floor((now - hire) / (365.25 * 24 * 60 * 60 * 1000));"
+- "Flag as high engagement if score > 80" → "return row.engagement_score > 80 ? 'High' : 'Normal';"
+
+Respond with ONLY a JSON object in this exact format:
+{
+  "transformationCode": "the JavaScript code as a string",
+  "explanation": "brief explanation of what the code does",
+  "sourceFieldsUsed": ["field1", "field2"],
+  "outputType": "number" | "string" | "boolean" | "date",
+  "confidence": 0.0 to 1.0
+}`;
+
+            const aiResult = await aiProvider.generateInsights(
+                {
+                    recordCount: sampleData?.length || 0,
+                    schema: schema,
+                    sampleRows: sampleData?.slice(0, 5) || [],
+                    summaryStats: {},
+                    focusAreas: ['transformation', 'data engineering'],
+                    projectName: 'Transformation Interpreter',
+                    journeyType: 'data_transformation',
+                },
+                'guided_question',
+                prompt
+            );
+
+            if (!aiResult.success) {
+                console.error(`❌ [NL Transform] AI failed:`, aiResult.error);
+                return res.status(502).json({
+                    success: false,
+                    error: aiResult.error || 'Failed to interpret transformation',
+                    provider: aiResult.provider
+                });
+            }
+
+            // Parse the AI response
+            const parsed = extractJsonSnippet(aiResult.insights);
+
+            if (!parsed || !parsed.transformationCode) {
+                console.error(`❌ [NL Transform] Failed to parse AI response:`, aiResult.insights);
+                return res.status(500).json({
+                    success: false,
+                    error: 'Failed to parse transformation code from AI response',
+                    rawResponse: aiResult.insights
+                });
+            }
+
+            console.log(`✅ [NL Transform] Generated code for ${elementName}:`, parsed.transformationCode.substring(0, 100) + '...');
+
+            res.json({
+                success: true,
+                elementName,
+                originalDescription: description,
+                transformationCode: parsed.transformationCode,
+                explanation: parsed.explanation || 'Transformation code generated from natural language',
+                sourceFieldsUsed: parsed.sourceFieldsUsed || [],
+                outputType: parsed.outputType || 'string',
+                confidence: clampConfidence(parsed.confidence) || 0.7,
+                provider: aiResult.provider
+            });
+
+        } catch (error: any) {
+            console.error('❌ [NL Transform] Error:', error);
+            res.status(500).json({
+                success: false,
+                error: error.message || 'Failed to interpret transformation'
+            });
+        }
+    }
+);
+
+/**
+ * Validate Transformation Code
+ * Tests transformation code against sample data
+ *
+ * POST /api/ai/validate-transformation
+ */
+router.post("/validate-transformation",
+    ensureAuthenticated,
+    async (req: Request, res: Response) => {
+        try {
+            const { transformationCode, sampleData, elementName } = req.body;
+
+            if (!transformationCode) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Transformation code is required'
+                });
+            }
+
+            if (!sampleData?.length) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Sample data is required for validation'
+                });
+            }
+
+            console.log(`🧪 [Validate Transform] Testing code for ${elementName || 'element'}`);
+
+            // Create a safe execution context
+            const results: Array<{ input: any; output: any; error?: string }> = [];
+
+            for (const row of sampleData.slice(0, 5)) {
+                try {
+                    // Create a function from the code
+                    const transformFn = new Function('row', transformationCode);
+                    const output = transformFn(row);
+                    results.push({ input: row, output });
+                } catch (execError: any) {
+                    results.push({
+                        input: row,
+                        output: null,
+                        error: execError.message
+                    });
+                }
+            }
+
+            const successCount = results.filter(r => !r.error).length;
+            const isValid = successCount === results.length;
+
+            console.log(`${isValid ? '✅' : '⚠️'} [Validate Transform] ${successCount}/${results.length} rows processed successfully`);
+
+            res.json({
+                success: true,
+                isValid,
+                results,
+                summary: {
+                    totalRows: results.length,
+                    successCount,
+                    errorCount: results.length - successCount,
+                    sampleOutputs: results.slice(0, 3).map(r => r.output)
+                }
+            });
+
+        } catch (error: any) {
+            console.error('❌ [Validate Transform] Error:', error);
+            res.status(500).json({
+                success: false,
+                error: error.message || 'Failed to validate transformation'
+            });
+        }
+    }
+);
 
 export default router;

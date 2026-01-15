@@ -61,12 +61,15 @@ interface BillingCapacityDisplayProps {
   breakdown: BillingBreakdown;
   currentTier: string;
   showDetailedBreakdown?: boolean;
+  /** Optional override for final cost - use to ensure consistency with parent component's authoritative cost */
+  overrideFinalCost?: number | null;
 }
 
-export default function BillingCapacityDisplay({ 
-  breakdown, 
-  currentTier, 
-  showDetailedBreakdown = true 
+export default function BillingCapacityDisplay({
+  breakdown,
+  currentTier,
+  showDetailedBreakdown = true,
+  overrideFinalCost
 }: BillingCapacityDisplayProps) {
   
   const formatCurrency = (cents: number) => {
@@ -301,7 +304,13 @@ export default function BillingCapacityDisplay({
             <div className="border-t pt-4">
               <div className="flex justify-between items-center text-lg font-bold">
                 <span>Final Cost</span>
-                <span className="text-blue-600">{formatCurrency(typeof breakdown?.totalCost === 'number' ? breakdown.totalCost : 0)}</span>
+                <span className="text-blue-600">
+                  {formatCurrency(
+                    overrideFinalCost !== undefined && overrideFinalCost !== null
+                      ? overrideFinalCost
+                      : (typeof breakdown?.totalCost === 'number' ? breakdown.totalCost : 0)
+                  )}
+                </span>
               </div>
             </div>
           </div>
@@ -361,7 +370,7 @@ export default function BillingCapacityDisplay({
                     </div>
                   </div>
                   <div className="mt-2">
-                    <Progress value={isUnlimited ? 0 : Math.min(100, (breakdown.utilizationPercentage as any)[meta.testId] || 0)} className="h-2" data-testid="capacity-progress" />
+                    <Progress value={isUnlimited ? 0 : Math.min(100, (breakdown.utilizationPercentage as any)?.[meta.testId] || 0)} className="h-2" data-testid="capacity-progress" />
                   </div>
                 </div>
               );
@@ -442,7 +451,7 @@ export default function BillingCapacityDisplay({
       )}
 
       {/* Capacity Warnings */}
-      {Object.values(breakdown.utilizationPercentage).some(p => p >= 75) && (
+      {breakdown.utilizationPercentage && Object.values(breakdown.utilizationPercentage).some(p => p >= 75) && (
         <Alert data-testid="capacity-warning">
           <AlertTriangle className="h-4 w-4" />
           <AlertDescription>

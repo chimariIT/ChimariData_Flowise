@@ -2,6 +2,12 @@
 /**
  * Analysis Execution API Routes
  * Endpoints for executing and retrieving real data analysis
+ *
+ * Payment Gate Architecture (Aligned with Billing System):
+ * 1. Check subscription tier via canAccessJourney() - tier determines allowed journey types
+ * 2. Check/track quota via trackFeatureUsage() - within quota = free, exceeded = overage charges
+ * 3. Fallback: Pay-per-analysis for one-off projects (project.isPaid)
+ * 4. Preview mode available for all tiers before consuming quota
  */
 
 import { Router } from 'express';
@@ -12,7 +18,9 @@ import { z } from 'zod';
 import { ArtifactGenerator } from '../services/artifact-generator';
 import { storage } from '../storage';
 import { JourneyStateManager } from '../services/journey-state-manager';
+import { getBillingService } from '../services/billing/unified-billing-service';
 import type { CostBreakdown } from '@shared/schema';
+import type { FeatureComplexity, JourneyType } from '@shared/canonical-types';
 
 const router = Router();
 
@@ -37,60 +45,279 @@ interface AnalysisExecutionResponsePayload {
   costBreakdown: CostBreakdown | null;
   journeyType: string;
   datasetIds: string[] | null;
+  // PHASE 6: Per-analysis execution tracking for dashboard display
+  analysisStatuses?: Array<{
+    analysisId: string;
+    analysisName: string;
+    analysisType: string;
+    status: string;
+    insightCount: number;
+    errorMessage?: string;
+    executionTimeMs?: number;
+    requiredDataElements?: string[];
+  }>;
+  perAnalysisBreakdown?: Record<string, {
+    status: string;
+    insights?: any[];
+    visualizations?: any[];
+    recommendations?: any[];
+    error?: string;
+    executionTimeMs?: number;
+  }>;
+}
+
+/**
+ * Helper function to determine analysis complexity based on project data
+ */
+function determineComplexity(project: any): FeatureComplexity {
+  const datasets = project?.datasets || [];
+  const totalRows = datasets.reduce((sum: number, ds: any) => {
+    const count = ds?.dataset?.recordCount || ds?.recordCount || 0;
+    return sum + count;
+  }, 0);
+  const totalCols = datasets.reduce((sum: number, ds: any) => {
+    const cols = Object.keys(ds?.dataset?.schema || ds?.schema || {}).length;
+    return sum + cols;
+  }, 0);
+
+  // Complexity based on data size
+  if (totalRows > 1000000 || totalCols > 100) return 'extra_large';
+  if (totalRows > 100000 || totalCols > 50) return 'large';
+  if (totalRows > 10000 || totalCols > 20) return 'medium';
+  return 'small';
+}
+
+/**
+ * Helper function to get recommended tier for upgrade
+ */
+function getRecommendedTier(currentTier: string): string {
+  switch (currentTier) {
+    case 'none':
+    case 'trial':
+      return 'starter';
+    case 'starter':
+      return 'professional';
+    case 'professional':
+      return 'enterprise';
+    default:
+      return 'professional';
+  }
 }
 
 /**
  * Execute analysis on a project's datasets
  * POST /api/analysis-execution/execute
+ *
+ * Payment Gate Flow (Subscription-First Model):
+ * 1. Project already paid (one-off) → Execute with full access
+ * 2. Check subscription tier → canAccessJourney()
+ * 3. Check/track quota → trackFeatureUsage()
+ * 4. Preview mode → Limited execution without consuming quota
  */
 router.post('/execute', ensureAuthenticated, async (req, res) => {
+  // Declare variables outside try block so they're accessible in catch block
+  const userId = (req.user as any)?.id;
+  let projectId: string = '';
+  let quotaTracked = false;
+  let trackedFeatureId = '';
+  let trackedComplexity: FeatureComplexity = 'small';
+
   try {
-    const userId = (req.user as any)?.id;
-    
     if (!userId) {
-      return res.status(401).json({ 
-        success: false, 
-        error: 'Authentication required' 
+      return res.status(401).json({
+        success: false,
+        error: 'Authentication required'
       });
     }
 
     // Validate request
+    // ✅ GAP 5 FIX: Extended schema to accept analysisPath and questionAnswerMapping
+    // These enable the evidence chain from questions → requirements → analysis → answers
     const schema = z.object({
       projectId: z.string().min(1),
       analysisTypes: z.array(z.string()).min(1),
-      datasetIds: z.array(z.string()).optional()
+      datasetIds: z.array(z.string()).optional(),
+      previewOnly: z.boolean().optional(),
+      // GAP 5: DS agent recommended analyses with required data elements
+      analysisPath: z.array(z.object({
+        analysisId: z.string(),
+        analysisName: z.string(),
+        analysisType: z.string().optional(),
+        requiredDataElements: z.array(z.string()).optional(),
+        priority: z.number().optional()
+      })).optional(),
+      // GAP 5: Question-to-analysis mapping for evidence chain
+      questionAnswerMapping: z.array(z.object({
+        questionId: z.string(),
+        questionText: z.string(),
+        recommendedAnalyses: z.array(z.string()).optional(),
+        requiredDataElements: z.array(z.string()).optional()
+      })).optional()
     });
 
     const validation = schema.safeParse(req.body);
-    
+
     if (!validation.success) {
-      return res.status(400).json({ 
-        success: false, 
+      return res.status(400).json({
+        success: false,
         error: 'Invalid request',
         details: validation.error.errors
       });
     }
 
-    const { projectId, analysisTypes, datasetIds } = validation.data;
+    const { projectId: validatedProjectId, analysisTypes, datasetIds, analysisPath, questionAnswerMapping, previewOnly } = validation.data;
+    projectId = validatedProjectId; // Assign to outer scope variable for catch block access
 
     const project = await storage.getProject(projectId);
 
-    console.log(`🚀 Analysis execution requested for project ${projectId}`);
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        error: 'Project not found'
+      });
+    }
+
+    // Get billing service for subscription/quota checks
+    const billingService = getBillingService();
+    const user = await storage.getUser(userId);
+    const userTier = (user as any)?.subscriptionTier || 'trial';
+
+    // ============================================================
+    // PAYMENT GATE: Subscription-First Model (Aligned with Billing)
+    // ============================================================
+
+    // Step 1: Check if project already paid (one-off payment)
+    const isPaid = (project as any).isPaid === true;
+    if (isPaid) {
+      console.log(`✅ [Billing] Project ${projectId} already paid - executing with full access`);
+      // Continue to execution (no quota consumption for paid projects)
+    } else {
+      // Step 2: Check subscription tier and journey access
+      const journeyType = ((project as any).journeyType || 'non-tech') as JourneyType;
+      const journeyAccess = await billingService.canAccessJourney(userId, journeyType);
+
+      if (!journeyAccess.allowed) {
+        console.log(`🚫 [Billing] Journey access denied for ${journeyType} (tier: ${userTier})`);
+        return res.status(403).json({
+          success: false,
+          error: 'Journey access denied',
+          message: journeyAccess.message || `Your ${userTier} tier does not include access to ${journeyType} journeys.`,
+          requiresUpgrade: true,
+          minimumTier: journeyAccess.minimumTier,
+          upgradeUrl: '/billing/upgrade',
+          code: 'TIER_UPGRADE_REQUIRED'
+        });
+      }
+
+      // Step 3: Check and track quota usage (unless preview only)
+      if (!previewOnly) {
+        const analysisType = analysisTypes?.[0] || 'statistical_analysis';
+        const complexity = determineComplexity(project);
+        trackedFeatureId = analysisType;
+        trackedComplexity = complexity;
+
+        console.log(`📊 [Billing] Checking quota for ${analysisType} (${complexity}) - tier: ${userTier}`);
+
+        const usageResult = await billingService.trackFeatureUsage(
+          userId,
+          analysisType,
+          complexity,
+          1 // quantity
+        );
+
+        if (!usageResult.allowed) {
+          // Quota exceeded - offer options
+          const quotaStatus = await billingService.getQuotaStatus(userId, analysisType, complexity);
+
+          console.log(`⚠️ [Billing] Quota exceeded for ${analysisType} (${complexity})`);
+
+          return res.status(402).json({
+            success: false,
+            error: 'Quota exceeded',
+            message: usageResult.message || `Your ${complexity} ${analysisType} quota has been exceeded.`,
+            quotaStatus: quotaStatus || { quota: 0, used: 0, remaining: 0, percentUsed: 100, isExceeded: true },
+            options: {
+              payOverage: {
+                cost: usageResult.cost,
+                // PHASE 10 FIX: Route to payment page with overage flag instead of non-existent endpoint
+                url: `/projects/${projectId}/payment?type=overage&cost=${usageResult.cost}`
+              },
+              upgradeTier: {
+                url: '/billing/upgrade',
+                recommendedTier: getRecommendedTier(userTier)
+              },
+              payPerProject: {
+                url: `/projects/${projectId}/payment`,
+                description: 'Pay for this specific project analysis'
+              }
+            },
+            code: 'QUOTA_EXCEEDED'
+          });
+        }
+
+        quotaTracked = true;
+        console.log(`✅ [Billing] Quota check passed (remaining: ${usageResult.remainingQuota}, cost: $${usageResult.cost.toFixed(2)})`);
+
+        // If there's an overage cost, log it
+        if (usageResult.cost > 0) {
+          console.log(`💰 [Billing] Overage charge: $${usageResult.cost.toFixed(2)} for ${analysisType} (${complexity})`);
+        }
+      } else {
+        console.log(`👁️ [Billing] Preview mode - skipping quota tracking`);
+      }
+    }
+
+    console.log(`🚀 Analysis execution requested for project ${projectId} (isPaid: ${isPaid}, tier: ${userTier})`);
     console.log(`📊 Analysis types: ${analysisTypes.join(', ')}`);
 
+    // ✅ GAP 5 FIX: Log received DS recommendations and question mappings
+    if (analysisPath && analysisPath.length > 0) {
+      console.log(`📋 [GAP 5] Received ${analysisPath.length} DS-recommended analyses`);
+    }
+    if (questionAnswerMapping && questionAnswerMapping.length > 0) {
+      console.log(`❓ [GAP 5] Received ${questionAnswerMapping.length} question-answer mappings for evidence chain`);
+    }
+
     // Execute analysis
-    const results = await AnalysisExecutionService.executeAnalysis({
+    // ✅ FIX: Use executeComprehensiveAnalysis which uses DataScienceOrchestrator
+    // with type-specific Python scripts (correlation_analysis.py, regression_analysis.py, etc.)
+    // instead of hardcoded generic statistics
+    const results = await AnalysisExecutionService.executeComprehensiveAnalysis({
       projectId,
       userId,
       analysisTypes,
-      datasetIds
+      datasetIds,
+      analysisPath,
+      questionAnswerMapping
     });
+
+    // Track execution cost
+    try {
+      const { costTrackingService } = await import('../services/cost-tracking');
+      await costTrackingService.trackExecutionCost(projectId, results);
+    } catch (costError) {
+      console.error('❌ Failed to track execution cost:', costError);
+      // Don't fail execution if cost tracking fails, but log it
+    }
 
     // ✅ SLA: Generate artifacts asynchronously (don't block journey completion)
     // Start artifact generation in background to meet <1 minute journey lifecycle SLA
     if (project) {
       console.log(`📦 Queueing artifact generation for project ${projectId} (async)`);
-      
+
+      // ✅ GAP 7 FIX: Load PII decision from journeyProgress (SSOT)
+      const journeyProgress = (project as any)?.journeyProgress || {};
+      const piiDecision = journeyProgress.piiDecision;
+      const piiConfig = piiDecision ? {
+        excludedColumns: piiDecision.excludedColumns || [],
+        anonymizationApplied: piiDecision.anonymizationApplied || false,
+        piiColumnsRemoved: piiDecision.piiColumnsRemoved || []
+      } : undefined;
+
+      if (piiConfig && piiConfig.excludedColumns.length > 0) {
+        console.log(`🔒 [GAP 7 FIX] PII config loaded for artifacts: ${piiConfig.excludedColumns.length} columns to exclude`);
+      }
+
       // Run artifact generation in background without awaiting
       setImmediate(async () => {
         try {
@@ -100,11 +327,12 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
             projectId,
             projectName: project.name || projectId, // Pass project name for folder structure
             userId,
-            journeyType: (project.journeyType || 'ai_guided') as 'non-tech' | 'business' | 'technical' | 'consultation',
+            journeyType: (project.journeyType || 'non-tech') as 'non-tech' | 'business' | 'technical' | 'consultation',
             analysisResults: results.insights || [], // Pass insights as analysis results
             visualizations: results.visualizations || [],
             insights: (results.insights || []).map(insight => insight.title), // Convert AnalysisInsight[] to string[]
-            datasetSizeMB: project.data ? (JSON.stringify(project.data).length / (1024 * 1024)) : 0
+            datasetSizeMB: project.data ? (JSON.stringify(project.data).length / (1024 * 1024)) : 0,
+            piiConfig // ✅ GAP 7 FIX: Pass PII config to artifact generator
           });
 
           console.log(`✅ Generated ${Object.keys(artifacts).length} artifacts (async):`);
@@ -165,9 +393,20 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
       executionTimeSeconds: Number.isFinite(executionSeconds) ? executionSeconds : null,
       cost: totalCost,
       costBreakdown,
-      journeyType: project?.journeyType ?? 'ai_guided',
-      datasetIds: datasetIds ?? null
+      journeyType: project?.journeyType ?? 'non-tech',
+      datasetIds: datasetIds ?? null,
+      // PHASE 6 FIX: Include per-analysis execution tracking for dashboard display
+      analysisStatuses: (results as any).analysisStatuses,
+      perAnalysisBreakdown: (results as any).perAnalysisBreakdown
     };
+
+    // Log per-analysis execution summary for debugging
+    if ((results as any).analysisStatuses?.length > 0) {
+      console.log(`📊 [Execution Response] Returning ${(results as any).analysisStatuses.length} analysis statuses`);
+      (results as any).analysisStatuses.forEach((status: any) => {
+        console.log(`   - ${status.analysisName} (${status.analysisType}): ${status.status}, ${status.insightCount} insights`);
+      });
+    }
 
     res.json({
       success: true,
@@ -177,9 +416,31 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
 
   } catch (error: any) {
     console.error('❌ Analysis execution error:', error);
+
+    // ✅ FIX: Refund quota usage if execution failed
+    // Note: For subscriptions, we track usage but can reverse it on failure
+    if (quotaTracked && trackedFeatureId) {
+      try {
+        console.log(`💰 [Billing] Refunding quota for ${trackedFeatureId} (${trackedComplexity}) due to execution failure`);
+        const billingService = getBillingService();
+        // Track negative usage to reverse the deduction
+        await billingService.trackFeatureUsage(
+          userId,
+          trackedFeatureId,
+          trackedComplexity,
+          -1 // Negative to refund
+        );
+        console.log(`✅ [Billing] Successfully refunded quota`);
+      } catch (refundError) {
+        console.error('⚠️ Failed to refund quota:', refundError);
+        // Log but continue with error response
+      }
+    }
+
     res.status(500).json({
       success: false,
-      error: error.message || 'Failed to execute analysis'
+      error: error.message || 'Failed to execute analysis',
+      quotaRefunded: quotaTracked // Let frontend know quota was refunded
     });
   }
 });
@@ -187,6 +448,11 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
 /**
  * Get analysis results for a project
  * GET /api/analysis-execution/results/:projectId
+ *
+ * Results Gate (Aligned with Billing):
+ * 1. Paid project → Full results
+ * 2. Active subscription → Full results (already consumed quota)
+ * 3. No payment/subscription → Preview-only results
  */
 router.get('/results/:projectId', ensureAuthenticated, async (req, res) => {
   try {
@@ -211,6 +477,7 @@ router.get('/results/:projectId', ensureAuthenticated, async (req, res) => {
       });
     }
 
+    const project = accessCheck.project;
     console.log(`📖 Fetching results for project ${projectId}`);
 
     // Get results (service layer can still validate, but route is primary gate)
@@ -223,9 +490,85 @@ router.get('/results/:projectId', ensureAuthenticated, async (req, res) => {
       });
     }
 
+    // ============================================================
+    // RESULTS GATE: Subscription-Aware (Aligned with Billing)
+    // ============================================================
+
+    const isPaid = (project as any)?.isPaid === true;
+    const billingService = getBillingService();
+    const user = await storage.getUser(userId);
+    const userTier = (user as any)?.subscriptionTier || 'none';
+    const subscriptionStatus = (user as any)?.subscriptionStatus || 'inactive';
+
+    // Determine if user has full access
+    const hasActiveSubscription = ['active', 'trialing'].includes(subscriptionStatus) && userTier !== 'none';
+    const hasFullAccess = isPaid || hasActiveSubscription || isAdminUser;
+
+    if (!hasFullAccess) {
+      console.log(`🔒 [Billing] Returning preview-only results for project ${projectId} (tier: ${userTier}, status: ${subscriptionStatus})`);
+
+      // Calculate counts for display
+      const totalInsights = results.insights?.length || 0;
+      const totalVisualizations = results.visualizations?.length || 0;
+      const totalRecommendations = results.recommendations?.length || 0;
+
+      // Return limited preview (10% of insights, 2 charts max, no recommendations)
+      const previewInsights = (results.insights || []).slice(0, Math.max(1, Math.ceil(totalInsights * 0.1)));
+      const previewVisualizations = (results.visualizations || []).slice(0, 2);
+
+      const limitedResults = {
+        ...results,
+        isPreview: true,
+        paymentRequired: true,
+        paymentUrl: `/projects/${projectId}/payment`,
+        subscriptionRequired: !hasActiveSubscription,
+        subscriptionUrl: '/billing/subscribe',
+        currentTier: userTier,
+
+        // Limited data
+        insights: previewInsights,
+        recommendations: [], // Hide recommendations until paid
+        visualizations: previewVisualizations,
+
+        // Truncate question answers
+        questionAnswers: results.questionAnswers ? {
+          ...results.questionAnswers,
+          answers: (results.questionAnswers.answers || []).map((qa: any) => ({
+            ...qa,
+            answer: qa.answer
+              ? qa.answer.substring(0, 150) + '... [Complete answer requires payment or subscription]'
+              : null,
+            supportingInsights: [], // Hide evidence chain
+            confidence: qa.confidence
+          }))
+        } : undefined,
+
+        // Include counts so frontend knows what's hidden
+        fullInsightCount: totalInsights,
+        fullVisualizationCount: totalVisualizations,
+        fullRecommendationCount: totalRecommendations,
+        previewInsightCount: previewInsights.length,
+        previewVisualizationCount: previewVisualizations.length
+      };
+
+      return res.json({
+        success: true,
+        results: limitedResults,
+        message: 'Preview results. Subscribe or pay for this project to unlock full analysis.'
+      });
+    }
+
+    console.log(`✅ [Billing] Returning full results for project ${projectId} (isPaid: ${isPaid}, tier: ${userTier})`);
+
+    // Full results for paid projects, active subscribers, or admins
     res.json({
       success: true,
-      results
+      results: {
+        ...results,
+        isPreview: false,
+        paymentRequired: false,
+        subscriptionTier: userTier
+      }
     });
 
   } catch (error: any) {
@@ -255,9 +598,9 @@ router.get('/status/:projectId', ensureAuthenticated, async (req, res) => {
     const { projectId } = req.params;
 
     if (!userId) {
-      return res.status(401).json({ 
-        success: false, 
-        error: 'Authentication required' 
+      return res.status(401).json({
+        success: false,
+        error: 'Authentication required'
       });
     }
 

@@ -1,9 +1,69 @@
 // Enhanced PythonProcessor service that uses REAL Python libraries
 import { spawn } from 'child_process';
+import { SocketManager } from '../socket-manager';
 
 export const PythonProcessor = {
+  async initialize(): Promise<void> {
+    console.log('🐍 Initializing Python Processor...');
+  },
+
+  async executePythonScript(script: string, env: Record<string, string> = {}, timeout: number = 30000): Promise<any> {
+    return new Promise((resolve, reject) => {
+      const pythonProcess = spawn('python', ['-c', script], {
+        env: { ...process.env, ...env }
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      const timeoutId = setTimeout(() => {
+        pythonProcess.kill();
+        reject(new Error(`Python script timed out after ${timeout}ms`));
+      }, timeout);
+
+      pythonProcess.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+
+      pythonProcess.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      pythonProcess.on('close', (code) => {
+        clearTimeout(timeoutId);
+        if (code === 0) {
+          try {
+            try {
+              const result = JSON.parse(stdout);
+              resolve(result);
+            } catch {
+              resolve({ success: true, output: stdout });
+            }
+          } catch (error) {
+            reject(new Error(`Failed to parse Python output: ${error}`));
+          }
+        } else {
+          reject(new Error(`Python script failed with code ${code}: ${stderr}`));
+        }
+      });
+
+      pythonProcess.on('error', (error) => {
+        clearTimeout(timeoutId);
+        reject(new Error(`Failed to start Python process: ${error.message}`));
+      });
+    });
+  },
+
   async processTrial(trialId: string, data: any): Promise<any> {
     console.log(`🐍 Processing trial ${trialId} with REAL Python libraries (Pandas, NumPy, Scikit-learn, TensorFlow, Polars)...`);
+
+    // Emit start event
+    SocketManager.getInstance().emitToProject(trialId, 'execution_progress', {
+      projectId: trialId,
+      status: 'running',
+      overallProgress: 10,
+      currentStep: { id: 'python_analysis', name: 'Running Python Analysis', status: 'running', description: 'Executing advanced analytics...' }
+    });
 
     try {
       const { preview, schema, recordCount } = data;
@@ -17,9 +77,18 @@ export const PythonProcessor = {
 
       // Try to use real Python analysis first
       const pythonResult = await this.executeRealPythonAnalysis(preview, schema, recordCount);
-      
+
       if (pythonResult.success) {
         console.log(`✅ Real Python analysis completed for trial ${trialId}`);
+
+        // Emit completion event
+        SocketManager.getInstance().emitToProject(trialId, 'execution_progress', {
+          projectId: trialId,
+          status: 'completed',
+          overallProgress: 100,
+          currentStep: { id: 'python_analysis', name: 'Python Analysis', status: 'completed', description: 'Analysis completed successfully.' }
+        });
+
         return pythonResult;
       } else {
         console.warn(`⚠️ Python analysis failed, using enhanced JavaScript fallback: ${pythonResult.error}`);
@@ -27,14 +96,36 @@ export const PythonProcessor = {
       }
     } catch (error) {
       console.error('Python processor error:', error);
-      return this.performEnhancedAnalysis(data.preview, data.schema, data.recordCount);
+      // Fallback using whatever data we have
+      return this.performEnhancedAnalysis(data?.preview || [], data?.schema || {}, data?.recordCount || 0);
     }
+  },
+
+  async processData(params: { projectId: string; operation: string; data: any; config: any }): Promise<any> {
+    console.log(`🐍 Processing data for project ${params.projectId} operation ${params.operation}...`);
+    const { data } = params;
+    // Map to processTrial format
+    return this.processTrial(params.projectId, {
+      preview: data.dataset?.data || [],
+      schema: data.dataset?.schema || {},
+      recordCount: (data.dataset?.data || []).length
+    });
+  },
+
+  async analyzeData(projectId: string, datasetRows: any[], analysisType: string, config: any): Promise<any> {
+    console.log(`🐍 Analyzing data for project ${projectId} type ${analysisType}...`);
+    // Map to processTrial format
+    return this.processTrial(projectId, {
+      preview: datasetRows,
+      schema: {},
+      recordCount: datasetRows.length
+    });
   },
 
   async executeRealPythonAnalysis(preview: any[], schema: any, recordCount: number): Promise<any> {
     // Safely serialize the preview data
     const previewJson = JSON.stringify(preview);
-    
+
     const pythonScript = `
 import pandas as pd
 import numpy as np
@@ -185,7 +276,7 @@ except Exception as e:
 
   performEnhancedAnalysis(preview: any[], schema: any, recordCount: number): any {
     console.log('🔄 Using enhanced JavaScript fallback analysis...');
-    
+
     const columns = Object.keys(schema || {});
     const numericColumns = columns.filter(col =>
       schema[col]?.type === 'number' || schema[col]?.type === 'integer'

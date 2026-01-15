@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -86,12 +86,16 @@ type NormalizedProjectDataset = {
   recordCount?: number | null;
 };
 
+// FIX: Production Readiness - Limit polling to prevent infinite requests
+const MAX_EMPTY_POLL_ATTEMPTS = 12; // 12 attempts * 5 seconds = 1 minute max
+
 export function ProjectArtifactTimeline({
   projectId,
   onViewArtifact,
   onExportArtifact,
 }: ProjectArtifactTimelineProps) {
   const [expandedArtifacts, setExpandedArtifacts] = useState<Set<string>>(new Set());
+  const emptyPollCount = useRef(0);
 
   const {
     data: artifacts = [],
@@ -107,15 +111,37 @@ export function ProjectArtifactTimeline({
       try {
         const result = await apiClient.getProjectArtifacts(projectId);
         if (Array.isArray(result?.data)) {
+          // Reset poll count when artifacts are found
+          if (result.data.length > 0) {
+            emptyPollCount.current = 0;
+          }
           return result.data;
         }
-        return Array.isArray(result) ? result : result?.artifacts ?? [];
+        const artifacts = Array.isArray(result) ? result : result?.artifacts ?? [];
+        if (artifacts.length > 0) {
+          emptyPollCount.current = 0;
+        }
+        return artifacts;
       } catch (fetchError) {
         console.error("Failed to fetch project artifacts:", fetchError);
         return [];
       }
     },
     enabled: !!projectId,
+    // FIX: Production Readiness - Limit polling to MAX_EMPTY_POLL_ATTEMPTS to prevent infinite requests
+    refetchInterval: (query) => {
+      const isEmpty = Array.isArray(query.state.data) && query.state.data.length === 0;
+      if (isEmpty) {
+        emptyPollCount.current++;
+        if (emptyPollCount.current >= MAX_EMPTY_POLL_ATTEMPTS) {
+          console.log(`[ArtifactTimeline] Stopping polling after ${MAX_EMPTY_POLL_ATTEMPTS} attempts with no artifacts`);
+          return false; // Stop polling
+        }
+        return 5000; // Continue polling every 5 seconds
+      }
+      return false; // Have artifacts, stop polling
+    },
+    refetchOnWindowFocus: true,
   });
 
   const { data: projectDatasets = [] } = useQuery({

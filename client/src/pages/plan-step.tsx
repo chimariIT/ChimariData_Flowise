@@ -8,6 +8,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   FileText,
   CheckCircle,
@@ -27,7 +29,9 @@ import {
   Settings,
   Sparkles,
   ArrowRight,
-  RefreshCw
+  RefreshCw,
+  XCircle,
+  Info
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/lib/api";
@@ -48,6 +52,20 @@ interface PlanStepProps {
   onNext?: () => void;
   onPrevious?: () => void;
   renderAsContent?: boolean;
+}
+
+// Per-analysis breakdown item (Phase 4 - Jan 2026)
+interface AnalysisBreakdownItem {
+  analysisId: string;
+  analysisName: string;
+  analysisType: string;
+  techniques: string[];
+  requiredElements: string[];
+  estimatedDuration: string;
+  dependencies: string[];
+  status: string;
+  description: string;
+  expectedOutputs: string[];
 }
 
 interface AnalysisPlan {
@@ -73,6 +91,10 @@ interface AnalysisPlan {
   approvedBy?: string;
   rejectionReason?: string;
   modificationsRequested?: string;
+  // NEW: Per-analysis breakdown (Phase 4 - Jan 2026)
+  analyses?: AnalysisBreakdownItem[];
+  totalEstimatedDuration?: string;
+  datasetSize?: number;
 }
 
 export default function PlanStep({
@@ -104,6 +126,9 @@ export default function PlanStep({
   const [creationStartTime, setCreationStartTime] = useState<number | null>(null);
   const [pendingElapsedMs, setPendingElapsedMs] = useState(0);
   const [requirementsConfirmed, setRequirementsConfirmed] = useState(false);
+
+  // P1-1 FIX: Skip confirmation dialog state
+  const [showSkipConfirmDialog, setShowSkipConfirmDialog] = useState(false);
 
   // Load existing plan or create new one
   useEffect(() => {
@@ -154,12 +179,24 @@ export default function PlanStep({
       const planData = response?.plan || response?.data?.plan || response?.data;
 
       if (planData && (planData.id || planData.projectId)) {
-        setPlan(planData);
-        if (planData.status !== 'pending') {
+        // CRITICAL FIX (Gap D): Check journeyProgress for approval status
+        // This handles the case where the plan was approved but the page was closed
+        // before the API update could complete
+        let enhancedPlanData = planData;
+        if (journeyProgress?.planApproved && planData.status !== 'approved') {
+          console.log('📋 [Gap D Fix] Restoring approved status from journeyProgress');
+          enhancedPlanData = {
+            ...planData,
+            status: 'approved',
+            approvedAt: journeyProgress.planApprovedAt || new Date().toISOString()
+          };
+        }
+        setPlan(enhancedPlanData);
+        if (enhancedPlanData.status !== 'pending') {
           setCreationStartTime(null);
         }
         setPlanError(null);
-        console.log('✅ Plan loaded successfully:', planData.id || planData.projectId, 'Status:', planData.status);
+        console.log('✅ Plan loaded successfully:', enhancedPlanData.id || enhancedPlanData.projectId, 'Status:', enhancedPlanData.status);
       } else {
         // No plan exists, trigger creation
         console.log('📋 No plan found, creating new plan...');
@@ -167,7 +204,12 @@ export default function PlanStep({
       }
     } catch (error: any) {
       // Check if it's a 404 (no plan exists) or other error
-      const is404 = error?.response?.status === 404 || error?.message?.includes('404') || error?.message?.includes('not found');
+      // Use case-insensitive matching for "not found" and "no.*plan.*found"
+      const errorMsg = (error?.message || '').toLowerCase();
+      const is404 = error?.response?.status === 404 ||
+                    errorMsg.includes('404') ||
+                    errorMsg.includes('not found') ||
+                    errorMsg.includes('no analysis plan found');
 
       if (is404) {
         // No plan exists, trigger creation
@@ -341,15 +383,57 @@ export default function PlanStep({
   }, [isPlanStuck, pendingElapsedMs, plan?.status, isCreatingPlan]);
   const requiredDataFields = useMemo(() => {
     if (!plan) return [];
+
+    // ✅ PHASE 2 FIX: First check plan.metadata.requiredDataElements (from requirementsDocument)
+    // This is the primary source of truth set by the PM Agent
+    const metadataElements = (plan as any).metadata?.requiredDataElements || [];
+    if (metadataElements.length > 0) {
+      // Extract element names from the structured requiredDataElements
+      return metadataElements.map((el: any) =>
+        el.elementName || el.name || el.sourceColumn || el.sourceField || 'Unknown Element'
+      );
+    }
+
+    // Fallback: Extract from analysis step inputs, visualizations, and ML models
     const stepInputs = plan.analysisSteps?.flatMap(step => step.inputs || []) ?? [];
     const vizFields = plan.visualizations?.flatMap(viz => viz.dataFields || []) ?? [];
     const mlFields = plan.mlModels?.flatMap(model => {
       const features = Array.isArray(model.features) ? model.features : [];
       return [model.targetVariable, ...features];
     }) ?? [];
-    const combined = [...stepInputs, ...vizFields, ...mlFields].filter(Boolean);
-    return Array.from(new Set(combined));
-  }, [plan]);
+
+    const rawIds = [...stepInputs, ...vizFields, ...mlFields].filter(Boolean);
+
+    // ✅ PHASE 11 FIX: Build element ID to name mapping from journeyProgress.requirementsDocument
+    const requirementsDoc = (journeyProgress as any)?.requirementsDocument;
+    const elementMap = new Map<string, string>();
+    const requirementsElements = requirementsDoc?.requiredDataElements || [];
+    requirementsElements.forEach((el: any) => {
+      if (el.elementId) {
+        elementMap.set(el.elementId, el.elementName || el.name || el.elementId);
+      }
+      // Also map by name for duplicate prevention
+      if (el.elementName) {
+        elementMap.set(el.elementName, el.elementName);
+      }
+    });
+
+    // Map IDs to names using the lookup, fall back to original if not found
+    const mappedFields = rawIds.map(id => {
+      // Check if this is an element ID that we can resolve
+      if (elementMap.has(id)) {
+        return elementMap.get(id)!;
+      }
+      // Filter out obvious element IDs (elem-XXXX pattern) that weren't resolved
+      if (id.startsWith('elem-')) {
+        console.warn(`⚠️ [Plan] Unresolved element ID: ${id}`);
+        return null; // Will be filtered out
+      }
+      return id;
+    }).filter(Boolean) as string[];
+
+    return Array.from(new Set(mappedFields));
+  }, [plan, journeyProgress]);
   const missingDataSignals = plan?.dataAssessment?.missingData ?? [];
   const transformationRecommendations = plan?.dataAssessment?.recommendedTransformations ?? [];
   const businessContext = plan?.businessContext ?? null;
@@ -763,7 +847,12 @@ export default function PlanStep({
               <Settings className="h-8 w-8 text-orange-500" />
               <div>
                 <div className="text-sm text-muted-foreground">Analysis Steps</div>
-                <div className="text-2xl font-bold">{plan.analysisSteps.length}</div>
+                {/* PHASE 7 FIX: Prefer plan.analyses (DS recommendations) over plan.analysisSteps */}
+                <div className="text-2xl font-bold">
+                  {(plan as any).analyses?.length > 0
+                    ? (plan as any).analyses.length
+                    : plan.analysisSteps.length}
+                </div>
               </div>
             </div>
           </CardContent>
@@ -788,7 +877,7 @@ export default function PlanStep({
                 <div className="text-sm font-medium mb-2">Required Data Elements</div>
                 {requiredDataFields.length > 0 ? (
                   <div className="flex flex-wrap gap-2">
-                    {requiredDataFields.map((field) => (
+                    {requiredDataFields.map((field: string) => (
                       <Badge key={field} variant="outline">
                         {field}
                       </Badge>
@@ -909,6 +998,90 @@ export default function PlanStep({
 
         {/* Analysis Steps Tab */}
         <TabsContent value="steps" className="space-y-4">
+          {/* ==========================================
+              PHASE 4: Per-Analysis Breakdown (Jan 2026)
+              Shows DS-recommended analyses with per-analysis estimates
+              ========================================== */}
+          {plan.analyses && plan.analyses.length > 0 && (
+            <Card className="border-primary/20 bg-primary/5">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Brain className="h-5 w-5 text-primary" />
+                  Analysis Breakdown ({plan.analyses.length} analyses)
+                </CardTitle>
+                <CardDescription>
+                  Per-analysis time estimates based on your data ({(plan.datasetSize || 0).toLocaleString()} rows)
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  {plan.analyses.map((analysis, idx) => (
+                    <div
+                      key={analysis.analysisId}
+                      className="flex items-center justify-between p-3 border rounded-lg bg-background hover:bg-muted/50 transition-colors"
+                    >
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline" className="text-xs">{idx + 1}</Badge>
+                          <span className="font-medium">{analysis.analysisName}</span>
+                        </div>
+                        <div className="text-sm text-muted-foreground mt-1">
+                          {analysis.techniques?.length > 0
+                            ? analysis.techniques.join(', ')
+                            : analysis.analysisType.replace(/_/g, ' ')}
+                        </div>
+                        {analysis.requiredElements?.length > 0 && (
+                          <div className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
+                            <Database className="h-3 w-3" />
+                            {analysis.requiredElements.length} data elements required
+                          </div>
+                        )}
+                        {analysis.description && (
+                          <div className="text-xs text-muted-foreground mt-1 line-clamp-1">
+                            {analysis.description}
+                          </div>
+                        )}
+                      </div>
+                      <div className="text-right ml-4">
+                        <Badge variant="secondary" className="flex items-center gap-1">
+                          <Clock className="h-3 w-3" />
+                          {analysis.estimatedDuration}
+                        </Badge>
+                        <div className="text-xs text-muted-foreground mt-1">
+                          {analysis.status === 'ready' ? (
+                            <span className="text-green-600 flex items-center gap-1">
+                              <CheckCircle className="h-3 w-3" /> Ready
+                            </span>
+                          ) : (
+                            <span className="text-amber-600 flex items-center gap-1">
+                              <Clock className="h-3 w-3" /> Pending
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-4 pt-4 border-t flex items-center justify-between">
+                  <span className="font-medium">Total Estimated Time:</span>
+                  <Badge variant="default" className="text-base px-3 py-1">
+                    <Clock className="h-4 w-4 mr-2" />
+                    {plan.totalEstimatedDuration || 'Calculating...'}
+                  </Badge>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Legacy Analysis Steps (from DS generatePlanBlueprint) */}
+          {plan.analysisSteps.length > 0 && (
+            <Card className="mt-4">
+              <CardHeader>
+                <CardTitle className="text-lg">Execution Plan Details</CardTitle>
+                <CardDescription>Technical steps the analysis engine will execute</CardDescription>
+              </CardHeader>
+            </Card>
+          )}
           {plan.analysisSteps.map((step, index) => (
             <Card key={step.stepNumber}>
               <CardHeader>
@@ -1250,7 +1423,8 @@ export default function PlanStep({
       </div>
 
       {/* Action Buttons */}
-      {plan.status === 'ready' && (
+      {/* Show action buttons for 'ready' and 'approved' status - users can reject even approved plans */}
+      {(plan.status === 'ready' || plan.status === 'approved') && (
         <Card>
           <CardContent className="pt-6">
             {!showRejectionForm ? (
@@ -1387,9 +1561,9 @@ export default function PlanStep({
             </Button>
           )}
           <div className="flex items-center gap-3 ml-auto">
-            {/* Allow users to skip if plan generation is incomplete but they want to proceed */}
+            {/* P1-1 FIX: Gate skip button with confirmation dialog */}
             {onNext && plan.status !== 'approved' && plan.status !== 'ready' && (
-              <Button variant="outline" onClick={onNext}>
+              <Button variant="outline" onClick={() => setShowSkipConfirmDialog(true)}>
                 Skip to Execution
                 <ArrowRight className="h-4 w-4 ml-2" />
               </Button>
@@ -1403,6 +1577,78 @@ export default function PlanStep({
           </div>
         </div>
       )}
+
+      {/* P1-1 FIX: Skip Confirmation Dialog */}
+      <Dialog open={showSkipConfirmDialog} onOpenChange={setShowSkipConfirmDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-500" />
+              Skip Analysis Plan?
+            </DialogTitle>
+            <DialogDescription>
+              The analysis plan helps optimize your results. Are you sure you want to proceed without it?
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="py-4 space-y-4">
+            <Alert className="border-amber-200 bg-amber-50">
+              <AlertTriangle className="h-4 w-4 text-amber-600" />
+              <AlertDescription className="text-amber-800">
+                <strong>Warning:</strong> Skipping the plan approval means:
+                <ul className="list-disc list-inside mt-2 space-y-1 text-sm">
+                  <li>Analysis may not be optimally configured</li>
+                  <li>Cost estimates won't be reviewed</li>
+                  <li>Recommended analyses may not be applied</li>
+                </ul>
+              </AlertDescription>
+            </Alert>
+
+            <div className="bg-gray-50 rounded-lg p-3">
+              <p className="text-sm text-gray-600">
+                <strong>Plan Status:</strong>{' '}
+                <Badge variant="secondary">{plan?.status || 'pending'}</Badge>
+              </p>
+              {plan?.status === 'pending' && (
+                <p className="text-xs text-gray-500 mt-1">
+                  The plan is still being generated. Consider waiting for completion.
+                </p>
+              )}
+            </div>
+
+            <Alert>
+              <Info className="h-4 w-4" />
+              <AlertDescription>
+                You can always return to this step later to review and approve the plan.
+              </AlertDescription>
+            </Alert>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowSkipConfirmDialog(false)}>
+              <XCircle className="w-4 h-4 mr-2" />
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setShowSkipConfirmDialog(false);
+                // Log skip action
+                console.log('⚠️ [P1-1] User skipped plan approval');
+                // Update journeyProgress to note the skip
+                updateProgress({
+                  planSkipped: true,
+                  planSkippedAt: new Date().toISOString()
+                });
+                if (onNext) onNext();
+              }}
+            >
+              <ArrowRight className="w-4 h-4 mr-2" />
+              Skip Anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

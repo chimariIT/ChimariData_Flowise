@@ -1,20 +1,24 @@
 import React, { useState } from 'react';
-import { useParams } from 'wouter';
+import { useParams, useLocation } from 'wouter';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
-import { ArrowLeft, TrendingUp, BarChart3, Brain } from "lucide-react";
+import { ArrowLeft, TrendingUp, Brain, Download, Loader2 } from "lucide-react";
 import { Link } from "wouter";
 import { DescriptiveStatsLazy } from "@/components/LazyComponents";
 import { AdvancedAnalysisModalLazy } from "@/components/LazyComponents";
 import { DataProject } from "@shared/schema";
+import { apiClient } from "@/lib/api";
+import { toast } from "@/hooks/use-toast";
 
 export default function DescriptiveStatsPage() {
   const { id } = useParams<{ id: string }>();
+  const [, setLocation] = useLocation();
   const [isAnalysisModalOpen, setIsAnalysisModalOpen] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<any>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isGeneratingViz, setIsGeneratingViz] = useState(false);
   
   const { data: project, isLoading } = useQuery<DataProject>({
     queryKey: [`/api/projects/${id}`],
@@ -49,6 +53,64 @@ export default function DescriptiveStatsPage() {
     setAnalysisResult(result);
     setIsAnalysisModalOpen(false);
   };
+
+  const handleExportReport = async () => {
+    if (!id) return;
+
+    setIsExporting(true);
+    try {
+      // Try to export as PDF/CSV
+      const response = await apiClient.get(`/api/projects/${id}/export/report`);
+
+      if (response?.downloadUrl) {
+        // If we get a download URL, open it
+        window.open(response.downloadUrl, '_blank');
+        toast({
+          title: "Export Started",
+          description: "Your report is being generated and will download shortly.",
+        });
+      } else if (response?.data) {
+        // If we get data directly, create a downloadable file
+        const blob = new Blob([JSON.stringify(response.data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${project?.name || 'report'}-statistics.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        toast({
+          title: "Report Exported",
+          description: "Your statistics report has been downloaded.",
+        });
+      } else {
+        toast({
+          title: "Export Available",
+          description: "Export functionality will be available after analysis is complete.",
+          variant: "default",
+        });
+      }
+    } catch (error: any) {
+      console.error('Export failed:', error);
+      toast({
+        title: "Export Not Available",
+        description: "Complete the analysis journey to unlock export features.",
+        variant: "default",
+      });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleGenerateVisualizations = () => {
+    if (!id) return;
+
+    // Navigate to the visualization page or dashboard builder for this project
+    setLocation(`/projects/${id}/dashboard`);
+    toast({
+      title: "Opening Visualization Builder",
+      description: "Create custom charts and dashboards for your data.",
+    });
+  };
   
   return (
     <div className="container mx-auto px-4 py-8">
@@ -82,57 +144,72 @@ export default function DescriptiveStatsPage() {
       
       {/* Action Buttons */}
       <div className="mb-8 flex flex-wrap gap-4">
-        <Button 
+        <Button
           onClick={() => setIsAnalysisModalOpen(true)}
           className="flex items-center gap-2"
         >
           <Brain className="h-4 w-4" />
           Advanced Analysis
         </Button>
-        
-        <Button variant="outline" className="flex items-center gap-2">
-          <TrendingUp className="h-4 w-4" />
+
+        <Button
+          variant="outline"
+          className="flex items-center gap-2"
+          onClick={handleGenerateVisualizations}
+          disabled={isGeneratingViz}
+        >
+          {isGeneratingViz ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <TrendingUp className="h-4 w-4" />
+          )}
           Generate Visualizations
         </Button>
-        
-        <Button variant="outline" className="flex items-center gap-2">
-          <BarChart3 className="h-4 w-4" />
+
+        <Button
+          variant="outline"
+          className="flex items-center gap-2"
+          onClick={handleExportReport}
+          disabled={isExporting}
+        >
+          {isExporting ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Download className="h-4 w-4" />
+          )}
           Export Report
         </Button>
       </div>
       
-      {/* Analysis Path Selection */}
+      {/* Project Analysis Summary - User only sees their current project analysis */}
       <Card className="mb-8">
         <CardHeader>
-          <CardTitle>Analysis Paths</CardTitle>
+          <CardTitle>Project Analysis Summary</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="p-4 border rounded-lg hover:bg-muted/50 transition-colors cursor-pointer">
-              <h3 className="font-semibold text-green-700">Relationship Analysis</h3>
-              <p className="text-sm text-muted-foreground">
-                Discover connections between variables using correlation, ANOVA, or regression analysis
+          <p className="text-sm text-muted-foreground mb-4">
+            This page shows statistics for your current project. To run additional analyses,
+            use the Advanced Analysis button above or continue your analysis journey.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="p-4 border rounded-lg bg-muted/30">
+              <h3 className="font-semibold text-gray-700">Records</h3>
+              <p className="text-2xl font-bold text-primary">
+                {project?.recordCount?.toLocaleString() || 0}
               </p>
             </div>
-            
-            <div className="p-4 border rounded-lg hover:bg-muted/50 transition-colors cursor-pointer">
-              <h3 className="font-semibold text-blue-700">Predictive Modeling</h3>
-              <p className="text-sm text-muted-foreground">
-                Build models to predict outcomes using machine learning algorithms
+
+            <div className="p-4 border rounded-lg bg-muted/30">
+              <h3 className="font-semibold text-gray-700">Variables</h3>
+              <p className="text-2xl font-bold text-primary">
+                {Object.keys(project?.schema || {}).length}
               </p>
             </div>
-            
-            <div className="p-4 border rounded-lg hover:bg-muted/50 transition-colors cursor-pointer">
-              <h3 className="font-semibold text-purple-700">Group Classification</h3>
-              <p className="text-sm text-muted-foreground">
-                Classify data into groups using clustering or discriminant analysis
-              </p>
-            </div>
-            
-            <div className="p-4 border rounded-lg hover:bg-muted/50 transition-colors cursor-pointer">
-              <h3 className="font-semibold text-orange-700">Structure Analysis</h3>
-              <p className="text-sm text-muted-foreground">
-                Explore underlying patterns using factor analysis or PCA
+
+            <div className="p-4 border rounded-lg bg-muted/30">
+              <h3 className="font-semibold text-gray-700">Data Quality</h3>
+              <p className="text-2xl font-bold text-primary">
+                {(project as any)?.qualityScore || 'N/A'}%
               </p>
             </div>
           </div>

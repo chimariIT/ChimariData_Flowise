@@ -2,7 +2,7 @@ import { db } from './db';
 import { projects, datasets, decisionAudits, generatedArtifacts } from '../shared/schema';
 import { eq } from 'drizzle-orm';
 import { EnhancedMCPService } from './enhanced-mcp-service';
-import { FileProcessor } from './file-processor';
+import { FileProcessor } from './services/file-processor';
 import WebSocket from 'ws';
 
 export interface WorkflowEvent {

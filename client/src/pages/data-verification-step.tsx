@@ -23,8 +23,12 @@ import {
   ArrowLeft,
   Info,
   TrendingUp,
-  Link2
+  Link2,
+  ThumbsUp,
+  ThumbsDown,
+  XCircle
 } from "lucide-react";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { PIIDetectionDialog } from "@/components/PIIDetectionDialog";
 import { SchemaAnalysis } from "@/components/SchemaAnalysis";
 import { DataQualityCheckpoint } from "@/components/DataQualityCheckpoint";
@@ -36,7 +40,7 @@ import AgentCheckpoints from "@/components/agent-checkpoints";
 import { apiClient } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { useProject } from "@/hooks/useProject";
-import { JourneyProgress } from '@shared/schema';
+// Note: JourneyProgress type removed - use journeyProgress from context instead
 
 interface DataVerificationStepProps {
   journeyType: string;
@@ -73,18 +77,34 @@ export default function DataVerificationStep({
   // Centralized project data and state (DEC-003)
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(() => localStorage.getItem('currentProjectId'));
   const { project, journeyProgress, updateProgress, isLoading: projectLoading, isUpdating } = useProject(currentProjectId || undefined);
+
+  // CRITICAL FIX (Gap A): Restore verification status from journeyProgress on mount
+  // This ensures status survives browser refresh/navigation
+  useEffect(() => {
+    if (journeyProgress?.verificationStatus) {
+      const savedStatus = journeyProgress.verificationStatus as VerificationStatus;
+      console.log('📋 [Verification Status] Restoring from journeyProgress:', savedStatus);
+      setVerificationStatus(prev => ({
+        ...prev,
+        ...savedStatus
+      }));
+    }
+  }, [journeyProgress?.verificationStatus]);
   const queryClient = useQueryClient();
   const hasRefreshedOnMount = useRef(false);
 
   // Local data state (some will be migrated to journeyProgress/project from hook)
   const [projectData, setProjectData] = useState<any>(null);
   const [dataQuality, setDataQuality] = useState<any>(null);
+  const [dataQualityLoaded, setDataQualityLoaded] = useState(false); // FIX: Track if quality was loaded
   const [piiResults, setPiiResults] = useState<any>(null);
   const [schemaAnalysis, setSchemaAnalysis] = useState<any>(null);
   const [requiredDataElements, setRequiredDataElements] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [joinInsights, setJoinInsights] = useState<any | null>(null);
+  // CRITICAL FIX: Store element mappings in state so they can be saved when approving
+  const [currentElementMappings, setCurrentElementMappings] = useState<any[]>([]);
 
   // PII Dialog state
   const [showPIIDialog, setShowPIIDialog] = useState(false);
@@ -94,11 +114,59 @@ export default function DataVerificationStep({
   const [showSchemaDialog, setShowSchemaDialog] = useState(false);
   const [editedSchema, setEditedSchema] = useState<any>(null);
 
+  // P0-2 FIX: Data Quality Approval Checkpoint state (u2a2a2u pattern)
+  const [showDataQualityApprovalDialog, setShowDataQualityApprovalDialog] = useState(false);
+  const [dataQualityCheckpointId, setDataQualityCheckpointId] = useState<string | null>(null);
+  const [isCreatingCheckpoint, setIsCreatingCheckpoint] = useState(false);
+
   // FIX #30: Multi-dataset tab selection - allows viewing each dataset individually
   const [selectedDatasetIndex, setSelectedDatasetIndex] = useState<number>(-1); // -1 = joined view
 
   // CRITICAL: Track when force refresh completes to prevent fallback race condition
   const [hasCompletedRefresh, setHasCompletedRefresh] = useState(false);
+
+  // Business Definition Enrichment state (connects BA Agent to data elements)
+  const [isEnrichingDefinitions, setIsEnrichingDefinitions] = useState(false);
+  const [definitionEnrichmentComplete, setDefinitionEnrichmentComplete] = useState(false);
+
+  // Function to enrich data elements with business definitions from BA Agent
+  const enrichDataElementsWithDefinitions = async (projectId: string) => {
+    if (isEnrichingDefinitions || definitionEnrichmentComplete) return;
+
+    try {
+      setIsEnrichingDefinitions(true);
+      console.log('📚 [Business Definitions] Starting enrichment for project', projectId);
+
+      const response = await apiClient.post(`/api/projects/${projectId}/enrich-data-elements`, {
+        includeInferred: true
+      });
+
+      if (response.success && response.enrichedElements) {
+        console.log('✅ [Business Definitions] Enrichment complete:', response.stats);
+
+        // Update the required data elements with enriched versions
+        setRequiredDataElements((prev: any) => ({
+          ...prev,
+          requiredDataElements: response.enrichedElements,
+          businessDefinitionsEnriched: true,
+          enrichmentStats: response.stats
+        }));
+
+        toast({
+          title: "Business Definitions Loaded",
+          description: `Found ${response.stats?.found || 0} standard definitions, inferred ${response.stats?.inferred || 0}.`,
+          variant: "default"
+        });
+
+        setDefinitionEnrichmentComplete(true);
+      }
+    } catch (error: any) {
+      console.error('❌ [Business Definitions] Enrichment error:', error);
+      // Don't block the flow - enrichment is an enhancement, not a requirement
+    } finally {
+      setIsEnrichingDefinitions(false);
+    }
+  };
 
   const computedQualityScore = (() => {
     // If we have it in journeyProgress, prioritize it
@@ -118,12 +186,21 @@ export default function DataVerificationStep({
     if (typeof dataQuality?.score === 'number') {
       return dataQuality.score;
     }
-    // Priority 4: Calculate from metrics if available
+    // Priority 4: Calculate from ONLY the 4 main metrics (completeness, consistency, accuracy, validity)
+    // FIX: Don't average ALL numeric values - only use the defined formula
     const metrics = dataQuality?.metrics && typeof dataQuality.metrics === 'object' ? dataQuality.metrics : null;
     if (metrics) {
-      const metricValues = Object.values(metrics).filter(v => typeof v === 'number') as number[];
-      if (metricValues.length > 0) {
-        return metricValues.reduce((sum, val) => sum + val, 0) / metricValues.length;
+      const mainMetrics = ['completeness', 'consistency', 'accuracy', 'validity'];
+      const values = mainMetrics
+        .map(key => {
+          const val = (metrics as any)[key];
+          return typeof val === 'number' ? val : null;
+        })
+        .filter((v): v is number => v !== null);
+
+      if (values.length > 0) {
+        // Formula: (Completeness + Consistency + Accuracy + Validity) / 4
+        return values.reduce((sum, val) => sum + val, 0) / values.length;
       }
     }
     return 0;
@@ -224,6 +301,7 @@ export default function DataVerificationStep({
     }
 
     // Map elements to the format expected by DataElementsMappingUI
+    // CRITICAL: Include calculationDefinition from DS agent for DE agent collaboration
     const mapped = elements.map((el: any, idx: number) => ({
       elementId: el.elementId || el.id || `element-${idx}`,
       elementName: el.elementName || el.name || el.element || `Element ${idx + 1}`,
@@ -233,13 +311,29 @@ export default function DataVerificationStep({
       required: el.required !== false, // Default to true
       sourceField: el.sourceField || el.mappedColumn || el.source || undefined,
       sourceAvailable: el.sourceAvailable ?? (!!el.sourceField || !!el.mappedColumn),
-      transformationRequired: el.transformationRequired ?? (!!el.transformationLogic || !!el.derivation),
+      transformationRequired: el.transformationRequired ?? (!!el.transformationLogic || !!el.derivation || !!el.calculationDefinition),
       transformationLogic: el.transformationLogic,
       alternatives: el.alternatives,
-      confidence: el.confidence
+      confidence: el.confidence,
+      // DS Agent collaboration: Pass calculation definition from prepare step
+      calculationDefinition: el.calculationDefinition,
+      // Also preserve any existing transformation code/description
+      transformationCode: el.transformationCode,
+      transformationDescription: el.transformationDescription,
+      sourceColumn: el.sourceColumn
     }));
 
     console.log(`📋 [Data Elements] Loaded ${mapped.length} required elements for mapping`);
+
+    // DS-DE Agent Collaboration Logging
+    const elementsWithCalcDef = mapped.filter((el: any) => el.calculationDefinition);
+    if (elementsWithCalcDef.length > 0) {
+      console.log(`🤝 [DS→DE] ${elementsWithCalcDef.length} elements have DS agent calculationDefinition for DE agent processing`);
+      elementsWithCalcDef.forEach((el: any) => {
+        console.log(`   - ${el.elementName}: ${el.calculationDefinition?.calculationType} (${el.calculationDefinition?.formula?.aggregationMethod || 'n/a'})`);
+      });
+    }
+
     if (mapped.length === 0) {
       console.warn(`⚠️ [Data Elements] No elements found - Preparation step may not have completed`);
     }
@@ -275,13 +369,39 @@ export default function DataVerificationStep({
           action: 'LOADED_FROM_SSOT'
         });
         setRequiredDataElements(reqDoc);
-        
+
+        // CRITICAL FIX: Restore element mappings from requirementsDocument
+        // This ensures mappings persist across page navigation/refresh
+        const elements = reqDoc?.requiredDataElements || [];
+        const restoredMappings: any[] = [];
+        elements.forEach((elem: any) => {
+          if (elem.sourceColumn) {
+            restoredMappings.push({
+              elementId: elem.elementId || elem.id,
+              mappedColumn: elem.sourceColumn,
+              transformationDescription: elem.transformationDescription,
+              transformationCode: elem.transformationCode
+            });
+          }
+        });
+        if (restoredMappings.length > 0) {
+          console.log('📋 [SSOT] Restoring', restoredMappings.length, 'element mappings from requirementsDocument');
+          setCurrentElementMappings(restoredMappings);
+        }
+
         // Also log analysis recommendations and questions for debugging
         if (reqDoc.analysisPath) {
           console.log('📋 [SSOT] Analysis recommendations:', reqDoc.analysisPath.map((a: any) => a.type || a).join(', '));
         }
         if (reqDoc.userQuestions) {
           console.log('📋 [SSOT] User questions:', reqDoc.userQuestions.length);
+        }
+
+        // Enrich elements with business definitions if not already done
+        // This connects BA Agent definitions to the data element pipeline
+        if (currentProjectId && !reqDoc.businessDefinitionsEnriched) {
+          console.log('📚 [Business Definitions] Elements not yet enriched, triggering enrichment...');
+          enrichDataElementsWithDefinitions(currentProjectId);
         }
       } else {
         // DEBUG: Log when requirementsDocument is missing
@@ -364,7 +484,15 @@ export default function DataVerificationStep({
 
           // Check if preparation is required (elements don't exist)
           if (dataElementsResponse.error === 'preparation_required' || dataElementsResponse.requiresPreparation) {
-            console.log('⚠️ [Fallback] Preparation step required - elements not yet generated, redirecting...');
+            console.log('⚠️ [Fallback] Preparation step required - elements not yet generated, redirecting...', {
+              error: dataElementsResponse.error,
+              requiresPreparation: dataElementsResponse.requiresPreparation,
+              journeyProgressAtRedirect: {
+                hasRequirementsDoc: !!journeyProgress?.requirementsDocument,
+                requirementsLocked: (journeyProgress as any)?.requirementsLocked,
+                currentStep: journeyProgress?.currentStep
+              }
+            });
             toast({
               title: "Preparation Required",
               description: "Redirecting to Preparation step to define your analysis goals and data requirements.",
@@ -416,10 +544,45 @@ export default function DataVerificationStep({
     const forceRefresh = async () => {
       if (currentProjectId && !projectLoading && !hasRefreshedOnMount.current) {
         hasRefreshedOnMount.current = true;
-        console.log('🔄 [Verification] Force refreshing project data on mount...');
+        console.log('🔄 [Verification] Force refreshing project data on mount...', {
+          currentProjectId,
+          hasRequirementsDocBefore: !!journeyProgress?.requirementsDocument,
+          requirementsLockedBefore: (journeyProgress as any)?.requirementsLocked
+        });
         try {
           await queryClient.refetchQueries({ queryKey: ["project", currentProjectId] });
-          console.log('✅ [Verification] Force refresh completed');
+          // Check cache data after refresh
+          const cachedData = queryClient.getQueryData(["project", currentProjectId]) as any;
+          console.log('✅ [Verification] Force refresh completed:', {
+            hasRequirementsDocAfter: !!cachedData?.journeyProgress?.requirementsDocument,
+            requirementsLockedAfter: cachedData?.journeyProgress?.requirementsLocked,
+            elementsCount: cachedData?.journeyProgress?.requirementsDocument?.requiredDataElements?.length || 0
+          });
+
+          // CRITICAL FIX: If requirementsDocument exists in fresh cache, set it directly
+          // This prevents race condition where React hasn't re-rendered with new journeyProgress yet
+          if (cachedData?.journeyProgress?.requirementsDocument) {
+            const reqDoc = cachedData.journeyProgress.requirementsDocument;
+            console.log('📋 [Verification] Setting requirementsDocument directly from fresh cache');
+            setRequiredDataElements(reqDoc);
+
+            // Also restore element mappings
+            const elements = reqDoc?.requiredDataElements || [];
+            const restoredMappings: any[] = [];
+            elements.forEach((elem: any) => {
+              if (elem.sourceColumn) {
+                restoredMappings.push({
+                  elementId: elem.elementId || elem.id,
+                  mappedColumn: elem.sourceColumn,
+                  transformationDescription: elem.transformationDescription,
+                  transformationCode: elem.transformationCode
+                });
+              }
+            });
+            if (restoredMappings.length > 0) {
+              setCurrentElementMappings(restoredMappings);
+            }
+          }
         } catch (err) {
           console.warn('⚠️ [Verification] Force refresh failed:', err);
         }
@@ -477,7 +640,14 @@ export default function DataVerificationStep({
             description: `Mapped ${response.mappingStats?.elementsMapped || 0} of ${response.mappingStats?.totalElements || 0} data elements to source fields.`,
           });
         } else if (response.error === 'preparation_required' || response.requiresPreparation) {
-          console.log('⚠️ [Data Engineer] Preparation required, redirecting...');
+          console.log('⚠️ [Data Engineer] Preparation required, redirecting...', {
+            error: response.error,
+            message: response.message,
+            journeyProgressAtRedirect: {
+              hasRequirementsDoc: !!journeyProgress?.requirementsDocument,
+              requirementsLocked: (journeyProgress as any)?.requirementsLocked
+            }
+          });
           toast({
             title: "Preparation Required",
             description: "Redirecting to Preparation step to define your analysis goals.",
@@ -686,8 +856,11 @@ export default function DataVerificationStep({
       try {
         const qualityResponse = await apiClient.get(`/api/projects/${projectId}/data-quality`);
         setDataQuality(qualityResponse);
+        setDataQualityLoaded(true); // FIX: Mark as loaded
+        console.log('📊 [Data Quality] Loaded with score:', qualityResponse?.qualityScore?.overall || qualityResponse?.qualityScore);
       } catch (error) {
         console.warn('Data quality assessment not available:', error);
+        setDataQualityLoaded(true); // FIX: Mark as loaded even on error
       }
 
       // Load PII detection results
@@ -872,29 +1045,167 @@ const handlePIIApproval = async (requiresPII: boolean, anonymizeData: boolean, s
   });
 };
 
-const handleSchemaConfirm = (schema: Record<string, string>) => {
-  setEditedSchema(schema);
-  updateVerificationStatus('schemaValidation', true);
-  toast({
-    title: "Schema Confirmed",
-    description: "Schema validation complete",
-  });
+const handleSchemaConfirm = async (schema: Record<string, string>) => {
+  const projectId = localStorage.getItem('currentProjectId');
+  if (!projectId) {
+    toast({
+      title: "Project Not Found",
+      description: "No project ID found. Please go back to Data Upload step.",
+      variant: "destructive"
+    });
+    return;
+  }
+
+  setIsProcessing(true);
+  try {
+    // [DAY 7] Route through DE agent for schema validation before approval
+    console.log('🔍 [DE Agent] Validating schema via agent...');
+    const validationResult = await apiClient.post(`/api/data-quality/${projectId}/validate-schema-via-agent`, {
+      proposedSchema: schema
+    });
+    console.log('🔍 [DE Agent Schema] Validation result:', validationResult);
+
+    // Check for blocking errors
+    if (!validationResult.validation?.isValid && validationResult.validation?.errors?.length > 0) {
+      toast({
+        title: "Schema Validation Failed",
+        description: `DE Agent found errors: ${validationResult.validation.errors.slice(0, 2).join(', ')}`,
+        variant: "destructive"
+      });
+      setIsProcessing(false);
+      return;
+    }
+
+    // Show warnings if any
+    if (validationResult.validation?.warnings?.length > 0) {
+      toast({
+        title: "Schema Warnings",
+        description: `DE Agent notes: ${validationResult.validation.warnings.slice(0, 2).join(', ')}`,
+        variant: "default"
+      });
+    }
+
+    // Now call the approval endpoint with the checkpoint ID
+    await apiClient.post(`/api/data-quality/${projectId}/approve-schema`, {
+      checkpointId: validationResult.validation?.checkpointId,
+      confirmedSchema: schema,
+      feedback: 'Schema confirmed after DE agent validation'
+    });
+
+    // Update local state
+    setEditedSchema(schema);
+    updateVerificationStatus('schemaValidation', true);
+
+    // Update journeyProgress
+    updateProgress({
+      schemaValidated: true,
+      schemaCheckpointId: validationResult.validation?.checkpointId,
+      confirmedSchema: schema,
+      currentStep: 'verification'
+    });
+
+    toast({
+      title: "Schema Confirmed",
+      description: "Schema validated by DE Agent and approved",
+    });
+
+    console.log('✅ [DE Agent Schema] Schema approved with checkpoint');
+  } catch (error: any) {
+    console.error('Schema validation error:', error);
+    // Non-blocking: Allow approval even if agent validation fails
+    toast({
+      title: "Schema Validation",
+      description: "Agent validation unavailable. Proceeding with manual approval.",
+      variant: "default"
+    });
+
+    // Fallback to direct approval
+    setEditedSchema(schema);
+    updateVerificationStatus('schemaValidation', true);
+    updateProgress({
+      schemaValidated: true,
+      confirmedSchema: schema,
+      currentStep: 'verification'
+    });
+  } finally {
+    setIsProcessing(false);
+  }
 };
 
 const handleQualityApprove = async () => {
   const projectId = localStorage.getItem('currentProjectId');
+  if (!projectId) {
+    toast({
+      title: "Project Not Found",
+      description: "No project ID found. Please go back to Data Upload step.",
+      variant: "destructive"
+    });
+    return;
+  }
 
-  // Update journeyProgress (SSOT)
-  updateProgress({
-    dataQualityApproved: true,
-    dataQualityScore: qualityScore,
-    currentStep: 'verification'
-  });
+  setIsProcessing(true);
+  try {
+    // [DAY 7] Route through DE agent for validation before approval
+    console.log('🔍 [DE Agent] Validating quality via agent...');
+    const validationResult = await apiClient.post(`/api/data-quality/${projectId}/validate-via-agent`, {});
+    console.log('🔍 [DE Agent Quality] Validation result:', validationResult);
 
-  toast({
-    title: "Quality Approved",
-    description: "Data quality has been approved and agent checkpoints updated",
-  });
+    // Show warnings if any
+    if (validationResult.validation?.warnings?.length > 0) {
+      toast({
+        title: "Quality Warnings",
+        description: `DE Agent notes: ${validationResult.validation.warnings.slice(0, 2).join(', ')}`,
+        variant: "default"
+      });
+    }
+
+    // Show recommendations
+    if (validationResult.validation?.recommendations?.length > 0) {
+      console.log('💡 [DE Agent Quality] Recommendations:', validationResult.validation.recommendations);
+    }
+
+    // Now call the approval endpoint with the checkpoint ID
+    await apiClient.post(`/api/data-quality/${projectId}/approve-quality`, {
+      checkpointId: validationResult.validation?.checkpointId,
+      feedback: `Approved with score ${validationResult.validation?.overallScore || qualityScore}%`
+    });
+
+    // Update local verification status
+    updateVerificationStatus('dataQuality', true);
+
+    // Update journeyProgress (SSOT)
+    updateProgress({
+      dataQualityApproved: true,
+      dataQualityScore: validationResult.validation?.overallScore || qualityScore,
+      dataQualityCheckpointId: validationResult.validation?.checkpointId,
+      currentStep: 'verification'
+    });
+
+    toast({
+      title: "Quality Approved",
+      description: `Data quality approved by DE Agent. Score: ${validationResult.validation?.overallScore || qualityScore}%`,
+    });
+
+    console.log('✅ [DE Agent Quality] Quality approved with checkpoint');
+  } catch (error: any) {
+    console.error('Quality validation error:', error);
+    // Non-blocking: Allow approval even if agent validation fails
+    toast({
+      title: "Quality Validation",
+      description: "Agent validation unavailable. Proceeding with manual approval.",
+      variant: "default"
+    });
+
+    // Fallback to direct approval
+    updateVerificationStatus('dataQuality', true);
+    updateProgress({
+      dataQualityApproved: true,
+      dataQualityScore: qualityScore,
+      currentStep: 'verification'
+    });
+  } finally {
+    setIsProcessing(false);
+  }
 };
 
 const handlePreviewConfirm = () => {
@@ -925,15 +1236,68 @@ const updateVerificationStatus = (key: keyof VerificationStatus, value: boolean)
   setVerificationStatus(prev => {
     const updated = { ...prev, [key]: value };
 
-    // Check if all verification steps are complete
-    const allComplete = Object.values(updated).every(status => status === true);
+    // FIX: Check only the 4 actual verification steps, NOT overallApproved itself
+    // Previously this included overallApproved in the check, causing it to always fail
+    const stepsToCheck: (keyof VerificationStatus)[] = ['dataQuality', 'schemaValidation', 'piiReview', 'dataPreview'];
+    const allComplete = stepsToCheck.every(step => updated[step] === true);
     updated.overallApproved = allComplete;
+
+    // CRITICAL FIX (Gap A): Persist verification status to journeyProgress
+    // This ensures status survives browser refresh/navigation
+    updateProgress({
+      verificationStatus: updated,
+      currentStep: 'data-verification'
+    });
+    console.log(`✅ [Verification Status] Persisted ${key}=${value} to journeyProgress`);
 
     return updated;
   });
 };
 
-const handleApproveData = async () => {
+// P0-2 FIX: Create checkpoint for data quality review (u2a2a2u pattern)
+const createDataQualityCheckpoint = async () => {
+  const projectId = localStorage.getItem('currentProjectId');
+  if (!projectId) return;
+
+  setIsCreatingCheckpoint(true);
+  try {
+    const checkpointResponse = await apiClient.post(`/api/projects/${projectId}/checkpoints`, {
+      stage: 'data_quality_review',
+      agentId: 'data_engineer',
+      message: `Data quality verification completed. Quality score: ${computedQualityScore}%. Please review and approve to proceed with transformation.`,
+      artifacts: [
+        {
+          type: 'data_quality_summary',
+          data: {
+            qualityScore: computedQualityScore,
+            dataQualityChecked: verificationStatus.dataQuality,
+            schemaValidated: verificationStatus.schemaValidation,
+            piiReviewed: verificationStatus.piiReview,
+            dataPreviewChecked: verificationStatus.dataPreview,
+            allChecksComplete: verificationStatus.overallApproved,
+            piiDecision: journeyProgress?.piiDecision || null
+          }
+        }
+      ],
+      requiresApproval: true
+    });
+
+    if (checkpointResponse.checkpointId) {
+      setDataQualityCheckpointId(checkpointResponse.checkpointId);
+      setShowDataQualityApprovalDialog(true);
+      console.log('✅ [P0-2] Data quality checkpoint created:', checkpointResponse.checkpointId);
+    }
+  } catch (error) {
+    console.error('Failed to create checkpoint:', error);
+    // Show dialog anyway for manual approval
+    setShowDataQualityApprovalDialog(true);
+  } finally {
+    setIsCreatingCheckpoint(false);
+  }
+};
+
+// P0-2 FIX: Handle final approval after checkpoint review
+const handleFinalApproval = async () => {
   try {
     setIsProcessing(true);
 
@@ -947,21 +1311,69 @@ const handleApproveData = async () => {
       return;
     }
 
-    // Mark project as verified in journeyProgress (SSOT) and mark step as complete
-    updateProgress({
+    // Submit checkpoint approval if we have one
+    if (dataQualityCheckpointId) {
+      try {
+        await apiClient.post(`/api/projects/${projectId}/checkpoints/${dataQualityCheckpointId}/feedback`, {
+          approved: true,
+          feedback: 'Data quality approved by user'
+        });
+        console.log('✅ [P0-2] Checkpoint approved:', dataQualityCheckpointId);
+      } catch (checkpointError) {
+        console.warn('⚠️ Checkpoint feedback failed (non-blocking):', checkpointError);
+      }
+    }
+
+    // CRITICAL FIX: Include element mappings when approving
+    let progressUpdate: any = {
       currentStep: 'transformation',
       completedSteps: [...(journeyProgress?.completedSteps || []), 'data-verification'],
       schemaValidated: verificationStatus.schemaValidation,
-      dataQualityApproved: verificationStatus.dataQuality,
+      dataQualityApproved: true, // P0-2: Always set to true after explicit approval
+      verificationStatus: { ...verificationStatus, overallApproved: true },
+      dataQualityCheckpointId: dataQualityCheckpointId,
       stepTimestamps: {
         ...(journeyProgress?.stepTimestamps || {}),
-        dataVerificationCompleted: new Date().toISOString()
+        dataVerificationCompleted: new Date().toISOString(),
+        dataQualityApprovedAt: new Date().toISOString() // P0-2: Track approval time
       }
-    });
+    };
+
+    // Include element mappings if any exist
+    if (currentElementMappings.length > 0) {
+      console.log('📋 [Verification Auto-Save] Including element mappings in approval:', currentElementMappings.length, 'mappings');
+
+      const existingReqDoc = (journeyProgress as any)?.requirementsDocument || {};
+      const updatedElements = (existingReqDoc.requiredDataElements || requiredDataElements || []).map((elem: any) => {
+        const elemId = elem.id || elem.elementId;
+        const mapping = currentElementMappings.find((m: any) => m.elementId === elemId);
+        if (mapping) {
+          return {
+            ...elem,
+            sourceColumn: mapping.mappedColumn,
+            transformationDescription: mapping.transformationDescription,
+            transformationCode: mapping.transformationCode,
+            mappingStatus: 'mapped' as const
+          };
+        }
+        return elem;
+      });
+
+      progressUpdate.requirementsDocument = {
+        ...existingReqDoc,
+        requiredDataElements: updatedElements
+      };
+      progressUpdate.requiredDataElements = updatedElements;
+    }
+
+    // Mark project as verified in journeyProgress (SSOT)
+    updateProgress(progressUpdate);
+
+    setShowDataQualityApprovalDialog(false);
 
     toast({
-      title: "Data Approved",
-      description: "Your data has been verified and approved for analysis",
+      title: "Data Quality Approved",
+      description: "Your data has been verified and approved. Proceeding to transformation step.",
     });
 
     // Proceed to next step
@@ -979,6 +1391,21 @@ const handleApproveData = async () => {
   } finally {
     setIsProcessing(false);
   }
+};
+
+// P0-2 FIX: Cancel approval and let user revise
+const handleCancelApproval = () => {
+  setShowDataQualityApprovalDialog(false);
+  toast({
+    title: "Approval Cancelled",
+    description: "Please review and address any data quality issues before proceeding.",
+  });
+};
+
+const handleApproveData = async () => {
+  // P0-2 FIX: Show checkpoint approval dialog instead of directly approving
+  // This ensures explicit user consent in the u2a2a2u pattern
+  await createDataQualityCheckpoint();
 };
 
 const getJourneyTypeInfo = () => {
@@ -1175,7 +1602,7 @@ return (
               <div className="flex flex-wrap gap-2">
                 {requiredDataElements.analysisPath.map((analysis: any, idx: number) => (
                   <Badge key={idx} variant="outline" className="bg-emerald-50 text-emerald-800 border-emerald-200">
-                    {analysis.type || analysis.method || analysis.name || analysis}
+                    {analysis.analysisName || analysis.analysisType || analysis.type || analysis.method || analysis.name || (typeof analysis === 'string' ? analysis : 'Unknown Analysis')}
                   </Badge>
                 ))}
               </div>
@@ -1203,16 +1630,17 @@ return (
                 <Eye className="w-4 h-4" />
                 Target Audience
               </h4>
-              <p className="text-sm text-gray-700">
-                Primary: <Badge variant="outline" className="ml-1">{journeyProgress.audience.primary}</Badge>
-                {journeyProgress.audience.secondary?.length > 0 && (
-                  <span className="ml-2">
-                    Secondary: {journeyProgress.audience.secondary.map((a: string, i: number) => (
-                      <Badge key={i} variant="outline" className="ml-1">{a}</Badge>
+              <div className="text-sm text-gray-700 flex flex-wrap items-center gap-1">
+                <span>Primary:</span> <Badge variant="outline">{journeyProgress.audience.primary}</Badge>
+                {Array.isArray(journeyProgress.audience.secondary) && journeyProgress.audience.secondary.length > 0 && (
+                  <>
+                    <span className="ml-2">Secondary:</span>
+                    {journeyProgress.audience.secondary.map((a: string, i: number) => (
+                      <Badge key={i} variant="outline">{a}</Badge>
                     ))}
-                  </span>
+                  </>
                 )}
-              </p>
+              </div>
             </div>
           )}
         </CardContent>
@@ -1440,7 +1868,7 @@ return (
             issues={qualityIssues}
             onApprove={handleQualityApprove}
             onFixIssue={handleFixIssue}
-            isLoading={isProcessing || qualityScore === 0}
+            isLoading={isProcessing || !dataQualityLoaded}
           />
 
           {qualityLabel && (
@@ -1531,7 +1959,10 @@ return (
                   : (schemaAnalysis?.columnNames || []);
                 const columnTypes = joinedSchema && !Array.isArray(joinedSchema)
                   ? Object.entries(joinedSchema).reduce((acc: Record<string, number>, [_, type]) => {
-                      const typeStr = String(type);
+                      // FIX: Handle both string and rich metadata object formats
+                      const typeStr = typeof type === 'string'
+                        ? type
+                        : (type as any)?.type || (type as any)?.dataType || 'unknown';
                       acc[typeStr] = (acc[typeStr] || 0) + 1;
                       return acc;
                     }, {})
@@ -1679,18 +2110,32 @@ return (
                 <DataElementsMappingUI
                   requiredDataElements={requiredElements}
                   availableColumns={availableColumns}
+                  schema={projectData?.schema || projectData?.joinedSchema || {}}
+                  sampleData={
+                    Array.isArray(projectData?.joinedPreview) && projectData.joinedPreview.length > 0
+                      ? projectData.joinedPreview.slice(0, 10)
+                      : Array.isArray(projectData?.preview)
+                        ? projectData.preview.slice(0, 10)
+                        : []
+                  }
                   onSaveMapping={async (mappings) => {
                     // P1-3: Persist element mappings to journeyProgress
                     // Then call Data Engineer agent to add transformation logic in natural language
                     console.log('📋 [P1-3] Saving data element mappings:', mappings);
+
+                    // CRITICAL FIX: Store mappings in state for use in handleApproveData
+                    setCurrentElementMappings(mappings as any[]);
+
                     try {
                       // Build element mappings object for Data Engineer endpoint
+                      // FIX: mappings is a Record<string, any>, not an array
                       const elementMappings: Record<string, any> = {};
-                      (mappings as any[]).forEach((m: any) => {
-                        elementMappings[m.elementId] = {
-                          sourceColumn: m.mappedColumn,
-                          transformationDescription: m.transformationDescription,
-                          transformationCode: m.transformationCode
+                      const mappingsRecord = mappings as Record<string, any>;
+                      Object.entries(mappingsRecord).forEach(([elementId, mapping]) => {
+                        elementMappings[elementId] = {
+                          sourceColumn: mapping.sourceField || mapping.mappedColumn,
+                          transformationDescription: mapping.transformationDescription,
+                          transformationCode: mapping.transformationCode
                         };
                       });
 
@@ -1715,13 +2160,14 @@ return (
                         });
                       } else {
                         // Fallback: Save mappings without enhancement
+                        // FIX: mappings is a Record<string, any>, not an array
                         const updatedElements = requiredElements.map(elem => {
                           const elemId = (elem as any).id || (elem as any).elementId;
-                          const mapping = (mappings as any[]).find((m: any) => m.elementId === elemId);
+                          const mapping = mappingsRecord[elemId]; // Direct lookup by elementId key
                           if (mapping) {
                             return {
                               ...elem,
-                              sourceColumn: mapping.mappedColumn,
+                              sourceColumn: mapping.sourceField || mapping.mappedColumn,
                               mappingStatus: 'mapped' as const
                             };
                           }
@@ -1952,24 +2398,76 @@ return (
 
     {/* Schema Validation Dialog */}
     {
-      showSchemaDialog && schemaAnalysis && (() => {
-        // Convert schema to flat Record<string, string> format
-        let flatSchema: Record<string, string> = {};
+      showSchemaDialog && (() => {
+        // FIX: Prioritize joined schema from journeyProgress (SSOT for multi-dataset)
+        // Priority 1: journeyProgress.joinedData.schema (SSOT)
+        // Priority 2: schemaAnalysis.schema from API (fallback)
+        const hasMultipleDatasets = (projectData?.datasets?.length ?? 0) > 1 ||
+                                    !!(journeyProgress as any)?.joinedData?.joinConfig;
 
-        if (schemaAnalysis.schema && typeof schemaAnalysis.schema === 'object') {
-          // Handle nested schema format { column: { type: 'string' } }
-          flatSchema = Object.fromEntries(
-            Object.entries(schemaAnalysis.schema).map(([key, value]) => [
-              key,
-              typeof value === 'string' ? value : (value as any)?.type || 'string'
-            ])
-          );
-        } else if (Array.isArray(schemaAnalysis.columnNames) && schemaAnalysis.columnNames.length > 0) {
-          // If we only have column names, create a basic schema
-          flatSchema = Object.fromEntries(
+        let schemaSource: Record<string, any> = {};
+        let isJoinedSchema = false;
+        const datasetCount = projectData?.datasets?.length || 1;
+
+        // Check journeyProgress.joinedData.schema first (SSOT for joined datasets)
+        const joinedSchema = (journeyProgress as any)?.joinedData?.schema;
+        if (hasMultipleDatasets && joinedSchema && typeof joinedSchema === 'object' && Object.keys(joinedSchema).length > 0) {
+          schemaSource = joinedSchema;
+          isJoinedSchema = true;
+          console.log(`📊 [Schema Dialog] Using JOINED schema from journeyProgress with ${Object.keys(schemaSource).length} columns`);
+        } else if (schemaAnalysis?.schema && typeof schemaAnalysis.schema === 'object') {
+          // Fallback to API response schema
+          schemaSource = schemaAnalysis.schema;
+          isJoinedSchema = schemaAnalysis.isJoinedSchema || false;
+          console.log(`📊 [Schema Dialog] Using API schema (isJoined: ${isJoinedSchema}) with ${Object.keys(schemaSource).length} columns`);
+        } else if (Array.isArray(schemaAnalysis?.columnNames) && schemaAnalysis.columnNames.length > 0) {
+          // Last resort: Create schema from column names only
+          schemaSource = Object.fromEntries(
             schemaAnalysis.columnNames.map((col: string) => [col, 'string'])
           );
+          console.log(`📊 [Schema Dialog] Created schema from column names with ${Object.keys(schemaSource).length} columns`);
         }
+
+        // PHASE 5 FIX: Additional fallback - build schema from dataset ingestionMetadata
+        // This handles cases where join was executed but journeyProgress hasn't refreshed
+        if (Object.keys(schemaSource).length === 0 || (!isJoinedSchema && hasMultipleDatasets)) {
+          const datasets = projectData?.datasets || [];
+          if (datasets.length > 0) {
+            const mergedSchema: Record<string, any> = {};
+            datasets.forEach((ds: any, idx: number) => {
+              const dsSchema = ds.ingestionMetadata?.transformedSchema ||
+                              ds.metadata?.transformedSchema ||
+                              ds.schema;
+              if (dsSchema && typeof dsSchema === 'object') {
+                for (const [col, type] of Object.entries(dsSchema)) {
+                  if (!mergedSchema[col]) {
+                    mergedSchema[col] = type;
+                  }
+                }
+              }
+            });
+            if (Object.keys(mergedSchema).length > 0) {
+              schemaSource = mergedSchema;
+              isJoinedSchema = datasets.length > 1;
+              console.log(`📊 [Schema Dialog] Built merged schema from ${datasets.length} dataset(s) with ${Object.keys(mergedSchema).length} columns`);
+            }
+          }
+        }
+
+        // Convert schema to flat Record<string, string> format for the dialog
+        const flatSchema: Record<string, string> = Object.fromEntries(
+          Object.entries(schemaSource).map(([key, value]) => [
+            key,
+            typeof value === 'string' ? value : (value as any)?.type || 'string'
+          ])
+        );
+
+        // Get appropriate sample data - prefer joined preview for multi-dataset
+        const joinedPreview = (journeyProgress as any)?.joinedData?.preview;
+        const sampleData = (isJoinedSchema && Array.isArray(joinedPreview) && joinedPreview.length > 0)
+          ? joinedPreview
+          : (Array.isArray(projectData?.preview) ? projectData.preview :
+             Array.isArray(projectData?.sampleData) ? projectData.sampleData : []);
 
         return (
           <SchemaValidationDialog
@@ -1977,12 +2475,133 @@ return (
             onClose={() => setShowSchemaDialog(false)}
             onConfirm={handleSchemaConfirm}
             detectedSchema={flatSchema}
-            sampleData={Array.isArray(projectData?.preview) ? projectData.preview :
-              Array.isArray(projectData?.sampleData) ? projectData.sampleData : []}
+            sampleData={sampleData}
+            isJoinedSchema={isJoinedSchema}
+            datasetCount={datasetCount}
           />
         );
       })()
     }
+
+    {/* P0-2 FIX: Data Quality Approval Dialog - Explicit user approval checkpoint */}
+    <Dialog open={showDataQualityApprovalDialog} onOpenChange={setShowDataQualityApprovalDialog}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Shield className="w-5 h-5 text-blue-500" />
+            Confirm Data Quality Approval
+          </DialogTitle>
+          <DialogDescription>
+            Review the data quality summary below and confirm that your data is ready for transformation and analysis.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="py-4 space-y-4">
+          {/* Quality Score Summary */}
+          <div className={`rounded-lg p-4 space-y-3 ${computedQualityScore >= 80 ? 'bg-green-50' : computedQualityScore >= 60 ? 'bg-yellow-50' : 'bg-red-50'}`}>
+            <div className="flex items-center justify-between">
+              <h4 className="font-medium text-sm">Data Quality Score</h4>
+              <Badge variant={computedQualityScore >= 80 ? 'default' : computedQualityScore >= 60 ? 'secondary' : 'destructive'}>
+                {computedQualityScore}%
+              </Badge>
+            </div>
+            <Progress value={computedQualityScore} className="h-2" />
+          </div>
+
+          {/* Verification Checklist */}
+          <div className="bg-gray-50 rounded-lg p-4 space-y-2">
+            <h4 className="font-medium text-sm mb-3">Verification Checklist</h4>
+            <div className="space-y-2 text-sm">
+              <div className="flex items-center gap-2">
+                {verificationStatus.dataQuality ? (
+                  <CheckCircle className="w-4 h-4 text-green-500" />
+                ) : (
+                  <XCircle className="w-4 h-4 text-gray-400" />
+                )}
+                <span>Data Quality Assessment</span>
+              </div>
+              <div className="flex items-center gap-2">
+                {verificationStatus.schemaValidation ? (
+                  <CheckCircle className="w-4 h-4 text-green-500" />
+                ) : (
+                  <XCircle className="w-4 h-4 text-gray-400" />
+                )}
+                <span>Schema Validation</span>
+              </div>
+              <div className="flex items-center gap-2">
+                {verificationStatus.piiReview ? (
+                  <CheckCircle className="w-4 h-4 text-green-500" />
+                ) : (
+                  <XCircle className="w-4 h-4 text-gray-400" />
+                )}
+                <span>PII Review</span>
+              </div>
+              <div className="flex items-center gap-2">
+                {verificationStatus.dataPreview ? (
+                  <CheckCircle className="w-4 h-4 text-green-500" />
+                ) : (
+                  <XCircle className="w-4 h-4 text-gray-400" />
+                )}
+                <span>Data Preview</span>
+              </div>
+            </div>
+          </div>
+
+          {/* PII Decision Summary if exists */}
+          {journeyProgress?.piiDecision && (
+            <div className="bg-amber-50 rounded-lg p-4">
+              <h4 className="font-medium text-sm text-amber-900 mb-2">PII Decision</h4>
+              <p className="text-xs text-amber-700">
+                {journeyProgress.piiDecision.excludedColumns?.length > 0
+                  ? `${journeyProgress.piiDecision.excludedColumns.length} column(s) will be excluded from analysis`
+                  : 'No columns excluded - all data will be included'}
+              </p>
+            </div>
+          )}
+
+          {/* Warning if not all checks complete */}
+          {!verificationStatus.overallApproved && (
+            <Alert className="border-amber-200 bg-amber-50">
+              <AlertTriangle className="h-4 w-4 text-amber-600" />
+              <AlertDescription className="text-amber-800">
+                Not all verification steps are complete. You can still proceed, but we recommend completing all checks for best results.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          <Alert>
+            <Info className="h-4 w-4" />
+            <AlertDescription>
+              By approving, you confirm that the data quality is acceptable and you're ready to proceed with data transformation.
+            </AlertDescription>
+          </Alert>
+        </div>
+
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={handleCancelApproval} disabled={isProcessing}>
+            <ThumbsDown className="w-4 h-4 mr-2" />
+            Review Again
+          </Button>
+          <Button
+            onClick={handleFinalApproval}
+            className="bg-green-600 hover:bg-green-700"
+            disabled={isProcessing}
+          >
+            {isProcessing ? (
+              <>
+                <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                Approving...
+              </>
+            ) : (
+              <>
+                <ThumbsUp className="w-4 h-4 mr-2" />
+                Approve & Continue
+              </>
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div >
 );
 }

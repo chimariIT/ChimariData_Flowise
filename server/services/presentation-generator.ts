@@ -41,7 +41,7 @@ export interface PresentationContent {
 
   // Metadata
   generatedDate: Date;
-  journeyType: 'ai_guided' | 'template_based' | 'self_service' | 'consultation' | 'custom';
+  journeyType: 'non-tech' | 'business' | 'technical' | 'consultation' | 'custom';
 }
 
 export interface VisualizationSlide {

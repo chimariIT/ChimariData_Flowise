@@ -152,10 +152,12 @@ describe('Billing API Routes', () => {
   });
 
   it('rejects invalid billing calculation payloads', async () => {
+    // Send an invalid journeyType that's not in the enum
+    // Note: datasetSizeMB defaults to 0 via preprocessor (FIX #34)
     const response = await request(app)
       .post('/api/billing/calculate')
       .set(authHeader(authToken))
-      .send({ journeyType: 'business' });
+      .send({ journeyType: 'invalid_journey_type_xyz' });
 
     expect(response.status).toBe(400);
     expect(response.body.success).toBe(false);

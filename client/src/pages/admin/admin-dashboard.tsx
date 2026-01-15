@@ -5,12 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { CustomerSelectionModal } from "@/components/CustomerSelectionModal";
 import { useConsultant } from "@/contexts/ConsultantContext";
-import { 
-  Users, 
-  Settings, 
-  BarChart3, 
-  DollarSign, 
-  Bot, 
+import {
+  Users,
+  Settings,
+  BarChart3,
+  DollarSign,
+  Bot,
   Wrench,
   TrendingUp,
   Activity,
@@ -64,6 +64,13 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
       icon: Wrench,
       path: "/admin/tools-management",
       color: "text-purple-600"
+    },
+    {
+      title: "Technical State Viewer",
+      description: "Inspect live journeyProgress (SSOT) JSON state for any project",
+      icon: Activity,
+      path: "/admin/state-inspector",
+      color: "text-indigo-600"
     }
   ];
 
@@ -105,7 +112,7 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
               </p>
             </div>
             <div className="flex gap-2">
-              <Button 
+              <Button
                 variant="outline"
                 onClick={() => setLocation('/dashboard')}
                 className="flex items-center gap-2"
@@ -148,7 +155,7 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
                   <CardDescription>{section.description}</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <Button 
+                  <Button
                     onClick={() => setLocation(section.path)}
                     className="w-full"
                   >
@@ -175,23 +182,23 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
             <div className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="p-4 border rounded-lg">
-                  <h3 className="font-semibold text-sm text-gray-700 mb-2">Free Tier</h3>
-                  <p className="text-xs text-gray-600">5 projects/month, Basic analysis</p>
+                  <h3 className="font-semibold text-sm text-gray-700 mb-2">Trial ($1/mo)</h3>
+                  <p className="text-xs text-gray-600">1 project, 3 analyses, Basic features</p>
                 </div>
                 <div className="p-4 border rounded-lg">
-                  <h3 className="font-semibold text-sm text-gray-700 mb-2">Professional</h3>
-                  <p className="text-xs text-gray-600">50 projects/month, Advanced features</p>
+                  <h3 className="font-semibold text-sm text-gray-700 mb-2">Starter ($10/mo)</h3>
+                  <p className="text-xs text-gray-600">5 projects, 30 analyses, All journey types</p>
                 </div>
                 <div className="p-4 border rounded-lg">
-                  <h3 className="font-semibold text-sm text-gray-700 mb-2">Business</h3>
-                  <p className="text-xs text-gray-600">200 projects/month, Priority support</p>
+                  <h3 className="font-semibold text-sm text-gray-700 mb-2">Professional ($20/mo)</h3>
+                  <p className="text-xs text-gray-600">25 projects, 300 analyses, Priority support</p>
                 </div>
                 <div className="p-4 border rounded-lg">
-                  <h3 className="font-semibold text-sm text-gray-700 mb-2">Enterprise</h3>
-                  <p className="text-xs text-gray-600">Unlimited projects, Custom solutions</p>
+                  <h3 className="font-semibold text-sm text-gray-700 mb-2">Enterprise ($50/mo)</h3>
+                  <p className="text-xs text-gray-600">100 projects, 1000 analyses, Custom solutions</p>
                 </div>
               </div>
-              <Button 
+              <Button
                 onClick={() => setLocation('/admin/subscription-management')}
                 variant="outline"
                 className="w-full"
@@ -233,20 +240,20 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-3">
-                  <Button 
+                  <Button
                     onClick={() => setLocation('/dashboard')}
                     className="flex items-center gap-2"
                   >
                     <UserCog className="h-4 w-4" />
                     Access Customer Dashboard
                   </Button>
-                  <Button 
+                  <Button
                     variant="outline"
                     onClick={() => setIsCustomerModalOpen(true)}
                   >
                     Change Customer
                   </Button>
-                  <Button 
+                  <Button
                     variant="outline"
                     onClick={clearConsultantMode}
                   >
@@ -269,14 +276,14 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-3">
-                  <Button 
+                  <Button
                     onClick={() => setIsCustomerModalOpen(true)}
                     className="flex items-center gap-2"
                   >
                     <UserCog className="h-4 w-4" />
                     Select Customer
                   </Button>
-                  <Button 
+                  <Button
                     variant="outline"
                     onClick={() => setLocation('/dashboard')}
                     disabled
@@ -302,13 +309,13 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
           </CardHeader>
           <CardContent>
             <div className="flex flex-wrap gap-3">
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 onClick={() => setLocation('/dashboard')}
               >
                 Back to Dashboard
               </Button>
-              <Button 
+              <Button
                 variant="outline"
                 onClick={() => window.location.reload()}
               >

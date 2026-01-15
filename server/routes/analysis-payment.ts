@@ -124,25 +124,125 @@ router.post('/create-intent', async (req, res) => {
     const remainingCostCents = Math.max(lockedCostCents - spentCostCents, 0);
 
     const hasLockedCost = lockedCostCents > 0;
+
+    // ✅ PHASE 3 FIX: Log locked cost usage for debugging cost mismatch issues
+    console.log(`✅ [Payment] Project ${projectId}: lockedCostEstimate=${lockedCost}, lockedCostCents=${lockedCostCents}, hasLockedCost=${hasLockedCost}`);
+
     const pricing = buildPricing(
       { dataSizeMB, recordCount, questionsCount, analysisType },
       hasLockedCost ? lockedCostCents / 100 : undefined,
       hasLockedCost ? 'locked' : 'calculated'
     );
 
+    // ✅ PHASE 3 FIX: Always prefer locked cost over calculated price to prevent cost mismatch
+    // Previously could use pricing.priceInCents (calculated) which differs from UI's locked cost
     const amountCents = hasLockedCost ? remainingCostCents : pricing.priceInCents;
+    console.log(`✅ [Payment] Using ${hasLockedCost ? 'locked' : 'calculated'} cost: ${amountCents} cents (remaining: ${remainingCostCents}, calculated: ${pricing.priceInCents})`);
 
     if (amountCents <= 0) {
       return res.status(400).json({ success: false, error: 'No outstanding balance for this analysis' });
     }
 
-    if (typeof payableCents === 'number' && Math.abs(payableCents - amountCents) > 1) {
-      return res.status(409).json({ success: false, error: 'Mismatched payable amount', expectedCents: amountCents });
+    // Payment amount validation with tolerance
+    // Use 1% tolerance or minimum 10 cents to account for rounding differences
+    // between frontend and backend price calculations
+    if (typeof payableCents === 'number') {
+      const tolerance = Math.max(10, Math.round(amountCents * 0.01)); // 1% or 10 cents minimum
+      const difference = Math.abs(payableCents - amountCents);
+
+      if (difference > tolerance) {
+        console.error(`❌ [Payment] Amount mismatch: frontend=${payableCents}c, backend=${amountCents}c, diff=${difference}c, tolerance=${tolerance}c`);
+        return res.status(409).json({
+          success: false,
+          error: 'Payment amount mismatch detected. Refresh the page and retry.',
+          expectedCents: amountCents,
+          receivedCents: payableCents,
+          difference,
+          tolerance
+        });
+      }
+      console.log(`✅ [Payment] Amount validation passed: frontend=${payableCents}c, backend=${amountCents}c, diff=${difference}c, tolerance=${tolerance}c`);
     }
 
-    const id = `pi_${crypto.randomBytes(12).toString('hex')}`;
-    const secret = crypto.randomBytes(24).toString('hex');
-    const clientSecret = `${id}_secret_${secret}`;
+    // FIX: Use real Stripe API instead of mock payment intent
+    const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+    let clientSecret: string;
+    let paymentIntentId: string;
+
+    if (stripeSecretKey && stripeSecretKey !== 'sk_test_your_stripe_secret_key') {
+      // Real Stripe integration
+      console.log(`💳 Creating real Stripe PaymentIntent for project ${projectId}: ${amountCents} cents`);
+
+      try {
+        const Stripe = (await import('stripe')).default;
+        const stripe = new Stripe(stripeSecretKey, { apiVersion: '2025-08-27.basil' });
+
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount: amountCents,
+          currency: 'usd',
+          metadata: {
+            projectId,
+            analysisType: analysisType || 'standard',
+            source: 'analysis_payment'
+          },
+          description: `Analysis for project ${project.name || projectId}`
+        });
+
+        clientSecret = paymentIntent.client_secret!;
+        paymentIntentId = paymentIntent.id;
+
+        console.log(`✅ Created Stripe PaymentIntent: ${paymentIntentId}`);
+      } catch (stripeError: any) {
+        console.error('❌ Stripe API error:', stripeError);
+        return res.status(500).json({
+          success: false,
+          error: `Stripe integration failed: ${stripeError.message}`
+        });
+      }
+    } else {
+      // Development fallback (mock)
+      console.warn('⚠️  Stripe not configured - using mock payment intent for development');
+      const id = `pi_mock_${crypto.randomBytes(12).toString('hex')}`;
+      const secret = crypto.randomBytes(24).toString('hex');
+      clientSecret = `${id}_secret_${secret}`;
+      paymentIntentId = id;
+    }
+
+    // AGENT ORCHESTRATION: Log billing decision via PM agent for audit trail
+    try {
+      const { db } = await import('../db');
+      const { decisionAudits } = await import('../../shared/schema');
+      const { nanoid } = await import('nanoid');
+
+      await db.insert(decisionAudits).values({
+        id: nanoid(),
+        projectId,
+        agent: 'project_manager',
+        decisionType: 'billing_payment_initiated',
+        decision: `Payment intent created for ${(amountCents / 100).toFixed(2)} USD`,
+        reasoning: `Analysis payment for ${analysisType || 'standard'} analysis.${hasLockedCost ? 'Using locked cost estimate.' : 'Calculated from project parameters.'} `,
+        alternatives: JSON.stringify([]),
+        confidence: 100,
+        context: JSON.stringify({
+          amountCents,
+          lockedCostCents,
+          spentCostCents,
+          remainingCostCents,
+          analysisType,
+          paymentIntentId,
+          pricingSource: pricing.source
+        }),
+        userInput: null,
+        reversible: false,
+        impact: 'high',
+        timestamp: new Date()
+      });
+
+      console.log(`📋[PM Agent] Logged billing decision for project ${projectId}`);
+    } catch (auditError) {
+      console.warn('⚠️  Failed to log billing decision to audit trail:', auditError);
+      // Don't fail payment creation if audit logging fails
+    }
 
     const dataComplexity = determineComplexity(recordCount);
 

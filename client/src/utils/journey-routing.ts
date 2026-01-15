@@ -87,17 +87,22 @@ export async function getResumeRoute(
     return ensureResumeFlag(baseProjectRoute);
   }
 
-  // Map journey steps to routes
+  // Get journey type from the state - default to 'non-tech' if not specified
+  const journeyType = (journeyState as JourneyStateResponse)?.journeyType || 'non-tech';
+
+  // Map journey steps to routes (8-step consolidated journey)
+  // CRITICAL: Routes must match App.tsx pattern: /journeys/:type/:step
   const stepRoutes: Record<string, string> = {
-    // Legacy guided journey routes
-    'project-setup': `/project-setup-step/${projectId}`,
-    'data': `/data-step/${projectId}`,
-    'data-verification': `/data-verification-step/${projectId}`,
-    'plan': `/plan-step/${projectId}`,
-    'prepare': `/prepare-step/${projectId}`,
-    'execute': `/execute-step/${projectId}`,
-    'results-preview': `/results-preview-step/${projectId}`,
-    'results': `/results-step/${projectId}`,
+    // Consolidated journey routes (8 steps) - using correct /journeys/:type/:step pattern
+    'data': `/journeys/${journeyType}/data?projectId=${projectId}`,             // Step 1: Data Upload & Project Setup
+    'prepare': `/journeys/${journeyType}/prepare?projectId=${projectId}`,       // Step 2: Prepare (goals, questions)
+    'data-verification': `/journeys/${journeyType}/data-verification?projectId=${projectId}`, // Step 3: Verification
+    'data-transformation': `/journeys/${journeyType}/data-transformation?projectId=${projectId}`, // Step 4: Transformation
+    'plan': `/journeys/${journeyType}/plan?projectId=${projectId}`,             // Step 5: Analysis Plan
+    'execute': `/journeys/${journeyType}/execute?projectId=${projectId}`,       // Step 6: Execution
+    'pricing': `/journeys/${journeyType}/pricing?projectId=${projectId}`,       // Step 7: Billing
+    'results': `/journeys/${journeyType}/results?projectId=${projectId}`,       // Step 8: Results
+    'dashboard': `/journeys/${journeyType}/results?projectId=${projectId}`,     // Step 8: Dashboard (alias)
 
     // Enhanced non-tech journey (default) step routes fall back to project experience tabs
     'intake_alignment': `${baseProjectRoute}?resume=true&tab=overview&step=intake_alignment`,

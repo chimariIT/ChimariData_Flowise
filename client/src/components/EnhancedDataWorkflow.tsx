@@ -1,14 +1,15 @@
 import { useState, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { 
-  Upload, 
-  Database, 
-  FileText, 
-  Plus, 
+import {
+  Upload,
+  Database,
+  FileText,
+  Plus,
   ArrowRight,
   CheckCircle,
   Layers,
@@ -35,8 +36,66 @@ interface EnhancedDataWorkflowProps {
 
 type WorkflowStep = 'select_option' | 'upload_new' | 'select_existing' | 'streaming_config' | 'scraping_config' | 'manage_sources' | 'configure_project' | 'complete';
 
-export function EnhancedDataWorkflow({ 
-  onComplete, 
+function ProjectDatasetsList({ projectId }: { projectId: string }) {
+  const { data: datasets, isLoading } = useQuery({
+    queryKey: ['/api/projects', projectId, 'datasets'],
+    queryFn: async () => {
+      const result = await apiClient.get(`/api/projects/${projectId}/datasets`);
+      return result.datasets || [];
+    }
+  });
+
+  if (isLoading || !datasets || datasets.length === 0) return null;
+
+  return (
+    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+      <h4 className="font-medium text-blue-900 mb-2 flex items-center gap-2">
+        <Database className="w-4 h-4" />
+        Current Project Datasets
+      </h4>
+      <div className="space-y-2">
+        {datasets.map((item: any, index: number) => {
+          // Handle both formats: { dataset, association } or flat dataset object
+          const dataset = item.dataset || item;
+          const association = item.association;
+
+          // Get the dataset name from multiple possible sources
+          const datasetName =
+            association?.alias ||
+            dataset.name ||
+            dataset.originalFileName ||
+            association?.datasetName ||
+            `Dataset ${index + 1}`;
+
+          // Get record count from dataset or ingestion metadata
+          const recordCount =
+            dataset.recordCount ??
+            dataset.ingestionMetadata?.recordCount ??
+            null;
+
+          const fileSize = dataset.fileSize ?? dataset.ingestionMetadata?.fileSize ?? null;
+
+          return (
+            <div key={dataset.id || index} className="bg-white p-3 rounded border border-blue-100 flex justify-between items-center">
+              <div>
+                <div className="font-medium text-sm">{datasetName}</div>
+                <div className="text-xs text-gray-500">
+                  {recordCount !== null ? recordCount.toLocaleString() + ' records' : 'Records pending'} • {fileSize ? Math.round(fileSize / 1024) + ' KB' : 'Size pending'}
+                </div>
+              </div>
+              <Badge variant="outline" className="bg-blue-50">
+                {association?.role || 'Active'}
+              </Badge>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+export function EnhancedDataWorkflow({
+  onComplete,
   serviceType = 'default',
   questions = [],
   projectId,
@@ -145,18 +204,18 @@ export function EnhancedDataWorkflow({
         };
 
         const dataset = await apiClient.createDataset(datasetData);
-        
+
         // Associate dataset with project
         await apiClient.addDatasetToProject(projectId, dataset.id, 'primary');
-        
+
         // Invalidate related caches to ensure real-time updates
         await queryClient.invalidateQueries({ queryKey: ['/api/datasets'] });
         await queryClient.invalidateQueries({ queryKey: ['/api/projects', projectId, 'datasets'] });
         await queryClient.invalidateQueries({ queryKey: ['/api/projects', projectId, 'artifacts'] });
-        
+
         setCreatedDatasets([dataset]);
         setCurrentStep('complete');
-        
+
         toast({
           title: "Dataset Created",
           description: `Successfully created and added dataset to project.`
@@ -179,7 +238,7 @@ export function EnhancedDataWorkflow({
         description: error.message || "Failed to process upload",
         variant: "destructive"
       });
-      
+
       onComplete({
         error: error.message || "Failed to process upload",
         errorType: 'PROCESSING_ERROR'
@@ -199,11 +258,11 @@ export function EnhancedDataWorkflow({
         for (const dataset of datasets) {
           await apiClient.addDatasetToProject(projectId, dataset.id);
         }
-        
+
         // Invalidate related caches to ensure real-time updates
         await queryClient.invalidateQueries({ queryKey: ['/api/projects', projectId, 'datasets'] });
         await queryClient.invalidateQueries({ queryKey: ['/api/projects', projectId, 'artifacts'] });
-        
+
         toast({
           title: "Datasets Added",
           description: `Successfully added ${datasets.length} dataset${datasets.length !== 1 ? 's' : ''} to project.`
@@ -237,24 +296,25 @@ export function EnhancedDataWorkflow({
       case 'select_option':
         return (
           <div className="space-y-6">
+            {projectId && (
+              <ProjectDatasetsList projectId={projectId} />
+            )}
             <div className="text-center mb-6">
               <h3 className="text-lg font-semibold mb-2">Choose Your Data Source</h3>
               <p className="text-sm text-muted-foreground">
                 Start by uploading new data or selecting from your existing datasets
               </p>
             </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+            <div className="grid grid-cols-1 md://grid-cols-2 gap-4">
               {workflowOptions.map((option) => {
                 const IconComponent = option.icon;
                 return (
                   <Card
                     key={option.id}
-                    className={`cursor-pointer transition-all hover:shadow-md ${
-                      option.recommended ? 'ring-2 ring-primary ring-opacity-50' : ''
-                    } ${
-                      (option as any).disabled ? 'opacity-50 cursor-not-allowed' : ''
-                    }`}
+                    className={`cursor-pointer transition-all hover:shadow-md ${option.recommended ? 'ring-2 ring-primary ring-opacity-50' : ''
+                      } ${(option as any).disabled ? 'opacity-50 cursor-not-allowed' : ''
+                      }`}
                     onClick={() => {
                       if (!(option as any).disabled) {
                         handleOptionSelect(option.id as 'upload' | 'select' | 'streaming' | 'scraping' | 'manage');
@@ -346,7 +406,7 @@ export function EnhancedDataWorkflow({
                 {projectId ? ' and added to your project' : ''}
               </p>
             </div>
-            
+
             {/* Summary */}
             <div className="bg-muted rounded-lg p-4 text-left">
               <h4 className="font-medium mb-2 flex items-center">
@@ -482,11 +542,11 @@ export function EnhancedDataWorkflow({
         <span className={[
           'upload_new', 'select_existing', 'streaming_config', 'scraping_config', 'manage_sources'
         ].includes(currentStep) ? 'text-primary font-medium' : ''}>
-          {workflowOption === 'upload' ? 'Upload Data' : 
-           workflowOption === 'select' ? 'Select Datasets' : 
-           workflowOption === 'streaming' ? 'Configure Stream' : 
-           workflowOption === 'scraping' ? 'Setup Scraping' : 
-           workflowOption === 'manage' ? 'Manage Sources' : 'Configure'}
+          {workflowOption === 'upload' ? 'Upload Data' :
+            workflowOption === 'select' ? 'Select Datasets' :
+              workflowOption === 'streaming' ? 'Configure Stream' :
+                workflowOption === 'scraping' ? 'Setup Scraping' :
+                  workflowOption === 'manage' ? 'Manage Sources' : 'Configure'}
         </span>
         <ArrowRight className="w-4 h-4" />
         <span className={currentStep === 'complete' ? 'text-primary font-medium' : ''}>

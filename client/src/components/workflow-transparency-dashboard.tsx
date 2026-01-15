@@ -599,11 +599,17 @@ export function WorkflowTransparencyDashboard({
                     <div>
                       <h4 className="font-medium mb-2">Dependencies</h4>
                       <div className="flex flex-wrap gap-1">
-                        {selectedStep.dependencies.map((dep, index) => (
-                          <Badge key={index} variant="outline" className="text-xs">
-                            {dep}
-                          </Badge>
-                        ))}
+                        {selectedStep.dependencies.map((dep: any, index: number) => {
+                          // Handle both string and object format
+                          const depName = typeof dep === 'string'
+                            ? dep
+                            : (dep.name || dep.id || dep.dependency || 'Unknown');
+                          return (
+                            <Badge key={index} variant="outline" className="text-xs">
+                              {depName}
+                            </Badge>
+                          );
+                        })}
                       </div>
                     </div>
                   </>

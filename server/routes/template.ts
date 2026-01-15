@@ -4,9 +4,43 @@ import { artifactTemplates, projects, templateFeedback } from '@shared/schema';
 import { eq } from 'drizzle-orm';
 import { DynamicTemplateEngine } from '../dynamic-template-engine';
 import { BusinessTemplates, type BusinessTemplate } from '../services/business-templates';
+import { TemplateService } from '../services/template-service';
 
 const router = express.Router();
 const templateEngine = new DynamicTemplateEngine();
+
+/**
+ * Semantic/keyword search templates
+ */
+router.get('/search', async (req, res) => {
+  try {
+    const { userId } = req.user || {};
+    if (!userId) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const { q, journeyType, industry, persona, isSystem, isActive, limit, minSimilarity } = req.query;
+
+    if (!q || typeof q !== 'string') {
+      return res.status(400).json({ error: 'Missing query param q' });
+    }
+
+    const results = await TemplateService.searchTemplatesWithFilters(q, {
+      journeyType: typeof journeyType === 'string' ? journeyType : undefined,
+      industry: typeof industry === 'string' ? industry : undefined,
+      persona: typeof persona === 'string' ? persona : undefined,
+      isSystem: typeof isSystem !== 'undefined' ? isSystem === 'true' : undefined,
+      isActive: typeof isActive !== 'undefined' ? isActive === 'true' : true,
+      limit: typeof limit === 'string' ? parseInt(limit, 10) : undefined,
+      minSimilarity: typeof minSimilarity === 'string' ? parseFloat(minSimilarity) : undefined,
+    });
+
+    res.json({ results });
+  } catch (error) {
+    console.error('Failed to search templates:', error);
+    res.status(500).json({ error: (error as any)?.message || 'Internal error' });
+  }
+});
 
 /**
  * Generate dynamic template for industry/business context

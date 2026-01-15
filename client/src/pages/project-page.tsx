@@ -2,24 +2,22 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { getResumeRoute } from "@/utils/journey-routing";
-import { ArrowLeft, Database, FileText, Settings, BarChart3, Brain, Wrench, Target, Layers, Route, Bot, Upload, Timer, Activity } from "lucide-react";
+import { ArrowLeft, Database, FileText, BarChart3, Brain, Layers, Route, Bot, Upload, Timer, Activity, PlayCircle, CheckCircle, XCircle, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { apiClient } from "@/lib/api";
-import SchemaEditor from "@/components/schema-editor";
-import { DataTransformationLazy } from "@/components/LazyComponents";
-import DataAnalysis from "@/components/data-analysis";
 import AIInsights from "@/components/ai-insights";
-import GuidedAnalysisWizard from "@/components/GuidedAnalysisWizard";
-import { AdvancedVisualizationWorkshop } from "@/components/advanced-visualization-workshop";
+// GuidedAnalysisWizard, SchemaEditor, DataTransformationLazy, DataAnalysis removed - analysis gated through journey
+import DashboardBuilder from "@/components/dashboard-builder";
 import { ProjectArtifactTimeline } from "@/components/ProjectArtifactTimeline";
 import { WorkflowTransparencyDashboard } from "@/components/workflow-transparency-dashboard";
 import { JourneyLifecycleIndicator } from "@/components/JourneyLifecycleIndicator";
 import { EnhancedDataWorkflow } from "@/components/EnhancedDataWorkflow";
 import AgentActivityOverview from "@/components/agent-activity-overview";
 import AgentCheckpoints from "@/components/agent-checkpoints";
+import AudienceTranslatedResults from "@/components/AudienceTranslatedResults";
 import { useJourneyState } from "@/hooks/useJourneyState";
 import { toast } from "@/hooks/use-toast";
 
@@ -30,7 +28,7 @@ interface ProjectPageProps {
 export default function ProjectPage({ projectId }: ProjectPageProps) {
   const [location, setLocation] = useLocation();
   const [activeTab, setActiveTab] = useState("overview");
-  const [showGuidedAnalysis, setShowGuidedAnalysis] = useState(false);
+  // showGuidedAnalysis state removed - analysis is now gated through user journey flow
   const hasAutoNavigatedRef = useRef(false);
 
   const { data: project, isLoading, error } = useQuery({
@@ -58,8 +56,8 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
   });
 
   // Get journey state to determine which tabs to show
-  const { data: journeyState } = useJourneyState(projectId, { 
-    enabled: !!projectId && !!project?.journeyType 
+  const { data: journeyState } = useJourneyState(projectId, {
+    enabled: !!projectId && !!project?.journeyType
   });
 
   const resolveArtifactFileRef = useCallback((artifact: any) => {
@@ -146,6 +144,66 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
       });
   }, [journeyState, projectId, location, currentSearch, setLocation]);
 
+  // Handle payment success/cancel URL parameters (fallback from Stripe redirect)
+  // This catches users who land on project page after payment even though we redirect to pricing step
+  useEffect(() => {
+    const params = new URLSearchParams(currentSearch);
+    const paymentStatus = params.get('payment');
+    const sessionId = params.get('session_id');
+
+    if (!paymentStatus || !projectId) return;
+
+    const handlePaymentCallback = async () => {
+      if (paymentStatus === 'success' && sessionId) {
+        // Verify payment with backend
+        try {
+          const response = await apiClient.post('/api/payment/verify-session', {
+            sessionId,
+            projectId
+          });
+
+          if (response.success && response.paymentStatus === 'paid') {
+            toast({
+              title: "Payment Successful!",
+              description: "Your payment has been verified. You can now view your analysis results.",
+            });
+
+            // Clear URL parameters and redirect to results
+            const cleanPath = location.split('?')[0];
+            setLocation(cleanPath, { replace: true });
+          } else {
+            toast({
+              title: "Payment Verification",
+              description: response.message || "Your payment is being processed.",
+            });
+          }
+        } catch (error: any) {
+          console.error('Payment verification error:', error);
+          toast({
+            title: "Payment Status",
+            description: "If you completed payment, your results will be available shortly.",
+            variant: "default"
+          });
+          // Clear params anyway to avoid repeated attempts
+          const cleanPath = location.split('?')[0];
+          setLocation(cleanPath, { replace: true });
+        }
+      } else if (paymentStatus === 'cancelled') {
+        toast({
+          title: "Payment Cancelled",
+          description: "You can resume payment from the pricing step when ready.",
+          variant: "default"
+        });
+
+        // Clear URL parameters
+        const cleanPath = location.split('?')[0];
+        setLocation(cleanPath, { replace: true });
+      }
+    };
+
+    handlePaymentCallback();
+  }, [currentSearch, projectId, location, setLocation]);
+
   useEffect(() => {
     const params = new URLSearchParams(currentSearch);
     const tabParam = params.get('tab');
@@ -207,7 +265,7 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
         <div className="text-center">
           <h2 className="text-2xl font-bold text-gray-900 mb-2">Project Not Found</h2>
           <p className="text-gray-600 mb-4">
-            The requested project could not be found. This may happen if the server was restarted 
+            The requested project could not be found. This may happen if the server was restarted
             and your project data was lost from memory.
           </p>
           <p className="text-sm text-gray-500 mb-4">
@@ -282,6 +340,19 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
               </div>
             </div>
             <div className="flex items-center space-x-2">
+              {journeyState?.canResume && (
+                <Button
+                  variant="default"
+                  size="sm"
+                  className="bg-green-600 hover:bg-green-700"
+                  onClick={() => {
+                    getResumeRoute(projectId, journeyState).then(route => setLocation(route));
+                  }}
+                >
+                  <PlayCircle className="w-4 h-4 mr-2" />
+                  Resume Journey
+                </Button>
+              )}
               <Button
                 variant="outline"
                 size="sm"
@@ -290,9 +361,9 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
                 <Upload className="w-4 h-4 mr-2" />
                 Re-upload Data
               </Button>
-              <Button 
-                variant="outline" 
-                size="sm" 
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => setLocation(`/stats/${projectId}`)}
               >
                 <BarChart3 className="w-4 h-4 mr-2" />
@@ -308,150 +379,116 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
 
       {/* Content */}
       <div className="container mx-auto px-4 py-4 max-w-6xl flex-1 overflow-auto">
-        {/* Only show journey selection options if no active journey */}
-        {!journeyState && (
-          <Card className="mb-4">
+        {/* Journey Start/Resume Card - Guide users through proper journey flow */}
+        {!journeyState ? (
+          // No journey started - prompt user to start one
+          <Card className="mb-4 border-blue-200 bg-blue-50/50">
             <CardHeader className="pb-3">
-              <CardTitle className="text-lg">Choose Your Data Journey</CardTitle>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Route className="w-5 h-5 text-blue-600" />
+                Start Your Data Journey
+              </CardTitle>
               <CardDescription className="text-sm">
-                Select what you'd like to do with your data
+                To get started with analysis, please select a guided journey that matches your needs.
+                Our journeys ensure your data is properly prepared and your analysis goals are captured.
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-5">
-                <Button
-                  variant="outline"
-                  className="h-20 flex-col space-y-1 border-blue-200 hover:bg-blue-50 text-sm"
-                  onClick={() => setLocation('/')}
-                  data-testid="button-choose-journey-project"
-                >
-                  <Route className="w-6 h-6 text-blue-600" />
-                  <div className="text-center">
-                    <div className="font-medium">Choose Journey</div>
-                    <div className="text-xs text-gray-500">Select your analytics path</div>
-                  </div>
-                </Button>
-
-                <Button
-                  variant="outline"
-                  className="h-24 flex-col space-y-2"
-                  onClick={() => setShowGuidedAnalysis(true)}
-                >
-                  <Target className="w-8 h-8" />
-                  <div className="text-center">
-                    <div className="font-medium">Guided Analysis</div>
-                    <div className="text-xs text-gray-500">Step-by-step business insights</div>
-                  </div>
-                </Button>
-                
-                <Button
-                  variant="outline"
-                  className="h-24 flex-col space-y-2"
-                  onClick={() => setActiveTab("transform")}
-                >
-                  <Wrench className="w-8 h-8" />
-                  <div className="text-center">
-                    <div className="font-medium">Data Transformation</div>
-                    <div className="text-xs text-gray-500">Clean, filter, and reshape your data</div>
-                  </div>
-                </Button>
-                
-                <Button
-                  variant="outline"
-                  className="h-24 flex-col space-y-2"
-                  onClick={() => setActiveTab("analysis")}
-                >
-                  <BarChart3 className="w-8 h-8" />
-                  <div className="text-center">
-                    <div className="font-medium">Visualizations</div>
-                    <div className="text-xs text-gray-500">Build charts and explore your data</div>
-                  </div>
-                </Button>
-                
-                <Button
-                  variant="outline"
-                  className="h-24 flex-col space-y-2"
-                  onClick={() => setActiveTab("insights")}
-                >
-                  <Brain className="w-8 h-8" />
-                  <div className="text-center">
-                    <div className="font-medium">AI Insights</div>
-                    <div className="text-xs text-gray-500">Intelligent data interpretation</div>
-                  </div>
-                </Button>
-              </div>
+              <Button
+                className="bg-blue-600 hover:bg-blue-700"
+                onClick={() => setLocation('/')}
+                data-testid="button-choose-journey-project"
+              >
+                <Route className="w-4 h-4 mr-2" />
+                Choose Your Journey
+              </Button>
             </CardContent>
           </Card>
-        )}
+        ) : journeyState.percentComplete < 100 ? (
+          // Journey in progress - prompt user to resume
+          <Card className="mb-4 border-amber-200 bg-amber-50/50">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <PlayCircle className="w-5 h-5 text-amber-600" />
+                Continue Your Journey
+              </CardTitle>
+              <CardDescription className="text-sm">
+                You have an active journey in progress ({journeyState.percentComplete}% complete).
+                Please complete all journey steps to unlock full analysis capabilities.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex items-center gap-4">
+              <div className="flex-1">
+                <div className="text-sm text-gray-600 mb-2">
+                  Current step: <span className="font-medium">{journeyState.currentStep?.name}</span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-2">
+                  <div
+                    className="bg-amber-500 h-2 rounded-full transition-all"
+                    style={{ width: `${journeyState.percentComplete}%` }}
+                  />
+                </div>
+              </div>
+              <Button
+                className="bg-amber-600 hover:bg-amber-700"
+                onClick={async () => {
+                  const route = await getResumeRoute(projectId, journeyState);
+                  if (route) {
+                    setLocation(route);
+                  }
+                }}
+              >
+                <PlayCircle className="w-4 h-4 mr-2" />
+                Resume Journey
+              </Button>
+            </CardContent>
+          </Card>
+        ) : null}
 
-  <Tabs value={activeTab} onValueChange={handleTabChange} className="flex-1 flex flex-col">
-          {/* Show journey-relevant tabs only - hide old navigation when journey is active */}
-    <TabsList className={`grid w-full mb-3 ${journeyState ? 'grid-cols-7' : 'grid-cols-8'}`}>
+        <Tabs value={activeTab} onValueChange={handleTabChange} className="flex-1 flex flex-col">
+          {/* Show journey-relevant tabs only - gate analysis tabs when journey incomplete */}
+          {/* CRITICAL: Analysis tabs are gated to ensure users complete the journey flow */}
+          <TabsList className="grid w-full mb-3 grid-cols-6">
             <TabsTrigger value="overview" className="flex items-center gap-1 text-xs" data-testid="workflow-tab">
               <Database className="w-3 h-3" />
               Overview
             </TabsTrigger>
-            {journeyState ? (
-              // Journey-specific navigation - show only relevant tabs
-              <>
-                <TabsTrigger value="agents" className="flex items-center gap-1 text-xs" data-testid="agents-tab">
-                  <Bot className="w-3 h-3" />
-                  AI Agents
-                </TabsTrigger>
-                <TabsTrigger value="datasets" className="flex items-center gap-1 text-xs">
-                  <Layers className="w-3 h-3" />
-                  Data
-                </TabsTrigger>
-                <TabsTrigger value="timeline" className="flex items-center gap-1 text-xs" data-testid="decisions-tab">
-                  <FileText className="w-3 h-3" />
-                  Timeline
-                </TabsTrigger>
-                <TabsTrigger value="analysis" className="flex items-center gap-1 text-xs">
-                  <BarChart3 className="w-3 h-3" />
-                  Visualizations
-                </TabsTrigger>
-                <TabsTrigger value="insights" className="flex items-center gap-1 text-xs">
-                  <Brain className="w-3 h-3" />
-                  Insights
-                </TabsTrigger>
-                <TabsTrigger value="schema" className="flex items-center gap-1 text-xs">
-                  <Settings className="w-3 h-3" />
-                  Schema
-                </TabsTrigger>
-              </>
-            ) : (
-              // Legacy navigation - show all tabs when no journey state
-              <>
-                <TabsTrigger value="agents" className="flex items-center gap-1 text-xs" data-testid="agents-tab">
-                  <Bot className="w-3 h-3" />
-                  AI Agents
-                </TabsTrigger>
-                <TabsTrigger value="datasets" className="flex items-center gap-1 text-xs">
-                  <Layers className="w-3 h-3" />
-                  Datasets
-                </TabsTrigger>
-                <TabsTrigger value="timeline" className="flex items-center gap-1 text-xs" data-testid="decisions-tab">
-                  <FileText className="w-3 h-3" />
-                  Timeline
-                </TabsTrigger>
-                <TabsTrigger value="schema" className="flex items-center gap-1 text-xs" data-testid="artifacts-tab">
-                  <Settings className="w-3 h-3" />
-                  Schema
-                </TabsTrigger>
-                <TabsTrigger value="transform" className="flex items-center gap-1 text-xs">
-                  <Wrench className="w-3 h-3" />
-                  Transform
-                </TabsTrigger>
-                <TabsTrigger value="analysis" className="flex items-center gap-1 text-xs">
-                  <BarChart3 className="w-3 h-3" />
-                  Visualizations
-                </TabsTrigger>
-                <TabsTrigger value="insights" className="flex items-center gap-1 text-xs">
-                  <Brain className="w-3 h-3" />
-                  Insights
-                </TabsTrigger>
-              </>
-            )}
+            <TabsTrigger value="agents" className="flex items-center gap-1 text-xs" data-testid="agents-tab">
+              <Bot className="w-3 h-3" />
+              AI Agents
+            </TabsTrigger>
+            <TabsTrigger value="datasets" className="flex items-center gap-1 text-xs">
+              <Layers className="w-3 h-3" />
+              Data
+            </TabsTrigger>
+            <TabsTrigger value="timeline" className="flex items-center gap-1 text-xs" data-testid="decisions-tab">
+              <FileText className="w-3 h-3" />
+              Timeline
+            </TabsTrigger>
+            {/* Visualizations tab - only enabled when journey is complete */}
+            <TabsTrigger
+              value="analysis"
+              className={`flex items-center gap-1 text-xs ${(!journeyState || journeyState.percentComplete < 100) ? 'opacity-50' : ''}`}
+              disabled={!journeyState || journeyState.percentComplete < 100}
+            >
+              <BarChart3 className="w-3 h-3" />
+              Visualizations
+              {(!journeyState || journeyState.percentComplete < 100) && (
+                <span className="ml-1 text-[10px]">🔒</span>
+              )}
+            </TabsTrigger>
+            {/* Insights tab - only enabled when journey is complete */}
+            <TabsTrigger
+              value="insights"
+              className={`flex items-center gap-1 text-xs ${(!journeyState || journeyState.percentComplete < 100) ? 'opacity-50' : ''}`}
+              disabled={!journeyState || journeyState.percentComplete < 100}
+            >
+              <Brain className="w-3 h-3" />
+              Insights
+              {(!journeyState || journeyState.percentComplete < 100) && (
+                <span className="ml-1 text-[10px]">🔒</span>
+              )}
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="mt-6">
@@ -636,48 +673,150 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
             />
           </TabsContent>
 
-          <TabsContent value="schema" className="mt-6">
-            <SchemaEditor project={project} />
-          </TabsContent>
-
-          <TabsContent value="transform" className="mt-6">
-            <DataTransformationLazy project={project} />
-          </TabsContent>
-
+          {/* Analysis tab - gated by journey completion */}
           <TabsContent value="analysis" className="mt-6">
-            <AdvancedVisualizationWorkshop 
-              project={project} 
-              onSave={() => {
-                toast({
-                  title: "Visualization saved",
-                  description: "Your chart has been saved to the project",
-                });
-              }}
-            />
+            {!journeyState || journeyState.percentComplete < 100 ? (
+              <Card className="border-amber-200 bg-amber-50">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <BarChart3 className="w-5 h-5 text-amber-600" />
+                    Complete Your Journey to Access Visualizations
+                  </CardTitle>
+                  <CardDescription>
+                    Visualizations are available after completing the guided user journey.
+                    This ensures your data is properly prepared and validated for accurate analysis.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Button
+                    className="bg-amber-600 hover:bg-amber-700"
+                    onClick={async () => {
+                      if (journeyState) {
+                        const route = await getResumeRoute(projectId, journeyState);
+                        if (route) setLocation(route);
+                      } else {
+                        setLocation('/');
+                      }
+                    }}
+                  >
+                    {journeyState ? 'Resume Journey' : 'Start Journey'}
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : (
+              <DashboardBuilder
+                project={project}
+                onSave={() => {
+                  toast({
+                    title: "Dashboard saved",
+                    description: "Your dashboard has been saved to the project",
+                  });
+                }}
+              />
+            )}
           </TabsContent>
 
-          <TabsContent value="insights" className="mt-6">
-            <AIInsights project={project} />
+          {/* Insights tab - gated by journey completion */}
+          <TabsContent value="insights" className="mt-6 space-y-6">
+            {!journeyState || journeyState.percentComplete < 100 ? (
+              <Card className="border-amber-200 bg-amber-50">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Brain className="w-5 h-5 text-amber-600" />
+                    Complete Your Journey to Access Insights
+                  </CardTitle>
+                  <CardDescription>
+                    AI-powered insights are available after completing the guided user journey.
+                    This ensures your analysis questions are captured and your data is properly analyzed.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Button
+                    className="bg-amber-600 hover:bg-amber-700"
+                    onClick={async () => {
+                      if (journeyState) {
+                        const route = await getResumeRoute(projectId, journeyState);
+                        if (route) setLocation(route);
+                      } else {
+                        setLocation('/');
+                      }
+                    }}
+                  >
+                    {journeyState ? 'Resume Journey' : 'Start Journey'}
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : (
+              <>
+                {/* PHASE 5 FIX: Analysis Execution Trace - Shows which analyses ran and their status */}
+                {project.analysisResults?.analysisStatuses?.length > 0 && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-lg">
+                        <Activity className="w-5 h-5" />
+                        Analysis Execution Trace
+                      </CardTitle>
+                      <CardDescription>
+                        Status of each analysis type executed for your data
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-2">
+                        {project.analysisResults.analysisStatuses.map((status: any) => (
+                          <div key={status.analysisId} className="flex items-center justify-between p-3 rounded-lg bg-gray-50 border">
+                            <div className="flex items-center gap-3">
+                              {status.status === 'completed' ? (
+                                <CheckCircle className="w-5 h-5 text-green-600" />
+                              ) : status.status === 'failed' ? (
+                                <XCircle className="w-5 h-5 text-red-600" />
+                              ) : (
+                                <Clock className="w-5 h-5 text-amber-600" />
+                              )}
+                              <div>
+                                <span className="font-medium">{status.analysisName}</span>
+                                <Badge variant="outline" className="ml-2">{status.analysisType}</Badge>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-4 text-sm text-gray-600">
+                              <span className="flex items-center gap-1">
+                                <Brain className="w-4 h-4" />
+                                {status.insightCount || 0} insights
+                              </span>
+                              {status.executionTimeMs && (
+                                <span className="flex items-center gap-1">
+                                  <Timer className="w-4 h-4" />
+                                  {status.executionTimeMs}ms
+                                </span>
+                              )}
+                              {status.errorMessage && (
+                                <span className="text-red-500 text-xs max-w-[200px] truncate" title={status.errorMessage}>
+                                  {status.errorMessage}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Show BA translated results if available (executive/technical/analyst views) */}
+                {(project.journeyProgress?.translatedResults || project.analysisResults) && (
+                  <AudienceTranslatedResults
+                    project={project}
+                    journeyType={project.journeyType}
+                  />
+                )}
+                {/* AI Insights for Q&A and exploration */}
+                <AIInsights project={project} />
+              </>
+            )}
           </TabsContent>
         </Tabs>
       </div>
-      
-      {/* Guided Analysis Modal */}
-      {showGuidedAnalysis && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg max-w-6xl w-full max-h-[90vh] overflow-hidden">
-            <GuidedAnalysisWizard
-              projectId={projectId}
-              schema={project.schema}
-              onComplete={(analysisConfig) => {
-                console.log('Analysis completed:', analysisConfig);
-                setShowGuidedAnalysis(false);
-              }}
-              onClose={() => setShowGuidedAnalysis(false)}
-            />
-          </div>
-        </div>
-      )}
+
+      {/* Guided Analysis Modal removed - analysis is now gated through user journey flow */}
     </div>
   );
 }

@@ -436,14 +436,25 @@ router.post('/subscription', ensureAuthenticated, async (req: Request, res: Resp
 
     // Check if Stripe is configured
     if (!stripeSyncService.isStripeConfigured()) {
-      // Return mock client secret for development/testing
+      // CRITICAL: Block mock payment in production
+      if (process.env.NODE_ENV === 'production') {
+        console.error('🔴 CRITICAL: Stripe not configured in production!');
+        return res.status(503).json({
+          success: false,
+          error: 'Payment service unavailable. Please contact support.',
+          code: 'STRIPE_NOT_CONFIGURED'
+        });
+      }
+
+      // Return mock client secret for development/testing ONLY
       const mockClientSecret = `pi_mock_${Date.now()}_secret_${Math.random().toString(36).slice(2)}`;
-      console.warn('⚠️  Stripe not configured - returning mock payment intent');
+      console.warn('⚠️  Stripe not configured - returning mock payment intent (DEVELOPMENT ONLY)');
       return res.json({
         success: true,
         clientSecret: mockClientSecret,
         message: 'Stripe not configured - using mock payment for development',
-        development: true
+        development: true,
+        warning: 'This is a mock payment - will not process real charges'
       });
     }
 
@@ -513,6 +524,7 @@ router.post('/subscription', ensureAuthenticated, async (req: Request, res: Resp
       customer: stripeCustomerId,
       metadata: {
         userId: userId,
+        tierId: planType,  // PHASE 11 FIX: Add explicit tierId for webhook to update user.subscriptionTier
         planType: planType,
         priceId,
         productId: syncResult.stripeProductId || ''

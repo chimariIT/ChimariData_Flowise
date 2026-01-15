@@ -1,6 +1,8 @@
 import { spawn } from 'child_process';
 import { SparkProcessor } from './spark-processor';
-import { PythonProcessor } from '../python-processor.js';
+import { db } from '../db';
+import { FileProcessor } from './file-processor';
+import { PythonProcessor } from './python-processor';
 
 export interface ValidationResult {
     ready: boolean;
@@ -137,23 +139,52 @@ async function checkPythonBridge(): Promise<ServiceStatus> {
     const pythonPath = process.env.PYTHON_PATH || 'python3';
 
     try {
-        // PythonProcessor.healthCheck is a static method
-        const health = await withTimeout(
-            PythonProcessor.healthCheck(),
-            5000,
-            { healthy: false, details: { error: 'Health check timed out after 5s' } }
-        );
+        // Test Python availability directly with spawn
+        const result = await new Promise<{success: boolean, error?: string}>((resolve) => {
+            const pythonProcess = spawn(pythonPath, ['--version'], {
+                timeout: 5000,
+                stdio: 'pipe'
+            });
 
-        if (health.healthy) {
+            let output = '';
+            let errorOutput = '';
+
+            pythonProcess.stdout?.on('data', (data) => {
+                output += data.toString();
+            });
+
+            pythonProcess.stderr?.on('data', (data) => {
+                errorOutput += data.toString();
+            });
+
+            pythonProcess.on('close', (code) => {
+                if (code === 0 || output.includes('Python') || errorOutput.includes('Python')) {
+                    resolve({ success: true });
+                } else {
+                    resolve({ success: false, error: `Python exited with code ${code}` });
+                }
+            });
+
+            pythonProcess.on('error', (error) => {
+                resolve({ success: false, error: error.message });
+            });
+
+            setTimeout(() => {
+                pythonProcess.kill();
+                resolve({ success: false, error: 'Python check timed out after 5s' });
+            }, 5000);
+        });
+
+        if (result.success) {
             return {
                 available: true,
-                details: `Python available with required libraries`,
+                details: `Python available at ${pythonPath}`,
                 critical: true
             };
         } else {
             return {
                 available: false,
-                details: `Python available but missing libraries: ${health.details.error || 'unknown'}`,
+                details: result.error || 'Python check failed',
                 critical: true
             };
         }
@@ -226,8 +257,19 @@ async function checkRedisConnection(): Promise<ServiceStatus> {
     try {
         // Import Redis client and test connection with 2 second timeout
         const Redis = await import('ioredis');
-        const redis = new Redis.default(process.env.REDIS_URL || 'redis://localhost:6379');
+        const redis = new Redis.default(process.env.REDIS_URL || 'redis://localhost:6379', {
+            lazyConnect: true,
+            maxRetriesPerRequest: 1,
+            retryStrategy: () => null,
+            connectTimeout: 2000
+        });
 
+        // Add error handler to prevent unhandled error events
+        redis.on('error', () => {
+            // Silently ignore - handled via try/catch
+        });
+
+        await redis.connect();
         await withTimeout(redis.ping(), 2000, 'TIMEOUT' as any);
         await redis.quit();
 
@@ -348,7 +390,7 @@ export async function getServiceHealth(): Promise<{
 
     // Check if any service is using mock data
     const usingMockData = !sparkAvailable || !pythonAvailable ||
-                          process.env.FORCE_SPARK_MOCK === 'true';
+        process.env.FORCE_SPARK_MOCK === 'true';
 
     const allServicesOperational = validation.ready && !usingMockData;
 

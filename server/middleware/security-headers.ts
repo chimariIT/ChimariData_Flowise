@@ -224,7 +224,7 @@ export const corsConfig = {
     callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'authorization', 'X-Forwarded-Authorization', 'x-forwarded-authorization', 'X-Requested-With', 'X-Customer-Context'],
   exposedHeaders: ['Authorization', 'X-Forwarded-Authorization'],
   maxAge: 86400 // 24 hours

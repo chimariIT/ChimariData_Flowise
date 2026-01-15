@@ -65,12 +65,12 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
         }
         return;
       }
-      
+
       // Fallback: analyze project data directly if API isn't available
       if (project?.data && Array.isArray(project.data) && project.data.length > 0) {
         const sampleRow = project.data[0];
         const fields = Object.keys(sampleRow);
-        
+
         // Simple heuristics to detect date and numeric columns
         const dateColumns = fields.filter(field => {
           const value = sampleRow[field];
@@ -82,12 +82,12 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
             (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value))
           );
         });
-        
+
         const numericColumns = fields.filter(field => {
           const value = sampleRow[field];
           return typeof value === 'number' && !dateColumns.includes(field);
         });
-        
+
         const detection = {
           dateColumns,
           numericColumns,
@@ -95,9 +95,9 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
           fields,
           suggestions: []
         };
-        
+
         setDetection(detection);
-        
+
         // Auto-select first date column if available
         if (dateColumns.length > 0) {
           setConfig(prev => ({
@@ -105,7 +105,7 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
             dateColumn: dateColumns[0]
           }));
         }
-        
+
         toast({
           title: "Column detection complete",
           description: `Found ${dateColumns.length} date columns and ${numericColumns.length} numeric columns`,
@@ -137,7 +137,7 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
 
     setIsAnalyzing(true);
     try {
-      const data = await apiClient.runTimeSeriesAnalysis(project.id, config);
+      const data = await apiClient.runTimeSeriesAnalysis(project.id, config as any);
 
       if (data?.success) {
         setResults(data.result);
@@ -257,7 +257,7 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
                   )}
                 </div>
               </div>
-              
+
               <div>
                 <h4 className="font-medium mb-2">Numeric Columns Found ({detection.numericColumns.length})</h4>
                 <div className="flex flex-wrap gap-2">
@@ -306,7 +306,7 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
             {/* Date Column Selection */}
             <div>
               <Label htmlFor="date-column">Date/Timestamp Column</Label>
-              <Select value={config.dateColumn} onValueChange={(value) => 
+              <Select value={config.dateColumn} onValueChange={(value) =>
                 setConfig(prev => ({ ...prev, dateColumn: value }))
               }>
                 <SelectTrigger>
@@ -321,8 +321,8 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
                       </div>
                     </SelectItem>
                   )) || (
-                    <SelectItem value="" disabled>No date columns detected</SelectItem>
-                  )}
+                      <SelectItem value="" disabled>No date columns detected</SelectItem>
+                    )}
                 </SelectContent>
               </Select>
               <p className="text-xs text-gray-500 mt-1">
@@ -350,8 +350,8 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
                     </label>
                   </div>
                 )) || (
-                  <p className="text-sm text-gray-500 p-2">No numeric columns available for visualization</p>
-                )}
+                    <p className="text-sm text-gray-500 p-2">No numeric columns available for visualization</p>
+                  )}
               </div>
               {config.valueColumns.length > 0 && (
                 <p className="text-xs text-green-600 mt-2">
@@ -364,7 +364,7 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
             <div className="bg-blue-50 rounded-lg p-4">
               <h4 className="font-medium text-blue-900 mb-2">Time Series Relationships</h4>
               <p className="text-sm text-blue-700">
-                This analysis will show how your selected variables change over time and their relationships with the date/timestamp field. 
+                This analysis will show how your selected variables change over time and their relationships with the date/timestamp field.
                 You can visualize trends, seasonal patterns, and correlations between different variables.
               </p>
             </div>
@@ -373,7 +373,7 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
             <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
               <div>
                 <Label htmlFor="frequency">Frequency</Label>
-                <Select value={config.frequency} onValueChange={(value: any) => 
+                <Select value={config.frequency} onValueChange={(value: any) =>
                   setConfig(prev => ({ ...prev, frequency: value }))
                 }>
                   <SelectTrigger>
@@ -395,9 +395,9 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
                   id="forecast-periods"
                   type="number"
                   value={config.forecastPeriods}
-                  onChange={(e) => setConfig(prev => ({ 
-                    ...prev, 
-                    forecastPeriods: parseInt(e.target.value) || 30 
+                  onChange={(e) => setConfig(prev => ({
+                    ...prev,
+                    forecastPeriods: parseInt(e.target.value) || 30
                   }))}
                   min={1}
                   max={365}
@@ -406,7 +406,7 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
 
               <div>
                 <Label htmlFor="confidence">Confidence Interval</Label>
-                <Select value={config.confidenceInterval?.toString()} onValueChange={(value) => 
+                <Select value={config.confidenceInterval?.toString()} onValueChange={(value) =>
                   setConfig(prev => ({ ...prev, confidenceInterval: parseFloat(value) }))
                 }>
                   <SelectTrigger>
@@ -422,7 +422,7 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
             </div>
 
             {/* Run Analysis Button */}
-            <Button 
+            <Button
               onClick={runTimeSeriesAnalysis}
               disabled={isAnalyzing || !config.dateColumn || config.valueColumns.length === 0}
               className="w-full"
@@ -520,23 +520,23 @@ export default function TimeSeriesAnalysis({ project }: TimeSeriesAnalysisProps)
             <div className="space-y-6">
               {/* Metrics */}
               {results.metrics && (
-              <div>
-                <h4 className="font-medium mb-3">Model Performance</h4>
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="text-center p-3 border rounded-lg">
-                    <div className="text-2xl font-bold text-blue-600">{results.metrics.mae.toFixed(2)}</div>
-                    <div className="text-sm text-muted-foreground">Mean Absolute Error</div>
-                  </div>
-                  <div className="text-center p-3 border rounded-lg">
-                    <div className="text-2xl font-bold text-green-600">{results.metrics.mape.toFixed(1)}%</div>
-                    <div className="text-sm text-muted-foreground">Mean Absolute Percentage Error</div>
-                  </div>
-                  <div className="text-center p-3 border rounded-lg">
-                    <div className="text-2xl font-bold text-orange-600">{results.metrics.rmse.toFixed(2)}</div>
-                    <div className="text-sm text-muted-foreground">Root Mean Square Error</div>
+                <div>
+                  <h4 className="font-medium mb-3">Model Performance</h4>
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="text-center p-3 border rounded-lg">
+                      <div className="text-2xl font-bold text-blue-600">{results.metrics.mae.toFixed(2)}</div>
+                      <div className="text-sm text-muted-foreground">Mean Absolute Error</div>
+                    </div>
+                    <div className="text-center p-3 border rounded-lg">
+                      <div className="text-2xl font-bold text-green-600">{results.metrics.mape.toFixed(1)}%</div>
+                      <div className="text-sm text-muted-foreground">Mean Absolute Percentage Error</div>
+                    </div>
+                    <div className="text-center p-3 border rounded-lg">
+                      <div className="text-2xl font-bold text-orange-600">{results.metrics.rmse.toFixed(2)}</div>
+                      <div className="text-sm text-muted-foreground">Root Mean Square Error</div>
+                    </div>
                   </div>
                 </div>
-              </div>
               )}
 
               {/* Insights */}

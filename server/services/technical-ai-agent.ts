@@ -12,13 +12,27 @@ export class TechnicalAIAgent {
     }
 
     /**
+     * Execute a tool via the MCP Tool Registry
+     * Exposed for other agents to use
+     */
+    async executeTool(toolName: string, input: any, context?: any): Promise<any> {
+        const { executeTool } = require('./mcp-tool-registry');
+        return await executeTool(
+            toolName,
+            'technical_ai_agent',
+            input,
+            context
+        );
+    }
+
+    /**
      * Process task from message broker for real-time agent coordination
      */
     async processTask(task: any, projectId: string): Promise<any> {
         const { stepName, dependency, project, previousResults } = task;
-        
+
         console.log(`Technical Agent processing task: ${stepName} for project ${projectId}`);
-        
+
         try {
             switch (stepName) {
                 case 'data_preprocessing':
@@ -82,9 +96,25 @@ export class TechnicalAIAgent {
         const recordCount = query.context?.data?.length ?? 0;
         const cost = this.estimateCost(query.type, recordCount, 'basic');
 
-        // Decide whether to use Spark based on data size or analysis type
-        if (recordCount > 1000 || query.type === 'machine_learning') {
-            console.log("Delegating to SparkProcessor due to data size or analysis type.");
+        // Use ComputeEngineSelector to decide execution engine
+        const { ComputeEngineSelector } = require('./compute-engine-selector');
+
+        const selection = ComputeEngineSelector.selectEngine({
+            recordCount,
+            analysisType: query.type,
+            complexity: 'basic', // Could be inferred from parameters
+            availableResources: {
+                localMemoryMB: 4096,
+                sparkAvailable: !!process.env.SPARK_MASTER_URL,
+                polarsAvailable: true // Assuming Polars is installed in Python env
+            }
+        });
+
+        console.log(`🤖 Technical Agent selected engine: ${selection.engine} (Reason: ${selection.reason})`);
+
+        // Execute using Spark if selected
+        if (selection.engine === 'spark') {
+            console.log("Delegating to SparkProcessor based on intelligent selection.");
             const sparkResult = await this.sparkProcessor.performAnalysis(query.context?.data ?? [], query.type, query.parameters);
 
             // CRITICAL: Validate no mock data in production
@@ -99,7 +129,14 @@ export class TechnicalAIAgent {
                 engine: 'spark',
                 model: "chimari-spark-ml-v1",
                 cost: cost.totalCost,
+                selectionMetadata: selection
             };
+        }
+
+        // If Polars is selected, we pass this preference to the tool registry
+        if (selection.engine === 'polars') {
+            console.log("Preferring Polars for local processing.");
+            // We'll inject this into the tool input config below
         }
 
         // REAL IMPLEMENTATION: Use Tool Registry for analysis
@@ -121,20 +158,20 @@ export class TechnicalAIAgent {
                 query.type === 'regression' || query.type === 'correlation') {
                 // Use statistical analyzer tool with intelligent library selection
                 toolName = 'statistical_analyzer';
-                
+
                 // Analyze dataset characteristics for intelligent library selection
                 const datasetCharacteristics = this.analyzeDatasetCharacteristics(data);
                 const analysisRequirements = this.extractAnalysisRequirements(query, parameters);
-                
+
                 // Get intelligent library recommendations
                 const libraryRecommendations = intelligentLibrarySelector.selectStatisticalLibrary(
                     datasetCharacteristics,
                     analysisRequirements
                 );
-                
+
                 const selectedLibrary = libraryRecommendations[0];
                 console.log(`🔬 Technical Agent selected statistical library: ${selectedLibrary.library} (confidence: ${selectedLibrary.confidence})`);
-                
+
                 toolInput = {
                     data,
                     config: {
@@ -146,6 +183,9 @@ export class TechnicalAIAgent {
                         library: selectedLibrary.library,
                         libraryConfidence: selectedLibrary.confidence,
                         libraryReasoning: selectedLibrary.reasoning,
+                        // Inject engine preference
+                        preferredEngine: selection.engine,
+                        preferredLibrary: selection.engine === 'polars' ? 'polars' : undefined,
                         alternatives: libraryRecommendations.slice(1).map(rec => ({
                             library: rec.library,
                             confidence: rec.confidence,
@@ -159,14 +199,14 @@ export class TechnicalAIAgent {
                     }
                 };
             } else if (query.type === 'machine_learning' || query.type === 'classification' ||
-                       query.type === 'clustering' || query.type === 'time_series' ||
-                       query.type === 'anomaly_detection') {
+                query.type === 'clustering' || query.type === 'time_series' ||
+                query.type === 'anomaly_detection') {
                 // Use comprehensive ML pipeline tool with intelligent library selection
                 toolName = 'comprehensive_ml_pipeline';
-                
+
                 // Analyze dataset characteristics for ML library selection
                 const datasetCharacteristics = this.analyzeDatasetCharacteristics(data);
-                
+
                 toolInput = {
                     data,
                     config: {
@@ -176,6 +216,9 @@ export class TechnicalAIAgent {
                         parameters: parameters.mlParams || {},
                         // Enhanced config with intelligent ML library selection
                         datasetCharacteristics,
+                        // Inject engine preference
+                        preferredEngine: selection.engine,
+                        preferredLibrary: selection.engine === 'polars' ? 'polars' : undefined,
                         useAutoML: parameters.useAutoML || false,
                         enableExplainability: parameters.enableExplainability || false,
                         performancePriority: parameters.performancePriority || 'balanced',
@@ -185,20 +228,20 @@ export class TechnicalAIAgent {
             } else if (query.type === 'visualization' || query.type === 'dashboard') {
                 // Use visualization engine tool with intelligent library selection
                 toolName = 'visualization_engine';
-                
+
                 // Analyze dataset characteristics for visualization library selection
                 const datasetCharacteristics = this.analyzeDatasetCharacteristics(data);
                 const visualizationRequirements = this.extractVisualizationRequirements(query, parameters);
-                
+
                 // Get intelligent library recommendations
                 const libraryRecommendations = intelligentLibrarySelector.selectVisualizationLibrary(
                     datasetCharacteristics,
                     visualizationRequirements
                 );
-                
+
                 const selectedLibrary = libraryRecommendations[0];
                 console.log(`🎨 Technical Agent selected visualization library: ${selectedLibrary.library} (confidence: ${selectedLibrary.confidence})`);
-                
+
                 toolInput = {
                     data,
                     config: {
@@ -210,6 +253,9 @@ export class TechnicalAIAgent {
                         library: selectedLibrary.library,
                         libraryConfidence: selectedLibrary.confidence,
                         libraryReasoning: selectedLibrary.reasoning,
+                        // Inject engine preference
+                        preferredEngine: selection.engine,
+                        preferredLibrary: selection.engine === 'polars' ? 'polars' : undefined,
                         alternatives: libraryRecommendations.slice(1).map(rec => ({
                             library: rec.library,
                             confidence: rec.confidence,
@@ -259,7 +305,7 @@ export class TechnicalAIAgent {
             // Enhanced billing integration with ML/LLM usage tracking
             const finalCost = toolResult.metrics?.cost || cost.totalCost;
             const libraryUsed = toolResult.result?.librarySelection?.selectedLibrary || toolInput.config?.library || 'unknown';
-            
+
             // Log usage for billing and analytics
             if (query.context?.userId && toolResult.status === 'success') {
                 try {
@@ -461,7 +507,7 @@ export class TechnicalAIAgent {
         }
 
         // Generate insights
-    analysis.insights = this.generateStatisticalInsights(analysis);
+        analysis.insights = this.generateStatisticalInsights(analysis);
 
         return analysis;
     }
@@ -523,8 +569,8 @@ export class TechnicalAIAgent {
             engineeredData.push(engineeredRow);
         }
 
-    features.engineered = engineeredData;
-    features.transformations = this.getTransformationSummary(data, engineeredData);
+        features.engineered = engineeredData;
+        features.transformations = this.getTransformationSummary(data, engineeredData);
 
         return features;
     }
@@ -1085,7 +1131,7 @@ export class TechnicalAIAgent {
 
     private generateFeatureImportanceInsights(importance: any): string[] {
         const insights = [];
-        const entries = Object.entries(importance).sort(([,a], [,b]) => (b as number) - (a as number));
+        const entries = Object.entries(importance).sort(([, a], [, b]) => (b as number) - (a as number));
 
         insights.push(`Most important feature: ${entries[0][0]} (${entries[0][1]})`);
 
@@ -1114,7 +1160,7 @@ export class TechnicalAIAgent {
 
         const sample = data.slice(0, Math.min(1000, data.length));
         const columns = Object.keys(sample[0]);
-        
+
         let numeric = 0, categorical = 0, datetime = 0, text = 0, boolean = 0;
         const cardinality: Record<string, number> = {};
 
@@ -1148,8 +1194,8 @@ export class TechnicalAIAgent {
 
         // Calculate sparsity
         const totalCells = data.length * columns.length;
-        const nullCells = data.reduce((count, row) => 
-            count + columns.reduce((colCount, col) => 
+        const nullCells = data.reduce((count, row) =>
+            count + columns.reduce((colCount, col) =>
                 colCount + (row[col] === null || row[col] === undefined ? 1 : 0), 0), 0);
         const sparsity = totalCells > 0 ? (nullCells / totalCells) * 100 : 0;
 
@@ -1180,7 +1226,7 @@ export class TechnicalAIAgent {
      */
     private extractAnalysisRequirements(query: TechnicalQueryType, parameters: any): AnalysisRequirements {
         const analysisType = query.type;
-        
+
         return {
             type: this.mapAnalysisTypeToRequirement(analysisType),
             complexity: this.determineComplexity(query, parameters),
@@ -1197,7 +1243,7 @@ export class TechnicalAIAgent {
     private extractVisualizationRequirements(query: TechnicalQueryType, parameters: any): VisualizationRequirements {
         const chartType = parameters.chartType || 'bar';
         const dataSize = this.getDataSizeCategory(parameters.dataSize);
-        
+
         return {
             chartTypes: [chartType],
             interactivity: parameters.interactive ? 'interactive' : 'static',
@@ -1230,7 +1276,7 @@ export class TechnicalAIAgent {
      */
     private determineComplexity(query: TechnicalQueryType, parameters: any): 'simple' | 'moderate' | 'complex' {
         const analysisType = query.type;
-        
+
         if (['descriptive_stats', 'correlation'].includes(analysisType)) {
             return 'simple';
         } else if (['anova', 'ancova', 'regression', 'hypothesis_testing'].includes(analysisType)) {

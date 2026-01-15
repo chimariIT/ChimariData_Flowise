@@ -4,11 +4,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { 
-  ChevronLeft, 
-  ChevronRight, 
-  Target, 
-  Database, 
+import {
+  ChevronLeft,
+  ChevronRight,
+  Target,
+  Database,
   BarChart3,
   CheckCircle,
   Circle,
@@ -19,17 +19,17 @@ import {
   MessageCircle,
   Lightbulb,
   Beaker,
-  Eye
+  RefreshCw
 } from "lucide-react";
 import PrepareStep from "@/pages/prepare-step";
-import ProjectSetupStep from "@/pages/project-setup-step";
-import DataStep from "@/pages/data-step";
+import DataUploadStep from "@/pages/data-upload-step";
 import DataVerificationStep from "@/pages/data-verification-step";
+import DataTransformationStep from "@/pages/data-transformation-step";
 import PlanStep from "@/pages/plan-step";
 import ExecuteStep from "@/pages/execute-step";
-import ResultsPreviewStep from "@/pages/results-preview-step";
 import PricingStep from "@/pages/pricing-step";
-import ResultsStep from "@/pages/results-step";
+import DashboardStep from "@/pages/dashboard-step";
+import { JourneyDataProvider } from "@/contexts/JourneyDataContext";
 
 interface JourneyStep {
   id: string;
@@ -47,76 +47,72 @@ interface JourneyWizardProps {
 
 export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps) {
   const [, setLocation] = useLocation();
-  
+
+  // User Journey Flow (8 steps - CONSOLIDATED):
+  // 1. Data Upload & Project Setup -> 2. Analysis Preparation -> 3. Data Verification ->
+  // 4. Data Transformation -> 5. Analysis Planning -> 6. Execution ->
+  // 7. Billing and Payment -> 8. Dashboard (Results)
   const steps: JourneyStep[] = [
     {
-      id: 'prepare',
-      title: 'Analysis Preparation',
-      description: 'Define goals and analysis questions with AI assistance',
-      route: `/journeys/${journeyType}/prepare`,
-      icon: Target,
-      completed: false
-    },
-    {
-      id: 'project-setup',
-      title: 'Project Setup',
-      description: 'Create project and confirm analysis approach',
-      route: `/journeys/${journeyType}/project-setup`,
-      icon: FolderOpen,
-      completed: false
-    },
-    {
       id: 'data',
-      title: 'Data Upload', 
-      description: 'Upload your data files',
+      title: '1. Data Upload & Setup',
+      description: 'Create project, upload files, PII review, join datasets',
       route: `/journeys/${journeyType}/data`,
       icon: Database,
       completed: false
     },
     {
+      id: 'prepare',
+      title: '2. Analysis Preparation',
+      description: 'Define goals, questions, get analysis recommendations',
+      route: `/journeys/${journeyType}/prepare`,
+      icon: Target,
+      completed: false
+    },
+    {
       id: 'data-verification',
-      title: 'Data Verification',
-      description: 'Review data quality, schema, and privacy',
+      title: '3. Data Verification',
+      description: 'Map data elements to columns, confirm quality',
       route: `/journeys/${journeyType}/data-verification`,
       icon: CheckCircle,
       completed: false
     },
     {
+      id: 'data-transformation',
+      title: '4. Data Transformation',
+      description: 'Transform data for each planned analysis',
+      route: `/journeys/${journeyType}/data-transformation`,
+      icon: RefreshCw,
+      completed: false
+    },
+    {
       id: 'plan',
-      title: 'Analysis Planning',
-      description: 'AI agents design analysis plan with cost estimate',
+      title: '5. Analysis Plan',
+      description: 'Review execution plan, expected artifacts, costs',
       route: `/journeys/${journeyType}/plan`,
       icon: Lightbulb,
       completed: false
     },
     {
       id: 'execute',
-      title: 'Analysis Configuration',
-      description: 'Configure analysis parameters and execute',
+      title: '6. Execution',
+      description: 'Run analyses with approval checkpoints',
       route: `/journeys/${journeyType}/execute`,
       icon: BarChart3,
       completed: false
     },
     {
-      id: 'preview',
-      title: 'Preview Results',
-      description: 'See what you will get before payment',
-      route: `/journeys/${journeyType}/preview`,
-      icon: Eye,
-      completed: false
-    },
-    {
       id: 'pricing',
-      title: 'Pricing & Payment',
-      description: 'Review costs and complete payment',
+      title: '7. Billing & Payment',
+      description: 'Preview results, review costs, complete payment',
       route: `/journeys/${journeyType}/pricing`,
       icon: DollarSign,
       completed: false
     },
     {
       id: 'results',
-      title: 'Results & Artifacts',
-      description: 'View insights and download artifacts',
+      title: '8. Dashboard',
+      description: 'View all results, artifacts, and exports',
       route: `/journeys/${journeyType}/results`,
       icon: Receipt,
       completed: false
@@ -171,13 +167,14 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
   };
 
   return (
+    <JourneyDataProvider>
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <div className="bg-white border-b border-gray-200">
         <div className="max-w-4xl mx-auto px-4 py-6">
           <div className="flex items-center justify-between mb-4">
-            <Button 
-              variant="ghost" 
+            <Button
+              variant="ghost"
               onClick={handleBackToJourneys}
               data-testid="button-back-to-journeys"
             >
@@ -188,7 +185,7 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
               {journeyType.charAt(0).toUpperCase() + journeyType.slice(1)} Journey
             </Badge>
           </div>
-          
+
           <div className="mb-6">
             <h1 className="text-2xl font-bold text-gray-900 mb-2" data-testid="text-journey-title">
               {getJourneyTypeTitle(journeyType)}
@@ -245,14 +242,14 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
                 <span className="text-sm font-medium text-blue-900">Current Focus</span>
               </div>
               <p className="text-sm text-blue-700">
-                {currentStage === 'prepare' && 'Define your analysis goals and requirements without worrying about costs'}
-                {currentStage === 'project-setup' && 'Create your project and confirm the analysis approach'}
-                {currentStage === 'data' && 'Upload your data files to the platform'}
-                {currentStage === 'data-verification' && 'Review data quality, schema, and privacy before analysis'}
-                {currentStage === 'execute' && 'Configure analysis parameters and run the analysis'}
-                {currentStage === 'preview' && 'Preview what you will get before proceeding to payment'}
-                {currentStage === 'pricing' && 'Review final costs based on your completed analysis requirements'}
-                {currentStage === 'results' && 'View your results and download artifacts'}
+                {currentStage === 'data' && 'Create your project, upload files, review PII, and approve joined dataset'}
+                {currentStage === 'prepare' && 'Define your analysis goals and get AI-powered recommendations'}
+                {currentStage === 'data-verification' && 'Map data elements to columns and confirm data quality'}
+                {currentStage === 'data-transformation' && 'Transform data for each planned analysis'}
+                {currentStage === 'plan' && 'Review the execution plan, expected artifacts, and cost estimates'}
+                {currentStage === 'execute' && 'Run analyses with approval checkpoints at each step'}
+                {currentStage === 'pricing' && 'Preview results, review final costs, and complete payment'}
+                {currentStage === 'results' && 'View all results, artifacts, and export options'}
               </p>
             </div>
           </div>
@@ -273,25 +270,23 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
                   <button
                     onClick={() => isAccessible && handleStepNavigation(step.id)}
                     disabled={!isAccessible}
-                    className={`flex items-center p-2 lg:p-3 rounded-lg border-2 transition-all w-full text-left ${
-                      isActive
-                        ? 'border-blue-500 bg-blue-50'
-                        : isCompleted
+                    className={`flex items-center p-2 lg:p-3 rounded-lg border-2 transition-all w-full text-left ${isActive
+                      ? 'border-blue-500 bg-blue-50'
+                      : isCompleted
                         ? 'border-green-500 bg-green-50 hover:bg-green-100'
                         : isAccessible
-                        ? 'border-gray-300 bg-white hover:bg-gray-50'
-                        : 'border-gray-200 bg-gray-50 cursor-not-allowed opacity-60'
-                    }`}
+                          ? 'border-gray-300 bg-white hover:bg-gray-50'
+                          : 'border-gray-200 bg-gray-50 cursor-not-allowed opacity-60'
+                      }`}
                     data-testid={`button-step-${step.id}`}
                   >
                     <div className="flex items-center space-x-3 min-w-0">
-                      <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
-                        isCompleted
-                          ? 'bg-green-500 text-white'
-                          : isActive
+                      <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${isCompleted
+                        ? 'bg-green-500 text-white'
+                        : isActive
                           ? 'bg-blue-500 text-white'
                           : 'bg-gray-200 text-gray-600'
-                      }`}>
+                        }`}>
                         {isCompleted ? (
                           <CheckCircle className="w-4 h-4" />
                         ) : (
@@ -299,14 +294,12 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
                         )}
                       </div>
                       <div className="min-w-0 flex-1 text-left">
-                        <h3 className={`font-medium text-sm truncate ${
-                          isActive ? 'text-blue-900' : isCompleted ? 'text-green-900' : 'text-gray-700'
-                        }`}>
+                        <h3 className={`font-medium text-sm truncate ${isActive ? 'text-blue-900' : isCompleted ? 'text-green-900' : 'text-gray-700'
+                          }`}>
                           {step.title}
                         </h3>
-                        <p className={`text-xs truncate ${
-                          isActive ? 'text-blue-700' : isCompleted ? 'text-green-700' : 'text-gray-500'
-                        }`}>
+                        <p className={`text-xs truncate ${isActive ? 'text-blue-700' : isCompleted ? 'text-green-700' : 'text-gray-500'
+                          }`}>
                           {step.description}
                         </p>
                       </div>
@@ -372,7 +365,11 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <PrepareStep journeyType={journeyType} />
+                <PrepareStep
+                  journeyType={journeyType}
+                  onNext={handleNext}
+                  onPrevious={handlePrevious}
+                />
                 {/* Inline role hint under prepare */}
                 {journeyType === 'business' && (
                   <div className="mt-4 text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg p-3">
@@ -383,69 +380,51 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
             </Card>
           )}
 
-          {currentStage === 'project-setup' && (
-            <Card data-testid="card-step-content">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <FolderOpen className="w-5 h-5" />
-                  Project Setup & Requirements
-                </CardTitle>
-                <CardDescription>
-                  Create project and confirm analysis approach based on your goals
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ProjectSetupStep journeyType={journeyType} />
-              </CardContent>
-            </Card>
-          )}
-          
           {currentStage === 'data' && (
-            <DataStep 
+            <DataUploadStep
               journeyType={journeyType}
               onNext={handleNext}
               onPrevious={handlePrevious}
               renderAsContent={true}
             />
           )}
-          
+
           {currentStage === 'data-verification' && (
-            <DataVerificationStep 
+            <DataVerificationStep
               journeyType={journeyType}
               onNext={handleNext}
               onPrevious={handlePrevious}
               renderAsContent={true}
             />
           )}
-          
-          {currentStage === 'plan' && (
-            <PlanStep 
-              journeyType={journeyType}
-              onNext={handleNext}
-              onPrevious={handlePrevious}
-              renderAsContent={true}
-            />
-          )}
-          
-          {currentStage === 'execute' && (
-            <ExecuteStep 
+
+          {currentStage === 'data-transformation' && (
+            <DataTransformationStep
               journeyType={journeyType}
               onNext={handleNext}
               onPrevious={handlePrevious}
             />
           )}
 
-          {currentStage === 'preview' && (
-            <ResultsPreviewStep 
+          {currentStage === 'plan' && (
+            <PlanStep
               journeyType={journeyType}
               onNext={handleNext}
               onPrevious={handlePrevious}
               renderAsContent={true}
+            />
+          )}
+
+          {currentStage === 'execute' && (
+            <ExecuteStep
+              journeyType={journeyType}
+              onNext={handleNext}
+              onPrevious={handlePrevious}
             />
           )}
 
           {currentStage === 'pricing' && (
-            <PricingStep 
+            <PricingStep
               journeyType={journeyType}
               onNext={handleNext}
               onPrevious={handlePrevious}
@@ -453,7 +432,7 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
           )}
 
           {currentStage === 'results' && (
-            <ResultsStep 
+            <DashboardStep
               journeyType={journeyType}
               onNext={handleNext}
               onPrevious={handlePrevious}
@@ -472,14 +451,13 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
             <ChevronLeft className="w-4 h-4 mr-2" />
             Previous
           </Button>
-          
+
           <div className="flex items-center space-x-2">
             {steps.map((_, index) => (
               <Circle
                 key={index}
-                className={`w-2 h-2 ${
-                  index <= currentStepIndex ? 'text-blue-500 fill-current' : 'text-gray-300'
-                }`}
+                className={`w-2 h-2 ${index <= currentStepIndex ? 'text-blue-500 fill-current' : 'text-gray-300'
+                  }`}
               />
             ))}
           </div>
@@ -495,5 +473,6 @@ export function JourneyWizard({ journeyType, currentStage }: JourneyWizardProps)
         </div>
       </div>
     </div>
+    </JourneyDataProvider>
   );
 }

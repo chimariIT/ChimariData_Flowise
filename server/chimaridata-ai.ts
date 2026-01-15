@@ -17,9 +17,10 @@ export class ChimaridataAI {
   }
 
   private initializeProviders() {
-    // Gemini provider (primary)
-    if (process.env.GEMINI_API_KEY) {
-      this.providers.push(new GeminiProvider(process.env.GEMINI_API_KEY));
+    // Gemini provider (primary) - check both GOOGLE_AI_API_KEY and legacy GEMINI_API_KEY
+    const googleApiKey = process.env.GOOGLE_AI_API_KEY || process.env.GEMINI_API_KEY;
+    if (googleApiKey) {
+      this.providers.push(new GeminiProvider(googleApiKey));
     }
 
     // OpenAI provider (fallback 1)
@@ -30,6 +31,11 @@ export class ChimaridataAI {
     // Anthropic provider (fallback 2)
     if (process.env.ANTHROPIC_API_KEY) {
       this.providers.push(new AnthropicProvider(process.env.ANTHROPIC_API_KEY));
+    }
+
+    // Mock provider (fallback 3 - always available if others fail)
+    if (this.providers.length === 0) {
+      this.providers.push(new MockProvider());
     }
 
     console.log(`Initialized ${this.providers.length} AI providers`);
@@ -45,7 +51,7 @@ export class ChimaridataAI {
 
     for (let i = 0; i < this.providers.length; i++) {
       const provider = this.providers[i];
-      
+
       try {
         if (!provider.isAvailable()) {
           console.log(`Provider ${provider.name} is not available, skipping...`);
@@ -54,7 +60,7 @@ export class ChimaridataAI {
 
         console.log(`Attempting insights generation with ${provider.name}...`);
         const insights = await provider.generateInsights(data, prompt);
-        
+
         return {
           success: true,
           insights,
@@ -62,7 +68,7 @@ export class ChimaridataAI {
         };
       } catch (error: any) {
         console.error(`Provider ${provider.name} failed:`, error.message);
-        
+
         // If this is the last provider, return the error
         if (i === this.providers.length - 1) {
           return {
@@ -81,6 +87,58 @@ export class ChimaridataAI {
       provider: "none",
       error: "No AI providers available"
     };
+  }
+
+  /**
+   * Generate generic text based on a prompt (e.g. for translation or summarization)
+   * Bypasses the dataset analysis prompt structure
+   */
+  async generateText(params: {
+    prompt: string;
+    maxTokens?: number;
+    temperature?: number;
+  }): Promise<{ text: string; provider: string }> {
+    const { prompt, maxTokens, temperature } = params;
+
+    for (let i = 0; i < this.providers.length; i++) {
+      const provider = this.providers[i];
+
+      try {
+        if (!provider.isAvailable()) {
+          continue;
+        }
+
+        // Use the provider's generateInsights method but treat it as raw text generation
+        // Most providers implement generateInsights by just sending the prompt if data is empty/ignored
+        // But we need to check implementation.
+        // Actually, looking at the providers:
+        // Gemini: uses result.response.text()
+        // OpenAI: uses completion.choices[0].message.content
+        // Anthropic: uses response.content[0].text
+        // All of them take `prompt` as 2nd arg.
+        // We can pass null/empty object as data and the full prompt as prompt.
+
+        // HOWEVER, generateInsights signature in providers is (data: any, prompt: string).
+
+        // Let's modify providers to support a more direct generation or generic method.
+        // For now, to avoid changing all providers, we can reuse generateInsights 
+        // passing empty data and our prompt.
+
+        const text = await provider.generateInsights({}, prompt);
+
+        return {
+          text,
+          provider: provider.name
+        };
+      } catch (error: any) {
+        console.error(`Provider ${provider.name} failed text generation:`, error.message);
+        if (i === this.providers.length - 1) {
+          throw new Error(`Text generation failed: ${error.message}`);
+        }
+      }
+    }
+
+    throw new Error("No AI providers available for text generation");
   }
 
   private buildPrompt(data: any, context: string): string {
@@ -128,7 +186,7 @@ class GeminiProvider implements AIProvider {
 
   async generateInsights(data: any, prompt: string): Promise<string> {
     const model = this.client.getGenerativeModel({ model: "gemini-1.5-pro" });
-    
+
     const result = await model.generateContent({
       contents: [{ role: "user", parts: [{ text: prompt }] }],
     });
@@ -204,5 +262,25 @@ class AnthropicProvider implements AIProvider {
   }
 }
 
-// Singleton instance
+class MockProvider implements AIProvider {
+  public name = "Mock (No API Keys)";
+
+  async generateInsights(data: any, prompt: string): Promise<string> {
+    return JSON.stringify({
+      summary: "System is running in offline mode. Please configure AI API keys to generate real insights.",
+      highlights: [
+        { title: "Configuration Required", description: "No AI provider API keys found in environment variables.", type: "warning", confidence: 1.0 },
+        { title: "Data Overview", description: `Dataset contains ${data.recordCount || 'unknown'} records.`, type: "info", confidence: 1.0 }
+      ],
+      recommendations: ["Add GOOGLE_AI_API_KEY or OPENAI_API_KEY to .env file"],
+      nextSteps: ["Configure API keys", "Restart server"],
+      warnings: ["AI features are currently disabled"]
+    });
+  }
+
+  isAvailable(): boolean {
+    return true;
+  }
+}
+
 export const chimaridataAI = new ChimaridataAI();

@@ -28,7 +28,6 @@ import { ProjectManagerAgent } from '../services/project-manager-agent';
 import { getMessageBroker } from '../services/agents/message-broker';
 import { DataEngineerAgent } from '../services/data-engineer-agent';
 import { DataScientistAgent } from '../services/data-scientist-agent';
-import { BusinessAgent } from '../services/business-agent';
 import { getBillingService } from '../services/billing/unified-billing-service';
 import type { JourneyType } from "../../shared/schema.js";
 import { canAccessProject, isAdmin } from '../middleware/ownership';
@@ -37,16 +36,15 @@ import { buildAgentContext } from '../utils/agent-context';
 import { performanceWebhookService } from '../services/performance-webhook-service';
 import { requiredDataElementsTool } from '../services/tools/required-data-elements-tool';
 import { db } from '../db';
-import { decisionAudits, projects, projectQuestions, projectDatasets } from '@shared/schema';
-import { normalizeJourneyType } from '@shared/canonical-types';
-import { QuestionAnswerService } from '../services/question-answer-service';
-import { parseJourneyProgress, fillJourneyProgressFields } from '../utils/journey-progress';
-import { eq, and, sql } from 'drizzle-orm';
-import { DatasetJoiner, type JoinConfig as DatasetJoinConfig } from '../dataset-joiner';
-import { executeTool } from '../services/mcp-tool-registry';
+import { eq, desc } from 'drizzle-orm';
+import { decisionAudits, projectQuestions, datasets, projectDatasets } from '@shared/schema';
+import { DatasetJoiner, JoinConfig } from '../dataset-joiner';
+import { semanticSearchService } from '../services/semantic-search-service';
+
+const VALID_PROJECT_JOURNEYS: JourneyType[] = ["non-tech", "business", "technical", "consultation", "custom"];
 
 const normalizeProjectJourneyType = (value: unknown): JourneyType =>
-    normalizeJourneyType(value as string | JourneyType | null);
+    VALID_PROJECT_JOURNEYS.includes(value as JourneyType) ? (value as JourneyType) : "non-tech";
 
 const mapProjectJourneyToAgentJourney = (
     journeyType: JourneyType
@@ -67,13 +65,6 @@ const mapProjectJourneyToAgentJourney = (
 };
 
 const router = Router();
-
-const getPendingApprovalCheckpoints = async (projectId: string) => {
-    const checkpoints = await projectAgentOrchestrator.getProjectCheckpoints(projectId);
-    return checkpoints.filter((checkpoint) =>
-        checkpoint.requiresUserInput && checkpoint.status === 'waiting_approval'
-    );
-};
 
 const extractRowsForTransformation = (dataset: any, project: any): any[] => {
     console.log(`Extracting rows for project ${project?.id}, dataset ${dataset?.id}`);
@@ -471,754 +462,6 @@ const computeDatasetCharacteristics = (snapshot: ProjectDataSnapshot): DatasetCh
     };
 };
 
-const JOIN_KEY_PATTERNS: RegExp[] = [
-    /^employee_?id$/i,
-    /^emp_?id$/i,
-    /^user_?id$/i,
-    /^customer_?id$/i,
-    /^department_?id$/i,
-    /^dept_?id$/i,
-    /^team_?id$/i,
-    /^project_?id$/i,
-    /^id$/i,
-    /_id$/i,
-    /^.*_key$/i,
-    /^.*_code$/i
-];
-
-const MAX_MULTI_DATASET_SAMPLE_ROWS = 200;
-const MAX_MULTI_DATASET_PREVIEW_ROWS = 50;
-
-type ProjectDatasetEntry = { dataset: any; association: any };
-
-type AutoJoinForeignKey = {
-    datasetId: string;
-    datasetName: string;
-    targetColumn: string;
-    primaryColumn: string;
-    confidence: number;
-    detectionSource: string;
-};
-
-type AutoJoinDetectionMethod = 'metadata' | 'data_engineer_agent' | 'schema_match' | 'fallback_concat';
-
-type AutoJoinPlan = {
-    strategy: 'join' | 'concat';
-    joinType: 'inner' | 'left' | 'right' | 'outer';
-    detectionMethod: AutoJoinDetectionMethod;
-    primaryDatasetId: string;
-    primaryColumn: string;
-    foreignKeys: AutoJoinForeignKey[];
-};
-
-type MultiDatasetPreviewPayload = {
-    previewRows: any[];
-    fullData?: any[]; // P1-1 FIX: Full joined dataset for analysis execution
-    totalRowCount?: number; // P1-1 FIX: Total row count of full joined dataset
-    schema: Record<string, any>;
-    joinInsights: {
-        detectionMethod: AutoJoinDetectionMethod;
-        joinStrategy: 'join' | 'concat';
-        joinType: 'inner' | 'left' | 'right' | 'outer';
-        primaryDatasetId: string;
-        primaryDatasetName: string;
-        primaryColumn: string;
-        foreignKeys: AutoJoinForeignKey[];
-        datasetCount: number;
-        previewRowCount: number;
-        warnings: string[];
-    };
-    autoJoinConfig: {
-        enabled: boolean;
-        strategy: 'join' | 'concat';
-        type: 'inner' | 'left' | 'right' | 'outer';
-        primaryDatasetId: string;
-        primaryDatasetName: string;
-        primaryColumn: string;
-        foreignKeys: AutoJoinForeignKey[];
-        detectionMethod: AutoJoinDetectionMethod;
-        datasetCount: number;
-        generatedAt: string;
-    };
-    generatedAt?: string; // Optional timestamp for generation
-};
-
-const stripFileExtension = (value: string | undefined): string => {
-    if (!value) {
-        return '';
-    }
-    return value.replace(/\.[^/.]+$/, '');
-};
-
-const normalizeDatasetLabel = (dataset: any): string => {
-    return (
-        dataset?.ingestionMetadata?.name ||
-        dataset?.originalFileName ||
-        dataset?.name ||
-        dataset?.id ||
-        'dataset'
-    );
-};
-
-const normalizeLabelForComparison = (value: string): string =>
-    stripFileExtension(value).toLowerCase().replace(/[^a-z0-9]+/g, '_');
-
-// Normalize column names for comparison (remove underscores, lowercase)
-const normalizeColumnName = (column: string): string => {
-    return column.toLowerCase().replace(/_/g, '');
-};
-
-// Find matching column with case-insensitive and underscore-tolerant matching
-const findMatchingColumn = (schema: Record<string, any>, targetColumn: string): string | null => {
-    const schemaColumns = Object.keys(schema);
-    const normalizedTarget = normalizeColumnName(targetColumn);
-
-    // First try exact match
-    if (schemaColumns.includes(targetColumn)) {
-        return targetColumn;
-    }
-
-    // Then try normalized match
-    const match = schemaColumns.find(col => normalizeColumnName(col) === normalizedTarget);
-    return match || null;
-};
-
-const datasetHasColumn = (dataset: any, column: string | undefined): boolean => {
-    if (!dataset || !column) {
-        return false;
-    }
-    const schema = dataset.schema || {};
-    // Check for exact match or normalized match
-    return findMatchingColumn(schema, column) !== null;
-};
-
-const detectPreferredPrimaryColumn = (dataset: any): string => {
-    const schema = dataset?.schema || {};
-    const columns = Object.keys(schema);
-    if (!columns.length) {
-        return 'id';
-    }
-    const preferred = columns.find((column) => JOIN_KEY_PATTERNS.some((pattern) => pattern.test(column)));
-    return preferred || columns[0];
-};
-
-const extractDatasetRows = (dataset: any, maxRows = MAX_MULTI_DATASET_SAMPLE_ROWS): any[] => {
-    if (!dataset) {
-        return [];
-    }
-    const sources = [
-        dataset.preview,
-        dataset.ingestionMetadata?.preview,
-        dataset.ingestionMetadata?.sampleRows,
-        dataset.sampleRows,
-        dataset.data
-    ];
-
-    for (const source of sources) {
-        const parsed = safeParseJson(source);
-        if (Array.isArray(parsed) && parsed.length) {
-            const normalizedRows = parsed
-                .filter((row) => row && typeof row === 'object')
-                .map((row) => ({ ...row }));
-            if (normalizedRows.length) {
-                return normalizedRows.slice(0, maxRows);
-            }
-        }
-    }
-    return [];
-};
-
-const regenerateDatasetPreview = async (dataset: any): Promise<any[]> => {
-    if (!dataset?.storageUri || !dataset?.id) {
-        return [];
-    }
-
-    try {
-        const buffer = await fs.readFile(dataset.storageUri);
-        const fileName = dataset.originalFileName || dataset.name || path.basename(dataset.storageUri);
-        const mimeType =
-            dataset.mimeType ||
-            (fileName.endsWith('.json')
-                ? 'application/json'
-                : fileName.endsWith('.xlsx') || fileName.endsWith('.xls')
-                    ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                    : 'text/csv');
-
-        const processed = await FileProcessor.processFile(buffer, fileName, mimeType);
-        const previewRows = Array.isArray(processed.preview)
-            ? processed.preview.slice(0, MAX_MULTI_DATASET_SAMPLE_ROWS)
-            : [];
-
-        if (previewRows.length) {
-            const updatedMetadata = {
-                ...(dataset.ingestionMetadata || {}),
-                preview: previewRows,
-                regeneratedPreviewAt: new Date().toISOString(),
-                regenerationSource: 'multi_dataset_preview_auto'
-            };
-
-            try {
-                await storage.updateDataset(dataset.id, {
-                    preview: previewRows,
-                    schema: dataset.schema || processed.schema,
-                    recordCount: dataset.recordCount ?? processed.recordCount,
-                    ingestionMetadata: updatedMetadata
-                } as any);
-            } catch (persistError) {
-                console.error(`Failed to persist regenerated preview for dataset ${dataset.id}:`, persistError);
-            }
-
-            dataset.preview = previewRows;
-            dataset.schema = dataset.schema || processed.schema;
-            dataset.recordCount = dataset.recordCount ?? processed.recordCount;
-            dataset.ingestionMetadata = updatedMetadata;
-        }
-
-        return previewRows;
-    } catch (error) {
-        console.error(`Failed to regenerate preview for dataset ${dataset?.id}:`, error);
-        return [];
-    }
-};
-
-const ensureDatasetRowsForPreview = async (dataset: any): Promise<any[]> => {
-    const rows = extractDatasetRows(dataset);
-    if (rows.length) {
-        return rows;
-    }
-    return regenerateDatasetPreview(dataset);
-};
-
-const choosePrimaryDatasetEntry = (entries: ProjectDatasetEntry[]): ProjectDatasetEntry => {
-    if (!entries.length) {
-        throw new Error('No dataset entries available');
-    }
-    const primaryByRole = entries.find((entry) => entry.association?.role === 'primary');
-    if (primaryByRole) {
-        return primaryByRole;
-    }
-    return entries.reduce((acc, entry) => {
-        const candidateCount = entry.dataset?.recordCount ?? 0;
-        const accCount = acc.dataset?.recordCount ?? 0;
-        return candidateCount > accCount ? entry : acc;
-    }, entries[0]);
-};
-
-const readStoredJoinPlan = (project: any, entries: ProjectDatasetEntry[]): AutoJoinPlan | null => {
-    const stored = project?.metadata?.autoDetectedJoinConfig;
-    if (!stored) {
-        return null;
-    }
-
-    const primaryEntry = choosePrimaryDatasetEntry(entries);
-    const candidateForeignKeys = Array.isArray(stored.foreignKeys) ? stored.foreignKeys : [];
-    const datasetIds = new Set(entries.map((entry) => entry.dataset?.id));
-    const foreignKeys: AutoJoinForeignKey[] = candidateForeignKeys
-        .filter((fk: any) => fk?.datasetId && datasetIds.has(fk.datasetId))
-        .map((fk: any) => ({
-            datasetId: fk.datasetId,
-            datasetName:
-                fk.datasetName ||
-                normalizeDatasetLabel(entries.find((entry) => entry.dataset?.id === fk.datasetId)?.dataset),
-            targetColumn: fk.targetColumn || fk.joinKey || fk.primaryColumn,
-            primaryColumn: fk.primaryColumn || fk.targetColumn || detectPreferredPrimaryColumn(primaryEntry.dataset),
-            confidence: typeof fk.confidence === 'number' ? fk.confidence : 0.85,
-            detectionSource: fk.detectionSource || 'metadata'
-        }));
-
-    if (!foreignKeys.length && stored.strategy !== 'concat') {
-        return null;
-    }
-
-    return {
-        strategy: stored.strategy || (foreignKeys.length ? 'join' : 'concat'),
-        joinType: stored.type || 'left',
-        detectionMethod: 'metadata',
-        primaryDatasetId: stored.primaryDatasetId || primaryEntry.dataset.id,
-        primaryColumn: stored.primaryColumn || detectPreferredPrimaryColumn(primaryEntry.dataset),
-        foreignKeys
-    };
-};
-
-const detectAgentJoinPlan = (entries: ProjectDatasetEntry[], dataEngineer: DataEngineerAgent): AutoJoinPlan => {
-    const primaryEntry = choosePrimaryDatasetEntry(entries);
-    const plan: AutoJoinPlan = {
-        strategy: 'join',
-        joinType: 'left',
-        detectionMethod: 'data_engineer_agent',
-        primaryDatasetId: primaryEntry.dataset.id,
-        primaryColumn: detectPreferredPrimaryColumn(primaryEntry.dataset),
-        foreignKeys: []
-    };
-
-    const schemaPayload = entries
-        .map((entry) => ({
-            fileName: normalizeDatasetLabel(entry.dataset),
-            schema: Object.entries(entry.dataset?.schema || {}).map(([name, info]: [string, any]) => ({
-                name,
-                type: typeof info === 'string' ? info : info?.type || 'text'
-            }))
-        }))
-        .filter((item) => item.schema.length);
-
-    if (schemaPayload.length < 2) {
-        return plan;
-    }
-
-    const relationships = dataEngineer.detectCrossFileRelationshipsPublic(schemaPayload);
-    if (!relationships.length) {
-        return plan;
-    }
-    const normalizedPrimaryName = normalizeLabelForComparison(normalizeDatasetLabel(primaryEntry.dataset));
-
-    entries.forEach((entry) => {
-        if (entry.dataset.id === primaryEntry.dataset.id) {
-            return;
-        }
-        const datasetLabel = normalizeDatasetLabel(entry.dataset);
-        const normalizedDatasetName = normalizeLabelForComparison(datasetLabel);
-
-        const relationship = relationships.find((candidate) => {
-            const file1 = normalizeLabelForComparison(candidate.file1);
-            const file2 = normalizeLabelForComparison(candidate.file2);
-            return (
-                (file1 === normalizedDatasetName && file2 === normalizedPrimaryName) ||
-                (file2 === normalizedDatasetName && file1 === normalizedPrimaryName)
-            );
-        });
-
-        if (!relationship) {
-            return;
-        }
-
-        const joinKey = relationship.joinKey;
-        if (!datasetHasColumn(entry.dataset, joinKey) || !datasetHasColumn(primaryEntry.dataset, joinKey)) {
-            return;
-        }
-
-        // FIX: Update plan.primaryColumn to match the detected join key
-        // This ensures the primary dataset's join key aligns with secondary datasets
-        if (plan.foreignKeys.length === 0) {
-            plan.primaryColumn = joinKey;
-            console.log(`🔗 [Agent Join] Updated primary column to "${joinKey}" based on DE agent detection`);
-        }
-
-        plan.foreignKeys.push({
-            datasetId: entry.dataset.id,
-            datasetName: datasetLabel,
-            targetColumn: joinKey,
-            primaryColumn: joinKey,
-            confidence: relationship.confidence ?? 0.85,
-            detectionSource: 'data_engineer_agent'
-        });
-    });
-
-    return plan;
-};
-
-const detectSchemaJoinPlan = (entries: ProjectDatasetEntry[]): AutoJoinPlan => {
-    const primaryEntry = choosePrimaryDatasetEntry(entries);
-    const primaryColumns = Object.keys(primaryEntry.dataset?.schema || {});
-    const plan: AutoJoinPlan = {
-        strategy: 'join',
-        joinType: 'left',
-        detectionMethod: 'schema_match',
-        primaryDatasetId: primaryEntry.dataset.id,
-        primaryColumn: detectPreferredPrimaryColumn(primaryEntry.dataset),
-        foreignKeys: []
-    };
-
-    if (!primaryColumns.length) {
-        return plan;
-    }
-
-    entries.forEach((entry) => {
-        if (entry.dataset.id === primaryEntry.dataset.id) {
-            return;
-        }
-
-        const datasetColumns = Object.keys(entry.dataset?.schema || {});
-        if (!datasetColumns.length) {
-            return;
-        }
-
-        let selectedColumn: string | null = null;
-        let matchedPrimaryColumn: string | null = null;
-        let confidence = 0.6;
-
-        // Create normalized map of primary columns for case-insensitive matching
-        const normalizedPrimaryColumns = new Map<string, string>();
-        primaryColumns.forEach(col => normalizedPrimaryColumns.set(normalizeColumnName(col), col));
-
-        // First pass: look for matching columns (case-insensitive, underscore-tolerant)
-        for (const column of datasetColumns) {
-            const normalizedCol = normalizeColumnName(column);
-            if (normalizedPrimaryColumns.has(normalizedCol)) {
-                selectedColumn = column;
-                matchedPrimaryColumn = normalizedPrimaryColumns.get(normalizedCol) || column;
-                confidence = JOIN_KEY_PATTERNS.some((pattern) => pattern.test(column)) ? 0.85 : 0.7;
-                console.log(`🔗 [Schema Join] Found matching columns: "${column}" ↔ "${matchedPrimaryColumn}" (confidence: ${confidence})`);
-                break;
-            }
-        }
-
-        // Second pass: look for join key pattern columns
-        if (!selectedColumn) {
-            const fallbackColumn = datasetColumns.find((column) => JOIN_KEY_PATTERNS.some((pattern) => pattern.test(column)));
-            if (fallbackColumn) {
-                // Check if primary has a matching column (case-insensitive)
-                const normalizedFallback = normalizeColumnName(fallbackColumn);
-                if (normalizedPrimaryColumns.has(normalizedFallback)) {
-                    selectedColumn = fallbackColumn;
-                    matchedPrimaryColumn = normalizedPrimaryColumns.get(normalizedFallback) || fallbackColumn;
-                    confidence = 0.65;
-                    console.log(`🔗 [Schema Join] Found fallback match: "${fallbackColumn}" ↔ "${matchedPrimaryColumn}" (confidence: ${confidence})`);
-                }
-            }
-        }
-
-        if (selectedColumn && matchedPrimaryColumn) {
-            // FIX: Update plan.primaryColumn to match the first detected join key
-            // This ensures the primary dataset's join key aligns with secondary datasets
-            if (plan.foreignKeys.length === 0) {
-                plan.primaryColumn = matchedPrimaryColumn;
-                console.log(`🔗 [Schema Join] Updated primary column to "${matchedPrimaryColumn}" based on schema match`);
-            }
-
-            plan.foreignKeys.push({
-                datasetId: entry.dataset.id,
-                datasetName: normalizeDatasetLabel(entry.dataset),
-                targetColumn: selectedColumn,
-                primaryColumn: matchedPrimaryColumn,
-                confidence,
-                detectionSource: 'schema_match'
-            });
-        }
-    });
-
-    return plan;
-};
-
-const buildFallbackConcatPlan = (entries: ProjectDatasetEntry[]): AutoJoinPlan => {
-    const primaryEntry = choosePrimaryDatasetEntry(entries);
-    return {
-        strategy: 'concat',
-        joinType: 'left',
-        detectionMethod: 'fallback_concat',
-        primaryDatasetId: primaryEntry.dataset.id,
-        primaryColumn: detectPreferredPrimaryColumn(primaryEntry.dataset),
-        foreignKeys: []
-    };
-};
-
-const deriveAutoJoinPlan = (project: any, entries: ProjectDatasetEntry[], dataEngineer: DataEngineerAgent): AutoJoinPlan => {
-    const stored = readStoredJoinPlan(project, entries);
-    if (stored) {
-        return stored;
-    }
-
-    const agentPlan = detectAgentJoinPlan(entries, dataEngineer);
-    if (agentPlan.foreignKeys.length) {
-        return agentPlan;
-    }
-
-    const schemaPlan = detectSchemaJoinPlan(entries);
-    if (schemaPlan.foreignKeys.length) {
-        return schemaPlan;
-    }
-
-    return buildFallbackConcatPlan(entries);
-};
-
-const buildJoinSignature = (config: any): string => {
-    if (!config) {
-        return '';
-    }
-    const normalizedForeignKeys = Array.isArray(config.foreignKeys)
-        ? config.foreignKeys
-            .map((fk: any) => ({
-                datasetId: fk.datasetId,
-                targetColumn: fk.targetColumn || fk.joinKey,
-                primaryColumn: fk.primaryColumn
-            }))
-            .sort((a: { datasetId: string }, b: { datasetId: string }) => a.datasetId.localeCompare(b.datasetId))
-        : [];
-
-    return JSON.stringify({
-        strategy: config.strategy,
-        type: config.type,
-        primaryDatasetId: config.primaryDatasetId,
-        primaryColumn: config.primaryColumn,
-        foreignKeys: normalizedForeignKeys
-    });
-};
-
-const buildMultiDatasetPreview = async (
-    project: any,
-    datasetEntries: ProjectDatasetEntry[],
-    dataEngineer: DataEngineerAgent
-): Promise<MultiDatasetPreviewPayload | null> => {
-    if (!datasetEntries || datasetEntries.length < 2) {
-        return null;
-    }
-
-    const autoJoinPlan = deriveAutoJoinPlan(project, datasetEntries, dataEngineer);
-    const primaryEntry = datasetEntries.find((entry) => entry.dataset.id === autoJoinPlan.primaryDatasetId) ||
-        choosePrimaryDatasetEntry(datasetEntries);
-    if (!primaryEntry?.dataset) {
-        return null;
-    }
-
-    if (!datasetHasColumn(primaryEntry.dataset, autoJoinPlan.primaryColumn)) {
-        autoJoinPlan.primaryColumn = detectPreferredPrimaryColumn(primaryEntry.dataset);
-    }
-
-    // P1-1 FIX: Get FULL dataset data for join, not just preview
-    // We need full data for analysis execution, not just UI preview
-    const getFullDatasetData = (dataset: any): any[] => {
-        // Priority: data > ingestionMetadata.data > ingestionMetadata.transformedData > preview
-        if (Array.isArray(dataset.data) && dataset.data.length > 0) {
-            return dataset.data;
-        }
-        const parsed = safeParseJson(dataset.data);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-            return parsed;
-        }
-        if (Array.isArray(dataset.ingestionMetadata?.data) && dataset.ingestionMetadata.data.length > 0) {
-            return dataset.ingestionMetadata.data;
-        }
-        if (Array.isArray(dataset.ingestionMetadata?.transformedData) && dataset.ingestionMetadata.transformedData.length > 0) {
-            return dataset.ingestionMetadata.transformedData;
-        }
-        // Fallback to preview if full data not available
-        return extractDatasetRows(dataset, 10000); // Large limit for fallback
-    };
-
-    const baseRows = getFullDatasetData(primaryEntry.dataset);
-    const basePreviewRows = baseRows.slice(0, MAX_MULTI_DATASET_PREVIEW_ROWS); // For UI preview
-    
-    if (!baseRows.length) {
-        console.warn(`⚠️  [JOIN PREVIEW] Primary dataset ${primaryEntry.dataset?.id} has no data.`);
-        return null;
-    }
-
-    console.log(`📊 [P1-1 FIX] Primary dataset: ${baseRows.length} total rows (${basePreviewRows.length} for preview)`);
-
-    const companionEntries = datasetEntries.filter((entry) => entry.dataset.id !== primaryEntry.dataset.id);
-    if (!companionEntries.length) {
-        return null;
-    }
-
-    const joinTargets = (
-        await Promise.all(
-            companionEntries.map(async (entry) => {
-                const fullRows = getFullDatasetData(entry.dataset);
-                return {
-                    entry,
-                    rows: fullRows,
-                    previewRows: fullRows.slice(0, MAX_MULTI_DATASET_PREVIEW_ROWS)
-                };
-            })
-        )
-    ).filter((target) => target.rows.length);
-
-    if (!joinTargets.length) {
-        console.warn(`⚠️  [JOIN PREVIEW] No companion datasets with preview rows available for project ${project?.id}.`);
-        return null;
-    }
-
-    let mergeStrategy: DatasetJoinConfig['mergeStrategy'] = autoJoinPlan.strategy === 'join' ? 'merge' : 'concat';
-    if (mergeStrategy === 'merge' && autoJoinPlan.foreignKeys.length < joinTargets.length) {
-        mergeStrategy = 'concat';
-        autoJoinPlan.detectionMethod = 'fallback_concat';
-        autoJoinPlan.foreignKeys = [];
-    }
-
-    if (mergeStrategy === 'merge') {
-        const missingJoinData = joinTargets.some((target) => {
-            const fk = autoJoinPlan.foreignKeys.find((foreignKey) => foreignKey.datasetId === target.entry.dataset.id);
-            return !fk || !datasetHasColumn(target.entry.dataset, fk.targetColumn);
-        });
-        if (missingJoinData) {
-            mergeStrategy = 'concat';
-            autoJoinPlan.detectionMethod = 'fallback_concat';
-            autoJoinPlan.foreignKeys = [];
-        }
-    }
-
-    // P1-2 FIX: Filter PII columns BEFORE joining datasets
-    // Get PII decisions from journeyProgress (SSOT) and project metadata (legacy)
-    const excludedColumns = new Set<string>();
-    
-    // Check journeyProgress.piiDecision first (SSOT)
-    const journeyProgress = parseJourneyProgress((project as any)?.journeyProgress) as any;
-    if (journeyProgress?.piiDecision?.excludedColumns) {
-        for (const col of journeyProgress.piiDecision.excludedColumns) {
-            excludedColumns.add(String(col).toLowerCase());
-        }
-    }
-    if (journeyProgress?.piiDecision?.anonymizedColumns && journeyProgress.piiDecision.anonymizedColumns.length > 0) {
-        // Anonymized columns are treated as excluded (they'll be redacted, not included)
-        for (const col of journeyProgress.piiDecision.anonymizedColumns) {
-            excludedColumns.add(String(col).toLowerCase());
-        }
-    }
-    
-    // Also check legacy project.metadata locations for backward compatibility
-    const legacyExcluded = (project as any)?.metadata?.excludedColumns || [];
-    for (const col of legacyExcluded) {
-        excludedColumns.add(String(col).toLowerCase());
-    }
-    
-    const piiDecisions = (project as any)?.metadata?.piiDecisions;
-    if (piiDecisions?.excludedColumns) {
-        for (const col of piiDecisions.excludedColumns) {
-            excludedColumns.add(String(col).toLowerCase());
-        }
-    }
-
-    // Helper to filter PII columns from rows
-    const filterPIIFromRows = (rows: any[]): any[] => {
-        if (excludedColumns.size === 0) return rows;
-        return rows.map(row => {
-            const filtered: any = {};
-            for (const [key, value] of Object.entries(row)) {
-                if (!excludedColumns.has(key.toLowerCase())) {
-                    filtered[key] = value;
-                }
-            }
-            return filtered;
-        });
-    };
-
-    // Helper to filter PII columns from schema
-    const filterPIIFromSchema = (schema: any): any => {
-        if (excludedColumns.size === 0) return schema;
-        if (Array.isArray(schema)) {
-            return schema.filter((col: any) => {
-                const colName = col.name || col.column || col;
-                return !excludedColumns.has(String(colName).toLowerCase());
-            });
-        }
-        return Object.fromEntries(
-            Object.entries(schema).filter(([col]) => !excludedColumns.has(col.toLowerCase()))
-        );
-    };
-
-    if (excludedColumns.size > 0) {
-        console.log(`🔒 [P1-2 FIX] Filtering ${excludedColumns.size} PII columns BEFORE join:`, Array.from(excludedColumns));
-    }
-
-    // P1-1 FIX: Join using FULL data, not preview
-    const baseProjectForJoiner = {
-        id: primaryEntry.dataset.id,
-        name: normalizeDatasetLabel(primaryEntry.dataset),
-        schema: filterPIIFromSchema(primaryEntry.dataset.schema || {}),
-        data: filterPIIFromRows(baseRows), // Full data for join
-        recordCount: baseRows.length
-    };
-
-    const joinProjects = joinTargets.map((target) => ({
-        id: target.entry.dataset.id,
-        name: normalizeDatasetLabel(target.entry.dataset),
-        schema: filterPIIFromSchema(target.entry.dataset.schema || {}),
-        data: filterPIIFromRows(target.rows), // Full data for join
-        recordCount: target.rows.length
-    }));
-
-    const joinConfig: DatasetJoinConfig = {
-        joinWithProjects: joinProjects.map((projectEntry) => projectEntry.id),
-        joinType: autoJoinPlan.joinType,
-        mergeStrategy,
-        joinKeys: {
-            [baseProjectForJoiner.id]: autoJoinPlan.primaryColumn
-        }
-    };
-
-    if (mergeStrategy === 'merge') {
-        for (const projectEntry of joinProjects) {
-            const fk = autoJoinPlan.foreignKeys.find((foreignKey) => foreignKey.datasetId === projectEntry.id);
-            if (!fk) {
-                mergeStrategy = 'concat';
-                joinConfig.mergeStrategy = 'concat';
-                autoJoinPlan.detectionMethod = 'fallback_concat';
-                autoJoinPlan.foreignKeys = [];
-                break;
-            }
-            joinConfig.joinKeys[projectEntry.id] = fk.targetColumn;
-        }
-    }
-
-    if (joinConfig.mergeStrategy === 'concat') {
-        joinConfig.joinKeys = {
-            [baseProjectForJoiner.id]: autoJoinPlan.primaryColumn
-        };
-    }
-
-    const joinResult = await DatasetJoiner.joinDatasets(baseProjectForJoiner, joinProjects, joinConfig);
-    if (!joinResult.success) {
-        return null;
-    }
-
-    // P1-1 FIX: Store FULL joined data, not just preview
-    const fullJoinedData = Array.isArray(joinResult.project?.data) ? joinResult.project.data : [];
-    const joinedRows = fullJoinedData.slice(0, MAX_MULTI_DATASET_PREVIEW_ROWS); // Preview for UI
-    if (!joinedRows.length) {
-        return null;
-    }
-
-    const joinedSchema = joinResult.project?.schema || {};
-    console.log(`📊 [P1-1 FIX] Full joined data: ${fullJoinedData.length} total rows, Preview: ${joinedRows.length} rows for UI`);
-
-    const warnings: string[] = [];
-    if (joinConfig.mergeStrategy === 'concat') {
-        warnings.push('No shared join keys detected. Displaying stacked preview until Data Engineer finalizes joins.');
-    }
-    if (joinProjects.length < companionEntries.length) {
-        warnings.push('Some datasets lacked sample rows and were skipped in this preview.');
-    }
-
-    const primaryDatasetName = normalizeDatasetLabel(primaryEntry.dataset);
-
-    const joinInsights = {
-        detectionMethod: autoJoinPlan.detectionMethod,
-        joinStrategy: joinConfig.mergeStrategy === 'merge' ? 'join' as const : 'concat' as const,
-        joinType: joinConfig.joinType,
-        primaryDatasetId: primaryEntry.dataset.id,
-        primaryDatasetName,
-        primaryColumn: autoJoinPlan.primaryColumn,
-        foreignKeys: joinConfig.mergeStrategy === 'merge' ? autoJoinPlan.foreignKeys : [],
-        datasetCount: datasetEntries.length,
-        previewRowCount: joinedRows.length,
-        warnings
-    };
-
-    const autoJoinConfig = {
-        enabled: true,
-        strategy: joinInsights.joinStrategy,
-        type: joinInsights.joinType,
-        primaryDatasetId: joinInsights.primaryDatasetId,
-        primaryDatasetName,
-        primaryColumn: joinInsights.primaryColumn,
-        foreignKeys: joinInsights.foreignKeys,
-        detectionMethod: joinInsights.detectionMethod,
-        datasetCount: joinInsights.datasetCount,
-        generatedAt: new Date().toISOString()
-    };
-
-    return {
-        previewRows: joinedRows,
-        fullData: fullJoinedData, // Store ALL rows for analysis execution
-        // FIX: Ensure totalRowCount is accurate (not just preview length)
-        totalRowCount: fullJoinedData.length,
-        schema: joinedSchema,
-        joinInsights,
-        autoJoinConfig,
-        // GAP FIX: Explicitly mark as ready for persistence to journeyProgress
-        generatedAt: new Date().toISOString()
-    };
-};
-
 const buildVisualizationRequirements = (chartType: string, recordCount: number): VisualizationRequirements => {
     const dataSize = recordCount > 100_000
         ? 'large'
@@ -1334,14 +577,7 @@ const clampScore = (value: number): number => {
     if (!Number.isFinite(value)) {
         return 0;
     }
-    // [FIX] Normalize: if value is clearly a decimal (0 < value < 1), convert to 0-100
-    // Changed from <= 1 to < 1 to avoid converting 1.0 to 100 (which is wrong)
-    // Values like 0.93 become 93, but 1 stays as 1, 93 stays as 93
-    let normalized = value;
-    if (value > 0 && value < 1) {
-        normalized = value * 100;
-    }
-    return Math.max(0, Math.min(100, Math.round(normalized)));
+    return Math.max(0, Math.min(100, Math.round(value)));
 };
 
 const normalizeScoreCandidate = (value: unknown): number | null => {
@@ -2944,7 +2180,7 @@ const buildUserContext = (req: any, project?: any) => {
         subscriptionTier: user.subscriptionTier || 'trial',
         projectId: project?.id,
         projectName: project?.name,
-        journeyType: normalizeJourneyType(project?.journeyType as string | JourneyType | null)
+        journeyType: project?.journeyType || 'non-tech'
     };
 };
 
@@ -2990,72 +2226,6 @@ const upload = multer({
         } else {
             cb(new Error(`File type ${ext} not supported. Allowed: ${allowedTypes.join(', ')}`));
         }
-    }
-});
-
-router.get("/:projectId/journey/pending-approvals", ensureAuthenticated, async (req, res) => {
-    try {
-        const { projectId } = req.params;
-        const userId = (req.user as any)?.id;
-
-        if (!userId) {
-            return res.status(401).json({ success: false, error: 'Authentication required' });
-        }
-
-        const accessCheck = await canAccessProject(userId, projectId, isAdmin(req));
-        if (!accessCheck.allowed) {
-            const status = accessCheck.reason === 'Project not found' ? 404 : 403;
-            return res.status(status).json({ success: false, error: accessCheck.reason });
-        }
-
-        const pendingCheckpoints = await getPendingApprovalCheckpoints(projectId);
-        res.json({
-            success: true,
-            pendingCheckpoints,
-        });
-    } catch (error: any) {
-        console.error('Error fetching pending approvals:', error);
-        res.status(500).json({ success: false, error: error.message || 'Failed to load pending approvals' });
-    }
-});
-
-router.post(":projectId/journey/resume", ensureAuthenticated, async (req, res) => {
-    try {
-        const { projectId } = req.params;
-        const userId = (req.user as any)?.id;
-
-        if (!userId) {
-            return res.status(401).json({ success: false, error: 'Authentication required' });
-        }
-
-        const accessCheck = await canAccessProject(userId, projectId, isAdmin(req));
-        if (!accessCheck.allowed) {
-            const status = accessCheck.reason === 'Project not found' ? 404 : 403;
-            return res.status(status).json({ success: false, error: accessCheck.reason });
-        }
-
-        const pendingCheckpoints = await getPendingApprovalCheckpoints(projectId);
-        if (pendingCheckpoints.length > 0) {
-            const journeyState = await journeyStateManager.getJourneyState(projectId);
-            return res.status(409).json({
-                success: false,
-                error: 'Pending approvals required before resuming the journey',
-                pendingCheckpoints,
-                journeyState,
-            });
-        }
-
-        await projectAgentOrchestrator.autoExecuteNextStep(projectId);
-        const journeyState = await journeyStateManager.getJourneyState(projectId);
-
-        res.json({
-            success: true,
-            message: 'Journey resume triggered',
-            journeyState
-        });
-    } catch (error: any) {
-        console.error('Error resuming journey:', error);
-        res.status(500).json({ success: false, error: error.message || 'Failed to resume journey' });
     }
 });
 
@@ -3201,7 +2371,7 @@ router.post("/:id/agent-recommendations", ensureAuthenticated, async (req, res) 
             goals,
             questions,
             dataSource: dataSource || 'upload',
-            journeyType: normalizeJourneyType(project.journeyType as string | JourneyType | null)
+            journeyType: project.journeyType || 'non-tech'
         };
 
         // Use context if available, fallback to old signature for backward compatibility
@@ -3211,7 +2381,7 @@ router.post("/:id/agent-recommendations", ensureAuthenticated, async (req, res) 
             goals,
             questions,
             dataSource: dataSource || 'upload',
-            journeyType: normalizeJourneyType(project.journeyType as string | JourneyType | null)
+            journeyType: project.journeyType || 'non-tech'
         } as any);
 
         // Publish event about data requirements estimation
@@ -3240,7 +2410,7 @@ router.post("/:id/agent-recommendations", ensureAuthenticated, async (req, res) 
             dataAnalysis: dataEstimate,
             userQuestions: questions,
             analysisGoal: goals,
-            journeyType: normalizeJourneyType(project.journeyType as string | JourneyType | null)
+            journeyType: project.journeyType || 'non-tech'
         } as any);
 
         // Publish event about analysis recommendations
@@ -3406,26 +2576,47 @@ router.post("/save-transformations/:projectId", unifiedAuth, async (req, res) =>
                 .filter((step): step is TransformationStep => step !== null)
             : [];
 
-        // Use apply_transformations tool via tool registry
-        const toolResult = await executeTool(
-            'apply_transformations',
-            'data_engineer',
+        const joinCache = new Map<string, { rows: any[]; projectName?: string }>();
+        const joinResolver = async (targetProjectId: string) => {
+            if (joinCache.has(targetProjectId)) {
+                return joinCache.get(targetProjectId)!;
+            }
+
+            const relatedProject = await storage.getProject(targetProjectId);
+            if (!relatedProject) {
+                throw new Error('Join project not found.');
+            }
+
+            const relatedOwner = (relatedProject as any)?.ownerId ?? (relatedProject as any)?.userId;
+            if (relatedOwner !== userId) {
+                throw new Error('Access denied for join project.');
+            }
+
+            const relatedDataset = await storage.getDatasetForProject(targetProjectId);
+            const relatedRows = extractRowsForTransformation(relatedDataset, relatedProject);
+
+            if (relatedRows.length === 0) {
+                throw new Error('Join dataset has no rows.');
+            }
+
+            const payload = {
+                rows: relatedRows,
+                projectName: relatedProject?.name ?? targetProjectId,
+            };
+
+            joinCache.set(targetProjectId, payload);
+            return payload;
+        };
+
+        const transformationResult = await DataTransformationService.applyTransformations(
+            sourceRows,
+            sanitizedSteps,
             {
-                projectId,
-                transformationSteps: sanitizedSteps,
-                sourceRows,
                 originalSchema: dataset?.schema ?? (project as any)?.schema,
-                // Note: joinResolver cannot be passed through tool (functions not serializable)
-                // Handler will need to resolve joins internally if needed
+                warnings: baseWarnings,
+                joinResolver,
             },
-            { userId, projectId }
         );
-
-        if (toolResult.status === 'error') {
-            throw new Error(toolResult.error || 'Transformation execution failed');
-        }
-
-        const transformationResult = toolResult.result;
 
         const updatedProject = await storage.updateProject(projectId, {
             transformedData: transformationResult.rows,
@@ -3681,8 +2872,14 @@ router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, r
         }).catch(error => {
             console.error('Failed to record PII analysis metric:', error);
         });
-        // [FIX] Create project FIRST, before PII check return
-        // This ensures projectId is always available for the frontend
+        // Track PII detection for metrics
+        if (piiAnalysis.detectedPII.length > 0) {
+            metricDetails.hasPii = true;
+            console.log(`🔒 [PII] Detected ${piiAnalysis.detectedPII.length} PII fields in ${req.file.originalname}`);
+        }
+
+        // ALWAYS create project first, then handle PII decisions
+        // This ensures projectId is available for all subsequent operations
         const projectCreateStart = Date.now();
         const project = await storage.createProject({
             userId: actualUserId, // ✅ Use customer's ID, not admin's
@@ -3744,11 +2941,14 @@ router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, r
 
         // Create a dataset and link it with real file path
         const datasetCreateStart = Date.now();
+        // ✅ PHASE 1 FIX: Ensure originalFileName is always set with fallback
+        const safeOriginalFileName = req.file.originalname || `upload_${Date.now()}.csv`;
         const dataset = await storage.createDataset({
             id: undefined as any, // will be set by storage impl
             userId: actualUserId, // ✅ Use customer's ID
             sourceType: 'upload',
-            originalFileName: req.file.originalname,
+            originalFileName: safeOriginalFileName,
+            name: safeOriginalFileName,
             mimeType: req.file.mimetype,
             fileSize: req.file.size,
             storageUri: originalFilePath, // ✅ Real file path, not virtual URI
@@ -3760,8 +2960,6 @@ router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, r
             ingestionMetadata
         } as any);
         await storage.linkProjectToDataset(project.id, dataset.id);
-        // [PHASE 2 FIX] Log link creation for debugging dataset-project connection issues
-        console.log(`📎 [Upload] Linked project ${project.id} to dataset ${dataset.id} (fileName: ${req.file.originalname})`);
         const datasetCreateDuration = Date.now() - datasetCreateStart;
         metricDetails.datasetId = dataset.id;
         metricDetails.datasetCreateMs = datasetCreateDuration;
@@ -3789,31 +2987,6 @@ router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, r
             'data_health_check'
         ]);
 
-        // [FIX] If PII detected, return early with projectId
-        // Project and dataset are already created, so user can continue after PII decision
-        if (piiAnalysis.detectedPII.length > 0) {
-            metricDetails.hasPii = true;
-            console.log(`🔒 [Upload] PII detected in project ${project.id}, returning for user decision`);
-            return res.json({
-                success: true,
-                requiresPIIDecision: true,
-                projectId: project.id, // [FIX] Now includes projectId!
-                datasetId: dataset.id,
-                piiResult: piiAnalysis,
-                name: name.trim(),
-                questions: parsedQuestions,
-                schema: processedData.schema,
-                recordCount: processedData.recordCount,
-                sampleData: processedData.preview,
-                dataDescription: processedData.datasetSummary.overview,
-                datasetSummary: processedData.datasetSummary,
-                descriptiveStats: processedData.descriptiveStats,
-                qualityMetrics: processedData.qualityMetrics,
-                relationships: processedData.relationships,
-                message: 'PII detected - user consent required'
-            });
-        }
-
         // ✅ PHASE 2: Map dataset to requirements (if Phase 1 document exists)
         let dataRequirementsDocument = undefined;
         try {
@@ -3832,68 +3005,40 @@ router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, r
                 columnTypes[col] = typeof info === 'object' && (info as any)?.type ? (info as any).type : 'text';
             }
 
-            // Generate Phase 1 requirements via tool registry
-            const phase1ToolResult = await executeTool(
-                'required_data_elements_tool',
-                'data_scientist',
-                {
-                    operation: 'defineRequirements',
-                    projectId: project.id,
-                    userGoals: parsedQuestions.length > 0
-                        ? [`Analyze data to answer: ${parsedQuestions.slice(0, 3).join(', ')}`]
-                        : ['Perform comprehensive data analysis'],
-                    userQuestions: parsedQuestions,
-                    // FIX: Include dataset metadata for column-based requirements
-                    datasetMetadata: datasetColumns.length > 0 ? {
-                        columns: datasetColumns,
-                        columnTypes: columnTypes,
-                        schema: processedData.schema
-                    } : undefined
-                },
-                { userId: actualUserId, projectId: project.id }
-            );
-
-            if (phase1ToolResult.status === 'error') {
-                console.warn('⚠️ Failed to generate Phase 1 requirements via tool:', phase1ToolResult.error);
-                throw new Error(phase1ToolResult.error || 'Failed to generate data requirements');
-            }
-
-            const phase1Doc = phase1ToolResult.result;
+            const phase1Doc = await requiredDataElementsTool.defineRequirements({
+                projectId: project.id,
+                userGoals: parsedQuestions.length > 0
+                    ? [`Analyze data to answer: ${parsedQuestions.slice(0, 3).join(', ')}`]
+                    : ['Perform comprehensive data analysis'],
+                userQuestions: parsedQuestions,
+                // FIX: Include dataset metadata for column-based requirements
+                datasetMetadata: datasetColumns.length > 0 ? {
+                    columns: datasetColumns,
+                    columnTypes: columnTypes,
+                    schema: processedData.schema
+                } : undefined
+            });
 
             console.log(`✅ Phase 1 complete: ${phase1Doc.analysisPath.length} analysis paths, ${phase1Doc.requiredDataElements.length} required elements`);
 
-            // Phase 2: Map dataset fields to required data elements via tool registry
+            // Phase 2: Map dataset fields to required data elements
             const mappingStart = Date.now();
-            const phase2ToolResult = await executeTool(
-                'required_data_elements_tool',
-                'data_engineer',
+            const phase2Doc = await requiredDataElementsTool.mapDatasetToRequirements(
+                phase1Doc,
                 {
-                    operation: 'mapDatasetToRequirements',
-                    document: phase1Doc,
-                    dataset: {
-                        fileName: req.file.originalname,
-                        rowCount: processedData.recordCount,
-                        schema: processedData.schema,
-                        preview: processedData.preview || []
-                    }
-                },
-                { userId: actualUserId, projectId: project.id }
+                    fileName: req.file.originalname,
+                    rowCount: processedData.recordCount,
+                    schema: processedData.schema,
+                    preview: processedData.preview || []
+                }
             );
-
-            if (phase2ToolResult.status === 'error') {
-                console.warn('⚠️ Failed to map dataset to requirements via tool:', phase2ToolResult.error);
-                // Fall back to Phase 1 document if Phase 2 fails
-                var phase2Doc = phase1Doc;
-            } else {
-                var phase2Doc = phase2ToolResult.result;
-            }
             const mappingDuration = Date.now() - mappingStart;
 
             console.log(`✅ Phase 2 complete in ${mappingDuration}ms: ${phase2Doc.completeness.elementsMapped}/${phase2Doc.completeness.totalElements} elements mapped`);
 
             if (phase2Doc.gaps.length > 0) {
                 console.log(`⚠️  Identified ${phase2Doc.gaps.length} data gaps:`);
-                phase2Doc.gaps.forEach((gap: any) => console.log(`  - ${gap.description}`));
+                phase2Doc.gaps.forEach(gap => console.log(`  - ${gap.description}`));
             }
 
             // Store document reference in dataset metadata
@@ -3906,6 +3051,23 @@ router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, r
                     dataRequirementsDocument: phase2Doc
                 }
             } as any);
+
+            // CRITICAL FIX: Also store in journeyProgress.requirementsDocument
+            // This is the SSOT for the verification step
+            const currentJourneyProgress = (project as any).journeyProgress || {};
+            await storage.updateProject(project.id, {
+                journeyProgress: {
+                    ...currentJourneyProgress,
+                    requirementsDocument: phase2Doc,
+                    requirementsLocked: false // Allow updates until user confirms
+                }
+            } as any);
+
+            console.log(`✅ [Data Elements] Stored requirementsDocument in journeyProgress:`, {
+                totalElements: phase2Doc.requiredDataElements?.length || 0,
+                elementsMapped: phase2Doc.completeness?.elementsMapped || 0,
+                analysisPath: phase2Doc.analysisPath?.length || 0
+            });
 
             performanceWebhookService.recordMetric({
                 timestamp: new Date(),
@@ -3931,39 +3093,19 @@ router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, r
             // Continue without data requirements mapping
         }
 
-        // FIX 7.3: Add user-visible checkpoint for data upload completion
-        // Note: stepName uses snake_case to distinguish from user journey steps (data, verify, transform, execute)
-        try {
-            await projectAgentOrchestrator.addCheckpoint(project.id, {
-                id: `checkpoint_de_upload_${Date.now()}`,
-                projectId: project.id,
-                agentType: 'data_engineer',
-                stepName: 'de_data_processed',
-                status: 'completed',
-                message: `Your data is ready for analysis (${processedData.recordCount.toLocaleString()} records)`,
-                data: {
-                    fileName: req.file.originalname,
-                    fileSize: req.file.size,
-                    rowCount: processedData.recordCount,
-                    columnCount: Object.keys(processedData.schema || {}).length,
-                    qualityScore: (processedData.qualityMetrics as any)?.overallScore ||
-                        (processedData.qualityMetrics as any)?.dataQualityScore ||
-                        (processedData.qualityMetrics as any)?.qualityScore
-                },
-                userFeedback: undefined,
-                requiresUserInput: false,
-                userVisible: true,
-                timestamp: new Date()
-            });
-        } catch (checkpointError) {
-            console.error('Failed to create upload checkpoint (non-fatal):', checkpointError);
-        }
+        // Check if PII was detected and needs user decision
+        const hasPII = piiAnalysis?.detectedPII?.length > 0;
 
         res.json({
             success: true,
             projectId: project.id,
             project: { ...project, preview: processedData.preview },
             piiAnalysis,
+            // Include PII decision info if PII was detected
+            requiresPIIDecision: hasPII,
+            piiResult: hasPII ? piiAnalysis : undefined,
+            sampleData: processedData.preview,
+            recordCount: processedData.recordCount,
             originalFilePath: originalFilePath, // Return path for client reference
             dataDescription: processedData.datasetSummary.overview,
             datasetSummary: processedData.datasetSummary,
@@ -4005,6 +3147,145 @@ router.get("/", ensureAuthenticated, async (req, res) => {
     }
 });
 
+// Server-side join key detection - mirrors client-side logic
+function autoDetectJoinKeys(datasets: any[]): { foreignKeys: Array<{ sourceDataset: string; sourceColumn: string; targetDataset: string; targetColumn: string; confidence: number }> } {
+    const foreignKeys: Array<{ sourceDataset: string; sourceColumn: string; targetDataset: string; targetColumn: string; confidence: number }> = [];
+
+    console.log(`🔗 [Server Auto-Join] Starting auto-detection for ${datasets.length} datasets`);
+
+    if (datasets.length < 2) {
+        return { foreignKeys };
+    }
+
+    const primaryDataset = datasets[0];
+    const primarySchema = primaryDataset.schema || {};
+    const primaryCols = Object.keys(primarySchema);
+    const primaryName = primaryDataset.originalFileName || primaryDataset.name || 'Primary';
+    const primaryData = Array.isArray(primaryDataset.data) ? primaryDataset.data :
+        Array.isArray(primaryDataset.preview) ? primaryDataset.preview : [];
+
+    console.log(`🔗 [Server Auto-Join] Primary: ${primaryName} (${primaryData.length} rows, ${primaryCols.length} cols)`);
+
+    // Join key patterns with priority scores
+    const joinKeyPatterns = [
+        { pattern: /^employee_?id$/i, score: 100 },
+        { pattern: /^emp_?id$/i, score: 95 },
+        { pattern: /^user_?id$/i, score: 90 },
+        { pattern: /^customer_?id$/i, score: 90 },
+        { pattern: /^department_?id$/i, score: 85 },
+        { pattern: /^dept_?id$/i, score: 85 },
+        { pattern: /^department$/i, score: 80 },
+        { pattern: /^dept$/i, score: 80 },
+        { pattern: /^id$/i, score: 75 },
+        { pattern: /_id$/i, score: 70 },
+        { pattern: /^.*_key$/i, score: 65 },
+        { pattern: /^.*_code$/i, score: 60 },
+        { pattern: /^name$/i, score: 50 },
+        { pattern: /^employee_?name$/i, score: 55 },
+        { pattern: /^full_?name$/i, score: 55 }
+    ];
+
+    for (let i = 1; i < datasets.length; i++) {
+        const secondaryDataset = datasets[i];
+        const secondarySchema = secondaryDataset.schema || {};
+        const secondaryCols = Object.keys(secondarySchema);
+        const secondaryName = secondaryDataset.originalFileName || secondaryDataset.name || `Secondary_${i}`;
+        const secondaryData = Array.isArray(secondaryDataset.data) ? secondaryDataset.data :
+            Array.isArray(secondaryDataset.preview) ? secondaryDataset.preview : [];
+
+        console.log(`🔗 [Server Auto-Join] Secondary: ${secondaryName} (${secondaryData.length} rows, ${secondaryCols.length} cols)`);
+
+        interface MatchCandidate {
+            sourceColumn: string;
+            targetColumn: string;
+            patternScore: number;
+            mergePotential: number;
+        }
+        const matchCandidates: MatchCandidate[] = [];
+
+        for (const pCol of primaryCols) {
+            const pColLower = pCol.toLowerCase();
+
+            for (const sCol of secondaryCols) {
+                const sColLower = sCol.toLowerCase();
+
+                // Direct match
+                const directMatch = pColLower === sColLower;
+
+                // Pattern match
+                let patternScore = 0;
+                for (const { pattern, score } of joinKeyPatterns) {
+                    if (pattern.test(pCol) && pattern.test(sCol)) {
+                        patternScore = Math.max(patternScore, score);
+                    }
+                }
+
+                // Partial match (same suffix)
+                const partialMatch = (pColLower.endsWith('_id') && sColLower.endsWith('_id')) ||
+                    (pColLower.endsWith('_key') && sColLower.endsWith('_key')) ||
+                    (pColLower.endsWith('_code') && sColLower.endsWith('_code'));
+
+                if (directMatch || patternScore > 0 || partialMatch) {
+                    // Calculate merge potential by comparing values
+                    const primaryValues = new Set<string>(
+                        primaryData.slice(0, 500).map((row: any) =>
+                            String(row[pCol] ?? '').toLowerCase().trim()
+                        ).filter((v: string) => v !== '')
+                    );
+                    const secondaryValues = new Set<string>(
+                        secondaryData.slice(0, 500).map((row: any) =>
+                            String(row[sCol] ?? '').toLowerCase().trim()
+                        ).filter((v: string) => v !== '')
+                    );
+
+                    let matchCount = 0;
+                    primaryValues.forEach((v) => {
+                        if (secondaryValues.has(v)) matchCount++;
+                    });
+
+                    const mergePotential = Math.min(primaryValues.size, secondaryValues.size) > 0
+                        ? (matchCount / Math.min(primaryValues.size, secondaryValues.size)) * 100
+                        : 0;
+
+                    matchCandidates.push({
+                        sourceColumn: pCol,
+                        targetColumn: sCol,
+                        patternScore: directMatch ? 110 : patternScore || (partialMatch ? 40 : 0),
+                        mergePotential
+                    });
+                }
+            }
+        }
+
+        // Select best match
+        if (matchCandidates.length > 0) {
+            matchCandidates.sort((a, b) => {
+                const scoreA = (a.mergePotential * 0.6) + (a.patternScore * 0.4);
+                const scoreB = (b.mergePotential * 0.6) + (b.patternScore * 0.4);
+                return scoreB - scoreA;
+            });
+
+            const bestMatch = matchCandidates[0];
+            const confidence = Math.min(100, (bestMatch.mergePotential * 0.6 + bestMatch.patternScore * 0.4)) / 100;
+
+            console.log(`✅ [Server Auto-Join] Best match: ${primaryName}.${bestMatch.sourceColumn} ↔ ${secondaryName}.${bestMatch.targetColumn} (${(confidence * 100).toFixed(1)}%)`);
+
+            foreignKeys.push({
+                sourceDataset: primaryDataset.id,
+                sourceColumn: bestMatch.sourceColumn,
+                targetDataset: secondaryDataset.id,
+                targetColumn: bestMatch.targetColumn,
+                confidence
+            });
+        } else {
+            console.log(`⚠️ [Server Auto-Join] No matching join key found for ${secondaryName}`);
+        }
+    }
+
+    console.log(`🔗 [Server Auto-Join] Detection complete: ${foreignKeys.length} join(s) found`);
+    return { foreignKeys };
+}
+
 router.get("/:projectId/datasets", ensureAuthenticated, async (req, res) => {
     try {
         const { projectId } = req.params;
@@ -4018,11 +3299,6 @@ router.get("/:projectId/datasets", ensureAuthenticated, async (req, res) => {
         if (!accessCheck.allowed) {
             const status = accessCheck.reason === 'Project not found' ? 404 : 403;
             return res.status(status).json({ success: false, error: accessCheck.reason });
-        }
-
-        const project = await storage.getProject(projectId);
-        if (!project) {
-            return res.status(404).json({ success: false, error: 'Project not found' });
         }
 
         const datasets = await storage.getProjectDatasets(projectId);
@@ -4047,6 +3323,10 @@ router.get("/:projectId/datasets", ensureAuthenticated, async (req, res) => {
 
             const schema = dataset.schema ?? datasetAny?.ingestionMetadata?.schema ?? null;
 
+            // Keep data for join operations
+            const fullData = Array.isArray(datasetAny?.data) ? datasetAny.data :
+                Array.isArray(safeParseJson(datasetAny?.data)) ? safeParseJson(datasetAny?.data) : [];
+
             const { data, ...rest } = datasetAny;
 
             return {
@@ -4054,80 +3334,206 @@ router.get("/:projectId/datasets", ensureAuthenticated, async (req, res) => {
                     ...rest,
                     schema,
                     preview: previewRows ?? [],
+                    data: fullData, // Include full data for joining
                 },
                 association,
             };
         });
 
-        const multiDatasetPreview = await buildMultiDatasetPreview(project, datasets, dataEngineerAgent);
+        // Generate joined preview if multiple datasets exist
+        let joinedPreview: any[] = [];
+        let joinedSchema: Record<string, any> | null = null;
+        let joinInsights: any = null;
 
-        // FIX: Persist joined dataset in journeyProgress for ALL subsequent steps to use
-        // This ensures verification, transformation, schema-analysis, required-data-elements all use the joined data
-        if ((multiDatasetPreview?.previewRows?.length ?? 0) > 0 && multiDatasetPreview?.schema) {
-            const existingMetadata = (project as any)?.metadata || {};
-            const existingProgress = parseJourneyProgress((project as any)?.journeyProgress) as any;
+        if (normalized.length >= 2) {
+            console.log(`📊 [Datasets] Multiple datasets detected (${normalized.length}), generating joined preview...`);
 
-            const existingSignature = buildJoinSignature(existingMetadata.autoDetectedJoinConfig);
-            const nextSignature = buildJoinSignature(multiDatasetPreview.autoJoinConfig);
+            // Extract dataset objects for joining
+            const datasetObjects = normalized.map(n => n.dataset);
 
-            const shouldUpdateJoinData = existingSignature !== nextSignature ||
-                !(existingProgress?.joinedData?.preview?.length ?? 0);
+            // Auto-detect join keys
+            const { foreignKeys } = autoDetectJoinKeys(datasetObjects);
 
-            if (shouldUpdateJoinData) {
-                // P1-1 FIX: Persist FULL joined dataset, not just preview
-                const fullRowCount = multiDatasetPreview.totalRowCount || multiDatasetPreview.fullData?.length || multiDatasetPreview.previewRows.length;
-                const fullData = multiDatasetPreview.fullData || multiDatasetPreview.previewRows; // Fallback to preview if fullData missing
-                
-                console.log(`📊 [P1-1 FIX] Persisting FULL joined dataset: ${fullRowCount} total rows (${multiDatasetPreview.previewRows.length} preview), ${Object.keys(multiDatasetPreview.schema).length} columns`);
-                console.log(`📊 [P1-1 FIX] Full data length: ${fullData.length} rows (will be used by Execute step)`);
+            if (foreignKeys.length > 0) {
+                try {
+                    const primaryDataset = datasetObjects[0];
+                    const secondaryDatasets = datasetObjects.slice(1);
+                    const primaryName = primaryDataset.originalFileName || primaryDataset.name || 'Primary';
 
-                await storage.updateProject(projectId, {
-                    metadata: {
-                        ...existingMetadata,
-                        autoDetectedJoinConfig: multiDatasetPreview.autoJoinConfig
-                    },
-                    journeyProgress: {
-                        ...existingProgress,
-                        joinedData: {
-                            preview: multiDatasetPreview.previewRows, // 50 rows for UI preview
-                            fullData: fullData, // FULL dataset for analysis execution
-                            fullRowCount: fullData.length, // Total row count
-                            totalRowCount: fullRowCount, // Alias for backward compatibility
-                            schema: multiDatasetPreview.schema, // Store derived schema
-                            joinInsights: multiDatasetPreview.joinInsights,
-                            joinConfig: multiDatasetPreview.autoJoinConfig, // Store join config
-                            datasetCount: datasets.length,
-                            persistedAt: new Date().toISOString(),
-                            generatedAt: new Date().toISOString()
+                    // Build join config
+                    const joinKeys: { [key: string]: string } = {
+                        [primaryDataset.id]: foreignKeys[0].sourceColumn
+                    };
+
+                    for (const fk of foreignKeys) {
+                        joinKeys[fk.targetDataset] = fk.targetColumn;
+                    }
+
+                    const joinConfig: JoinConfig = {
+                        joinWithProjects: secondaryDatasets.map(d => d.id),
+                        joinType: 'left',
+                        joinKeys,
+                        mergeStrategy: 'merge'
+                    };
+
+                    // Perform the join
+                    const joinResult = await DatasetJoiner.joinDatasets(
+                        primaryDataset,
+                        secondaryDatasets,
+                        joinConfig
+                    );
+
+                    if (joinResult.success && joinResult.project) {
+                        joinedPreview = Array.isArray(joinResult.project.data)
+                            ? joinResult.project.data.slice(0, 20)
+                            : [];
+                        joinedSchema = joinResult.project.schema || null;
+
+                        joinInsights = {
+                            detectionMethod: 'schema_match',
+                            joinStrategy: 'join',
+                            datasetCount: normalized.length,
+                            totalRowCount: joinResult.recordCount,
+                            primaryDatasetName: primaryName,
+                            foreignKeys: foreignKeys.map(fk => {
+                                const targetDataset = datasetObjects.find(d => d.id === fk.targetDataset);
+                                return {
+                                    datasetId: fk.targetDataset,
+                                    datasetName: targetDataset?.originalFileName || targetDataset?.name || 'Unknown',
+                                    primaryColumn: fk.sourceColumn,
+                                    foreignColumn: fk.targetColumn,
+                                    confidence: fk.confidence
+                                };
+                            })
+                        };
+
+                        console.log(`✅ [Datasets] Join successful: ${joinResult.recordCount} rows, ${joinResult.joinedFields.length} fields`);
+
+                        // ✅ CRITICAL FIX: ALWAYS persist joined schema to journeyProgress (SSOT)
+                        // Updated: Remove the "only if not set" condition - always update on successful join
+                        // This ensures schema reflects latest join results, not stale data
+                        try {
+                            const project = await storage.getProject(projectId);
+                            const currentProgress = (project as any)?.journeyProgress || {};
+
+                            // ✅ PHASE 6 FIX: Always update joined schema on successful join
+                            // This fixes the "schema reverts to individual dataset" issue
+                            await storage.updateProject(projectId, {
+                                journeyProgress: {
+                                    ...currentProgress,
+                                    joinedData: {
+                                        ...(currentProgress.joinedData || {}),
+                                        schema: joinedSchema,
+                                        preview: joinedPreview.slice(0, 50),
+                                        totalRowCount: joinResult.recordCount,
+                                        columnCount: Object.keys(joinedSchema || {}).length,
+                                        joinInsights: joinInsights,
+                                        persistedAt: new Date().toISOString()
+                                    }
+                                }
+                            } as any);
+                            console.log(`✅ [Datasets] Persisted joined schema to journeyProgress: ${Object.keys(joinedSchema || {}).length} columns`);
+                        } catch (persistError: any) {
+                            console.warn('⚠️ [Datasets] Failed to persist joined schema:', persistError.message);
+                            // Continue anyway - API response will still have the joined data
+                        }
+                    } else {
+                        console.log(`⚠️ [Datasets] Join failed: ${joinResult.error}`);
+                    }
+                } catch (joinError: any) {
+                    console.error('Dataset join error:', joinError);
+                }
+            } else {
+                // No join keys found - fall back to stacked preview with MERGED schema
+                console.log(`📊 [Datasets] No join keys found, using stacked preview with merged schema`);
+                joinedPreview = normalized.flatMap(n => (n.dataset.preview || []).slice(0, 5));
+
+                // ✅ FIX: Merge schemas from ALL datasets, not just first one
+                const mergedSchema: Record<string, any> = {};
+                for (let i = 0; i < normalized.length; i++) {
+                    const ds = normalized[i].dataset;
+                    // ✅ PHASE 1 FIX: Ensure dsName is never undefined/empty with explicit fallbacks
+                    const rawName = ds.originalFileName || ds.name || '';
+                    const dsName = rawName
+                        ? rawName.replace(/\.[^.]+$/, '')
+                        : `Dataset${i + 1}`;
+                    const dsSchema = ds.schema || {};
+
+                    for (const [col, type] of Object.entries(dsSchema)) {
+                        // Handle column name conflicts by prefixing with dataset name
+                        if (mergedSchema[col] !== undefined && normalized.length > 1) {
+                            // Both columns exist - prefix this one
+                            // ✅ PHASE 1 FIX: Additional safeguard to prevent undefined_ prefix
+                            const safePrefix = dsName || `DS${i + 1}`;
+                            const prefixedCol = `${safePrefix}_${col}`;
+                            mergedSchema[prefixedCol] = type;
+                            console.log(`📊 [Datasets] Schema conflict: '${col}' prefixed as '${prefixedCol}'`);
+                        } else {
+                            mergedSchema[col] = type;
                         }
                     }
-                } as any);
-                
-                console.log(`✅ [P1-1 FIX] Successfully persisted full joined dataset to journeyProgress`);
-            }
-        } else if (multiDatasetPreview?.autoJoinConfig) {
-            // Still persist autoJoinConfig even if no preview generated
-            const existingMetadata = (project as any)?.metadata || {};
-            const existingSignature = buildJoinSignature(existingMetadata.autoDetectedJoinConfig);
-            const nextSignature = buildJoinSignature(multiDatasetPreview.autoJoinConfig);
+                }
 
-            if (existingSignature !== nextSignature) {
-                await storage.updateProject(projectId, {
-                    metadata: {
-                        ...existingMetadata,
-                        autoDetectedJoinConfig: multiDatasetPreview.autoJoinConfig
-                    }
-                } as any);
+                joinedSchema = mergedSchema;
+                console.log(`📊 [Datasets] Merged schema: ${Object.keys(mergedSchema).length} columns from ${normalized.length} datasets`);
+
+                joinInsights = {
+                    detectionMethod: 'fallback',
+                    joinStrategy: 'stacked',
+                    datasetCount: normalized.length,
+                    // ✅ GAP 10 FIX: Use recordCount (actual row count) instead of preview.length (sample rows)
+                    totalRowCount: normalized.reduce((sum, n) => sum + (n.dataset.recordCount || n.dataset.preview?.length || 0), 0),
+                    foreignKeys: [],
+                    mergedSchemaColumnCount: Object.keys(mergedSchema).length
+                };
+
+                // ✅ FIX: Also persist merged schema to journeyProgress for fallback case
+                // ✅ PHASE 6 FIX: Always update schema - remove "only if not set" condition
+                try {
+                    const project = await storage.getProject(projectId);
+                    const currentProgress = (project as any)?.journeyProgress || {};
+
+                    await storage.updateProject(projectId, {
+                        journeyProgress: {
+                            ...currentProgress,
+                            joinedData: {
+                                ...(currentProgress.joinedData || {}),
+                                schema: mergedSchema,
+                                preview: joinedPreview.slice(0, 50),
+                                totalRowCount: joinInsights.totalRowCount,
+                                columnCount: Object.keys(mergedSchema).length,
+                                joinInsights: joinInsights,
+                                persistedAt: new Date().toISOString()
+                            }
+                        }
+                    } as any);
+                    console.log(`✅ [Datasets] Persisted MERGED schema to journeyProgress: ${Object.keys(mergedSchema).length} columns`);
+                } catch (persistError: any) {
+                    console.warn('⚠️ [Datasets] Failed to persist merged schema:', persistError.message);
+                }
             }
         }
 
+        // Remove full data from response to reduce payload (keep preview only)
+        const cleanedNormalized = normalized.map(n => ({
+            ...n,
+            dataset: {
+                ...n.dataset,
+                data: undefined // Don't send full data to client
+            }
+        }));
+
         return res.json({
             success: true,
-            datasets: normalized,
-            count: normalized.length,
-            joinedPreview: multiDatasetPreview?.previewRows ?? null,
-            joinedSchema: multiDatasetPreview?.schema ?? null,
-            joinInsights: multiDatasetPreview?.joinInsights ?? null
+            datasets: cleanedNormalized,
+            count: cleanedNormalized.length,
+            joinedPreview,
+            joinedSchema,
+            // Alias for clarity - same as joinedSchema but explicit name
+            mergedSchema: joinedSchema,
+            joinInsights,
+            // Total row count across all datasets
+            totalRecordCount: joinInsights?.totalRowCount || normalized.reduce((sum, n) => sum + (n.dataset.recordCount || 0), 0)
         });
     } catch (error: any) {
         console.error('Failed to fetch project datasets:', error);
@@ -4213,83 +3619,6 @@ router.delete("/:projectId/datasets/:datasetId", ensureAuthenticated, async (req
     } catch (error: any) {
         console.error('Failed to remove dataset from project:', error);
         res.status(500).json({ success: false, error: error.message || 'Failed to remove dataset from project' });
-    }
-});
-
-router.post("/:projectId/questions", ensureAuthenticated, async (req, res) => {
-    try {
-        const { projectId } = req.params;
-        const userId = (req.user as any)?.id;
-        const rawQuestions: unknown[] = Array.isArray(req.body?.questions) ? req.body.questions : [];
-
-        if (!userId) {
-            return res.status(401).json({ success: false, error: 'Authentication required' });
-        }
-
-        const normalizedQuestions: string[] = rawQuestions
-            .map((question: unknown) => (typeof question === 'string' ? question.trim() : ''))
-            .filter((question: string) => question.length > 0);
-
-        if (!normalizedQuestions.length) {
-            return res.status(400).json({ success: false, error: 'questions must be a non-empty array of strings' });
-        }
-
-        const accessCheck = await canAccessProject(userId, projectId, isAdmin(req));
-        if (!accessCheck.allowed) {
-            const status = accessCheck.reason === 'Project not found' ? 404 : 403;
-            return res.status(status).json({ success: false, error: accessCheck.reason });
-        }
-
-        const project = await storage.getProject(projectId);
-        if (!project) {
-            return res.status(404).json({ success: false, error: 'Project not found' });
-        }
-
-        const savedQuestions = await QuestionAnswerService.saveProjectQuestions(projectId, normalizedQuestions);
-
-        const [projectRow] = await db
-            .select({ journeyProgress: projects.journeyProgress })
-            .from(projects)
-            .where(eq(projects.id, projectId))
-            .limit(1);
-
-        let journeyProgressState = parseJourneyProgress(projectRow?.journeyProgress ?? (project as any)?.journeyProgress);
-        let journeyProgressUpdated = false;
-
-        try {
-            const { changed, value } = fillJourneyProgressFields(
-                journeyProgressState,
-                { businessQuestions: normalizedQuestions },
-                { flag: 'questionsNormalized', timestamp: new Date().toISOString() }
-            );
-
-            if (changed) {
-                journeyProgressState = value;
-                journeyProgressUpdated = true;
-                await db
-                    .update(projects)
-                    .set({
-                        journeyProgress: value,
-                        updatedAt: new Date()
-                    })
-                    .where(eq(projects.id, projectId));
-            }
-        } catch (progressError) {
-            console.warn('Failed to sync business questions into journeyProgress:', progressError);
-        }
-
-        await markJourneyProgress(projectId, ['intake_alignment']);
-
-        return res.json({
-            success: true,
-            count: savedQuestions.length,
-            questions: savedQuestions,
-            journeyProgress: journeyProgressState,
-            journeyProgressUpdated
-        });
-    } catch (error: any) {
-        console.error('Failed to save project questions:', error);
-        res.status(500).json({ success: false, error: error.message || 'Failed to save project questions' });
     }
 });
 
@@ -4445,37 +3774,253 @@ router.put("/:id/schema", ensureAuthenticated, async (req, res) => {
     }
 });
 
-// Get project checkpoints
-// FIX #35: Filter by userVisible unless admin or explicitly requesting all
-router.get("/:id/checkpoints", ensureAuthenticated, async (req, res) => {
+// Verify/approve project data - marks data as verified and ready for analysis
+router.put("/:id/verify", ensureAuthenticated, async (req, res) => {
     try {
-        const { id } = req.params;
+        const { id: projectId } = req.params;
+        const {
+            verificationStatus,
+            verificationTimestamp,
+            verificationChecks,
+            // ✅ FIX 1.4: Accept PII decisions from frontend
+            piiDecisions,
+            dataQuality,
+            schemaValidation
+        } = req.body;
         const userId = (req.user as any)?.id;
-        const showAll = req.query.showAll === 'true';  // FIX #35: Allow admin to see all
-        const userIsAdmin = isAdmin(req);
 
         if (!userId) {
-            return res.status(401).json({ error: "User authentication required" });
+            return res.status(401).json({ error: "Authentication required" });
         }
 
-        const accessCheck = await canAccessProject(userId, id, userIsAdmin);
+        const accessCheck = await canAccessProject(userId, projectId, isAdmin(req));
         if (!accessCheck.allowed) {
             const status = accessCheck.reason === 'Project not found' ? 404 : 403;
             return res.status(status).json({ error: accessCheck.reason });
         }
 
-        const allCheckpoints = await projectAgentOrchestrator.getProjectCheckpoints(id);
+        const project = accessCheck.project;
 
-        // FIX #35: Filter checkpoints for regular users (show only userVisible=true)
-        // Admins can see all checkpoints if showAll=true
-        const checkpoints = (userIsAdmin && showAll)
-            ? allCheckpoints
-            : allCheckpoints.filter(cp => cp.userVisible === true);
+        // ✅ FIX 1.4: Log PII decisions being saved
+        if (piiDecisions && Object.keys(piiDecisions).length > 0) {
+            console.log(`🔒 [FIX 1.4] Received ${Object.keys(piiDecisions).length} PII decisions for project ${projectId}`);
+        }
 
+        // Update journeyProgress with verification info
+        const currentProgress = (project as any)?.journeyProgress || {};
+        const updatedProgress = {
+            ...currentProgress,
+            dataQualityApproved: verificationStatus === 'approved',
+            verificationTimestamp: verificationTimestamp || new Date().toISOString(),
+            verificationChecks: verificationChecks || {},
+            // ✅ FIX 1.4: Save PII decisions to journeyProgress (SSOT)
+            piiDecisions: piiDecisions || currentProgress.piiDecisions || {},
+            piiDecisionTimestamp: piiDecisions ? new Date().toISOString() : currentProgress.piiDecisionTimestamp,
+            dataQuality: dataQuality || currentProgress.dataQuality,
+            schemaValidation: schemaValidation ?? currentProgress.schemaValidation,
+            verificationCompleted: true,
+            currentStep: 'transformation', // Move to next step
+            completedSteps: [...(currentProgress.completedSteps || []), 'verification'].filter((v: string, i: number, a: string[]) => a.indexOf(v) === i)
+        };
+
+        console.log(`✅ [Verify] Project ${projectId} verification status: ${verificationStatus}`);
+
+        // Update project
+        const updatedProject = await storage.updateProject(projectId, {
+            journeyProgress: updatedProgress,
+            status: 'verified'
+        } as any);
+
+        // ✅ FIX 1.4: Also save PII decisions to each dataset's ingestionMetadata
+        if (piiDecisions && Object.keys(piiDecisions).length > 0) {
+            try {
+                const datasets = await storage.getProjectDatasets(projectId);
+
+                for (const ds of datasets) {
+                    const dataset = (ds as any).dataset || ds;
+                    const schema = dataset.schema || dataset.ingestionMetadata?.originalSchema || {};
+                    const piiFields = dataset.piiFields || [];
+
+                    // Build column-specific PII choices for this dataset
+                    const datasetPiiChoices: Record<string, string> = {};
+
+                    for (const [field, choice] of Object.entries(piiDecisions)) {
+                        // Include field if it exists in this dataset's schema or piiFields
+                        if (schema[field] || piiFields.includes(field)) {
+                            datasetPiiChoices[field] = choice as string;
+                        }
+                    }
+
+                    if (Object.keys(datasetPiiChoices).length > 0) {
+                        await storage.updateDataset(dataset.id, {
+                            ingestionMetadata: {
+                                ...(dataset.ingestionMetadata || {}),
+                                piiMaskingChoices: datasetPiiChoices,
+                                piiDecisionTimestamp: new Date().toISOString()
+                            }
+                        } as any);
+
+                        console.log(`✅ [FIX 1.4] Saved ${Object.keys(datasetPiiChoices).length} PII choices to dataset ${dataset.id}`);
+                    }
+                }
+
+                console.log(`🔒 [FIX 1.4] PII decisions saved to both journeyProgress and ${datasets.length} dataset(s)`);
+            } catch (piiSaveError) {
+                console.warn('⚠️ [FIX 1.4] Failed to save PII decisions to datasets:', piiSaveError);
+                // Continue anyway - journeyProgress is the SSOT
+            }
+        }
+
+        // Complete the verification step in journey state manager
+        try {
+            await journeyStateManager.completeStep(projectId, 'data-verification');
+        } catch (stepError) {
+            console.warn('⚠️ [Verify] Failed to mark step complete in journey state manager:', stepError);
+        }
+
+        // ============================================================
+        // CRITICAL FIX: Trigger DE Agent to generate transformation plan (ASYNC)
+        // ============================================================
+        try {
+            const datasets = await storage.getProjectDatasets(projectId);
+            const primaryDataset = (datasets[0] as any)?.dataset || datasets[0];
+
+            // Get JOINED schema (critical for multi-dataset scenarios)
+            const datasetMetadata = {
+                schema: updatedProgress.joinedData?.schema || primaryDataset?.schema || {},
+                columnNames: Object.keys(updatedProgress.joinedData?.schema || primaryDataset?.schema || {}),
+                preview: updatedProgress.joinedData?.preview || primaryDataset?.preview || [],
+                totalRowCount: updatedProgress.joinedData?.totalRowCount || primaryDataset?.recordCount || 0
+            };
+
+            // Get user goals and questions from journey progress
+            const userGoals = updatedProgress.analysisGoals ||
+                             (updatedProgress.selectedPatterns || []).map((p: any) => p.name || p) ||
+                             ['Analyze the data'];
+            const userQuestions = (updatedProgress.userQuestions || updatedProgress.businessQuestions || [])
+                .map((q: any) => typeof q === 'string' ? q : q.text || q.question)
+                .filter(Boolean);
+
+            console.log(`🔧 [Verify] Triggering DE Agent for project ${projectId} (async)`);
+            console.log(`   Goals: ${userGoals.length}, Questions: ${userQuestions.length}, Columns: ${datasetMetadata.columnNames.length}`);
+
+            // ASYNC: Execute PM-supervised data mapping flow in background
+            // User proceeds immediately; transformation step will poll for results
+            projectAgentOrchestrator.executePMSupervisedDataMappingFlow(
+                projectId,
+                datasetMetadata,
+                userGoals,
+                userQuestions
+            ).then(async (result) => {
+                if (result.success) {
+                    console.log(`✅ [DE Agent] Transformation plan ready for project ${projectId}: ${result.transformationPlan?.transformations?.length || 0} transformations`);
+                    // Result is already saved to journeyProgress by the orchestrator
+                } else {
+                    console.warn(`⚠️ [DE Agent] Transformation plan failed for project ${projectId}: ${result.error}`);
+                }
+            }).catch((err) => {
+                console.error(`❌ [DE Agent] Error generating transformations for project ${projectId}:`, err);
+            });
+
+        } catch (deError) {
+            console.warn('⚠️ [Verify] Could not trigger DE agent transformations:', deError);
+            // Continue anyway - user can manually configure in transformation step
+        }
+
+        res.json({
+            success: true,
+            project: updatedProject,
+            journeyProgress: updatedProgress,
+            deAgentTriggered: true, // Let frontend know DE is working in background
+            message: 'Data verification completed successfully. Transformation plan is being generated.'
+        });
+    } catch (error: any) {
+        console.error('Failed to verify project:', error);
+        res.status(500).json({ error: error.message || 'Failed to verify project' });
+    }
+});
+
+// Get project checkpoints
+router.get("/:id/checkpoints", ensureAuthenticated, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = (req.user as any)?.id;
+
+        if (!userId) {
+            return res.status(401).json({ error: "User authentication required" });
+        }
+
+        const accessCheck = await canAccessProject(userId, id, isAdmin(req));
+        if (!accessCheck.allowed) {
+            const status = accessCheck.reason === 'Project not found' ? 404 : 403;
+            return res.status(status).json({ error: accessCheck.reason });
+        }
+
+        const checkpoints = await projectAgentOrchestrator.getProjectCheckpoints(id);
         res.json({ success: true, checkpoints });
     } catch (error: any) {
         console.error('Failed to fetch checkpoints:', error);
         res.status(500).json({ error: "Failed to fetch checkpoints" });
+    }
+});
+
+// Create a new checkpoint (for agent-to-user communication requiring approval)
+router.post("/:id/checkpoints", ensureAuthenticated, async (req, res) => {
+    try {
+        const { id: projectId } = req.params;
+        const { stage, agentId, message, artifacts, requiresApproval, metadata } = req.body;
+        const userId = (req.user as any)?.id;
+
+        if (!userId) {
+            return res.status(401).json({ error: "Authentication required" });
+        }
+
+        const accessCheck = await canAccessProject(userId, projectId, isAdmin(req));
+        if (!accessCheck.allowed) {
+            const status = accessCheck.reason === 'Project not found' ? 404 : 403;
+            return res.status(status).json({ error: accessCheck.reason });
+        }
+
+        // Generate checkpoint ID
+        const checkpointId = `checkpoint_${Date.now()}_${stage || 'generic'}`;
+
+        // Create checkpoint object
+        const checkpoint = {
+            id: checkpointId,
+            projectId,
+            stage: stage || 'unknown',
+            agentId: agentId || 'system',
+            message: message || 'Checkpoint created',
+            artifacts: artifacts || [],
+            requiresApproval: requiresApproval !== false,
+            status: 'pending',
+            createdAt: new Date().toISOString(),
+            metadata: metadata || {}
+        };
+
+        console.log(`📌 [Checkpoint] Created checkpoint ${checkpointId} for project ${projectId} (stage: ${stage})`);
+
+        // Store checkpoint in project journeyProgress
+        const project = accessCheck.project;
+        const currentProgress = (project as any)?.journeyProgress || {};
+        const existingCheckpoints = currentProgress.checkpoints || [];
+
+        await storage.updateProject(projectId, {
+            journeyProgress: {
+                ...currentProgress,
+                checkpoints: [...existingCheckpoints, checkpoint]
+            }
+        } as any);
+
+        res.json({
+            success: true,
+            checkpoint,
+            checkpointId,
+            message: 'Checkpoint created successfully'
+        });
+    } catch (error: any) {
+        console.error('Failed to create checkpoint:', error);
+        res.status(500).json({ error: error.message || 'Failed to create checkpoint' });
     }
 });
 
@@ -4500,8 +4045,32 @@ router.post("/:id/checkpoints/:checkpointId/feedback", ensureAuthenticated, asyn
 
         res.json({ success: true });
     } catch (error: any) {
-        console.error('Failed to submit feedback:', error);
-        res.status(500).json({ error: "Failed to submit feedback" });
+        console.error('❌ [Checkpoint Feedback] Failed to submit feedback:', {
+            projectId: req.params.id,
+            checkpointId: req.params.checkpointId,
+            error: error.message,
+            stack: error.stack?.split('\n').slice(0, 5).join('\n')
+        });
+        // Return more detailed error for debugging
+        const isCheckpointNotFound = error.message?.includes('Checkpoint not found');
+        const isContextNotFound = error.message?.includes('context not found');
+
+        if (isCheckpointNotFound) {
+            return res.status(404).json({
+                error: "Checkpoint not found",
+                details: error.message
+            });
+        }
+        if (isContextNotFound) {
+            return res.status(404).json({
+                error: "Project context not found",
+                details: "The server may have restarted. Please refresh the page and try again."
+            });
+        }
+        res.status(500).json({
+            error: "Failed to submit feedback",
+            details: error.message
+        });
     }
 });
 
@@ -4548,6 +4117,14 @@ router.get("/:id", ensureAuthenticated, async (req, res) => {
                 recordCount: dataset.recordCount ?? null,
                 addedAt: association.addedAt ?? null,
             };
+        });
+
+        // DEBUG: Log journeyProgress presence for tracking data elements persistence
+        console.log(`📊 [GET Project] Returning project ${id}:`, {
+            hasJourneyProgress: !!(project as any).journeyProgress,
+            hasRequirementsDocument: !!(project as any).journeyProgress?.requirementsDocument,
+            elementsCount: (project as any).journeyProgress?.requirementsDocument?.requiredDataElements?.length || 0,
+            requirementsLocked: (project as any).journeyProgress?.requirementsLocked
         });
 
         res.json({
@@ -4623,14 +4200,17 @@ router.post("/:id/upload", ensureAuthenticated, upload.single('file'), async (re
         };
 
         // Create a new Dataset
+        // ✅ PHASE 1 FIX: Ensure originalFileName is always set with fallback
+        const safeOriginalFileName2 = req.file.originalname || `upload_${Date.now()}.csv`;
         const newDataset = await storage.createDataset({
             id: undefined as any,
             userId: userId,
             sourceType: 'upload',
-            originalFileName: req.file.originalname,
+            originalFileName: safeOriginalFileName2,
+            name: safeOriginalFileName2,
             mimeType: req.file.mimetype,
             fileSize: req.file.size,
-            storageUri: `mem://${projectId}/${req.file.originalname}`, // Example URI
+            storageUri: `mem://${projectId}/${safeOriginalFileName2}`, // Example URI
             schema: processedData.schema,
             recordCount: processedData.recordCount,
             preview: processedData.preview,
@@ -4642,27 +4222,6 @@ router.post("/:id/upload", ensureAuthenticated, upload.single('file'), async (re
         // Link dataset to the project
         await storage.linkProjectToDataset(projectId, newDataset.id);
         console.log(`[project.ts] Linked project ${projectId} to dataset ${newDataset.id}`);
-
-        // [FIX] Verify the link was created successfully
-        const verifyLink = await db
-            .select()
-            .from(projectDatasets)
-            .where(and(
-                eq(projectDatasets.projectId, projectId),
-                eq(projectDatasets.datasetId, newDataset.id)
-            ));
-
-        if (verifyLink.length === 0) {
-            console.error(`[CRITICAL] Dataset link verification failed: project=${projectId}, dataset=${newDataset.id}`);
-            // Retry linking directly to ensure it works
-            await db.insert(projectDatasets).values({
-                id: nanoid(),
-                projectId,
-                datasetId: newDataset.id,
-                role: 'primary'
-            });
-            console.log(`[RETRY] Re-linked dataset ${newDataset.id} to project ${projectId}`);
-        }
 
         // Update project metadata (optional, if needed)
         const updatedProject = await storage.updateProject(projectId, {
@@ -4934,6 +4493,7 @@ router.post("/:id/upload", ensureAuthenticated, upload.single('file'), async (re
         });
         res.json({
             success: true,
+            projectId: projectId, // Include for client consistency
             project: updatedProject,
             datasetId: newDataset.id,
             piiAnalysis,
@@ -4945,6 +4505,7 @@ router.post("/:id/upload", ensureAuthenticated, upload.single('file'), async (re
         });
 
     } catch (error: any) {
+        console.error(`[project.ts] File upload to project ${req.params.id} failed:`, error);
         res.status(500).json({ success: false, error: error.message || "Failed to process file" });
     }
 });
@@ -4960,7 +4521,28 @@ router.get("/:id/data-quality", ensureAuthenticated, requireOwnership('project')
 
         const userContext = buildUserContext(req, project);
         const datasets = await storage.getProjectDatasets(projectId);
-        const datasetRecord = datasets?.[0]?.dataset;
+        const primaryDataset = (datasets?.[0] as any)?.dataset || datasets?.[0];
+
+        // FIX Issue 1: Check if datasets were joined - use joined data metrics if so
+        const journeyProgress = (project as any)?.journeyProgress || {};
+        const wasJoined = primaryDataset?.ingestionMetadata?.joinConfig?.foreignKeys?.length > 0 ||
+                          journeyProgress?.joinedData?.joinApproved;
+
+        // Use joined dataset metrics if available, otherwise use first dataset
+        const datasetRecord = wasJoined && primaryDataset?.ingestionMetadata?.transformedData
+            ? {
+                ...primaryDataset,
+                data: primaryDataset.ingestionMetadata.transformedData,
+                recordCount: primaryDataset.ingestionMetadata.transformedRowCount ||
+                             primaryDataset.ingestionMetadata.transformedData?.length ||
+                             primaryDataset.recordCount,
+                qualityMetrics: primaryDataset.ingestionMetadata.joinedQualityMetrics ||
+                                primaryDataset.qualityMetrics
+              }
+            : primaryDataset;
+
+        console.log(`📊 [Data Quality] Using ${wasJoined ? 'JOINED' : 'FIRST'} dataset metrics`);
+
         const ingestionMetadata = (datasetRecord as any)?.ingestionMetadata || {};
         const qualityMetrics = ingestionMetadata?.qualityMetrics || (datasetRecord as any)?.qualityMetrics || {};
         const qualityMetricsAny = qualityMetrics as Record<string, unknown>;
@@ -4997,25 +4579,24 @@ router.get("/:id/data-quality", ensureAuthenticated, requireOwnership('project')
             )
         };
 
+        // CRITICAL FIX: Always use the average of displayed metrics as the overall score
+        // This ensures consistency between what the user sees in the breakdown and the overall number
+        // Formula: (Completeness + Consistency + Accuracy + Validity) / 4
         const computedAverage = datasetRecord
             ? clampScore((metrics.completeness + metrics.consistency + metrics.accuracy + metrics.validity) / 4)
             : 0;
 
-        // FIX: Use computed average from individual metrics when they're all available
-        // This ensures the displayed overall score matches the formula shown in UI
-        const allMetricsValid = metrics.completeness > 0 && metrics.consistency > 0 &&
-            metrics.accuracy > 0 && metrics.validity > 0;
+        // Use computedAverage as the primary score - this matches the displayed metrics
+        // The old weighted dataQualityScore formula gave different results than the displayed average
+        const qualityScoreValue = datasetRecord ? computedAverage : 0;
 
-        const qualityScoreValue = allMetricsValid
-            ? computedAverage  // Prefer computed average when all metrics are available
-            : pickScore(
-                qualityMetricsAny['overall'],
-                qualityMetricsAny['overallScore'],
-                qualityMetricsAny['dataQualityScore'],
-                qualityMetricsAny['qualityScore'],
-                derivedQuality?.overall,
-                datasetRecord ? computedAverage : 0
-            );
+        console.log(`📊 [Quality Score] Calculated: ${qualityScoreValue}% from metrics:`, {
+            completeness: metrics.completeness,
+            consistency: metrics.consistency,
+            accuracy: metrics.accuracy,
+            validity: metrics.validity,
+            formula: '(C + C + A + V) / 4'
+        });
 
         const resolvedIssues = (Array.isArray(qualityMetricsAny['issues']) && (qualityMetricsAny['issues'] as unknown[]).length > 0
             ? qualityMetricsAny['issues']
@@ -5077,77 +4658,31 @@ router.get("/:id/data-quality", ensureAuthenticated, requireOwnership('project')
 router.get("/:id/pii-analysis", ensureAuthenticated, requireOwnership('project'), async (req, res) => {
     try {
         const { id: projectId } = req.params;
-        const userId = (req.user as any)?.id;
         const project = await storage.getProject(projectId);
         if (!project) {
             return res.status(404).json({ success: false, error: "Project not found" });
         }
 
         const userContext = buildUserContext(req, project);
+        const datasets = await storage.getProjectDatasets(projectId);
+        const datasetRecord = datasets?.[0]?.dataset;
+        const piiAnalysis = (datasetRecord as any)?.piiAnalysis || {};
 
-        // U2A2A2U PATTERN: Call the same MCP tool that agents use
-        // This is the FALLBACK path - agents are preferred, but API calls the same tool
-        console.log(`🔒 [PII Analysis] Calling scan_pii_columns tool (fallback path) for project ${projectId}`);
-        const toolResult = await executeTool('scan_pii_columns', 'api_fallback', {
-            projectId,
-            sensitivityLevel: 'moderate',
-            includePatternMatching: true,
-            includeMLDetection: false
-        }, {
-            userId,
-            projectId
-        });
-
-        if (toolResult.status === 'error') {
-            console.error('🔒 [PII Analysis] Tool execution failed:', toolResult.error);
-            // Fallback to legacy behavior if tool fails
-            const datasets = await storage.getProjectDatasets(projectId);
-            const datasetRecord = datasets?.[0]?.dataset;
-            const piiAnalysis = (datasetRecord as any)?.piiAnalysis || {};
-            const rawDetectedPII = Array.isArray(piiAnalysis.detectedPII) ? piiAnalysis.detectedPII : [];
-
-            return res.json({
-                success: true,
-                assessedBy: 'legacy_fallback',
-                userContext,
-                detectedPII: rawDetectedPII.map((col: string) => ({
-                    column: col,
-                    field: col,
-                    type: 'personal_identifier',
-                    types: ['personal_identifier'],
-                    confidence: 0.5,
-                    isPII: true
-                })),
-                requiresReview: rawDetectedPII.length > 0,
-                metadata: { generatedAt: new Date().toISOString(), toolFailed: true }
-            });
-        }
-
-        // Transform tool result to API response format
-        const piiResult = toolResult.result;
-        const detectedPII = piiResult.detectedPII.map((p: any) => ({
-            column: p.column,
-            field: p.column,
-            type: p.type,
-            types: [p.type],
-            confidence: p.confidence,
-            isPII: true,
-            recommendation: p.recommendation,
-            datasetId: p.datasetId
-        }));
+        const detectedPII = Array.isArray(piiAnalysis.detectedPII) ? piiAnalysis.detectedPII : [];
+        const requiresReview = detectedPII.length > 0;
 
         res.json({
             success: true,
-            assessedBy: 'scan_pii_columns_tool', // Indicates tool was used
+            assessedBy: 'data_verification_service_enhanced',
             userContext,
+            datasetId: datasetRecord?.id || null,
             detectedPII,
-            requiresReview: piiResult.highConfidenceCount > 0,
-            recommendations: piiResult.recommendations,
+            userConsent: piiAnalysis.userConsent ?? false,
+            requiresReview,
+            userDecision: piiAnalysis.userDecision || null,
+            decisionTimestamp: piiAnalysis.consentTimestamp || null,
             metadata: {
-                totalColumnsScanned: piiResult.totalColumnsScanned,
-                piiColumnsFound: piiResult.piiColumnsFound,
-                highConfidenceCount: piiResult.highConfidenceCount,
-                scanTimestamp: piiResult.scanTimestamp,
+                datasetAvailable: Boolean(datasetRecord),
                 generatedAt: new Date().toISOString()
             }
         });
@@ -5168,108 +4703,27 @@ router.get("/:id/schema-analysis", ensureAuthenticated, requireOwnership('projec
 
         const userContext = buildUserContext(req, project);
         const datasets = await storage.getProjectDatasets(projectId);
+        const datasetRecord = datasets?.[0]?.dataset;
 
-        // FIX: PRIORITIZE persisted joined dataset from journeyProgress
-        const journeyProgress = parseJourneyProgress((project as any)?.journeyProgress);
-        const persistedJoinedData = (journeyProgress as any)?.joinedData as {
-            schema?: Record<string, any>;
-            preview?: any[];
-            joinInsights?: {
-                primaryDatasetName?: string;
-                foreignKeys?: Array<{ datasetName?: string; foreignColumn?: string; primaryColumn?: string }>;
-            };
-        } | undefined;
+        // FIX: Prioritize joined schema from journeyProgress over individual dataset schema
+        const journeyProgress = (project as any)?.journeyProgress || {};
+        const joinedSchema = journeyProgress.joinedData?.schema || journeyProgress.transformedSchema;
 
-        let mergedSchema: Record<string, any> = {};
-        let mergedDescriptiveStats: Record<string, any> = {};
-        let allRelationships: any[] = [];
-        let datasetSummary: any = null;
-        const datasetNames: string[] = [];
-        let usedJoinedData = false;
+        // Use joined schema if available (multiple datasets), otherwise use first dataset schema
+        const schema = joinedSchema || (datasetRecord as any)?.schema || {};
+        const isJoinedSchema = !!joinedSchema;
 
-        // PRIORITY 1: Use persisted joined schema if available (from upload step)
-        if (persistedJoinedData?.schema && Object.keys(persistedJoinedData.schema).length > 0) {
-            mergedSchema = persistedJoinedData.schema;
-            usedJoinedData = true;
-            console.log(`📊 [Schema Analysis] Using PERSISTED joined schema: ${Object.keys(mergedSchema).length} columns`);
+        console.log(`📊 [Schema Analysis] Using ${isJoinedSchema ? 'JOINED' : 'individual'} schema with ${Object.keys(schema).length} columns`);
 
-            // Extract dataset names from joinInsights if available
-            if (persistedJoinedData.joinInsights?.primaryDatasetName) {
-                datasetNames.push(persistedJoinedData.joinInsights.primaryDatasetName);
-            }
-            if (persistedJoinedData.joinInsights?.foreignKeys) {
-                persistedJoinedData.joinInsights.foreignKeys.forEach((fk: any) => {
-                    if (fk.datasetName && !datasetNames.includes(fk.datasetName)) {
-                        datasetNames.push(fk.datasetName);
-                    }
-                });
-            }
-        } else {
-            // PRIORITY 2: Merge schemas from ALL datasets manually
-            for (let i = 0; i < (datasets?.length || 0); i++) {
-                const datasetEntry = datasets![i];
-                const datasetRecord = datasetEntry?.dataset;
-                if (!datasetRecord) continue;
-
-                const schema = (datasetRecord as any)?.schema || {};
-                const ingestionMetadata = (datasetRecord as any)?.ingestionMetadata || {};
-                const fileName = (datasetRecord as any)?.originalFileName || `Dataset_${i + 1}`;
-                datasetNames.push(fileName);
-
-                // First dataset's summary becomes the main summary
-                if (i === 0) {
-                    datasetSummary = ingestionMetadata?.datasetSummary || null;
-                }
-
-                // [FIX] Add dataset prefix to columns to differentiate sources
-                // Always add ALL columns, prefix with dataset name when multiple datasets
-                const cleanFileName = fileName.replace(/\.[^.]+$/, '');
-                for (const [columnName, columnInfo] of Object.entries(schema)) {
-                    // If column already exists in mergedSchema, always prefix to avoid overwrite
-                    let finalColumnName = columnName;
-                    if (datasets!.length > 1) {
-                        // For multi-dataset, prefix columns from 2nd+ dataset, OR if conflict exists
-                        if (i > 0 || mergedSchema[columnName] !== undefined) {
-                            finalColumnName = `${cleanFileName}: ${columnName}`;
-                        }
-                    }
-                    mergedSchema[finalColumnName] = columnInfo;
-                }
-
-                // Merge descriptive stats - use same prefixing logic as schema
-                const descriptiveStats = ingestionMetadata?.descriptiveStats || {};
-                for (const [columnName, stats] of Object.entries(descriptiveStats)) {
-                    let finalColumnName = columnName;
-                    if (datasets!.length > 1) {
-                        if (i > 0 || mergedDescriptiveStats[columnName] !== undefined) {
-                            finalColumnName = `${cleanFileName}: ${columnName}`;
-                        }
-                    }
-                    mergedDescriptiveStats[finalColumnName] = stats;
-                }
-
-                // Collect relationships
-                const relationships = Array.isArray(ingestionMetadata?.relationships)
-                    ? ingestionMetadata.relationships
-                    : Array.isArray((datasetRecord as any)?.relationships)
-                        ? (datasetRecord as any).relationships
-                        : [];
-                allRelationships = [...allRelationships, ...relationships];
-            }
-        }
-
-        // Add join insights relationships if we used joined data
-        if (usedJoinedData && persistedJoinedData?.joinInsights?.foreignKeys) {
-            const joinRelationships = persistedJoinedData.joinInsights.foreignKeys.map((fk: any) => ({
-                sourceColumn: fk.foreignColumn,
-                targetColumn: fk.primaryColumn,
-                type: 'join_key',
-                datasetName: fk.datasetName
-            }));
-            allRelationships = [...allRelationships, ...joinRelationships];
-        }
-
-        const schemaEntries = Object.entries(mergedSchema);
+        const ingestionMetadata = (datasetRecord as any)?.ingestionMetadata || {};
+        const datasetSummary = ingestionMetadata?.datasetSummary || null;
+        const descriptiveStatsByColumn = ingestionMetadata?.descriptiveStats || null;
+        const inferredRelationships = Array.isArray(ingestionMetadata?.relationships)
+            ? ingestionMetadata.relationships
+            : Array.isArray((datasetRecord as any)?.relationships)
+                ? (datasetRecord as any).relationships
+                : [];
+        const schemaEntries = Object.entries(schema as Record<string, any>);
 
         const columnDetails = schemaEntries.map(([columnName, columnInfo]) => ({
             name: columnName,
@@ -5278,38 +4732,40 @@ router.get("/:id/schema-analysis", ensureAuthenticated, requireOwnership('projec
             sampleValues: Array.isArray(columnInfo?.sampleValues)
                 ? columnInfo.sampleValues.slice(0, 5)
                 : [],
-            descriptiveStats: mergedDescriptiveStats?.[columnName] ?? columnInfo?.descriptiveStats ?? null
+            descriptiveStats: descriptiveStatsByColumn?.[columnName] ?? columnInfo?.descriptiveStats ?? null
         }));
 
-        const recommendations = schemaEntries.length > 0 ? [
-            datasets && datasets.length > 1
-                ? `Schema merged from ${datasets.length} datasets: ${datasetNames.join(', ')}.`
-                : 'Validate detected data types before training models.',
-            'Document business meaning for key columns to support collaboration.'
-        ] : [
-            'Upload a dataset to generate schema insights.',
-            'Define expected columns for this project to guide future uploads.'
-        ];
+        const recommendations = Array.isArray((datasetRecord as any)?.schemaRecommendations)
+            ? (datasetRecord as any).schemaRecommendations
+            : (schemaEntries.length > 0 ? [
+                'Validate detected data types before training models.',
+                'Document business meaning for key columns to support collaboration.'
+            ] : [
+                'Upload a dataset to generate schema insights.',
+                'Define expected columns for this project to guide future uploads.'
+            ]);
 
         res.json({
             success: true,
             assessedBy: 'data_verification_service_enhanced',
             userContext,
-            datasetId: datasets?.[0]?.dataset?.id || null,
+            datasetId: datasetRecord?.id || null,
             columnCount: columnDetails.length,
             columnDetails,
             dataTypes: schemaEntries.reduce((acc, [key, val]) => {
                 acc[key] = (val as any)?.type || 'unknown';
                 return acc;
             }, {} as Record<string, string>),
+            // FIX: Include raw schema object for frontend to use
+            schema: schema,
+            isJoinedSchema,
             datasetSummary,
             dataDescription: typeof datasetSummary?.overview === 'string' ? datasetSummary.overview : null,
-            relationships: allRelationships,
+            relationships: inferredRelationships,
             recommendations,
             metadata: {
-                datasetAvailable: (datasets?.length || 0) > 0,
+                datasetAvailable: Boolean(datasetRecord),
                 datasetCount: datasets?.length || 0,
-                datasetNames,
                 generatedAt: new Date().toISOString()
             }
         });
@@ -5324,15 +4780,7 @@ router.get("/:id/schema-analysis", ensureAuthenticated, requireOwnership('projec
 router.post("/:id/generate-data-requirements", ensureAuthenticated, requireOwnership('project'), async (req, res) => {
     try {
         const { id: projectId } = req.params;
-        const userId = (req.user as any)?.id;
         const { userGoals, userQuestions } = req.body;
-
-        if (!userId) {
-            return res.status(401).json({
-                success: false,
-                error: 'User authentication required'
-            });
-        }
 
         if (!userGoals || !Array.isArray(userGoals) || userGoals.length === 0) {
             return res.status(400).json({
@@ -5341,72 +4789,70 @@ router.post("/:id/generate-data-requirements", ensureAuthenticated, requireOwner
             });
         }
 
-            // Generate Phase 1 requirements document via tool registry
-            const toolResult = await executeTool(
-                'required_data_elements_tool',
-                'data_scientist',
-                {
-                    operation: 'defineRequirements',
-                    projectId,
-                    userGoals: userGoals.filter((g: any) => g && typeof g === 'string' && g.trim() !== ''),
-                    userQuestions: userQuestions && Array.isArray(userQuestions)
-                        ? userQuestions.filter((q: any) => q && typeof q === 'string' && q.trim() !== '')
-                        : []
-                },
-                { userId, projectId }
-            );
+        // Import the required data elements tool
+        const { RequiredDataElementsTool } = await import('../services/tools/required-data-elements-tool');
+        const tool = new RequiredDataElementsTool();
 
-            if (toolResult.status === 'error') {
-                throw new Error(toolResult.error || 'Failed to generate data requirements');
+        // Generate Phase 1 requirements document
+        const filteredGoals = userGoals.filter((g: any) => g && typeof g === 'string' && g.trim() !== '');
+        const filteredQuestions = userQuestions && Array.isArray(userQuestions)
+            ? userQuestions.filter((q: any) => q && typeof q === 'string' && q.trim() !== '')
+            : [];
+
+        console.log(`📋 [Generate Requirements] Input:`, {
+            projectId,
+            goalsCount: filteredGoals.length,
+            questionsCount: filteredQuestions.length,
+            goals: filteredGoals.slice(0, 3),
+            questions: filteredQuestions.slice(0, 3)
+        });
+
+        const document = await tool.defineRequirements({
+            projectId,
+            userGoals: filteredGoals,
+            userQuestions: filteredQuestions
+        });
+
+        console.log(`📋 [Generate Requirements] Tool output:`, {
+            documentId: document.documentId,
+            analysisPathCount: document.analysisPath?.length || 0,
+            requiredDataElementsCount: document.requiredDataElements?.length || 0,
+            questionAnswerMappingCount: document.questionAnswerMapping?.length || 0,
+            status: document.status,
+            firstElement: document.requiredDataElements?.[0]?.elementName || 'none'
+        });
+
+        // ✅ GAP 9 FIX: Persist requirements document to journeyProgress (SSOT)
+        // This ensures Verification and Transformation steps can access the data elements
+        const project = await storage.getProject(projectId);
+        const existingProgress = (project as any)?.journeyProgress || {};
+        const requirementsDocument = {
+            documentId: document.documentId,
+            analysisPath: document.analysisPath,
+            requiredDataElements: document.requiredDataElements,
+            completeness: document.completeness,
+            status: document.status,
+            generatedAt: new Date().toISOString()
+        };
+
+        await storage.updateProject(projectId, {
+            journeyProgress: {
+                ...existingProgress,
+                requirementsDocument,
+                requirementsLocked: true,
+                requirementsLockedAt: new Date().toISOString()
             }
+        } as any);
 
-            const document = toolResult.result;
-
-        // P1-4 FIX: Store and LOCK the generated document in journeyProgress
-        // CRITICAL: Use atomic JSONB update to prevent race conditions with frontend updateProgress calls
-        try {
-            const project = await storage.getProject(projectId);
-            if (project) {
-                // CRITICAL FIX: parseJourneyProgress expects journeyProgress JSONB, not the entire project object
-                const journeyProgress = parseJourneyProgress((project as any)?.journeyProgress || {});
-                const requirementsDoc = {
-                    ...document,
-                    generatedAt: new Date().toISOString(),
-                    version: (journeyProgress as any).requirementsDocument?.version ? (journeyProgress as any).requirementsDocument.version + 1 : 1
-                };
-                
-                // Use atomic JSONB merge to preserve existing journeyProgress fields while setting lock
-                // This prevents race conditions if frontend calls updateProgress simultaneously
-                const lockedAtTimestamp = new Date().toISOString();
-                const projectIdForLock = String(projectId);
-                await db.execute(
-                    sql`UPDATE projects
-                        SET journey_progress = COALESCE(journey_progress, '{}'::jsonb)
-                            || jsonb_build_object(
-                                'requirementsDocument', ${JSON.stringify(requirementsDoc)}::jsonb,
-                                'requirementsLocked', true,
-                                'requirementsLockedAt', ${lockedAtTimestamp}::text
-                            ),
-                            updated_at = NOW()
-                        WHERE id = ${projectIdForLock}::text`
-                );
-
-                console.log(`💾🔒 [P1-4 FIX] Stored and LOCKED requirements document in journeyProgress for project ${projectId} (atomic JSONB merge)`);
-            }
-        } catch (persistError) {
-            console.error(`❌ [generate-data-requirements] Failed to persist requirements:`, persistError);
-            // Non-fatal - continue with response, but log as error since this is critical
-        }
+        console.log(`✅ [GAP 9 FIX] Persisted requirements document to journeyProgress for project ${projectId}`);
+        console.log(`   - Analysis path items: ${document.analysisPath?.length || 0}`);
+        console.log(`   - Required data elements: ${document.requiredDataElements?.length || 0}`);
 
         res.json({
             success: true,
-            document: {
-                documentId: document.documentId,
-                analysisPath: document.analysisPath,
-                requiredDataElements: document.requiredDataElements,
-                completeness: document.completeness,
-                status: document.status
-            }
+            document: requirementsDocument,
+            requirementsLocked: true,
+            requirementsLockedAt: new Date().toISOString()
         });
 
     } catch (error: any) {
@@ -5418,139 +4864,361 @@ router.post("/:id/generate-data-requirements", ensureAuthenticated, requireOwner
     }
 });
 
+// Map required data elements to source columns in the dataset
+// ENHANCED: Uses RequiredDataElementsTool with semantic matching, AI inference, and domain patterns
+router.post("/:id/map-data-elements", ensureAuthenticated, requireOwnership('project'), async (req, res) => {
+    try {
+        const { id: projectId } = req.params;
+        const { forceRemap = false } = req.body;
+
+        console.log(`🔧 [Map Elements] Starting enhanced mapping for project ${projectId} (forceRemap: ${forceRemap})`);
+
+        // Get project with datasets and journeyProgress
+        const project = await storage.getProject(projectId);
+        const journeyProgress = (project as any)?.journeyProgress;
+
+        // Check if requirements document exists
+        if (!journeyProgress?.requirementsDocument) {
+            console.log(`⚠️ [Map Elements] No requirements document found for project ${projectId}`);
+            return res.json({
+                success: false,
+                error: 'preparation_required',
+                requiresPreparation: true,
+                message: 'Please complete the Preparation step first to define your analysis goals.'
+            });
+        }
+
+        const reqDoc = journeyProgress.requirementsDocument;
+        const requiredElements = reqDoc.requiredDataElements || [];
+
+        if (requiredElements.length === 0) {
+            console.log(`⚠️ [Map Elements] No required elements in document for project ${projectId}`);
+            return res.json({
+                success: false,
+                error: 'no_elements',
+                message: 'No data elements defined. Please define your requirements in the Preparation step.'
+            });
+        }
+
+        // Get datasets with full metadata
+        const datasets = await storage.getProjectDatasets(projectId);
+        if (!datasets || datasets.length === 0) {
+            console.log(`⚠️ [Map Elements] No datasets found for project ${projectId}`);
+            return res.json({
+                success: false,
+                error: 'no_dataset',
+                message: 'No data uploaded. Please upload your data first.'
+            });
+        }
+
+        // Build merged schema and preview from all datasets
+        const mergedSchema: Record<string, any> = {};
+        let mergedPreview: any[] = [];
+        let totalRowCount = 0;
+        const datasetFileNames: string[] = [];
+        const piiFields: string[] = [];
+
+        for (const ds of datasets) {
+            const dataset = ds.dataset as any;
+            datasetFileNames.push(dataset.originalName || dataset.originalFileName || dataset.fileName || (dataset.metadata as any)?.fileName || 'unknown');
+
+            // Merge schema
+            const schema = dataset.schema || (dataset as any).metadata?.schema || {};
+            if (typeof schema === 'object') {
+                Object.entries(schema).forEach(([col, type]) => {
+                    if (!mergedSchema[col]) {
+                        mergedSchema[col] = type;
+                    }
+                });
+            }
+
+            // Get preview data (limited to 100 rows per dataset for AI analysis)
+            const preview = dataset.preview as any[] || dataset.data as any[] || [];
+            if (Array.isArray(preview) && preview.length > 0) {
+                // Also infer schema from preview if not available
+                Object.keys(preview[0]).forEach(col => {
+                    if (!mergedSchema[col]) {
+                        mergedSchema[col] = { type: typeof preview[0][col] };
+                    }
+                });
+                mergedPreview = mergedPreview.concat(preview.slice(0, 100));
+            }
+
+            totalRowCount += dataset.rowCount || (Array.isArray(dataset.data) ? dataset.data.length : 0);
+
+            // Collect PII fields
+            const datasetPII = (dataset as any).piiFields || (dataset as any).metadata?.piiFields || [];
+            piiFields.push(...datasetPII);
+        }
+
+        // If joined data exists, prioritize it
+        if (journeyProgress.joinedData?.schema) {
+            console.log(`📊 [Map Elements] Using joined data schema with ${Object.keys(journeyProgress.joinedData.schema).length} columns`);
+            Object.entries(journeyProgress.joinedData.schema).forEach(([col, type]) => {
+                mergedSchema[col] = type;
+            });
+            if (journeyProgress.joinedData.preview) {
+                mergedPreview = journeyProgress.joinedData.preview.slice(0, 100);
+            }
+            if (journeyProgress.joinedData.rowCount) {
+                totalRowCount = journeyProgress.joinedData.rowCount;
+            }
+        }
+
+        console.log(`📊 [Map Elements] Merged schema has ${Object.keys(mergedSchema).length} columns, ${mergedPreview.length} preview rows`);
+
+        // ============================================================
+        // ENHANCED: Use RequiredDataElementsTool with semantic matching
+        // ============================================================
+        try {
+            const mappedDocument = await requiredDataElementsTool.mapDatasetToRequirements(
+                {
+                    ...reqDoc,
+                    requiredDataElements: forceRemap
+                        ? requiredElements.map((e: any) => ({ ...e, sourceField: undefined, sourceAvailable: false }))
+                        : requiredElements
+                },
+                {
+                    fileName: datasetFileNames.join(', '),
+                    rowCount: totalRowCount,
+                    schema: mergedSchema,
+                    preview: mergedPreview,
+                    piiFields: [...new Set(piiFields)]
+                }
+            );
+
+            // Count mapping stats
+            const mappedElements = mappedDocument.requiredDataElements || [];
+            const mappingStats = {
+                totalElements: mappedElements.length,
+                elementsMapped: mappedElements.filter((e: any) => e.sourceField || e.sourceAvailable).length,
+                elementsUnmapped: mappedElements.filter((e: any) => !e.sourceField && !e.sourceAvailable).length,
+                elementsNeedingTransform: mappedElements.filter((e: any) => e.transformationRequired).length,
+                availableColumns: Object.keys(mergedSchema).length,
+                aiMapped: mappedElements.filter((e: any) => (e as any).mappingSource === 'ai').length,
+                patternMapped: mappedElements.filter((e: any) => (e as any).mappingSource !== 'ai' && e.sourceField).length
+            };
+
+            console.log(`✅ [Map Elements] Enhanced mapping complete for project ${projectId}:`, mappingStats);
+
+            // Update journeyProgress with mapped elements
+            const updatedReqDoc = {
+                ...mappedDocument,
+                lastMappedAt: new Date().toISOString()
+            };
+
+            await storage.updateProject(projectId, {
+                journeyProgress: {
+                    ...journeyProgress,
+                    requirementsDocument: updatedReqDoc
+                }
+            } as any);
+
+            res.json({
+                success: true,
+                document: updatedReqDoc,
+                mappingStats,
+                availableColumns: Object.keys(mergedSchema),
+                enhancedMapping: true
+            });
+
+        } catch (toolError: any) {
+            console.error(`⚠️ [Map Elements] Enhanced mapping failed, falling back to basic:`, toolError.message);
+
+            // ============================================================
+            // FALLBACK: Basic string-based mapping if tool fails
+            // ============================================================
+            const availableColumns = Object.keys(mergedSchema);
+            const mappedElements = requiredElements.map((elem: any) => {
+                // Skip if already mapped (unless forceRemap)
+                if (elem.sourceColumn && !forceRemap) {
+                    return elem;
+                }
+
+                const elementName = (elem.elementName || elem.name || '').toLowerCase().replace(/[_\s-]/g, '');
+                const elementId = (elem.elementId || elem.id || '').toLowerCase().replace(/[_\s-]/g, '');
+
+                // Find best matching column with enhanced matching
+                let bestMatch: string | null = null;
+                let bestScore = 0;
+
+                for (const col of availableColumns) {
+                    const colNormalized = col.toLowerCase().replace(/[_\s-]/g, '');
+                    let score = 0;
+
+                    // Exact match
+                    if (colNormalized === elementName || colNormalized === elementId) {
+                        score = 100;
+                    }
+                    // Partial match
+                    else if (colNormalized.includes(elementName) || elementName.includes(colNormalized)) {
+                        score = 60 * Math.min(colNormalized.length, elementName.length) / Math.max(colNormalized.length, elementName.length);
+                    }
+                    // Word-based matching (for multi-word names)
+                    else {
+                        const elemWords = elementName.split(/(?=[A-Z])|\s+/).map((w: string) => w.toLowerCase());
+                        const colWords = colNormalized.split(/(?=[A-Z])|\s+/).map((w: string) => w.toLowerCase());
+                        const matchingWords = elemWords.filter((w: string) => w.length > 2 && colWords.some((cw: string) => cw.includes(w) || w.includes(cw)));
+                        if (matchingWords.length > 0) {
+                            score = 40 * matchingWords.length / Math.max(elemWords.length, 1);
+                        }
+                    }
+
+                    // Domain-specific boosting
+                    const domainPatterns = [
+                        { elem: /identifier|id$/i, col: /id$|_id$|identifier/i, boost: 30 },
+                        { elem: /score|rating/i, col: /score|rating|level/i, boost: 25 },
+                        { elem: /date|time|period/i, col: /date|time|created|updated/i, boost: 25 },
+                        { elem: /department|team/i, col: /dept|department|team|group/i, boost: 25 },
+                        { elem: /employee|staff/i, col: /emp|employee|staff|worker/i, boost: 25 },
+                        { elem: /engagement/i, col: /engage|satisfaction/i, boost: 20 },
+                        { elem: /turnover|retention/i, col: /turnover|retention|attrition/i, boost: 20 }
+                    ];
+
+                    for (const pattern of domainPatterns) {
+                        if (pattern.elem.test(elementName) && pattern.col.test(col)) {
+                            score += pattern.boost;
+                        }
+                    }
+
+                    if (score > bestScore) {
+                        bestMatch = col;
+                        bestScore = score;
+                    }
+                }
+
+                // Accept matches with score > 30
+                if (bestMatch && bestScore > 30) {
+                    return {
+                        ...elem,
+                        sourceColumn: bestMatch,
+                        sourceField: bestMatch,
+                        sourceAvailable: true,
+                        mappingConfidence: bestScore / 100,
+                        confidence: bestScore / 100,
+                        mappingStatus: 'auto_mapped' as const
+                    };
+                }
+
+                return {
+                    ...elem,
+                    sourceAvailable: false,
+                    mappingStatus: 'unmapped' as const,
+                    confidence: 0
+                };
+            });
+
+            // Count mapping stats
+            const mappingStats = {
+                totalElements: mappedElements.length,
+                elementsMapped: mappedElements.filter((e: any) => e.sourceColumn || e.sourceField).length,
+                elementsUnmapped: mappedElements.filter((e: any) => !e.sourceColumn && !e.sourceField).length,
+                availableColumns: availableColumns.length,
+                fallbackUsed: true
+            };
+
+            console.log(`✅ [Map Elements] Fallback mapping complete for project ${projectId}:`, mappingStats);
+
+            // Update journeyProgress with mapped elements
+            const updatedReqDoc = {
+                ...reqDoc,
+                requiredDataElements: mappedElements,
+                lastMappedAt: new Date().toISOString()
+            };
+
+            await storage.updateProject(projectId, {
+                journeyProgress: {
+                    ...journeyProgress,
+                    requirementsDocument: updatedReqDoc
+                }
+            } as any);
+
+            res.json({
+                success: true,
+                document: updatedReqDoc,
+                mappingStats,
+                availableColumns,
+                enhancedMapping: false,
+                fallbackReason: toolError.message
+            });
+        }
+
+    } catch (error: any) {
+        console.error('Error mapping data elements:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message || 'Failed to map data elements'
+        });
+    }
+});
+
 // Get required data elements document for a project
 router.get("/:id/required-data-elements", ensureAuthenticated, requireOwnership('project'), async (req, res) => {
-    // [FIX] Add timeout handling to prevent infinite loading
-    const TIMEOUT_MS = 30000; // 30 seconds
-    let responded = false;
-    const timeoutId = setTimeout(() => {
-        if (!responded) {
-            responded = true;
-            console.error(`[Required Elements] Request timed out after ${TIMEOUT_MS}ms for project ${req.params.id}`);
-            res.status(504).json({
-                success: false,
-                error: 'Request timed out while generating data requirements',
-                timeout: true,
-                message: 'Analysis recommendation generation is taking longer than expected. Please try again.',
-                // Provide fallback structure so frontend can continue
-                defaultElements: {
-                    requiredDataElements: [],
-                    analysisPath: [],
-                    completeness: { readyForExecution: false, totalElements: 0 }
+    try {
+        const { id: projectId } = req.params;
+
+        // First, check journeyProgress for requirementsDocument (SSOT from Prepare step)
+        const project = await storage.getProject(projectId);
+        const journeyProgress = (project as any)?.journeyProgress;
+
+        if (journeyProgress?.requirementsDocument) {
+            const doc = journeyProgress.requirementsDocument;
+            console.log(`📋 [Required Elements] Found document in journeyProgress for project ${projectId}:`, {
+                elementsCount: doc.requiredDataElements?.length || 0,
+                analysisPathCount: doc.analysisPath?.length || 0,
+                firstElement: doc.requiredDataElements?.[0]?.elementName || 'none',
+                documentId: doc.documentId
+            });
+            return res.json({
+                success: true,
+                document: {
+                    documentId: doc.documentId || `doc_${projectId}`,
+                    projectId: projectId,
+                    version: doc.version || '1.0',
+                    status: doc.status || 'complete',
+                    createdAt: doc.createdAt || new Date().toISOString(),
+                    updatedAt: doc.updatedAt || new Date().toISOString(),
+                    analysisPath: doc.analysisPath || [],
+                    requiredDataElements: doc.requiredDataElements || [],
+                    completeness: doc.completeness,
+                    gaps: doc.gaps || [],
+                    recommendations: doc.recommendations || [],
+                    questionAnswerMapping: doc.questionAnswerMapping || [],
+                    userQuestions: doc.userQuestions || journeyProgress.userQuestions || [],
+                    transformationPlan: doc.transformationPlan || []
+                },
+                metadata: {
+                    source: 'journeyProgress',
+                    generatedAt: new Date().toISOString()
                 }
             });
         }
-    }, TIMEOUT_MS);
 
-    try {
-        const { id: projectId } = req.params;
-        const userId = (req.user as any)?.id;
-
-        if (!userId) {
-            clearTimeout(timeoutId);
-            if (responded) return;
-            responded = true;
-            return res.status(401).json({
-                success: false,
-                error: 'User authentication required'
-            });
-        }
-
-        // FIX: First check journeyProgress.requirementsDocument (set by generate-data-requirements)
-        const project = await storage.getProject(projectId);
-        // CRITICAL FIX: parseJourneyProgress expects journeyProgress JSONB, not the entire project object
-        const journeyProgress = parseJourneyProgress((project as any)?.journeyProgress || {});
-        const storedRequirements = (journeyProgress as any).requirementsDocument;
-        const isLocked = (journeyProgress as any).requirementsLocked === true;
-
-        // DEBUG LOGGING: Track decision flow
-        console.log(`🔍 [DEBUG] GET /required-data-elements for project ${projectId}:`, {
-            hasStoredRequirements: !!storedRequirements,
-            isLocked,
-            requirementsCount: storedRequirements?.requiredDataElements?.length || 0,
-            analysesCount: storedRequirements?.analysisPath?.length || 0,
-            source: 'journeyProgress.requirementsDocument'
-        });
-
-        // FIX 3: If storedRequirements exists, ALWAYS return it (even if lock check is unclear)
-        // Don't fall through to regeneration - this ensures SSOT consistency
-        if (storedRequirements) {
-            clearTimeout(timeoutId);
-            if (responded) return;
-            responded = true;
-            
-            if (isLocked) {
-                console.log(`📄🔒 [SSOT] Requirements LOCKED for project ${projectId} - returning stored document, NO regeneration allowed`);
-                return res.json({
-                    success: true,
-                    document: storedRequirements,
-                    ...storedRequirements,
-                    fromCache: true,
-                    locked: true,
-                    lockedAt: (journeyProgress as any).requirementsLockedAt || null,
-                    message: 'Using stored requirements from Preparation step - locked to ensure consistency',
-                    metadata: {
-                        projectId,
-                        generatedAt: storedRequirements.generatedAt || new Date().toISOString(),
-                        source: 'journeyProgress.requirementsDocument'
-                    }
-                });
-            }
-            
-            // Not locked but exists - check if user wants to regenerate
-            const generateNew = req.query.generateNew === 'true';
-            if (!generateNew) {
-                console.log(`📄 [SSOT] Using stored requirements from journeyProgress for project ${projectId} (not locked, returning cached)`);
-                return res.json({
-                    success: true,
-                    document: storedRequirements,
-                    ...storedRequirements,
-                    fromCache: true,
-                    locked: false,
-                    message: 'Using stored requirements from Preparation step - use ?generateNew=true to regenerate',
-                    metadata: {
-                        projectId,
-                        generatedAt: storedRequirements.generatedAt || new Date().toISOString(),
-                        source: 'journeyProgress.requirementsDocument'
-                    }
-                });
-            }
-            
-            // User explicitly wants to regenerate - continue to generation logic below
-            console.log(`🔄 [Required Elements] User requested regeneration (generateNew=true) for project ${projectId}`);
-        }
-
-        // Fallback: Check dataset ingestionMetadata (legacy location)
+        // Fallback: Get dataset linked to this project
         const datasets = await storage.getProjectDatasets(projectId);
 
         if (!datasets || datasets.length === 0) {
-            clearTimeout(timeoutId);
-            if (responded) return;
-            responded = true;
-            // [PHASE 3 FIX] Return 200 with graceful fallback instead of 404
-            // This allows frontend to handle the state without showing destructive errors
-            console.log(`⚠️ [Required Elements] No datasets found for project ${projectId}, returning graceful fallback`);
+            // No datasets yet - return empty document instead of 404
+            console.log(`📋 [Required Elements] No datasets found, returning empty document for project ${projectId}`);
             return res.json({
-                success: false,
-                document: null,
-                error: 'no_dataset',
-                message: 'Upload data first to generate required data elements',
-                // Provide minimal default structure for frontend to work with
-                defaultElements: {
+                success: true,
+                document: {
+                    documentId: `doc_${projectId}`,
+                    projectId: projectId,
+                    version: '1.0',
+                    status: 'pending',
                     requiredDataElements: [],
                     analysisPath: [],
-                    completeness: {
-                        readyForExecution: false,
-                        totalElements: 0,
-                        elementsMapped: 0,
-                        elementsMissing: 0,
-                        gaps: []
-                    },
-                    gaps: [{
-                        severity: 'high',
-                        type: 'data_missing',
-                        description: 'No dataset has been uploaded yet. Please upload your data first.'
-                    }]
+                    gaps: [],
+                    recommendations: [],
+                    questionAnswerMapping: [],
+                    userQuestions: journeyProgress?.userQuestions || [],
+                    transformationPlan: []
+                },
+                metadata: {
+                    source: 'empty',
+                    message: 'No requirements document generated yet. Complete the Prepare step first.',
+                    generatedAt: new Date().toISOString()
                 }
             });
         }
@@ -5558,153 +5226,36 @@ router.get("/:id/required-data-elements", ensureAuthenticated, requireOwnership(
         const dataset = datasets[0].dataset;
         const ingestionMetadata = (dataset as any).ingestionMetadata;
 
-        // [DATA CONTINUITY FIX] Use joined schema from journeyProgress if available
-        // This ensures requirements are generated against ALL columns from ALL datasets
-        const storedJoinedData = (journeyProgress as any)?.joinedData;
-        const joinedSchema = storedJoinedData?.schema || null;
-
-        // Build merged schema from all datasets if no joined schema available
-        let effectiveSchema: Record<string, any>;
-        let totalRowCount = 0;
-
-        if (joinedSchema && Object.keys(joinedSchema).length > 0) {
-            // Use persisted joined schema
-            effectiveSchema = joinedSchema;
-            // CRITICAL FIX: Use actual totalRowCount, not preview length
-            totalRowCount = storedJoinedData?.totalRowCount || 
-                          storedJoinedData?.fullRowCount || 
-                          storedJoinedData?.fullData?.length || 
-                          storedJoinedData?.preview?.length || 
-                          0;
-            console.log(`📊 [Required Elements] Using JOINED schema with ${Object.keys(effectiveSchema).length} columns, ${totalRowCount} total rows`);
-        } else if (datasets.length > 1) {
-            // Merge schemas from all datasets
-            effectiveSchema = {};
-            for (let i = 0; i < datasets.length; i++) {
-                const ds = datasets[i].dataset;
-                const dsName = (ds as any).originalFileName?.replace(/\.[^.]+$/, '').substring(0, 15) || `Dataset${i + 1}`;
-                const dsSchema = (ds as any).schema || {};
-                totalRowCount += (ds as any).recordCount || 0;
-
-                for (const [col, type] of Object.entries(dsSchema)) {
-                    // Use dataset name prefix if column name conflicts
-                    const finalCol = effectiveSchema[col] !== undefined ? `${dsName}_${col}` : col;
-                    effectiveSchema[finalCol] = type;
-                }
-            }
-            console.log(`📊 [Required Elements] Merged schema from ${datasets.length} datasets: ${Object.keys(effectiveSchema).length} columns`);
-        } else {
-            // Single dataset - use its schema directly
-            effectiveSchema = (dataset as any).schema || {};
-            totalRowCount = (dataset as any).recordCount || 0;
-        }
-
-        // P1-4 FIX: Only generate if not locked and not found
-        // FIX 2: BEFORE regeneration, check if requirements are locked
-        // If locked but document missing, return error instead of regenerating
-        if (isLocked && !storedRequirements) {
-            // Locked but missing - this is an error, don't regenerate
-            clearTimeout(timeoutId);
-            if (responded) return;
-            responded = true;
-            console.error(`❌ [SSOT] Requirements locked but document missing for project ${projectId} - cannot regenerate`, {
-                isLocked: true,
-                hasStoredRequirements: false,
-                action: 'BLOCKED_REGENERATION'
-            });
-            return res.status(500).json({
-                success: false,
-                error: 'Requirements are locked but document is missing. Please contact support.',
-                locked: true,
-                projectId
-            });
-        }
-
-        // Check legacy location (dataset.ingestionMetadata.dataRequirementsDocument)
-        let doc = ingestionMetadata?.dataRequirementsDocument;
-
-        // CRITICAL FIX: NEVER regenerate elements - only use stored data or migrate from legacy
-        // The Preparation step is the ONLY place where elements should be generated
-        if (doc && !storedRequirements) {
-            // Legacy document exists but not in journeyProgress - MIGRATE it
-            console.log(`🔄 [Required Elements] Migrating legacy document to journeyProgress for project ${projectId}`, {
-                legacyElementsCount: doc.requiredDataElements?.length || 0,
-                action: 'MIGRATING_LEGACY_TO_SSOT'
-            });
-
-            // Migrate to journeyProgress and lock
-            const requirementsDoc = {
-                ...doc,
-                generatedAt: doc.generatedAt || new Date().toISOString(),
-                version: doc.version || 1,
-                migratedFromLegacy: true,
-                migratedAt: new Date().toISOString()
-            };
-
-            const lockedAtTimestamp = new Date().toISOString();
-            const projectIdForMigration = String(projectId);
-            await db.execute(
-                sql`UPDATE projects
-                    SET journey_progress = COALESCE(journey_progress, '{}'::jsonb)
-                        || jsonb_build_object(
-                            'requirementsDocument', ${JSON.stringify(requirementsDoc)}::jsonb,
-                            'requirementsLocked', true,
-                            'requirementsLockedAt', ${lockedAtTimestamp}::text
-                        ),
-                        updated_at = NOW()
-                    WHERE id = ${projectIdForMigration}::text`
-            );
-
-            console.log(`✅🔒 [Required Elements] Migrated and LOCKED legacy requirements with ${doc.requiredDataElements?.length || 0} elements`);
-        } else if (!doc && !storedRequirements) {
-            // NO document exists anywhere - user needs to complete Preparation step
-            // DO NOT regenerate - return error directing user to Preparation step
-            clearTimeout(timeoutId);
-            if (responded) return;
-            responded = true;
-
-            console.log(`⚠️ [Required Elements] No requirements document found for project ${projectId}`, {
-                hasLegacyDoc: false,
-                hasStoredRequirements: false,
-                action: 'REQUIRING_PREPARATION_STEP'
-            });
-
+        if (!ingestionMetadata?.dataRequirementsDocument) {
+            // No document in dataset - return empty document instead of 404
+            console.log(`📋 [Required Elements] No document in dataset, returning empty for project ${projectId}`);
             return res.json({
-                success: false,
-                document: null,
-                error: 'preparation_required',
-                message: 'Please complete the Preparation step first to define your analysis goals and generate required data elements.',
-                requiresPreparation: true,
-                // Provide minimal structure for frontend to work with
-                defaultElements: {
+                success: true,
+                document: {
+                    documentId: `doc_${projectId}`,
+                    projectId: projectId,
+                    version: '1.0',
+                    status: 'pending',
                     requiredDataElements: [],
                     analysisPath: [],
-                    completeness: {
-                        readyForExecution: false,
-                        totalElements: 0,
-                        elementsMapped: 0,
-                        elementsMissing: 0,
-                        gaps: []
-                    },
-                    gaps: [{
-                        severity: 'high',
-                        type: 'preparation_required',
-                        description: 'Required data elements have not been generated. Please complete the Preparation step to define your analysis goals.'
-                    }]
+                    gaps: [],
+                    recommendations: [],
+                    questionAnswerMapping: [],
+                    userQuestions: journeyProgress?.userQuestions || [],
+                    transformationPlan: []
+                },
+                metadata: {
+                    source: 'empty',
+                    datasetId: dataset.id,
+                    message: 'Requirements document not yet generated. Complete the Prepare step.',
+                    generatedAt: new Date().toISOString()
                 }
             });
         }
 
-        // R2 FIX: Include questionAnswerMapping and other fields needed by transformation step
-        // Refresh project to get updated journeyProgress with lock status
-        const updatedProject = await storage.getProject(projectId);
-        // CRITICAL FIX: parseJourneyProgress expects journeyProgress JSONB, not the entire project object
-        const updatedProgress = parseJourneyProgress((updatedProject as any)?.journeyProgress || {});
-        const isLockedAfterUpdate = (updatedProgress as any).requirementsLocked === true;
+        const doc = ingestionMetadata.dataRequirementsDocument;
 
-        clearTimeout(timeoutId);
-        if (responded) return;
-        responded = true;
+        // R2 FIX: Include questionAnswerMapping and other fields needed by transformation step
         res.json({
             success: true,
             document: {
@@ -5726,27 +5277,13 @@ router.get("/:id/required-data-elements", ensureAuthenticated, requireOwnership(
             },
             metadata: {
                 datasetId: dataset.id,
-                datasetName: datasets.length > 1
-                    ? `${datasets.length} datasets (joined)`
-                    : ((dataset as any).originalFileName || 'Unknown'),
-                recordCount: totalRowCount,
-                columnCount: Object.keys(effectiveSchema).length,
-                datasetCount: datasets.length,
-                usedJoinedSchema: joinedSchema && Object.keys(joinedSchema).length > 0,
+                datasetName: (dataset as any).originalFileName,
+                recordCount: (dataset as any).recordCount,
                 generatedAt: new Date().toISOString()
-            },
-            // CONSISTENCY: Tell frontend if requirements are locked
-            locked: isLockedAfterUpdate,
-            lockedAt: (updatedProgress as any).requirementsLockedAt || null,
-            message: isLockedAfterUpdate
-                ? 'Requirements are locked - these recommendations will remain consistent throughout your journey'
-                : 'Requirements generated - will be locked after first use'
+            }
         });
 
     } catch (error: any) {
-        clearTimeout(timeoutId);
-        if (responded) return;
-        responded = true;
         console.error('Error fetching required data elements:', error);
         res.status(500).json({
             success: false,
@@ -5755,191 +5292,504 @@ router.get("/:id/required-data-elements", ensureAuthenticated, requireOwnership(
     }
 });
 
-// Data Engineer mapping endpoint - Maps existing elements to source fields
-// CRITICAL: This does NOT regenerate elements - only maps them to available data sources
-router.post("/:id/map-data-elements", ensureAuthenticated, requireOwnership('project'), async (req, res) => {
+// ═══════════════════════════════════════════════════════════════════════════════
+// BUSINESS DEFINITION ENRICHMENT - Connect BA Agent to data elements
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /api/projects/:id/enrich-data-elements
+ *
+ * Enriches required data elements with business definitions from the BA Agent.
+ * This connects the business definition registry to the data element pipeline.
+ *
+ * Flow:
+ * 1. Takes data elements (from DS Agent)
+ * 2. Looks up business definitions for each element (BA Agent via registry)
+ * 3. Infers missing definitions (Researcher Agent via AI)
+ * 4. Returns enriched elements with formulas, component fields, and confidence
+ *
+ * Body: {
+ *   elements?: DataElement[],  // Optional - uses journeyProgress if not provided
+ *   industry?: string,         // For industry-specific definitions
+ *   includeInferred?: boolean  // Whether to infer missing definitions (default: true)
+ * }
+ */
+router.post("/:id/enrich-data-elements", ensureAuthenticated, requireOwnership('project'), async (req, res) => {
     try {
         const { id: projectId } = req.params;
-        const userId = (req.user as any)?.id;
+        const { elements, industry, includeInferred = true } = req.body;
 
-        if (!userId) {
-            return res.status(401).json({ success: false, error: 'User authentication required' });
-        }
+        console.log(`\n📚 [Business Definitions] Enriching data elements for project ${projectId}`);
 
-        console.log(`🔧 [Data Engineer] Mapping data elements to source fields for project ${projectId}`);
+        // Import business definition registry
+        const { businessDefinitionRegistry } = await import('../services/business-definition-registry');
 
-        // Get project and requirements document
+        // Get project and journey progress
         const project = await storage.getProject(projectId);
         if (!project) {
             return res.status(404).json({ success: false, error: 'Project not found' });
         }
 
-        const journeyProgress = parseJourneyProgress((project as any)?.journeyProgress || {});
-        const requirementsDoc = (journeyProgress as any).requirementsDocument;
+        const journeyProgress = (project as any)?.journeyProgress || {};
+        const projectIndustry = industry || journeyProgress.industry || 'general';
 
-        if (!requirementsDoc || !requirementsDoc.requiredDataElements) {
-            return res.status(400).json({
-                success: false,
-                error: 'preparation_required',
-                message: 'Requirements document not found. Please complete the Preparation step first.',
-                requiresPreparation: true
+        // Get elements from request or journey progress
+        let dataElements = elements;
+        if (!dataElements || dataElements.length === 0) {
+            const reqDoc = journeyProgress.requirementsDocument;
+            dataElements = reqDoc?.requiredDataElements || [];
+        }
+
+        if (dataElements.length === 0) {
+            return res.json({
+                success: true,
+                enrichedElements: [],
+                message: 'No data elements to enrich. Complete the Prepare step first.'
             });
         }
 
-        // Get dataset schema
-        const datasets = await storage.getProjectDatasets(projectId);
-        if (!datasets || datasets.length === 0) {
-            return res.status(400).json({
-                success: false,
-                error: 'No datasets found. Please upload data first.'
+        console.log(`📚 [Business Definitions] Enriching ${dataElements.length} elements for industry: ${projectIndustry}`);
+
+        // Enrich each element with business definitions
+        const enrichedElements = [];
+        const enrichmentStats = {
+            found: 0,
+            inferred: 0,
+            notFound: 0
+        };
+
+        for (const element of dataElements) {
+            const conceptName = element.elementName || element.name || element.element;
+            console.log(`  📖 Looking up definition for: "${conceptName}"`);
+
+            // Look up definition in registry
+            const lookupResult = await businessDefinitionRegistry.lookupDefinition(conceptName, {
+                industry: projectIndustry,
+                projectId,
+                includeGlobal: true
             });
-        }
 
-        // Use joined schema if available, otherwise merge all dataset schemas
-        const joinedSchema = (journeyProgress as any)?.joinedData?.schema;
-        let effectiveSchema: Record<string, any> = {};
-        let totalRowCount = 0;
+            let enrichedElement = { ...element };
 
-        if (joinedSchema && Object.keys(joinedSchema).length > 0) {
-            effectiveSchema = joinedSchema;
-            totalRowCount = (journeyProgress as any)?.joinedData?.totalRowCount || 0;
-        } else if (datasets.length > 1) {
-            for (const ds of datasets) {
-                const dsSchema = (ds.dataset as any).schema || {};
-                totalRowCount += (ds.dataset as any).recordCount || 0;
-                for (const [col, type] of Object.entries(dsSchema)) {
-                    if (!effectiveSchema[col]) {
-                        effectiveSchema[col] = type;
-                    }
+            if (lookupResult.found && lookupResult.definition) {
+                // Found definition in registry
+                const def = lookupResult.definition;
+                enrichedElement = {
+                    ...element,
+                    businessDefinition: {
+                        conceptName: def.conceptName,
+                        displayName: def.displayName,
+                        businessDescription: def.businessDescription,
+                        calculationType: def.calculationType,
+                        formula: def.formula,
+                        componentFields: def.componentFields,
+                        aggregationMethod: def.aggregationMethod,
+                        confidence: lookupResult.confidence,
+                        source: lookupResult.source,
+                        industry: def.industry
+                    },
+                    hasBusinessDefinition: true,
+                    definitionConfidence: lookupResult.confidence
+                };
+                enrichmentStats.found++;
+                console.log(`    ✅ Found: ${def.displayName || def.conceptName} (${lookupResult.source}, ${(lookupResult.confidence * 100).toFixed(0)}% confidence)`);
+
+            } else if (includeInferred) {
+                // Try to infer definition
+                const inferredDef = await businessDefinitionRegistry.inferDefinition({
+                    conceptName,
+                    context: journeyProgress.goals?.join(', ') || '',
+                    industry: projectIndustry,
+                    datasetSchema: journeyProgress.schema
+                });
+
+                if (inferredDef) {
+                    enrichedElement = {
+                        ...element,
+                        businessDefinition: {
+                            conceptName: inferredDef.conceptName,
+                            displayName: inferredDef.displayName,
+                            businessDescription: inferredDef.businessDescription,
+                            calculationType: inferredDef.calculationType,
+                            formula: inferredDef.formula,
+                            componentFields: inferredDef.componentFields,
+                            aggregationMethod: inferredDef.aggregationMethod,
+                            confidence: 0.7,
+                            source: 'ai_inferred',
+                            industry: inferredDef.industry
+                        },
+                        hasBusinessDefinition: true,
+                        definitionConfidence: 0.7
+                    };
+                    enrichmentStats.inferred++;
+                    console.log(`    🔬 Inferred: ${inferredDef.displayName || inferredDef.conceptName}`);
+                } else {
+                    enrichedElement.hasBusinessDefinition = false;
+                    enrichedElement.definitionConfidence = 0;
+                    enrichmentStats.notFound++;
+                    console.log(`    ❌ No definition found or inferred`);
                 }
+            } else {
+                enrichedElement.hasBusinessDefinition = false;
+                enrichedElement.definitionConfidence = 0;
+                enrichmentStats.notFound++;
             }
-        } else {
-            effectiveSchema = (datasets[0].dataset as any).schema || {};
-            totalRowCount = (datasets[0].dataset as any).recordCount || 0;
+
+            // Add alternatives if available
+            if (lookupResult.alternatives && lookupResult.alternatives.length > 0) {
+                enrichedElement.alternativeDefinitions = lookupResult.alternatives.map(alt => ({
+                    conceptName: alt.conceptName,
+                    displayName: alt.displayName,
+                    businessDescription: alt.businessDescription,
+                    calculationType: alt.calculationType
+                }));
+            }
+
+            enrichedElements.push(enrichedElement);
         }
 
-        // Get preview data for better matching
-        const previewData = (journeyProgress as any)?.joinedData?.preview ||
-                           (datasets[0].dataset as any).preview || [];
+        console.log(`📚 [Business Definitions] Enrichment complete:`, enrichmentStats);
 
-        // Call Data Engineer tool to map elements to source fields
-        const toolResult = await executeTool(
-            'required_data_elements_tool',
-            'data_engineer',
-            {
-                operation: 'mapDatasetToRequirements',
-                document: requirementsDoc,
-                dataset: {
-                    fileName: datasets.length > 1
-                        ? `${datasets.length} datasets (joined)`
-                        : ((datasets[0].dataset as any).originalFileName || 'Dataset'),
-                    rowCount: totalRowCount,
-                    schema: effectiveSchema,
-                    preview: previewData.slice(0, 10) // Limit preview for performance
+        // Update journey progress with enriched elements (optional - can be disabled)
+        if (req.body.persistToProgress !== false) {
+            const updatedReqDoc = {
+                ...journeyProgress.requirementsDocument,
+                requiredDataElements: enrichedElements,
+                businessDefinitionsEnriched: true,
+                enrichmentStats,
+                enrichedAt: new Date().toISOString()
+            };
+
+            await storage.updateProject(projectId, {
+                journeyProgress: {
+                    ...journeyProgress,
+                    requirementsDocument: updatedReqDoc
                 }
-            },
-            { userId, projectId }
-        );
+            } as any);
 
-        if (toolResult.status === 'error') {
-            console.error(`❌ [Data Engineer] Mapping failed:`, toolResult.error);
-            return res.status(500).json({
-                success: false,
-                error: toolResult.error || 'Failed to map data elements'
-            });
+            console.log(`📚 [Business Definitions] Persisted enriched elements to journeyProgress`);
         }
-
-        const mappedDocument = toolResult.result;
-
-        // Update journeyProgress with the mapped document
-        // CRITICAL: Preserve the lock status
-        const projectIdForUpdate = String(projectId);
-        await db.execute(
-            sql`UPDATE projects
-                SET journey_progress = COALESCE(journey_progress, '{}'::jsonb)
-                    || jsonb_build_object(
-                        'requirementsDocument', ${JSON.stringify(mappedDocument)}::jsonb,
-                        'dataElementsMappedAt', ${new Date().toISOString()}::text
-                    ),
-                    updated_at = NOW()
-                WHERE id = ${projectIdForUpdate}::text`
-        );
-
-        console.log(`✅ [Data Engineer] Mapped ${mappedDocument.completeness?.elementsMapped || 0}/${mappedDocument.completeness?.totalElements || 0} elements to source fields`);
 
         res.json({
             success: true,
-            document: mappedDocument,
-            mappingStats: {
-                totalElements: mappedDocument.completeness?.totalElements || 0,
-                elementsMapped: mappedDocument.completeness?.elementsMapped || 0,
-                elementsMissing: mappedDocument.completeness?.elementsMissing || 0,
-                gapsFound: mappedDocument.gaps?.length || 0
-            },
-            message: `Successfully mapped ${mappedDocument.completeness?.elementsMapped || 0} data elements to source fields`
+            enrichedElements,
+            stats: enrichmentStats,
+            industry: projectIndustry,
+            message: `Enriched ${enrichmentStats.found} elements from registry, inferred ${enrichmentStats.inferred}, ${enrichmentStats.notFound} without definitions`
         });
 
     } catch (error: any) {
-        console.error('Error mapping data elements:', error);
+        console.error('Error enriching data elements:', error);
         res.status(500).json({
             success: false,
-            error: error.message || 'Failed to map data elements'
+            error: error.message || 'Failed to enrich data elements with business definitions'
         });
     }
 });
 
-// CONSISTENCY: Explicit endpoint to unlock and regenerate requirements
-// Use this when user explicitly wants to change their goals/questions and get new recommendations
-router.post("/:id/unlock-requirements", ensureAuthenticated, requireOwnership('project'), async (req, res) => {
+/**
+ * GET /api/projects/:id/business-definitions/:conceptName
+ *
+ * Look up a specific business definition by concept name.
+ * Used by UI to show business context when mapping columns.
+ */
+router.get("/:id/business-definitions/:conceptName", ensureAuthenticated, requireOwnership('project'), async (req, res) => {
     try {
-        const { id: projectId } = req.params;
-        const { regenerate = false, newGoals, newQuestions } = req.body;
+        const { id: projectId, conceptName } = req.params;
+        const { industry } = req.query;
 
+        // Import business definition registry
+        const { businessDefinitionRegistry } = await import('../services/business-definition-registry');
+
+        // Get project for industry context
         const project = await storage.getProject(projectId);
-        // CRITICAL FIX: parseJourneyProgress expects journeyProgress JSONB, not the entire project object
-        const journeyProgress = parseJourneyProgress((project as any)?.journeyProgress || {});
+        const journeyProgress = (project as any)?.journeyProgress || {};
+        const projectIndustry = (industry as string) || journeyProgress.industry || 'general';
 
-        // Unlock requirements
-        const updatedProgress: any = {
-            ...journeyProgress,
-            requirementsLocked: false,
-            requirementsUnlockedAt: new Date().toISOString(),
-            requirementsUnlockReason: 'User requested unlock to modify goals/questions'
-        };
+        const lookupResult = await businessDefinitionRegistry.lookupDefinition(conceptName, {
+            industry: projectIndustry,
+            projectId,
+            includeGlobal: true
+        });
 
-        // If regenerate is requested, clear the existing document
-        if (regenerate) {
-            delete updatedProgress.requirementsDocument;
-            console.log(`🔓 [Requirements] Unlocked and cleared requirements for project ${projectId}`);
-
-            // Update goals/questions if provided
-            if (newGoals) {
-                updatedProgress.goals = Array.isArray(newGoals) ? newGoals : [newGoals];
-            }
-            if (newQuestions) {
-                updatedProgress.businessQuestions = Array.isArray(newQuestions) ? newQuestions.join('\n') : newQuestions;
-            }
+        if (lookupResult.found && lookupResult.definition) {
+            res.json({
+                success: true,
+                found: true,
+                definition: lookupResult.definition,
+                confidence: lookupResult.confidence,
+                source: lookupResult.source,
+                alternatives: lookupResult.alternatives
+            });
         } else {
-            console.log(`🔓 [Requirements] Unlocked requirements for project ${projectId} (keeping existing document)`);
+            res.json({
+                success: true,
+                found: false,
+                alternatives: lookupResult.alternatives,
+                message: `No business definition found for "${conceptName}". Consider using the enrich endpoint to infer one.`
+            });
         }
 
-        await storage.updateProject(projectId, {
-            journeyProgress: updatedProgress
-        } as any);
+    } catch (error: any) {
+        console.error('Error looking up business definition:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message || 'Failed to look up business definition'
+        });
+    }
+});
+
+/**
+ * POST /api/projects/:id/validate-mapping
+ *
+ * Validates a column mapping against its business definition.
+ * Ensures the mapped columns align with what the definition expects.
+ *
+ * Body: {
+ *   elementName: string,
+ *   mappedColumns: string[],
+ *   transformationLogic?: string
+ * }
+ */
+router.post("/:id/validate-mapping", ensureAuthenticated, requireOwnership('project'), async (req, res) => {
+    try {
+        const { id: projectId } = req.params;
+        const { elementName, mappedColumns, transformationLogic } = req.body;
+
+        if (!elementName) {
+            return res.status(400).json({ success: false, error: 'elementName is required' });
+        }
+
+        // Import business definition registry
+        const { businessDefinitionRegistry } = await import('../services/business-definition-registry');
+
+        // Get project
+        const project = await storage.getProject(projectId);
+        const journeyProgress = (project as any)?.journeyProgress || {};
+        const projectIndustry = journeyProgress.industry || 'general';
+
+        // Look up definition
+        const lookupResult = await businessDefinitionRegistry.lookupDefinition(elementName, {
+            industry: projectIndustry,
+            projectId,
+            includeGlobal: true
+        });
+
+        const validationResult: {
+            valid: boolean;
+            warnings: string[];
+            suggestions: string[];
+            confidence: number;
+        } = {
+            valid: true,
+            warnings: [],
+            suggestions: [],
+            confidence: 1.0
+        };
+
+        if (lookupResult.found && lookupResult.definition) {
+            const def = lookupResult.definition as any;
+
+            // Check if mapped columns match expected component fields
+            const componentFields = Array.isArray(def.componentFields) ? def.componentFields : [];
+            if (componentFields.length > 0) {
+                const expectedFields = componentFields.map((f: string) => f.toLowerCase());
+                const mappedLower = mappedColumns.map((c: string) => c.toLowerCase());
+
+                // Check for missing expected fields
+                const missingFields = expectedFields.filter((f: string) =>
+                    !mappedLower.some((m: string) => m.includes(f) || f.includes(m))
+                );
+
+                if (missingFields.length > 0) {
+                    validationResult.warnings.push(
+                        `Business definition expects fields: ${componentFields.join(', ')}. ` +
+                        `Missing: ${missingFields.join(', ')}`
+                    );
+                    validationResult.confidence *= 0.7;
+                }
+
+                // Check for extra fields not in definition
+                const extraFields = mappedLower.filter((m: string) =>
+                    !expectedFields.some((f: string) => m.includes(f) || f.includes(m))
+                );
+
+                if (extraFields.length > 0 && missingFields.length > 0) {
+                    validationResult.suggestions.push(
+                        `Mapped columns ${extraFields.join(', ')} are not in the standard definition. ` +
+                        `Verify these are equivalent to expected fields.`
+                    );
+                }
+            }
+
+            // Check calculation type alignment
+            if (def.calculationType === 'aggregated' && !transformationLogic) {
+                validationResult.suggestions.push(
+                    `This metric requires aggregation (${def.aggregationMethod || 'average'}). ` +
+                    `Add transformation logic to aggregate the mapped columns.`
+                );
+            }
+
+            // Suggest the standard formula if available
+            if (def.formula && !transformationLogic) {
+                validationResult.suggestions.push(
+                    `Standard formula: ${def.formula}. Consider using this as your transformation.`
+                );
+            }
+
+            validationResult.valid = validationResult.warnings.length === 0;
+
+        } else {
+            // No definition found - mapping is valid but low confidence
+            validationResult.confidence = 0.5;
+            validationResult.warnings.push(
+                `No business definition found for "${elementName}". ` +
+                `Cannot validate mapping against standard formula.`
+            );
+        }
 
         res.json({
             success: true,
-            message: regenerate
-                ? 'Requirements unlocked and cleared - new recommendations will be generated on next load'
-                : 'Requirements unlocked - you can now modify goals/questions',
-            locked: false
+            elementName,
+            validation: validationResult,
+            businessDefinition: lookupResult.definition || null
         });
 
     } catch (error: any) {
-        console.error('Error unlocking requirements:', error);
+        console.error('Error validating mapping:', error);
         res.status(500).json({
             success: false,
-            error: error.message || 'Failed to unlock requirements'
+            error: error.message || 'Failed to validate mapping'
+        });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PM-SUPERVISED DATA ELEMENT MAPPING FLOW
+// Orchestrates DS → BA → Researcher → DE with PM validation at each step
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /api/projects/:id/pm-supervised-mapping
+ *
+ * Executes the PM-supervised data element mapping flow:
+ * 1. DS Agent identifies required data elements from goals/questions
+ * 2. PM validates DS output
+ * 3. BA Agent looks up business definitions from registry
+ * 4. PM validates BA output
+ * 5. Researcher Agent infers missing definitions using AI
+ * 6. PM validates Researcher output
+ * 7. DE Agent creates transformation logic
+ * 8. PM validates final transformation plan
+ *
+ * Body: {
+ *   userGoals?: string[],      // Override goals from journey progress
+ *   userQuestions?: string[]   // Override questions from journey progress
+ * }
+ */
+router.post("/:id/pm-supervised-mapping", ensureAuthenticated, requireOwnership('project'), async (req, res) => {
+    try {
+        const { id: projectId } = req.params;
+        const userId = (req.user as any)?.id;
+
+        console.log(`\n🎯 [API] Starting PM-supervised data mapping for project ${projectId}`);
+
+        // Get project and journey progress
+        const project = await storage.getProject(projectId);
+        if (!project) {
+            return res.status(404).json({
+                success: false,
+                error: 'Project not found'
+            });
+        }
+
+        const journeyProgress = (project as any)?.journeyProgress || {};
+
+        // Get user goals and questions (from request body or journey progress)
+        let userGoals = req.body.userGoals || journeyProgress.goals || [];
+        let userQuestions = req.body.userQuestions || journeyProgress.businessQuestions || journeyProgress.userQuestions || [];
+
+        // Normalize goals to array
+        if (typeof userGoals === 'string') {
+            userGoals = [userGoals];
+        }
+
+        // Include analysis goal if not in goals array
+        if (journeyProgress.analysisGoal && !userGoals.includes(journeyProgress.analysisGoal)) {
+            userGoals.unshift(journeyProgress.analysisGoal);
+        }
+
+        if (userGoals.length === 0 && userQuestions.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'No goals or questions available. Please complete the Prepare step first.'
+            });
+        }
+
+        // Get dataset metadata
+        const datasets = await storage.getProjectDatasets(projectId);
+        if (!datasets || datasets.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'No datasets uploaded. Please upload data first.'
+            });
+        }
+
+        // Build dataset metadata for the mapping flow
+        const primaryDataset = datasets[0]?.dataset || datasets[0];
+        const datasetMetadata = {
+            columns: (primaryDataset as any)?.metadata?.columns || [],
+            columnNames: (primaryDataset as any)?.metadata?.columns?.map((c: any) => c.name || c) || [],
+            schema: (primaryDataset as any)?.metadata?.schema || (primaryDataset as any)?.metadata,
+            rowCount: (primaryDataset as any)?.recordCount || (primaryDataset as any)?.metadata?.rowCount || 0,
+            datasetId: primaryDataset?.id,
+            datasetName: (primaryDataset as any)?.originalFileName || 'Unknown'
+        };
+
+        console.log(`📊 [API] Dataset metadata: ${datasetMetadata.columnNames.length} columns, ${datasetMetadata.rowCount} rows`);
+        console.log(`📋 [API] User goals: ${userGoals.length}, questions: ${userQuestions.length}`);
+
+        // Import and execute the PM-supervised flow
+        const { projectAgentOrchestrator } = await import('../services/project-agent-orchestrator');
+
+        const result = await projectAgentOrchestrator.executePMSupervisedDataMappingFlow(
+            projectId,
+            datasetMetadata,
+            userGoals,
+            userQuestions
+        );
+
+        if (!result.success) {
+            return res.status(500).json({
+                success: false,
+                error: result.error || 'PM-supervised mapping flow failed',
+                pmValidations: result.pmValidations
+            });
+        }
+
+        console.log(`✅ [API] PM-supervised mapping completed successfully`);
+
+        res.json({
+            success: true,
+            message: 'PM-supervised data element mapping completed',
+            requirementsDocument: result.requirementsDocument,
+            businessDefinitions: result.businessDefinitions,
+            transformationPlan: result.transformationPlan,
+            pmValidations: result.pmValidations,
+            summary: {
+                definitionsFound: result.businessDefinitions?.length || 0,
+                transformationsCreated: result.transformationPlan?.transformations?.length || 0,
+                readinessScore: result.transformationPlan?.readinessScore || 0,
+                pmValidationsPassed: result.pmValidations?.filter(v => v.validated).length || 0,
+                pmValidationsTotal: result.pmValidations?.length || 0
+            }
+        });
+
+    } catch (error: any) {
+        console.error('❌ [API] PM-supervised mapping error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message || 'Failed to execute PM-supervised data mapping'
         });
     }
 });
@@ -5947,43 +5797,9 @@ router.post("/:id/unlock-requirements", ensureAuthenticated, requireOwnership('p
 // Agent interaction endpoints
 
 // Get project checkpoints
-// FIX #35: Filter by userVisible for regular users
 router.get("/:projectId/checkpoints", ensureAuthenticated, requireOwnership('project'), async (req, res) => {
     try {
         const { projectId } = req.params;
-        const userId = (req.user as any)?.id;
-        const showAll = req.query.showAll === 'true';  // FIX #35: Allow admin to see all
-        const userIsAdmin = isAdmin(req);
-
-        if (!userId) {
-            return res.status(401).json({ error: "Authentication required" });
-        }
-
-        // Verify user has access to this project
-        const project = await storage.getProject(projectId);
-        const owner = (project as any)?.ownerId ?? (project as any)?.userId;
-        if (owner !== userId && !userIsAdmin) {
-            return res.status(403).json({ error: "Access denied" });
-        }
-
-        const allCheckpoints = await projectAgentOrchestrator.getProjectCheckpoints(projectId);
-
-        // FIX #35: Filter checkpoints for regular users (show only userVisible=true)
-        const checkpoints = (userIsAdmin && showAll)
-            ? allCheckpoints
-            : allCheckpoints.filter(cp => cp.userVisible === true);
-
-        res.json({ success: true, checkpoints });
-    } catch (error: any) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-// Handle checkpoint feedback
-router.post("/:projectId/checkpoints/:checkpointId/feedback", ensureAuthenticated, async (req, res) => {
-    try {
-        const { projectId, checkpointId } = req.params;
-        const { feedback, approved } = req.body;
         const userId = (req.user as any)?.id;
 
         if (!userId) {
@@ -5997,18 +5813,16 @@ router.post("/:projectId/checkpoints/:checkpointId/feedback", ensureAuthenticate
             return res.status(403).json({ error: "Access denied" });
         }
 
-        await projectAgentOrchestrator.handleCheckpointFeedback(
-            projectId,
-            checkpointId,
-            feedback || '',
-            approved === true
-        );
-
-        res.json({ success: true, message: "Feedback processed successfully" });
+        const checkpoints = await projectAgentOrchestrator.getProjectCheckpoints(projectId);
+        res.json({ success: true, checkpoints });
     } catch (error: any) {
         res.status(500).json({ success: false, error: error.message });
     }
 });
+
+// ✅ GAP 8 FIX: Removed duplicate checkpoint feedback endpoint
+// The authoritative endpoint is at POST /:id/checkpoints/:checkpointId/feedback (line ~3819)
+// which uses canAccessProject() for proper admin bypass support
 
 // Get project questions from project_questions table
 router.get("/:id/questions", ensureAuthenticated, async (req, res) => {
@@ -6037,11 +5851,9 @@ router.get("/:id/questions", ensureAuthenticated, async (req, res) => {
 
         res.json({
             success: true,
-            questions: questions.map((q: { id: string; questionText: string; questionOrder: number | null; status: string | null }) => ({
+            questions: questions.map((q: typeof projectQuestions.$inferSelect) => ({
                 id: q.id,
                 text: q.questionText,
-                questionText: q.questionText,  // For frontend compatibility
-                question: q.questionText,       // Alternative field name
                 order: q.questionOrder,
                 status: q.status
             })),
@@ -6053,12 +5865,13 @@ router.get("/:id/questions", ensureAuthenticated, async (req, res) => {
     }
 });
 
-// PUT /api/projects/:id/verify - Verify data and mark step as complete
-router.put("/:id/verify", ensureAuthenticated, async (req, res) => {
+// Save project questions to project_questions table
+// This is called from prepare-step to persist questions for analysis linking
+router.post("/:id/questions", ensureAuthenticated, async (req, res) => {
     try {
         const { id: projectId } = req.params;
+        const { questions } = req.body;
         const userId = (req.user as any)?.id;
-        const { verificationStatus, verificationTimestamp, verificationChecks } = req.body;
 
         if (!userId) {
             return res.status(401).json({ error: "Authentication required" });
@@ -6070,230 +5883,155 @@ router.put("/:id/verify", ensureAuthenticated, async (req, res) => {
             return res.status(status).json({ error: accessCheck.reason });
         }
 
-        console.log(`✅ [Verify] Processing verification for project ${projectId}`);
-        console.log(`   Status: ${verificationStatus}, Timestamp: ${verificationTimestamp}`);
+        if (!Array.isArray(questions)) {
+            return res.status(400).json({ error: "Questions must be an array" });
+        }
 
-        // Get current project
-        const project = accessCheck.project;
-        // CRITICAL FIX: parseJourneyProgress expects journeyProgress JSONB, not the entire project object
-        const currentJourneyProgress = parseJourneyProgress((project as any)?.journeyProgress || {});
+        console.log(`📋 [Questions] Saving ${questions.length} questions for project ${projectId}`);
 
-        // Update journeyProgress with verification data
-        // FIX: Ensure completedSteps is an array before spreading (may be {} if empty)
-        const existingSteps = Array.isArray(currentJourneyProgress.completedSteps)
-            ? currentJourneyProgress.completedSteps
-            : [];
-        const updatedJourneyProgress = {
-            ...currentJourneyProgress,
-            verificationStatus,
-            verificationTimestamp,
-            verificationChecks,
-            currentPhase: 'transform',
-            completedSteps: [...existingSteps, 'verify'].filter((v, i, a) => a.indexOf(v) === i)
-        };
+        // Delete existing questions for this project first (replace strategy)
+        await db.delete(projectQuestions).where(eq(projectQuestions.projectId, projectId));
 
-        // Update project with verification state
-        await storage.updateProject(projectId, {
-            journeyProgress: updatedJourneyProgress
-        } as any);
+        // Insert new questions
+        const insertedQuestions = [];
+        for (let i = 0; i < questions.length; i++) {
+            const questionText = typeof questions[i] === 'string'
+                ? questions[i]
+                : questions[i]?.text || questions[i]?.question || String(questions[i]);
 
-        // Mark verification step as complete using journey state manager
-        await journeyStateManager.completeStep(projectId, 'verify');
+            if (!questionText?.trim()) continue;
 
-        console.log(`✅ [Verify] Data verified for project ${projectId}`);
+            const questionId = `q_${projectId}_${Date.now()}_${i}`;
+            await db.insert(projectQuestions).values({
+                id: questionId,
+                projectId,
+                questionText: questionText.trim(),
+                questionOrder: i,
+                status: 'pending'
+            });
+            insertedQuestions.push({
+                id: questionId,
+                text: questionText.trim(),
+                order: i,
+                status: 'pending'
+            });
+        }
+
+        console.log(`✅ [Questions] Saved ${insertedQuestions.length} questions for project ${projectId}`);
 
         res.json({
             success: true,
-            message: "Data verified successfully",
-            verificationStatus,
-            nextPhase: 'transform'
+            questions: insertedQuestions,
+            count: insertedQuestions.length
         });
     } catch (error: any) {
-        console.error('Failed to verify project data:', error);
-        res.status(500).json({ success: false, error: error.message || 'Failed to verify data' });
+        console.error('Failed to save project questions:', error);
+        res.status(500).json({ success: false, error: error.message || 'Failed to save questions' });
     }
 });
 
-// POST /api/projects/:id/create-mapping-document - Verification step creates mappingDocument artifact
-// IMMUTABLE ARTIFACTS: Creates NEW mappingDocument, does NOT modify requirementsDocument
-router.post("/:id/create-mapping-document", ensureAuthenticated, requireOwnership('project'), async (req, res) => {
+// P0-3 FIX: Deep merge helper for nested objects in journeyProgress
+// This ensures fields like requirementsDocument, verificationStatus, etc. are properly merged
+function deepMergeProgress(target: any, source: any): any {
+    const result = { ...target };
+
+    for (const key of Object.keys(source)) {
+        const sourceValue = source[key];
+        const targetValue = target[key];
+
+        // If both are objects (but not arrays or null), deep merge
+        if (
+            sourceValue !== null &&
+            typeof sourceValue === 'object' &&
+            !Array.isArray(sourceValue) &&
+            targetValue !== null &&
+            typeof targetValue === 'object' &&
+            !Array.isArray(targetValue)
+        ) {
+            // Special case: if source explicitly wants to replace (has _replace flag)
+            if (sourceValue._replace) {
+                const { _replace, ...rest } = sourceValue;
+                result[key] = rest;
+            } else {
+                result[key] = deepMergeProgress(targetValue, sourceValue);
+            }
+        } else {
+            // For primitives, arrays, or null - direct replacement
+            result[key] = sourceValue;
+        }
+    }
+
+    return result;
+}
+
+// Update project journey progress
+// This is the primary endpoint for journey state updates across all steps
+router.put("/:id/progress", ensureAuthenticated, async (req, res) => {
     try {
         const { id: projectId } = req.params;
+        const progressUpdate = req.body;
         const userId = (req.user as any)?.id;
-        const { elementMappings } = req.body; // { elementId: { sourceColumn, transformationDescription } }
 
         if (!userId) {
             return res.status(401).json({ error: "Authentication required" });
         }
 
-        console.log(`🔧 [Verification Step] Creating mapping document for project ${projectId}`);
-
-        // Get project and requirements document (READ-ONLY - never modify)
-        const project = await storage.getProject(projectId);
-        if (!project) {
-            return res.status(404).json({ error: "Project not found" });
+        const accessCheck = await canAccessProject(userId, projectId, isAdmin(req));
+        if (!accessCheck.allowed) {
+            const status = accessCheck.reason === 'Project not found' ? 404 : 403;
+            return res.status(status).json({ error: accessCheck.reason });
         }
 
-        // CRITICAL FIX: parseJourneyProgress expects journeyProgress JSONB, not the entire project object
-        const journeyProgress = parseJourneyProgress((project as any)?.journeyProgress || {});
-        const requirementsDoc = (journeyProgress as any).requirementsDocument;
+        const project = accessCheck.project;
 
-        if (!requirementsDoc) {
-            return res.status(400).json({ 
-                error: "Requirements document not found. Please complete the Preparation step first." 
-            });
+        // P0-3 FIX: Deep merge new progress with existing to preserve nested objects
+        const currentProgress = (project as any)?.journeyProgress || {};
+        const updatedProgress = deepMergeProgress(currentProgress, {
+            ...progressUpdate,
+            updatedAt: new Date().toISOString()
+        });
+
+        // P0-3 FIX: Ensure requirementsDocument is preserved if not explicitly provided
+        // This prevents accidental loss during shallow updates
+        if (!progressUpdate.requirementsDocument && currentProgress.requirementsDocument) {
+            updatedProgress.requirementsDocument = currentProgress.requirementsDocument;
+            console.log(`📋 [P0-3] Preserved existing requirementsDocument during progress update`);
         }
 
-        // Get dataset schema for transformation suggestions
-        const datasets = await storage.getProjectDatasets(projectId);
-        if (!datasets || datasets.length === 0) {
-            return res.status(400).json({ error: "No datasets found. Please upload data first." });
-        }
+        // DEBUG: Log what we're receiving and saving
+        console.log(`📊 [Progress] Updating journey progress for project ${projectId}:`, {
+            keysReceived: Object.keys(progressUpdate),
+            hasRequirementsDocInUpdate: !!progressUpdate.requirementsDocument,
+            hasRequirementsDocInCurrent: !!currentProgress.requirementsDocument,
+            hasRequirementsDocInMerged: !!updatedProgress.requirementsDocument,
+            requirementsLockedInUpdate: progressUpdate.requirementsLocked,
+            elementsCountInUpdate: progressUpdate.requirementsDocument?.requiredDataElements?.length || 0,
+            elementsCountPreserved: updatedProgress.requirementsDocument?.requiredDataElements?.length || 0
+        });
 
-        // Use joined schema if available, otherwise use first dataset schema
-        const joinedSchema = (journeyProgress as any)?.joinedData?.schema;
-        const datasetSchema = joinedSchema || (datasets[0].dataset as any).schema || {};
-        const availableColumns = Object.keys(datasetSchema);
+        // Update project with merged progress
+        const updatedProject = await storage.updateProject(projectId, {
+            journeyProgress: updatedProgress
+        } as any);
 
-        // Get user goals and questions for context (from requirementsDocument)
-        const userGoals = requirementsDoc.userGoals || [];
-        const userQuestions = requirementsDoc.userQuestions || [];
-
-        // Import Data Engineer agent for transformation suggestions
-        const { DataEngineerAgent } = await import('../services/data-engineer-agent');
-        const dataEngineerAgent = new DataEngineerAgent();
-
-        // Create element mappings array from requirementsDocument elements
-        const elementMappingsArray = await Promise.all(
-            (requirementsDoc.requiredDataElements || []).map(async (element: any) => {
-                const mapping = elementMappings?.[element.id || element.elementId];
-                
-                if (!mapping || !mapping.sourceColumn) {
-                    // Element not mapped yet
-                    return {
-                        elementId: element.id || element.elementId,
-                        elementName: element.name || element.elementName,
-                        sourceColumn: '', // Will be empty if not mapped
-                        sourceDataType: undefined,
-                        targetDataType: element.dataType,
-                        transformationRequired: false,
-                        mappingConfidence: 0,
-                        relatedAnalyses: element.relatedAnalyses || [],
-                        relatedGoals: element.relatedGoals || [],
-                        relatedQuestions: element.relatedQuestions || [],
-                    };
-                }
-
-                const sourceColumn = mapping.sourceColumn || mapping.mappedColumn;
-                // Get source type from schema - handle both object types and primitive types
-                const sourceTypeValue = datasetSchema[sourceColumn];
-                const sourceType = (typeof sourceTypeValue === 'object' && sourceTypeValue && 'type' in sourceTypeValue)
-                    ? (sourceTypeValue as any).type
-                    : (typeof sourceTypeValue !== 'undefined')
-                    ? typeof sourceTypeValue
-                    : 'unknown';
-                const targetType = element.dataType || 'unknown';
-                const needsTransformation = sourceType !== targetType || mapping.transformationDescription;
-
-                // Build base mapping
-                const elementMapping: any = {
-                    elementId: element.id || element.elementId,
-                    elementName: element.name || element.elementName,
-                    sourceColumn: sourceColumn,
-                    sourceDataType: sourceType,
-                    targetDataType: targetType,
-                    transformationRequired: needsTransformation,
-                    mappingConfidence: mapping.confidence || 0.8,
-                    // Preserve linkage from requirementsDocument
-                    relatedAnalyses: element.relatedAnalyses || [],
-                    relatedGoals: element.relatedGoals || [],
-                    relatedQuestions: element.relatedQuestions || [],
-                };
-
-                // Add transformation logic if needed
-                if (needsTransformation) {
-                    try {
-                        const missingColumns = [element.name || element.elementName];
-                        const transformationOptions = await dataEngineerAgent.suggestTransformations(
-                            missingColumns,
-                            availableColumns,
-                            userGoals
-                        );
-
-                        const relevantTransformation = Array.isArray(transformationOptions.transformations)
-                            ? transformationOptions.transformations.find((t: any) => 
-                                t.targetColumn?.toLowerCase() === element.name?.toLowerCase() ||
-                                t.sourceColumns?.includes(sourceColumn)
-                              )
-                            : null;
-
-                        elementMapping.transformationLogic = {
-                            description: mapping.transformationDescription || 
-                                        relevantTransformation?.description ||
-                                        `Transform "${sourceColumn}" (${sourceType}) to match "${element.name}" (${targetType}) requirements`,
-                            operation: relevantTransformation?.method || 'custom',
-                            code: mapping.transformationCode,
-                            dependencies: relevantTransformation?.sourceColumns || [sourceColumn]
-                        };
-                    } catch (transformError) {
-                        console.warn(`⚠️ Failed to generate transformation logic for element ${element.id}:`, transformError);
-                        // Continue without transformation logic
-                        elementMapping.transformationLogic = {
-                            description: mapping.transformationDescription || `Transform "${sourceColumn}" to match "${element.name}" requirements`,
-                            operation: 'custom',
-                            dependencies: [sourceColumn]
-                        };
-                    }
-                }
-
-                return elementMapping;
-            })
-        );
-
-        // Create NEW mappingDocument artifact (does NOT modify requirementsDocument)
-        const mappingDocument = {
-            requirementsDocument: requirementsDoc, // Full snapshot for convenience
-            elementMappings: elementMappingsArray,
-            generatedAt: new Date().toISOString(),
-            generatedBy: 'data_engineer_agent',
-            status: 'completed' as const
-        };
-
-        // Update journeyProgress with NEW mappingDocument (requirementsDocument remains unchanged)
-        const updatedJourneyProgress = {
-            ...journeyProgress,
-            mappingDocument: mappingDocument
-            // requirementsDocument is NOT modified - it remains immutable
-        };
-
-        // Use atomic JSONB update to prevent race conditions
-        const projectIdStr = String(projectId);
-        await db.execute(
-            sql`UPDATE projects
-                SET journey_progress = COALESCE(journey_progress, '{}'::jsonb)
-                    || jsonb_build_object('mappingDocument', ${JSON.stringify(mappingDocument)}::jsonb),
-                    updated_at = NOW()
-                WHERE id = ${projectIdStr}::text`
-        );
-
-        const mappedCount = elementMappingsArray.filter((m: any) => m.sourceColumn).length;
-        console.log(`✅ [Verification Step] Created mapping document with ${mappedCount}/${elementMappingsArray.length} elements mapped`);
+        // DEBUG: Log what we're returning to verify journeyProgress is present
+        console.log(`📊 [Progress] Response includes journeyProgress:`, {
+            hasUpdatedProject: !!updatedProject,
+            hasJourneyProgressInProject: !!(updatedProject as any)?.journeyProgress,
+            hasRequirementsDocInProject: !!(updatedProject as any)?.journeyProgress?.requirementsDocument,
+            elementsCountInProject: (updatedProject as any)?.journeyProgress?.requirementsDocument?.requiredDataElements?.length || 0
+        });
 
         res.json({
             success: true,
-            mappingDocument: mappingDocument,
-            message: `Created mapping document with ${mappedCount} element mappings`
+            journeyProgress: updatedProgress,
+            project: updatedProject
         });
-
     } catch (error: any) {
-        console.error('Failed to create mapping document:', error);
-        res.status(500).json({ 
-            success: false, 
-            error: error.message || 'Failed to create mapping document' 
-        });
+        console.error('Failed to update project progress:', error);
+        res.status(500).json({ success: false, error: error.message || 'Failed to update progress' });
     }
 });
-
 
 // AI Question Suggestions for Non-Tech Users (Phase 3 - Task 3.1)
 router.post("/project-manager/suggest-questions", ensureAuthenticated, async (req, res) => {
@@ -6531,13 +6269,7 @@ router.put('/:id/schema', ensureAuthenticated, async (req, res) => {
         // Update project schema
         const updatedProject = await storage.updateProject(id, { schema });
 
-        return res.json({
-            success: true,
-            project: updatedProject,
-            message: 'Schema updated successfully'
-        });
-
-        // Log decision (fire and forget)
+        // FIX Issue 2: Log decision BEFORE return (was unreachable dead code)
         try {
             await db.insert(decisionAudits).values({
                 id: nanoid(),
@@ -6558,7 +6290,11 @@ router.put('/:id/schema', ensureAuthenticated, async (req, res) => {
             console.error('Failed to log schema update decision:', err);
         }
 
-        return;
+        return res.json({
+            success: true,
+            project: updatedProject,
+            message: 'Schema updated successfully'
+        });
     } catch (error: any) {
         console.error('Failed to update schema:', error);
         return res.status(500).json({ error: 'Failed to update schema' });
@@ -6706,317 +6442,8 @@ router.put('/:id', ensureAuthenticated, async (req, res) => {
     }
 });
 
-// Get project datasets
-router.get('/:id/datasets', ensureAuthenticated, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const userId = (req.user as any)?.id;
-
-        if (!userId) {
-            return res.status(401).json({ error: 'Authentication required' });
-        }
-
-        const accessCheck = await canAccessProject(userId, id, isAdmin(req));
-        if (!accessCheck.allowed) {
-            return res.status(403).json({ error: 'Unauthorized access to project' });
-        }
-
-        const datasets = await storage.getProjectDatasets(id);
-        const datasetList = datasets || [];
-
-        // [DATA CONTINUITY FIX] Load stored joined data from journeyProgress
-        const project = await storage.getProject(id);
-        // CRITICAL FIX: parseJourneyProgress expects journeyProgress JSONB, not the entire project object
-        const journeyProgress = parseJourneyProgress((project as any)?.journeyProgress || {});
-        const projectMetadata = (project as any)?.metadata || {};
-
-        // Get stored joined data (persisted by first datasets endpoint)
-        const storedJoinedData = (journeyProgress as any)?.joinedData as {
-            schema?: Record<string, any>;
-            preview?: any[];
-            joinInsights?: any;
-        } | undefined;
-        const autoDetectedJoinConfig = projectMetadata?.autoDetectedJoinConfig;
-
-        // [PHASE 4 & 5 FIX] Build merged schema and total counts for multi-dataset scenarios
-        let mergedSchema: Record<string, any> = {};
-        let totalRecordCount = 0;
-
-        if (datasetList.length > 0) {
-            for (let dsIdx = 0; dsIdx < datasetList.length; dsIdx++) {
-                const dsEntry = datasetList[dsIdx];
-                const ds = (dsEntry?.dataset || dsEntry) as any;
-                const schema = ds?.schema || {};
-                const recordCount = ds?.recordCount || (ds?.data as any[])?.length || 0;
-
-                totalRecordCount += recordCount;
-
-                // Merge schema with prefix for conflicts
-                const rawName = ds?.originalFileName || ds?.name || `Dataset${dsIdx + 1}`;
-                const cleanName = rawName.replace(/\.[^.]+$/, '').substring(0, 15);
-
-                Object.entries(schema).forEach(([col, type]) => {
-                    let finalCol = col;
-                    if (mergedSchema[col] !== undefined && datasetList.length > 1) {
-                        finalCol = `${cleanName}_${col}`;
-                    }
-                    mergedSchema[finalCol] = type;
-                });
-            }
-        }
-
-        // [DATA CONTINUITY FIX] Return stored joined data for downstream steps
-        // Priority: Use stored joinedData from journeyProgress if available
-        const joinedPreview = storedJoinedData?.preview || null;
-        const joinedSchema = storedJoinedData?.schema || (datasetList.length > 1 ? mergedSchema : null);
-        const joinInsights = storedJoinedData?.joinInsights || null;
-
-        console.log(`📊 [Datasets Endpoint] Returning ${datasetList.length} datasets, joinedPreview: ${joinedPreview?.length || 0} rows, joinedSchema: ${joinedSchema ? Object.keys(joinedSchema).length : 0} columns`);
-
-        return res.json({
-            success: true,
-            datasets: datasetList,
-            count: datasetList.length,
-            // [DATA CONTINUITY FIX] Include stored joined data for all downstream steps
-            joinedPreview,
-            joinedSchema,
-            joinInsights,
-            autoDetectedJoinConfig,
-            // [PHASE 4 & 5 FIX] Include merged schema and total counts
-            mergedSchema: datasetList.length > 1 ? mergedSchema : undefined,
-            totalRecordCount,
-            recordCountNote: datasetList.length > 1
-                ? `${totalRecordCount} total rows across ${datasetList.length} datasets`
-                : undefined
-        });
-    } catch (error: any) {
-        console.error('Failed to fetch project datasets:', error);
-        return res.status(500).json({ error: 'Failed to fetch project datasets' });
-    }
-});
-
-// ============================================
-// PATCH /api/projects/:id/progress - DEC-004: Atomic Journey Progress Updates
-// Deep merges provided fields into existing journeyProgress JSONB
-// Prevents race conditions between user UI and agent updates
-// See: docs/DESIGN_DECISIONS.md, docs/COMPREHENSIVE_JOURNEY_FIX_PLAN.md
-// ============================================
-router.patch('/:id/progress', ensureAuthenticated, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const progressUpdate = req.body;
-        const userId = (req.user as any)?.id;
-
-        if (!userId) {
-            return res.status(401).json({ success: false, error: 'Authentication required' });
-        }
-
-        // Verify ownership
-        const accessCheck = await canAccessProject(userId, id, isAdmin(req));
-        if (!accessCheck.allowed) {
-            return res.status(403).json({ success: false, error: 'Unauthorized access to project' });
-        }
-
-        const project = accessCheck.project;
-        if (!project) {
-            return res.status(404).json({ success: false, error: 'Project not found' });
-        }
-
-        // Parse existing journeyProgress
-        // CRITICAL FIX: parseJourneyProgress expects journeyProgress JSONB, not the entire project object
-        const existingProgress = parseJourneyProgress((project as any)?.journeyProgress || {});
-
-        // IMMUTABLE ARTIFACTS: Exclude artifact fields from updates - they can only be created via dedicated endpoints
-        // These fields are immutable once created and should never be modified via generic PATCH
-        const IMMUTABLE_ARTIFACT_FIELDS = [
-            'requirementsDocument',
-            'requirementsLocked',
-            'requirementsLockedAt',
-            'mappingDocument',
-            'transformationDocument'
-        ];
-
-        // Remove artifact fields from progressUpdate (they should only be created via dedicated endpoints)
-        const sanitizedUpdate: any = { ...progressUpdate };
-        let removedFields: string[] = [];
-        IMMUTABLE_ARTIFACT_FIELDS.forEach(field => {
-            if (field in sanitizedUpdate) {
-                delete sanitizedUpdate[field];
-                removedFields.push(field);
-            }
-        });
-
-        if (removedFields.length > 0) {
-            console.warn(`⚠️ [PATCH /progress] Removed immutable artifact fields from update for project ${id}: ${removedFields.join(', ')}. Use dedicated endpoints to create/modify artifacts.`);
-        }
-
-        // Deep merge the sanitized update into existing progress
-        const mergedProgress = deepMergeJourneyProgress(existingProgress, sanitizedUpdate);
-
-        // PROTECTION: Preserve all immutable artifacts from existing progress (even if not in update)
-        // This ensures artifacts are never accidentally cleared by PATCH operations
-        if ((existingProgress as any).requirementsDocument) {
-            (mergedProgress as any).requirementsDocument = (existingProgress as any).requirementsDocument;
-        }
-        if ((existingProgress as any).mappingDocument) {
-            (mergedProgress as any).mappingDocument = (existingProgress as any).mappingDocument;
-        }
-        if ((existingProgress as any).transformationDocument) {
-            (mergedProgress as any).transformationDocument = (existingProgress as any).transformationDocument;
-        }
-        
-        // Also preserve lock status if it exists
-        if ((existingProgress as any).requirementsLocked === true) {
-            (mergedProgress as any).requirementsLocked = true;
-            if ((existingProgress as any).requirementsLockedAt) {
-                (mergedProgress as any).requirementsLockedAt = (existingProgress as any).requirementsLockedAt;
-            }
-        }
-
-        // Update timestamp for the current step if provided
-        if (progressUpdate.currentStep) {
-            mergedProgress.stepTimestamps = {
-                ...mergedProgress.stepTimestamps,
-                [progressUpdate.currentStep]: new Date().toISOString()
-            };
-        }
-
-        // Use raw SQL for atomic JSONB update to prevent race conditions
-        const projectIdForUpdate = String(id);
-        await db.execute(
-            sql`UPDATE projects
-                SET journey_progress = ${JSON.stringify(mergedProgress)}::jsonb,
-                    updated_at = NOW()
-                WHERE id = ${projectIdForUpdate}::text`
-        );
-
-        // Fetch updated project
-        const updatedProject = await storage.getProject(id);
-
-        console.log(`✅ [DEC-004] Journey progress updated for project ${id}`);
-
-        return res.json({
-            success: true,
-            journeyProgress: mergedProgress,
-            project: updatedProject,
-            message: 'Journey progress updated successfully'
-        });
-    } catch (error: any) {
-        console.error('❌ [DEC-004] Failed to update journey progress:', error);
-        return res.status(500).json({
-            success: false,
-            error: 'Failed to update journey progress',
-            details: error.message
-        });
-    }
-});
-
-// Helper function for deep merging journeyProgress (DEC-004)
-function deepMergeJourneyProgress(target: any, source: any): any {
-    const result = { ...target };
-
-    for (const key in source) {
-        if (source[key] === null || source[key] === undefined) {
-            continue; // Skip null/undefined values
-        }
-
-        if (Array.isArray(source[key])) {
-            // Arrays are replaced, not merged (intentional for lists like completedSteps, questions)
-            result[key] = [...source[key]];
-        } else if (typeof source[key] === 'object' && !Array.isArray(source[key])) {
-            // Objects are deep merged
-            result[key] = deepMergeJourneyProgress(result[key] || {}, source[key]);
-        } else {
-            // Primitives are replaced
-            result[key] = source[key];
-        }
-    }
-
-    return result;
-}
-
-// Translate results for different audiences
-router.post('/:id/translate-results', ensureAuthenticated, async (req, res) => {
-    try {
-        const projectId = req.params.id;
-        const userId = (req.user as any)?.id;
-        const isAdminUser = (req.user as any)?.isAdmin || false;
-        const { audienceType } = req.body;
-
-        // Check project access
-        const access = await canAccessProject(userId, projectId, isAdminUser);
-        if (!access.allowed) {
-            return res.status(403).json({
-                success: false,
-                error: access.reason || 'Access denied'
-            });
-        }
-
-        // Load project and analysis results
-        const project = await storage.getProject(projectId);
-        if (!project) {
-            return res.status(404).json({
-                success: false,
-                error: 'Project not found'
-            });
-        }
-
-        // Get analysis results
-        const analysisResults = (project as any).analysisResults;
-        if (!analysisResults) {
-            return res.status(404).json({
-                success: false,
-                error: 'Analysis results not found. Please complete the execution step first.'
-            });
-        }
-
-        // Check if translation already exists in results
-        const existingTranslations = analysisResults.audienceTranslations || {};
-        if (existingTranslations[audienceType]) {
-            return res.json({
-                success: true,
-                translation: existingTranslations[audienceType],
-                fromCache: true
-            });
-        }
-
-        // Get audience from journeyProgress if not provided
-        const journeyProgress = parseJourneyProgress((project as any).journeyProgress);
-        const audience = (journeyProgress as any)?.audience;
-        const targetAudience = audienceType || (audience?.primary as string) || 'general';
-        const decisionContext = audience?.decisionContext as string | undefined;
-
-        // Use Business Agent to translate results
-        const businessAgent = new BusinessAgent();
-        const translatedResults = await businessAgent.translateResults({
-            results: analysisResults,
-            audience: targetAudience,
-            decisionContext
-        });
-
-        // Store translation in project's analysisResults for future use
-        // This is read-only display, so we don't need to persist it back
-        // (it will be stored when analysis completes)
-
-        res.json({
-            success: true,
-            translation: {
-                insights: translatedResults.insights || [],
-                recommendations: translatedResults.recommendations || [],
-                executiveSummary: translatedResults.executiveSummary,
-                translatedFor: targetAudience,
-                translatedAt: translatedResults.translatedAt || new Date().toISOString()
-            }
-        });
-
-    } catch (error: any) {
-        console.error('❌ Error translating results:', error);
-        res.status(500).json({
-            success: false,
-            error: error.message || 'Failed to translate results'
-        });
-    }
-});
+// NOTE: Duplicate minimal datasets endpoint removed - use GET /:projectId/datasets instead
+// which includes joinedSchema, joinedPreview, and joinInsights
 
 export default router;
 
@@ -7034,28 +6461,7 @@ router.get("/:id/export", ensureAuthenticated, async (req, res) => {
         }
 
         // Prefer transformed data, then raw data; fallback to schema snapshot
-        // FIX: Production Readiness - Also check journeyProgress for transformed data
-        const journeyProgress = (project as any)?.journeyProgress;
-        const dataRows = journeyProgress?.transformationStepData?.transformedData ||
-            (project as any)?.transformedData ||
-            (project as any)?.data ||
-            [];
-
-        // FIX: Production Readiness - Return error when no data is available for export
-        if (!Array.isArray(dataRows) || dataRows.length === 0) {
-            const hasSchema = Object.keys((project as any)?.schema || {}).length > 0;
-            const hasInsights = Object.keys((project as any)?.insights || journeyProgress?.analysisResults || {}).length > 0;
-
-            if (!hasSchema && !hasInsights) {
-                return res.status(400).json({
-                    error: 'No data available for export',
-                    message: 'This project does not have any data, schema, or analysis results to export. Please complete the data upload and analysis steps first.'
-                });
-            }
-            // If we have schema or insights but no data rows, we can still generate metadata export
-            console.log(`[Export] Project ${id} has no data rows but has ${hasSchema ? 'schema' : ''}${hasSchema && hasInsights ? ' and ' : ''}${hasInsights ? 'insights' : ''} - proceeding with metadata export`);
-        }
-
+        const dataRows = (project as any)?.transformedData || (project as any)?.data || [];
         const meta = {
             id,
             name: (project as any)?.name,
@@ -7125,6 +6531,332 @@ router.get("/:id/export", ensureAuthenticated, async (req, res) => {
 // =============================================================================
 
 /**
+ * DAY 6 (Week 2): DE Agent Validation for Transformations
+ * Validates transformation plan against data quality assessment before execution
+ * Frontend should call this BEFORE execute-transformations
+ */
+router.post("/:id/validate-transformations", ensureAuthenticated, async (req, res) => {
+    try {
+        const { id: projectId } = req.params;
+        const userId = (req.user as any)?.id;
+        const {
+            transformationSteps = [],
+            mappings = [],
+            joinConfig
+        } = req.body;
+
+        console.log(`🔍 [DE Validation] Validating transformations for project ${projectId}`);
+
+        if (!userId) {
+            return res.status(401).json({ success: false, error: "Authentication required" });
+        }
+
+        // Verify access
+        const accessCheck = await canAccessProject(userId, projectId, isAdmin(req));
+        if (!accessCheck.allowed) {
+            const status = accessCheck.reason === 'Project not found' ? 404 : 403;
+            return res.status(status).json({ success: false, error: accessCheck.reason });
+        }
+
+        // Load datasets to get schema and data quality info
+        const datasets = await storage.getProjectDatasets(projectId);
+        if (!datasets || datasets.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: "No datasets available for validation"
+            });
+        }
+
+        // Build validation context from datasets
+        const datasetSchemas = datasets.map((d: any) => {
+            const ds = d.dataset || d;
+            return {
+                id: ds.id,
+                name: ds.originalFileName || ds.name,
+                schema: ds.metadata?.schema || ds.schema || {},
+                rowCount: ds.metadata?.totalRows || ds.totalRows || 0,
+                qualityScore: ds.ingestionMetadata?.qualityScore || ds.metadata?.qualityScore || 80
+            };
+        });
+
+        // Get project's journeyProgress for data quality assessment
+        const project = await storage.getProject(projectId);
+        const journeyProgress = (project as any)?.journeyProgress || {};
+        const deAssessment = journeyProgress?.dataEngineerAssessment || journeyProgress?.dataQuality || {};
+
+        // Validation results
+        const validationResults = {
+            isValid: true,
+            warnings: [] as string[],
+            errors: [] as string[],
+            recommendations: [] as string[],
+            dataQuality: {
+                overallScore: deAssessment?.overallScore || 75,
+                issues: deAssessment?.issues || [],
+                missingValueColumns: deAssessment?.missingValues || []
+            },
+            transformationAnalysis: [] as any[]
+        };
+
+        // Validate each transformation step
+        for (const step of transformationSteps) {
+            const stepAnalysis: any = {
+                step: step.description || step.name || 'Unknown step',
+                status: 'valid',
+                issues: []
+            };
+
+            // Check if affected columns exist in schema
+            if (step.affectedElements) {
+                for (const element of step.affectedElements) {
+                    const elementExists = datasetSchemas.some(ds =>
+                        Object.keys(ds.schema).some(col =>
+                            col.toLowerCase() === element.toLowerCase()
+                        )
+                    );
+                    if (!elementExists) {
+                        stepAnalysis.issues.push(`Column "${element}" not found in dataset schema`);
+                        stepAnalysis.status = 'warning';
+                    }
+                }
+            }
+
+            // Check for transformations on high-missing-value columns
+            const missingValueCols = deAssessment?.missingValues || [];
+            if (step.affectedElements) {
+                const highMissingCols = step.affectedElements.filter((el: string) =>
+                    missingValueCols.some((m: any) =>
+                        m.column?.toLowerCase() === el.toLowerCase() && m.percent > 30
+                    )
+                );
+                if (highMissingCols.length > 0) {
+                    stepAnalysis.issues.push(
+                        `Transformation affects columns with >30% missing values: ${highMissingCols.join(', ')}`
+                    );
+                    validationResults.warnings.push(
+                        `Consider handling missing values in ${highMissingCols.join(', ')} before transformation`
+                    );
+                }
+            }
+
+            validationResults.transformationAnalysis.push(stepAnalysis);
+
+            // Mark overall validation as having warnings if any step has issues
+            if (stepAnalysis.issues.length > 0 && stepAnalysis.status === 'warning') {
+                validationResults.warnings.push(...stepAnalysis.issues);
+            }
+        }
+
+        // Validate join configuration if multiple datasets
+        if (datasets.length > 1 && joinConfig) {
+            if (!joinConfig.foreignKeys || joinConfig.foreignKeys.length === 0) {
+                validationResults.warnings.push(
+                    'Multiple datasets detected but no join keys specified. Data may not be properly combined.'
+                );
+            } else {
+                // Validate join keys exist in schemas
+                for (const fk of joinConfig.foreignKeys) {
+                    const sourceSchema = datasetSchemas.find(ds => ds.id === fk.sourceDataset);
+                    const targetSchema = datasetSchemas.find(ds => ds.id === fk.targetDataset);
+
+                    if (sourceSchema && !Object.keys(sourceSchema.schema).some(
+                        col => col.toLowerCase() === fk.sourceColumn?.toLowerCase()
+                    )) {
+                        validationResults.errors.push(
+                            `Join key "${fk.sourceColumn}" not found in source dataset`
+                        );
+                        validationResults.isValid = false;
+                    }
+
+                    if (targetSchema && !Object.keys(targetSchema.schema).some(
+                        col => col.toLowerCase() === fk.targetColumn?.toLowerCase()
+                    )) {
+                        validationResults.errors.push(
+                            `Join key "${fk.targetColumn}" not found in target dataset`
+                        );
+                        validationResults.isValid = false;
+                    }
+                }
+            }
+        }
+
+        // Add recommendations based on data quality
+        if (validationResults.dataQuality.overallScore < 70) {
+            validationResults.recommendations.push(
+                'Data quality score is below 70%. Consider cleaning data before transformation.'
+            );
+        }
+
+        if (transformationSteps.length === 0) {
+            validationResults.recommendations.push(
+                'No transformation steps defined. The data will be passed through unchanged.'
+            );
+        }
+
+        console.log(`🔍 [DE Validation] Validation complete: ${validationResults.isValid ? 'VALID' : 'INVALID'}`);
+        console.log(`🔍 [DE Validation] Warnings: ${validationResults.warnings.length}, Errors: ${validationResults.errors.length}`);
+
+        res.json({
+            success: true,
+            validation: validationResults,
+            datasets: datasetSchemas.map(ds => ({
+                id: ds.id,
+                name: ds.name,
+                rowCount: ds.rowCount,
+                qualityScore: ds.qualityScore
+            })),
+            timestamp: new Date().toISOString()
+        });
+
+    } catch (error: any) {
+        console.error('❌ [DE Validation] Failed:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message || "Failed to validate transformations"
+        });
+    }
+});
+
+/**
+ * ENHANCE REQUIREMENTS MAPPINGS: Data Engineer agent suggests transformation logic
+ * Takes user-provided element-to-column mappings and generates transformation code suggestions
+ */
+router.post("/:id/enhance-requirements-mappings", ensureAuthenticated, async (req, res) => {
+    try {
+        const { id: projectId } = req.params;
+        const userId = (req.user as any)?.id;
+        const { elementMappings } = req.body;
+
+        console.log(`🔧 [DE Enhance] Enhancing mappings for project ${projectId}`);
+        console.log(`🔧 [DE Enhance] Mappings received:`, Object.keys(elementMappings || {}).length);
+
+        if (!userId) {
+            return res.status(401).json({ success: false, error: "Authentication required" });
+        }
+
+        // Verify access
+        const accessCheck = await canAccessProject(userId, projectId, isAdmin(req));
+        if (!accessCheck.allowed) {
+            const status = accessCheck.reason === 'Project not found' ? 404 : 403;
+            return res.status(status).json({ success: false, error: accessCheck.reason });
+        }
+
+        // Get project and its requirements document
+        const project = await storage.getProject(projectId);
+        const journeyProgress = (project as any)?.journeyProgress || {};
+        const requirementsDoc = journeyProgress?.requirementsDocument || {};
+        const requiredDataElements = requirementsDoc?.requiredDataElements || [];
+
+        if (!elementMappings || Object.keys(elementMappings).length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: "No element mappings provided"
+            });
+        }
+
+        // Load dataset schema to understand column types
+        const datasets = await storage.getProjectDatasets(projectId);
+        const schemaInfo: Record<string, any> = {};
+
+        datasets.forEach((d: any) => {
+            const ds = d.dataset || d;
+            const schema = ds.metadata?.schema || ds.schema || {};
+            Object.entries(schema).forEach(([colName, colInfo]: [string, any]) => {
+                schemaInfo[colName] = {
+                    type: colInfo?.type || colInfo || 'string',
+                    nullable: colInfo?.nullable ?? true,
+                    sample: colInfo?.sample
+                };
+            });
+        });
+
+        // Use DE Agent to enhance mappings with intelligent transformation code generation
+        const { DataEngineerAgent } = await import('../services/data-engineer-agent');
+        const deAgent = new DataEngineerAgent();
+
+        // Get sample data for context
+        const firstDataset = datasets[0] as any;
+        const sampleData = firstDataset?.dataset?.preview || firstDataset?.dataset?.data || firstDataset?.preview || [];
+
+        // Get available columns from schema
+        const availableColumns = Object.keys(schemaInfo);
+
+        // Call DE agent's enhanced method
+        const deResult = await deAgent.enhanceElementMappings({
+            elementMappings,
+            requiredDataElements: requiredDataElements.map((elem: any) => ({
+                elementId: elem.elementId || elem.id,
+                elementName: elem.elementName || elem.name,
+                description: elem.description,
+                dataType: elem.dataType,
+                calculationDefinition: elem.calculationDefinition
+            })),
+            availableColumns,
+            schema: schemaInfo,
+            sampleData: sampleData.slice(0, 10)
+        });
+
+        // Build enhanced elements with DE agent's transformation code
+        const enhancedElements = requiredDataElements.map((elem: any) => {
+            const elemId = elem.elementId || elem.id;
+            const mapping = elementMappings[elemId];
+            const deEnhanced = deResult.enhancedElements.find(e => e.elementId === elemId);
+
+            if (!mapping && !deEnhanced) {
+                return elem; // No mapping provided, keep original
+            }
+
+            const sourceCol = mapping?.sourceColumn || deEnhanced?.sourceColumn;
+            const sourceInfo = schemaInfo[sourceCol || ''] || {};
+
+            return {
+                ...elem,
+                sourceColumn: sourceCol,
+                mappingStatus: 'mapped' as const,
+                sourceInfo: sourceInfo,
+                transformationCode: deEnhanced?.transformationCode || mapping?.transformationCode || `row['${sourceCol}']`,
+                transformationDescription: deEnhanced?.transformationDescription || mapping?.transformationDescription || `Map ${sourceCol} directly to ${elem.elementName}`,
+                transformationConfidence: deEnhanced?.confidence || 0.5,
+                codeExplanation: deEnhanced?.codeExplanation,
+                mappedAt: new Date().toISOString(),
+                mappedBy: 'data_engineer_agent'
+            };
+        });
+
+        // Update requirements document with enhanced elements
+        const enhancedDocument = {
+            ...requirementsDoc,
+            requiredDataElements: enhancedElements,
+            transformationPlan: deResult.transformationPlan,
+            lastEnhancedAt: new Date().toISOString(),
+            enhancedBy: 'data_engineer_agent'
+        };
+
+        const mappedCount = enhancedElements.filter((e: any) => e.sourceColumn).length;
+        const highConfidenceCount = enhancedElements.filter((e: any) => (e.transformationConfidence || 0) >= 0.7).length;
+
+        console.log(`🔧 [DE Enhance] Enhanced ${mappedCount} elements with mappings`);
+        console.log(`🔧 [DE Enhance] ${highConfidenceCount} high-confidence transformations`);
+
+        res.json({
+            success: true,
+            document: enhancedDocument,
+            enhancedCount: mappedCount,
+            highConfidenceCount,
+            transformationPlan: deResult.transformationPlan,
+            timestamp: new Date().toISOString()
+        });
+
+    } catch (error: any) {
+        console.error('❌ [DE Enhance] Failed:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message || "Failed to enhance mappings"
+        });
+    }
+});
+
+/**
  * D3 FIX: Execute transformations with multi-dataset join support
  * Frontend expects: POST /api/projects/:id/execute-transformations
  * Payload: { transformationSteps, mappings, questionAnswerMapping, joinConfig }
@@ -7137,11 +6869,8 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
             transformationSteps = [],
             mappings = [],
             questionAnswerMapping = [],
-            joinConfig: initialJoinConfig
+            joinConfig
         } = req.body;
-
-        // Use let so we can modify joinConfig if needed based on persisted insights
-        let joinConfig = initialJoinConfig;
 
         console.log(`📊 [D3 FIX] Execute transformations for project ${projectId}`);
         console.log(`📊 [D3 FIX] Join config:`, joinConfig);
@@ -7169,59 +6898,16 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
 
         console.log(`📊 [D3 FIX] Found ${datasets.length} datasets`);
 
-        // CORRECTED FIX: Use persisted joinInsights for JOIN CONFIG but use FULL datasets for data
-        // The preview is only 50 rows for UI display - transformation needs FULL data
-        const project = await storage.getProject(projectId);
-        const journeyProgress = parseJourneyProgress((project as any)?.journeyProgress);
-        const persistedJoinedData = (journeyProgress as any)?.joinedData;
-
+        // Start with first dataset's data
         let workingData: any[] = [];
-
-        // Define firstDataset for data access
         const firstDataset = (datasets[0] as any).dataset || datasets[0];
-
-        // ALWAYS start with FULL first dataset data (not the 50-row preview!)
         workingData = Array.isArray(firstDataset.data)
             ? [...firstDataset.data]
             : (firstDataset.preview || firstDataset.sampleData || []);
-        console.log(`📊 [D3 FIX] Starting with FULL first dataset: ${workingData.length} rows`);
 
-        // Use persisted joinInsights to build join config if available (from upload step)
-        // This preserves the join strategy detected earlier, but we'll re-join using full data
-        if (persistedJoinedData?.joinInsights && datasets.length > 1) {
-            const insights = persistedJoinedData.joinInsights;
-            console.log(`📊 [D3 FIX] Using persisted join insights:`, {
-                joinStrategy: insights.joinStrategy,
-                primaryColumn: insights.primaryColumn,
-                foreignKeysCount: insights.foreignKeys?.length || 0
-            });
-
-            // Build joinConfig from persisted insights if no explicit joinConfig provided
-            if (!joinConfig?.foreignKeys?.length && insights.foreignKeys?.length > 0) {
-                joinConfig = {
-                    foreignKeys: insights.foreignKeys,
-                    type: insights.joinType || 'left'
-                };
-                console.log(`📊 [D3 FIX] Built joinConfig from persisted insights: ${joinConfig.foreignKeys.length} foreign keys`);
-            }
-        }
-
-        // MULTI-DATASET JOIN: Perform join on FULL datasets when we have multiple datasets with join config
+        // MULTI-DATASET JOIN: If we have multiple datasets and join config
         if (datasets.length > 1 && joinConfig?.foreignKeys?.length > 0) {
-            console.log(`🔗 [ENHANCED JOIN] Performing multi-dataset join with ${joinConfig.foreignKeys.length} key mappings`);
-            console.log(`🔗 [ENHANCED JOIN] Join type: ${joinConfig.type || 'left'}`);
-
-            // Load PII exclusion settings from project (already loaded above)
-            const excludedColumns = new Set<string>(
-                ((project as any)?.metadata?.excludedColumns || []).map((c: string) => c.toLowerCase())
-            );
-            const anonymizedColumns = new Set<string>(
-                ((project as any)?.metadata?.anonymizedColumns || []).map((c: string) => c.toLowerCase())
-            );
-
-            if (excludedColumns.size > 0) {
-                console.log(`🔒 [ENHANCED JOIN] Will exclude PII columns:`, Array.from(excludedColumns));
-            }
+            console.log(`🔗 [D3 FIX] Performing multi-dataset join with ${joinConfig.foreignKeys.length} key mappings`);
 
             for (let i = 1; i < datasets.length; i++) {
                 const rightDataset = (datasets[i] as any).dataset || datasets[i];
@@ -7229,171 +6915,60 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
                     ? rightDataset.data
                     : (rightDataset.preview || rightDataset.sampleData || []);
 
-                // DEBUG: Log dataset IDs for matching
-                console.log(`🔗 [ENHANCED JOIN] Dataset ${i} matching:`, {
-                    firstDatasetId: firstDataset.id,
-                    rightDatasetId: rightDataset.id,
-                    foreignKeysCount: joinConfig.foreignKeys?.length || 0
-                });
-
-                // Find the join key for this dataset pair - enhanced matching
-                let keyMapping = joinConfig.foreignKeys.find((fk: any) =>
-                    (fk.sourceDataset === firstDataset.id && fk.targetDataset === rightDataset.id) ||
-                    (fk.sourceDataset === rightDataset.id && fk.targetDataset === firstDataset.id)
+                // Find the join key for this dataset pair
+                const keyMapping = joinConfig.foreignKeys.find((fk: any) =>
+                    fk.sourceDataset === firstDataset.id && fk.targetDataset === rightDataset.id ||
+                    fk.sourceDataset === rightDataset.id && fk.targetDataset === firstDataset.id
                 );
 
-                // FALLBACK: If no direct ID match, try matching by position (first → second dataset)
-                if (!keyMapping && joinConfig.foreignKeys.length > 0) {
-                    console.log(`🔗 [ENHANCED JOIN] No direct ID match, trying positional mapping (index ${i - 1})`);
-                    keyMapping = joinConfig.foreignKeys[i - 1]; // Use positional index
-                    console.log(`🔗 [ENHANCED JOIN] Using positional keyMapping:`, keyMapping);
-                }
-
                 if (keyMapping && rightData.length > 0) {
-                    // Determine left/right keys - handle both orderings
-                    let leftKey = keyMapping.sourceColumn;
-                    let rightKey = keyMapping.targetColumn;
+                    const leftKey = keyMapping.sourceDataset === firstDataset.id
+                        ? keyMapping.sourceColumn
+                        : keyMapping.targetColumn;
+                    const rightKey = keyMapping.sourceDataset === firstDataset.id
+                        ? keyMapping.targetColumn
+                        : keyMapping.sourceColumn;
 
-                    // Check if the sourceDataset matches firstDataset; if not, swap
-                    if (keyMapping.sourceDataset && keyMapping.sourceDataset !== firstDataset.id) {
-                        leftKey = keyMapping.targetColumn;
-                        rightKey = keyMapping.sourceColumn;
-                    }
+                    console.log(`🔗 [D3 FIX] Joining on ${leftKey} = ${rightKey}`);
 
-                    console.log(`🔗 [ENHANCED JOIN] Joining on "${leftKey}" = "${rightKey}"`);
-                    console.log(`🔗 [ENHANCED JOIN] Left dataset rows: ${workingData.length}, Right dataset rows: ${rightData.length}`);
-
-                    // Get actual column names from data (case may differ)
-                    const leftColNames = workingData.length > 0 ? Object.keys(workingData[0]) : [];
-                    const rightColNames = rightData.length > 0 ? Object.keys(rightData[0]) : [];
-                    console.log(`🔗 [ENHANCED JOIN] Left columns: ${leftColNames.join(', ')}`);
-                    console.log(`🔗 [ENHANCED JOIN] Right columns: ${rightColNames.join(', ')}`);
-
-                    // Find actual column names (case-insensitive match)
-                    const actualLeftKey = leftColNames.find(c => c.toLowerCase() === leftKey.toLowerCase()) || leftKey;
-                    const actualRightKey = rightColNames.find(c => c.toLowerCase() === rightKey.toLowerCase()) || rightKey;
-                    console.log(`🔗 [ENHANCED JOIN] Actual column names: left="${actualLeftKey}", right="${actualRightKey}"`);
-
-                    // ENHANCED: Create lookup map that handles multiple rows per key (group by key)
-                    const rightLookup = new Map<string, any[]>();
-                    let rightKeyCount = 0;
+                    // Create lookup map for right dataset
+                    const rightLookup = new Map<string, any>();
                     for (const row of rightData) {
-                        const keyVal = String(row[actualRightKey] ?? '').toLowerCase().trim();
-                        if (keyVal) {
-                            if (!rightLookup.has(keyVal)) {
-                                rightLookup.set(keyVal, []);
-                                rightKeyCount++;
-                            }
-                            rightLookup.get(keyVal)!.push(row);
-                        }
-                    }
-                    console.log(`🔗 [ENHANCED JOIN] Right lookup: ${rightKeyCount} unique keys from ${rightData.length} rows`);
-
-                    // Track join statistics
-                    let matchedRows = 0;
-                    let unmatchedRows = 0;
-
-                    // Perform JOIN based on type
-                    const joinType = joinConfig.type || 'left';
-                    const newWorkingData: any[] = [];
-
-                    // FIX: Pre-calculate right column mapping to ensure consistent schema for ALL rows (matched or not)
-                    // This prevents "polymorphic" arrays where some rows have right columns and others don't.
-                    const finalRightKeys = new Map<string, string>(); // RightCol -> FinalColName
-                    const rightKeyLower = actualRightKey.toLowerCase();
-                    const prefix = rightDataset.originalFileName?.replace(/\.[^.]+$/i, '') || `ds${i}`;
-
-                    // Use first matched row (or first row if no match) to determine left structure for collision check
-                    // Note: This is an approximation. Ideally we check all left cols.
-                    const sampleLeftRow = workingData[0] || {};
-                    const leftColSet = new Set(Object.keys(sampleLeftRow));
-
-                    for (const col of rightColNames) {
-                        if (col.toLowerCase() === rightKeyLower) continue; // Skip join key
-                        if (excludedColumns.has(col.toLowerCase())) continue; // Skip PII
-
-                        // Check collision against left columns
-                        if (leftColSet.has(col)) {
-                            finalRightKeys.set(col, `${prefix}_${col}`);
-                        } else {
-                            finalRightKeys.set(col, col);
-                        }
+                        const key = String(row[rightKey] ?? '').toLowerCase();
+                        if (key) rightLookup.set(key, row);
                     }
 
-                    console.log(`🔗 [ENHANCED JOIN] Right column mapping prepared: ${finalRightKeys.size} columns`);
-
-                    // DEBUG: Log sample keys to help diagnose matching issues
-                    const debugLeftKeys = workingData.slice(0, 5).map(r => String(r[actualLeftKey] ?? '').toLowerCase().trim());
-                    const debugRightKeys = Array.from(rightLookup.keys()).slice(0, 5);
-                    console.log(`🔗 [ENHANCED JOIN] Sample Left Keys:`, debugLeftKeys);
-                    console.log(`🔗 [ENHANCED JOIN] Sample Right Keys:`, debugRightKeys);
-
-                    for (const leftRow of workingData) {
-                        const leftKeyValue = String(leftRow[actualLeftKey] ?? '').toLowerCase().trim();
-                        const rightRows = rightLookup.get(leftKeyValue);
-
-                        // Base object has left columns
-                        const baseRow: any = {};
-                        for (const [col, val] of Object.entries(leftRow)) {
-                            const colLower = col.toLowerCase();
-                            if (excludedColumns.has(colLower)) continue;
-                            if (anonymizedColumns.has(colLower)) {
-                                baseRow[col] = '********';
-                            } else {
-                                baseRow[col] = val;
-                            }
-                        }
-
-                        if (rightRows && rightRows.length > 0) {
-                            matchedRows++;
-                            const rightRow = rightRows[0]; // Take first match
-                            const merged = { ...baseRow };
-
-                            // Add right columns using pre-calculated map
-                            for (const [rightCol, finalKey] of finalRightKeys.entries()) {
-                                const val = rightRow[rightCol];
-                                const colLower = rightCol.toLowerCase();
-                                const finalVal = anonymizedColumns.has(colLower) ? '********' : val;
-                                merged[finalKey] = finalVal;
-                            }
-                            newWorkingData.push(merged);
-                        } else {
-                            unmatchedRows++;
-                            // LEFT JOIN: Keep unmatched left rows BUT backfill right columns with null
-                            if (joinType === 'left' || joinType === 'outer') {
-                                const filtered = { ...baseRow };
-                                // FIX: Backfill missing right columns to maintain consistent schema
-                                for (const finalKey of finalRightKeys.values()) {
-                                    filtered[finalKey] = null;
+                    // Perform LEFT JOIN
+                    workingData = workingData.map(leftRow => {
+                        const leftKeyValue = String(leftRow[leftKey] ?? '').toLowerCase();
+                        const rightRow = rightLookup.get(leftKeyValue);
+                        if (rightRow) {
+                            // Merge rows, prefixing right columns if they clash
+                            const merged = { ...leftRow };
+                            for (const [col, val] of Object.entries(rightRow)) {
+                                if (col !== rightKey) {
+                                    const newCol = col in merged ? `${rightDataset.originalFileName || 'ds' + i}_${col}` : col;
+                                    merged[newCol] = val;
                                 }
-                                newWorkingData.push(filtered);
                             }
-                            // INNER JOIN: Skip unmatched rows
+                            return merged;
                         }
-                    }
-
-                    workingData = newWorkingData;
-
-                    console.log(`✅ [ENHANCED JOIN] Join completed:`, {
-                        resultRows: workingData.length,
-                        matchedRows,
-                        unmatchedRows,
-                        matchRate: `${((matchedRows / (matchedRows + unmatchedRows)) * 100).toFixed(1)}%`
+                        return leftRow;
                     });
-                } else {
-                    console.log(`⚠️ [ENHANCED JOIN] No valid key mapping found for dataset ${i}`);
+
+                    console.log(`🔗 [D3 FIX] Join completed. Rows: ${workingData.length}`);
                 }
             }
-
-            console.log(`🔗 [ENHANCED JOIN] All joins complete. Final row count: ${workingData.length}`);
         }
 
         // APPLY TRANSFORMATIONS in order
         for (const step of transformationSteps) {
-            const { type, config } = step || {};
-            console.log(`📊 [D3 FIX] Applying transformation: ${type}`);
+            // MULTI-COLUMN FIX: Handle both new format (operation, sourceColumns) and legacy (type, config)
+            const { type, config, operation, sourceColumns, aggregationFunction, targetElement } = step || {};
+            const transformationType = type || operation;
+            console.log(`📊 [D3 FIX] Applying transformation: ${transformationType} (sourceColumns: ${sourceColumns?.length || 0})`);
 
-            switch (type) {
+            switch (transformationType) {
                 case 'filter': {
                     const { field, operator, value } = config || {};
                     if (field) {
@@ -7438,18 +7013,82 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
                     break;
                 }
                 case 'derive': {
-                    const { newColumn, expression, sourceColumns } = config || {};
-                    if (newColumn && sourceColumns?.length) {
+                    // MULTI-COLUMN FIX: Handle both legacy config format and new direct format
+                    const configSourceColumns = config?.sourceColumns;
+                    const cols = sourceColumns || configSourceColumns;
+                    const newColumn = targetElement || config?.newColumn;
+                    const aggFn = aggregationFunction || config?.expression || config?.aggregationFunction || 'avg';
+
+                    if (newColumn && cols?.length) {
+                        console.log(`📊 [DERIVE] Creating ${newColumn} from columns [${cols.join(', ')}] using ${aggFn}`);
+
                         workingData = workingData.map((r) => {
-                            // Simple derivation: concatenate or calculate
-                            let derived = '';
-                            if (expression === 'concat') {
-                                derived = sourceColumns.map((c: string) => r[c] ?? '').join(' ');
-                            } else if (expression === 'sum') {
-                                derived = sourceColumns.reduce((acc: number, c: string) => acc + (Number(r[c]) || 0), 0);
+                            // Extract numeric values from source columns
+                            const values = cols.map((c: string) => r[c]);
+                            const numericValues = values
+                                .map((v: any) => typeof v === 'number' ? v : parseFloat(v))
+                                .filter((v: number) => !isNaN(v));
+
+                            let derived: any;
+
+                            switch (aggFn) {
+                                case 'sum':
+                                    derived = numericValues.reduce((acc: number, v: number) => acc + v, 0);
+                                    break;
+                                case 'avg':
+                                case 'average':
+                                    derived = numericValues.length > 0
+                                        ? numericValues.reduce((acc: number, v: number) => acc + v, 0) / numericValues.length
+                                        : null;
+                                    break;
+                                case 'min':
+                                    derived = numericValues.length > 0 ? Math.min(...numericValues) : null;
+                                    break;
+                                case 'max':
+                                    derived = numericValues.length > 0 ? Math.max(...numericValues) : null;
+                                    break;
+                                case 'count':
+                                    derived = values.filter((v: any) => v !== null && v !== undefined && v !== '').length;
+                                    break;
+                                case 'concat':
+                                    derived = values.map((v: any) => v ?? '').join(' ').trim();
+                                    break;
+                                case 'first':
+                                    derived = values.find((v: any) => v !== null && v !== undefined) ?? null;
+                                    break;
+                                case 'weighted_avg':
+                                    // For weighted average, alternate columns are weights: [val1, weight1, val2, weight2, ...]
+                                    // Or use equal weights if odd number of columns
+                                    if (cols.length >= 2 && cols.length % 2 === 0) {
+                                        let weightedSum = 0;
+                                        let totalWeight = 0;
+                                        for (let i = 0; i < cols.length; i += 2) {
+                                            const val = parseFloat(r[cols[i]]) || 0;
+                                            const weight = parseFloat(r[cols[i + 1]]) || 1;
+                                            weightedSum += val * weight;
+                                            totalWeight += weight;
+                                        }
+                                        derived = totalWeight > 0 ? weightedSum / totalWeight : null;
+                                    } else {
+                                        // Fall back to regular average
+                                        derived = numericValues.length > 0
+                                            ? numericValues.reduce((acc: number, v: number) => acc + v, 0) / numericValues.length
+                                            : null;
+                                    }
+                                    break;
+                                default:
+                                    // Default to average for numeric, concat for strings
+                                    if (numericValues.length === values.length && numericValues.length > 0) {
+                                        derived = numericValues.reduce((acc: number, v: number) => acc + v, 0) / numericValues.length;
+                                    } else {
+                                        derived = values.map((v: any) => v ?? '').join(' ').trim();
+                                    }
                             }
+
                             return { ...r, [newColumn]: derived };
                         });
+
+                        console.log(`📊 [DERIVE] Created derived column: ${newColumn}`);
                     }
                     break;
                 }
@@ -7527,55 +7166,27 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
             }
         }
 
-        // Define primaryDataset before using it
+        // STORE TRANSFORMED DATA to dataset's ingestionMetadata
         const primaryDataset = (datasets[0] as any).dataset || datasets[0];
 
-        // IMMUTABLE ARTIFACTS: Create transformationDocument artifact (does NOT modify mappingDocument)
-        // Get mappingDocument from journeyProgress (READ-ONLY - never modify)
-        const mappingDoc = (journeyProgress as any).mappingDocument;
-        if (!mappingDoc) {
-            console.warn(`⚠️ [Transformation] mappingDocument not found - transformation will proceed but artifact won't reference it`);
-        }
+        // ✅ FIX 1.1: Save column mappings to enable evidence chain traceability
+        // mappings contains the element-to-source-column mapping from frontend
+        const columnMappings = Array.isArray(mappings)
+            ? mappings.reduce((acc: Record<string, any>, m: any) => {
+                if (m.elementId || m.targetElement) {
+                    acc[m.elementId || m.targetElement] = {
+                        sourceColumn: m.sourceColumn || m.targetElement,
+                        transformationType: m.transformationType || 'direct',
+                        userDefinedLogic: m.userDefinedLogic || null,
+                        mappedAt: new Date().toISOString()
+                    };
+                }
+                return acc;
+              }, {})
+            : (typeof mappings === 'object' ? mappings : {});
 
-        // Extract selectionCriteria from request (if provided) or use empty array
-        const selectionCriteria = mappings?.filter((m: any) => m.criteria || m.selectionCriteria)
-            .map((m: any) => ({
-                analysisId: m.analysisId || m.targetElement || '',
-                criteria: m.criteria || m.selectionCriteria || '',
-                filters: m.filters
-            })) || [];
+        console.log(`📊 [FIX 1.1] Saving ${Object.keys(columnMappings).length} column mappings to dataset`);
 
-        // Build transformation steps array with element linkage
-        const transformationStepsArray = transformationSteps.map((step: any, idx: number) => {
-            // Find corresponding element from mappingDocument if available
-            const elementMapping = mappingDoc?.elementMappings?.find((m: any) => 
-                m.sourceColumn === step.sourceColumn || m.elementId === step.elementId
-            );
-
-            return {
-                elementId: elementMapping?.elementId || step.elementId || `element-${idx}`,
-                targetElement: step.targetElement || step.targetColumn || elementMapping?.elementName || '',
-                sourceColumn: step.sourceColumn || elementMapping?.sourceColumn || '',
-                transformationLogic: step.transformationLogic || step.description || elementMapping?.transformationLogic?.description || '',
-                operation: step.operation || step.type || elementMapping?.transformationLogic?.operation || 'custom',
-                dependencies: step.dependencies || elementMapping?.transformationLogic?.dependencies || [step.sourceColumn].filter(Boolean)
-            };
-        });
-
-        // Create NEW transformationDocument artifact
-        const transformationDocument = {
-            mappingDocument: mappingDoc, // Full snapshot for convenience (if available)
-            transformationSteps: transformationStepsArray,
-            transformedDatasetId: primaryDataset?.id,
-            transformedSchema: transformedSchema,
-            transformedRowCount: workingData.length,
-            selectionCriteria: selectionCriteria,
-            generatedAt: new Date().toISOString(),
-            generatedBy: 'data_engineer_agent',
-            status: 'applied' as const
-        };
-
-        // STORE TRANSFORMED DATA to dataset's ingestionMetadata (for analysis service compatibility)
         await storage.updateDataset(primaryDataset.id, {
             ingestionMetadata: {
                 ...(primaryDataset.ingestionMetadata || {}),
@@ -7585,54 +7196,71 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
                 transformationSteps,
                 joinConfig,
                 questionAnswerMapping,
+                // ✅ FIX 1.1: Add column mappings for evidence chain
+                columnMappings,
                 transformedAt: new Date().toISOString(),
                 transformedRowCount: workingData.length
             }
         } as any);
 
-        // Update journeyProgress with NEW transformationDocument (mappingDocument remains unchanged)
-        // Also store transformedData at project level for analysis service compatibility
-        const projectIdForTransform = String(projectId);
-        await db.execute(
-            sql`UPDATE projects
-                SET journey_progress = COALESCE(journey_progress, '{}'::jsonb)
-                    || jsonb_build_object('transformationDocument', ${JSON.stringify(transformationDocument)}::jsonb),
-                    transformed_data = ${JSON.stringify(workingData)}::jsonb,
-                    updated_at = NOW()
-                WHERE id = ${projectIdForTransform}::text`
-        );
-
-        // Also update project.transformedData and project.transformations for legacy compatibility
-        // (Some services still read from these fields)
+        // Also update project's journeyProgress
+        const project = await storage.getProject(projectId);
         await storage.updateProject(projectId, {
-            transformedData: workingData,
-            transformations: transformationSteps,
+            journeyProgress: {
+                ...(project as any)?.journeyProgress,
+                transformationApplied: true,
+                transformedRowCount: workingData.length,
+                transformedAt: new Date().toISOString(),
+                // ✅ FIX 1.1: Save mappings to journeyProgress for frontend access
+                transformationMappings: columnMappings,
+                questionAnswerMapping,
+                // ✅ PHASE 9 FIX: Save joinedData to journeyProgress for analysis execution
+                // DataScienceOrchestrator.loadProjectDatasets() looks for this as SSOT
+                joinedData: {
+                    fullData: workingData,
+                    preview: workingData.slice(0, 100),
+                    schema: transformedSchema,
+                    rowCount: workingData.length,
+                    recordCount: workingData.length,
+                    joinConfig: joinConfig || null,
+                    columnCount: Object.keys(transformedSchema).length
+                }
+            }
         } as any);
+
+        console.log(`✅ [PHASE 9] Saved joinedData to journeyProgress: ${workingData.length} rows`);
+
+        console.log(`✅ [FIX 1.1] Column mappings saved to both dataset and journeyProgress`);
 
         console.log(`✅ [D3 FIX] Transformation complete. Rows: ${workingData.length}, Columns: ${Object.keys(transformedSchema).length}`);
 
-        // FIX: Add user-visible checkpoint for transformation completion
+        // ✅ GAP 3 FIX: Log transformation execution to decision audits
         try {
-            await projectAgentOrchestrator.addCheckpoint(projectId, {
-                id: `checkpoint_de_transform_${Date.now()}`,
-                projectId: projectId,
-                agentType: 'data_engineer',
-                stepName: 'de_transformation_complete',
-                status: 'completed',
-                message: `Data transformation complete: ${workingData.length.toLocaleString()} rows with ${Object.keys(transformedSchema).length} columns${datasets.length > 1 ? ' (joined from ' + datasets.length + ' datasets)' : ''}`,
-                data: {
-                    rowCount: workingData.length,
-                    columnCount: Object.keys(transformedSchema).length,
-                    datasetsJoined: datasets.length,
-                    transformationSteps: transformationSteps.length
-                },
-                userFeedback: undefined,
-                requiresUserInput: false,
-                userVisible: true,
-                timestamp: new Date()
+            await db.insert(decisionAudits).values({
+                id: nanoid(),
+                projectId,
+                agent: 'data_engineer',
+                decisionType: 'transformation_execution',
+                decision: `Executed ${transformationSteps.length} transformation(s) on ${datasets.length} dataset(s)`,
+                confidence: 100,
+                reasoning: joinConfig?.foreignKeys?.length > 0
+                    ? `Multi-dataset join performed with ${joinConfig.foreignKeys.length} key mapping(s)`
+                    : 'Single dataset transformation',
+                evidence: JSON.stringify({
+                    transformationSteps: transformationSteps.map((s: any) => s.type || s),
+                    joinConfig: joinConfig || null,
+                    resultRowCount: workingData.length,
+                    resultColumnCount: Object.keys(transformedSchema).length,
+                    mappingsCount: mappings?.length || 0,
+                    questionAnswerMappingCount: questionAnswerMapping?.length || 0
+                }),
+                appliedAt: new Date(),
+                createdAt: new Date()
             });
-        } catch (checkpointErr) {
-            console.warn('⚠️ Failed to add transformation checkpoint:', checkpointErr);
+            console.log(`✅ [GAP 3 FIX] Transformation decision logged to audit trail`);
+        } catch (auditError) {
+            console.warn('⚠️ Failed to log transformation audit:', auditError);
+            // Don't fail the request if audit logging fails
         }
 
         res.json({
@@ -7655,18 +7283,17 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
 
 /**
  * D2 FIX: Server-side PII filtering
- * U2A2A2U PATTERN: Calls the same apply_pii_exclusions MCP tool that agents use
- * This is the FALLBACK path - agents are preferred, but API calls the same tool
+ * Removes excluded columns from dataset data, not just UI
  */
 router.post("/:id/apply-pii-exclusions", ensureAuthenticated, async (req, res) => {
     try {
         const { id: projectId } = req.params;
         const userId = (req.user as any)?.id;
-        const { excludedColumns = [], anonymizedColumns = [], maskingStrategy = 'remove' } = req.body;
+        const { excludedColumns = [], anonymizedColumns = [] } = req.body;
 
-        console.log(`🔒 [PII Exclusion] Calling apply_pii_exclusions tool (fallback path) for project ${projectId}`);
-        console.log(`🔒 [PII Exclusion] Excluded columns:`, excludedColumns);
-        console.log(`🔒 [PII Exclusion] Anonymized columns:`, anonymizedColumns);
+        console.log(`🔒 [D2 FIX] Apply PII exclusions for project ${projectId}`);
+        console.log(`🔒 [D2 FIX] Excluded columns:`, excludedColumns);
+        console.log(`🔒 [D2 FIX] Anonymized columns:`, anonymizedColumns);
 
         if (!userId) {
             return res.status(401).json({ success: false, error: "Authentication required" });
@@ -7685,138 +7312,100 @@ router.post("/:id/apply-pii-exclusions", ensureAuthenticated, async (req, res) =
             });
         }
 
-        // Determine masking strategy based on input
-        // excludedColumns -> 'remove', anonymizedColumns -> 'redact'
-        const allColumnsToProcess = [...excludedColumns];
-        const effectiveMaskingStrategy = anonymizedColumns.length > 0 ? 'redact' : maskingStrategy;
-
-        // If we have both excluded and anonymized, we need to process them separately
-        // For simplicity, combine them with the appropriate strategy
-        if (anonymizedColumns.length > 0 && excludedColumns.length > 0) {
-            // Process excluded columns with 'remove' strategy first
-            // First call: Remove excluded columns
-            const removeResult = await executeTool('apply_pii_exclusions', 'data_engineer', {
-                projectId,
-                excludedColumns: excludedColumns,
-                maskingStrategy: 'remove',
-                persistDecision: true,
-                userConfirmed: true // API call implies user has confirmed via UI
-            }, {
-                userId,
-                projectId
+        // Load all datasets
+        const datasets = await storage.getProjectDatasets(projectId);
+        if (!datasets || datasets.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: "No datasets available"
             });
+        }
 
-            if (removeResult.status === 'error') {
-                throw new Error(removeResult.error || 'Failed to remove PII columns');
+        const excludeSet = new Set(excludedColumns.map((c: string) => c.toLowerCase()));
+        const anonymizeSet = new Set(anonymizedColumns.map((c: string) => c.toLowerCase()));
+
+        for (const ds of datasets) {
+            const dataset = (ds as any).dataset || ds;
+            let data = Array.isArray(dataset.data) ? dataset.data : (dataset.preview || []);
+            let preview = dataset.preview || [];
+            let schema = dataset.schema || {};
+
+            // Filter out excluded columns and anonymize others
+            const filterRow = (row: any) => {
+                const newRow: any = {};
+                for (const [key, value] of Object.entries(row)) {
+                    const lowerKey = key.toLowerCase();
+                    if (excludeSet.has(lowerKey)) {
+                        // Skip excluded columns
+                        continue;
+                    }
+                    if (anonymizeSet.has(lowerKey)) {
+                        // Anonymize: replace with masked value
+                        newRow[key] = typeof value === 'string'
+                            ? value.replace(/./g, '*').substring(0, 8) + '...'
+                            : '***';
+                    } else {
+                        newRow[key] = value;
+                    }
+                }
+                return newRow;
+            };
+
+            const filteredData = data.map(filterRow);
+            const filteredPreview = preview.map(filterRow);
+
+            // Update schema to remove excluded columns
+            const filteredSchema: any = {};
+            for (const [key, value] of Object.entries(schema)) {
+                if (!excludeSet.has(key.toLowerCase())) {
+                    filteredSchema[key] = value;
+                }
             }
 
-            // Second call: Redact anonymized columns
-            const redactResult = await executeTool('apply_pii_exclusions', 'data_engineer', {
-                projectId,
-                excludedColumns: anonymizedColumns,
-                maskingStrategy: 'redact',
-                persistDecision: true,
-                userConfirmed: true
-            }, {
-                userId,
-                projectId
-            });
+            // Update dataset with filtered data
+            await storage.updateDataset(dataset.id, {
+                data: filteredData,
+                preview: filteredPreview.slice(0, 100),
+                schema: filteredSchema,
+                metadata: {
+                    ...(dataset.metadata || {}),
+                    piiFiltered: true,
+                    piiFilteredAt: new Date().toISOString(),
+                    excludedColumns,
+                    anonymizedColumns,
+                    originalColumnCount: Object.keys(schema).length,
+                    filteredColumnCount: Object.keys(filteredSchema).length
+                }
+            } as any);
 
-            if (redactResult.status === 'error') {
-                throw new Error(redactResult.error || 'Failed to anonymize PII columns');
+            console.log(`🔒 [D2 FIX] Dataset ${dataset.id}: Removed ${excludedColumns.length} columns, anonymized ${anonymizedColumns.length}`);
+        }
+
+        // Update project metadata
+        const project = await storage.getProject(projectId);
+        await storage.updateProject(projectId, {
+            metadata: {
+                ...(project as any)?.metadata,
+                piiDecision: {
+                    excludedColumns,
+                    anonymizedColumns,
+                    appliedAt: new Date().toISOString()
+                }
             }
-
-            return res.json({
-                success: true,
-                message: `Removed ${excludedColumns.length} columns, anonymized ${anonymizedColumns.length} columns`,
-                excludedColumns,
-                anonymizedColumns,
-                appliedBy: 'apply_pii_exclusions_tool',
-                removeResult: removeResult.result,
-                redactResult: redactResult.result
-            });
-        }
-
-        // Single operation: either remove or redact
-        const columnsToProcess = excludedColumns.length > 0 ? excludedColumns : anonymizedColumns;
-        const strategy = excludedColumns.length > 0 ? 'remove' : 'redact';
-
-        const toolResult = await executeTool('apply_pii_exclusions', 'data_engineer', {
-            projectId,
-            excludedColumns: columnsToProcess,
-            maskingStrategy: strategy,
-            persistDecision: true,
-            userConfirmed: true // API call implies user has confirmed via UI
-        }, {
-            userId,
-            projectId
-        });
-
-        if (toolResult.status === 'error') {
-            console.error('🔒 [PII Exclusion] Tool execution failed:', toolResult.error);
-            throw new Error(toolResult.error || 'Failed to apply PII exclusions');
-        }
-
-        const exclusionResult = toolResult.result;
-
-        // FIX: Add user-visible checkpoint for PII handling
-        try {
-            await projectAgentOrchestrator.addCheckpoint(projectId, {
-                id: `checkpoint_de_pii_${Date.now()}`,
-                projectId: projectId,
-                agentType: 'data_engineer',
-                stepName: 'de_pii_applied',
-                status: 'completed',
-                message: `Privacy protection applied: ${columnsToProcess.length} column(s) ${strategy === 'remove' ? 'removed' : 'anonymized'}`,
-                data: {
-                    strategy,
-                    columnsProcessed: columnsToProcess,
-                    processedCount: columnsToProcess.length
-                },
-                userFeedback: undefined,
-                requiresUserInput: false,
-                userVisible: true,
-                timestamp: new Date()
-            });
-        } catch (checkpointErr) {
-            console.warn('⚠️ Failed to add PII checkpoint:', checkpointErr);
-        }
+        } as any);
 
         res.json({
             success: true,
-            message: `${strategy === 'remove' ? 'Removed' : 'Anonymized'} ${columnsToProcess.length} columns`,
-            excludedColumns: strategy === 'remove' ? columnsToProcess : [],
-            anonymizedColumns: strategy === 'redact' ? columnsToProcess : [],
-            appliedBy: 'apply_pii_exclusions_tool', // Indicates tool was used
-            processedDatasets: exclusionResult.processedDatasets,
-            appliedAt: exclusionResult.appliedAt
+            message: `Removed ${excludedColumns.length} columns, anonymized ${anonymizedColumns.length} columns`,
+            excludedColumns,
+            anonymizedColumns
         });
 
     } catch (error: any) {
-        console.error('❌ [PII Exclusion] Error:', error);
-        console.error('❌ [PII Exclusion] Stack:', error.stack);
-        console.error('❌ [PII Exclusion] Request body:', req.body);
-        console.error('❌ [PII Exclusion] Project ID:', req.params.id);
-        
-        // More specific error handling
-        let statusCode = 500;
-        let errorMessage = error.message || "Failed to apply PII exclusions";
-        
-        if (error.message?.includes('No datasets found')) {
-            statusCode = 404;
-            errorMessage = "No datasets found for this project. Please upload data first.";
-        } else if (error.message?.includes('not found') || error.message?.includes('does not exist')) {
-            statusCode = 404;
-            errorMessage = "Project or dataset not found";
-        } else if (error.message?.includes('Access denied') || error.message?.includes('Permission')) {
-            statusCode = 403;
-            errorMessage = "Access denied";
-        }
-        
-        res.status(statusCode).json({
+        console.error('❌ [D2 FIX] PII exclusion error:', error);
+        res.status(500).json({
             success: false,
-            error: errorMessage,
-            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            error: error.message || "Failed to apply PII exclusions"
         });
     }
 });
@@ -7843,60 +7432,66 @@ router.post("/:id/recommend-templates", ensureAuthenticated, async (req, res) =>
             return res.status(status).json({ success: false, error: accessCheck.reason });
         }
 
-        // Analyze goals and questions to determine best template
-        const goalText = userGoals.join(' ').toLowerCase();
-        const questionText = userQuestions.join(' ').toLowerCase();
-        const combinedText = `${goalText} ${questionText}`;
+        // Build search query from user goals and questions for semantic search
+        const searchQuery = [...userGoals, ...userQuestions].filter(Boolean).join(' ');
+        const project = await storage.getProject(projectId);
+        const journeyType = (project as any)?.journeyType;
 
-        // Template matching logic
+        console.log(`🔍 [Vector Search] Query: "${searchQuery.substring(0, 100)}..." | Journey: ${journeyType} | Industry: ${industryContext?.industry || 'any'}`);
+
+        // Use semantic vector search to find matching templates
+        const recommendations = await semanticSearchService.findSimilarTemplates(searchQuery, {
+            limit: 5,
+            minSimilarity: 0.5, // Lower threshold to ensure we get results
+            journeyType: journeyType,
+            industry: industryContext?.industry,
+            isActive: true
+        });
+
+        console.log(`📊 [Vector Search] Found ${recommendations.length} matching templates`);
+
+        // Transform top result to expected response format
         let template = null;
-        let confidence = 0.7;
+        let confidence = 0.5;
         let marketDemand = 'moderate';
         let implementationComplexity = 'medium';
 
-        // Pattern matching for common analysis types
-        if (combinedText.includes('employee') || combinedText.includes('engagement') || combinedText.includes('satisfaction') || combinedText.includes('hr')) {
+        if (recommendations.length > 0) {
+            const topMatch = recommendations[0];
             template = {
-                id: 'hr_analytics',
-                name: 'HR & Employee Analytics',
-                description: 'Analyze employee engagement, satisfaction, and workforce metrics',
-                recommendedAnalyses: ['descriptive', 'correlation', 'segmentation', 'trend_analysis'],
-                requiredDataElements: ['employee_id', 'department', 'satisfaction_score', 'tenure', 'performance_rating']
+                id: topMatch.item.id,
+                name: topMatch.item.name,
+                description: topMatch.item.summary || topMatch.item.description,
+                recommendedAnalyses: (topMatch.item.expectedArtifacts as string[]) || [],
+                requiredDataElements: ((topMatch.item.metadata as any)?.requiredElements as string[]) || []
             };
-            confidence = 0.85;
-            marketDemand = 'high';
-        } else if (combinedText.includes('sales') || combinedText.includes('revenue') || combinedText.includes('customer')) {
-            template = {
-                id: 'sales_analytics',
-                name: 'Sales & Revenue Analytics',
-                description: 'Analyze sales performance, customer behavior, and revenue trends',
-                recommendedAnalyses: ['descriptive', 'time_series', 'predictive', 'segmentation'],
-                requiredDataElements: ['customer_id', 'transaction_date', 'amount', 'product', 'region']
-            };
-            confidence = 0.82;
-            marketDemand = 'very_high';
-        } else if (combinedText.includes('marketing') || combinedText.includes('campaign') || combinedText.includes('conversion')) {
-            template = {
-                id: 'marketing_analytics',
-                name: 'Marketing Campaign Analytics',
-                description: 'Analyze marketing effectiveness, campaign ROI, and conversion rates',
-                recommendedAnalyses: ['descriptive', 'attribution', 'ab_testing', 'funnel_analysis'],
-                requiredDataElements: ['campaign_id', 'channel', 'spend', 'impressions', 'conversions']
-            };
-            confidence = 0.80;
-            marketDemand = 'high';
-        } else if (combinedText.includes('financial') || combinedText.includes('budget') || combinedText.includes('cost')) {
-            template = {
-                id: 'financial_analytics',
-                name: 'Financial Analysis',
-                description: 'Analyze financial metrics, budgets, and cost optimization',
-                recommendedAnalyses: ['descriptive', 'variance_analysis', 'forecasting', 'trend_analysis'],
-                requiredDataElements: ['account', 'period', 'budget', 'actual', 'variance']
-            };
-            confidence = 0.78;
-            marketDemand = 'moderate';
+            confidence = topMatch.similarity;
+
+            // Determine market demand based on similarity
+            if (topMatch.similarity >= 0.85) {
+                marketDemand = 'very_high';
+            } else if (topMatch.similarity >= 0.75) {
+                marketDemand = 'high';
+            } else if (topMatch.similarity >= 0.65) {
+                marketDemand = 'moderate';
+            } else {
+                marketDemand = 'low';
+            }
+
+            // Determine complexity based on template content depth
+            const contentDepth = topMatch.item.contentDepth;
+            if (contentDepth === 'comprehensive' || contentDepth === 'detailed') {
+                implementationComplexity = 'high';
+            } else if (contentDepth === 'standard') {
+                implementationComplexity = 'medium';
+            } else {
+                implementationComplexity = 'low';
+            }
+
+            console.log(`✅ [Vector Search] Top match: ${template.name} (similarity: ${confidence.toFixed(3)})`);
         } else {
-            // Generic template
+            // Fallback to generic template if no semantic matches found
+            console.log(`⚠️ [Vector Search] No semantic matches found, using generic template`);
             template = {
                 id: 'general_analytics',
                 name: 'General Data Analytics',
@@ -7904,28 +7499,36 @@ router.post("/:id/recommend-templates", ensureAuthenticated, async (req, res) =>
                 recommendedAnalyses: ['descriptive', 'correlation', 'distribution_analysis'],
                 requiredDataElements: []
             };
-            confidence = 0.65;
+            confidence = 0.5;
             implementationComplexity = 'low';
         }
 
-        // Store recommendation in project
-        // CRITICAL FIX: Parse journeyProgress before spreading to preserve joinedData and other fields
-        const project = await storage.getProject(projectId);
-        const existingProgress = parseJourneyProgress((project as any)?.journeyProgress);
+        // Build alternative templates from remaining matches
+        const alternativeTemplates = recommendations.slice(1).map(match => ({
+            id: match.item.id,
+            name: match.item.name,
+            description: match.item.summary || match.item.description,
+            similarity: match.similarity,
+            matchReason: 'semantic'
+        }));
+
+        // Store recommendation in project (project already fetched above)
         await storage.updateProject(projectId, {
             journeyProgress: {
-                ...existingProgress,
+                ...(project as any)?.journeyProgress,
                 researcherRecommendation: {
                     template,
                     confidence,
                     marketDemand,
                     implementationComplexity,
-                    recommendedAt: new Date().toISOString()
+                    alternativeTemplates,
+                    recommendedAt: new Date().toISOString(),
+                    searchMethod: 'semantic_vector_search'
                 }
             }
         } as any);
 
-        console.log(`✅ [R1 FIX] Recommended template: ${template?.name} (confidence: ${confidence})`);
+        console.log(`✅ [Vector Search] Recommended template: ${template?.name} (confidence: ${confidence.toFixed(3)}) + ${alternativeTemplates.length} alternatives`);
 
         res.json({
             success: true,
@@ -7933,7 +7536,8 @@ router.post("/:id/recommend-templates", ensureAuthenticated, async (req, res) =>
             confidence,
             marketDemand,
             implementationComplexity,
-            alternativeTemplates: [] // Could expand this later
+            alternativeTemplates, // Now includes actual alternatives from vector search
+            searchMethod: 'semantic'
         });
 
     } catch (error: any) {
@@ -7944,3 +7548,917 @@ router.post("/:id/recommend-templates", ensureAuthenticated, async (req, res) =>
         });
     }
 });
+
+// ==========================================
+// [DAY 9] AGENT QUERY ENDPOINT
+// ==========================================
+/**
+ * Allow users to ask follow-up questions about their project via PM agent
+ * POST /api/projects/:id/ask-agent
+ */
+router.post("/:id/ask-agent", ensureAuthenticated, async (req, res) => {
+    try {
+        const { id: projectId } = req.params;
+        const userId = (req.user as any)?.id;
+        const isAdmin = (req.user as any)?.isAdmin || false;
+        const { question, context } = req.body;
+
+        console.log(`🤖 [Agent Query] User ${userId} asking: "${question?.substring(0, 100)}..."`);
+
+        // Ownership check
+        const accessCheck = await canAccessProject(userId, projectId, isAdmin);
+        if (!accessCheck.allowed) {
+            return res.status(403).json({
+                success: false,
+                error: accessCheck.reason
+            });
+        }
+
+        if (!question || typeof question !== 'string' || question.trim().length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Question is required'
+            });
+        }
+
+        const project = accessCheck.project;
+        const journeyProgress = (project as any).journeyProgress || {};
+        const analysisResults = (project as any).analysisResults || {};
+
+        // Get datasets for context
+        const projectDatasets = await storage.getProjectDatasets(projectId);
+
+        // Build context for PM agent
+        const agentContext = {
+            projectName: project.name,
+            journeyType: (project as any).journeyType || 'general',
+            currentStep: journeyProgress.currentStep || 'unknown',
+            completedSteps: journeyProgress.completedSteps || [],
+            datasetCount: projectDatasets.length,
+            totalRows: projectDatasets.reduce((sum: number, d: any) => sum + (d.rowCount || d.preview?.length || 0), 0),
+            hasAnalysisResults: !!analysisResults.insights || !!analysisResults.recommendations,
+            userQuestions: journeyProgress.userQuestions || [],
+            questionAnswers: analysisResults.questionAnswers || [],
+            userProvidedContext: context || ''
+        };
+
+        // Route to PM Agent for intelligent response
+        let response: any;
+        try {
+            const { ProjectManagerAgent } = await import('../services/project-manager-agent');
+            const pmAgent = new ProjectManagerAgent();
+
+            response = await pmAgent.handleFollowUpQuestion({
+                projectId,
+                userId,
+                question: question.trim(),
+                projectContext: agentContext,
+                analysisResults
+            });
+        } catch (agentError: any) {
+            console.warn(`⚠️ [Agent Query] PM Agent error:`, agentError.message);
+            // Fallback to simple response if agent fails
+            response = generateFallbackResponse(question, agentContext, analysisResults);
+        }
+
+        // Log the query for analytics
+        console.log(`✅ [Agent Query] Response generated for project ${projectId}`);
+
+        // Create checkpoint for this interaction
+        const checkpointId = `cp_query_${Date.now()}`;
+        try {
+            await storage.createAgentCheckpoint({
+                id: checkpointId,
+                projectId,
+                stepName: 'agent_query',
+                agentType: 'project_manager',
+                status: 'completed',
+                message: `User question: "${question.substring(0, 100)}..."`,
+                data: {
+                    question,
+                    responsePreview: response.answer?.substring(0, 200),
+                    timestamp: new Date().toISOString()
+                }
+            });
+        } catch (cpError) {
+            console.warn('Checkpoint creation failed (non-blocking):', cpError);
+        }
+
+        res.json({
+            success: true,
+            answer: response.answer,
+            confidence: response.confidence || 0.8,
+            sources: response.sources || [],
+            relatedInsights: response.relatedInsights || [],
+            suggestedFollowUps: response.suggestedFollowUps || [],
+            agentContribution: {
+                agentId: 'project_manager',
+                timestamp: new Date().toISOString()
+            }
+        });
+
+    } catch (error: any) {
+        console.error('❌ [Agent Query] Error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message || 'Failed to process agent query'
+        });
+    }
+});
+
+/**
+ * [DAY 9] Generate insights from existing results via agent
+ * POST /api/projects/:id/generate-insights
+ */
+router.post("/:id/generate-insights", ensureAuthenticated, async (req, res) => {
+    try {
+        const { id: projectId } = req.params;
+        const userId = (req.user as any)?.id;
+        const isAdmin = (req.user as any)?.isAdmin || false;
+        const { focusArea } = req.body;
+
+        console.log(`🔮 [Insight Generation] Generating insights for project ${projectId}`);
+
+        const accessCheck = await canAccessProject(userId, projectId, isAdmin);
+        if (!accessCheck.allowed) {
+            return res.status(403).json({
+                success: false,
+                error: accessCheck.reason
+            });
+        }
+
+        const project = accessCheck.project;
+        const analysisResults = (project as any).analysisResults || {};
+        const journeyProgress = (project as any).journeyProgress || {};
+
+        // Get existing insights or generate new ones
+        let insights: any[] = [];
+
+        if (analysisResults.insights && analysisResults.insights.length > 0) {
+            insights = analysisResults.insights;
+        } else {
+            // Generate insights via DS agent
+            try {
+                const { dataScienceOrchestrator } = await import('../services/data-science-orchestrator');
+                const projectDatasets = await storage.getProjectDatasets(projectId);
+
+                if (projectDatasets.length > 0) {
+                    const dataset = projectDatasets[0];
+                    const data = (dataset as any).data || (dataset as any).preview || [];
+
+                    if (data.length > 0) {
+                        const result = await dataScienceOrchestrator.generateQuickInsights({
+                            data,
+                            schema: (dataset as any).schema || {},
+                            focusArea
+                        });
+
+                        insights = result.insights || [];
+                    }
+                }
+            } catch (dsError: any) {
+                console.warn('DS agent insight generation failed:', dsError.message);
+            }
+        }
+
+        // Generate follow-up recommendations
+        const recommendations = generateInsightRecommendations(insights, focusArea);
+
+        res.json({
+            success: true,
+            insights,
+            recommendations,
+            generatedAt: new Date().toISOString(),
+            focusArea: focusArea || 'general'
+        });
+
+    } catch (error: any) {
+        console.error('❌ [Insight Generation] Error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message || 'Failed to generate insights'
+        });
+    }
+});
+
+// ==========================================
+// ✅ FIX 2.1: MISSING API ENDPOINTS
+// ==========================================
+
+/**
+ * GET /api/projects/:id/decision-trail
+ * Returns the audit trail of agent decisions for a project
+ * ✅ FIX 2.1.1: Decision Trail Endpoint
+ */
+router.get("/:id/decision-trail", ensureAuthenticated, async (req, res) => {
+    try {
+        const { id: projectId } = req.params;
+        const userId = (req.user as any)?.id;
+
+        if (!userId) {
+            return res.status(401).json({ success: false, error: "Authentication required" });
+        }
+
+        const accessCheck = await canAccessProject(userId, projectId, isAdmin(req));
+        if (!accessCheck.allowed) {
+            const status = accessCheck.reason === 'Project not found' ? 404 : 403;
+            return res.status(status).json({ success: false, error: accessCheck.reason });
+        }
+
+        console.log(`📋 [FIX 2.1.1] Fetching decision trail for project ${projectId}`);
+
+        // Query decision audits from database
+        const audits = await db
+            .select()
+            .from(decisionAudits)
+            .where(eq(decisionAudits.projectId, projectId))
+            .orderBy(desc(decisionAudits.timestamp));
+
+        // Format for frontend
+        const decisionTrail = audits.map((audit: any) => ({
+            id: audit.id,
+            timestamp: audit.timestamp,
+            agent: audit.agent,
+            decisionType: audit.decisionType,
+            decision: audit.decision,
+            confidence: audit.confidence,
+            reasoning: audit.reasoning,
+            evidence: audit.evidence ? (typeof audit.evidence === 'string' ? JSON.parse(audit.evidence) : audit.evidence) : null,
+            appliedAt: audit.appliedAt
+        }));
+
+        console.log(`✅ [FIX 2.1.1] Found ${decisionTrail.length} decision audit entries`);
+
+        return res.json({
+            success: true,
+            decisionTrail,
+            count: decisionTrail.length
+        });
+
+    } catch (error: any) {
+        console.error('❌ [FIX 2.1.1] Error fetching decision trail:', error);
+        return res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * GET /api/projects/:id/upload-sla
+ * Returns SLA metrics for upload processing
+ * ✅ FIX 2.1.2: Upload SLA Endpoint
+ */
+router.get("/:id/upload-sla", ensureAuthenticated, async (req, res) => {
+    try {
+        const { id: projectId } = req.params;
+        const userId = (req.user as any)?.id;
+
+        if (!userId) {
+            return res.status(401).json({ success: false, error: "Authentication required" });
+        }
+
+        const accessCheck = await canAccessProject(userId, projectId, isAdmin(req));
+        if (!accessCheck.allowed) {
+            const status = accessCheck.reason === 'Project not found' ? 404 : 403;
+            return res.status(status).json({ success: false, error: accessCheck.reason });
+        }
+
+        const project = accessCheck.project;
+        const journeyProgress = (project as any)?.journeyProgress || {};
+        const stepTimestamps = journeyProgress.stepTimestamps || {};
+
+        // Calculate SLA metrics
+        const uploadStarted = stepTimestamps.uploadStarted ? new Date(stepTimestamps.uploadStarted) : null;
+        const uploadCompleted = stepTimestamps.uploadCompleted ? new Date(stepTimestamps.uploadCompleted) : null;
+
+        let uploadDurationMs = 0;
+        if (uploadStarted && uploadCompleted) {
+            uploadDurationMs = uploadCompleted.getTime() - uploadStarted.getTime();
+        }
+
+        // Get datasets for size info
+        const datasets = await storage.getProjectDatasets(projectId);
+        const totalRecords = datasets.reduce((sum, ds) => {
+            const dataset = (ds as any).dataset || ds;
+            return sum + (dataset.recordCount || 0);
+        }, 0);
+        const totalSizeMB = datasets.reduce((sum, ds) => {
+            const dataset = (ds as any).dataset || ds;
+            const dataSizeBytes = JSON.stringify(dataset.data || []).length;
+            return sum + (dataSizeBytes / (1024 * 1024));
+        }, 0);
+
+        // SLA thresholds (configurable)
+        const SLA_THRESHOLDS = {
+            small: { maxRecords: 10000, targetSeconds: 30 },
+            medium: { maxRecords: 100000, targetSeconds: 120 },
+            large: { maxRecords: 1000000, targetSeconds: 300 }
+        };
+
+        let slaTarget = SLA_THRESHOLDS.large.targetSeconds;
+        let slaCategory = 'large';
+        if (totalRecords <= SLA_THRESHOLDS.small.maxRecords) {
+            slaTarget = SLA_THRESHOLDS.small.targetSeconds;
+            slaCategory = 'small';
+        } else if (totalRecords <= SLA_THRESHOLDS.medium.maxRecords) {
+            slaTarget = SLA_THRESHOLDS.medium.targetSeconds;
+            slaCategory = 'medium';
+        }
+
+        const uploadDurationSeconds = uploadDurationMs / 1000;
+        const slaMet = uploadDurationSeconds <= slaTarget || uploadDurationSeconds === 0;
+
+        console.log(`📊 [FIX 2.1.2] Upload SLA for project ${projectId}: ${uploadDurationSeconds}s (target: ${slaTarget}s)`);
+
+        return res.json({
+            success: true,
+            sla: {
+                uploadDurationMs,
+                uploadDurationSeconds: Math.round(uploadDurationSeconds * 100) / 100,
+                slaTargetSeconds: slaTarget,
+                slaCategory,
+                slaMet,
+                totalRecords,
+                totalSizeMB: Math.round(totalSizeMB * 100) / 100,
+                recordsPerSecond: uploadDurationSeconds > 0 ? Math.round(totalRecords / uploadDurationSeconds) : 0,
+                datasetCount: datasets.length,
+                timestamps: {
+                    started: uploadStarted?.toISOString() || null,
+                    completed: uploadCompleted?.toISOString() || null
+                }
+            }
+        });
+
+    } catch (error: any) {
+        console.error('❌ [FIX 2.1.2] Error fetching upload SLA:', error);
+        return res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * GET /api/projects/:id/cost-estimate
+ * Calculate analysis cost estimate for a project
+ * ✅ FIX: Cost Estimate Endpoint (was returning 404 causing hardcoded $35 fallback)
+ */
+router.get("/:id/cost-estimate", ensureAuthenticated, async (req, res) => {
+    try {
+        const projectId = req.params.id;
+        const userId = (req.user as any)?.id;
+        const userIsAdmin = (req.user as any)?.isAdmin || false;
+
+        if (!userId) {
+            return res.status(401).json({ success: false, error: "Authentication required" });
+        }
+
+        const access = await canAccessProject(userId, projectId, userIsAdmin);
+        if (!access.allowed) {
+            return res.status(403).json({ success: false, error: access.reason });
+        }
+
+        const project = access.project;
+
+        // Check if cost already locked
+        if ((project as any).lockedCostEstimate) {
+            const lockedCost = parseFloat((project as any).lockedCostEstimate);
+            console.log(`✅ [Cost Estimate] Using locked cost for project ${projectId}: $${lockedCost}`);
+            return res.json({
+                success: true,
+                estimatedCost: lockedCost,
+                totalCost: lockedCost,
+                breakdown: (project as any).costBreakdown || {},
+                isLocked: true
+            });
+        }
+
+        // Calculate cost based on data and analyses using hybrid PricingService
+        const projectDatasets = await storage.getProjectDatasets(projectId);
+        const totalRows = projectDatasets.reduce((sum: number, pd: { dataset: any }) => sum + (pd.dataset?.recordCount || 0), 0);
+
+        const journeyProgress = (project as any).journeyProgress || {};
+        const analysisPath = journeyProgress.requirementsDocument?.analysisPath || [];
+
+        // PHASE 6 FIX: Use PricingService.calculateAnalysisCost() for hybrid pricing
+        // This considers: analysis type factors, complexity multipliers, data size scaling
+        let totalCost = 0;
+        const perAnalysisCosts: Array<{ analysisType: string; cost: number; complexity: string }> = [];
+
+        if (analysisPath.length > 0) {
+            for (const analysis of analysisPath) {
+                // Determine complexity from analysis metadata or default to 'intermediate'
+                const complexity = (analysis.complexity as 'basic' | 'intermediate' | 'advanced') || 'intermediate';
+                const analysisType = analysis.analysisType || 'statistical';
+
+                const costResult = PricingService.calculateAnalysisCost(
+                    analysisType,
+                    totalRows,
+                    complexity
+                );
+
+                totalCost += costResult.totalCost;
+                perAnalysisCosts.push({
+                    analysisType,
+                    cost: costResult.totalCost,
+                    complexity
+                });
+            }
+        } else {
+            // Fallback for projects without analysis path - use default pricing
+            const defaultCost = PricingService.calculateAnalysisCost('statistical', totalRows, 'basic');
+            totalCost = defaultCost.totalCost;
+            perAnalysisCosts.push({
+                analysisType: 'statistical',
+                cost: defaultCost.totalCost,
+                complexity: 'basic'
+            });
+        }
+
+        // Add platform base fee (uses admin-configurable value from PricingService)
+        const platformFee = PricingService.getPlatformFee();
+        totalCost += platformFee;
+
+        console.log(`✅ [Cost Estimate] Calculated $${totalCost.toFixed(2)} for project ${projectId} using hybrid pricing`);
+        console.log(`   - ${totalRows} rows, ${analysisPath.length || 1} analyses`);
+        console.log(`   - Per-analysis breakdown:`, perAnalysisCosts);
+
+        return res.json({
+            success: true,
+            estimatedCost: parseFloat(totalCost.toFixed(2)),
+            totalCost: parseFloat(totalCost.toFixed(2)),
+            breakdown: {
+                platformFee,
+                rowsProcessed: totalRows,
+                analysisCount: analysisPath.length || 1,
+                perAnalysisCosts,
+                // Pricing factors used (for transparency)
+                pricingFactors: {
+                    statistical: 1.0,
+                    machine_learning: 2.5,
+                    visualization: 0.5,
+                    business_intelligence: 1.5,
+                    time_series: 2.0
+                }
+            },
+            isLocked: false
+        });
+    } catch (error: any) {
+        console.error('❌ [Cost Estimate] Error calculating cost estimate:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Failed to calculate cost estimate'
+        });
+    }
+});
+
+/**
+ * POST /api/projects/:id/lock-cost
+ * Locks the cost estimate before payment - ensures Stripe checkout uses the displayed price
+ * ✅ PHASE 6 FIX: Cost Locking Endpoint
+ */
+router.post("/:id/lock-cost", ensureAuthenticated, async (req, res) => {
+    try {
+        const { id: projectId } = req.params;
+        const userId = (req.user as any)?.id;
+        const userIsAdmin = (req.user as any)?.isAdmin || false;
+
+        if (!userId) {
+            return res.status(401).json({ success: false, error: 'Authentication required' });
+        }
+
+        const access = await canAccessProject(userId, projectId, userIsAdmin);
+        if (!access.allowed) {
+            return res.status(403).json({ success: false, error: access.reason });
+        }
+
+        const { lockedCostEstimate } = req.body;
+
+        if (!lockedCostEstimate || parseFloat(lockedCostEstimate) <= 0) {
+            return res.status(400).json({ success: false, error: 'Valid cost estimate required' });
+        }
+
+        const costValue = parseFloat(lockedCostEstimate).toFixed(2);
+
+        await storage.updateProject(projectId, {
+            lockedCostEstimate: costValue
+        } as any);
+
+        console.log(`✅ [Lock Cost] Saved lockedCostEstimate $${costValue} for project ${projectId}`);
+
+        return res.json({
+            success: true,
+            lockedCostEstimate: costValue,
+            message: 'Cost estimate locked successfully'
+        });
+    } catch (error: any) {
+        console.error('❌ [Lock Cost] Error locking cost:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Failed to lock cost estimate'
+        });
+    }
+});
+
+/**
+ * POST /api/projects/:id/generate-charts
+ * Generates visualization charts for project data
+ * ✅ FIX 2.1.3: Chart Generation Endpoint
+ */
+router.post("/:id/generate-charts", ensureAuthenticated, async (req, res) => {
+    try {
+        const { id: projectId } = req.params;
+        const userId = (req.user as any)?.id;
+
+        if (!userId) {
+            return res.status(401).json({ success: false, error: "Authentication required" });
+        }
+
+        const accessCheck = await canAccessProject(userId, projectId, isAdmin(req));
+        if (!accessCheck.allowed) {
+            const status = accessCheck.reason === 'Project not found' ? 404 : 403;
+            return res.status(status).json({ success: false, error: accessCheck.reason });
+        }
+
+        const { chartTypes, columns, options } = req.body;
+
+        // Get project data
+        const datasets = await storage.getProjectDatasets(projectId);
+        if (!datasets.length) {
+            return res.status(400).json({ success: false, error: 'No datasets found' });
+        }
+
+        const primaryDataset = (datasets[0] as any).dataset || datasets[0];
+        const data = primaryDataset.ingestionMetadata?.transformedData ||
+                     primaryDataset.data ||
+                     primaryDataset.preview || [];
+
+        if (data.length === 0) {
+            return res.status(400).json({ success: false, error: 'No data available for chart generation' });
+        }
+
+        const schema = primaryDataset.ingestionMetadata?.transformedSchema ||
+                       primaryDataset.schema ||
+                       {};
+
+        console.log(`📊 [FIX 2.1.3] Generating charts for project ${projectId} with ${data.length} rows`);
+
+        const charts: any[] = [];
+        const requestedTypes = chartTypes || ['bar', 'line', 'pie'];
+        const availableColumns = columns || Object.keys(schema);
+
+        // Identify numeric and categorical columns
+        const numericColumns: string[] = [];
+        const categoricalColumns: string[] = [];
+
+        for (const col of availableColumns) {
+            const colSchema = schema[col];
+            const sampleValues = data.slice(0, 100).map((r: any) => r[col]).filter((v: any) => v != null);
+            const isNumeric = sampleValues.every((v: any) => !isNaN(Number(v)));
+
+            if (isNumeric || colSchema?.type === 'number') {
+                numericColumns.push(col);
+            } else {
+                categoricalColumns.push(col);
+            }
+        }
+
+        // Generate charts based on data types and requested types
+        for (const chartType of requestedTypes) {
+            try {
+                let chartConfig: any = null;
+
+                switch (chartType) {
+                    case 'bar':
+                        if (categoricalColumns.length > 0 && numericColumns.length > 0) {
+                            const xCol = categoricalColumns[0];
+                            const yCol = numericColumns[0];
+
+                            // Aggregate data by category
+                            const aggregated = new Map<string, number>();
+                            for (const row of data) {
+                                const key = String(row[xCol] || 'Unknown');
+                                const value = Number(row[yCol]) || 0;
+                                aggregated.set(key, (aggregated.get(key) || 0) + value);
+                            }
+
+                            chartConfig = {
+                                type: 'bar',
+                                title: `${yCol} by ${xCol}`,
+                                xAxis: { label: xCol, categories: Array.from(aggregated.keys()).slice(0, 20) },
+                                yAxis: { label: yCol },
+                                series: [{
+                                    name: yCol,
+                                    data: Array.from(aggregated.values()).slice(0, 20)
+                                }]
+                            };
+                        }
+                        break;
+
+                    case 'line':
+                        if (numericColumns.length >= 2) {
+                            const xCol = numericColumns[0];
+                            const yCol = numericColumns[1];
+
+                            chartConfig = {
+                                type: 'line',
+                                title: `${yCol} vs ${xCol}`,
+                                xAxis: { label: xCol },
+                                yAxis: { label: yCol },
+                                series: [{
+                                    name: yCol,
+                                    data: data.slice(0, 100).map((row: any) => ({
+                                        x: Number(row[xCol]) || 0,
+                                        y: Number(row[yCol]) || 0
+                                    }))
+                                }]
+                            };
+                        }
+                        break;
+
+                    case 'pie':
+                        if (categoricalColumns.length > 0) {
+                            const catCol = categoricalColumns[0];
+
+                            // Count occurrences
+                            const counts = new Map<string, number>();
+                            for (const row of data) {
+                                const key = String(row[catCol] || 'Unknown');
+                                counts.set(key, (counts.get(key) || 0) + 1);
+                            }
+
+                            chartConfig = {
+                                type: 'pie',
+                                title: `Distribution of ${catCol}`,
+                                series: [{
+                                    name: catCol,
+                                    data: Array.from(counts.entries())
+                                        .slice(0, 10)
+                                        .map(([name, value]) => ({ name, value }))
+                                }]
+                            };
+                        }
+                        break;
+
+                    case 'scatter':
+                        if (numericColumns.length >= 2) {
+                            const xCol = numericColumns[0];
+                            const yCol = numericColumns[1];
+
+                            chartConfig = {
+                                type: 'scatter',
+                                title: `${yCol} vs ${xCol}`,
+                                xAxis: { label: xCol },
+                                yAxis: { label: yCol },
+                                series: [{
+                                    name: 'Data Points',
+                                    data: data.slice(0, 500).map((row: any) => ({
+                                        x: Number(row[xCol]) || 0,
+                                        y: Number(row[yCol]) || 0
+                                    }))
+                                }]
+                            };
+                        }
+                        break;
+                }
+
+                if (chartConfig) {
+                    charts.push({
+                        id: nanoid(),
+                        ...chartConfig,
+                        generatedAt: new Date().toISOString()
+                    });
+                }
+            } catch (chartError) {
+                console.warn(`⚠️ [FIX 2.1.3] Failed to generate ${chartType} chart:`, chartError);
+            }
+        }
+
+        // Save charts to project journeyProgress
+        const project = accessCheck.project;
+        await storage.updateProject(projectId, {
+            journeyProgress: {
+                ...(project as any)?.journeyProgress,
+                generatedCharts: charts,
+                chartsGeneratedAt: new Date().toISOString()
+            }
+        } as any);
+
+        console.log(`✅ [FIX 2.1.3] Generated ${charts.length} charts for project ${projectId}`);
+
+        return res.json({
+            success: true,
+            charts,
+            count: charts.length,
+            availableColumns: {
+                numeric: numericColumns,
+                categorical: categoricalColumns
+            }
+        });
+
+    } catch (error: any) {
+        console.error('❌ [FIX 2.1.3] Error generating charts:', error);
+        return res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * GET /api/projects/:id/can-proceed
+ * Check if step can proceed based on checkpoint approvals
+ * ✅ FIX 2.2: Checkpoint gating helper endpoint
+ */
+router.get("/:id/can-proceed", ensureAuthenticated, async (req, res) => {
+    try {
+        const { id: projectId } = req.params;
+        const targetStep = req.query.targetStep as string;
+        const userId = (req.user as any)?.id;
+
+        if (!userId) {
+            return res.status(401).json({ success: false, error: "Authentication required" });
+        }
+
+        if (!targetStep) {
+            return res.status(400).json({ success: false, error: "targetStep query parameter required" });
+        }
+
+        const accessCheck = await canAccessProject(userId, projectId, isAdmin(req));
+        if (!accessCheck.allowed) {
+            const status = accessCheck.reason === 'Project not found' ? 404 : 403;
+            return res.status(status).json({ success: false, error: accessCheck.reason });
+        }
+
+        // Get pending checkpoints for this project
+        const project = accessCheck.project;
+        const journeyProgress = (project as any)?.journeyProgress || {};
+        const checkpoints = journeyProgress.checkpoints || [];
+
+        // Filter for pending checkpoints that require approval
+        const pendingCheckpoints = checkpoints.filter((cp: any) =>
+            cp.status === 'pending' && cp.requiresApproval === true
+        );
+
+        // Step order for determining if checkpoint blocks target
+        const stepOrder = ['prepare', 'upload', 'verification', 'transformation', 'plan', 'execute', 'results'];
+        const targetIndex = stepOrder.indexOf(targetStep);
+
+        // Map checkpoint stages to steps
+        const stageToStep: Record<string, string> = {
+            'data_quality_review': 'verification',
+            'pii_detection': 'verification',
+            'transformation_review': 'transformation',
+            'analysis_plan_review': 'plan',
+            'results_validation': 'execute'
+        };
+
+        let blockingCheckpoint = null;
+        for (const checkpoint of pendingCheckpoints) {
+            const checkpointStep = stageToStep[checkpoint.stage] || 'unknown';
+            const checkpointIndex = stepOrder.indexOf(checkpointStep);
+
+            // If checkpoint is for a step before target, it blocks progression
+            if (checkpointIndex >= 0 && checkpointIndex < targetIndex) {
+                blockingCheckpoint = checkpoint;
+                break;
+            }
+        }
+
+        if (blockingCheckpoint) {
+            console.log(`⚠️ [FIX 2.2] Checkpoint ${blockingCheckpoint.id} blocks progression to ${targetStep}`);
+            return res.json({
+                success: true,
+                canProceed: false,
+                blockingCheckpoint,
+                reason: `Checkpoint "${blockingCheckpoint.stage}" requires approval before proceeding to ${targetStep}`
+            });
+        }
+
+        // P1-2: Add data availability validation using WorkflowService
+        const fromStep = (req.query.fromStep as string) || journeyProgress.currentStep?.name || 'data';
+        const { WorkflowService } = await import('../workflow-service');
+
+        // Get datasets for this project
+        const projectDatasetLinks = await db.select({ dataset: datasets })
+            .from(projectDatasets)
+            .innerJoin(datasets, eq(projectDatasets.datasetId, datasets.id))
+            .where(eq(projectDatasets.projectId, projectId));
+
+        const datasetList = projectDatasetLinks.map((link: { dataset: any }) => link.dataset);
+
+        // Validate data availability for the step transition
+        const dataValidation = WorkflowService.validateStepTransition(
+            fromStep,
+            targetStep,
+            {
+                datasets: datasetList,
+                journeyProgress: journeyProgress,
+                analysisResults: (project as any)?.analysisResults,
+                requirementsDocument: journeyProgress?.requirementsDocument
+            }
+        );
+
+        if (!dataValidation.canProceed) {
+            console.log(`⚠️ [P1-2] Data availability blocks progression to ${targetStep}: ${dataValidation.missingRequirements.join(', ')}`);
+            return res.json({
+                success: true,
+                canProceed: false,
+                missingRequirements: dataValidation.missingRequirements,
+                warnings: dataValidation.warnings,
+                reason: `Missing requirements: ${dataValidation.missingRequirements.join('; ')}`
+            });
+        }
+
+        return res.json({
+            success: true,
+            canProceed: true,
+            pendingCheckpoints: pendingCheckpoints.length,
+            warnings: dataValidation.warnings // Return warnings even if can proceed
+        });
+
+    } catch (error: any) {
+        console.error('❌ [FIX 2.2] Error checking can-proceed:', error);
+        return res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Helper function for fallback response when agent unavailable
+function generateFallbackResponse(question: string, context: any, results: any): any {
+    const lowercaseQ = question.toLowerCase();
+
+    // Check for common question types
+    if (lowercaseQ.includes('status') || lowercaseQ.includes('progress')) {
+        return {
+            answer: `Your project "${context.projectName}" is currently at the "${context.currentStep}" step. You have completed ${context.completedSteps?.length || 0} steps so far with ${context.datasetCount} dataset(s) containing approximately ${context.totalRows} rows.`,
+            confidence: 0.9,
+            sources: ['project_metadata']
+        };
+    }
+
+    if (lowercaseQ.includes('insight') || lowercaseQ.includes('finding')) {
+        const insights = results.insights || [];
+        if (insights.length > 0) {
+            return {
+                answer: `Based on your analysis, here are the key findings:\n${insights.slice(0, 3).map((i: any, idx: number) => `${idx + 1}. ${i.title || i.description || i}`).join('\n')}`,
+                confidence: 0.85,
+                sources: ['analysis_results'],
+                relatedInsights: insights.slice(0, 5)
+            };
+        }
+    }
+
+    if (lowercaseQ.includes('recommend') || lowercaseQ.includes('suggestion')) {
+        const recommendations = results.recommendations || [];
+        if (recommendations.length > 0) {
+            return {
+                answer: `Here are recommendations from your analysis:\n${recommendations.slice(0, 3).map((r: any, idx: number) => `${idx + 1}. ${r.title || r.description || r}`).join('\n')}`,
+                confidence: 0.85,
+                sources: ['analysis_recommendations']
+            };
+        }
+    }
+
+    // Default response
+    return {
+        answer: `I can help you understand your project "${context.projectName}". Your project has ${context.datasetCount} dataset(s) and is currently at the "${context.currentStep}" step. You can ask me about:\n- Analysis insights and findings\n- Data quality and transformations\n- Recommendations and next steps\n- Specific metrics or patterns in your data`,
+        confidence: 0.7,
+        sources: ['project_context'],
+        suggestedFollowUps: [
+            'What are the key insights from my analysis?',
+            'What do you recommend I do next?',
+            'Can you summarize my data quality?'
+        ]
+    };
+}
+
+// Helper function to generate recommendations from insights
+function generateInsightRecommendations(insights: any[], focusArea?: string): string[] {
+    const recommendations: string[] = [];
+
+    if (insights.length === 0) {
+        recommendations.push('Complete your analysis to generate insights');
+        recommendations.push('Upload more data for comprehensive analysis');
+        return recommendations;
+    }
+
+    // Generate recommendations based on insight types
+    const hasCorrelations = insights.some((i: any) =>
+        (i.type || '').includes('correlation') || (i.title || '').toLowerCase().includes('correlation')
+    );
+    const hasTrends = insights.some((i: any) =>
+        (i.type || '').includes('trend') || (i.title || '').toLowerCase().includes('trend')
+    );
+    const hasAnomalies = insights.some((i: any) =>
+        (i.type || '').includes('anomaly') || (i.title || '').toLowerCase().includes('anomaly')
+    );
+
+    if (hasCorrelations) {
+        recommendations.push('Investigate the identified correlations for causal relationships');
+    }
+    if (hasTrends) {
+        recommendations.push('Create time-series forecasts based on the detected trends');
+    }
+    if (hasAnomalies) {
+        recommendations.push('Review anomalies to determine if they represent data quality issues or genuine patterns');
+    }
+
+    if (recommendations.length === 0) {
+        recommendations.push('Review insights and identify actionable items');
+        recommendations.push('Share findings with stakeholders');
+    }
+
+    return recommendations.slice(0, 5);
+}

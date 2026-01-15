@@ -37,8 +37,46 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
     },
   });
 
-  const schema = project.schema || {};
-  const fields = Object.keys(schema);
+  // Fetch dataset schema from backend if not available in project
+  const { data: schemaAnalysis } = useQuery({
+    queryKey: ["/api/projects", project?.id, "schema-analysis"],
+    queryFn: async () => {
+      if (!project?.id) return null;
+      try {
+        const result = await apiClient.get(`/api/projects/${project.id}/schema-analysis`);
+        return result;
+      } catch (error) {
+        console.warn('Failed to load schema analysis:', error);
+        return null;
+      }
+    },
+    enabled: !!project?.id,
+  });
+
+  // Prioritize schema from schemaAnalysis API, then project.schema, then infer from data
+  let schema = project?.schema || {};
+
+  // Use schema from backend API if available and more complete
+  if (schemaAnalysis?.schema && typeof schemaAnalysis.schema === 'object') {
+    const backendSchema = schemaAnalysis.schema;
+    const backendFields = Object.keys(backendSchema);
+    const localFields = Object.keys(schema);
+
+    // If backend has more fields, use it
+    if (backendFields.length > localFields.length) {
+      schema = backendSchema;
+    }
+  }
+
+  let fields = Object.keys(schema);
+
+  // Fallback: infer from data if schema is empty or has very few fields
+  if ((fields.length === 0 || fields.length === 1) && project?.data && Array.isArray(project.data) && project.data.length > 0) {
+    const dataFields = Object.keys(project.data[0]);
+    if (dataFields.length > fields.length) {
+      fields = dataFields;
+    }
+  }
 
   const transformationTypes = [
     { value: "filter", label: "Filter Rows", description: "Remove rows based on conditions" },
@@ -81,7 +119,7 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
   };
 
   const updateTransformation = (id: number, config: any) => {
-    setTransformations(transformations.map(t => 
+    setTransformations(transformations.map(t =>
       t.id === id ? { ...t, config } : t
     ));
   };
@@ -99,7 +137,7 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
       });
       return;
     }
-    
+
     setIsTransforming(true);
     try {
       const response = await fetch(`/api/transform-data/${project.id}`, {
@@ -118,24 +156,24 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
 
       if (response.ok) {
         const result = await response.json();
-        
+
         toast({
           title: "Transformations applied",
           description: "Preview your changes and save to project when ready",
         });
-        
+
         // Store transformation results for validation and preview
         setHasTransformedData(true);
         setTransformedDataUrl(result.downloadUrl);
         setTransformedData(result.transformedData);
-        
+
         // Show validation preview in console for now
         console.log('Transformation preview:', {
           appliedTransformations: transformations.length,
           resultData: result.transformedData?.slice(0, 5),
           downloadUrl: result.downloadUrl
         });
-        
+
         console.log('Transformation result:', result);
       } else {
         const errorData = await response.json();
@@ -156,7 +194,7 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
 
   const saveTransformationsToProject = async () => {
     if (!project?.id || !hasTransformedData) return;
-    
+
     try {
       const response = await fetch(`/api/save-transformations/${project.id}`, {
         method: 'POST',
@@ -174,12 +212,12 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
 
       if (response.ok) {
         const result = await response.json();
-        
+
         toast({
           title: "Transformations saved",
           description: "Your transformed data has been saved to the project",
         });
-        
+
         // Update project data with transformed results
         console.log('Saved transformation result:', result);
       } else {
@@ -197,7 +235,7 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
 
   const exportTransformedData = async () => {
     if (!project?.id || !hasTransformedData) return;
-    
+
     try {
       const response = await fetch(`/api/export-transformed-data/${project.id}`, {
         method: 'GET',
@@ -217,7 +255,7 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
         a.click();
         window.URL.revokeObjectURL(url);
         document.body.removeChild(a);
-        
+
         toast({
           title: "Export successful",
           description: "Transformed data has been downloaded",
@@ -259,7 +297,7 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
           const result = await response.json();
           setPreviewData(result.data);
           setShowPreview(true);
-          
+
           toast({
             title: "Data preview loaded",
             description: `Showing first 100 rows of transformed data`,
@@ -273,7 +311,7 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
         const previewData = project.data.slice(0, 100);
         setPreviewData(previewData);
         setShowPreview(true);
-        
+
         toast({
           title: "Original data preview",
           description: `Showing first 100 rows of original data (${project.data.length} total records)`,
@@ -311,7 +349,7 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
                 ))}
               </SelectContent>
             </Select>
-            
+
             <Select
               value={config.operator}
               onValueChange={(value) => updateTransformation(transformation.id, { ...config, operator: value })}
@@ -327,7 +365,7 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
                 <SelectItem value="less_than">Less Than</SelectItem>
               </SelectContent>
             </Select>
-            
+
             <Input
               placeholder="Value"
               value={config.value}
@@ -376,7 +414,7 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
                 ))}
               </SelectContent>
             </Select>
-            
+
             <Select
               value={config.newType}
               onValueChange={(value) => updateTransformation(transformation.id, { ...config, newType: value })}
@@ -479,9 +517,9 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
                         onValueChange={(value) => {
                           const newAggregations = config.aggregations?.filter((a: any) => a.field !== field) || [];
                           if (value) {
-                            newAggregations.push({ 
-                              field, 
-                              operation: value, 
+                            newAggregations.push({
+                              field,
+                              operation: value,
                               alias: existingAgg?.alias || field // Keep existing alias or default to field name
                             });
                           }
@@ -504,7 +542,7 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
                           placeholder="Column name"
                           value={existingAgg.alias || ''}
                           onChange={(e) => {
-                            const newAggregations = config.aggregations?.map((a: any) => 
+                            const newAggregations = config.aggregations?.map((a: any) =>
                               a.field === field ? { ...a, alias: e.target.value } : a
                             ) || [];
                             updateTransformation(transformation.id, { ...config, aggregations: newAggregations });
@@ -568,8 +606,59 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
     }
   };
 
+  // Show warning if no columns are available
+  if (fields.length === 0 || (fields.length === 1 && fields[0] === '')) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Database className="w-5 h-5" />
+            Data Transformations
+          </CardTitle>
+          <CardDescription>
+            Apply transformations to clean, filter, and reshape your data
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6">
+            <h4 className="font-medium text-yellow-900 mb-2 flex items-center gap-2">
+              <Database className="w-5 h-5" />
+              No Dataset Available
+            </h4>
+            <p className="text-yellow-800 text-sm mb-3">
+              To use transformations, you need to upload a dataset first. The dataset schema is not yet available for this project.
+            </p>
+            <p className="text-yellow-700 text-xs">
+              Please complete the Data Upload step before proceeding with transformations.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <div className="space-y-6">
+      {/* Dataset Info */}
+      {fields.length > 0 && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <h4 className="font-medium text-blue-900 mb-2 flex items-center gap-2">
+            <Database className="w-4 h-4" />
+            Dataset Columns ({fields.length})
+          </h4>
+          <div className="flex flex-wrap gap-2">
+            {fields.slice(0, 10).map((field) => (
+              <Badge key={field} variant="outline" className="bg-white">
+                {field}
+              </Badge>
+            ))}
+            {fields.length > 10 && (
+              <Badge variant="secondary">+{fields.length - 10} more</Badge>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Add Transformation */}
       <Card>
         <CardHeader>
@@ -617,7 +706,7 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
                 {transformations.length} transformation(s) have been applied to your data.
               </p>
               <div className="flex space-x-2">
-                <Button 
+                <Button
                   variant="outline"
                   onClick={viewTransformedData}
                   disabled={!project?.data && !hasTransformedData}
@@ -625,16 +714,16 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
                   <Eye className="w-4 h-4 mr-2" />
                   View Data
                 </Button>
-                
-                <Button 
+
+                <Button
                   variant="default"
                   onClick={saveTransformationsToProject}
                 >
                   <Save className="w-4 h-4 mr-2" />
                   Save to Project
                 </Button>
-                
-                <Button 
+
+                <Button
                   variant="outline"
                   onClick={exportTransformedData}
                 >
@@ -674,7 +763,7 @@ export default function DataTransformation({ project, onProjectUpdate }: DataTra
                     Remove
                   </Button>
                 </div>
-                
+
                 {renderTransformationConfig(transformation)}
               </div>
             ))}

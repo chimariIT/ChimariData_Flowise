@@ -158,15 +158,20 @@ test.describe('Updated User Journeys - Authentication & Ownership', () => {
     // Step 1: Register and login
     const token = await setupUser(request, REGULAR_USER);
 
-    // Step 2: Access dashboard (should work)
-    await page.goto('/dashboard');
-    await page.setExtraHTTPHeaders({
-      'Authorization': `Bearer ${token}`
-    });
-    await page.waitForLoadState('domcontentloaded');
-    await takeScreenshot(page, '01-regular-dashboard', 'Regular user dashboard');
+    // Step 2: Access dashboard (only if frontend server is running)
+    const skipFrontend = process.env.PLAYWRIGHT_SKIP_WEBSERVER === '1';
+    if (!skipFrontend) {
+      await page.goto('/dashboard');
+      await page.setExtraHTTPHeaders({
+        'Authorization': `Bearer ${token}`
+      });
+      await page.waitForLoadState('domcontentloaded');
+      await takeScreenshot(page, '01-regular-dashboard', 'Regular user dashboard');
+    } else {
+      console.log('⚠️ Skipping frontend dashboard test (PLAYWRIGHT_SKIP_WEBSERVER=1)');
+    }
 
-    // Step 3: Create project
+    // Step 3: Create project (API-based, always runs)
     const projectId = await createProject(request, token, 'Regular User Project');
 
     // Step 4: Access own project data quality (should work)

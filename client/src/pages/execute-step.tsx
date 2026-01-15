@@ -21,14 +21,15 @@ import {
   ShieldCheck,
   ArrowRight,
   Loader2,
-  RefreshCw
+  RefreshCw,
+  CreditCard
 } from "lucide-react";
 import { useProject } from "@/hooks/useProject";
 import { CheckpointDialog } from "@/components/CheckpointDialog";
 import { apiClient } from "@/lib/api";
 import type { JourneyTemplate } from '@shared/journey-templates';
 import { useToast } from "@/hooks/use-toast";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import AgentCheckpoints from "@/components/agent-checkpoints";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
@@ -36,6 +37,7 @@ import { ExecutionProgressTracker } from "@/components/ExecutionProgressTracker"
 import type { AnalysisExecutionState, ExecutionStep } from "@shared/progress-types";
 import { SmartDefaultsService, type DatasetSchema, type AnalysisRecommendation } from "@/lib/smart-defaults";
 import { realtimeClient } from "@/lib/realtime";
+import { QuotaStatusIndicator, QuotaExceededBanner, SubscriptionRequiredBanner } from "@/components/QuotaStatusIndicator";
 
 interface ExecuteStepProps {
   journeyType: string;
@@ -75,6 +77,14 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewData, setPreviewData] = useState<any>(null);
   const [artifactLoading, setArtifactLoading] = useState(false);
+
+  // P1-3 FIX: Artifact generation polling state
+  const [artifactPolling, setArtifactPolling] = useState(false);
+  const [artifactStatus, setArtifactStatus] = useState<'idle' | 'generating' | 'ready' | 'error'>('idle');
+  const [artifacts, setArtifacts] = useState<any[]>([]);
+  const [artifactPollCount, setArtifactPollCount] = useState(0);
+  const MAX_ARTIFACT_POLLS = 30; // Max 30 polls = 60 seconds (2s interval)
+
   const [selectedScenario, setSelectedScenario] = useState<string[]>([]);
   const [scenarioQuestion, setScenarioQuestion] = useState<string>("");
   const [suggestedScenarios, setSuggestedScenarios] = useState<Array<{ id: string; title: string; description: string; analyses: string[] }>>([]);
@@ -91,6 +101,24 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
 
   // GAP D: Requirements document with analysisPath and questionAnswerMapping
   const [requirementsDocument, setRequirementsDocument] = useState<any>(null);
+
+  // PHASE 6 FIX: Cost confirmation before execution
+  const [showCostConfirmation, setShowCostConfirmation] = useState(false);
+  const [estimatedCost, setEstimatedCost] = useState<number>(0);
+  const [costLoading, setCostLoading] = useState(false);
+
+  // Billing/Subscription State (Aligned with Unified Billing)
+  const [billingError, setBillingError] = useState<{
+    type: 'TIER_UPGRADE_REQUIRED' | 'QUOTA_EXCEEDED' | 'PAYMENT_REQUIRED' | null;
+    message: string;
+    options?: {
+      payOverage?: { cost: number; url: string };
+      upgradeTier?: { url: string; recommendedTier: string };
+      payPerProject?: { url: string; description: string };
+    };
+    quotaStatus?: { quota: number; used: number; remaining: number; percentUsed: number; isExceeded: boolean };
+    minimumTier?: string;
+  } | null>(null);
 
   // Note: Questions loading moved below after session is available
 
@@ -130,6 +158,20 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
   // Agent recommendation state
   const [agentRecommendations, setAgentRecommendations] = useState<any | null>(null);
   const [useAgentConfig, setUseAgentConfig] = useState(true); // Default to using agent recommendations
+
+  // =====================================================
+  // U2A2A2U WORKFLOW STATE
+  // =====================================================
+  // Track workflow phases and checkpoint for agentic execution
+  const [workflowCheckpointId, setWorkflowCheckpointId] = useState<string | null>(null);
+  const [workflowStatus, setWorkflowStatus] = useState<'idle' | 'running' | 'awaiting_approval' | 'completed' | 'failed'>('idle');
+  const [workflowPhases, setWorkflowPhases] = useState<Array<{
+    phase: string;
+    agentType?: string;
+    status: 'success' | 'partial' | 'failed' | 'skipped';
+    summary: string;
+  }>>([]);
+  const [workflowSynthesis, setWorkflowSynthesis] = useState<any>(null);
 
   const resolvedProjectId = projectId;
 
@@ -198,10 +240,59 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     const handleProgress = (event: any) => {
       const data = event.data || event;
       if (data.projectId === resolvedProjectId || event.sourceId === resolvedProjectId) {
+        // [DAY 10] Handle workflow_progress events from U2A2A2U coordination
+        if (data.eventType === 'workflow_progress') {
+          console.log('📊 [Execute] Workflow progress event:', data);
+
+          // Update workflow phases with new phase info
+          setWorkflowPhases(prev => {
+            const existingPhase = prev.find(p => p.phase === data.phase);
+            if (existingPhase) {
+              // Update existing phase
+              return prev.map(p => p.phase === data.phase
+                ? { ...p, status: data.status === 'completed' ? 'success' : data.status === 'failed' ? 'failed' : 'partial', summary: data.message }
+                : p
+              );
+            } else if (data.status === 'completed' || data.status === 'started') {
+              // Add new phase
+              return [...prev, {
+                phase: data.phase,
+                agentType: data.phase.replace(/_/g, ' '),
+                status: data.status === 'completed' ? 'success' : 'partial',
+                summary: data.message
+              }];
+            }
+            return prev;
+          });
+
+          // Update workflow status based on overall progress
+          if (data.percentComplete >= 100) {
+            setWorkflowStatus('completed');
+          } else if (data.status === 'failed') {
+            setWorkflowStatus('failed');
+          } else if (data.percentComplete > 0) {
+            setWorkflowStatus('running');
+          }
+
+          // Also update execution state progress
+          setExecutionState(prev => ({
+            ...prev,
+            overallProgress: data.percentComplete,
+            currentStep: {
+              ...prev.currentStep,
+              name: data.message || data.phase,
+              status: data.status === 'completed' ? 'completed' : 'running',
+              description: data.slaCompliant ? 'Within SLA' : (data.durationMs ? `Duration: ${Math.round(data.durationMs / 1000)}s` : prev.currentStep.description)
+            }
+          }));
+          return;
+        }
+
+        // Standard execution progress handling
         setExecutionState(prev => ({
           ...prev,
           status: data.status || prev.status,
-          overallProgress: data.overallProgress ?? prev.overallProgress,
+          overallProgress: data.overallProgress ?? data.progress ?? prev.overallProgress,
           currentStep: data.currentStep || prev.currentStep,
           completedSteps: data.completedSteps || prev.completedSteps
         }));
@@ -228,9 +319,17 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       { persistent: true }
     );
 
+    // [DAY 10] Subscribe to type:analysis for workflow progress events
+    const unsubscribeAnalysis = realtimeClient.subscribe(
+      'type:analysis',
+      handleProgress,
+      { persistent: true }
+    );
+
     return () => {
       unsubscribe();
       unsubscribeProgress();
+      unsubscribeAnalysis();
     };
   }, [resolvedProjectId, executionStatus]);
 
@@ -246,6 +345,14 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     // Load goal
     if (journeyProgress.analysisGoal) {
       setSavedGoal(journeyProgress.analysisGoal);
+    }
+
+    // CRITICAL FIX (Gap E): Restore selectedAnalyses from executionConfig if available
+    // This ensures analysis selections survive browser refresh/navigation
+    const savedExecutionConfig = (journeyProgress as any).executionConfig;
+    if (savedExecutionConfig?.selectedAnalyses?.length > 0 && selectedAnalyses.length === 0) {
+      console.log('📋 [Gap E Fix] Restoring selectedAnalyses from journeyProgress.executionConfig:', savedExecutionConfig.selectedAnalyses);
+      setSelectedAnalyses(savedExecutionConfig.selectedAnalyses);
     }
 
     // [STEP 5→6 FIX] First check if there's an approved plan with analysisSteps
@@ -280,11 +387,14 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
 
       // Auto-select analyses if nothing selected (only if no approved plan)
       if (selectedAnalyses.length === 0 && !planApproved) {
+        // PHASE 8 FIX: Replace [_\s]+ to handle both underscores and spaces in type names
+        // e.g., 'descriptive_statistics' → 'descriptive-statistics'
         const recommendedTypes = analysisPath
-          .map((a: any) => a.analysisType?.toLowerCase().replace(/\s+/g, '-'))
+          .map((a: any) => a.analysisType?.toLowerCase().replace(/[_\s]+/g, '-'))
           .filter((t: string) => t);
         if (recommendedTypes.length > 0) {
           setSelectedAnalyses(recommendedTypes);
+          console.log('✅ [Execute] Auto-selected DS-recommended analyses from journeyProgress:', recommendedTypes);
         }
       }
     }
@@ -334,12 +444,14 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
 
           // Auto-select analyses from DS recommendations if not already selected
           if (selectedAnalyses.length === 0 && response.document.analysisPath?.length > 0) {
+            // PHASE 8 FIX: Replace [_\s]+ to handle both underscores and spaces in type names
+            // e.g., 'descriptive_statistics' → 'descriptive-statistics'
             const recommendedTypes = response.document.analysisPath
-              .map((a: any) => a.analysisType?.toLowerCase().replace(/\s+/g, '-'))
+              .map((a: any) => a.analysisType?.toLowerCase().replace(/[_\s]+/g, '-'))
               .filter((t: string) => t);
             if (recommendedTypes.length > 0) {
               setSelectedAnalyses(recommendedTypes);
-              console.log('✅ [Execute] Auto-selected DS-recommended analyses:', recommendedTypes);
+              console.log('✅ [Execute] Auto-selected DS-recommended analyses from API:', recommendedTypes);
             }
           }
         } else {
@@ -368,24 +480,45 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     }
 
     const loadApprovedPlan = async () => {
+      // PHASE 6 FIX (ROOT CAUSE #4): Prioritize journeyProgress.requirementsDocument.analysisPath
+      // This ensures Execute Step uses the SAME data source that Plan Step displayed
+      // Priority: requirementsDocument (DS Agent) > plan.analysisSteps (PM Agent)
+
+      const reqDocAnalysisPath = (journeyProgress as any).requirementsDocument?.analysisPath;
+
+      if (reqDocAnalysisPath?.length > 0 && selectedAnalyses.length === 0) {
+        // Use DS Agent's analysisPath directly from SSOT (what user approved in Plan Step)
+        const dsRecommendedAnalyses = reqDocAnalysisPath
+          .map((a: any) => a.analysisType?.toLowerCase().replace(/\s+/g, '-') || a.type?.toLowerCase())
+          .filter((t: string) => t);
+
+        if (dsRecommendedAnalyses.length > 0) {
+          console.log('✅ [PHASE 6 FIX] Using DS Agent analysisPath from journeyProgress SSOT:', dsRecommendedAnalyses);
+          setSelectedAnalyses(dsRecommendedAnalyses);
+          // Don't need to fetch from API since we have SSOT
+          return;
+        }
+      }
+
+      // Fallback: Load from API if not in journeyProgress
       try {
-        console.log(`📋 [STEP 5→6 FIX] Loading approved plan: ${analysisPlanId}`);
+        console.log(`📋 [STEP 5→6 FIX] Loading approved plan from API: ${analysisPlanId}`);
         const response = await apiClient.get(`/api/projects/${resolvedProjectId}/plan`);
 
         if (response?.plan || response?.data?.plan) {
           const plan = response.plan || response.data.plan;
           setApprovedPlan(plan);
 
-          // Use plan's analysisSteps for execution
-          if (plan.analysisSteps?.length > 0) {
+          // Use plan's analysisSteps for execution (only if we didn't get from SSOT above)
+          if (plan.analysisSteps?.length > 0 && selectedAnalyses.length === 0) {
             const plannedAnalyses = plan.analysisSteps.map((step: any) =>
               step.method?.toLowerCase().replace(/\s+/g, '-') ||
               step.type?.toLowerCase() ||
               step.name?.toLowerCase().replace(/\s+/g, '-')
             ).filter((t: string) => t);
 
-            if (plannedAnalyses.length > 0 && selectedAnalyses.length === 0) {
-              console.log('✅ [STEP 5→6 FIX] Using analyses from APPROVED PLAN:', plannedAnalyses);
+            if (plannedAnalyses.length > 0) {
+              console.log('✅ [STEP 5→6 FIX] Using analyses from API PLAN (fallback):', plannedAnalyses);
               setSelectedAnalyses(plannedAnalyses);
             }
           }
@@ -396,8 +529,8 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
           }
         }
       } catch (error) {
-        console.warn('⚠️ [Execute] Could not load approved plan:', error);
-        // Fall back to requirements document
+        console.warn('⚠️ [Execute] Could not load approved plan from API:', error);
+        // Fall back to requirements document (already loaded by other effects)
       }
     };
 
@@ -455,12 +588,19 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     loadSchemaAndRecommend();
   }, [resolvedProjectId, journeyProgress?.selectedAnalysisTypes]);
 
-  // Load business templates from journeyProgress
+  // Load selected analysis types from journeyProgress
+  // ✅ FIX: For non-tech journeys, populate selectedAnalyses; for business, set selectedBusinessTemplates
   useEffect(() => {
-    if (journeyProgress?.selectedAnalysisTypes) {
+    if (journeyProgress?.selectedAnalysisTypes && journeyProgress.selectedAnalysisTypes.length > 0) {
       setSelectedBusinessTemplates(journeyProgress.selectedAnalysisTypes);
+
+      // ✅ For non-tech/technical journeys, also populate selectedAnalyses so they're pre-checked
+      if ((journeyType === 'non-tech' || journeyType === 'technical') && selectedAnalyses.length === 0) {
+        console.log('📋 [Execute] Pre-selecting analyses from journeyProgress.selectedAnalysisTypes:', journeyProgress.selectedAnalysisTypes);
+        setSelectedAnalyses(journeyProgress.selectedAnalysisTypes);
+      }
     }
-  }, [journeyType, journeyProgress]);
+  }, [journeyType, journeyProgress, selectedAnalyses.length]);
 
   useEffect(() => {
     if (journeyProgress?.agentRecommendations && journeyProgress.agentRecommendations.length > 0) {
@@ -656,35 +796,35 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
 
   const baseAnalysisOptions = getAnalysisOptions();
 
-  // CONSISTENCY FIX: When requirements are locked, prioritize showing recommended analyses
-  // This ensures users see the SAME analyses promised in Prepare step
+  // PHASE 8 FIX: When DS Agent has recommended analyses, show THOSE directly instead of hardcoded options
+  // This ensures users see the EXACT analyses that DS Agent recommended in Prepare step
   const analysisOptions = useMemo(() => {
-    const recommendedAnalyses = requirementsDocument?.analysisPath || [];
+    const recommendedAnalyses = requirementsDocument?.analysisPath ||
+                                (journeyProgress as any)?.requirementsDocument?.analysisPath || [];
 
-    if (recommendedAnalyses.length === 0) {
-      return baseAnalysisOptions;
+    // PRIORITY 1: If DS Agent has recommendations, show those directly
+    if (recommendedAnalyses.length > 0) {
+      console.log('📊 [Execute] Using DS Agent analysisPath with', recommendedAnalyses.length, 'analyses');
+      return recommendedAnalyses.map((analysis: any, index: number) => ({
+        // Normalize ID to match selection state (using [_\s]+ to handle underscores)
+        id: analysis.analysisType?.toLowerCase().replace(/[_\s]+/g, '-') || `analysis-${index}`,
+        name: analysis.analysisName || analysis.analysisType?.replace(/_/g, ' ') || `Analysis ${index + 1}`,
+        description: analysis.description || analysis.rationale || analysis.purpose || '',
+        duration: analysis.estimatedDuration || '5-10 min',
+        isRecommended: true,
+        // Preserve original data for execution
+        originalAnalysisId: analysis.analysisId,
+        analysisType: analysis.analysisType,
+        requiredElements: analysis.requiredDataElements || []
+      }));
     }
 
-    // Map recommended analyses to their IDs (normalize for matching)
-    const recommendedIds = recommendedAnalyses.map((a: any) =>
-      a.analysisType?.toLowerCase().replace(/\s+/g, '-') ||
-      a.analysisName?.toLowerCase().replace(/\s+/g, '-') ||
-      ''
-    ).filter(Boolean);
-
-    // Enrich analysis options with "isRecommended" flag
-    const enrichedOptions = baseAnalysisOptions.map(opt => ({
+    // FALLBACK: Use hardcoded options only if no DS recommendations
+    return baseAnalysisOptions.map(opt => ({
       ...opt,
-      isRecommended: recommendedIds.includes(opt.id.toLowerCase())
+      isRecommended: false
     }));
-
-    // Sort: recommended first, then others
-    return enrichedOptions.sort((a, b) => {
-      if (a.isRecommended && !b.isRecommended) return -1;
-      if (!a.isRecommended && b.isRecommended) return 1;
-      return 0;
-    });
-  }, [baseAnalysisOptions, requirementsDocument?.analysisPath]);
+  }, [baseAnalysisOptions, requirementsDocument?.analysisPath, journeyProgress]);
 
   // Count how many recommended analyses exist
   const recommendedCount = analysisOptions.filter((a: any) => a.isRecommended).length;
@@ -822,6 +962,26 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       return;
     }
 
+    // PHASE 6 FIX: Show cost confirmation before execution
+    // If cost confirmation not yet shown, fetch estimate and show dialog
+    if (!showCostConfirmation && estimatedCost === 0) {
+      setCostLoading(true);
+      try {
+        const costResponse = await apiClient.get(`/api/projects/${projectId}/cost-estimate`);
+        const cost = costResponse.estimatedCost || costResponse.totalCost || 0;
+        setEstimatedCost(cost);
+        setShowCostConfirmation(true);
+      } catch (costError) {
+        console.warn('Cost estimate unavailable, proceeding without confirmation:', costError);
+        // Proceed without cost confirmation if endpoint not available
+      }
+      setCostLoading(false);
+      return;
+    }
+
+    // Reset cost confirmation for next execution
+    setShowCostConfirmation(false);
+
     setExecutionState({
       status: 'initializing',
       overallProgress: 0,
@@ -896,17 +1056,55 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         headers['Authorization'] = `Bearer ${token}`;
       }
 
-      // GAP D: Include analysisPath and questionAnswerMapping from requirements document
-      // FIX Issue #9: Include analysisSteps from approved plan
+      // =====================================================
+      // U2A2A2U AGENTIC WORKFLOW INTEGRATION
+      // =====================================================
+      // Instead of calling analysis-execution directly, we now use the
+      // U2A2A2U (User→Agent→Agent→User) workflow which coordinates:
+      // 1. Data Engineer Agent - validates data quality
+      // 2. Data Scientist Agent - plans and executes analysis
+      // 3. Business Agent - adds industry context
+      // 4. PM Agent - synthesizes results
+      // 5. Checkpoint - user approval
+      // 6. Execution - run approved analysis
+      // =====================================================
+
+      console.log('🔄 [U2A2A2U] Starting agentic workflow for project', projectId);
+      console.log('🔄 [U2A2A2U] Agents will coordinate: DATA_ENGINEER → DATA_SCIENTIST → BUSINESS_AGENT → PM_SYNTHESIS');
+
       // FIX Phase 3: Add execution timeout (5 minutes for complex analyses)
       const EXECUTION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
       const controller = new AbortController();
       const timeoutId = setTimeout(() => {
         controller.abort();
-        console.warn('⏱️ Analysis execution timed out after 5 minutes');
+        console.warn('⏱️ U2A2A2U workflow timed out after 5 minutes');
       }, EXECUTION_TIMEOUT_MS);
 
       let response: Response;
+
+      // PHASE 9 FIX: Use direct analysis execution route instead of agent-workflow
+      // This route has better data extraction (extractDatasetRows) that properly handles
+      // transformed data from joinedData in journeyProgress
+      console.log('🔬 [PHASE 9] Using direct analysis-execution route');
+
+      // Build analysisPath for evidence chain if not already available (declared outside try for logging)
+      const analysisPathForExecution = requirementsDocument?.analysisPath ||
+        selectedAnalyses.map((type, idx) => ({
+          analysisId: `analysis_${idx}`,
+          analysisName: type.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+          analysisType: type,
+          requiredDataElements: []
+        }));
+
+      // Build questionAnswerMapping from requirements document (declared outside try for logging)
+      const questionMappingForExecution = requirementsDocument?.questionAnswerMapping ||
+        (savedQuestions || []).map((q: string, idx: number) => ({
+          questionId: `q_${idx}`,
+          questionText: q,
+          recommendedAnalyses: selectedAnalyses.slice(0, 2),
+          requiredDataElements: []
+        }));
+
       try {
         response = await fetch('/api/analysis-execution/execute', {
           method: 'POST',
@@ -915,32 +1113,77 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
           signal: controller.signal,
           body: JSON.stringify({
             projectId: projectId,
+            // Selected analysis types (required)
             analysisTypes: selectedAnalyses,
-            journeyType: journeyType,
-            // GAP D: Pass DS-recommended analyses and question mappings
-            analysisPath: requirementsDocument?.analysisPath || [],
-            questionAnswerMapping: requirementsDocument?.questionAnswerMapping || [],
-            // FIX Issue #9: Pass the full analysisSteps from the approved plan
-            analysisSteps: approvedPlan?.analysisSteps || [],
-            templateContext: journeyType === 'business' ? {
-              selectedTemplates: selectedBusinessTemplates,
-              primaryTemplate: primaryBusinessTemplate
-            } : undefined
+            // CRITICAL: Pass DS-recommended analyses with priority and details
+            analysisPath: analysisPathForExecution,
+            // CRITICAL: Pass question-to-analysis mapping for evidence chain
+            questionAnswerMapping: questionMappingForExecution,
+            // Preview mode flag
+            previewOnly: false
           })
         });
       } catch (fetchError: any) {
         clearTimeout(timeoutId);
         if (fetchError.name === 'AbortError') {
-          throw new Error('Analysis execution timed out after 5 minutes. Your analysis may be processing in the background - please check back in a few minutes.');
+          throw new Error('Agentic workflow timed out after 5 minutes. Your analysis may be processing in the background - please check back in a few minutes.');
         }
         throw fetchError;
       }
       clearTimeout(timeoutId);
-      console.log('🚀 [Execute] Sent analysisPath:', requirementsDocument?.analysisPath?.length || 0, 'analyses');
-      console.log('📋 [Issue #9 Fix] Sent analysisSteps:', approvedPlan?.analysisSteps?.length || 0, 'steps from plan');
+
+      console.log('🔄 [PHASE 9] Analysis execution request sent');
+      console.log('📈 [PHASE 9] Analysis types:', selectedAnalyses.length);
+      console.log('📋 [PHASE 9] Analysis path items:', analysisPathForExecution.length);
+      console.log('❓ [PHASE 9] Question mappings:', questionMappingForExecution.length);
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => null);
+
+        // Handle billing-specific error codes
+        if (response.status === 402 || response.status === 403) {
+          const errorCode = errorData?.code;
+
+          if (errorCode === 'TIER_UPGRADE_REQUIRED') {
+            console.log('🔒 [Billing] Tier upgrade required');
+            setBillingError({
+              type: 'TIER_UPGRADE_REQUIRED',
+              message: errorData?.message || 'Your subscription tier does not include access to this journey type.',
+              minimumTier: errorData?.minimumTier,
+              options: {
+                upgradeTier: { url: errorData?.upgradeUrl || '/billing/upgrade', recommendedTier: errorData?.minimumTier }
+              }
+            });
+            setExecutionState(prev => ({ ...prev, status: 'idle', overallProgress: 0 }));
+            return; // Don't throw, let the UI show the billing error
+          }
+
+          if (errorCode === 'QUOTA_EXCEEDED') {
+            console.log('⚠️ [Billing] Quota exceeded');
+            setBillingError({
+              type: 'QUOTA_EXCEEDED',
+              message: errorData?.message || 'Your analysis quota has been exceeded.',
+              quotaStatus: errorData?.quotaStatus,
+              options: errorData?.options
+            });
+            setExecutionState(prev => ({ ...prev, status: 'idle', overallProgress: 0 }));
+            return; // Don't throw, let the UI show the billing error
+          }
+
+          if (errorCode === 'PAYMENT_REQUIRED') {
+            console.log('💳 [Billing] Payment required');
+            setBillingError({
+              type: 'PAYMENT_REQUIRED',
+              message: errorData?.message || 'Payment is required to execute this analysis.',
+              options: {
+                payPerProject: { url: errorData?.paymentUrl || `/projects/${projectId}/payment`, description: 'Pay for this project' }
+              }
+            });
+            setExecutionState(prev => ({ ...prev, status: 'idle', overallProgress: 0 }));
+            return; // Don't throw, let the UI show the billing error
+          }
+        }
+
         const errorMessage = errorData?.error
           || errorData?.message
           || `Analysis execution failed (HTTP ${response.status}). Please check your data and try again.`;
@@ -960,70 +1203,83 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         throw new Error(data.error || 'Analysis execution failed');
       }
 
-      // ✅ Validate response data structure
-      if (!data.results) {
-        throw new Error('Analysis results missing from response');
+      // =====================================================
+      // U2A2A2U WORKFLOW RESPONSE HANDLING
+      // =====================================================
+      // The workflow returns phases, status, and optional checkpointId
+      const workflow = data.workflow;
+
+      if (!workflow) {
+        throw new Error('Workflow response missing from API');
       }
 
-      console.log('✅ Analysis completed successfully');
-      console.log(`📈 Results: ${data.results?.insightCount || 0} insights, ${data.results?.recommendationCount || 0} recommendations`);
+      console.log('🔄 [U2A2A2U] Workflow response received');
+      console.log(`🔄 [U2A2A2U] Status: ${workflow.status}, Phases: ${workflow.phases?.length || 0}`);
+      console.log(`🔄 [U2A2A2U] Current phase: ${workflow.currentPhase}`);
 
-      setExecutionState(prev => ({
-        ...prev,
-        status: 'completed',
-        overallProgress: 100,
-        currentStep: { id: 'complete', name: 'Analysis Complete', status: 'completed', description: 'All steps finished successfully.' },
-        completedSteps: [...prev.completedSteps, prev.currentStep]
-      }));
+      // Store workflow phases for display
+      setWorkflowPhases(workflow.phases || []);
+      setWorkflowStatus(workflow.status);
 
+      // =====================================================
+      // HANDLE AWAITING_APPROVAL STATUS
+      // =====================================================
+      // If workflow needs user approval, show checkpoint dialog
+      if (workflow.status === 'awaiting_approval' && workflow.checkpointId) {
+        console.log(`✋ [U2A2A2U] Workflow awaiting approval. CheckpointId: ${workflow.checkpointId}`);
+        setWorkflowCheckpointId(workflow.checkpointId);
 
-      const payload = data.results;
-      setExecutionResults(payload);
-
-      // Store execution summary for pricing/session validation
-      // Add comprehensive null checks to prevent crashes
-      const pricingSummary = {
-        totalAnalyses: payload?.analysisTypes?.length ?? payload?.summary?.totalAnalyses ?? selectedAnalyses.length,
-        executionTime: payload?.summary?.executionTime ?? (payload?.executionTimeSeconds ? `${payload.executionTimeSeconds}s` : '0s'),
-        resultsGenerated: payload?.insightCount ?? payload?.summary?.dataRowsProcessed ?? 0,
-        insightsFound: payload?.insightCount ?? 0,
-        recommendationsFound: payload?.recommendationCount ?? payload?.recommendations?.length ?? 0,
-        qualityScore: payload?.qualityScore ?? payload?.summary?.qualityScore ?? 0,
-        dataSize: payload?.dataRowsProcessed ?? payload?.summary?.dataRowsProcessed ?? 0,
-        datasetCount: payload?.metadata?.datasetCount ?? payload?.datasetCount ?? 1,
-        selectedAnalyses,
-        // Add extra null checks for estimatedCost calculation
-        estimatedCost: payload?.cost ?? payload?.costBreakdown?.total ?? payload?.estimatedCost?.total ?? 0
-      };
-
-      // Update journeyProgress with results (SSOT)
-      try {
-        updateProgress({
-          executionCompletedAt: new Date().toISOString(),
-          analysisResultsId: data.results?.id || data.results?.analysisId,
-          artifactIds: data.results?.artifactIds || [],
-          executionSummary: {
-            totalAnalyses: pricingSummary.totalAnalyses,
-            dataSize: pricingSummary.dataSize,
-            executionTime: pricingSummary.executionTime,
-            resultsGenerated: pricingSummary.resultsGenerated,
-            insightsFound: pricingSummary.insightsFound,
-            recommendationsFound: pricingSummary.recommendationsFound,
-            qualityScore: pricingSummary.qualityScore,
-            datasetCount: pricingSummary.datasetCount
-          },
-          costEstimate: {
-            amount: pricingSummary.estimatedCost,
-            currency: 'USD',
-            lockedAt: new Date().toISOString(),
+        // Get synthesis results for checkpoint display
+        const synthesisPhase = workflow.phases?.find((p: any) => p.phase === 'synthesis');
+        if (synthesisPhase?.resultId) {
+          try {
+            const latestRes = await fetch(`/api/agent-workflow/${projectId}/results/latest`, {
+              headers,
+              credentials: 'include'
+            });
+            if (latestRes.ok) {
+              const latestData = await latestRes.json();
+              const pmResult = latestData.results?.project_manager;
+              if (pmResult?.output?.result) {
+                setWorkflowSynthesis(pmResult.output.result);
+              }
+            }
+          } catch (e) {
+            console.warn('Failed to fetch synthesis details:', e);
           }
+        }
+
+        setExecutionState(prev => ({
+          ...prev,
+          status: 'running',
+          overallProgress: 75,
+          currentStep: {
+            id: 'checkpoint',
+            name: 'Awaiting Your Approval',
+            status: 'running',
+            description: 'AI agents have prepared an analysis plan. Please review and approve.'
+          }
+        }));
+
+        // Show the checkpoint dialog
+        setShowCheckpoint(true);
+
+        toast({
+          title: "Approval Required",
+          description: "AI agents have prepared an analysis plan. Please review and approve to continue.",
         });
 
-        // Backwards compatibility: Also cache in localStorage
-        localStorage.setItem('chimari_execution_results', JSON.stringify(payload));
+        return; // Wait for user to approve via handleWorkflowApproval
+      }
 
-      } catch (error) {
-        console.error('Failed to save execution results to progress:', error);
+      // =====================================================
+      // HANDLE COMPLETED STATUS
+      // =====================================================
+      if (workflow.status === 'completed') {
+        await handleWorkflowCompleted(workflow, headers);
+      } else if (workflow.status === 'failed') {
+        const failedPhase = workflow.phases?.find((p: any) => p.status === 'failed');
+        throw new Error(failedPhase?.summary || 'Workflow failed');
       }
 
     } catch (error: any) {
@@ -1039,6 +1295,347 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       toast({
         title: "Analysis Failed",
         description: errorMsg,
+        variant: "destructive"
+      });
+    }
+  };
+
+  // =====================================================
+  // U2A2A2U WORKFLOW HELPER FUNCTIONS
+  // =====================================================
+
+  /**
+   * Handle workflow completion - extract results and update state
+   */
+  const handleWorkflowCompleted = async (workflow: any, headers: Record<string, string>) => {
+    console.log('✅ [U2A2A2U] Workflow completed successfully');
+
+    // Fetch latest results from all agents
+    const projectId = resolvedProjectId;
+    let payload: any = null;
+
+    try {
+      const resultsRes = await fetch(`/api/agent-workflow/${projectId}/results/latest`, {
+        headers,
+        credentials: 'include'
+      });
+
+      if (resultsRes.ok) {
+        const resultsData = await resultsRes.json();
+
+        // Extract synthesis from PM agent
+        const pmResult = resultsData.results?.project_manager;
+        const dsResult = resultsData.results?.data_scientist;
+
+        // Build payload from agent results
+        payload = {
+          // From DS agent
+          insights: dsResult?.output?.result?.insights || [],
+          correlations: dsResult?.output?.result?.correlations || [],
+          mlModels: dsResult?.output?.result?.mlModels || [],
+          recommendations: [
+            ...(dsResult?.output?.recommendations || []),
+            ...(pmResult?.output?.recommendations || [])
+          ],
+          // From PM synthesis
+          formatted: pmResult?.output?.result?.formatted || {},
+          questionAnswers: pmResult?.output?.result?.questionAnswers || [],
+          executiveSummary: pmResult?.output?.result?.formatted?.executiveSummary ||
+                           pmResult?.output?.result?.summaryForUser,
+          // Metadata
+          workflowId: workflow.workflowId,
+          executionTimeMs: workflow.executionTimeMs,
+          phases: workflow.phases,
+          insightCount: dsResult?.output?.result?.insights?.length || 0,
+          recommendationCount: (dsResult?.output?.recommendations?.length || 0) +
+                              (pmResult?.output?.recommendations?.length || 0)
+        };
+
+        console.log(`📈 [U2A2A2U] Results: ${payload.insightCount} insights, ${payload.recommendationCount} recommendations`);
+      }
+    } catch (e) {
+      console.warn('Failed to fetch workflow results:', e);
+    }
+
+    // Fallback if no results fetched
+    if (!payload) {
+      payload = {
+        insights: [],
+        recommendations: [],
+        workflowId: workflow.workflowId,
+        executionTimeMs: workflow.executionTimeMs,
+        phases: workflow.phases,
+        insightCount: 0,
+        recommendationCount: 0
+      };
+    }
+
+    setExecutionState(prev => ({
+      ...prev,
+      status: 'completed',
+      overallProgress: 100,
+      currentStep: {
+        id: 'complete',
+        name: 'Analysis Complete',
+        status: 'completed',
+        description: 'All AI agents have finished processing.'
+      },
+      completedSteps: [...prev.completedSteps, prev.currentStep]
+    }));
+
+    setExecutionResults(payload);
+    setWorkflowStatus('completed');
+
+    // Store execution summary
+    const pricingSummary = {
+      totalAnalyses: selectedAnalyses.length,
+      executionTime: `${Math.round(workflow.executionTimeMs / 1000)}s`,
+      resultsGenerated: payload.insightCount || 0,
+      insightsFound: payload.insightCount || 0,
+      recommendationsFound: payload.recommendationCount || 0,
+      qualityScore: 85, // Default quality score
+      dataSize: 0,
+      datasetCount: 1,
+      selectedAnalyses,
+      estimatedCost: 0
+    };
+
+    // Update journeyProgress with results (SSOT)
+    try {
+      updateProgress({
+        executionCompletedAt: new Date().toISOString(),
+        analysisResultsId: workflow.workflowId,
+        artifactIds: [],
+        executionSummary: {
+          totalAnalyses: pricingSummary.totalAnalyses,
+          dataSize: pricingSummary.dataSize,
+          executionTime: pricingSummary.executionTime,
+          resultsGenerated: pricingSummary.resultsGenerated,
+          insightsFound: pricingSummary.insightsFound,
+          recommendationsFound: pricingSummary.recommendationsFound,
+          qualityScore: pricingSummary.qualityScore,
+          datasetCount: pricingSummary.datasetCount
+        },
+        costEstimate: {
+          amount: pricingSummary.estimatedCost,
+          currency: 'USD',
+          lockedAt: new Date().toISOString(),
+        }
+      });
+
+      localStorage.setItem('chimari_execution_results', JSON.stringify(payload));
+
+      // P1-3 FIX: Start artifact generation polling after execution completes
+      startArtifactPolling();
+    } catch (error) {
+      console.error('Failed to save execution results to progress:', error);
+    }
+  };
+
+  /**
+   * P1-3 FIX: Poll for artifact generation status after execution completes
+   * Artifacts are generated asynchronously by the backend after analysis execution
+   */
+  const startArtifactPolling = () => {
+    console.log('📦 [P1-3] Starting artifact generation polling...');
+    setArtifactPolling(true);
+    setArtifactStatus('generating');
+    setArtifactPollCount(0);
+  };
+
+  // P1-3 FIX: Artifact polling effect
+  useEffect(() => {
+    if (!artifactPolling || !resolvedProjectId) return;
+
+    const pollArtifacts = async () => {
+      try {
+        console.log(`📦 [P1-3] Polling artifacts (attempt ${artifactPollCount + 1}/${MAX_ARTIFACT_POLLS})...`);
+
+        const response = await apiClient.get(`/api/projects/${resolvedProjectId}/artifacts`);
+        const fetchedArtifacts = response?.artifacts || [];
+
+        if (fetchedArtifacts.length > 0) {
+          // Check if any artifacts are still generating
+          const pendingArtifacts = fetchedArtifacts.filter(
+            (a: any) => a.status === 'generating' || a.status === 'pending' || a.status === 'created'
+          );
+          const readyArtifacts = fetchedArtifacts.filter(
+            (a: any) => a.status === 'ready' || a.status === 'completed'
+          );
+
+          setArtifacts(fetchedArtifacts);
+
+          if (pendingArtifacts.length === 0 && readyArtifacts.length > 0) {
+            // All artifacts are ready
+            console.log(`✅ [P1-3] All ${readyArtifacts.length} artifacts are ready!`);
+            setArtifactStatus('ready');
+            setArtifactPolling(false);
+
+            // Update journeyProgress with artifact IDs
+            const artifactIds = readyArtifacts.map((a: any) => a.id);
+            updateProgress({
+              artifactIds,
+              artifactsGeneratedAt: new Date().toISOString()
+            });
+
+            toast({
+              title: "Artifacts Ready",
+              description: `${readyArtifacts.length} artifact(s) have been generated and are ready for download.`,
+            });
+          } else if (readyArtifacts.length > 0) {
+            // Some artifacts ready, some still generating
+            console.log(`⏳ [P1-3] ${readyArtifacts.length} artifacts ready, ${pendingArtifacts.length} still generating...`);
+            setArtifacts(fetchedArtifacts);
+          }
+        }
+
+        // Check if we've exceeded max polls
+        if (artifactPollCount >= MAX_ARTIFACT_POLLS) {
+          console.log('⚠️ [P1-3] Max polling attempts reached, stopping poll...');
+          setArtifactPolling(false);
+          if (artifacts.length === 0) {
+            setArtifactStatus('error');
+            toast({
+              title: "Artifact Generation Timeout",
+              description: "Artifacts are taking longer than expected. You can check back later on the Results page.",
+              variant: "default"
+            });
+          }
+        }
+      } catch (error) {
+        console.error('❌ [P1-3] Error polling artifacts:', error);
+        // Don't stop polling on transient errors, just increment counter
+      }
+
+      setArtifactPollCount(prev => prev + 1);
+    };
+
+    const pollInterval = setInterval(pollArtifacts, 2000); // Poll every 2 seconds
+
+    // Initial poll
+    pollArtifacts();
+
+    return () => clearInterval(pollInterval);
+  }, [artifactPolling, resolvedProjectId, artifactPollCount, artifacts.length, updateProgress, toast]);
+
+  /**
+   * Handle workflow approval - continue workflow after user approves checkpoint
+   */
+  const handleWorkflowApproval = async (approved: boolean, feedback?: string) => {
+    const projectId = resolvedProjectId;
+    const checkpointId = workflowCheckpointId;
+
+    if (!projectId || !checkpointId) {
+      toast({
+        title: "Error",
+        description: "Missing project or checkpoint ID",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    setShowCheckpoint(false);
+    setCheckpointApproved(approved);
+
+    if (!approved) {
+      console.log('❌ [U2A2A2U] User rejected the analysis plan');
+      setExecutionState(prev => ({
+        ...prev,
+        status: 'idle',
+        overallProgress: 0,
+        currentStep: {
+          id: 'rejected',
+          name: 'Plan Rejected',
+          status: 'failed',
+          description: 'You rejected the analysis plan. Please adjust your selections and try again.'
+        }
+      }));
+      setWorkflowStatus('failed');
+
+      toast({
+        title: "Plan Rejected",
+        description: "You can adjust your analysis selections and try again.",
+        variant: "default"
+      });
+      return;
+    }
+
+    console.log(`▶️ [U2A2A2U] User approved. Continuing workflow with checkpoint: ${checkpointId}`);
+
+    setExecutionState(prev => ({
+      ...prev,
+      overallProgress: 85,
+      currentStep: {
+        id: 'executing',
+        name: 'Executing Approved Analysis',
+        status: 'running',
+        description: 'Running the approved analysis plan...'
+      }
+    }));
+
+    try {
+      const token = localStorage.getItem('auth_token');
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      // Call continue endpoint
+      const response = await fetch('/api/agent-workflow/continue', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({
+          projectId,
+          checkpointId,
+          feedback: feedback || 'approved'
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        throw new Error(errorData?.error || 'Failed to continue workflow');
+      }
+
+      const data = await response.json();
+
+      if (!data.success || !data.workflow) {
+        throw new Error(data.error || 'Invalid response from workflow continuation');
+      }
+
+      console.log('✅ [U2A2A2U] Workflow continuation complete');
+
+      // Update phases
+      setWorkflowPhases(prev => [...prev, ...(data.workflow.phases || [])]);
+
+      // Handle completed workflow
+      await handleWorkflowCompleted(data.workflow, headers);
+
+      toast({
+        title: "Analysis Complete",
+        description: "Your analysis has been executed successfully!",
+      });
+
+    } catch (error: any) {
+      console.error('❌ [U2A2A2U] Workflow continuation failed:', error);
+      setExecutionState(prev => ({
+        ...prev,
+        status: 'failed',
+        error: error.message,
+        currentStep: {
+          id: 'failed',
+          name: 'Execution Failed',
+          status: 'failed',
+          description: error.message
+        }
+      }));
+      setWorkflowStatus('failed');
+
+      toast({
+        title: "Execution Failed",
+        description: error.message,
         variant: "destructive"
       });
     }
@@ -1127,10 +1724,10 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
 
   // Phase 3 - Task 3.3: Checkpoint handlers
   // FIX Phase 3: Remove hardcoded delay by using async/await properly
+  // UPDATED: Integrated with U2A2A2U workflow approval
   const handleCheckpointApprove = async (feedback?: string) => {
     console.log('Analysis plan approved', feedback ? `with feedback: ${feedback}` : '');
-    setCheckpointApproved(true);
-    setShowCheckpoint(false);
+
     // Store approval decision in project history (SSOT)
     try {
       const history = journeyProgress?.checkpointHistory || [];
@@ -1141,16 +1738,28 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         analysesSelected: selectedAnalyses
       };
 
-      // Use async version and await it before triggering execution
       await updateProgressAsync({
         checkpointHistory: [...history, newRecord]
       });
-      console.log('✅ [Phase 3 Fix] Checkpoint history updated, now executing analysis');
+      console.log('✅ [Phase 3 Fix] Checkpoint history updated');
     } catch (error) {
       console.error('Failed to update checkpoint history:', error);
     }
-    // Trigger execution immediately - no artificial delay needed
-    handleExecuteAnalysis();
+
+    // =====================================================
+    // U2A2A2U WORKFLOW APPROVAL
+    // =====================================================
+    // If we have a workflow checkpoint, continue the U2A2A2U workflow
+    if (workflowCheckpointId) {
+      console.log('🔄 [U2A2A2U] Continuing workflow after checkpoint approval');
+      await handleWorkflowApproval(true, feedback);
+    } else {
+      // Legacy path: Direct execution (not using U2A2A2U)
+      console.log('⚡ [Legacy] Direct execution without U2A2A2U workflow');
+      setCheckpointApproved(true);
+      setShowCheckpoint(false);
+      handleExecuteAnalysis();
+    }
   };
 
   const handleCheckpointModify = (modifications: string) => {
@@ -1172,12 +1781,27 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     } catch (error) {
       console.error('Failed to update checkpoint history:', error);
     }
-    // Show message to user
-    alert(`Your modification request has been recorded:\n\n"${modifications}"\n\nPlease adjust your analysis selection and try again.`);
+
+    // Reset workflow checkpoint if we're modifying
+    if (workflowCheckpointId) {
+      setWorkflowCheckpointId(null);
+      setWorkflowStatus('idle');
+      setWorkflowPhases([]);
+    }
+
+    toast({
+      title: "Modification Requested",
+      description: "Please adjust your analysis selection and try again.",
+    });
   };
 
   const handleCheckpointClose = () => {
     setShowCheckpoint(false);
+
+    // If closing during U2A2A2U workflow, treat as rejection
+    if (workflowCheckpointId && workflowStatus === 'awaiting_approval') {
+      handleWorkflowApproval(false, 'User closed checkpoint dialog');
+    }
   };
 
   // For non-tech, selecting a scenario toggles it and accumulates analyses
@@ -1269,7 +1893,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
 
   const getEstimatedDuration = () => {
     const totalMinutes = selectedAnalyses.reduce((total, analysisId) => {
-      const analysis = analysisOptions.find(opt => opt.id === analysisId);
+      const analysis = analysisOptions.find((opt: { id: string; duration?: string }) => opt.id === analysisId);
       const duration = analysis?.duration || '5 min';
       return total + parseInt(duration.split('-')[0]);
     }, 0);
@@ -1343,10 +1967,76 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         onClose={handleCheckpointClose}
         onApprove={handleCheckpointApprove}
         onModify={handleCheckpointModify}
-        analysisSteps={analysisOptions.filter(a => selectedAnalyses.includes(a.id))}
+        analysisSteps={analysisOptions.filter((a: { id: string }) => selectedAnalyses.includes(a.id))}
         journeyType={journeyType}
         estimatedDuration={selectedAnalyses.length > 0 ? `${selectedAnalyses.length * 5}-${selectedAnalyses.length * 8} minutes` : undefined}
       />
+
+      {/* PHASE 6 FIX: Cost Confirmation Dialog */}
+      <Dialog open={showCostConfirmation} onOpenChange={setShowCostConfirmation}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <BarChart3 className="w-5 h-5 text-blue-600" />
+              Confirm Analysis Execution
+            </DialogTitle>
+            <DialogDescription>
+              Review the estimated cost before proceeding with analysis.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+              <p className="text-sm text-gray-600 mb-1">Estimated Cost</p>
+              <p className="text-3xl font-bold text-blue-700">
+                ${estimatedCost.toFixed(2)}
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-start gap-2 text-sm text-gray-600">
+                <Eye className="w-4 h-4 mt-0.5 text-gray-400" />
+                <span>You'll see a <strong>preview</strong> of results after execution</span>
+              </div>
+              <div className="flex items-start gap-2 text-sm text-gray-600">
+                <Shield className="w-4 h-4 mt-0.5 text-gray-400" />
+                <span>Pay after reviewing to unlock <strong>full insights</strong></span>
+              </div>
+              <div className="flex items-start gap-2 text-sm text-gray-600">
+                <Download className="w-4 h-4 mt-0.5 text-gray-400" />
+                <span>Includes PDF reports and data exports</span>
+              </div>
+            </div>
+
+            <p className="text-xs text-gray-500 bg-gray-50 rounded p-2">
+              Selected analyses: {selectedAnalyses.length} ({selectedAnalyses.join(', ')})
+            </p>
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowCostConfirmation(false);
+                setEstimatedCost(0);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                setShowCostConfirmation(false);
+                // Re-call handleExecuteAnalysis which will now proceed past the cost check
+                handleExecuteAnalysis();
+              }}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              <Play className="w-4 h-4 mr-2" />
+              Execute Analysis
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={isPreviewOpen}
@@ -1538,11 +2228,17 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
                   <p className="text-xs text-gray-600 mt-1">{analysis.description}</p>
                   {analysis.techniques && analysis.techniques.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-2">
-                      {analysis.techniques.slice(0, 3).map((technique: string, idx: number) => (
-                        <Badge key={idx} variant="secondary" className="text-xs">
-                          {technique}
-                        </Badge>
-                      ))}
+                      {analysis.techniques.slice(0, 3).map((technique: any, idx: number) => {
+                        // Handle both string and object format
+                        const techniqueName = typeof technique === 'string'
+                          ? technique
+                          : (technique.name || technique.technique || technique.type || 'Unknown');
+                        return (
+                          <Badge key={idx} variant="secondary" className="text-xs">
+                            {techniqueName}
+                          </Badge>
+                        );
+                      })}
                       {analysis.techniques.length > 3 && (
                         <Badge variant="secondary" className="text-xs">+{analysis.techniques.length - 3} more</Badge>
                       )}
@@ -1875,17 +2571,94 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       {/* Execution Controls */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            {getExecutionStatusIcon()}
-            Analysis Execution
-          </CardTitle>
-          <CardDescription>
-            {getExecutionStatusText()}
-          </CardDescription>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                {getExecutionStatusIcon()}
+                Analysis Execution
+              </CardTitle>
+              <CardDescription>
+                {getExecutionStatusText()}
+              </CardDescription>
+            </div>
+            {/* Subscription & Quota Status */}
+            <QuotaStatusIndicator
+              featureId="statistical_analysis"
+              complexity="small"
+              className="hidden md:flex"
+            />
+          </div>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
-            {executionStatus === 'idle' && (
+            {/* Billing/Subscription Error Banners */}
+            {billingError?.type === 'TIER_UPGRADE_REQUIRED' && (
+              <SubscriptionRequiredBanner
+                message={billingError.message}
+                minimumTier={billingError.minimumTier}
+                onUpgrade={() => {
+                  setBillingError(null);
+                  window.location.href = billingError.options?.upgradeTier?.url || '/billing/upgrade';
+                }}
+              />
+            )}
+
+            {billingError?.type === 'QUOTA_EXCEEDED' && (
+              <QuotaExceededBanner
+                quotaStatus={billingError.quotaStatus}
+                options={billingError.options}
+                onUpgrade={() => {
+                  setBillingError(null);
+                  window.location.href = billingError.options?.upgradeTier?.url || '/billing/upgrade';
+                }}
+                onPayOverage={() => {
+                  setBillingError(null);
+                  if (billingError.options?.payOverage?.url) {
+                    window.location.href = billingError.options.payOverage.url;
+                  }
+                }}
+                onPayPerProject={() => {
+                  setBillingError(null);
+                  window.location.href = billingError.options?.payPerProject?.url || `/projects/${projectId}/payment`;
+                }}
+              />
+            )}
+
+            {billingError?.type === 'PAYMENT_REQUIRED' && (
+              <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="flex items-start gap-3">
+                  <CreditCard className="w-5 h-5 text-blue-600 mt-0.5" />
+                  <div className="flex-1">
+                    <h4 className="font-medium text-blue-800">Payment Required</h4>
+                    <p className="text-sm text-blue-700 mt-1">{billingError.message}</p>
+                    <div className="flex gap-2 mt-3">
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          setBillingError(null);
+                          window.location.href = billingError.options?.payPerProject?.url || `/projects/${projectId}/payment`;
+                        }}
+                        className="bg-blue-600 hover:bg-blue-700"
+                      >
+                        Pay for Analysis
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setBillingError(null);
+                          window.location.href = '/billing/subscribe';
+                        }}
+                      >
+                        Subscribe Instead
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {executionStatus === 'idle' && !billingError && (
               <div className="text-center py-8">
                 <p className="text-gray-600 mb-4">
                   Select analyses above to begin execution
@@ -2097,7 +2870,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
             <p className="text-sm text-green-800 font-medium mb-3">
               ✅ Your analysis has been completed successfully! Results are ready for review and pricing.
             </p>
-            <div className="flex items-center gap-2 mb-4">
+            <div className="flex items-center gap-2 mb-4 flex-wrap">
               <Badge variant="secondary" className="bg-green-100 text-green-800">
                 {executionSummary.totalAnalyses} analyses completed
               </Badge>
@@ -2108,6 +2881,66 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
                 {executionSummary.qualityScore}% quality score
               </Badge>
             </div>
+
+            {/* P1-3 FIX: Artifact Generation Status Indicator */}
+            <div className="mb-4 p-3 rounded-md border bg-white">
+              <div className="flex items-center gap-2">
+                {artifactStatus === 'generating' && (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                    <span className="text-sm text-blue-800 font-medium">
+                      Generating artifacts ({artifactPollCount}/{MAX_ARTIFACT_POLLS})...
+                    </span>
+                    {artifacts.length > 0 && (
+                      <Badge variant="outline" className="ml-2">
+                        {artifacts.filter((a: any) => a.status === 'ready' || a.status === 'completed').length}/{artifacts.length} ready
+                      </Badge>
+                    )}
+                  </>
+                )}
+                {artifactStatus === 'ready' && (
+                  <>
+                    <CheckCircle className="h-4 w-4 text-green-600" />
+                    <span className="text-sm text-green-800 font-medium">
+                      {artifacts.length} artifact(s) ready for download
+                    </span>
+                  </>
+                )}
+                {artifactStatus === 'error' && (
+                  <>
+                    <AlertCircle className="h-4 w-4 text-amber-600" />
+                    <span className="text-sm text-amber-800 font-medium">
+                      Artifact generation timed out. Check Results page later.
+                    </span>
+                  </>
+                )}
+                {artifactStatus === 'idle' && artifacts.length === 0 && (
+                  <>
+                    <Clock className="h-4 w-4 text-gray-500" />
+                    <span className="text-sm text-gray-600">
+                      Artifacts will be generated shortly...
+                    </span>
+                  </>
+                )}
+              </div>
+              {/* Show available artifacts */}
+              {artifacts.length > 0 && artifactStatus === 'ready' && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {artifacts.map((artifact: any) => (
+                    <Badge
+                      key={artifact.id}
+                      variant="outline"
+                      className="text-xs bg-blue-50 text-blue-700 border-blue-200 cursor-pointer hover:bg-blue-100"
+                      title={`Type: ${artifact.type}`}
+                    >
+                      <Download className="h-3 w-3 mr-1" />
+                      {artifact.type}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+
             {onNext && (
               <Button
                 onClick={async () => {

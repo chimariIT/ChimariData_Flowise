@@ -3,7 +3,7 @@ import { JourneyType, JourneyTypeEnum } from '@shared/canonical-types';
 import { nanoid } from 'nanoid';
 import { ensureAuthenticated } from './auth';
 import { storage } from '../services/storage';
-import { PythonProcessor } from '../python-processor';
+import { PythonProcessor } from '../services/python-processor';
 import { audienceFormatter, AudienceContext } from '../services/audience-formatter';
 
 const router = Router();
@@ -15,7 +15,7 @@ const coerceJourneyType = (value: unknown): JourneyType => {
       return value as JourneyType;
     }
   }
-  return 'ai_guided';
+  return 'non-tech';
 };
 
 const ensureArray = <T>(value: unknown): T[] => (Array.isArray(value) ? value as T[] : []);
@@ -37,9 +37,9 @@ router.post('/analyze-data/:projectId', ensureAuthenticated, async (req, res) =>
     const userId = (req.user as any)?.id;
 
     if (!analysisType) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Analysis type is required' 
+      return res.status(400).json({
+        success: false,
+        error: 'Analysis type is required'
       });
     }
 
@@ -47,9 +47,9 @@ router.post('/analyze-data/:projectId', ensureAuthenticated, async (req, res) =>
     const project = await storage.getProject(projectId);
     const owner = (project as any)?.ownerId ?? (project as any)?.userId;
     if (!project || owner !== userId) {
-      return res.status(404).json({ 
-        success: false, 
-        error: 'Project not found or access denied' 
+      return res.status(404).json({
+        success: false,
+        error: 'Project not found or access denied'
       });
     }
 
@@ -214,17 +214,17 @@ router.post('/analyze-data/:projectId', ensureAuthenticated, async (req, res) =>
 router.get('/analyze-data/:projectId/results', ensureAuthenticated, async (req, res) => {
   try {
     const { projectId } = req.params;
-  const { audienceType = 'mixed' } = req.query;
-  const requestedAudience = normalizeAudience(audienceType);
+    const { audienceType = 'mixed' } = req.query;
+    const requestedAudience = normalizeAudience(audienceType);
     const userId = (req.user as any)?.id;
 
     // Get project and verify ownership
     const project = await storage.getProject(projectId);
     const owner = (project as any)?.ownerId ?? (project as any)?.userId;
     if (!project || owner !== userId) {
-      return res.status(404).json({ 
-        success: false, 
-        error: 'Project not found or access denied' 
+      return res.status(404).json({
+        success: false,
+        error: 'Project not found or access denied'
       });
     }
 
@@ -232,7 +232,7 @@ router.get('/analyze-data/:projectId/results', ensureAuthenticated, async (req, 
 
     // Get analysis artifacts for this project
     const artifacts = await storage.getProjectArtifacts(projectId, 'analysis');
-    
+
     if (artifacts.length === 0) {
       return res.status(404).json({
         success: false,
@@ -242,7 +242,7 @@ router.get('/analyze-data/:projectId/results', ensureAuthenticated, async (req, 
 
     // Get the most recent analysis
     const getTimestamp = (value: Date | string | null | undefined) => value ? new Date(value).getTime() : 0;
-    const latestAnalysis = artifacts.sort((a, b) => 
+    const latestAnalysis = artifacts.sort((a, b) =>
       getTimestamp(b.createdAt) - getTimestamp(a.createdAt)
     )[0];
 
@@ -267,7 +267,7 @@ router.get('/analyze-data/:projectId/results', ensureAuthenticated, async (req, 
       }
     } catch (error) {
       audienceContext = {
-  primaryAudience: requestedAudience || 'mixed',
+        primaryAudience: requestedAudience || 'mixed',
         secondaryAudiences: [],
         decisionContext: '',
         journeyType: projectJourneyType
@@ -278,8 +278,8 @@ router.get('/analyze-data/:projectId/results', ensureAuthenticated, async (req, 
     const artifactContent = (latestAnalysis.output ?? {}) as any;
     const artifactMetadata = artifactContent?.metadata || {};
 
-  if (artifactContent?.formattedResults &&
-    artifactContent?.audienceContext?.primaryAudience === requestedAudience) {
+    if (artifactContent?.formattedResults &&
+      artifactContent?.audienceContext?.primaryAudience === requestedAudience) {
       // Use existing formatted results
       res.json({
         success: true,
@@ -337,9 +337,9 @@ router.get('/analyze-data/:projectId/types', ensureAuthenticated, async (req, re
     const project = await storage.getProject(projectId);
     const owner = (project as any)?.ownerId ?? (project as any)?.userId;
     if (!project || owner !== userId) {
-      return res.status(404).json({ 
-        success: false, 
-        error: 'Project not found or access denied' 
+      return res.status(404).json({
+        success: false,
+        error: 'Project not found or access denied'
       });
     }
 
@@ -358,22 +358,22 @@ router.get('/analyze-data/:projectId/types', ensureAuthenticated, async (req, re
 
     const columnTypes = Object.values(datasetSchema).map((col) => (col as any)?.type);
     const datasetRows = ensureArray<any>((dataset as any)?.data);
-    
+
     // Determine available analysis types based on data types
     const availableTypes = [];
-    
+
     if (columnTypes.some(type => ['number', 'integer', 'float'].includes(type))) {
       availableTypes.push('descriptive', 'correlation', 'regression');
     }
-    
+
     if (columnTypes.some(type => ['string', 'text', 'category'].includes(type))) {
       availableTypes.push('categorical', 'segmentation');
     }
-    
+
     if (columnTypes.some(type => ['date', 'datetime', 'timestamp'].includes(type))) {
       availableTypes.push('time_series', 'trend_analysis');
     }
-    
+
     // Always available
     availableTypes.push('data_quality', 'visualization');
 

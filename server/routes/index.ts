@@ -52,6 +52,9 @@ import { requireOwnership } from '../middleware/rbac';
 import streamingSourcesRouter from './streaming-sources';
 import scrapingJobsRouter from './scraping-jobs';
 import liveSourcesRouter from './live-sources';
+import dataQualityRouter from './data-quality';
+import costTrackingRouter from './cost-tracking';
+import agentWorkflowRouter from './agent-workflow';
 
 const router = Router();
 
@@ -110,6 +113,9 @@ router.use('/analysis-payment', ensureAuthenticated, analysisPaymentRouter); // 
 router.use('/streaming-sources', ensureAuthenticated, streamingSourcesRouter);
 router.use('/scraping-jobs', ensureAuthenticated, scrapingJobsRouter);
 router.use('/live-sources', ensureAuthenticated, liveSourcesRouter);
+router.use('/', ensureAuthenticated, dataQualityRouter); // Data quality analysis and auto-fix
+router.use('/costs', costTrackingRouter); // Cost tracking with 3-table architecture (authentication handled per-route)
+router.use('/agent-workflow', ensureAuthenticated, agentWorkflowRouter); // Agent workflow orchestration for U2A2A2U pattern
 
 // Direct Stripe payment intent endpoint for testing
 router.post('/create-payment-intent', async (req, res) => {

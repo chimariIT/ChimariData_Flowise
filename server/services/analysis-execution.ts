@@ -9,16 +9,58 @@
  */
 
 import { db } from '../db';
-import { projects, datasets, projectDatasets, projectSessions, analysisPlans } from '@shared/schema';
+import {
+  projects,
+  datasets,
+  projectDatasets,
+  projectSessions,
+  analysisPlans,
+  decisionAudits,
+  // U2A2A2U normalized tables
+  agentExecutions,
+  dsAnalysisResults,
+  insights as insightsTable,
+  projectQuestions,  // Week 1 Option B: Single source of truth for questions
+} from '@shared/schema';
 import type { CostBreakdown } from '@shared/schema';
 import { eq, and, desc } from 'drizzle-orm';
-import { PythonProcessor } from '../python-processor';
+import { PythonProcessor } from './python-processor';
+import { storage } from './storage';
+import { nanoid } from 'nanoid';
+import { dataScienceOrchestrator, type DataScienceResults } from './data-science-orchestrator';
+import { dataAccessor, type DatasetDataResult } from './data-accessor'; // Week 4 Option B: Unified data access
+// PHASE 6 FIX (Friction #2): Import ComputeEngineSelector for intelligent compute routing
+import { ComputeEngineSelector, type ComputeEngine, type ComputeSelectionResult } from './compute-engine-selector';
+
+import { BusinessAgent } from './business-agent';
+
+type Dataset = typeof datasets.$inferSelect;
 
 interface AnalysisRequest {
   projectId: string;
   userId: string;
   analysisTypes: string[]; // ['descriptive', 'correlation', 'regression', etc.]
   datasetIds?: string[];
+  userContext?: UserContext;
+  // GAP D: DS-recommended analyses from requirements document
+  analysisPath?: Array<{
+    analysisId: string;
+    analysisName: string;
+    analysisType?: string;
+    description?: string;
+    techniques?: string[];
+    requiredDataElements?: string[];
+    estimatedDuration?: string;
+    dependencies?: string[];
+  }>;
+  // GAP D: Question-to-analysis mapping for traceability
+  questionAnswerMapping?: Array<{
+    questionId: string;
+    questionText: string;
+    recommendedAnalyses?: string[];
+    requiredDataElements?: string[];
+    transformationsNeeded?: string[];
+  }>;
 }
 
 interface UserContext {
@@ -41,6 +83,7 @@ interface AnalysisInsight {
   category: string;
   dataSource?: string;
   details?: any;
+  answersQuestions?: string[]; // Phase 3: Question IDs this insight helps answer
 }
 
 interface AnalysisRecommendation {
@@ -50,6 +93,19 @@ interface AnalysisRecommendation {
   priority: 'High' | 'Medium' | 'Low';
   effort: 'High' | 'Medium' | 'Low';
   expectedImpact?: string;
+}
+
+// Phase 3: Question-to-Analysis Mapping
+interface QuestionAnalysisMapping {
+  questionId: string;
+  questionText: string;
+  requiredDataElements: string[];
+  recommendedAnalyses: string[];
+  transformationsNeeded: string[];
+  expectedArtifacts: Array<{
+    artifactType: 'visualization' | 'model' | 'report' | 'dashboard' | 'metric';
+    description: string;
+  }>;
 }
 
 interface AnalysisResults {
@@ -70,17 +126,57 @@ interface AnalysisResults {
     datasetNames: string[];
     techniques: string[];
   };
+  questionAnswers?: {
+    projectId: string;
+    answers: Array<{
+      question: string;
+      answer: string;
+      confidence: number;
+      sources: string[];
+      relatedInsights: string[];
+      status: 'answered' | 'partial' | 'pending';
+      generatedAt: Date;
+    }>;
+    generatedBy: string;
+    generatedAt: Date;
+    totalQuestions: number;
+    answeredCount: number;
+  };
+  questionAnswerMapping?: QuestionAnalysisMapping[]; // Phase 3: Question-to-analysis mapping
+  insightToQuestionMap?: Record<string, string[]>; // Phase 3: insightId → questionIds
+  // Phase 6: Per-analysis breakdown for dashboard view
+  perAnalysisBreakdown?: Record<string, {
+    status: string;
+    insights?: any[];
+    visualizations?: any[];
+    recommendations?: any[];
+    error?: string;
+    executionTimeMs?: number;
+  }>;
+  analysisStatuses?: Array<{
+    analysisId: string;
+    analysisName: string;
+    analysisType: string;
+    status: string;
+    insightCount: number;
+    errorMessage?: string;
+    executionTimeMs?: number;
+  }>;
 }
 
 export class AnalysisExecutionService {
+  /**
+   * Execute analysis based on user request
+   */
 
   /**
    * Retrieve user context from project session
+   * WEEK 1 FIX: Prioritize questions from project_questions table (single source of truth)
    */
   private static async getUserContext(projectId: string, userId: string): Promise<UserContext> {
     console.log(`🔍 Retrieving user context for project ${projectId}`);
 
-    // Get project to find linked session
+    // Get project to find linked session AND to get project-level fields as fallback
     const [project] = await db
       .select()
       .from(projects)
@@ -91,42 +187,163 @@ export class AnalysisExecutionService {
       return {};
     }
 
+    // WEEK 1 FIX: First try to load questions from project_questions table (single source of truth)
+    let questionsFromDB: string | undefined;
+    try {
+      const dbQuestions = await db
+        .select()
+        .from(projectQuestions)
+        .where(eq(projectQuestions.projectId, projectId))
+        .orderBy(projectQuestions.questionOrder);
+
+      if (dbQuestions.length > 0) {
+        // Join questions with newlines to maintain compatibility with existing code
+        questionsFromDB = dbQuestions.map((q: { questionText: string | null }) => q.questionText).join('\n');
+        console.log(`✅ [getUserContext] Loaded ${dbQuestions.length} questions from project_questions table`);
+      }
+    } catch (err) {
+      console.warn(`⚠️  Failed to load questions from project_questions table:`, err);
+    }
+
+    // Project-level fields as fallback
+    const projectGoal = (project as any).analysisGoals || (project as any).description;
+    const projectQuestionsLegacy = (project as any).businessQuestions;
+
     // Find the session for this project/user
+    // CRITICAL: Query by projectId to get the correct session with businessQuestions
     const sessions = await db
       .select()
       .from(projectSessions)
-      .where(
-        and(
-          eq(projectSessions.userId, userId),
-          eq(projectSessions.journeyType, project.journeyType as string)
-        )
-      )
+      .where(eq(projectSessions.projectId, projectId))
       .orderBy(desc(projectSessions.lastActivity))
       .limit(1);
 
+    // WEEK 1 FIX: Questions priority: 1) project_questions table, 2) session, 3) legacy field
+    const resolveQuestions = (sessionQuestions?: string) =>
+      questionsFromDB || sessionQuestions || projectQuestionsLegacy;
+
+    // Fallback: If no session found by projectId, try userId + journeyType
     if (!sessions || sessions.length === 0) {
-      console.warn(`⚠️  No session found for project ${projectId}, user ${userId}`);
-      return {};
+      console.log(`⚠️  No session found by projectId, trying userId + journeyType fallback`);
+      const fallbackSessions = await db
+        .select()
+        .from(projectSessions)
+        .where(
+          and(
+            eq(projectSessions.userId, userId),
+            eq(projectSessions.journeyType, project.journeyType as string)
+          )
+        )
+        .orderBy(desc(projectSessions.lastActivity))
+        .limit(1);
+
+      if (!fallbackSessions || fallbackSessions.length === 0) {
+        // No session found - use DB questions or project-level fields
+        const questions = resolveQuestions();
+        if (projectGoal || questions) {
+          console.log(`✅ Using project-level context (no session found):`, {
+            hasGoal: !!projectGoal,
+            hasQuestions: !!questions,
+            questionsSource: questionsFromDB ? 'project_questions_table' : 'legacy_field'
+          });
+          return {
+            analysisGoal: projectGoal || undefined,
+            businessQuestions: questions || undefined
+          };
+        }
+        console.warn(`⚠️  No session or project-level context found for project ${projectId}, user ${userId}`);
+        return {};
+      }
+
+      // Use fallback session
+      const fallbackSession = fallbackSessions[0];
+      const fallbackPrepareData = fallbackSession.prepareData as any;
+
+      if (!fallbackPrepareData) {
+        // No prepareData in fallback session - use DB questions or project-level fields
+        const questions = resolveQuestions();
+        if (projectGoal || questions) {
+          console.log(`✅ Using project-level context (no prepareData in fallback session):`, {
+            hasGoal: !!projectGoal,
+            hasQuestions: !!questions,
+            questionsSource: questionsFromDB ? 'project_questions_table' : 'legacy_field'
+          });
+          return {
+            analysisGoal: projectGoal || undefined,
+            businessQuestions: questions || undefined
+          };
+        }
+        console.warn(`⚠️  No prepareData found in fallback session`);
+        return {};
+      }
+
+      const questions = resolveQuestions(fallbackPrepareData.businessQuestions);
+      console.log(`✅ Retrieved user context from fallback session:`, {
+        hasGoal: !!fallbackPrepareData.analysisGoal,
+        hasQuestions: !!questions,
+        questionsSource: questionsFromDB ? 'project_questions_table' : 'session'
+      });
+
+      return {
+        analysisGoal: fallbackPrepareData.analysisGoal || projectGoal,
+        businessQuestions: questions,
+        selectedTemplates: fallbackPrepareData.selectedTemplates,
+        audience: fallbackPrepareData.audience
+      };
     }
 
     const session = sessions[0];
     const prepareData = session.prepareData as any;
 
     if (!prepareData) {
+      // No prepareData in session - use DB questions or project-level fields
+      const questions = resolveQuestions();
+      if (projectGoal || questions) {
+        console.log(`✅ Using project-level context (no prepareData in session):`, {
+          hasGoal: !!projectGoal,
+          hasQuestions: !!questions,
+          questionsSource: questionsFromDB ? 'project_questions_table' : 'legacy_field'
+        });
+        return {
+          analysisGoal: projectGoal || undefined,
+          businessQuestions: questions || undefined
+        };
+      }
       console.warn(`⚠️  No prepareData found in session for project ${projectId}`);
       return {};
     }
 
+    const questions = resolveQuestions(prepareData.businessQuestions);
     console.log(`✅ Retrieved user context:`, {
       hasGoal: !!prepareData.analysisGoal,
-      hasQuestions: !!prepareData.businessQuestions,
+      hasQuestions: !!questions,
+      questionsSource: questionsFromDB ? 'project_questions_table' : 'session',
       hasTemplates: !!prepareData.selectedTemplates?.length,
       hasAudience: !!prepareData.audience
     });
 
+    // CRITICAL FIX Issue #14: Sync session prepareData to project if project fields are empty
+    // This ensures businessQuestions are available when analysis executes
+    if ((prepareData.analysisGoal || prepareData.businessQuestions) && (!projectGoal && !projectQuestionsLegacy)) {
+      try {
+        console.log(`🔄 Syncing session prepareData to project ${projectId}...`);
+        await db
+          .update(projects)
+          .set({
+            analysisGoals: prepareData.analysisGoal || null,
+            businessQuestions: prepareData.businessQuestions || null,
+            updatedAt: new Date()
+          })
+          .where(eq(projects.id, projectId));
+        console.log(`✅ Synced session data to project ${projectId}`);
+      } catch (syncError) {
+        console.warn(`⚠️ Failed to sync session data to project:`, syncError);
+      }
+    }
+
     return {
-      analysisGoal: prepareData.analysisGoal,
-      businessQuestions: prepareData.businessQuestions,
+      analysisGoal: prepareData.analysisGoal || projectGoal,
+      businessQuestions: questions,  // WEEK 1 FIX: Use resolved questions (DB first)
       selectedTemplates: prepareData.selectedTemplates,
       audience: prepareData.audience
     };
@@ -134,12 +351,33 @@ export class AnalysisExecutionService {
 
   /**
    * Execute analysis on a project's datasets
+   *
+   * Agent Responsibility: DATA_SCIENTIST
+   * - Selects and prioritizes analysis types
+   * - Executes statistical and ML analyses
+   * - Generates insights and visualizations
+   * - Links results to user questions (evidence chain)
    */
   static async executeAnalysis(request: AnalysisRequest): Promise<AnalysisResults> {
     const startTime = Date.now();
 
-    console.log(`🔬 Starting analysis for project ${request.projectId}`);
+    console.log(`🔬 [DATA_SCIENTIST] Starting analysis for project ${request.projectId}`);
+    console.log(`🔬 [DATA_SCIENTIST] Using tools: statistical_analyzer, ml_pipeline, visualization_engine`);
+    console.log(`⏱️ Target: <60s for 2-minute SLA`);
     console.log(`📊 Analysis types: ${request.analysisTypes.join(', ')}`);
+
+    // Validate request parameters
+    if (!request.projectId) {
+      throw new Error('Missing project ID. Please ensure you have selected a valid project.');
+    }
+
+    if (!request.userId) {
+      throw new Error('Authentication required. Please log in to execute analysis.');
+    }
+
+    if (!request.analysisTypes || request.analysisTypes.length === 0) {
+      throw new Error('No analysis types selected. Please select at least one analysis type (e.g., descriptive, correlation, regression).');
+    }
 
     const [project] = await db
       .select()
@@ -147,12 +385,33 @@ export class AnalysisExecutionService {
       .where(eq(projects.id, request.projectId));
 
     if (!project) {
-      throw new Error(`Project ${request.projectId} not found`);
+      throw new Error(`Project not found. The project ID "${request.projectId}" does not exist or may have been deleted.`);
     }
 
     if (project.userId !== request.userId) {
-      throw new Error('Access denied: User does not own this project');
+      throw new Error('Access denied. You do not have permission to run analysis on this project.');
     }
+
+    // GAP 2 FIX: Load PII decision from project metadata to enforce filtering
+    const projectMetadata = (project as any).metadata || {};
+    const piiDecision = projectMetadata.piiDecision;
+    const excludedColumns: string[] = projectMetadata.excludedColumns || [];
+    const piiColumnsToRemove: string[] = piiDecision?.selectedColumns || [];
+    const columnsToExclude = new Set([...excludedColumns, ...piiColumnsToRemove]);
+
+    if (columnsToExclude.size > 0) {
+      console.log(`🔒 [GAP 2 - PII] ========================`);
+      console.log(`🔒 [GAP 2 - PII] Enforcing PII column removal for analysis:`);
+      Array.from(columnsToExclude).forEach(col => {
+        console.log(`🔒 [GAP 2 - PII]   - ${col}`);
+      });
+      console.log(`🔒 [GAP 2 - PII] ========================`);
+    } else {
+      console.log(`✅ [GAP 2 - PII] No PII columns to filter`);
+    }
+
+    // Pass columnsToExclude explicitly to downstream methods instead of using static property
+    // AnalysisExecutionService._currentPIIColumnsToExclude = columnsToExclude; (REMOVED)
 
     // ✅ REMOVED BLOCKING REQUIREMENT: Analysis plan approval is now optional
     // Users can execute analysis directly without going through plan approval step
@@ -171,25 +430,66 @@ export class AnalysisExecutionService {
         plan = planRecords[0];
 
         if (plan.status === 'executing') {
-          throw new Error('Analysis execution is already in progress for this plan.');
+          throw new Error('Analysis is already running. Please wait for the current execution to complete, then refresh the page to see results.');
         }
 
         if (plan.status === 'completed') {
-          throw new Error('Analysis has already been completed for this plan.');
+          throw new Error('Analysis has already been completed for this project. View your results on the Results page or create a new project for additional analysis.');
         }
       }
     }
 
     if (project.analysisExecutedAt) {
-      throw new Error('Analysis has already been executed for this project.');
+      throw new Error('Analysis has already been completed for this project. View your results on the Results page, or start a new project for additional analysis.');
     }
 
     if (project.analysisBilledAt) {
-      throw new Error('Analysis billing has been finalized for this project; execution is locked.');
+      throw new Error('This project has already been billed. Analysis cannot be re-run after billing. Please create a new project for additional analysis.');
     }
 
     let executionMarked = false;
     const executionStartTimestamp = new Date();
+
+    // GAP D: Log and use DS-recommended analyses for prioritization
+    if (request.analysisPath && request.analysisPath.length > 0) {
+      console.log(`📊 [GAP D] Using ${request.analysisPath.length} DS-recommended analyses for prioritization`);
+
+      // Prioritize requested analysisTypes based on DS recommendations
+      const recommendedTypes = request.analysisPath
+        .map(a => a.analysisType?.toLowerCase() || a.analysisName.toLowerCase().replace(/\s+/g, '-'))
+        .filter(t => t);
+
+      // Sort analysisTypes so recommended ones come first
+      const sortedAnalysisTypes = [...request.analysisTypes].sort((a, b) => {
+        const aIsRecommended = recommendedTypes.includes(a.toLowerCase());
+        const bIsRecommended = recommendedTypes.includes(b.toLowerCase());
+        if (aIsRecommended && !bIsRecommended) return -1;
+        if (!aIsRecommended && bIsRecommended) return 1;
+        return 0;
+      });
+
+      if (JSON.stringify(sortedAnalysisTypes) !== JSON.stringify(request.analysisTypes)) {
+        console.log(`📊 [GAP D] Prioritized analysis order: ${sortedAnalysisTypes.join(', ')}`);
+        request.analysisTypes = sortedAnalysisTypes;
+      }
+    }
+
+    // GAP D + GAP E: Store questionAnswerMapping in project for results traceability
+    if (request.questionAnswerMapping && request.questionAnswerMapping.length > 0) {
+      console.log(`📊 [GAP D] Storing ${request.questionAnswerMapping.length} question-answer mappings for results traceability`);
+      try {
+        await db
+          .update(projects)
+          .set({
+            questionAnswerMapping: request.questionAnswerMapping,
+            updatedAt: new Date()
+          } as any)
+          .where(eq(projects.id, request.projectId));
+      } catch (err) {
+        console.warn(`⚠️ [GAP D] Could not store questionAnswerMapping (column may not exist):`, err);
+        // Non-fatal: continue with execution
+      }
+    }
 
     try {
       // Only update plan status if a plan exists
@@ -231,13 +531,140 @@ export class AnalysisExecutionService {
         .innerJoin(datasets, eq(projectDatasets.datasetId, datasets.id))
         .where(eq(projectDatasets.projectId, request.projectId));
 
-      const projectDatasetList = projectDatasetLinks.map((link: any) => link.dataset);
+      const projectDatasetList = projectDatasetLinks.map((link: { dataset: Dataset }) => link.dataset);
 
       if (!projectDatasetList || projectDatasetList.length === 0) {
-        throw new Error('No datasets found for this project');
+        // Check if project exists but has no data uploaded yet
+        const projectCheck = await storage.getProject(request.projectId);
+        if (!projectCheck) {
+          throw new Error('Project not found. It may have been deleted.');
+        }
+
+        throw new Error(
+          'No data uploaded. Please go back to the "Data Upload" step and upload your dataset(s) before running analysis.'
+        );
+      }
+
+      // Validate that datasets have actual data to analyze
+      const datasetsWithData = projectDatasetList.filter((ds: any) => {
+        const rows = this.extractDatasetRows(ds);
+        return rows && rows.length > 0;
+      });
+
+      if (datasetsWithData.length === 0) {
+        const hasTransformedData = projectDatasetList.some((ds: any) =>
+          ds.ingestionMetadata?.transformedData?.length > 0 || ds.metadata?.transformedData?.length > 0
+        );
+
+        if (hasTransformedData) {
+          throw new Error(
+            'Dataset transformations found but no data rows available. Please verify your data transformations in the "Data Transformation" step.'
+          );
+        }
+
+        throw new Error(
+          'Uploaded files contain no data rows. Please verify your files have data and re-upload in the "Data Upload" step. Supported formats: CSV, Excel, JSON.'
+        );
       }
 
       console.log(`📁 Found ${projectDatasetList.length} dataset(s)`);
+
+      // GAP 1 FIX: Validate multi-dataset projects have been joined
+      if (projectDatasetList.length > 1) {
+        // Check if any dataset has transformedData (indicating join was executed)
+        const hasJoinedData = projectDatasetList.some((ds: any) =>
+          (ds.ingestionMetadata?.transformedData?.length > 0) ||
+          (ds.metadata?.transformedData?.length > 0)
+        );
+
+        if (!hasJoinedData) {
+          console.error(`❌ [GAP 1] Multi-dataset project ${request.projectId} has ${projectDatasetList.length} datasets but no joined data`);
+          const datasetNames = projectDatasetList.map((ds: any) => ds.fileName || ds.name || 'Unknown').join(', ');
+          throw new Error(
+            `Multiple datasets detected (${datasetNames}) but they have not been joined. ` +
+            `Please go back to the "Data Transformation" step and click "Execute Transformations" to merge your datasets before running analysis. ` +
+            `Without joining, only one dataset will be analyzed and the others will be ignored.`
+          );
+        }
+        console.log(`✅ [GAP 1] Multi-dataset project has joined/transformed data, proceeding with analysis`);
+      }
+
+      // Log decision for analysis execution start
+      try {
+        await db.insert(decisionAudits).values({
+          id: nanoid(),
+          projectId: request.projectId,
+          agent: 'data_scientist',
+          decisionType: 'analysis_started',
+          decision: `Starting analysis execution with ${request.analysisTypes.length} analysis types`,
+          reasoning: `User requested analysis types: ${request.analysisTypes.join(', ')}. Found ${projectDatasetList.length} dataset(s) with transformed data.`,
+          alternatives: JSON.stringify(request.analysisTypes),
+          confidence: 85,
+          context: JSON.stringify({
+            datasetCount: projectDatasetList.length,
+            analysisTypes: request.analysisTypes,
+            hasUserQuestions: !!userContext.businessQuestions
+          }),
+          userInput: userContext.businessQuestions || null,
+          reversible: false,
+          impact: 'high',
+          timestamp: new Date()
+        });
+      } catch (auditError) {
+        console.warn('Failed to log analysis start decision:', auditError);
+      }
+
+      // Phase 3: Load question-to-analysis mapping with priority:
+      // 1. HIGHEST: request.questionAnswerMapping (from frontend/prepare step - GAP 5 FIX)
+      // 2. MEDIUM: transformation metadata
+      // 3. LOWEST: generate from businessQuestions
+      let questionAnswerMapping: QuestionAnalysisMapping[] = [];
+      const insightToQuestionMap: Record<string, string[]> = {};
+
+      // ✅ GAP 5 FIX: Priority 1 - Use request.questionAnswerMapping if provided
+      if (request.questionAnswerMapping && request.questionAnswerMapping.length > 0) {
+        questionAnswerMapping = request.questionAnswerMapping.map(qam => ({
+          questionId: qam.questionId,
+          questionText: qam.questionText,
+          requiredDataElements: qam.requiredDataElements || [],
+          recommendedAnalyses: qam.recommendedAnalyses || [],
+          transformationsNeeded: qam.transformationsNeeded || [],
+          expectedArtifacts: []
+        }));
+        console.log(`📋 [GAP 5 FIX] Using ${questionAnswerMapping.length} question mappings from request (highest priority)`);
+      }
+      // Priority 2 - Load from transformation metadata
+      else if (projectDatasetList.length > 0) {
+        const primaryDataset = projectDatasetList[0];
+        const ingestionMetadata = (primaryDataset as any).ingestionMetadata || {};
+        const transformationMetadata = ingestionMetadata.transformationMetadata || {};
+        questionAnswerMapping = transformationMetadata.questionAnswerMapping || [];
+
+        if (questionAnswerMapping.length > 0) {
+          console.log(`📋 [Phase 3] Loaded ${questionAnswerMapping.length} question-to-analysis mappings from transformation metadata`);
+        }
+      }
+
+      // Priority 3 - Generate stable question IDs from project.businessQuestions if no mapping exists
+      // This ensures evidence chain doesn't break when questions come from prepare step
+      if (questionAnswerMapping.length === 0 && userContext.businessQuestions) {
+        const questionsText = typeof userContext.businessQuestions === 'string'
+          ? userContext.businessQuestions.split('\n').filter((q: string) => q.trim())
+          : Array.isArray(userContext.businessQuestions) ? userContext.businessQuestions : [];
+
+        questionAnswerMapping = questionsText.map((q: string, idx: number) => ({
+          questionId: `q_${idx + 1}_${Buffer.from(q.slice(0, 20)).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 8)}`,
+          questionText: q.trim(),
+          requiredDataElements: [],
+          recommendedAnalyses: request.analysisTypes || [],
+          transformationsNeeded: [],
+          expectedArtifacts: []
+        }));
+
+        if (questionAnswerMapping.length > 0) {
+          console.log(`📋 [Phase 3 Fix] Generated ${questionAnswerMapping.length} question mappings from businessQuestions`);
+        }
+      }
 
       const allInsights: AnalysisInsight[] = [];
       const allRecommendations: AnalysisRecommendation[] = [];
@@ -245,36 +672,95 @@ export class AnalysisExecutionService {
       let totalRows = 0;
       let totalColumns = 0;
 
-      for (const dataset of projectDatasetList) {
-        console.log(`🔍 Analyzing dataset: ${dataset.originalFileName}`);
+      // ✅ SLA OPTIMIZATION: Run dataset analysis in parallel (target: <60s for 2-minute SLA)
+      console.log(`⏱️ Starting parallel analysis of ${projectDatasetList.length} dataset(s)...`);
+      const datasetAnalysisStart = Date.now();
 
-        try {
-          const datasetResults = await this.analyzeDataset(
-            dataset,
-            request.analysisTypes,
-            request.projectId,
-            userContext
-          );
+      const datasetResults = await Promise.all(
+        projectDatasetList.map(async (dataset: Dataset) => {
+          console.log(`🔍 Analyzing dataset: ${dataset.originalFileName}`);
 
-          allInsights.push(...datasetResults.insights);
-          allRecommendations.push(...datasetResults.recommendations);
-          allVisualizations.push(...datasetResults.visualizations);
-          totalRows += datasetResults.rowCount;
-          totalColumns += datasetResults.columnCount;
+          try {
+            return await this.analyzeDataset(
+              dataset,
+              request.analysisTypes,
+              request.projectId,
+              userContext,
+              columnsToExclude
+            );
+          } catch (error: any) {
+            console.error(`❌ Error analyzing dataset ${dataset.originalFileName}:`, error.message);
+            return {
+              insights: [{
+                id: Date.now(),
+                title: `Analysis Error: ${dataset.originalFileName}`,
+                description: `Could not complete analysis: ${error.message}`,
+                impact: 'Low',
+                confidence: 0,
+                category: 'Error',
+                dataSource: dataset.originalFileName
+              }],
+              recommendations: [],
+              visualizations: [],
+              rowCount: 0,
+              columnCount: 0
+            };
+          }
+        })
+      );
 
-        } catch (error: any) {
-          console.error(`❌ Error analyzing dataset ${dataset.originalFileName}:`, error.message);
-          allInsights.push({
-            id: Date.now(),
-            title: `Analysis Error: ${dataset.originalFileName}`,
-            description: `Could not complete analysis: ${error.message}`,
-            impact: 'Low',
-            confidence: 0,
-            category: 'Error',
-            dataSource: dataset.originalFileName
+      // Aggregate results from all datasets and tag with questions (Phase 3)
+      for (const result of datasetResults) {
+        // Tag insights with questions they answer
+        const taggedInsights = result.insights.map((insight: AnalysisInsight) => {
+          // Find which questions this insight helps answer
+          const relatedQuestionIds: string[] = [];
+
+          if (questionAnswerMapping.length > 0) {
+            questionAnswerMapping.forEach(qaMap => {
+              // Match insight to question based on keywords or analysis type
+              const insightText = `${insight.title} ${insight.description}`.toLowerCase();
+              const questionText = qaMap.questionText.toLowerCase();
+
+              // Check if insight relates to this question
+              const questionKeywords = questionText.split(' ').filter(w => w.length > 3);
+              const hasMatch = questionKeywords.some(keyword => insightText.includes(keyword));
+
+              if (hasMatch || qaMap.recommendedAnalyses.some(aId =>
+                insight.category?.toLowerCase().includes(aId.toLowerCase()) ||
+                insight.dataSource?.toLowerCase().includes(aId.toLowerCase())
+              )) {
+                relatedQuestionIds.push(qaMap.questionId);
+              }
+            });
+          }
+
+          // Add answersQuestions field to insight (Phase 3)
+          const taggedInsight = {
+            ...insight,
+            answersQuestions: relatedQuestionIds.length > 0 ? relatedQuestionIds : undefined
+          };
+
+          // Build reverse mapping: questionId → insightIds
+          relatedQuestionIds.forEach(qId => {
+            if (!insightToQuestionMap[qId]) {
+              insightToQuestionMap[qId] = [];
+            }
+            insightToQuestionMap[qId].push(insight.id.toString());
           });
-        }
+
+          return taggedInsight;
+        });
+
+        allInsights.push(...taggedInsights);
+        allRecommendations.push(...result.recommendations);
+        allVisualizations.push(...result.visualizations);
+        totalRows += result.rowCount;
+        totalColumns += result.columnCount;
       }
+
+      const datasetAnalysisElapsed = ((Date.now() - datasetAnalysisStart) / 1000).toFixed(2);
+      console.log(`✅ Parallel dataset analysis completed in ${datasetAnalysisElapsed}s`);
 
       const syntheticRecommendations = this.generateRecommendations(allInsights);
       allRecommendations.push(...syntheticRecommendations);
@@ -299,7 +785,9 @@ export class AnalysisExecutionService {
           executedAt: completedAt,
           datasetNames: projectDatasetList.map((d: any) => d.originalFileName),
           techniques: request.analysisTypes
-        }
+        },
+        questionAnswerMapping: questionAnswerMapping.length > 0 ? questionAnswerMapping : undefined, // Phase 3
+        insightToQuestionMap: Object.keys(insightToQuestionMap).length > 0 ? insightToQuestionMap : undefined // Phase 3
       };
 
       const planCostBreakdown = (plan?.estimatedCost as CostBreakdown | undefined) ?? { total: 0, breakdown: {} };
@@ -313,6 +801,61 @@ export class AnalysisExecutionService {
         total: totalCost,
         breakdown: projectCostBreakdown?.breakdown ?? planCostBreakdown.breakdown ?? {}
       };
+
+      // ============================================
+      // SAVE TO U2A2A2U NORMALIZED TABLES
+      // ============================================
+      let dsExecutionId: string | null = null;
+      try {
+        // 1. Create agent_executions record for data_scientist
+        const executionId = nanoid();
+        dsExecutionId = executionId;
+
+        await db.insert(agentExecutions).values({
+          id: executionId,
+          projectId: request.projectId,
+          agentType: 'data_scientist',
+          status: 'success',
+          startedAt: new Date(startTime),
+          completedAt: completedAt,
+          executionTimeMs: Date.now() - startTime,
+          modelUsed: 'python_analysis',
+        });
+
+        // 2. Save analysis results to ds_analysis_results for each analysis type
+        for (const analysisType of request.analysisTypes) {
+          const resultId = nanoid();
+          await db.insert(dsAnalysisResults).values({
+            id: resultId,
+            executionId: executionId,
+            analysisType: analysisType,
+            sampleSize: totalRows,
+          });
+        }
+
+        // 3. Save insights to insights table
+        for (const insight of allInsights) {
+          const insightId = `ins_${nanoid(12)}`;
+          await db.insert(insightsTable).values({
+            id: insightId,
+            projectId: request.projectId,
+            executionId: executionId,
+            questionId: insight.answersQuestions?.[0] || null, // Link to first related question
+            insightType: insight.category || 'general',
+            title: insight.title,
+            description: insight.description,
+            impact: insight.impact.toLowerCase() as 'high' | 'medium' | 'low',
+            confidence: Math.round(insight.confidence),
+            supportingData: insight.details ? JSON.stringify(insight.details) : null,
+            dataSource: insight.dataSource || null,
+          });
+        }
+
+        console.log(`✅ Saved ${allInsights.length} insights to normalized tables`);
+      } catch (normalizedError) {
+        console.error('Failed to save to normalized tables (non-blocking):', normalizedError);
+        // Don't fail the analysis - legacy storage will still work
+      }
       const billedAt = totalCost > 0 ? completedAt : null;
 
       await db.transaction(async (tx: any) => {
@@ -346,21 +889,392 @@ export class AnalysisExecutionService {
       console.log(`💾 Results stored for project ${request.projectId}`);
       console.log(`✅ Analysis complete: ${allInsights.length} insights, ${allRecommendations.length} recommendations`);
 
-      return results;
-    } catch (error) {
-      // Roll back plan status if it was marked as executing
-      if (executionMarked && approvedPlanId) {
-        await db
-          .update(analysisPlans)
-          .set({
-            status: 'approved',
-            executedAt: null,
-            updatedAt: new Date(),
-          })
-          .where(eq(analysisPlans.id, approvedPlanId));
+      // ✅ GENERATE AI-POWERED QUESTION ANSWERS
+      // Check both userContext AND project fields for business questions
+      const businessQuestionsSource = userContext.businessQuestions ||
+        (project as any).businessQuestions ||
+        (project as any).description;
+      const analysisGoalSource = userContext.analysisGoal ||
+        (project as any).analysisGoals ||
+        (project as any).description;
+
+      console.log(`🔍 [Q&A Debug] userContext.businessQuestions: ${!!userContext.businessQuestions}`);
+      console.log(`🔍 [Q&A Debug] project.businessQuestions: ${!!(project as any).businessQuestions}`);
+      console.log(`🔍 [Q&A Debug] Final businessQuestionsSource: ${!!businessQuestionsSource}`);
+
+      if (businessQuestionsSource) {
+        try {
+          console.log(`🤔 Generating AI-powered answers to user questions...`);
+          console.log(`🤔 Questions to answer: "${businessQuestionsSource.substring(0, 200)}..."`);
+          const { QuestionAnswerService } = await import('./question-answer-service');
+
+          const qaResult = await QuestionAnswerService.generateAnswers({
+            projectId: request.projectId,
+            userId: request.userId,
+            questions: [businessQuestionsSource], // Use resolved source
+            analysisResults: results,
+            analysisGoal: analysisGoalSource,
+            audience: userContext.audience // Pass audience context for appropriate formatting
+          });
+
+          console.log(`✅ Generated ${qaResult.answeredCount}/${qaResult.totalQuestions} AI-powered answers`);
+
+          // Update results with Q&A
+          results.questionAnswers = qaResult;
+
+          // Re-save with Q&A included
+          await db
+            .update(projects)
+            .set({
+              analysisResults: results as any,
+              updatedAt: new Date()
+            })
+            .where(eq(projects.id, request.projectId));
+
+        } catch (qaError) {
+          console.error(`❌ Failed to generate question answers:`, qaError);
+          console.error(`❌ Error details:`, qaError instanceof Error ? qaError.stack : qaError);
+          // Don't fail the entire analysis if Q&A generation fails
+        }
+      } else {
+        console.log(`ℹ️  No business questions provided, skipping Q&A generation`);
+        console.log(`ℹ️  [Debug] userContext keys: ${Object.keys(userContext).join(', ')}`);
+        console.log(`ℹ️  [Debug] project.businessQuestions: ${(project as any).businessQuestions}`);
+        console.log(`ℹ️  [Debug] project.analysisGoals: ${(project as any).analysisGoals}`);
       }
 
-      throw error;
+      // ✅ PHASE 4 FIX: BUSINESS AGENT RESULTS TRANSLATION FOR ALL AUDIENCES
+      // Translate results for ALL audience types (executive, technical, analyst)
+      try {
+        console.log(`💼 [BA Translation] Starting results translation for ALL audiences...`);
+        const { BusinessAgent } = await import('./business-agent');
+        const businessAgent = new BusinessAgent();
+
+        // Get primary audience from project context
+        const audienceContext = userContext.audience as any;
+        const journeyAudience = (project as any)?.journeyProgress?.audience as any;
+
+        const primaryAudience = audienceContext?.primaryAudience ||
+          audienceContext?.primary ||
+          journeyAudience?.primaryAudience ||
+          journeyAudience?.primary ||
+          'executive';
+
+        const decisionContext = audienceContext?.decisionContext ||
+          journeyAudience?.decisionContext ||
+          'General business decision support';
+
+        // ✅ PHASE 4 FIX: Translate for ALL audiences, not just primary
+        const allAudiences = ['executive', 'technical', 'analyst'];
+        const allTranslations: Record<string, any> = {};
+
+        for (const audience of allAudiences) {
+          try {
+            console.log(`💼 [BA Translation] Translating for ${audience} audience...`);
+
+            const translatedResults = await businessAgent.translateResults({
+              results: {
+                insights: allInsights,
+                recommendations: allRecommendations,
+                summary: results.summary
+              },
+              audience,
+              decisionContext
+            });
+
+            if (translatedResults) {
+              allTranslations[audience] = {
+                insights: translatedResults.insights || allInsights,
+                recommendations: translatedResults.recommendations || allRecommendations,
+                executiveSummary: translatedResults.executiveSummary,
+                translatedAt: new Date().toISOString()
+              };
+              console.log(`✅ [BA Translation] ${audience} translation complete`);
+            }
+          } catch (audienceError) {
+            console.warn(`⚠️ [BA Translation] Failed to translate for ${audience}:`, audienceError);
+            // Continue with other audiences
+          }
+        }
+
+        // Generate business impact assessment
+        let businessImpact: any = null;
+        try {
+          const projectGoals = (project as any).journeyProgress?.goals ||
+            (userContext as any).goals ||
+            (userContext as any).businessQuestions ||
+            [];
+          businessImpact = await businessAgent.assessBusinessImpact(
+            Array.isArray(projectGoals) ? projectGoals : [projectGoals],
+            { insights: allInsights, recommendations: allRecommendations },
+            (project as any).journeyProgress?.industry || 'general'
+          );
+          console.log(`✅ [BA Translation] Business impact assessment complete`);
+        } catch (impactError) {
+          console.warn(`⚠️ [BA Translation] Business impact assessment failed:`, impactError);
+        }
+
+        // Generate industry-specific insights
+        let industryInsights: any = null;
+        try {
+          industryInsights = await businessAgent.generateIndustryInsights({
+            industry: (project as any).journeyProgress?.industry || 'general',
+            userGoals: (project as any).journeyProgress?.goals || []
+          });
+          console.log(`✅ [BA Translation] Industry insights generated`);
+        } catch (industryError) {
+          console.warn(`⚠️ [BA Translation] Industry insights failed:`, industryError);
+        }
+
+        // Store primary audience translation in results for backward compatibility
+        const primaryTranslation = allTranslations[primaryAudience] || allTranslations['executive'];
+        if (primaryTranslation) {
+          (results as any).translatedInsights = primaryTranslation.insights;
+          (results as any).translatedRecommendations = primaryTranslation.recommendations;
+          (results as any).executiveSummary = primaryTranslation.executiveSummary || (results.summary as any)?.summary;
+          (results as any).audienceFormatted = true;
+          (results as any).targetAudience = primaryAudience;
+        }
+
+        // Store ALL translations in journeyProgress for multi-audience access
+        const journeyProgress = (project as any).journeyProgress || {};
+        const updatedJourneyProgress = {
+          ...journeyProgress,
+          translatedResults: allTranslations,
+          businessImpact,
+          industryInsights,
+          baTranslatedAt: new Date().toISOString()
+        };
+
+        // Save both analysisResults and updated journeyProgress with all translations
+        await db
+          .update(projects)
+          .set({
+            analysisResults: results as any,
+            journeyProgress: updatedJourneyProgress as any,
+            updatedAt: new Date()
+          })
+          .where(eq(projects.id, request.projectId));
+
+        console.log(`💾 [BA Translation] All translations saved to database`);
+        console.log(`   - Executive: ${allTranslations['executive'] ? '✅' : '❌'}`);
+        console.log(`   - Technical: ${allTranslations['technical'] ? '✅' : '❌'}`);
+        console.log(`   - Analyst: ${allTranslations['analyst'] ? '✅' : '❌'}`);
+        console.log(`   - Business Impact: ${businessImpact ? '✅' : '❌'}`);
+        console.log(`   - Industry Insights: ${industryInsights ? '✅' : '❌'}`);
+
+      } catch (translationError) {
+        console.warn(`⚠️ [BA Translation] Business Agent translation failed (non-blocking):`, translationError);
+        // Continue with untranslated results - this is non-critical
+        (results as any).audienceFormatted = false;
+        (results as any).translationError = translationError instanceof Error ? translationError.message : 'Translation failed';
+      }
+
+      // ✅ GENERATE ARTIFACTS
+      try {
+        console.log(`🎨 Generating artifacts for project ${request.projectId}...`);
+        const { ArtifactGenerator } = await import('./artifact-generator');
+        const artifactGenerator = new ArtifactGenerator();
+
+        // Calculate total dataset size
+        const totalSizeBytes = projectDatasetList.reduce((acc: number, ds: any) => acc + (ds.fileSize || 0), 0);
+        const totalSizeMB = totalSizeBytes / (1024 * 1024);
+
+        console.log(`📦 Artifact generation config:`, {
+          projectId: request.projectId,
+          projectName: project.name,
+          userId: request.userId,
+          journeyType: (project.journeyType as any) || 'non-tech',
+          insightCount: allInsights.length,
+          visualizationCount: allVisualizations.length,
+          datasetSizeMB: totalSizeMB || 1
+        });
+
+        const artifactResult = await artifactGenerator.generateArtifacts({
+          projectId: request.projectId,
+          projectName: project.name,
+          userId: request.userId,
+          journeyType: (project.journeyType as any) || 'non-tech',
+          analysisResults: [results], // Wrap in array as expected by interface
+          visualizations: allVisualizations,
+          insights: allInsights.map(i => `${i.title}: ${i.description}`),
+          datasetSizeMB: totalSizeMB || 1 // Default to 1MB if unknown
+        });
+
+        console.log(`✅ Artifacts generated successfully for project ${request.projectId}:`, {
+          totalCost: artifactResult.totalCost,
+          totalSizeMB: artifactResult.totalSizeMB,
+          pdfUrl: artifactResult.pdf?.url,
+          presentationUrl: artifactResult.presentation?.url,
+          csvUrl: artifactResult.csv?.url,
+          dashboardUrl: artifactResult.dashboard?.url
+        });
+      } catch (artifactError) {
+        console.error(`❌ Failed to generate artifacts for project ${request.projectId}:`, artifactError);
+        if (artifactError instanceof Error) {
+          console.error(`❌ Artifact error stack:`, artifactError.stack);
+          console.error(`❌ Artifact error message:`, artifactError.message);
+        }
+
+        // Create a basic artifact record even if file generation fails
+        try {
+          console.log(`📝 Creating fallback artifact record for project ${request.projectId}...`);
+          const { nanoid } = await import('nanoid');
+          await storage.createArtifact({
+            id: nanoid(),
+            projectId: request.projectId,
+            type: 'analysis',
+            status: 'error',
+            output: {
+              error: artifactError instanceof Error ? artifactError.message : 'Unknown error',
+              analysisCompleted: true,
+              insightCount: allInsights.length,
+              recommendationCount: allRecommendations.length,
+              visualizationCount: allVisualizations.length
+            },
+            createdBy: request.userId,
+            metrics: {
+              artifactGenerationFailed: true,
+              errorTime: new Date().toISOString()
+            }
+          });
+          console.log(`✅ Fallback artifact record created for project ${request.projectId}`);
+        } catch (fallbackError) {
+          console.error(`❌ Failed to create fallback artifact record:`, fallbackError);
+        }
+      }
+
+      const totalElapsedSec = ((Date.now() - startTime) / 1000).toFixed(2);
+      console.log(`✅ Analysis execution completed in ${totalElapsedSec}s (Target: <60s for 2-minute SLA)`);
+
+      // Log decision for analysis completion
+      try {
+        await db.insert(decisionAudits).values({
+          id: nanoid(),
+          projectId: request.projectId,
+          agent: 'data_scientist',
+          decisionType: 'analysis_completed',
+          decision: `Analysis completed: ${allInsights.length} insights, ${allRecommendations.length} recommendations generated`,
+          reasoning: `Analysis executed successfully in ${totalElapsedSec}s. Generated ${allInsights.length} insights and ${allRecommendations.length} actionable recommendations from ${request.analysisTypes.length} analysis types.`,
+          alternatives: JSON.stringify([]),
+          confidence: 90,
+          context: JSON.stringify({
+            insightCount: allInsights.length,
+            recommendationCount: allRecommendations.length,
+            analysisTypes: request.analysisTypes,
+            executionTime: totalElapsedSec,
+            questionAnswersGenerated: !!results.questionAnswers
+          }),
+          userInput: null,
+          reversible: false,
+          impact: 'high',
+          timestamp: new Date()
+        });
+      } catch (auditError) {
+        console.warn('Failed to log analysis completion decision:', auditError);
+      }
+
+      // Week 2 Priority 1: Auto-Translation Integration
+      try {
+        const targetAudience = request.userContext?.audience?.primaryAudience || 'mixed';
+
+        // Only proceed if audience is specific
+        if (['executive', 'business', 'technical'].includes(targetAudience)) {
+          // Instantiate agent (Week 2 Fix: Call as instance method)
+          const businessAgent = new BusinessAgent();
+          await businessAgent.translateResults({
+            results,
+            audience: targetAudience,
+            decisionContext: request.userContext?.audience?.decisionContext || undefined
+          });
+
+          console.log('✅ Auto-translation complete');
+
+          // Log translation decision to audit trail
+          try {
+            const { nanoid } = await import('nanoid');
+            await db.insert(decisionAudits).values({
+              id: nanoid(),
+              projectId: request.projectId,
+              agent: 'business_analyst',
+              decisionType: 'result_translation',
+              decision: `Translated results for ${targetAudience} audience`,
+              reasoning: `Auto-translation triggered by audience setting: ${targetAudience}`,
+              alternatives: JSON.stringify(['mixed']),
+              confidence: 95,
+              context: JSON.stringify({
+                originalInsightCount: results.insights.length,
+                targetAudience
+              }),
+              userInput: null,
+              reversible: true,
+              impact: 'medium',
+              timestamp: new Date()
+            });
+          } catch (auditError) {
+            console.warn('Failed to log translation audit:', auditError);
+          }
+        }
+      } catch (translationError) {
+        // Silent fail for translation to not block results
+        console.warn('Auto-translation failed:', translationError);
+      }
+
+      return results;
+    } catch (error: any) {
+      // Roll back plan status if it was marked as executing
+      if (executionMarked && approvedPlanId) {
+        try {
+          await db
+            .update(analysisPlans)
+            .set({
+              status: 'approved',
+              executedAt: null,
+              updatedAt: new Date(),
+            })
+            .where(eq(analysisPlans.id, approvedPlanId));
+        } catch (rollbackError) {
+          console.error('Failed to roll back plan status:', rollbackError);
+        }
+      }
+
+      // Categorize and enhance error messages for better user feedback
+      const errorMsg = error?.message || String(error);
+      console.error(`❌ Analysis execution failed: ${errorMsg}`);
+
+      // Provide user-friendly error messages based on error type
+      if (errorMsg.includes('timeout') || errorMsg.includes('ETIMEDOUT')) {
+        throw new Error(
+          `Analysis timed out. Your dataset may be too large for real-time processing. Try: (1) reducing the number of analysis types, or (2) using a smaller dataset sample.`
+        );
+      }
+
+      if (errorMsg.includes('Python') || errorMsg.includes('python') || errorMsg.includes('spawn') || errorMsg.includes('ENOENT')) {
+        throw new Error(
+          `Analysis engine unavailable. Our Python analysis service is temporarily unavailable. Please try again in a few minutes. If the issue persists, contact support.`
+        );
+      }
+
+      if (errorMsg.includes('memory') || errorMsg.includes('heap') || errorMsg.includes('out of memory')) {
+        throw new Error(
+          `Dataset too large. Your dataset exceeds memory limits. Please try with a smaller dataset or reduce the number of columns being analyzed.`
+        );
+      }
+
+      if (errorMsg.includes('database') || errorMsg.includes('connection') || errorMsg.includes('ECONNREFUSED')) {
+        throw new Error(
+          `Database connection error. Unable to access project data. Please refresh the page and try again.`
+        );
+      }
+
+      // Re-throw with original message if it's already user-friendly (contains a period or is a full sentence)
+      if (errorMsg.includes('.') && errorMsg.length > 20) {
+        throw error;
+      }
+      // Default fallback with the original error for debugging
+      throw new Error(
+        `Analysis failed: ${errorMsg}. Please try again or contact support if the problem persists.`
+      );
     }
   }
 
@@ -371,7 +1285,8 @@ export class AnalysisExecutionService {
     dataset: any,
     analysisTypes: string[],
     projectId: string,
-    userContext: UserContext  // *** ADD USER CONTEXT PARAMETER ***
+    userContext: UserContext,
+    piiColumnsToExclude: Set<string>
   ): Promise<{
     insights: AnalysisInsight[];
     recommendations: AnalysisRecommendation[];
@@ -386,7 +1301,8 @@ export class AnalysisExecutionService {
       dataset,
       analysisTypes,
       projectId,
-      userContext
+      userContext,
+      piiColumnsToExclude
     });
 
     // Parse Python results into insights
@@ -410,10 +1326,12 @@ export class AnalysisExecutionService {
     analysisTypes: string[];
     projectId: string;
     userContext: UserContext;
+    piiColumnsToExclude?: Set<string>;
   }): Promise<any> {
-    const { dataset, analysisTypes, projectId, userContext } = params;
+    const { dataset, analysisTypes, projectId, userContext, piiColumnsToExclude } = params;
 
-    const datasetPayload = this.buildDatasetPayload(dataset, projectId);
+
+    const datasetPayload = this.buildDatasetPayload(dataset, projectId, piiColumnsToExclude);
 
     const analysisConfig = {
       analysisTypes,
@@ -449,14 +1367,33 @@ export class AnalysisExecutionService {
       return processorResult.data;
 
     } catch (error: any) {
-      console.error('❌ Python execution error:', error?.message || error);
-      return await this.basicDataProfilingFromDataset(dataset);
+      const errorMsg = error?.message || String(error);
+      console.error('❌ Python execution error:', errorMsg);
+
+      // Log specific error categorization for debugging
+      let errorCategory = 'unknown';
+      if (errorMsg.includes('timeout') || errorMsg.includes('ETIMEDOUT')) {
+        errorCategory = 'timeout';
+        console.error('⏱️ Python script timed out - falling back to basic profiling');
+      } else if (errorMsg.includes('spawn') || errorMsg.includes('ENOENT') || errorMsg.includes('python')) {
+        errorCategory = 'python_not_found';
+        console.error('🐍 Python interpreter issue - ensure Python is installed and in PATH');
+      } else if (errorMsg.includes('memory') || errorMsg.includes('heap')) {
+        errorCategory = 'memory';
+        console.error('💾 Memory issue - dataset may be too large for current configuration');
+      } else if (errorMsg.includes('parse') || errorMsg.includes('JSON')) {
+        errorCategory = 'parse_error';
+        console.error('📄 Failed to parse Python script output');
+      }
+
+      console.log(`📊 Falling back to basic data profiling (error category: ${errorCategory})`);
+      return await this.basicDataProfilingFromDataset(dataset, piiColumnsToExclude);
     }
   }
 
-  private static buildDatasetPayload(dataset: any, projectId: string) {
+  private static buildDatasetPayload(dataset: any, projectId: string, piiColumnsToExclude?: Set<string>) {
     const datasetName = dataset.originalFileName || dataset.name || dataset.datasetName || dataset.id;
-    const rows = this.extractDatasetRows(dataset);
+    const rows = this.extractDatasetRows(dataset, piiColumnsToExclude);
     const potentialPath = dataset.storageUri || dataset.filePath || dataset.file_path || null;
     const resolvedPath = potentialPath && typeof potentialPath === 'string' && !potentialPath.startsWith('mem://')
       ? potentialPath
@@ -479,39 +1416,143 @@ export class AnalysisExecutionService {
     };
   }
 
-  private static extractDatasetRows(dataset: any): any[] | null {
-    const candidates = [
-      dataset.data,
-      dataset.preview,
-      dataset.sampleData,
-      dataset.records
-    ];
+  /**
+   * GAP 2 FIX: Filter PII columns from data rows
+   * This is called after extractDatasetRows to ensure PII columns are never passed to analysis
+   */
+  private static filterPIIColumns(
+    rows: any[] | null,
+    columnsToExclude: Set<string>
+  ): any[] | null {
+    if (!rows || columnsToExclude.size === 0) {
+      return rows;
+    }
 
-    for (const candidate of candidates) {
-      if (!candidate) continue;
-      if (Array.isArray(candidate)) {
-        return candidate;
+    console.log(`🔒 [GAP 2 - PII] Filtering ${columnsToExclude.size} PII columns from ${rows.length} rows`);
+
+    const filteredRows = rows.map(row => {
+      const filteredRow: Record<string, any> = {};
+      for (const [key, value] of Object.entries(row)) {
+        // Skip column if it's in the exclude list (case-insensitive check)
+        const keyLower = key.toLowerCase();
+        const shouldExclude = Array.from(columnsToExclude).some(
+          col => col.toLowerCase() === keyLower
+        );
+        if (!shouldExclude) {
+          filteredRow[key] = value;
+        }
       }
-      if (Array.isArray(candidate?.rows)) {
-        return candidate.rows;
-      }
-      if (Array.isArray(candidate?.records)) {
-        return candidate.records;
-      }
-      if (Array.isArray(candidate?.items)) {
-        return candidate.items;
+      return filteredRow;
+    });
+
+    const removedCount = rows.length > 0 ? Object.keys(rows[0]).length - Object.keys(filteredRows[0] || {}).length : 0;
+    console.log(`🔒 [GAP 2 - PII] Removed ${removedCount} PII column(s) from data`);
+
+    return filteredRows;
+  }
+
+  /**
+   * Extract rows from a dataset, preferring transformed data over original.
+   *
+   * Week 4 Option B: This method uses DataAccessorService internally for
+   * consistent data resolution across the platform.
+   *
+   * Priority:
+   * 1. Transformed data (user-approved transformations)
+   * 2. Original data (upload source)
+   */
+  private static extractDatasetRows(dataset: any, columnsToExclude?: Set<string>): any[] | null {
+    let result: any[] | null = null;
+    let source: string = 'none';
+
+    // Week 4 Option B: Delegate to unified data accessor logic
+    // Priority 1: Use transformed data if available (from transformation step)
+    const transformedData = dataset?.ingestionMetadata?.transformedData;
+    if (Array.isArray(transformedData) && transformedData.length > 0) {
+      result = transformedData;
+      source = 'transformed (ingestionMetadata)';
+    }
+
+    // Priority 2: Check for transformed data in nested metadata locations
+    if (!result) {
+      const altTransformedData = dataset?.metadata?.transformedData;
+      if (Array.isArray(altTransformedData) && altTransformedData.length > 0) {
+        result = altTransformedData;
+        source = 'transformed (metadata)';
       }
     }
 
-    return null;
+    // Priority 3: Fall back to original data sources
+    if (!result) {
+      const candidates = [
+        { name: 'data', value: dataset.data },
+        { name: 'preview', value: dataset.preview },
+        { name: 'sampleData', value: dataset.sampleData },
+        { name: 'records', value: dataset.records },
+      ];
+
+      for (const { name, value } of candidates) {
+        if (!value) continue;
+        if (Array.isArray(value)) {
+          result = value;
+          source = `original (${name})`;
+          break;
+        }
+        if (Array.isArray(value?.rows)) {
+          result = value.rows;
+          source = `original (${name}.rows)`;
+          break;
+        }
+        if (Array.isArray(value?.records)) {
+          result = value.records;
+          source = `original (${name}.records)`;
+          break;
+        }
+        if (Array.isArray(value?.items)) {
+          result = value.items;
+          source = `original (${name}.items)`;
+          break;
+        }
+      }
+    }
+
+    if (!result) {
+      console.warn(`⚠️ [Week4] No data found for dataset ${dataset?.id || 'unknown'}`);
+      return null;
+    }
+
+    console.log(`📊 [Week4] Using ${source} (${result.length} rows) for analysis`);
+
+    // GAP 2 FIX: Always apply PII filtering using explicit parameter
+    if (columnsToExclude && columnsToExclude.size > 0) {
+      result = this.filterPIIColumns(result, columnsToExclude);
+    }
+
+    return result;
+  }
+
+  /**
+   * Week 4 Option B: Get project data using the unified DataAccessor service.
+   * This method provides a cleaner interface for getting all project data
+   * with proper transformed/original resolution.
+   */
+  private static async getProjectDataViaAccessor(projectId: string): Promise<{
+    datasets: DatasetDataResult[];
+    hasTransformations: boolean;
+  }> {
+    const result = await dataAccessor.getProjectData(projectId);
+    return {
+      datasets: result.datasets,
+      hasTransformations: result.hasAnyTransformations,
+    };
   }
 
   /**
    * Basic data profiling fallback (without Python)
    */
-  private static async basicDataProfilingFromDataset(dataset: any): Promise<any> {
+  private static async basicDataProfilingFromDataset(dataset: any, piiColumnsToExclude?: Set<string>): Promise<any> {
     console.warn(`⚠️ Falling back to basic profiling for dataset ${dataset.id}`);
-    const rows = this.extractDatasetRows(dataset) || [];
+    const rows = this.extractDatasetRows(dataset, piiColumnsToExclude) || [];
     const columns = rows.length > 0
       ? Object.keys(rows[0])
       : dataset.schema
@@ -743,6 +1784,7 @@ export class AnalysisExecutionService {
 
   /**
    * Retrieve stored analysis results
+   * Note: Route-level access check is now primary gate, this is secondary validation
    */
   static async getResults(projectId: string, userId: string): Promise<AnalysisResults | null> {
     const [project] = await db
@@ -754,10 +1796,9 @@ export class AnalysisExecutionService {
       throw new Error(`Project ${projectId} not found`);
     }
 
-    // Verify user owns project
-    if (project.userId !== userId) {
-      throw new Error('Access denied: User does not own this project');
-    }
+    // Note: Authorization is primarily handled at route level via canAccessProject()
+    // This check is secondary validation - route allows admin access
+    // Service layer just ensures project exists and returns results
 
     return project.analysisResults as AnalysisResults | null;
   }
@@ -801,7 +1842,15 @@ export class AnalysisExecutionService {
       .where(eq(projectDatasets.projectId, projectId));
 
     if (projectDatasetLinks.length === 0) {
-      throw new Error('No datasets found for this project');
+      // Check if project exists but has no data uploaded yet
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        throw new Error('Project not found');
+      }
+
+      throw new Error(
+        'No datasets have been uploaded for this project. Please upload data in the Data Upload step before previewing results.'
+      );
     }
 
     const dataset = projectDatasetLinks[0].dataset;
@@ -827,5 +1876,482 @@ export class AnalysisExecutionService {
       estimatedDuration: '15-30 minutes',
       expectedVisualizations: ['Overview Dashboard', 'Key Metrics Chart', 'Trend Analysis', 'Distribution Graphs']
     };
+  }
+
+  /**
+   * Execute comprehensive data science workflow using the orchestrator
+   * This method runs proper Python scripts and generates real artifacts
+   *
+   * Use this for full data science project execution with:
+   * - Data Quality Report
+   * - Statistical Analysis Report
+   * - ML Model Training & Artifacts
+   * - Visualizations
+   * - Question-Answer Evidence Chain
+   * - Executive Summary
+   */
+  static async executeComprehensiveAnalysis(request: AnalysisRequest): Promise<AnalysisResults> {
+    console.log(`🔬 [Comprehensive] Starting data science workflow for project ${request.projectId}`);
+
+    // Get user context
+    const userContext = await this.getUserContext(request.projectId, request.userId);
+
+    // Parse goals and questions
+    const userGoals = userContext.analysisGoal
+      ? userContext.analysisGoal.split(/[;\n]/).filter(g => g.trim())
+      : [];
+
+    const userQuestions = userContext.businessQuestions
+      ? userContext.businessQuestions.split(/[\n]/).filter(q => q.trim())
+      : [];
+
+    console.log(`🎯 Goals: ${userGoals.length}, Questions: ${userQuestions.length}`);
+
+    // ==========================================
+    // PHASE 6: Per-Analysis Execution Loop (Option B - Jan 2026)
+    // Execute each analysis separately with graceful degradation
+    // ==========================================
+    const perAnalysisResults = new Map<string, {
+      status: 'completed' | 'failed' | 'skipped';
+      insights: AnalysisInsight[];
+      visualizations: any[];
+      recommendations: any[];
+      error?: string;
+      executionTimeMs?: number;
+    }>();
+
+    // Check if we have analysisPath from DS recommendations
+    const analysisPath = request.analysisPath || [];
+    const usePerAnalysisExecution = analysisPath.length > 0;
+
+    // =======================================================================
+    // PHASE 6 FIX (Friction #2): Select optimal compute engine
+    // Uses ComputeEngineSelector to route to Local/Polars/Spark based on data size
+    // =======================================================================
+    let selectedEngine: ComputeSelectionResult = {
+      engine: 'local',
+      reason: 'Default local processing',
+      confidence: 0.9
+    };
+
+    // Get total record count for compute engine selection
+    let totalRecordCount = 0;
+    try {
+      const projectDatasetRecords = await db.select()
+        .from(projectDatasets)
+        .leftJoin(datasets, eq(projectDatasets.datasetId, datasets.id))
+        .where(eq(projectDatasets.projectId, request.projectId));
+
+      totalRecordCount = projectDatasetRecords.reduce((sum: number, pd: any) => {
+        return sum + (pd.datasets?.recordCount || 0);
+      }, 0);
+
+      // Determine most complex analysis type
+      const complexAnalysisTypes = ['machine_learning', 'clustering', 'anomaly_detection', 'time_series_forecasting'];
+      const mostComplexType = (request.analysisTypes || []).find(t => complexAnalysisTypes.includes(t)) ||
+                             analysisPath.find(a => complexAnalysisTypes.includes(a.analysisType || ''))?.analysisType ||
+                             'statistical';
+
+      // Select compute engine
+      selectedEngine = ComputeEngineSelector.selectEngine({
+        recordCount: totalRecordCount,
+        analysisType: mostComplexType,
+        complexity: 'intermediate',
+        availableResources: {
+          localMemoryMB: 4096,
+          sparkAvailable: process.env.SPARK_ENABLED === 'true',
+          polarsAvailable: true
+        }
+      });
+
+      console.log(`⚙️ [Compute Engine] Selected: ${selectedEngine.engine.toUpperCase()}`);
+      console.log(`   - Reason: ${selectedEngine.reason}`);
+      console.log(`   - Records: ${totalRecordCount.toLocaleString()}, Confidence: ${(selectedEngine.confidence * 100).toFixed(0)}%`);
+
+      // Get engine-specific configuration
+      const engineConfig = ComputeEngineSelector.getEngineConfig(selectedEngine.engine, {
+        recordCount: totalRecordCount,
+        analysisType: mostComplexType
+      });
+      console.log(`   - Config: ${JSON.stringify(engineConfig)}`);
+    } catch (err: any) {
+      console.warn(`⚠️ [Compute Engine] Selection failed, using local: ${err.message}`);
+    }
+
+    let results: DataScienceResults;
+
+    if (usePerAnalysisExecution && analysisPath.length > 0) {
+      console.log(`📊 [Phase 6] PARALLEL per-analysis execution mode: ${analysisPath.length} analyses`);
+      console.log(`   - Using compute engine: ${selectedEngine.engine.toUpperCase()}`);
+
+      // PHASE 6 FIX (Friction #1): Execute analyses in PARALLEL using Promise.allSettled
+      // This maintains graceful degradation - if one analysis fails, others continue
+      const parallelStartTime = Date.now();
+
+      // Create analysis execution promises
+      const analysisPromises = analysisPath.map(async (analysis) => {
+        const analysisId = analysis.analysisId || `analysis_${nanoid(8)}`;
+        const analysisType = analysis.analysisType || 'descriptive';
+        const startTime = Date.now();
+
+        console.log(`  🚀 Launching parallel: ${analysis.analysisName} (${analysisType})`);
+
+        try {
+          // Execute single analysis
+          const singleResult = await dataScienceOrchestrator.executeWorkflow({
+            projectId: request.projectId,
+            userId: request.userId,
+            analysisTypes: [analysisType],
+            userGoals,
+            userQuestions,
+            datasetIds: request.datasetIds
+          });
+
+          const executionTimeMs = Date.now() - startTime;
+          console.log(`  ✅ Completed: ${analysis.analysisName} (${executionTimeMs}ms)`);
+
+          return {
+            analysisId,
+            analysis,
+            analysisType,
+            singleResult,
+            executionTimeMs,
+            status: 'completed' as const
+          };
+        } catch (error: any) {
+          const executionTimeMs = Date.now() - startTime;
+          console.error(`  ❌ Failed: ${analysis.analysisName} - ${error.message}`);
+
+          return {
+            analysisId,
+            analysis,
+            analysisType,
+            error: error.message,
+            executionTimeMs,
+            status: 'failed' as const
+          };
+        }
+      });
+
+      // Wait for all analyses to complete (Promise.allSettled ensures all complete)
+      const settledResults = await Promise.allSettled(analysisPromises);
+
+      const parallelTotalTime = Date.now() - parallelStartTime;
+      console.log(`📊 [Phase 6] All ${analysisPath.length} analyses completed in ${parallelTotalTime}ms (parallel)`);
+
+      // Process results and merge
+      let mergedInsights: any[] = [];
+      let mergedVisualizations: any[] = [];
+      let mergedRecommendations: any[] = [];
+      let mergedQuestionAnswers: any[] = [];
+      let insightIdCounter = 1;
+
+      for (const settled of settledResults) {
+        if (settled.status === 'rejected') {
+          // This shouldn't happen since we catch errors above, but handle it just in case
+          console.error(`  ⚠️ Unexpected rejection:`, settled.reason);
+          continue;
+        }
+
+        const result = settled.value;
+        const { analysisId, analysis, analysisType, executionTimeMs } = result;
+
+        if (result.status === 'failed') {
+          // Store failure (graceful degradation)
+          perAnalysisResults.set(analysisId, {
+            status: 'failed',
+            insights: [],
+            visualizations: [],
+            recommendations: [],
+            error: result.error,
+            executionTimeMs
+          });
+          continue;
+        }
+
+        const { singleResult } = result;
+
+        // Convert to insights for this analysis
+        const analysisInsights: AnalysisInsight[] = [];
+
+        // Extract insights from this single analysis result
+        for (const corr of (singleResult.statisticalAnalysisReport?.correlationMatrix?.significantCorrelations || []).slice(0, 3)) {
+          analysisInsights.push({
+            id: insightIdCounter++,
+            title: `[${analysis.analysisName}] ${corr.var1} & ${corr.var2}`,
+            description: `Found ${corr.correlation > 0 ? 'positive' : 'negative'} correlation (r=${corr.correlation.toFixed(3)})`,
+            impact: Math.abs(corr.correlation) > 0.7 ? 'High' : 'Medium',
+            confidence: Math.round((1 - corr.pValue) * 100),
+            category: analysis.analysisName,
+            dataSource: analysisType,
+            details: { ...corr, sourceAnalysisId: analysisId }
+          });
+        }
+
+        // Tag visualizations with source analysis
+        const taggedViz = (singleResult.visualizations || []).map((v: any) => ({
+          ...v,
+          sourceAnalysisId: analysisId,
+          sourceAnalysisName: analysis.analysisName
+        }));
+
+        // Store per-analysis result
+        perAnalysisResults.set(analysisId, {
+          status: 'completed',
+          insights: analysisInsights,
+          visualizations: taggedViz,
+          recommendations: (singleResult.executiveSummary?.recommendations || []).map((r: any) => ({
+            ...r,
+            sourceAnalysisId: analysisId
+          })),
+          executionTimeMs
+        });
+
+        // Merge into overall results
+        mergedInsights = mergedInsights.concat(analysisInsights);
+        mergedVisualizations = mergedVisualizations.concat(taggedViz);
+        mergedRecommendations = mergedRecommendations.concat(
+          (singleResult.executiveSummary?.recommendations || []).map((r: any) => ({
+            ...r,
+            sourceAnalysisId: analysisId
+          }))
+        );
+        mergedQuestionAnswers = mergedQuestionAnswers.concat(
+          (singleResult.executiveSummary?.answersToQuestions || []).map((qa: any) => ({
+            ...qa,
+            sourceAnalysisId: analysisId
+          }))
+        );
+      }
+
+      // Build combined results from per-analysis execution
+      const completedCount = Array.from(perAnalysisResults.values()).filter(r => r.status === 'completed').length;
+      console.log(`📊 [Phase 6] Completed ${completedCount}/${analysisPath.length} analyses`);
+
+      // Create a synthetic DataScienceResults from merged data
+      const executionStartTime = new Date();
+      results = {
+        projectId: request.projectId,
+        executionId: nanoid(),
+        startedAt: executionStartTime,
+        completedAt: new Date(),
+        dataQualityReport: {
+          overallScore: 85,
+          missingValueAnalysis: [],
+          outlierDetection: [],
+          distributionAssessments: [],
+          piiDetection: []
+        },
+        statisticalAnalysisReport: {
+          descriptiveStats: [],
+          correlationMatrix: { columns: [], matrix: [], significantCorrelations: [] },
+          hypothesisTests: []
+        },
+        mlModels: [],
+        visualizations: mergedVisualizations,
+        executiveSummary: {
+          keyFindings: mergedInsights.map(i => i.title),
+          recommendations: mergedRecommendations,
+          answersToQuestions: mergedQuestionAnswers,
+          nextSteps: []
+        },
+        questionAnalysisLinks: [],
+        metadata: {
+          totalRows: 0,
+          totalColumns: 0,
+          analysisTypes: request.analysisTypes,
+          executionTimeMs: Array.from(perAnalysisResults.values()).reduce((sum, r) => sum + (r.executionTimeMs || 0), 0),
+          pythonScriptsUsed: analysisPath.map(a => a.analysisType || 'unknown')
+        }
+      };
+    } else {
+      // Fallback: Execute all analyses together (legacy behavior)
+      console.log(`📊 [Phase 6] Monolithic execution mode (no analysisPath)`);
+      results = await dataScienceOrchestrator.executeWorkflow({
+        projectId: request.projectId,
+        userId: request.userId,
+        analysisTypes: request.analysisTypes,
+        userGoals,
+        userQuestions,
+        datasetIds: request.datasetIds
+      });
+    }
+
+    // Convert orchestrator results to legacy format for backward compatibility
+    const legacyInsights: AnalysisInsight[] = [];
+    let insightId = 1;
+
+    // Convert data quality findings to insights
+    if (results.dataQualityReport.overallScore < 80) {
+      legacyInsights.push({
+        id: insightId++,
+        title: 'Data Quality Assessment',
+        description: `Overall data quality score: ${results.dataQualityReport.overallScore.toFixed(0)}%. ${results.dataQualityReport.missingValueAnalysis.filter(m => m.missingPercent > 5).length} columns have notable missing values.`,
+        impact: results.dataQualityReport.overallScore < 60 ? 'High' : 'Medium',
+        confidence: 95,
+        category: 'Data Quality',
+        details: results.dataQualityReport
+      });
+    }
+
+    // Convert statistical findings to insights
+    for (const corr of results.statisticalAnalysisReport.correlationMatrix.significantCorrelations.slice(0, 5)) {
+      legacyInsights.push({
+        id: insightId++,
+        title: `Strong Correlation: ${corr.var1} & ${corr.var2}`,
+        description: `Found ${corr.correlation > 0 ? 'positive' : 'negative'} correlation (r=${corr.correlation.toFixed(3)}, p=${corr.pValue.toFixed(4)})`,
+        impact: Math.abs(corr.correlation) > 0.7 ? 'High' : 'Medium',
+        confidence: Math.round((1 - corr.pValue) * 100),
+        category: 'Correlation',
+        details: corr
+      });
+    }
+
+    // Convert ML model results to insights
+    for (const model of results.mlModels) {
+      const metricDescription = model.problemType === 'regression'
+        ? `R² = ${(model.metrics.r2 || 0).toFixed(3)}, RMSE = ${(model.metrics.rmse || 0).toFixed(3)}`
+        : model.problemType === 'classification'
+          ? `Accuracy = ${((model.metrics.accuracy || 0) * 100).toFixed(1)}%, F1 = ${((model.metrics.f1Score || 0) * 100).toFixed(1)}%`
+          : `Silhouette Score = ${(model.metrics.silhouetteScore || 0).toFixed(3)}`;
+
+      legacyInsights.push({
+        id: insightId++,
+        title: `${model.modelType} Model Results`,
+        description: `${model.problemType} model trained. ${metricDescription}. Top features: ${model.featureImportance.slice(0, 3).map(f => f.feature).join(', ')}`,
+        impact: 'High',
+        confidence: model.problemType === 'regression'
+          ? Math.round((model.metrics.r2 || 0.5) * 100)
+          : Math.round((model.metrics.accuracy || model.metrics.silhouetteScore || 0.5) * 100),
+        category: 'Machine Learning',
+        details: model
+      });
+    }
+
+    // Add question-answer insights
+    for (const qa of results.executiveSummary.answersToQuestions) {
+      legacyInsights.push({
+        id: insightId++,
+        title: `Answer: ${qa.question.substring(0, 50)}...`,
+        description: qa.answer,
+        impact: qa.confidence > 0.7 ? 'High' : 'Medium',
+        confidence: Math.round(qa.confidence * 100),
+        category: 'Question Answer',
+        details: { evidence: qa.evidence }
+      });
+    }
+
+    // Generate legacy recommendations
+    const legacyRecommendations: AnalysisRecommendation[] = results.executiveSummary.recommendations.map((rec, idx) => ({
+      id: idx + 1,
+      title: rec.text.substring(0, 50),
+      description: rec.text,
+      priority: rec.priority === 'high' ? 'High' : rec.priority === 'medium' ? 'Medium' : 'Low',
+      effort: 'Medium',
+      expectedImpact: rec.expectedImpact
+    }));
+
+    // Update project with comprehensive results
+    const completedAt = new Date();
+    const legacyResults: AnalysisResults = {
+      projectId: request.projectId,
+      analysisTypes: request.analysisTypes,
+      insights: legacyInsights,
+      recommendations: legacyRecommendations,
+      visualizations: results.visualizations.map(v => ({
+        id: v.id,
+        type: v.type,
+        title: v.title,
+        description: v.description,
+        data: v.data,
+        config: v.config
+      })),
+      summary: {
+        totalAnalyses: request.analysisTypes.length,
+        dataRowsProcessed: results.metadata.totalRows,
+        columnsAnalyzed: results.metadata.totalColumns,
+        executionTime: `${(results.metadata.executionTimeMs / 1000).toFixed(1)} seconds`,
+        qualityScore: results.dataQualityReport.overallScore
+      },
+      metadata: {
+        executedAt: completedAt,
+        datasetNames: [],
+        techniques: results.metadata.pythonScriptsUsed
+      },
+      questionAnswers: {
+        projectId: request.projectId,
+        answers: results.executiveSummary.answersToQuestions.map(qa => ({
+          question: qa.question,
+          answer: qa.answer,
+          confidence: qa.confidence * 100,
+          sources: qa.evidence,
+          relatedInsights: [],
+          status: qa.confidence > 0.5 ? 'answered' as const : 'partial' as const,
+          generatedAt: completedAt
+        })),
+        generatedBy: 'data-science-orchestrator',
+        generatedAt: completedAt,
+        totalQuestions: results.executiveSummary.answersToQuestions.length,
+        answeredCount: results.executiveSummary.answersToQuestions.filter(a => a.confidence > 0.5).length
+      },
+      questionAnswerMapping: results.questionAnalysisLinks.map(link => ({
+        questionId: link.questionId,
+        questionText: link.questionText,
+        requiredDataElements: link.dataElements,
+        recommendedAnalyses: link.analysisTypes,
+        transformationsNeeded: [],
+        expectedArtifacts: link.findings.map(f => ({
+          artifactType: 'report' as const,
+          description: f.title
+        }))
+      })),
+      // ==========================================
+      // PHASE 6: Per-Analysis Breakdown Storage (Jan 2026)
+      // Stores per-analysis results for granular dashboard view
+      // ==========================================
+      perAnalysisBreakdown: usePerAnalysisExecution
+        ? Object.fromEntries(perAnalysisResults)
+        : undefined,
+      analysisStatuses: usePerAnalysisExecution
+        ? Array.from(perAnalysisResults.entries()).map(([analysisId, result]) => {
+            const analysisInfo = analysisPath.find(a => a.analysisId === analysisId);
+            return {
+              analysisId,
+              analysisName: analysisInfo?.analysisName || 'Unknown',
+              analysisType: analysisInfo?.analysisType || 'unknown',
+              status: result.status,
+              insightCount: result.insights?.length || 0,
+              errorMessage: result.error,
+              executionTimeMs: result.executionTimeMs,
+              // PHASE 6 FIX (ROOT CAUSE #3): Include requiredDataElements for traceability
+              // This allows the dashboard to show which data elements were used per analysis
+              requiredDataElements: analysisInfo?.requiredDataElements || []
+            };
+          })
+        : undefined
+    };
+
+    // Store in database
+    await db
+      .update(projects)
+      .set({
+        analysisResults: legacyResults as any,
+        analysisExecutedAt: completedAt,
+        updatedAt: completedAt
+      })
+      .where(eq(projects.id, request.projectId));
+
+    // Log per-analysis status summary
+    if (usePerAnalysisExecution) {
+      const statusSummary = Array.from(perAnalysisResults.entries())
+        .map(([id, r]) => `${id}: ${r.status}`)
+        .join(', ');
+      console.log(`📊 [Phase 6] Per-analysis statuses: ${statusSummary}`);
+    }
+
+    console.log(`✅ [Comprehensive] Data science workflow completed for project ${request.projectId}`);
+
+    // Return legacyResults (AnalysisResults format) for route compatibility
+    return legacyResults;
   }
 }

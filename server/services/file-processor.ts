@@ -1,5 +1,6 @@
 import * as Papa from 'papaparse';
 import * as XLSX from 'xlsx';
+import { UnifiedPIIProcessor } from './unified-pii-processor';
 
 interface SchemaColumn {
     name: string;
@@ -141,7 +142,9 @@ export class FileProcessor {
                 const result = Papa.parse<Record<string, unknown>>(csvString, {
                     header: true,
                     dynamicTyping: true,
-                    skipEmptyLines: true
+                    skipEmptyLines: true,
+                    delimiter: "", // Auto-detect delimiter
+                    comments: "#"
                 });
 
                 if (result.errors.length > 0) {
@@ -286,6 +289,8 @@ export class FileProcessor {
         return uniqueValues.size === values.length;
     }
 
+
+
     /**
      * Calculate comprehensive data quality metrics
      */
@@ -310,8 +315,9 @@ export class FileProcessor {
         const uniqueRows = new Set(data.map(row => JSON.stringify(row)));
         const duplicateRows = totalRows - uniqueRows.size;
 
-        // Detect potential PII fields
-        const potentialPIIFields = this.detectPIIFields(schema);
+        // Detect potential PII fields using UnifiedPIIProcessor
+        const piiResult = UnifiedPIIProcessor.processPIIData(data, schema);
+        const potentialPIIFields = piiResult.piiFields;
 
         // Calculate overall data quality score
         const qualityScore = this.calculateQualityScore(
@@ -332,33 +338,6 @@ export class FileProcessor {
     }
 
     /**
-     * Detect potential PII fields based on column names and patterns
-     */
-    private static detectPIIFields(schema: Record<string, SchemaColumn>): string[] {
-        const piiKeywords = [
-            'email', 'phone', 'ssn', 'social', 'security',
-            'password', 'credit', 'card', 'address', 'zipcode',
-            'postal', 'name', 'firstname', 'lastname', 'dob',
-            'birth', 'age', 'gender', 'passport', 'license'
-        ];
-
-        const piiFields: string[] = [];
-
-        for (const [columnName, columnInfo] of Object.entries(schema)) {
-            const lowerName = columnName.toLowerCase().replace(/[_\s]/g, '');
-
-            for (const keyword of piiKeywords) {
-                if (lowerName.includes(keyword)) {
-                    piiFields.push(columnName);
-                    break;
-                }
-            }
-        }
-
-        return piiFields;
-    }
-
-    /**
      * Calculate overall data quality score (0-100)
      */
     private static calculateQualityScore(
@@ -367,16 +346,20 @@ export class FileProcessor {
         totalRows: number,
         schema: Record<string, SchemaColumn>
     ): number {
-        // Completeness weight: 40%
-        const completenessScore = completeness * 0.4;
+        // Completeness is already 0-100 percentage, convert to 0-1 ratio
+        const completenessRatio = completeness / 100;
 
-        // Uniqueness weight: 30%
-        const uniquenessScore = ((totalRows - duplicateRows) / totalRows) * 100 * 0.3;
+        // Uniqueness ratio (0-1)
+        const uniquenessRatio = (totalRows - duplicateRows) / totalRows;
 
-        // Consistency weight: 30% (based on type consistency)
-        const consistencyScore = this.calculateConsistencyScore(schema) * 0.3;
+        // Consistency score (0-100), convert to 0-1 ratio
+        const consistencyRatio = this.calculateConsistencyScore(schema) / 100;
 
-        return Math.round(completenessScore + uniquenessScore + consistencyScore);
+        // Weighted average: 40% completeness, 30% uniqueness, 30% consistency
+        const weightedScore = (completenessRatio * 0.4) + (uniquenessRatio * 0.3) + (consistencyRatio * 0.3);
+
+        // Convert back to 0-100 percentage
+        return Math.round(weightedScore * 100);
     }
 
     /**

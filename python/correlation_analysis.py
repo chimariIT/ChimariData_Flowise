@@ -145,15 +145,41 @@ def perform_correlation_analysis(config):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
+    import os
+
+    config = None
+
+    # Priority 1: Check CONFIG environment variable
+    if os.environ.get('CONFIG'):
+        try:
+            config = json.loads(os.environ['CONFIG'])
+        except:
+            pass
+
+    # Priority 2: Check stdin
+    if config is None and not sys.stdin.isatty():
+        try:
+            stdin_data = sys.stdin.read().strip()
+            if stdin_data:
+                config = json.loads(stdin_data)
+        except:
+            pass
+
+    # Priority 3: Check command line argument
+    if config is None and len(sys.argv) == 2:
+        try:
+            config = json.loads(sys.argv[1])
+        except:
+            pass
+
+    if config is None:
         print(json.dumps({
             'success': False,
-            'error': 'Usage: python3 correlation_analysis.py <config_json>'
+            'error': 'Usage: python3 correlation_analysis.py <config_json> OR pipe JSON to stdin OR set CONFIG env var'
         }))
         sys.exit(1)
 
     try:
-        config = json.loads(sys.argv[1])
         result = perform_correlation_analysis(config)
         print(json.dumps(result))
         sys.exit(0 if result.get('success') else 1)

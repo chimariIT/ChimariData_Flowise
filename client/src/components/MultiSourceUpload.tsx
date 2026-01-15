@@ -137,7 +137,7 @@ export function MultiSourceUpload({
         const projectResponse = await apiClient.createProject({
           name: file.name.split('.')[0],
           description: `Uploaded from ${selectedSource}`,
-          journeyType: 'ai_guided'
+          journeyType: 'non-tech'
         });
 
         const projectData = projectResponse?.project ?? projectResponse;

@@ -10,7 +10,8 @@
  * - Graph analysis
  */
 
-import { PythonProcessor } from './enhanced-python-processor';
+import { PythonProcessor } from './python-processor';
+import { SocketManager } from '../socket-manager';
 import { ToolExecutionContext, ToolExecutionResult } from './real-tool-handlers';
 
 export interface SparkJobConfig {
@@ -31,11 +32,11 @@ export interface SparkDatasetInfo {
 }
 
 export class SparkVisualizationEngine {
-  private pythonProcessor: PythonProcessor;
+  // private pythonProcessor: PythonProcessor; // Removed
   private sparkConfig: SparkJobConfig;
 
   constructor() {
-    this.pythonProcessor = new PythonProcessor();
+    // this.pythonProcessor = new PythonProcessor(); // Removed
     this.sparkConfig = {
       master: process.env.SPARK_MASTER_URL || 'local[*]',
       appName: 'ChimariData-Visualization',
@@ -58,16 +59,40 @@ export class SparkVisualizationEngine {
       sizeBy?: string;
       interactive?: boolean;
       exportFormat?: string;
+      projectId?: string; // Added projectId to type definition
     }
   ): Promise<ToolExecutionResult> {
     const startTime = Date.now();
-    
+
     try {
       console.log(`🔥 Creating distributed visualization with Spark for ${data.length} records`);
-      
-      // Check if data is large enough to benefit from Spark
-      const shouldUseSpark = data.length > 100000 || this.estimateMemoryUsage(data) > 100; // MB
-      
+
+      // Use ComputeEngineSelector for consistency
+      const { ComputeEngineSelector } = require('./compute-engine-selector');
+      const selection = ComputeEngineSelector.selectEngine({
+        recordCount: data.length,
+        analysisType: 'visualization',
+        complexity: config.chartType === 'scatter' ? 'intermediate' : 'basic',
+        availableResources: {
+          localMemoryMB: 4096,
+          sparkAvailable: true
+        }
+      });
+
+      const shouldUseSpark = selection.engine === 'spark';
+
+      if (shouldUseSpark) {
+        // Emit Spark start event
+        if (config.projectId) {
+          SocketManager.getInstance().emitToProject(config.projectId, 'execution_progress', {
+            projectId: config.projectId,
+            status: 'running',
+            overallProgress: 20,
+            currentStep: { id: 'spark_viz', name: 'Spark Visualization', status: 'running', description: `Initializing Spark cluster (${selection.reason})...` }
+          });
+        }
+      }
+
       if (!shouldUseSpark) {
         console.log('📊 Dataset too small for Spark - falling back to regular visualization');
         return this.fallbackToRegularVisualization(data, config, startTime);
@@ -75,10 +100,10 @@ export class SparkVisualizationEngine {
 
       // Create Spark visualization script
       const sparkScript = this.generateSparkVisualizationScript(data, config);
-      
+
       // Execute Spark job
-      await this.pythonProcessor.initialize();
-      const result = await this.pythonProcessor.executePythonScript(sparkScript, {
+      await PythonProcessor.initialize();
+      const result = await PythonProcessor.executePythonScript(sparkScript, {
         SPARK_MASTER_URL: this.sparkConfig.master,
         SPARK_APP_NAME: this.sparkConfig.appName,
         SPARK_EXECUTOR_MEMORY: this.sparkConfig.executorMemory,
@@ -323,11 +348,11 @@ finally:
 }
 
 export class SparkStatisticalAnalyzer {
-  private pythonProcessor: PythonProcessor;
+  // private pythonProcessor: PythonProcessor; // Removed
   private sparkConfig: SparkJobConfig;
 
   constructor() {
-    this.pythonProcessor = new PythonProcessor();
+    // this.pythonProcessor = new PythonProcessor(); // Removed
     this.sparkConfig = {
       master: process.env.SPARK_MASTER_URL || 'local[*]',
       appName: 'ChimariData-Statistics',
@@ -349,13 +374,24 @@ export class SparkStatisticalAnalyzer {
     }
   ): Promise<ToolExecutionResult> {
     const startTime = Date.now();
-    
+
     try {
       console.log(`📊 Performing distributed statistical analysis with Spark for ${data.length} records`);
-      
-      // Check if data is large enough to benefit from Spark
-      const shouldUseSpark = data.length > 50000;
-      
+
+      // Use ComputeEngineSelector for consistency
+      const { ComputeEngineSelector } = require('./compute-engine-selector');
+      const selection = ComputeEngineSelector.selectEngine({
+        recordCount: data.length,
+        analysisType: config.analysisType,
+        complexity: config.analysisType === 'anova' ? 'intermediate' : 'basic',
+        availableResources: {
+          localMemoryMB: 4096,
+          sparkAvailable: true
+        }
+      });
+
+      const shouldUseSpark = selection.engine === 'spark';
+
       if (!shouldUseSpark) {
         console.log('📈 Dataset too small for Spark - falling back to regular analysis');
         return this.fallbackToRegularAnalysis(data, config, startTime);
@@ -363,10 +399,10 @@ export class SparkStatisticalAnalyzer {
 
       // Create Spark analysis script
       const sparkScript = this.generateSparkAnalysisScript(data, config);
-      
+
       // Execute Spark job
-      await this.pythonProcessor.initialize();
-      const result = await this.pythonProcessor.executePythonScript(sparkScript, {
+      await PythonProcessor.initialize();
+      const result = await PythonProcessor.executePythonScript(sparkScript, {
         SPARK_MASTER_URL: this.sparkConfig.master,
         SPARK_APP_NAME: this.sparkConfig.appName
       }, 30000) as Record<string, any>;

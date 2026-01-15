@@ -1,9 +1,24 @@
 import jwt from 'jsonwebtoken';
 import { nanoid } from 'nanoid';
 
-const DEFAULT_JWT_SECRET = 'chimari-dev-secret-key-change-in-production-2024';
+// Security: Do not use default secret in production
+if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
+  throw new Error('FATAL: JWT_SECRET is not defined in production environment');
+}
 
-const resolveJwtSecret = (): string => process.env.JWT_SECRET || DEFAULT_JWT_SECRET;
+const JWT_SECRET = process.env.JWT_SECRET;
+
+if (!JWT_SECRET && process.env.NODE_ENV !== 'production') {
+  console.warn('WARNING: JWT_SECRET not set. Using insecure default for development only.');
+}
+
+const resolveJwtSecret = (): string => {
+  if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('FATAL: JWT_SECRET is not defined in production environment');
+  }
+  return 'chimari-dev-secret-key-change-in-production-2024';
+};
 
 export interface TokenData {
   userId: string;
@@ -82,7 +97,7 @@ export class TokenStorage {
   refreshToken(token: string): string | null {
     const decoded = this.validateToken(token);
     if (!decoded) return null;
-    
+
     return this.generateToken(decoded.userId, decoded.email);
   }
 

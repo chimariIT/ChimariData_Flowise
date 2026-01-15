@@ -15,6 +15,12 @@ export interface ArtifactConfig {
   visualizations: any[];
   insights: string[];
   datasetSizeMB: number;
+  // ✅ GAP 7 FIX: PII configuration for artifact filtering
+  piiConfig?: {
+    excludedColumns: string[];
+    anonymizationApplied: boolean;
+    piiColumnsRemoved: string[];
+  };
 }
 
 export interface GeneratedArtifacts {
@@ -337,7 +343,24 @@ export class ArtifactGenerator {
 
     fs.mkdirSync(artifactDir, { recursive: true });
 
-    const worksheet = XLSX.utils.json_to_sheet(config.analysisResults);
+    // ✅ GAP 7 FIX: Filter out PII columns from CSV export
+    let dataToExport = config.analysisResults;
+    if (config.piiConfig && config.piiConfig.excludedColumns.length > 0) {
+      const excludedCols = new Set(config.piiConfig.excludedColumns.map(c => c.toLowerCase()));
+      console.log(`🔒 [GAP 7 FIX] Filtering ${excludedCols.size} PII columns from CSV export`);
+
+      dataToExport = config.analysisResults.map((row: any) => {
+        const filteredRow: Record<string, any> = {};
+        for (const key of Object.keys(row)) {
+          if (!excludedCols.has(key.toLowerCase())) {
+            filteredRow[key] = row[key];
+          }
+        }
+        return filteredRow;
+      });
+    }
+
+    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
     const csv = XLSX.utils.sheet_to_csv(worksheet);
 
     fs.writeFileSync(outputPath, csv);
@@ -359,11 +382,33 @@ export class ArtifactGenerator {
 
     fs.mkdirSync(artifactDir, { recursive: true });
 
+    // ✅ P0-4: Filter out PII columns from JSON export
+    let dataToExport = config.analysisResults;
+    if (config.piiConfig && config.piiConfig.excludedColumns.length > 0) {
+      const excludedCols = new Set(config.piiConfig.excludedColumns.map(c => c.toLowerCase()));
+      console.log(`🔒 [P0-4] Filtering ${excludedCols.size} PII columns from JSON export`);
+
+      dataToExport = config.analysisResults.map((row: any) => {
+        const filteredRow: Record<string, any> = {};
+        for (const key of Object.keys(row)) {
+          if (!excludedCols.has(key.toLowerCase())) {
+            filteredRow[key] = row[key];
+          }
+        }
+        return filteredRow;
+      });
+    }
+
     const jsonData = {
       projectId: config.projectId,
       timestamp: new Date().toISOString(),
-      results: config.analysisResults,
-      metadata: { engine: 'python-spark-hybrid' }
+      results: dataToExport, // Use filtered data instead of raw analysisResults
+      metadata: {
+        engine: 'python-spark-hybrid',
+        // P0-4: Include PII filtering info in metadata
+        piiColumnsRemoved: config.piiConfig?.excludedColumns || [],
+        anonymizationApplied: config.piiConfig?.anonymizationApplied || false
+      }
     };
 
     fs.writeFileSync(outputPath, JSON.stringify(jsonData, null, 2));
@@ -409,5 +454,41 @@ export class ArtifactGenerator {
     const finalPrice = basePrice * sizeMultiplier;
 
     return Math.round(finalPrice);
+  }
+}
+
+// RealtimeServer integration for artifact completion notifications
+let realtimeServer: any = null;
+
+/**
+ * Set the RealtimeServer instance for artifact completion notifications
+ */
+export function setRealtimeServer(server: any): void {
+  realtimeServer = server;
+  console.log('✅ ArtifactGenerator: RealtimeServer connected for completion notifications');
+}
+
+/**
+ * Get the RealtimeServer instance
+ */
+export function getRealtimeServer(): any {
+  return realtimeServer;
+}
+
+/**
+ * Notify clients when artifact generation is complete
+ */
+export function notifyArtifactComplete(projectId: string, artifactType: string, url: string): void {
+  if (realtimeServer) {
+    try {
+      realtimeServer.broadcastToProject(projectId, {
+        type: 'artifact_complete',
+        artifactType,
+        url,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      console.warn('Failed to broadcast artifact completion:', error);
+    }
   }
 }

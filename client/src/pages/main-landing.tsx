@@ -43,12 +43,12 @@ export default function MainLandingPage({ user, onLogout }: MainLandingPageProps
   // Journey selection handler for pre-authentication users
   const handleJourneySelect = (journeyType: string) => {
     if (user) {
-      // Authenticated users go directly to journey
-      setLocation(`/journeys/${journeyType}/prepare`);
+      // Authenticated users go directly to Data Upload & Setup step (step 1) with ?new=true to clear prefilled data
+      setLocation(`/journeys/${journeyType}/data?new=true`);
     } else {
-      // Store the intended journey for post-auth redirect
+      // Store the intended journey for post-auth redirect (with ?new=true)
       localStorage.setItem('intended_journey', journeyType);
-      localStorage.setItem('intended_route', `/journeys/${journeyType}/prepare`);
+      localStorage.setItem('intended_route', `/journeys/${journeyType}/data?new=true`);
       // Redirect to registration to authenticate first
       setLocation('/auth/register');
     }

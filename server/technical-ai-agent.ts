@@ -378,7 +378,7 @@ export class TechnicalAIAgent {
     params: any,
     apiKey?: string
   ): Promise<{ content: string; tokensUsed: number }> {
-    const key = apiKey || process.env.GEMINI_API_KEY;
+    const key = apiKey || process.env.GOOGLE_AI_API_KEY || process.env.GEMINI_API_KEY;
     if (!key) {
       throw new Error('Gemini API key not available');
     }

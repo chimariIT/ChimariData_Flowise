@@ -1,5 +1,5 @@
 import { MCPAIService, AIRole, MCPResource, AIRequest, AIAction } from './mcp-ai-service';
-import { FileProcessor } from './file-processor';
+import { FileProcessor } from './services/file-processor';
 import { MLService, MLAnalysisRequest } from './ml-service';
 import { AdvancedAnalyzer } from './advanced-analyzer';
 import { VisualizationAPIService } from './visualization-api-service';
@@ -461,7 +461,7 @@ export class EnhancedMCPService extends MCPAIService {
     }
 
     // Generate schema using FileProcessor
-    const schema = FileProcessor['generateSchema'](data);
+    const schema = (FileProcessor as any).generateSchema(data);
 
     await this.logDecision(
       context.projectId || 'unknown',
@@ -704,12 +704,12 @@ export class EnhancedMCPService extends MCPAIService {
           industryContext: context.industryContext,
           template: template
             ? {
-                id: template.templateId,
-                name: template.name,
-                goals: template.goals,
-                workflow: template.workflow,
-                deliverables: template.deliverables
-              }
+              id: template.templateId,
+              name: template.name,
+              goals: template.goals,
+              workflow: template.workflow,
+              deliverables: template.deliverables
+            }
             : undefined
         },
         resourcesNeeded: ['gemini-2.5-flash', 'business_templates']

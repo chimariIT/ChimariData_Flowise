@@ -75,9 +75,9 @@ describe('UserRoleEnum', () => {
 
 describe('JourneyTypeEnum', () => {
   test('parses valid journey types', () => {
-    expect(JourneyTypeEnum.parse('ai_guided')).toBe('ai_guided');
-    expect(JourneyTypeEnum.parse('template_based')).toBe('template_based');
-    expect(JourneyTypeEnum.parse('self_service')).toBe('self_service');
+    expect(JourneyTypeEnum.parse('non-tech')).toBe('non-tech');
+    expect(JourneyTypeEnum.parse('business')).toBe('business');
+    expect(JourneyTypeEnum.parse('technical')).toBe('technical');
     expect(JourneyTypeEnum.parse('consultation')).toBe('consultation');
     expect(JourneyTypeEnum.parse('custom')).toBe('custom');
   });
@@ -85,17 +85,17 @@ describe('JourneyTypeEnum', () => {
   test('rejects invalid journey types', () => {
     // Old/deprecated journey type names
     expect(() => JourneyTypeEnum.parse('guided')).toThrow();
-    expect(() => JourneyTypeEnum.parse('business')).toThrow();
-    expect(() => JourneyTypeEnum.parse('technical')).toThrow();
-    expect(() => JourneyTypeEnum.parse('nontech')).toThrow();
+    expect(() => JourneyTypeEnum.parse('ai_guided')).toThrow();
+    expect(() => JourneyTypeEnum.parse('template_based')).toThrow();
+    expect(() => JourneyTypeEnum.parse('self_service')).toThrow();
   });
 
   test('covers all expected journey types', () => {
     const values = JourneyTypeEnum.options;
     expect(values).toHaveLength(5);
-    expect(values).toContain('ai_guided');
-    expect(values).toContain('template_based');
-    expect(values).toContain('self_service');
+    expect(values).toContain('non-tech');
+    expect(values).toContain('business');
+    expect(values).toContain('technical');
     expect(values).toContain('consultation');
     expect(values).toContain('custom');
   });
@@ -157,15 +157,15 @@ describe('Journey to Role Mapping', () => {
   });
 
   test('ai_guided journey maps to non-tech role only', () => {
-    expect(journeyToRoleMapping.ai_guided).toEqual(['non-tech']);
+    expect(journeyToRoleMapping['non-tech']).toEqual(['non-tech']);
   });
 
   test('template_based journey maps to business role only', () => {
-    expect(journeyToRoleMapping.template_based).toEqual(['business']);
+    expect(journeyToRoleMapping.business).toEqual(['business']);
   });
 
   test('self_service journey maps to technical role only', () => {
-    expect(journeyToRoleMapping.self_service).toEqual(['technical']);
+    expect(journeyToRoleMapping.technical).toEqual(['technical']);
   });
 
   test('consultation journey maps to multiple roles', () => {
@@ -204,19 +204,19 @@ describe('Tier to Journey Mapping', () => {
   });
 
   test('trial tier has limited journeys', () => {
-    expect(tierToJourneyMapping.trial).toContain('ai_guided');
+    expect(tierToJourneyMapping.trial).toContain('non-tech');
     expect(tierToJourneyMapping.trial).toHaveLength(1);
   });
 
   test('starter tier has more journeys than trial', () => {
     expect(tierToJourneyMapping.starter.length).toBeGreaterThan(tierToJourneyMapping.trial.length);
-    expect(tierToJourneyMapping.starter).toContain('ai_guided');
-    expect(tierToJourneyMapping.starter).toContain('template_based');
+    expect(tierToJourneyMapping.starter).toContain('non-tech');
+    expect(tierToJourneyMapping.starter).toContain('business');
   });
 
   test('professional tier has even more journeys', () => {
     expect(tierToJourneyMapping.professional.length).toBeGreaterThan(tierToJourneyMapping.starter.length);
-    expect(tierToJourneyMapping.professional).toContain('self_service');
+    expect(tierToJourneyMapping.professional).toContain('technical');
   });
 
   test('enterprise tier has all journeys', () => {
@@ -249,17 +249,17 @@ describe('Tier to Journey Mapping', () => {
 
 describe('canAccessJourney', () => {
   test('returns true when role can access journey', () => {
-    expect(canAccessJourney('non-tech', 'ai_guided')).toBe(true);
-    expect(canAccessJourney('business', 'template_based')).toBe(true);
-    expect(canAccessJourney('technical', 'self_service')).toBe(true);
+    expect(canAccessJourney('non-tech', 'non-tech')).toBe(true);
+    expect(canAccessJourney('business', 'business')).toBe(true);
+    expect(canAccessJourney('technical', 'technical')).toBe(true);
     expect(canAccessJourney('technical', 'consultation')).toBe(true);
     expect(canAccessJourney('business', 'consultation')).toBe(true);
     expect(canAccessJourney('custom', 'custom')).toBe(true);
   });
 
   test('returns false when role cannot access journey', () => {
-    expect(canAccessJourney('non-tech', 'self_service')).toBe(false);
-    expect(canAccessJourney('business', 'ai_guided')).toBe(false);
+    expect(canAccessJourney('non-tech', 'technical')).toBe(false);
+    expect(canAccessJourney('business', 'non-tech')).toBe(false);
     expect(canAccessJourney('non-tech', 'consultation')).toBe(false);
     expect(canAccessJourney('non-tech', 'custom')).toBe(false);
   });
@@ -267,17 +267,17 @@ describe('canAccessJourney', () => {
 
 describe('canAccessJourneyForTier', () => {
   test('returns true when tier can access journey', () => {
-    expect(canAccessJourneyForTier('trial', 'ai_guided')).toBe(true);
-    expect(canAccessJourneyForTier('starter', 'template_based')).toBe(true);
-    expect(canAccessJourneyForTier('professional', 'self_service')).toBe(true);
+    expect(canAccessJourneyForTier('trial', 'non-tech')).toBe(true);
+    expect(canAccessJourneyForTier('starter', 'business')).toBe(true);
+    expect(canAccessJourneyForTier('professional', 'technical')).toBe(true);
     expect(canAccessJourneyForTier('enterprise', 'consultation')).toBe(true);
     expect(canAccessJourneyForTier('enterprise', 'custom')).toBe(true);
   });
 
   test('returns false when tier cannot access journey', () => {
-    expect(canAccessJourneyForTier('none', 'ai_guided')).toBe(false);
+    expect(canAccessJourneyForTier('none', 'non-tech')).toBe(false);
     expect(canAccessJourneyForTier('trial', 'consultation')).toBe(false);
-    expect(canAccessJourneyForTier('starter', 'self_service')).toBe(false);
+    expect(canAccessJourneyForTier('starter', 'technical')).toBe(false);
     expect(canAccessJourneyForTier('professional', 'custom')).toBe(false);
   });
 });
@@ -285,22 +285,22 @@ describe('canAccessJourneyForTier', () => {
 describe('getAllowedJourneysForRole', () => {
   test('returns correct journeys for non-tech role', () => {
     const journeys = getAllowedJourneysForRole('non-tech');
-    expect(journeys).toContain('ai_guided');
-    expect(journeys).not.toContain('template_based');
-    expect(journeys).not.toContain('self_service');
+    expect(journeys).toContain('non-tech');
+    expect(journeys).not.toContain('business');
+    expect(journeys).not.toContain('technical');
   });
 
   test('returns correct journeys for business role', () => {
     const journeys = getAllowedJourneysForRole('business');
-    expect(journeys).toContain('template_based');
+    expect(journeys).toContain('business');
     expect(journeys).toContain('consultation');
     expect(journeys).toContain('custom');
-    expect(journeys).not.toContain('ai_guided');
+    expect(journeys).not.toContain('non-tech');
   });
 
   test('returns correct journeys for technical role', () => {
     const journeys = getAllowedJourneysForRole('technical');
-    expect(journeys).toContain('self_service');
+    expect(journeys).toContain('technical');
     expect(journeys).toContain('consultation');
     expect(journeys).toContain('custom');
   });
@@ -326,7 +326,7 @@ describe('getAllowedJourneysForTier', () => {
 
   test('returns correct journeys for trial tier', () => {
     const journeys = getAllowedJourneysForTier('trial');
-    expect(journeys).toContain('ai_guided');
+    expect(journeys).toContain('non-tech');
     expect(journeys.length).toBe(1);
   });
 
@@ -350,20 +350,20 @@ describe('getAllowedJourneysForTier', () => {
 
 describe('validateJourneyAccess', () => {
   test('allows valid role and tier combination', () => {
-    const result = validateJourneyAccess('non-tech', 'trial', 'ai_guided');
+    const result = validateJourneyAccess('non-tech', 'trial', 'non-tech');
     expect(result.allowed).toBe(true);
     expect(result.reason).toBeUndefined();
   });
 
   test('blocks when role cannot access journey', () => {
-    const result = validateJourneyAccess('non-tech', 'professional', 'self_service');
+    const result = validateJourneyAccess('non-tech', 'professional', 'technical');
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain('Role');
     expect(result.reason).toContain('cannot access');
   });
 
   test('blocks when tier cannot access journey', () => {
-    const result = validateJourneyAccess('technical', 'starter', 'self_service');
+    const result = validateJourneyAccess('technical', 'starter', 'technical');
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain('Subscription tier');
     expect(result.reason).toContain('Upgrade');
@@ -374,9 +374,9 @@ describe('validateJourneyAccess', () => {
     expect(result1.reason).toContain('non-tech');
     expect(result1.reason).toContain('consultation');
 
-    const result2 = validateJourneyAccess('technical', 'trial', 'self_service');
+    const result2 = validateJourneyAccess('technical', 'trial', 'technical');
     expect(result2.reason).toContain('trial');
-    expect(result2.reason).toContain('self_service');
+    expect(result2.reason).toContain('technical');
   });
 
   test('allows hybrid journeys only for eligible tier and role combinations', () => {
@@ -494,17 +494,18 @@ describe('Type Guards', () => {
 
   describe('isJourneyType', () => {
     test('returns true for valid journey types', () => {
-      expect(isJourneyType('ai_guided')).toBe(true);
-      expect(isJourneyType('template_based')).toBe(true);
-      expect(isJourneyType('self_service')).toBe(true);
+      expect(isJourneyType('non-tech')).toBe(true);
+      expect(isJourneyType('business')).toBe(true);
+      expect(isJourneyType('technical')).toBe(true);
       expect(isJourneyType('consultation')).toBe(true);
       expect(isJourneyType('custom')).toBe(true);
     });
 
     test('returns false for old/deprecated journey names', () => {
       expect(isJourneyType('guided')).toBe(false);
-      expect(isJourneyType('business')).toBe(false);
-      expect(isJourneyType('technical')).toBe(false);
+      expect(isJourneyType('ai_guided')).toBe(false);
+      expect(isJourneyType('template_based')).toBe(false);
+      expect(isJourneyType('self_service')).toBe(false);
     });
   });
 
@@ -549,7 +550,7 @@ describe('DEFAULTS', () => {
     expect(DEFAULTS.USER_ROLE).toBe('non-tech');
     expect(DEFAULTS.SUBSCRIPTION_TIER).toBe('none');
     expect(DEFAULTS.SUBSCRIPTION_STATUS).toBe('inactive');
-    expect(DEFAULTS.JOURNEY_TYPE).toBe('ai_guided');
+    expect(DEFAULTS.JOURNEY_TYPE).toBe('non-tech');
     expect(DEFAULTS.PROJECT_STATUS).toBe('draft');
     expect(DEFAULTS.TECHNICAL_LEVEL).toBe('beginner');
     expect(DEFAULTS.DATA_SOURCE).toBe('upload');
@@ -575,27 +576,27 @@ describe('DEFAULTS', () => {
 // ==========================================
 
 describe('Integration - User Journey Selection', () => {
-  test('new non-tech user with trial can start ai_guided journey', () => {
+  test('new non-tech user with trial can start non-tech journey', () => {
     const role: UserRole = 'non-tech';
     const tier: SubscriptionTier = 'trial';
-    const journey: JourneyType = 'ai_guided';
+    const journey: JourneyType = 'non-tech';
 
     const validation = validateJourneyAccess(role, tier, journey);
     expect(validation.allowed).toBe(true);
   });
 
-  test('business user with starter can use template_based journey', () => {
+  test('business user with starter can use business journey', () => {
     const role: UserRole = 'business';
     const tier: SubscriptionTier = 'starter';
-    const journey: JourneyType = 'template_based';
+    const journey: JourneyType = 'business';
 
     const validation = validateJourneyAccess(role, tier, journey);
     expect(validation.allowed).toBe(true);
   });
 
-  test('technical user needs professional tier for self_service', () => {
+  test('technical user needs professional tier for technical journey', () => {
     const role: UserRole = 'technical';
-    const journey: JourneyType = 'self_service';
+    const journey: JourneyType = 'technical';
 
     // Should fail with starter
     const starterValidation = validateJourneyAccess(role, 'starter', journey);
@@ -653,7 +654,7 @@ describe('Performance - Enum Validation Speed', () => {
     const start = Date.now();
 
     for (let i = 0; i < 10000; i++) {
-      JourneyTypeEnum.safeParse('ai_guided');
+      JourneyTypeEnum.safeParse('non-tech');
     }
 
     const duration = Date.now() - start;
@@ -675,7 +676,7 @@ describe('Performance - Enum Validation Speed', () => {
     const start = Date.now();
 
     for (let i = 0; i < 10000; i++) {
-      validateJourneyAccess('technical', 'professional', 'self_service');
+      validateJourneyAccess('technical', 'professional', 'technical');
     }
 
     const duration = Date.now() - start;

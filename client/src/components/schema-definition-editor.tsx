@@ -38,14 +38,20 @@ export default function SchemaDefinitionEditor({
 
   useEffect(() => {
     // Convert schema object to SchemaField array with AI-generated descriptions
-    const fields = Object.entries(schema).map(([name, type]) => ({
-      name,
-      type: String(type),
-      aiDescription: generateAIDescription(name, type),
-      userDescription: "",
-      sampleValues: generateSampleValues(name, type),
-      isEditing: false
-    }));
+    // FIX: Handle both string and object schema formats { column: 'string' } or { column: { type: 'string', ... } }
+    const fields = Object.entries(schema).map(([name, typeOrMeta]) => {
+      const typeStr = typeof typeOrMeta === 'string'
+        ? typeOrMeta
+        : (typeOrMeta as any)?.type || (typeOrMeta as any)?.dataType || 'unknown';
+      return {
+        name,
+        type: typeStr,
+        aiDescription: generateAIDescription(name, typeStr),
+        userDescription: "",
+        sampleValues: generateSampleValues(name, typeStr),
+        isEditing: false
+      };
+    });
     setSchemaFields(fields);
   }, [schema]);
 

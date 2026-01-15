@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import PrepareStep from '@/pages/prepare-step';
-import DataStep from '@/pages/data-step';
-import ResultsStep from '@/pages/results-step';
+import DataUploadStep from '@/pages/data-upload-step';
+import DashboardStep from '@/pages/dashboard-step';
 import { apiClient } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({
@@ -77,14 +77,14 @@ beforeEach(() => {
     loading: false,
     error: null
   });
-  apiClient.getEnhancedCapabilities.mockResolvedValue({ businessTemplates: [] });
-  apiClient.post.mockResolvedValue({ success: true });
-  apiClient.getProjectArtifacts.mockResolvedValue({ artifacts: [] });
-  apiClient.getProjectDatasets.mockResolvedValue({ datasets: [] });
-  apiClient.runAudienceAnalysis.mockResolvedValue({ success: true, analysisType: 'descriptive', rawResults: {}, formattedResults: {}, metadata: {} });
-  apiClient.getAudienceAnalysisResults.mockResolvedValue({ success: true, formattedResults: {}, metadata: { analysisType: 'descriptive', timestamp: new Date().toISOString(), dataSize: 0, columnCount: 0 }, audienceContext: { primaryAudience: 'mixed' } });
-  apiClient.getAudienceAnalysisTypes.mockResolvedValue({ success: true, availableTypes: ['descriptive', 'custom', 'visualization'], schema: { columns: [], columnTypes: [] } });
-  apiClient.createProjectVisualization.mockResolvedValue({ success: true, visualization: { title: 'Test', insights: [] } });
+  (apiClient.getEnhancedCapabilities as Mock).mockResolvedValue({ businessTemplates: [] });
+  (apiClient.post as Mock).mockResolvedValue({ success: true });
+  (apiClient.getProjectArtifacts as Mock).mockResolvedValue({ artifacts: [] });
+  (apiClient.getProjectDatasets as Mock).mockResolvedValue({ datasets: [] });
+  (apiClient.runAudienceAnalysis as Mock).mockResolvedValue({ success: true, analysisType: 'descriptive', rawResults: {}, formattedResults: {}, metadata: {} });
+  (apiClient.getAudienceAnalysisResults as Mock).mockResolvedValue({ success: true, formattedResults: {}, metadata: { analysisType: 'descriptive', timestamp: new Date().toISOString(), dataSize: 0, columnCount: 0 }, audienceContext: { primaryAudience: 'mixed' } });
+  (apiClient.getAudienceAnalysisTypes as Mock).mockResolvedValue({ success: true, availableTypes: ['descriptive', 'custom', 'visualization'], schema: { columns: [], columnTypes: [] } });
+  (apiClient.createProjectVisualization as Mock).mockResolvedValue({ success: true, visualization: { title: 'Test', insights: [] } });
   localStorage.clear();
 });
 
@@ -103,7 +103,7 @@ describe('PrepareStep', () => {
       error: null
     });
 
-    apiClient.getEnhancedCapabilities.mockResolvedValue({
+    (apiClient.getEnhancedCapabilities as Mock).mockResolvedValue({
       businessTemplates: [
         { templateId: 'template-1', name: 'Engagement Template', description: 'Parent feedback tracker' }
       ]
@@ -119,15 +119,15 @@ describe('PrepareStep', () => {
   });
 });
 
-describe('DataStep', () => {
+describe('DataUploadStep', () => {
   it('shows journey specific hero copy', () => {
-    render(<DataStep journeyType="technical" />);
+    render(<DataUploadStep journeyType="technical" />);
     expect(screen.getByText('Technical Data Upload')).toBeInTheDocument();
     expect(screen.getByText(/full control over validation/i)).toBeInTheDocument();
   });
 });
 
-describe('ResultsStep', () => {
+describe('DashboardStep', () => {
   it('renders insights when results load successfully', async () => {
     sessionHookMock.mockReturnValue({
       session: { projectId: 'project-42' },
@@ -137,7 +137,7 @@ describe('ResultsStep', () => {
       error: null
     });
 
-    apiClient.get.mockResolvedValueOnce({
+    (apiClient.get as Mock).mockResolvedValueOnce({
       success: true,
       results: {
         insights: [{
@@ -153,7 +153,7 @@ describe('ResultsStep', () => {
       }
     });
 
-    render(<ResultsStep journeyType="non-tech" />);
+    render(<DashboardStep journeyType="non-tech" />);
     await waitFor(() => expect(apiClient.get).toHaveBeenCalled());
     const user = userEvent.setup();
     await user.click(screen.getByRole('tab', { name: /insights/i }));
@@ -169,9 +169,9 @@ describe('ResultsStep', () => {
       error: null
     });
 
-    apiClient.get.mockRejectedValueOnce(new Error('Network down'));
+    (apiClient.get as Mock).mockRejectedValueOnce(new Error('Network down'));
 
-    render(<ResultsStep journeyType="business" />);
+    render(<DashboardStep journeyType="business" />);
 
     expect(await screen.findByText('Results Not Available')).toBeInTheDocument();
     expect(screen.getByText('Network down')).toBeInTheDocument();

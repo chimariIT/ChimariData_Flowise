@@ -230,7 +230,7 @@ export default function AgentActivityOverview({ project, journeyState, onNavigat
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Brain className="w-5 h-5" />
-            Fast-track to Insights
+            Fast-track to Insights {project?.name ? `for ${project.name}` : ''}
           </CardTitle>
           <CardDescription>
             Stay aligned with what the agent team has already prepared so you can jump into insight review sooner.
@@ -241,7 +241,7 @@ export default function AgentActivityOverview({ project, journeyState, onNavigat
             <div>
               <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Current focus</p>
               <p className="text-sm font-semibold text-gray-900 mt-1">{currentStepName}</p>
-              {estimatedTimeline && (
+              {estimatedTimeline && (journeyState as any)?.status !== 'completed' && (
                 <p className="text-xs text-gray-500 mt-1 flex items-center gap-1">
                   <Clock className="w-3 h-3" />
                   ~{estimatedTimeline} remaining

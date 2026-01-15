@@ -8,6 +8,7 @@ export interface RoleBasedLimits {
   maxDatasetSizeMB: number;
   maxAiQueriesPerMonth: number;
   maxVisualizationsPerProject: number;
+  maxComputeMinutesPerMonth: number;
   allowedAiProviders: string[];
   canUseAdvancedModels: boolean;
 }
@@ -52,6 +53,7 @@ export class RolePermissionService {
       maxDatasetSizeMB: 5,
       maxAiQueriesPerMonth: 10,
       maxVisualizationsPerProject: 3,
+      maxComputeMinutesPerMonth: 60,
       allowedAiProviders: ["gemini"],
       canUseAdvancedModels: false,
     },
@@ -71,6 +73,7 @@ export class RolePermissionService {
       maxDatasetSizeMB: 25,
       maxAiQueriesPerMonth: 50,
       maxVisualizationsPerProject: 10,
+      maxComputeMinutesPerMonth: 300,
       allowedAiProviders: ["gemini", "openai"],
       canUseAdvancedModels: false,
     },
@@ -90,6 +93,7 @@ export class RolePermissionService {
       maxDatasetSizeMB: 100,
       maxAiQueriesPerMonth: 200,
       maxVisualizationsPerProject: 25,
+      maxComputeMinutesPerMonth: 1000,
       allowedAiProviders: ["gemini", "openai", "anthropic"],
       canUseAdvancedModels: true,
     },
@@ -109,6 +113,7 @@ export class RolePermissionService {
       maxDatasetSizeMB: 50,
       maxAiQueriesPerMonth: 100,
       maxVisualizationsPerProject: 15,
+      maxComputeMinutesPerMonth: 500,
       allowedAiProviders: ["gemini", "openai", "anthropic"],
       canUseAdvancedModels: true,
     },
@@ -128,10 +133,12 @@ export class RolePermissionService {
       maxDatasetSizeMB: 100,
       maxAiQueriesPerMonth: 200,
       maxVisualizationsPerProject: 25,
+      maxComputeMinutesPerMonth: 1000,
       allowedAiProviders: ["gemini", "openai", "anthropic"],
       canUseAdvancedModels: true,
     },
   };
+
 
   // Subscription tier multipliers
   private static readonly SUBSCRIPTION_MULTIPLIERS: Record<string, {
@@ -140,12 +147,12 @@ export class RolePermissionService {
     aiQueries: number;
     visualizations: number;
   }> = {
-    "none": { projects: 1, dataSize: 1, aiQueries: 1, visualizations: 1 },
-    "trial": { projects: 1, dataSize: 1, aiQueries: 2, visualizations: 1.5 },
-    "starter": { projects: 2, dataSize: 2, aiQueries: 5, visualizations: 2 },
-    "professional": { projects: 5, dataSize: 10, aiQueries: 25, visualizations: 5 },
-    "enterprise": { projects: 20, dataSize: 50, aiQueries: 100, visualizations: 20 },
-  };
+      "none": { projects: 1, dataSize: 1, aiQueries: 1, visualizations: 1 },
+      "trial": { projects: 1, dataSize: 1, aiQueries: 2, visualizations: 1.5 },
+      "starter": { projects: 2, dataSize: 2, aiQueries: 5, visualizations: 2 },
+      "professional": { projects: 5, dataSize: 10, aiQueries: 25, visualizations: 5 },
+      "enterprise": { projects: 20, dataSize: 50, aiQueries: 100, visualizations: 20 },
+    };
 
   /**
    * Get user permissions by userId, creating default permissions if they don't exist
@@ -254,7 +261,7 @@ export class RolePermissionService {
   static async hasPermission(userId: string, permission: keyof FeaturePermissions | string): Promise<boolean> {
     try {
       const permissions = await this.getUserPermissions(userId);
-      
+
       // Always allow canUseAI - it's a basic feature available to all authenticated users
       if (permission === 'canUseAI') {
         if (!permissions) {
@@ -267,22 +274,22 @@ export class RolePermissionService {
         }
         return hasPermission;
       }
-      
+
       if (!permissions) {
         console.warn(`⚠️  [PERMISSIONS] No permissions record for user ${userId}, denying ${permission}`);
         return false;
       }
-      
+
       // Handle canAccessAdvancedFeatures - map to canAccessAdvancedAnalytics if not set
       if (permission === 'canAccessAdvancedFeatures') {
         return permissions.canAccessAdvancedFeatures ?? permissions.canAccessAdvancedAnalytics ?? false;
       }
-      
+
       // Standard permission check
       if (permission in permissions) {
         return (permissions[permission as keyof typeof permissions] as boolean) ?? false;
       }
-      
+
       console.warn(`⚠️  [PERMISSIONS] Permission ${permission} not found in permissions record for user ${userId}`);
       return false;
     } catch (error) {
@@ -308,14 +315,16 @@ export class RolePermissionService {
     // Restrictions should be based on subscription/billing, not journey type
     switch (journeyType) {
       case "non-tech":
-      case "ai_guided":
       case "business":
-      case "template_based":
       case "technical":
-      case "self_service":
       case "consultation":
       case "custom":
         return true; // All users can access all journey types
+      // Legacy journey types (deprecated, but still supported for backward compatibility)
+      case "ai_guided":      // Maps to non-tech
+      case "template_based": // Maps to business
+      case "self_service":   // Maps to technical
+        return true;
       default:
         return false; // Invalid journey type
     }
@@ -356,6 +365,7 @@ export class RolePermissionService {
       maxDatasetSizeMB: permissions.maxDatasetSizeMB || 5,
       maxAiQueriesPerMonth: permissions.maxAiQueriesPerMonth || 10,
       maxVisualizationsPerProject: permissions.maxVisualizationsPerProject || 3,
+      maxComputeMinutesPerMonth: permissions.maxComputeMinutesPerMonth || 60,
       allowedAiProviders: (permissions.allowedAiProviders as string[]) || ["gemini"],
       canUseAdvancedModels: permissions.canUseAdvancedModels || false,
     };
@@ -377,13 +387,13 @@ export class RolePermissionService {
 
     switch (userRole) {
       case "non-tech":
-        return "ai_guided";
+        return "non-tech";
       case "business":
-        return "template_based";
+        return "business";
       case "technical":
-        return technicalLevel === "expert" ? "self_service" : "template_based";
+        return technicalLevel === "expert" ? "technical" : "business";
       default:
-        return "ai_guided";
+        return "non-tech";
     }
   }
 

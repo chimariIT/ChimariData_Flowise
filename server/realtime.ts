@@ -8,7 +8,7 @@ import { WebSocketLifecycleManager, ConnectionHealth } from './services/websocke
 // Real-time event types
 export interface RealtimeEvent {
   type: 'status_change' | 'metrics_update' | 'error' | 'progress' | 'job_complete' | 'connection_test' | 'data_received' | 'buffer_status';
-  sourceType: 'streaming' | 'scraping';
+  sourceType: 'streaming' | 'scraping' | 'analysis';
   sourceId: string;
   userId: string;
   projectId?: string;
@@ -32,7 +32,7 @@ export interface BroadcastOptions {
   userId?: string;
   projectId?: string;
   sourceId?: string;
-  sourceType?: 'streaming' | 'scraping';
+  sourceType?: 'streaming' | 'scraping' | 'analysis';
   excludeClient?: string;
 }
 
@@ -45,7 +45,7 @@ export class RealtimeServer extends EventEmitter {
 
   constructor(private wss: WebSocketServer) {
     super();
-    
+
     // Initialize enhanced lifecycle manager
     this.lifecycleManager = new WebSocketLifecycleManager(
       {
@@ -63,7 +63,7 @@ export class RealtimeServer extends EventEmitter {
         criticalThreshold: 3000   // 3 seconds for critical status
       }
     );
-    
+
     this.setupWebSocketServer();
     this.startHeartbeat();
     this.startCleanup();
@@ -105,7 +105,7 @@ export class RealtimeServer extends EventEmitter {
 
       // Store client connection
       this.clients.set(clientId, client);
-      
+
       // Track user's clients
       if (!this.userClients.has(user.id)) {
         this.userClients.set(user.id, new Set());
@@ -153,12 +153,12 @@ export class RealtimeServer extends EventEmitter {
           const bearerToken = authHeader.substring(7);
           return this.validateToken(bearerToken);
         }
-        
+
         // Allow unauthenticated connections in development mode
         if (!process.env.JWT_SECRET || process.env.NODE_ENV !== 'production') {
           return { id: 'dev-guest' };
         }
-        
+
         return null;
       }
 
@@ -229,7 +229,7 @@ export class RealtimeServer extends EventEmitter {
       client.lastActivity = new Date();
 
       const message = JSON.parse(data.toString());
-      
+
       switch (message.type) {
         case 'subscribe':
           this.handleSubscription(clientId, message.channels || []);
@@ -239,6 +239,10 @@ export class RealtimeServer extends EventEmitter {
           break;
         case 'ping':
           this.sendToClient(clientId, { type: 'pong', timestamp: new Date() });
+          break;
+        case 'request_state_sync':
+          // Solution C: Handle state sync request after client reconnection
+          this.handleStateSyncRequest(clientId, message.projectId);
           break;
         default:
           console.warn(`Unknown message type from client ${clientId}:`, message.type);
@@ -284,6 +288,74 @@ export class RealtimeServer extends EventEmitter {
     });
   }
 
+  /**
+   * Solution C: Handle state sync request after client reconnection.
+   * Sends the current project state (checkpoints, progress) to the client.
+   */
+  private async handleStateSyncRequest(clientId: string, projectId: string): Promise<void> {
+    const client = this.clients.get(clientId);
+    if (!client || !projectId) return;
+
+    console.log(`🔄 [Solution C] Processing state sync request for project ${projectId} from client ${clientId}`);
+
+    try {
+      // Import dynamically to avoid circular dependencies
+      const { projectAgentOrchestrator } = await import('./services/project-agent-orchestrator');
+      const { journeyStateManager } = await import('./services/journey-state-manager');
+
+      // Get current checkpoints
+      const checkpoints = await projectAgentOrchestrator.getProjectCheckpoints(projectId);
+
+      // Get journey state
+      const journeyState = await journeyStateManager.getJourneyState(projectId);
+
+      // Send state sync response
+      this.sendToClient(clientId, {
+        type: 'state_sync',
+        sourceType: 'analysis',
+        sourceId: projectId,
+        userId: client.userId,
+        timestamp: new Date(),
+        data: {
+          projectId,
+          checkpoints: checkpoints.map(cp => ({
+            id: cp.id,
+            agentType: cp.agentType,
+            stepName: cp.stepName,
+            status: cp.status,
+            message: cp.message,
+            timestamp: cp.timestamp,
+            requiresUserInput: cp.requiresUserInput
+          })),
+          journeyState: {
+            currentStep: journeyState.currentStep,
+            percentComplete: journeyState.percentComplete,
+            status: (journeyState as any).status,
+            completedSteps: journeyState.completedSteps
+          },
+          syncedAt: new Date().toISOString()
+        }
+      });
+
+      console.log(`✅ [Solution C] State sync sent for project ${projectId}: ${checkpoints.length} checkpoints, ${journeyState.percentComplete}% complete`);
+    } catch (error) {
+      console.error(`❌ [Solution C] Failed to sync state for project ${projectId}:`, error);
+
+      // Send error response
+      this.sendToClient(clientId, {
+        type: 'state_sync_error',
+        sourceType: 'analysis',
+        sourceId: projectId,
+        userId: client.userId,
+        timestamp: new Date(),
+        data: {
+          projectId,
+          error: 'Failed to retrieve project state'
+        }
+      });
+    }
+  }
+
   private handleClientDisconnect(clientId: string, code: number, reason: string): void {
     const client = this.clients.get(clientId);
     if (!client) return;
@@ -314,7 +386,7 @@ export class RealtimeServer extends EventEmitter {
   // Public API for broadcasting events
   public broadcast(event: RealtimeEvent, options: BroadcastOptions = {}): void {
     const targets = this.getTargetClients(options);
-    
+
     targets.forEach(clientId => {
       this.sendToClient(clientId, event);
     });
@@ -437,7 +509,7 @@ export class RealtimeServer extends EventEmitter {
 
       this.clients.forEach((client, clientId) => {
         const timeSinceActivity = now.getTime() - client.lastActivity.getTime();
-        
+
         if (timeSinceActivity > staleThreshold && client.websocket.readyState !== WebSocket.OPEN) {
           console.log(`Cleaning up stale client ${clientId}`);
           this.handleClientDisconnect(clientId, 1001, 'Stale connection cleanup');
@@ -454,7 +526,7 @@ export class RealtimeServer extends EventEmitter {
     serverUptime: number;
   } {
     const connectionsPerUser: { [userId: string]: number } = {};
-    
+
     this.userClients.forEach((clients, userId) => {
       connectionsPerUser[userId] = clients.size;
     });
@@ -479,7 +551,7 @@ export class RealtimeServer extends EventEmitter {
   }
 
   // Enhanced monitoring methods using lifecycle manager
-  
+
   /**
    * Get connection health for a specific client
    */
@@ -566,7 +638,7 @@ export class RealtimeServer extends EventEmitter {
 
     // Close all client connections
     const closePromises: Promise<void>[] = [];
-    
+
     this.clients.forEach((client, clientId) => {
       const promise = new Promise<void>((resolve) => {
         if (client.websocket.readyState === WebSocket.OPEN) {
@@ -633,11 +705,31 @@ export function initializeRealtimeServer(wss: WebSocketServer): RealtimeServer {
   if (realtimeServer) {
     throw new Error('Real-time server already initialized');
   }
-  
+
   realtimeServer = new RealtimeServer(wss);
   return realtimeServer;
 }
 
+
+
 export function getRealtimeServer(): RealtimeServer | null {
   return realtimeServer;
+}
+
+export function createAnalysisEvent(
+  type: RealtimeEvent['type'],
+  sourceId: string,
+  userId: string,
+  data: any,
+  projectId?: string
+): RealtimeEvent {
+  return {
+    type,
+    sourceType: 'analysis',
+    sourceId,
+    userId,
+    projectId,
+    timestamp: new Date(),
+    data
+  };
 }

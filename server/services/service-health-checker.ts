@@ -232,39 +232,55 @@ export class ServiceHealthChecker {
         };
       }
 
-      // TODO: Implement real Redis ping
-      const responseTime = Date.now() - startTime;
+      // Import message broker to check connection
+      const { getMessageBroker } = await import('./agents/message-broker');
+      const broker = getMessageBroker();
 
-      return {
-        name: 'redis',
-        status: 'healthy',
-        responseTime,
-        lastCheck: new Date(),
-        uptime: 99.9,
-        message: 'Redis connection active'
-      };
+      if (await broker.isHealthy()) {
+        const responseTime = Date.now() - startTime;
+        return {
+          name: 'redis',
+          status: 'healthy',
+          responseTime,
+          lastCheck: new Date(),
+          uptime: 99.9,
+          message: 'Redis connection active via MessageBroker'
+        };
+      } else {
+        throw new Error('MessageBroker reported unhealthy status');
+      }
     } catch (error) {
       return {
         name: 'redis',
         status: 'degraded',
         lastCheck: new Date(),
-        message: 'Redis unavailable (fallback mode active)'
+        message: `Redis unavailable: ${(error as Error).message}`
       };
     }
   }
 
   private async checkWebSocket(): Promise<ServiceStatus> {
+    const startTime = Date.now();
     try {
-      // Check if WebSocket server is initialized
-      // TODO: Add real WebSocket health check
+      // Check if SocketManager is initialized
+      const { SocketManager } = await import('../socket-manager');
 
-      return {
-        name: 'websocket',
-        status: 'healthy',
-        lastCheck: new Date(),
-        uptime: 99.8,
-        message: 'WebSocket server operational'
-      };
+      // We can't easily check internal state without exposing it, 
+      // but we can check if the singleton exists
+      try {
+        const instance = SocketManager.getInstance();
+        // If we got here, the singleton is initialized
+
+        return {
+          name: 'websocket',
+          status: 'healthy',
+          lastCheck: new Date(),
+          uptime: 99.9,
+          message: 'WebSocket server running'
+        };
+      } catch (e) {
+        throw new Error('SocketManager not initialized');
+      }
     } catch (error) {
       return {
         name: 'websocket',
@@ -298,17 +314,36 @@ export class ServiceHealthChecker {
   }
 
   private async checkMLService(): Promise<ServiceStatus> {
+    const startTime = Date.now();
     try {
       // Check Python availability for ML services
-      // TODO: Add real Python process check
+      const pythonBinary = process.env.PYTHON_BIN || 'python3';
+      const { exec } = await import('child_process');
+      const util = await import('util');
+      const execAsync = util.promisify(exec);
 
-      return {
-        name: 'ml-service',
-        status: 'healthy',
-        lastCheck: new Date(),
-        uptime: 99.5,
-        message: 'ML service operational'
-      };
+      try {
+        // Try to execute python --version
+        const { stdout } = await execAsync(`${pythonBinary} --version`, { timeout: 5000 });
+        const version = stdout.trim();
+        const responseTime = Date.now() - startTime;
+
+        return {
+          name: 'ml-service',
+          status: 'healthy',
+          lastCheck: new Date(),
+          responseTime,
+          uptime: 99.5,
+          message: `Python available (${version})`
+        };
+      } catch (pythonError) {
+        return {
+          name: 'ml-service',
+          status: 'degraded',
+          lastCheck: new Date(),
+          message: `Python not found or unresponsive: ${pythonBinary}`
+        };
+      }
     } catch (error) {
       return {
         name: 'ml-service',
@@ -372,13 +407,29 @@ export class ServiceHealthChecker {
   // ==========================================
 
   private async collectMetrics(): Promise<any> {
-    // TODO: Implement real metrics collection
-    return {
-      totalRequests: 10500,
-      averageResponseTime: 245,
-      errorRate: 0.2,
-      activeConnections: 42
-    };
+    try {
+      const { getPoolStats } = await import('../db');
+      const poolStats = getPoolStats();
+
+      return {
+        totalRequests: 0, // Would need request counter middleware
+        averageResponseTime: 0, // Would need timing middleware
+        errorRate: 0,
+        activeConnections: poolStats ? (poolStats.totalCount - poolStats.idleCount) : 0,
+        databasePool: poolStats ? {
+          total: poolStats.totalCount,
+          idle: poolStats.idleCount,
+          waiting: poolStats.waitingCount
+        } : null
+      };
+    } catch (error) {
+      return {
+        totalRequests: 0,
+        averageResponseTime: 0,
+        errorRate: 0,
+        activeConnections: 0
+      };
+    }
   }
 
   private calculateOverallStatus(services: ServiceStatus[]): 'healthy' | 'degraded' | 'critical' {

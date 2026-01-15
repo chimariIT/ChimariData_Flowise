@@ -49,13 +49,19 @@ export type TechnicalLevel = z.infer<typeof TechnicalLevelEnum>;
  * Determines the workflow, agent involvement, and deliverables
  *
  * CANONICAL DEFINITION - Use everywhere
+ * 
+ * UPDATED (Dec 1, 2025): Changed to match frontend route naming
+ * - ai_guided → non-tech (AI-guided journey for non-technical users)
+ * - template_based → business (Template-based journey for business users)
+ * - self_service → technical (Self-service journey for technical users)
+ * - consultation, custom remain unchanged
  */
 export const JourneyTypeEnum = z.enum([
-  "ai_guided",      // Full AI orchestration with checkpoints
-  "template_based", // Structured workflow with business templates
-  "self_service",   // Full user control with advanced tools
-  "consultation",   // Expert-assisted analysis
-  "custom"          // Hybrid workflow with bespoke orchestration
+  "non-tech",      // Full AI orchestration with checkpoints (formerly ai_guided)
+  "business",      // Structured workflow with business templates (formerly template_based)
+  "technical",     // Full user control with advanced tools (formerly self_service)
+  "consultation",  // Expert-assisted analysis
+  "custom"         // Hybrid workflow with bespoke orchestration
 ]);
 
 export type JourneyType = z.infer<typeof JourneyTypeEnum>;
@@ -65,9 +71,9 @@ export type JourneyType = z.infer<typeof JourneyTypeEnum>;
  * Defines which user roles can access which journey types
  */
 export const journeyToRoleMapping = {
-  ai_guided: ['non-tech'] as UserRole[],
-  template_based: ['business'] as UserRole[],
-  self_service: ['technical'] as UserRole[],
+  'non-tech': ['non-tech'] as UserRole[],
+  business: ['business'] as UserRole[],
+  technical: ['technical'] as UserRole[],
   consultation: ['technical', 'business', 'consultation', 'custom'] as UserRole[],
   custom: ['technical', 'business', 'consultation', 'custom'] as UserRole[]
 } as const;
@@ -123,10 +129,10 @@ export type SubscriptionStatus = z.infer<typeof SubscriptionStatusEnum>;
  */
 export const tierToJourneyMapping = {
   none: [] as JourneyType[],
-  trial: ['ai_guided'] as JourneyType[],
-  starter: ['ai_guided', 'template_based'] as JourneyType[],
-  professional: ['ai_guided', 'template_based', 'self_service'] as JourneyType[],
-  enterprise: ['ai_guided', 'template_based', 'self_service', 'consultation', 'custom'] as JourneyType[]
+  trial: ['non-tech'] as JourneyType[],
+  starter: ['non-tech', 'business'] as JourneyType[],
+  professional: ['non-tech', 'business', 'technical'] as JourneyType[],
+  enterprise: ['non-tech', 'business', 'technical', 'consultation', 'custom'] as JourneyType[]
 } as const;
 
 // ==========================================
@@ -612,7 +618,7 @@ export const DEFAULTS = {
   USER_ROLE: 'non-tech' as UserRole,
   SUBSCRIPTION_TIER: 'none' as SubscriptionTier,
   SUBSCRIPTION_STATUS: 'inactive' as SubscriptionStatus,
-  JOURNEY_TYPE: 'ai_guided' as JourneyType,
+  JOURNEY_TYPE: 'non-tech' as JourneyType,
   PROJECT_STATUS: 'draft' as ProjectStatus,
   TECHNICAL_LEVEL: 'beginner' as TechnicalLevel,
   DATA_SOURCE: 'upload' as DataSource,

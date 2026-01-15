@@ -66,6 +66,12 @@ export function PMAgentClarificationDialog({
     return (
       <Dialog open={open} onOpenChange={onClose}>
         <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Analyzing Your Goals</DialogTitle>
+            <DialogDescription>
+              The PM Agent is reviewing your analysis goals and preparing clarifying questions.
+            </DialogDescription>
+          </DialogHeader>
           <div className="flex flex-col items-center justify-center py-12">
             <Loader2 className="h-12 w-12 animate-spin text-primary mb-4" />
             <p className="text-lg font-medium">PM Agent is analyzing your goals...</p>

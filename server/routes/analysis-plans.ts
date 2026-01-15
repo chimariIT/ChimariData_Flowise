@@ -5,18 +5,124 @@ import { Router } from 'express';
 import { ensureAuthenticated } from './auth';
 import { canAccessProject } from '../middleware/ownership';
 import { db } from '../db';
-import { analysisPlans, projects, decisionAudits } from '../../shared/schema';
+import { analysisPlans, projects, decisionAudits, datasets, projectDatasets, agentCheckpoints } from '../../shared/schema';
 import { eq, and, desc } from 'drizzle-orm';
 import { ProjectManagerAgent } from '../services/project-manager-agent';
 import { getMessageBroker } from '../services/agents/message-broker';
 import { nanoid } from 'nanoid';
-import { normalizeJourneyType } from '@shared/canonical-types';
-import { parseJourneyProgress } from '../utils/journey-progress';
 
 const router = Router();
 const STALE_PLAN_THRESHOLD_MS = 2 * 60 * 1000; // 2 minutes
 const projectManagerAgent = new ProjectManagerAgent();
 const messageBroker = getMessageBroker();
+
+// ==========================================
+// Helper: Calculate Per-Analysis Duration (Phase 4 - Jan 2026)
+// ==========================================
+/**
+ * Calculates realistic duration estimate for each analysis type
+ * Based on analysis complexity, dataset size, and technique count
+ */
+function calculateAnalysisDuration(analysisType: string, datasetSize: number, techniqueCount: number = 1): string {
+  // Base minutes for each analysis type
+  const baseMinutes: Record<string, number> = {
+    // Descriptive
+    'descriptive': 2,
+    'descriptive_statistics': 2,
+    'exploratory_data_analysis': 3,
+    'summary_statistics': 2,
+
+    // Correlation & Relationships
+    'correlation': 3,
+    'correlation_analysis': 3,
+    'relationship_analysis': 4,
+
+    // Regression & Prediction
+    'regression': 5,
+    'regression_analysis': 5,
+    'predictive_modeling': 7,
+    'prediction': 7,
+    'forecast': 8,
+    'forecasting': 8,
+
+    // Clustering & Segmentation
+    'clustering': 7,
+    'segmentation': 5,
+    'customer_segmentation': 6,
+    'market_segmentation': 6,
+
+    // Classification
+    'classification': 8,
+    'classification_modeling': 8,
+
+    // Time Series
+    'time_series': 10,
+    'time_series_analysis': 10,
+    'trend_analysis': 5,
+
+    // Text & Sentiment
+    'sentiment': 6,
+    'sentiment_analysis': 6,
+    'text_analysis': 8,
+
+    // Comparative
+    'comparative': 4,
+    'comparative_analysis': 4,
+    'benchmark_analysis': 5,
+
+    // Advanced
+    'anomaly_detection': 6,
+    'feature_engineering': 4,
+    'dimensionality_reduction': 5,
+  };
+
+  // Normalize analysis type for lookup
+  const normalizedType = (analysisType || 'descriptive').toLowerCase()
+    .replace(/[^a-z_]/g, '_')
+    .replace(/_+/g, '_');
+
+  const base = baseMinutes[normalizedType] || 5; // Default 5 minutes for unknown types
+
+  // Scale by dataset size (rows)
+  let scaleFactor = 1;
+  if (datasetSize > 10000) scaleFactor = 1.5;
+  if (datasetSize > 100000) scaleFactor = 2;
+  if (datasetSize > 500000) scaleFactor = 2.5;
+  if (datasetSize > 1000000) scaleFactor = 3;
+
+  // Scale by technique count
+  const techniqueMultiplier = 1 + (techniqueCount - 1) * 0.2;
+
+  const minutes = Math.ceil(base * scaleFactor * techniqueMultiplier);
+
+  if (minutes < 1) return '< 1 min';
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.ceil(minutes / 60);
+  return hours === 1 ? '1 hr' : `${hours} hrs`;
+}
+
+/**
+ * Sums duration strings into total estimate
+ */
+function sumDurations(analyses: Array<{ estimatedDuration?: string }>): string {
+  let totalMinutes = 0;
+
+  for (const analysis of analyses) {
+    const duration = analysis.estimatedDuration || '5 min';
+    const match = duration.match(/(\d+)\s*(min|hr)/i);
+    if (match) {
+      const value = parseInt(match[1], 10);
+      const unit = match[2].toLowerCase();
+      totalMinutes += unit === 'hr' || unit === 'hrs' ? value * 60 : value;
+    }
+  }
+
+  if (totalMinutes < 60) return `${totalMinutes} min`;
+  const hours = Math.floor(totalMinutes / 60);
+  const mins = totalMinutes % 60;
+  if (mins === 0) return hours === 1 ? '1 hr' : `${hours} hrs`;
+  return `${hours} hr ${mins} min`;
+}
 
 // ==========================================
 // Plan Step Event Subscriptions
@@ -116,28 +222,6 @@ router.post('/:projectId/plan/create', ensureAuthenticated, async (req, res) => 
       timestamp: new Date().toISOString()
     });
 
-    // [DATA CONTINUITY FIX] Extract journeyProgress to use transformed data and previous step outputs
-    const journeyProgress = parseJourneyProgress((project as any)?.journeyProgress || {}) as any;
-
-    // Prioritize transformed data over original data (Step 4→5 data flow)
-    const transformedData = journeyProgress?.transformationStepData?.transformedData ||
-                           journeyProgress?.joinedData?.fullData ||
-                           project.data || [];
-
-    // Use joined schema or transformed schema over original
-    const effectiveSchema = journeyProgress?.joinedData?.schema ||
-                           journeyProgress?.transformationStepData?.schema ||
-                           project.schema || {};
-
-    // Extract user questions and analysis goal from journeyProgress (Step 2→5 data flow)
-    const userQuestions = journeyProgress?.userQuestions?.map((q: any) => q.text || q) || [];
-    const analysisGoal = journeyProgress?.analysisGoal || project.objectives || '';
-    const requirementsDocument = journeyProgress?.requirementsDocument || null;
-    const transformationDocument = journeyProgress?.transformationDocument || null;
-
-    console.log(`📋 [STEP 4→5 FIX] Using ${transformedData.length} rows (${journeyProgress?.transformationStepData ? 'transformed' : journeyProgress?.joinedData ? 'joined' : 'original'} data)`);
-    console.log(`📋 [STEP 4→5 FIX] Schema has ${Object.keys(effectiveSchema).length} columns, ${userQuestions.length} user questions`);
-
     // ✅ SLA: Plan creation must complete in under 30 seconds for <1 minute total journey lifecycle
     const PLAN_CREATION_TIMEOUT = 30 * 1000; // 30 seconds (reduced from 5 minutes for SLA compliance)
     const planPromise = projectManagerAgent.createAnalysisPlan({
@@ -146,21 +230,11 @@ router.post('/:projectId/plan/create', ensureAuthenticated, async (req, res) => 
       project: {
         id: project.id,
         name: project.name || '',
-        journeyType: normalizeJourneyType(project.journeyType as string | null),
-        data: transformedData,  // [FIX] Use transformed data from Step 4
-        schema: effectiveSchema, // [FIX] Use joined/transformed schema
-        objectives: analysisGoal, // [FIX] Use analysis goal from Step 2
+        journeyType: project.journeyType || 'non-tech',
+        data: project.data || [],
+        schema: project.schema || {},
+        objectives: project.objectives || '',
         businessContext: project.businessContext || {},
-      },
-      // [DATA CONTINUITY] Pass previous step artifacts for context
-      journeyContext: {
-        userQuestions,
-        analysisGoal,
-        requirementsDocument,
-        transformationDocument,
-        audience: journeyProgress?.audience || null,
-        dataQualityApproved: journeyProgress?.dataQualityApproved || false,
-        completedSteps: journeyProgress?.completedSteps || [],
       }
     });
 
@@ -304,6 +378,8 @@ router.get('/:projectId/plan', ensureAuthenticated, async (req, res) => {
       });
     }
 
+    const project = accessCheck.project;
+
     // Get latest plan
     const plans = await db.select()
       .from(analysisPlans)
@@ -320,7 +396,54 @@ router.get('/:projectId/plan', ensureAuthenticated, async (req, res) => {
 
     const plan = plans[0];
 
+    // ==========================================
+    // PHASE 4 FIX: Extract analysisPath from requirementsDocument (Jan 2026)
+    // Pull real analysis types from DS recommendations with per-analysis estimates
+    // ==========================================
+    const journeyProgress = (project as any)?.journeyProgress || {};
+    const requirementsDoc = journeyProgress?.requirementsDocument || {};
+    const analysisPath = requirementsDoc?.analysisPath || [];
+
+    // Get dataset size for duration calculation
+    let datasetSize = 0;
+    try {
+      const { storage } = await import('../services/storage');
+      const projectDatasetsList = await storage.getProjectDatasets(projectId);
+      if (projectDatasetsList && projectDatasetsList.length > 0) {
+        const primaryDataset = projectDatasetsList[0];
+        const datasetObj = (primaryDataset as any)?.dataset || primaryDataset;
+        datasetSize = (datasetObj as any)?.recordCount || (datasetObj as any)?.rowCount || 0;
+      }
+    } catch (e) {
+      console.warn('Could not fetch dataset size for duration calculation:', e);
+    }
+
+    // Build per-analysis breakdown with realistic estimates
+    const analysesBreakdown = analysisPath.map((analysis: any, index: number) => {
+      const analysisType = analysis?.analysisType || analysis?.type || analysis?.method || 'descriptive';
+      const techniques = analysis?.techniques || [];
+
+      return {
+        analysisId: analysis?.analysisId || `analysis_${index + 1}`,
+        analysisName: analysis?.analysisName || analysis?.name || `Analysis ${index + 1}`,
+        analysisType,
+        techniques,
+        requiredElements: analysis?.requiredDataElements || [],
+        estimatedDuration: calculateAnalysisDuration(analysisType, datasetSize, techniques.length || 1),
+        dependencies: analysis?.dependencies || [],
+        status: 'pending',
+        description: analysis?.description || analysis?.purpose || '',
+        expectedOutputs: analysis?.expectedOutputs || []
+      };
+    });
+
+    // Calculate total duration from per-analysis estimates
+    const totalEstimatedDuration = analysesBreakdown.length > 0
+      ? sumDurations(analysesBreakdown)
+      : plan.estimatedDuration || 'Calculating...';
+
     console.log(`📋 Retrieved plan ${plan.id} for project ${projectId} (status: ${plan.status})`);
+    console.log(`📊 [Phase 4] Per-analysis breakdown: ${analysesBreakdown.length} analyses, total: ${totalEstimatedDuration}`);
 
     return res.json({
       success: true,
@@ -347,6 +470,12 @@ router.get('/:projectId/plan', ensureAuthenticated, async (req, res) => {
         approvedBy: plan.approvedBy,
         rejectionReason: plan.rejectionReason,
         modificationsRequested: plan.modificationsRequested,
+        // ==========================================
+        // NEW: Per-analysis breakdown (Phase 4 - Jan 2026)
+        // ==========================================
+        analyses: analysesBreakdown,
+        totalEstimatedDuration,
+        datasetSize,
       }
     });
 
@@ -520,11 +649,13 @@ router.post('/:projectId/plan/:planId/reject', ensureAuthenticated, async (req, 
 
     const plan = plans[0];
 
-    // Verify plan is in 'ready' status
-    if (plan.status !== 'ready') {
+    // Verify plan is in a rejectable status (ready or approved)
+    // Users can reject even approved plans if they haven't started execution
+    const rejectableStatuses = ['ready', 'approved'];
+    if (!rejectableStatuses.includes(plan.status || '')) {
       return res.status(400).json({
         success: false,
-        error: `Cannot reject plan in '${plan.status}' status. Plan must be 'ready'.`
+        error: `Cannot reject plan in '${plan.status}' status. Plan must be 'ready' or 'approved'.`
       });
     }
 
@@ -550,50 +681,132 @@ router.post('/:projectId/plan/:planId/reject', ensureAuthenticated, async (req, 
 
     console.log(`❌ Plan ${planId} rejected by user ${userId}: ${reason}`);
 
-    // TODO: Implement handlePlanRejection method in ProjectManagerAgent
-    // This method should regenerate the analysis plan based on user feedback
-    // For now, just updating the plan status to rejected
-    console.log(`❌ Plan ${planId} rejected by user ${userId}: ${reason}`);
-    console.log(`⚠️ Plan regeneration not yet implemented - plan status set to rejected`);
+    // [DAY 8] Plan Refinement Loop - Call DS agent to regenerate plan with feedback
+    console.log(`🔄 [Plan Refinement] Starting plan regeneration with DS agent...`);
 
-    return res.json({
-      success: true,
-      message: 'Analysis plan rejected. Plan regeneration feature needs implementation.',
-      planId,
-      status: 'rejected',
-      note: 'handlePlanRejection method not yet implemented in ProjectManagerAgent'
-    });
+    try {
+      // Get project data for context
+      const project = accessCheck.project;
+      // Get datasets through projectDatasets join table
+      const projectDatasetsJoin = await db.select({ dataset: datasets })
+        .from(projectDatasets)
+        .innerJoin(datasets, eq(projectDatasets.datasetId, datasets.id))
+        .where(eq(projectDatasets.projectId, projectId));
+      const datasetsForProject = projectDatasetsJoin.map((r: any) => r.dataset);
 
-    /* UNCOMMENT WHEN IMPLEMENTED:
-    const regenerationResult = await projectManagerAgent.handlePlanRejection({
-      planId,
-      projectId,
-      userId,
-      rejectionReason: reason,
-      modificationsRequested: modifications,
-      previousPlan: plan
-    });
+      // Build refinement context from previous plan
+      const previousPlanContext = {
+        executiveSummary: plan.executiveSummary,
+        analysisSteps: JSON.parse(typeof plan.analysisSteps === 'string' ? plan.analysisSteps : JSON.stringify(plan.analysisSteps || [])),
+        complexity: plan.complexity,
+        risks: JSON.parse(typeof plan.risks === 'string' ? plan.risks : JSON.stringify(plan.risks || [])),
+        recommendations: JSON.parse(typeof plan.recommendations === 'string' ? plan.recommendations : JSON.stringify(plan.recommendations || []))
+      };
 
-    if (regenerationResult.success) {
-      console.log(`✅ New plan generated: ${regenerationResult.newPlanId}`);
-      return res.json({
-        success: true,
-        message: 'Analysis plan rejected. New plan has been generated based on your feedback.',
-        planId,
-        newPlanId: regenerationResult.newPlanId,
-        status: 'rejected'
+      // Import DS agent for refinement
+      const { dataScienceOrchestrator } = await import('../services/data-science-orchestrator');
+
+      // Request refined plan from DS agent
+      const refinementResult = await dataScienceOrchestrator.refinePlan({
+        projectId,
+        userId,
+        previousPlan: previousPlanContext,
+        rejectionReason: reason,
+        modificationsRequested: modifications,
+        projectContext: {
+          name: project.name,
+          description: (project as any).description,
+          journeyType: (project as any).journeyType || 'general',
+          datasetCount: datasetsForProject.length,
+          totalRows: datasetsForProject.reduce((sum: number, d: any) => sum + (d.recordCount || 0), 0)
+        }
       });
-    } else {
-      console.error(`❌ Plan regeneration failed: ${regenerationResult.error}`);
+
+      if (refinementResult.success && refinementResult.plan) {
+        // Create new plan version
+        const newPlanId = `plan_${nanoid()}`;
+        const newVersion = (plan.version || 1) + 1;
+
+        await db.insert(analysisPlans).values({
+          id: newPlanId,
+          projectId,
+          version: newVersion,
+          status: 'ready',
+          executiveSummary: refinementResult.plan.executiveSummary || `Refined plan based on feedback: ${reason.substring(0, 100)}`,
+          analysisSteps: JSON.stringify(refinementResult.plan.analysisSteps || []),
+          dataAssessment: JSON.stringify(refinementResult.plan.dataAssessment || {}),
+          businessContext: JSON.stringify(refinementResult.plan.businessContext || {}),
+          mlModels: JSON.stringify(refinementResult.plan.mlModels || []),
+          visualizations: JSON.stringify(refinementResult.plan.visualizations || []),
+          estimatedCost: JSON.stringify(refinementResult.plan.estimatedCost || { total: 0 }),
+          estimatedDuration: refinementResult.plan.estimatedDuration || '30 minutes',
+          complexity: refinementResult.plan.complexity || 'medium',
+          risks: JSON.stringify(refinementResult.plan.risks || []),
+          recommendations: JSON.stringify([
+            `Refined based on user feedback: ${reason.substring(0, 100)}`,
+            ...(refinementResult.plan.recommendations || [])
+          ]),
+          agentContributions: JSON.stringify({
+            data_scientist: {
+              status: 'completed',
+              timestamp: new Date().toISOString(),
+              contribution: 'Refined plan based on user rejection feedback'
+            }
+          }),
+          createdAt: new Date(),
+          updatedAt: new Date()
+        });
+
+        console.log(`✅ [Plan Refinement] New plan ${newPlanId} (v${newVersion}) generated`);
+
+        // Create checkpoint for refined plan
+        const checkpointId = nanoid();
+        await db.insert(agentCheckpoints).values({
+          id: checkpointId,
+          projectId,
+          stepName: 'plan_refinement',
+          agentType: 'data_scientist',
+          status: 'pending',
+          message: `Refined analysis plan (v${newVersion}) generated based on user feedback`,
+          data: {
+            previousPlanId: planId,
+            newPlanId,
+            rejectionReason: reason,
+            modifications,
+            timestamp: new Date().toISOString()
+          }
+        });
+
+        return res.json({
+          success: true,
+          message: 'Analysis plan rejected. New plan has been generated based on your feedback.',
+          planId,
+          newPlanId,
+          newVersion,
+          status: 'rejected',
+          checkpointId
+        });
+      } else {
+        console.warn(`⚠️ [Plan Refinement] DS agent refinement failed:`, refinementResult.error);
+        return res.json({
+          success: true,
+          message: 'Analysis plan rejected. DS agent could not generate refined plan - please create manually.',
+          planId,
+          status: 'rejected',
+          error: refinementResult.error || 'DS agent refinement failed'
+        });
+      }
+    } catch (refinementError: any) {
+      console.error(`❌ [Plan Refinement] Error during refinement:`, refinementError);
+      // Non-blocking: Return success for rejection even if refinement fails
       return res.json({
         success: true,
-        message: 'Analysis plan rejected. Plan regeneration encountered an error.',
+        message: 'Analysis plan rejected. Automatic refinement encountered an error - please create a new plan manually.',
         planId,
         status: 'rejected',
-        error: regenerationResult.error
+        refinementError: refinementError.message
       });
     }
-    */
 
   } catch (error) {
     console.error('❌ Error rejecting analysis plan:', error);
@@ -646,11 +859,12 @@ router.get('/:projectId/plan/progress', ensureAuthenticated, async (req, res) =>
     // Extract agent progress from agentContributions
     const contributions = plan.agentContributions as Record<string, any> || {};
 
-    // FIX #33: Include rejectionReason in progress response so frontend can display error
+    // Build progress response with error details for failed states
+    const isFailedState = ['rejected', 'failed', 'cancelled'].includes(plan.status || '');
+
     const progress = {
       planId: plan.id,
       status: plan.status,
-      rejectionReason: plan.rejectionReason || null, // FIX: Return rejection reason for failed/rejected plans
       agentProgress: {
         dataEngineer: contributions.data_engineer?.status || 'pending',
         dataScientist: contributions.data_scientist?.status || 'pending',
@@ -658,7 +872,21 @@ router.get('/:projectId/plan/progress', ensureAuthenticated, async (req, res) =>
       },
       percentComplete: calculateProgressPercent(contributions),
       estimatedTimeRemaining: estimateTimeRemaining(contributions, plan.status),
+      // Include error information for failed states
+      ...(isFailedState && {
+        error: plan.rejectionReason || `Plan ${plan.status}`,
+        rejectionReason: plan.rejectionReason,
+        errorDetails: {
+          agentErrors: {
+            dataEngineer: contributions.data_engineer?.error,
+            dataScientist: contributions.data_scientist?.error,
+            businessAgent: contributions.business_agent?.error,
+          }
+        }
+      })
     };
+
+    console.log(`📋 [Plan Progress] Project ${projectId}: status=${plan.status}, percent=${progress.percentComplete}%${isFailedState ? `, error=${plan.rejectionReason}` : ''}`);
 
     return res.json({
       success: true,

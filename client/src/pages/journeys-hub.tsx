@@ -42,15 +42,15 @@ export default function JourneysHub({ user }: JourneysHubProps) {
 
   const handleJourneyStart = (journeyType: string) => {
     if (!user) {
-      // Store intended route before redirecting to auth page
+      // Store intended route before redirecting to auth page (with ?new=true to clear prefilled data)
       import('@/lib/utils').then(({ routeStorage }) => {
-        routeStorage.setIntendedRoute(`/journeys/${journeyType}/prepare`);
+        routeStorage.setIntendedRoute(`/journeys/${journeyType}/data?new=true`);
       });
       setLocation('/auth/register');
       return;
     }
-    // Navigate to journey preparation step using SPA navigation
-    setLocation(`/journeys/${journeyType}/prepare`);
+    // Navigate to Data Upload & Setup step (step 1) using SPA navigation (with ?new=true to clear prefilled data)
+    setLocation(`/journeys/${journeyType}/data?new=true`);
   };
 
   const journeys = [
@@ -227,12 +227,9 @@ export default function JourneysHub({ user }: JourneysHubProps) {
                 {user ? 'Access your existing projects and continue your analysis.' : 'Sign in to view your projects and continue your work.'}
               </p>
               {user ? (
-                <Button 
-                  variant="outline" 
-                  onClick={() => {
-                    // For now, show a message that projects are integrated into journeys
-                    alert('Your projects are now integrated into your chosen journey workflows. Start a new journey to create and manage projects.');
-                  }}
+                <Button
+                  variant="outline"
+                  onClick={() => setLocation('/dashboard')}
                   data-testid="button-projects"
                 >
                   View Projects

@@ -9,16 +9,16 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Separator } from '@/components/ui/separator';
-import { 
-  Database, 
-  Filter, 
-  Columns, 
-  ArrowRight, 
-  Plus, 
-  Trash2, 
-  Play, 
-  Eye, 
-  Save, 
+import {
+  Database,
+  Filter,
+  Columns,
+  ArrowRight,
+  Plus,
+  Trash2,
+  Play,
+  Eye,
+  Save,
   AlertCircle,
   CheckCircle,
   Clock,
@@ -29,7 +29,7 @@ import {
   Upload
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { useProjectSession } from '@/hooks/useProjectSession';
+import { useProject } from '@/hooks/useProject';
 
 interface DataTransformationUIProps {
   projectId: string;
@@ -80,14 +80,22 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
   const [isProcessing, setIsProcessing] = useState(false);
   const [preview, setPreview] = useState<TransformationPreview | null>(null);
   const [showPreview, setShowPreview] = useState(false);
-  const [pmGuidance, setPmGuidance] = useState<any>(null);
-  const [pmStatus, setPmStatus] = useState<'idle' | 'analyzing' | 'recommending' | 'ready'>('idle');
+
+  const [transformationRecs, setTransformationRecs] = useState<any>(null);
+  const [isLoadingRecs, setIsLoadingRecs] = useState(false);
   const [selectedJoinProject, setSelectedJoinProject] = useState<string>('');
   const [availableProjects, setAvailableProjects] = useState<any[]>([]);
+  const [pmGuidance, setPmGuidance] = useState<{ recommendation: string; suggestedTransformations?: string[] } | null>(null);
   const { toast } = useToast();
-  // Fix: Pass journeyType from project to useProjectSession
-  const journeyType = project?.journeyType || 'ai_guided';
-  const { updateStep } = useProjectSession({ journeyType: journeyType as any });
+  // 🔒 SSOT: Use useProject hook for journeyProgress updates
+  // Note: `project` comes from props, not from hook, to avoid duplicate identifier
+  const {
+    journeyProgress,
+    updateProgress,
+    isUpdating
+  } = useProject(projectId);
+
+  const journeyType = project?.journeyType || 'non-tech';
 
   const schema = project?.schema || {};
   const fields = Object.keys(schema);
@@ -154,7 +162,8 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
 
   useEffect(() => {
     loadAvailableProjects();
-    requestPMGuidance();
+
+    fetchTransformationRecommendations();
   }, [projectId]);
 
   const loadAvailableProjects = async () => {
@@ -164,12 +173,12 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
           'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
         }
       });
-      
+
       if (response.ok) {
         const payload = await response.json();
         const projects = Array.isArray(payload) ? payload : Array.isArray(payload?.projects) ? payload.projects : [];
         // Filter out current project and only show projects with data
-        const availableProjects = projects.filter((p: any) => 
+        const availableProjects = projects.filter((p: any) =>
           p.id !== projectId && p.data && p.data.length > 0
         );
         setAvailableProjects(availableProjects);
@@ -179,33 +188,54 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
     }
   };
 
-  const requestPMGuidance = async () => {
-    setPmStatus('analyzing');
+
+
+  const fetchTransformationRecommendations = async () => {
+    setIsLoadingRecs(true);
     try {
-      const response = await fetch('/api/project-manager/analyze-transformation-needs', {
-        method: 'POST',
+      const response = await fetch(`/api/projects/${projectId}/transformation-recommendations`, {
         headers: {
-          'Content-Type': 'application/json',
           'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        },
-        body: JSON.stringify({
-          projectId,
-          schema,
-          dataSize: project?.data?.length || 0,
-          journeyType: project?.journeyType || 'business'
-        })
+        }
       });
 
       if (response.ok) {
-        const guidance = await response.json();
-        setPmGuidance(guidance);
-        setPmStatus('ready');
-      } else {
-        setPmStatus('idle');
+        const data = await response.json();
+        setTransformationRecs(data);
+
+        // Auto-generate transformation steps if available and not already set
+        if (data.transformationSteps && data.transformationSteps.length > 0 && transformationSteps.length === 0) {
+          setTransformationSteps(data.transformationSteps);
+        } else if (data.recommendations && transformationSteps.length === 0) {
+          // Generate steps from recommendations if code is available
+          const generatedSteps = data.recommendations
+            .filter((rec: any) => rec.transformation.code)
+            .map((rec: any) => ({
+              id: `step_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+              type: 'convert', // Default, should infer from operation
+              name: rec.elementName,
+              description: rec.transformation.description,
+              config: {
+                field: rec.sourceField,
+                code: rec.transformation.code,
+                targetType: 'string' // Default
+              },
+              status: 'pending',
+              aiGenerated: true,
+              relatedGoals: rec.relatedGoals,
+              relatedQuestions: rec.relatedQuestions,
+              confidence: rec.confidence
+            }));
+
+          if (generatedSteps.length > 0) {
+            setTransformationSteps(generatedSteps);
+          }
+        }
       }
     } catch (error) {
-      console.error('Failed to get PM guidance:', error);
-      setPmStatus('idle');
+      console.error('Failed to fetch transformation recommendations:', error);
+    } finally {
+      setIsLoadingRecs(false);
     }
   };
 
@@ -221,13 +251,18 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
     };
 
     setTransformationSteps([...transformationSteps, newStep]);
-    
-    // Update project session with transformation data
-    updateStep('data', {
-      transformation: {
-        steps: [...transformationSteps, newStep],
-        lastUpdated: new Date().toISOString()
-      }
+
+    setTransformationSteps([...transformationSteps, newStep]);
+
+    // Update journeyProgress with transformation data
+    updateProgress({
+      transformationMappings: [...transformationSteps, newStep].map(step => ({
+        sourceElementId: step.id,
+        targetColumn: step.name, // Mapping UI name to target for logic
+        transformationType: step.type,
+        config: step.config,
+        appliedAt: new Date().toISOString()
+      }))
     });
   };
 
@@ -352,18 +387,18 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
         });
 
         setShowPreview(true);
-        
+
         toast({
           title: "Transformations applied",
           description: `Successfully processed ${result.rowCount} rows`,
         });
 
-        // Update project session with transformation results
-        await updateStep('transformation', {
-          steps: transformationSteps,
-          results: result,
-          completed: true,
-          lastUpdated: new Date().toISOString()
+        // Update journeyProgress with transformation results
+        await updateProgress({
+          transformationApprovedAt: new Date().toISOString(),
+          transformedDatasetId: result.datasetId || projectId, // Logic should provide new ID if created
+          // Store schema for next steps
+          transformedSchema: result.schema || {}
         });
 
       } else {
@@ -404,11 +439,10 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
           description: "Transformed data has been saved to your project",
         });
 
-        // Update project session
-        await updateStep('transformation', {
-          steps: transformationSteps,
-          saved: true,
-          lastUpdated: new Date().toISOString()
+        // Update journeyProgress
+        await updateProgress({
+          transformationApprovedAt: new Date().toISOString(),
+          transformedDatasetId: projectId, // Placeholder if same project
         });
 
         if (onNext) {
@@ -590,12 +624,12 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
             <Database className="w-6 h-6 text-blue-600" />
             <div>
               <h1 className="text-2xl font-bold">Data Transformation</h1>
-              <p className="text-gray-600">
-                Transform your data for analysis • {project?.data?.length || 0} rows, {fields.length} columns
+              <p className="text-gray-500">
+                Transform your data for analysis • {project?.data?.length || (project?.dataPreview && Object.values(project.dataPreview)[0] && (Object.values(project.dataPreview)[0] as any[]).length) || 0} rows, {fields.length} columns
               </p>
             </div>
           </div>
-          
+
           <div className="flex gap-2">
             {onBack && (
               <Button variant="outline" onClick={onBack}>
@@ -626,11 +660,11 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
         )}
       </div>
 
-      <Tabs defaultValue="transformations" className="space-y-6">
+      <Tabs defaultValue="guidance" className="space-y-6">
         <TabsList className="grid w-full grid-cols-3">
+          <TabsTrigger value="guidance">Guidance</TabsTrigger>
           <TabsTrigger value="transformations">Transformations</TabsTrigger>
           <TabsTrigger value="preview">Preview</TabsTrigger>
-          <TabsTrigger value="guidance">Guidance</TabsTrigger>
         </TabsList>
 
         <TabsContent value="transformations" className="space-y-6">
@@ -859,37 +893,136 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
         </TabsContent>
 
         <TabsContent value="guidance" className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Users className="w-5 h-5" />
-                Transformation Guidance
-              </CardTitle>
-              <CardDescription>
-                AI-powered recommendations for your data transformation
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                {transformationTypes.map(type => (
-                  <div key={type.value} className="p-4 border rounded-lg">
-                    <div className="flex items-center gap-3 mb-2">
-                      <type.icon className="w-5 h-5 text-blue-600" />
-                      <h3 className="font-medium">{type.label}</h3>
-                    </div>
-                    <p className="text-sm text-gray-600 mb-2">{type.description}</p>
-                    <div className="bg-blue-50 p-3 rounded">
-                      <p className="text-sm text-blue-800">
-                        <strong>PM Guidance:</strong> {type.pmGuidance}
-                      </p>
-                    </div>
+          {isLoadingRecs ? (
+            <Card>
+              <CardContent className="text-center py-8">
+                <Clock className="w-12 h-12 text-gray-400 mx-auto mb-4 animate-spin" />
+                <p className="text-gray-600">Loading transformation guidance...</p>
+              </CardContent>
+            </Card>
+          ) : transformationRecs?.recommendations?.length > 0 ? (
+            <>
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Users className="w-5 h-5" />
+                    🤖 AI-Recommended Transformations
+                  </CardTitle>
+                  <CardDescription>
+                    Based on your goals and questions, we recommend the following transformations
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    {transformationRecs.recommendations.map((rec: any, idx: number) => (
+                      <div key={idx} className="bg-white rounded-lg p-4 border border-blue-100">
+                        <div className="flex items-start justify-between mb-2">
+                          <div className="flex-1">
+                            <h5 className="font-medium text-gray-900">{rec.elementName}</h5>
+                            <p className="text-sm text-gray-600 mt-1">{rec.purpose}</p>
+                          </div>
+                          <Badge variant={rec.priority === 'high' ? 'destructive' : 'secondary'}>
+                            {rec.priority}
+                          </Badge>
+                        </div>
+
+                        <div className="flex items-center gap-2 mb-3">
+                          <span className="text-xs font-medium text-gray-500">Confidence:</span>
+                          <Badge variant={rec.confidence >= 0.8 ? 'outline' : 'secondary'} className={rec.confidence >= 0.8 ? 'text-green-600 border-green-600' : 'text-yellow-600'}>
+                            {Math.round((rec.confidence || 0) * 100)}%
+                          </Badge>
+                          {rec.needsReview && (
+                            <Badge variant="outline" className="text-orange-600 border-orange-600 flex items-center gap-1">
+                              <AlertCircle className="w-3 h-3" />
+                              Needs Review
+                            </Badge>
+                          )}
+                        </div>
+
+                        {rec.transformation.validationError && (
+                          <div className="mb-3 p-2 bg-red-50 text-red-700 text-xs rounded border border-red-200">
+                            <strong>Validation Error:</strong> {rec.transformation.validationError}
+                          </div>
+                        )}
+
+                        {rec.transformation.warnings && rec.transformation.warnings.length > 0 && (
+                          <div className="mb-3 p-2 bg-yellow-50 text-yellow-700 text-xs rounded border border-yellow-200">
+                            <strong>Warnings:</strong>
+                            <ul className="list-disc list-inside mt-1">
+                              {rec.transformation.warnings.map((w: string, i: number) => (
+                                <li key={i}>{w}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        <div className="mt-3 space-y-2">
+                          <div className="text-sm">
+                            <span className="font-medium text-gray-700">Source:</span>{' '}
+                            <code className="bg-gray-100 px-2 py-1 rounded">{rec.sourceField}</code>
+                          </div>
+                          <div className="text-sm">
+                            <span className="font-medium text-gray-700">Transformation:</span>{' '}
+                            {rec.transformation.description}
+                          </div>
+                          {rec.relatedQuestions?.length > 0 && (
+                            <div className="text-sm">
+                              <span className="font-medium text-gray-700">Answers:</span>{' '}
+                              <span className="text-gray-600">{rec.relatedQuestions[0]}</span>
+                            </div>
+                          )}
+                          {rec.relatedAnalyses?.length > 0 && (
+                            <div className="text-sm">
+                              <span className="font-medium text-gray-700">Used in:</span>{' '}
+                              <span className="text-gray-600">{rec.relatedAnalyses.join(', ')}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
+                </CardContent>
+              </Card>
+
+              {transformationRecs.gaps?.length > 0 && (
+                <Card className="border-yellow-200 bg-yellow-50">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-yellow-900">
+                      <AlertCircle className="w-5 h-5" />
+                      ⚠️ Data Gaps
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {transformationRecs.gaps.map((gap: any, idx: number) => (
+                      <div key={idx} className="mb-3 last:mb-0">
+                        <p className="text-sm font-medium text-yellow-900">{gap.description}</p>
+                        <p className="text-sm text-yellow-700 mt-1">{gap.recommendation}</p>
+                      </div>
+                    ))}
+                  </CardContent>
+                </Card>
+              )}
+            </>
+          ) : (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Users className="w-5 h-5" />
+                  Transformation Guidance
+                </CardTitle>
+                <CardDescription>
+                  AI-powered recommendations for your data transformation
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="text-center py-8 text-gray-500">
+                  No transformation recommendations available yet. Upload data to get AI-powered guidance.
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
       </Tabs>
-    </div>
+    </div >
   );
 }

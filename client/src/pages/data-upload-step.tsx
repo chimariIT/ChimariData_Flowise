@@ -50,10 +50,11 @@ interface DataUploadStepProps {
 
 type SessionJourney = 'non-tech' | 'business' | 'technical' | 'consultation' | 'custom';
 
+// Journey type mapping - use consistent names (new schema uses non-tech/business/technical)
 const SESSION_TO_PROJECT_JOURNEY: Record<SessionJourney, string> = {
-  'non-tech': 'ai_guided',
-  business: 'template_based',
-  technical: 'self_service',
+  'non-tech': 'non-tech',
+  business: 'business',
+  technical: 'technical',
   consultation: 'consultation',
   custom: 'custom',
 };
@@ -143,17 +144,38 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
     const entries = Object.values(dataValidation);
     if (!entries.length) return null;
 
-    // CRITICAL FIX: If we have joined data with totalRowCount, use that instead of summing individual datasets
-    // This ensures accuracy when datasets are joined (joined count != sum of individual counts)
-    const joinedTotalRows = journeyProgress?.joinedData?.totalRowCount || 
-                           journeyProgress?.joinedData?.fullData?.length || 
+    // PHASE 10 FIX: If we have joined data, use that for accurate totals
+    // The joinedData in journeyProgress has the true row/column count after joining
+    const joinedData = journeyProgress?.joinedData;
+    const joinedTotalRows = joinedData?.totalRowCount ||
+                           joinedData?.rowCount ||
+                           joinedData?.recordCount ||
+                           joinedData?.fullData?.length ||
                            null;
+
+    // Get joined column count from schema or columnCount
+    const joinedTotalColumns = joinedData?.columnCount ||
+                              (joinedData?.schema ? Object.keys(joinedData.schema).length : null) ||
+                              null;
 
     return entries.reduce(
       (acc, stats, idx) => {
-        // Use joined total if available, otherwise sum individual datasets
-        acc.totalRows = joinedTotalRows !== null ? joinedTotalRows : (acc.totalRows + (stats.totalRows || 0));
-        acc.totalColumns = Math.max(acc.totalColumns, stats.totalColumns || 0);
+        // Use joined totals if available, otherwise aggregate from individual datasets
+        if (joinedTotalRows !== null) {
+          acc.totalRows = joinedTotalRows;
+        } else {
+          acc.totalRows += (stats.totalRows || 0);
+        }
+
+        // PHASE 10 FIX: For columns, use joined schema column count if available
+        // Otherwise sum all unique columns across datasets
+        if (joinedTotalColumns !== null) {
+          acc.totalColumns = joinedTotalColumns;
+        } else {
+          // Sum columns across all datasets (for multi-dataset view before join)
+          acc.totalColumns += (stats.totalColumns || 0);
+        }
+
         acc.missingValues += stats.missingValues || 0;
         acc.duplicateRows += stats.duplicateRows || 0;
         acc.qualityScoreSum += stats.qualityScore || 0;
@@ -162,7 +184,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
       },
       {
         totalRows: joinedTotalRows !== null ? joinedTotalRows : 0,
-        totalColumns: 0,
+        totalColumns: joinedTotalColumns !== null ? joinedTotalColumns : 0,
         missingValues: 0,
         duplicateRows: 0,
         qualityScoreSum: 0,
@@ -737,7 +759,9 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
           ...(journeyProgress?.joinedData || {}),
           preview: joinedPreview,
           schema: joinedPreviewSchema || undefined,
-          totalRowCount: aggregatedValidation?.totalRows || journeyProgress?.joinedData?.totalRowCount || joinedPreview.length,
+          // CRITICAL FIX: Prioritize joinInsights.totalRowCount (backend-calculated accurate count)
+          // over aggregatedValidation.totalRows (sum of individual datasets which doesn't account for joins)
+          totalRowCount: joinInsights?.totalRowCount || journeyProgress?.joinedData?.joinInsights?.totalRowCount || aggregatedValidation?.totalRows || journeyProgress?.joinedData?.totalRowCount || joinedPreview.length,
           joinInsights: joinInsights || journeyProgress?.joinedData?.joinInsights || undefined,
           columnCount: joinedPreviewColumns.length,
           rowCount: joinedPreview.length,
@@ -840,16 +864,21 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
           // AUTO-CREATE PROJECT ON FIRST FILE UPLOAD
           if (latestProjectId && index > 0) {
             // Add file to existing project
+            console.log(`📤 [Upload] Adding file ${index + 1} to existing project: ${latestProjectId}`);
             data = await apiClient.uploadFileToProject(latestProjectId, file);
           } else {
             // Create new project with first file (auto-create on upload)
+            console.log(`📤 [Upload] Creating new project with file: ${file.name}, journeyType: ${normalizedJourneyType}`);
             data = await apiClient.uploadFile(file, {
               name: fallbackName,
               description: fallbackDescription,
               questions: [],
-              isTrial: false
+              isTrial: false,
+              journeyType: normalizedJourneyType
             });
           }
+
+          console.log('📤 [Upload] Response:', { success: data?.success, projectId: data?.projectId, error: data?.error });
 
           if (!data?.success) {
             uploadNetworkMetric?.end('error', {
@@ -1427,7 +1456,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
               <div>
                 <div className="flex items-center gap-2 mb-2">
                   <Badge variant="outline" className="bg-white text-gray-700 border-gray-200">
-                    {Math.min(joinedPreview.length, 10)} rows of {(journeyProgress?.joinedData?.totalRowCount || journeyProgress?.joinedData?.fullData?.length || joinedPreview.length).toLocaleString()} total records in the joined dataset
+                    {Math.min(joinedPreview.length, 10)} rows of {(joinInsights?.totalRowCount || journeyProgress?.joinedData?.joinInsights?.totalRowCount || journeyProgress?.joinedData?.totalRowCount || journeyProgress?.joinedData?.fullData?.length || joinedPreview.length).toLocaleString()} total records in the joined dataset
                   </Badge>
                 </div>
                 <ScrollArea className="border rounded-lg h-96 w-full bg-white">

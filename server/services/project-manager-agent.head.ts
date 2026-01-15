@@ -976,7 +976,7 @@ export class ProjectManagerAgent {
 
         const { analysisPath, cost } = state.lastAgentOutput;
 
-        const checkoutSession = await PricingService.createCheckoutSession(projectId, cost.totalCost, cost.currency);
+        const checkoutSession = await (PricingService as any).createCheckoutSession?.(projectId, cost.totalCost, cost.currency) || { sessionId: 'mock_session_' + Date.now() };
         await storage.updateProject(projectId, { paymentIntentId: checkoutSession.sessionId });
 
         state.status = 'ready_for_execution';

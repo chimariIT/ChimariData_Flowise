@@ -27,7 +27,7 @@ import MultiAgentCheckpoint from './multi-agent-checkpoint';
 interface AgentCheckpoint {
   id: string;
   projectId: string;
-  agentType: 'project_manager' | 'technical_ai' | 'business';
+  agentType: 'project_manager' | 'technical_ai' | 'business' | 'data_engineer' | 'data_scientist';
   stepName: string;
   status: 'pending' | 'in_progress' | 'waiting_approval' | 'approved' | 'completed' | 'rejected';
   message: string;
@@ -35,6 +35,7 @@ interface AgentCheckpoint {
   userFeedback?: string;
   timestamp: string;
   requiresUserInput: boolean;
+  userVisible?: boolean;  // FIX #35: Controls visibility to regular users
 }
 
 interface AgentCheckpointsProps {
@@ -53,7 +54,9 @@ const statusConfig = {
 const agentConfig = {
   project_manager: { name: 'Project Manager', icon: Bot, color: 'text-purple-600' },
   technical_ai: { name: 'Technical AI', icon: Bot, color: 'text-blue-600' },
-  business: { name: 'Business Agent', icon: Bot, color: 'text-green-600' },
+  business: { name: 'Business Analyst', icon: Bot, color: 'text-green-600' },
+  data_engineer: { name: 'Data Engineer', icon: Bot, color: 'text-orange-600' },
+  data_scientist: { name: 'Data Scientist', icon: Bot, color: 'text-cyan-600' },
 };
 
 export default function AgentCheckpoints({ projectId }: AgentCheckpointsProps) {
@@ -225,11 +228,12 @@ export default function AgentCheckpoints({ projectId }: AgentCheckpointsProps) {
           AI Agent Activity
         </CardTitle>
         <CardDescription>
-          Real-time collaboration with AI agents
+          {/* FIX #35: Shows journey phase updates and approvals needed */}
+          Key journey milestones and approval requests
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <ScrollArea className="h-[500px] pr-4">
+        <ScrollArea className="h-auto max-h-[600px] pr-4" style={{ height: `${Math.min(checkpoints.length * 120 + 100, 600)}px` }}>
           <div className="space-y-4">
             {checkpoints.map((checkpoint, index) => {
               // Check if this is a multi-agent coordination checkpoint

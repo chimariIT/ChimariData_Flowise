@@ -9,11 +9,15 @@
  * 2. Bridge receives message and forwards to WebSocket
  * 3. User responds via WebSocket
  * 4. Bridge forwards response back to agent via message broker
+ *
+ * FIX: Socket.IO Migration - Now uses Socket.IO for better reconnection handling
  */
 
 import { getMessageBroker, AgentMessage, AgentCheckpoint, PendingCheckpointInfo } from './message-broker';
 import { RealtimeServer, RealtimeEvent } from '../../realtime';
+import { SocketManager, AgentCheckpointEvent, ExecutionProgressEvent } from '../../socket-manager';
 import { EventEmitter } from 'events';
+import { storage } from '../../storage';
 
 export class RealtimeAgentBridge extends EventEmitter {
   private messageBroker: ReturnType<typeof getMessageBroker>;
@@ -45,6 +49,29 @@ export class RealtimeAgentBridge extends EventEmitter {
     console.log('Real-Time Agent Bridge initialized');
   }
 
+  /**
+   * Get the owner userId for a project
+   * FIX: Production Readiness - Replace hardcoded 'user_placeholder' with actual DB lookup
+   */
+  private async getProjectOwner(projectId: string): Promise<string> {
+    if (!projectId) {
+      console.warn('[RealtimeAgentBridge] No projectId provided for owner lookup');
+      return 'system';
+    }
+
+    try {
+      const project = await storage.getProject(projectId);
+      if (project?.userId) {
+        return project.userId;
+      }
+      console.warn(`[RealtimeAgentBridge] Project ${projectId} has no userId, using 'system'`);
+      return 'system';
+    } catch (error) {
+      console.error(`[RealtimeAgentBridge] Failed to lookup project owner for ${projectId}:`, error);
+      return 'system';
+    }
+  }
+
   // ==========================================
   // AGENT → USER (via WebSocket)
   // ==========================================
@@ -69,10 +96,16 @@ export class RealtimeAgentBridge extends EventEmitter {
     this.messageBroker.on('message:error', async (message: AgentMessage) => {
       await this.handleAgentError(message);
     });
+
+    // [DAY 10] Listen for workflow progress events from agent coordination service
+    this.messageBroker.on('workflow:progress', async (payload: any) => {
+      await this.handleWorkflowProgress(payload);
+    });
   }
 
   /**
    * Forward agent checkpoint to user via WebSocket
+   * FIX: Socket.IO Migration - Now emits via both native ws and Socket.IO for transition
    */
   private async handleAgentCheckpoint(message: AgentMessage): Promise<void> {
     const checkpoint = message.payload as AgentCheckpoint;
@@ -92,10 +125,15 @@ export class RealtimeAgentBridge extends EventEmitter {
     this.pendingCheckpointIds.add(checkpoint.checkpointId);
 
     // Get project owner (userId) from database
-    // TODO: Query database for project owner
-    const userId = 'user_placeholder'; // Replace with actual lookup
+    const userId = await this.getProjectOwner(checkpoint.projectId);
 
-    // Forward to WebSocket
+    // Update checkpoint map with resolved userId
+    const existingCheckpoint = this.checkpointMap.get(checkpoint.checkpointId);
+    if (existingCheckpoint) {
+      existingCheckpoint.userId = userId;
+    }
+
+    // Forward to native WebSocket (legacy - kept for backwards compatibility)
     const event: RealtimeEvent = {
       type: 'status_change',
       sourceType: 'streaming', // Using existing event type
@@ -118,17 +156,36 @@ export class RealtimeAgentBridge extends EventEmitter {
 
     this.realtimeServer.broadcast(event, { userId, projectId: checkpoint.projectId });
 
-    console.log(`Checkpoint ${checkpoint.checkpointId} forwarded to user ${userId}`);
+    // FIX: Socket.IO Migration - Also emit via Socket.IO for better reconnection handling
+    const socketManager = SocketManager.getInstance();
+    const socketEvent: AgentCheckpointEvent = {
+      checkpointId: checkpoint.checkpointId,
+      projectId: checkpoint.projectId,
+      agentType: checkpoint.agentId || 'unknown',
+      stepName: checkpoint.step || 'unknown',
+      status: 'waiting_approval',
+      message: checkpoint.question || 'Checkpoint requires approval',
+      timestamp: new Date(),
+      userVisible: true, // Checkpoints sent to users are always visible
+      data: {
+        options: checkpoint.options,
+        artifacts: checkpoint.artifacts,
+      },
+    };
+    socketManager.emitAgentCheckpoint(checkpoint.projectId, socketEvent);
+
+    console.log(`Checkpoint ${checkpoint.checkpointId} forwarded to user ${userId} (ws + Socket.IO)`);
     this.emit('checkpoint_forwarded', { checkpointId: checkpoint.checkpointId, userId });
   }
 
   /**
    * Forward agent status to user via WebSocket
+   * FIX: Socket.IO Migration - Now emits via both native ws and Socket.IO
    */
   private async handleAgentStatus(message: AgentMessage): Promise<void> {
     const status = message.payload;
 
-    // Broadcast status to all users (could be filtered by project)
+    // Broadcast status to all users via native WebSocket (legacy)
     const event: RealtimeEvent = {
       type: 'status_change',
       sourceType: 'streaming',
@@ -145,18 +202,30 @@ export class RealtimeAgentBridge extends EventEmitter {
     };
 
     this.realtimeServer.broadcast(event);
+
+    // FIX: Socket.IO Migration - Also broadcast via Socket.IO
+    const socketManager = SocketManager.getInstance();
+    socketManager.broadcast('agent_status', {
+      agentId: message.from,
+      status: status.status,
+      currentTask: status.currentTask,
+      queuedTasks: status.queuedTasks,
+      timestamp: new Date(),
+    });
   }
 
   /**
    * Forward agent result to user via WebSocket
+   * FIX: Socket.IO Migration - Now emits via both native ws and Socket.IO
    */
   private async handleAgentResult(message: AgentMessage): Promise<void> {
     const result = message.payload;
-
-    // TODO: Get userId from project/task context
-    const userId = result.userId || 'user_placeholder';
     const projectId = result.projectId;
 
+    // Get userId from result payload or lookup from project owner
+    const userId = result.userId || (projectId ? await this.getProjectOwner(projectId) : 'system');
+
+    // Emit via native WebSocket (legacy)
     const event: RealtimeEvent = {
       type: 'job_complete',
       sourceType: 'streaming',
@@ -172,18 +241,34 @@ export class RealtimeAgentBridge extends EventEmitter {
     };
 
     this.realtimeServer.broadcast(event, { userId, projectId });
+
+    // FIX: Socket.IO Migration - Also emit via Socket.IO for project room
+    if (projectId) {
+      const socketManager = SocketManager.getInstance();
+      const progressEvent: ExecutionProgressEvent = {
+        projectId,
+        phase: 'result',
+        status: 'completed',
+        message: `Agent ${message.from} completed task`,
+        progress: 100,
+        data: result,
+      };
+      socketManager.emitExecutionProgress(projectId, progressEvent);
+    }
   }
 
   /**
    * Forward agent error to user via WebSocket
+   * FIX: Socket.IO Migration - Now emits via both native ws and Socket.IO
    */
   private async handleAgentError(message: AgentMessage): Promise<void> {
     const error = message.payload;
-
-    // TODO: Get userId from project/task context
-    const userId = error.userId || 'user_placeholder';
     const projectId = error.projectId;
 
+    // Get userId from error payload or lookup from project owner
+    const userId = error.userId || (projectId ? await this.getProjectOwner(projectId) : 'system');
+
+    // Emit via native WebSocket (legacy)
     const event: RealtimeEvent = {
       type: 'error',
       sourceType: 'streaming',
@@ -200,6 +285,89 @@ export class RealtimeAgentBridge extends EventEmitter {
     };
 
     this.realtimeServer.broadcast(event, { userId, projectId });
+
+    // FIX: Socket.IO Migration - Also emit via Socket.IO for project room
+    if (projectId) {
+      const socketManager = SocketManager.getInstance();
+      const progressEvent: ExecutionProgressEvent = {
+        projectId,
+        phase: 'error',
+        status: 'failed',
+        message: error.message || 'Agent error occurred',
+        data: {
+          agentId: message.from,
+          error: error.message,
+          details: error,
+        },
+      };
+      socketManager.emitExecutionProgress(projectId, progressEvent);
+    }
+  }
+
+  /**
+   * [DAY 10] Forward workflow progress events to user via WebSocket
+   * This handles real-time U2A2A2U workflow phase updates
+   */
+  private async handleWorkflowProgress(payload: any): Promise<void> {
+    const progressData = payload.data || payload;
+    const projectId = progressData.projectId;
+
+    if (!projectId) {
+      console.warn('[RealtimeAgentBridge] Workflow progress missing projectId:', progressData);
+      return;
+    }
+
+    // Get userId from project owner
+    const userId = await this.getProjectOwner(projectId);
+
+    console.log(`📊 [Workflow Progress] Phase: ${progressData.phase}, Progress: ${progressData.percentComplete}%, Status: ${progressData.status}`);
+
+    // Emit via native WebSocket
+    const event: RealtimeEvent = {
+      type: 'status_change',
+      sourceType: 'analysis',
+      sourceId: progressData.workflowId || projectId,
+      userId,
+      projectId,
+      timestamp: new Date(),
+      data: {
+        eventType: 'workflow_progress',
+        workflowId: progressData.workflowId,
+        phase: progressData.phase,
+        phaseIndex: progressData.phaseIndex,
+        totalPhases: progressData.totalPhases,
+        status: progressData.status,
+        percentComplete: progressData.percentComplete,
+        message: progressData.message,
+        slaCompliant: progressData.slaCompliant,
+        durationMs: progressData.durationMs,
+      },
+    };
+
+    this.realtimeServer.broadcast(event, { userId, projectId });
+
+    // Also emit via Socket.IO for project room
+    const socketManager = SocketManager.getInstance();
+    const progressEvent: ExecutionProgressEvent = {
+      projectId,
+      phase: progressData.phase || 'workflow',
+      status: progressData.status === 'completed' ? 'completed'
+        : progressData.status === 'failed' ? 'failed'
+        : progressData.status === 'started' ? 'starting'
+        : 'in_progress',
+      message: progressData.message || `Workflow phase: ${progressData.phase}`,
+      progress: progressData.percentComplete,
+      data: {
+        workflowId: progressData.workflowId,
+        phaseIndex: progressData.phaseIndex,
+        totalPhases: progressData.totalPhases,
+        slaCompliant: progressData.slaCompliant,
+        durationMs: progressData.durationMs,
+      },
+    };
+    socketManager.emitExecutionProgress(projectId, progressEvent);
+
+    this.emit('workflow_progress', progressData);
   }
 
   // ==========================================

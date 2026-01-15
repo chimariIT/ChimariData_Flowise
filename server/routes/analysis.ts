@@ -177,41 +177,50 @@ router.post('/:projectId/transform', ensureAuthenticated, async (req, res) => {
 });
 
 /**
- * Suggest analysis scenarios based on a plain-English question and optional schema context.
+ * Suggest analysis scenarios based on a plain-English question, schema, goals, and data context.
  * Classifies whether the question matches known internal presets or appears to be a new type
  * that may require external knowledge/sources. Returns suggested analyses to run.
  */
 router.post('/suggest-scenarios', ensureAuthenticated, async (req, res) => {
     try {
-        const { question, schema } = req.body || {};
+        const { question, schema, goals, previousQuestions, dataContext } = req.body || {};
         if (!question || typeof question !== 'string') {
             return res.status(400).json({ error: 'A plain-English "question" string is required.' });
         }
 
         const q = String(question).toLowerCase();
 
-        // Simple keyword signals
-        const hasTime = /(over time|trend|weekly|monthly|quarter|year|time series|timeline)/.test(q);
-        const hasEffect = /(impact|effect|increase|decrease|lift|change)/.test(q);
-        const hasPrice = /(price|pricing|plan|tier|discount)/.test(q);
-        const hasChurn = /(churn|cancel|attrition|turnover|leave|departure)/.test(q);
-        const hasCampaign = /(campaign|marketing|ads?|promotion|promo)/.test(q);
-        const hasSla = /(sla|breach|uptime|downtime|latency|ticket|ops|operations?)/.test(q);
-        const hasPredict = /(predict|likely|probability|classify)/.test(q);
-        const hasRel = /(relationship|correlat|associate|link)/.test(q);
+        // Extract context from goals and data
+        const goalContext = goals && Array.isArray(goals) && goals.length > 0 ? goals.join(' ').toLowerCase() : '';
+        const columnNames = dataContext?.columnNames || (schema ? Object.keys(schema) : []);
+        const hasTimeSeries = dataContext?.hasTimeSeries ||
+            columnNames.some((col: string) => /date|time|timestamp|year|month|day/.test(col.toLowerCase()));
+
+        // Combine question with goal context for better matching
+        const combinedContext = `${q} ${goalContext}`.toLowerCase();
+
+        // Simple keyword signals - now using combinedContext for better matching
+        const hasTime = /(over time|trend|weekly|monthly|quarter|year|time series|timeline)/.test(combinedContext);
+        const hasEffect = /(impact|effect|increase|decrease|lift|change)/.test(combinedContext);
+        const hasPrice = /(price|pricing|plan|tier|discount)/.test(combinedContext);
+        const hasChurn = /(churn|cancel|attrition|turnover|leave|departure)/.test(combinedContext);
+        const hasCampaign = /(campaign|marketing|ads?|promotion|promo)/.test(combinedContext);
+        const hasSla = /(sla|breach|uptime|downtime|latency|ticket|ops|operations?)/.test(combinedContext);
+        const hasPredict = /(predict|likely|probability|classify)/.test(combinedContext);
+        const hasRel = /(relationship|correlat|associate|link)/.test(combinedContext);
 
         // Map to internal presets
         const internalMatches: Array<{ id: string; title: string; description: string; analyses: string[] }>= [];
-        if (hasCampaign || (/sales|revenue|conversion/.test(q) && hasEffect)) {
+        if (hasCampaign || (/sales|revenue|conversion/.test(combinedContext) && hasEffect)) {
             internalMatches.push({ id: 'campaign-effectiveness', title: 'Marketing campaign effectiveness', description: 'Determine if a recent campaign drove sales lift', analyses: ['descriptive','time-series','regression'] });
         }
-        if ((hasPrice || /pricing/.test(q)) && (hasChurn || hasEffect)) {
+        if ((hasPrice || /pricing/.test(combinedContext)) && (hasChurn || hasEffect)) {
             internalMatches.push({ id: 'pricing-churn', title: 'Pricing change effect on churn', description: 'Assess if pricing changes impacted customer churn', analyses: ['descriptive','correlation','classification','regression'] });
         }
-        if ((/policy|remote work|policy change/.test(q)) && (hasChurn || /attrition|hr|employee|people/.test(q))) {
+        if ((/policy|remote work|policy change/.test(combinedContext)) && (hasChurn || /attrition|hr|employee|people/.test(combinedContext))) {
             internalMatches.push({ id: 'policy-attrition', title: 'Policy impact on employee attrition', description: 'Check if a policy change increased employee departures', analyses: ['descriptive','correlation','regression','time-series'] });
         }
-        if (hasSla || /operations|operational/.test(q)) {
+        if (hasSla || /operations|operational/.test(combinedContext)) {
             internalMatches.push({ id: 'operations-sla', title: 'Operational changes and SLA breaches', description: 'See if schedule changes affected SLA breaches', analyses: ['descriptive','correlation','time-series'] });
         }
         if (hasPredict) {
@@ -226,11 +235,14 @@ router.post('/suggest-scenarios', ensureAuthenticated, async (req, res) => {
             return res.json({ source: 'internal', scenarios: internalMatches });
         }
 
-        // Otherwise, classify as external/new type; provide safe defaults
-        const defaults = hasTime ? ['descriptive','time-series','regression'] : ['descriptive','correlation','regression'];
+        // Otherwise, classify as external/new type; provide context-aware defaults
+        const defaults = (hasTime || hasTimeSeries)
+            ? ['descriptive','time-series','regression']
+            : ['descriptive','correlation','regression'];
+
         return res.json({
             source: 'external',
-            scenarios: [{ id: 'general-question', title: 'General analysis', description: 'We will analyze your data to answer this new type of question', analyses: defaults }]
+            scenarios: [{ id: 'general-question', title: 'General analysis', description: `Analyze your data${columnNames.length > 0 ? ` (${columnNames.length} columns)` : ''} to answer this question`, analyses: defaults }]
         });
     } catch (error: any) {
         res.status(500).json({ error: error.message });

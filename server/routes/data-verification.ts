@@ -34,7 +34,7 @@ const buildUserContext = (req: any, project?: any) => {
     subscriptionTier: user.subscriptionTier || 'trial',
     projectId: project?.id,
     projectName: project?.name,
-    journeyType: project?.journeyType || project?.journey_type || 'ai_guided'
+    journeyType: project?.journeyType || project?.journey_type || 'non-tech'
   };
 };
 
@@ -89,6 +89,11 @@ router.get('/:projectId/data-quality', ensureAuthenticated, async (req, res) => 
       : datasetEntry;
 
     const datasetAvailable = Boolean(datasetObj);
+
+    // Extract quality metrics from ingestionMetadata where they're actually stored
+    const ingestionMetadata = datasetAvailable ? (datasetObj as any).ingestionMetadata : null;
+    const qualityMetricsFromMetadata = ingestionMetadata?.qualityMetrics ?? null;
+
     const dataset: {
       schema: Record<string, any>;
       rowCount: number;
@@ -99,13 +104,12 @@ router.get('/:projectId/data-quality', ensureAuthenticated, async (req, res) => 
           schema: toRecord((datasetObj as any).schema),
           rowCount: Number((datasetObj as any).recordCount ?? (datasetObj as any).rowCount ?? 0),
           id: (datasetObj as any).id ?? null,
-          qualityMetrics: (datasetObj as any).qualityMetrics ?? null
+          qualityMetrics: qualityMetricsFromMetadata // ✅ Read from ingestionMetadata, not direct field
         }
       : { schema: {}, rowCount: 0, id: null, qualityMetrics: null };
 
     const schema = dataset.schema;
     const columns = Object.keys(schema);
-    let qualityScore = datasetAvailable ? 75 : 0;
     const issues: any[] = [];
     const recommendations: string[] = [];
 
@@ -116,7 +120,6 @@ router.get('/:projectId/data-quality', ensureAuthenticated, async (req, res) => 
           message: 'Dataset has very few columns',
           suggestion: 'Consider adding more data features'
         });
-        qualityScore -= 10;
       }
 
       if (dataset.rowCount && dataset.rowCount < 10) {
@@ -125,7 +128,6 @@ router.get('/:projectId/data-quality', ensureAuthenticated, async (req, res) => 
           message: 'Dataset has very few rows',
           suggestion: 'Consider adding more data for robust analysis'
         });
-        qualityScore -= 15;
       }
 
       recommendations.push(
@@ -134,26 +136,22 @@ router.get('/:projectId/data-quality', ensureAuthenticated, async (req, res) => 
       );
 
       if (dataset.qualityMetrics) {
-        const metrics = dataset.qualityMetrics;
+        const rawMetrics = dataset.qualityMetrics;
 
-        if (typeof metrics.dataQualityScore === 'number') {
-          qualityScore = Math.round(metrics.dataQualityScore);
+        // Extract completeness - handle both 0-1 ratio and 0-100 percentage formats
+        let completeness = typeof rawMetrics.completeness === 'number' ? rawMetrics.completeness : 95;
+        // If completeness is in 0-1 range, convert to percentage
+        if (completeness <= 1) {
+          completeness = completeness * 100;
         }
 
-        const completeness = typeof metrics.completeness === 'number' ? metrics.completeness : 1.0;
         const totalRows = dataset.rowCount || 1;
-        const duplicateRows = metrics.duplicateRows || 0;
-        const uniqueness = Math.max(0, (totalRows - duplicateRows) / totalRows);
-        const typeConsistency = typeof metrics.typeConsistency === 'number' ? metrics.typeConsistency : 1.0;
+        const duplicateRows = rawMetrics.duplicateRows || 0;
 
-        if (qualityScore === 75) {
-          qualityScore = Math.round(((completeness * 0.4) + (uniqueness * 0.3) + (typeConsistency * 0.3)) * 100);
-        }
-
-        if (completeness < 0.9) {
+        if (completeness < 90) {
           issues.push({
-            severity: completeness < 0.7 ? 'error' : 'warning',
-            message: `Data completeness is ${Math.round(completeness * 100)}%`,
+            severity: completeness < 70 ? 'error' : 'warning',
+            message: `Data completeness is ${Math.round(completeness)}%`,
             suggestion: 'Some fields contain missing values'
           });
         }
@@ -165,10 +163,6 @@ router.get('/:projectId/data-quality', ensureAuthenticated, async (req, res) => 
             message: `${duplicateRows} duplicate rows detected (${Math.round(duplicatePct)}%)`,
             suggestion: 'Consider removing duplicates before analysis'
           });
-        }
-      } else {
-        if (columns.length > 0) {
-          qualityScore = 75 + Math.min(10, Math.floor(columns.length / 3));
         }
       }
     } else {
@@ -184,11 +178,36 @@ router.get('/:projectId/data-quality', ensureAuthenticated, async (req, res) => 
       );
     }
 
+    // Build display metrics - these are what the user sees in the UI
+    // FIX: Always calculate overall score as average of these displayed metrics
+    // to ensure the displayed values match the overall score
     const metrics = datasetAvailable && dataset.qualityMetrics ? {
-      completeness: Math.round((dataset.qualityMetrics.completeness ?? 1) * 100),
-      consistency: Math.round((dataset.qualityMetrics.consistency ?? 1) * 100),
-      accuracy: Math.round((dataset.qualityMetrics.accuracy ?? 1) * 100),
-      validity: Math.round((dataset.qualityMetrics.validity ?? 1) * 100)
+      // Completeness from file-processor can be 0-100 or 0-1, normalize to 0-100
+      completeness: Math.round(
+        dataset.qualityMetrics.completeness > 1
+          ? dataset.qualityMetrics.completeness
+          : (dataset.qualityMetrics.completeness ?? 0.95) * 100
+      ),
+      // Consistency: check uniqueness ratio (fewer duplicates = better)
+      consistency: Math.round(
+        dataset.qualityMetrics.consistency !== undefined
+          ? (dataset.qualityMetrics.consistency > 1 ? dataset.qualityMetrics.consistency : dataset.qualityMetrics.consistency * 100)
+          : (dataset.rowCount ? Math.max(0, ((dataset.rowCount - (dataset.qualityMetrics.duplicateRows || 0)) / dataset.rowCount) * 100) : 92)
+      ),
+      // Accuracy: type inference confidence
+      accuracy: Math.round(
+        dataset.qualityMetrics.accuracy !== undefined
+          ? (dataset.qualityMetrics.accuracy > 1 ? dataset.qualityMetrics.accuracy : dataset.qualityMetrics.accuracy * 100)
+          : (dataset.qualityMetrics.typeConsistency !== undefined
+              ? (dataset.qualityMetrics.typeConsistency > 1 ? dataset.qualityMetrics.typeConsistency : dataset.qualityMetrics.typeConsistency * 100)
+              : 90)
+      ),
+      // Validity: assume high validity unless specific issues detected
+      validity: Math.round(
+        dataset.qualityMetrics.validity !== undefined
+          ? (dataset.qualityMetrics.validity > 1 ? dataset.qualityMetrics.validity : dataset.qualityMetrics.validity * 100)
+          : 88
+      )
     } : {
       completeness: datasetAvailable ? 95 : 0,
       consistency: datasetAvailable ? 92 : 0,
@@ -196,10 +215,18 @@ router.get('/:projectId/data-quality', ensureAuthenticated, async (req, res) => 
       validity: datasetAvailable ? 88 : 0
     };
 
-    if (!datasetAvailable || !(dataset.qualityMetrics && typeof dataset.qualityMetrics.dataQualityScore === 'number')) {
-      const average = (metrics.completeness + metrics.consistency + metrics.accuracy + metrics.validity) / 4;
-      qualityScore = Math.round(average);
-    }
+    // CRITICAL FIX: Always calculate overall score as the simple average of displayed metrics
+    // This ensures the overall score matches what the user sees in the UI breakdown
+    // Formula: (Completeness + Consistency + Accuracy + Validity) / 4
+    const qualityScore = Math.round((metrics.completeness + metrics.consistency + metrics.accuracy + metrics.validity) / 4);
+
+    console.log(`📊 [Quality Score] Calculated: ${qualityScore}% from metrics:`, {
+      completeness: metrics.completeness,
+      consistency: metrics.consistency,
+      accuracy: metrics.accuracy,
+      validity: metrics.validity,
+      formula: '(C + C + A + V) / 4'
+    });
 
     const userContext = buildUserContext(req, projectRecord);
 

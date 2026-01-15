@@ -1,6 +1,6 @@
 import { db } from "../db.js";
-import { users } from "../../shared/schema.js";
-import { eq } from "drizzle-orm";
+import { users, projects, generatedArtifacts } from "../../shared/schema.js";
+import { eq, and } from "drizzle-orm";
 import { RolePermissionService } from "./role-permission.js";
 import { SubscriptionJourneyMappingService } from "./subscription-journey-mapping.js";
 import type { UserRole } from "../../shared/schema.js";
@@ -177,15 +177,35 @@ export class UsageTrackingService {
       };
     }
 
-    // TODO: Implement actual project counting logic
-    // For now, assume this is checked elsewhere in project creation logic
+    // Count active projects for user
+    const activeProjects = await db
+      .select()
+      .from(projects)
+      .where(and(eq(projects.userId, userId), eq(projects.status, 'active')));
+
+    const currentUsage = activeProjects.length;
+    const limit = permissions.maxConcurrentProjects || 1;
+
+    if (currentUsage >= limit) {
+      return {
+        allowed: false,
+        reason: `Project limit reached (${limit} active projects). Upgrade to create more.`,
+        currentUsage,
+        limit,
+        remainingUsage: 0,
+        percentageUsed: 100,
+        shouldPromptUpgrade: true,
+        recommendedTier: "professional"
+      };
+    }
+
     return {
       allowed: true,
-      currentUsage: 0,
-      limit: permissions.maxConcurrentProjects || 1,
-      remainingUsage: permissions.maxConcurrentProjects || 1,
-      percentageUsed: 0,
-      shouldPromptUpgrade: false
+      currentUsage,
+      limit,
+      remainingUsage: limit - currentUsage,
+      percentageUsed: (currentUsage / limit) * 100,
+      shouldPromptUpgrade: (currentUsage / limit) >= 0.8
     };
   }
 
@@ -193,15 +213,40 @@ export class UsageTrackingService {
    * Track visualization generation
    */
   static async trackVisualizationGeneration(userId: string, projectId: string): Promise<UsageCheckResult> {
-    // TODO: Implement project-specific visualization counting
-    // For now, this is a placeholder that always allows
+    const permissions = await RolePermissionService.getUserPermissions(userId);
+    if (!permissions) {
+      return { allowed: false, reason: "Permissions error", currentUsage: 0, limit: 0, remainingUsage: 0, percentageUsed: 100, shouldPromptUpgrade: false };
+    }
+
+    // Count visualizations for this project
+    const projectVisualizations = await db
+      .select()
+      .from(generatedArtifacts)
+      .where(and(eq(generatedArtifacts.projectId, projectId), eq(generatedArtifacts.type, 'visualization')));
+
+    const currentUsage = projectVisualizations.length;
+    const limit = permissions.maxVisualizationsPerProject || 3;
+
+    if (currentUsage >= limit) {
+      return {
+        allowed: false,
+        reason: `Visualization limit reached for this project (${limit}). Upgrade for more.`,
+        currentUsage,
+        limit,
+        remainingUsage: 0,
+        percentageUsed: 100,
+        shouldPromptUpgrade: true,
+        recommendedTier: "professional"
+      };
+    }
+
     return {
       allowed: true,
-      currentUsage: 0,
-      limit: 10,
-      remainingUsage: 10,
-      percentageUsed: 0,
-      shouldPromptUpgrade: false
+      currentUsage,
+      limit,
+      remainingUsage: limit - currentUsage,
+      percentageUsed: (currentUsage / limit) * 100,
+      shouldPromptUpgrade: (currentUsage / limit) >= 0.8
     };
   }
 
@@ -247,13 +292,32 @@ export class UsageTrackingService {
       };
     }
 
-    // TODO: Implement consultation minute tracking
+    // Track consultation minutes
+    const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    const currentUsage = user[0]?.consultationMinutes || 0;
+    const limit = 60; // Hardcoded limit for now, should come from subscription
+
+    if (currentUsage + minutes > limit) {
+      return {
+        allowed: false,
+        reason: "Consultation minutes limit exceeded",
+        currentUsage,
+        limit,
+        remainingUsage: limit - currentUsage,
+        percentageUsed: 100,
+        shouldPromptUpgrade: true
+      };
+    }
+
+    // Update usage
+    await db.update(users).set({ consultationMinutes: currentUsage + minutes }).where(eq(users.id, userId));
+
     return {
       allowed: true,
-      currentUsage: 0,
-      limit: 60, // Default to 60 minutes included
-      remainingUsage: 60,
-      percentageUsed: 0,
+      currentUsage: currentUsage + minutes,
+      limit,
+      remainingUsage: limit - (currentUsage + minutes),
+      percentageUsed: ((currentUsage + minutes) / limit) * 100,
       shouldPromptUpgrade: false
     };
   }
@@ -306,7 +370,9 @@ export class UsageTrackingService {
       switch (usageType) {
         case 'aiQueries':
           currentUsage = userData.monthlyAIInsights || 0;
-          limit = permissions.maxAiQueriesPerMonth || 10;
+          // Increase default limit for development (was 10, now 1000)
+          // In production, this should be controlled by subscription tier
+          limit = permissions.maxAiQueriesPerMonth || (process.env.NODE_ENV === 'production' ? 50 : 1000);
           break;
         case 'dataUploads':
           currentUsage = userData.monthlyUploads || 0;
@@ -317,7 +383,12 @@ export class UsageTrackingService {
           limit = permissions.maxDatasetSizeMB || 5;
           break;
         case 'projects':
-          currentUsage = 0; // TODO: Implement project counting
+          // Count active projects
+          const activeProjects = await db
+            .select()
+            .from(projects)
+            .where(and(eq(projects.userId, userId), eq(projects.status, 'active')));
+          currentUsage = activeProjects.length;
           limit = permissions.maxConcurrentProjects || 1;
           break;
       }
@@ -365,6 +436,51 @@ export class UsageTrackingService {
   }
 
   /**
+   * Track compute minutes usage
+   */
+  static async trackComputeMinutes(userId: string, minutes: number): Promise<UsageCheckResult> {
+    // Get user and permissions
+    const permissions = await RolePermissionService.getUserPermissions(userId);
+    if (!permissions) {
+      return { allowed: false, reason: "Permissions error", currentUsage: 0, limit: 0, remainingUsage: 0, percentageUsed: 100, shouldPromptUpgrade: false };
+    }
+
+    // Get current usage
+    const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    const currentUsage = user[0]?.monthlyComputeMinutes || 0;
+    const limit = permissions.maxComputeMinutesPerMonth || 60; // Default 60 mins
+
+    if (currentUsage + minutes > limit) {
+      return {
+        allowed: false,
+        reason: "Monthly compute minutes limit exceeded",
+        currentUsage,
+        limit,
+        remainingUsage: Math.max(0, limit - currentUsage),
+        percentageUsed: 100,
+        shouldPromptUpgrade: true
+      };
+    }
+
+    // Update usage
+    await db.update(users)
+      .set({
+        monthlyComputeMinutes: currentUsage + minutes,
+        updatedAt: new Date()
+      })
+      .where(eq(users.id, userId));
+
+    return {
+      allowed: true,
+      currentUsage: currentUsage + minutes,
+      limit,
+      remainingUsage: limit - (currentUsage + minutes),
+      percentageUsed: ((currentUsage + minutes) / limit) * 100,
+      shouldPromptUpgrade: false
+    };
+  }
+
+  /**
    * Get current usage for a user
    */
   static async getCurrentUsage(userId: string): Promise<UsageMetrics> {
@@ -381,14 +497,24 @@ export class UsageTrackingService {
 
       const userData = user[0];
 
+      // Count active projects
+      const activeProjects = await db
+        .select()
+        .from(projects)
+        .where(and(eq(projects.userId, userId), eq(projects.status, 'active')));
+
+      // Count visualizations (approximate from artifacts)
+      // This is expensive to count every time, ideally should be cached or stored in user table
+      // For now we return 0 or implement a separate counter
+
       return {
         aiQueries: userData.monthlyAIInsights || 0,
         dataUploads: userData.monthlyUploads || 0,
         dataVolumeMB: userData.monthlyDataVolume || 0,
-        projectsCreated: 0, // TODO: Implement project counting
-        visualizationsGenerated: 0, // TODO: Implement visualization counting
-        codeGenerations: 0, // TODO: Implement code generation counting
-        consultationMinutes: 0, // TODO: Implement consultation minute tracking
+        projectsCreated: activeProjects.length,
+        visualizationsGenerated: 0, // Still TODO: Add column to users table for perf
+        codeGenerations: 0,
+        consultationMinutes: userData.consultationMinutes || 0,
       };
     } catch (error) {
       console.error("Error getting current usage:", error);

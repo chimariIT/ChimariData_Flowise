@@ -1,9 +1,8 @@
-import { DataProject, InsertDataProject, insertProjectSchema, insertEnterpriseInquirySchema, insertGuidedAnalysisOrderSchema, insertDatasetSchema, insertProjectDatasetSchema, insertProjectArtifactSchema, insertStreamingSourceSchema, insertDatasetVersionSchema, journeys, journeyStepProgress, costEstimates, eligibilityChecks, insertAgentCheckpointSchema, JourneyProgress, createEmptyJourneyProgress } from "@shared/schema";
+import { DataProject, InsertDataProject, insertProjectSchema, insertEnterpriseInquirySchema, insertGuidedAnalysisOrderSchema, insertDatasetSchema, insertProjectDatasetSchema, insertProjectArtifactSchema, insertStreamingSourceSchema, insertDatasetVersionSchema, journeys, journeyStepProgress, costEstimates, eligibilityChecks, insertAgentCheckpointSchema } from "@shared/schema";
 import { users, projects, enterpriseInquiries, guidedAnalysisOrders, datasets, projectDatasets, projectArtifacts, streamingSources, streamChunks, streamCheckpoints, scrapingJobs, scrapingRuns, datasetVersions, agentCheckpoints, projectSessions, projectStates } from "@shared/schema";
 import { db } from "./db";
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
-import { normalizeJourneyType } from "@shared/canonical-types";
 
 // Local type aliases derived from Drizzle tables (schema does not export these named types directly)
 type User = typeof users.$inferSelect;
@@ -90,10 +89,10 @@ function projectToDataProject(project: Project, dataset?: Dataset, projectState?
       ? !['draft', 'uploading', 'pii_review'].includes(projectStatus)
       : false;
 
-  const result: DataProject & { preview?: unknown; sampleData?: unknown } = {
+  const result: DataProject & { preview?: unknown; sampleData?: unknown; journeyProgress?: unknown } = {
     id: project.id,
     userId: project.userId || '',
-    journeyType: normalizeJourneyType(projectRecord?.journeyType as string | undefined),
+    journeyType: projectRecord?.journeyType ?? 'non-tech',
     name: project.name,
     fileName,
     fileSize,
@@ -130,6 +129,9 @@ function projectToDataProject(project: Project, dataset?: Dataset, projectState?
     upgradedAt: projectRecord?.upgradedAt ?? undefined,
     transformedData: projectRecord?.transformedData ?? undefined,
     file_path: storageUri,
+    // CRITICAL: Include journeyProgress from the database column
+    // This was missing and caused prepare step data (requirementsDocument, etc.) to not be returned
+    journeyProgress: projectRecord?.journeyProgress ?? undefined,
   };
 
   if (datasetRecord?.preview !== undefined) {
@@ -169,7 +171,7 @@ function dataProjectToInsertProject(dataProject: InsertDataProject): Omit<Insert
     userId: userId, // Set userId (required by schema)
     name: dataProject.name,
     description: dataProject.description || null,
-    journeyType: normalizeJourneyType((dataProject as any).journeyType as string | undefined),
+  journeyType: (dataProject as any).journeyType || 'non-tech', // Default to non-tech if not specified
   };
 }
 
@@ -423,6 +425,7 @@ export interface IStorage {
 
   // Agent checkpoint management
   createAgentCheckpoint(checkpoint: Omit<InsertAgentCheckpoint, 'id' | 'createdAt' | 'timestamp'> & { id?: string; timestamp?: Date; createdAt?: Date }): Promise<AgentCheckpoint>;
+  getAgentCheckpoint(checkpointId: string): Promise<AgentCheckpoint | null>;
   getProjectCheckpoints(projectId: string): Promise<AgentCheckpoint[]>;
   updateAgentCheckpoint(checkpointId: string, updates: Partial<Omit<AgentCheckpoint, 'id' | 'createdAt'>>): Promise<AgentCheckpoint | null>;
   deleteProjectCheckpoints(projectId: string): Promise<void>;
@@ -868,6 +871,10 @@ export class MemStorage implements IStorage {
     return Array.from(this.agentCheckpoints.values())
       .filter(cp => cp.projectId === projectId)
       .sort((a, b) => (b.timestamp?.getTime?.() ?? 0) - (a.timestamp?.getTime?.() ?? 0));
+  }
+
+  async getAgentCheckpoint(checkpointId: string): Promise<AgentCheckpoint | null> {
+    return this.agentCheckpoints.get(checkpointId) ?? null;
   }
 
   async updateAgentCheckpoint(checkpointId: string, updates: Partial<Omit<AgentCheckpoint, 'id' | 'createdAt'>>): Promise<AgentCheckpoint | null> {
@@ -1385,216 +1392,14 @@ export class DatabaseStorage implements IStorage {
       .select()
       .from(projects)
       .where(eq(projects.id, id));
-
+    
     if (!project) {
       return undefined;
     }
 
-    // DEC-002: Lazy Migration - Check if journeyProgress needs migration
-    const migratedProject = await this.migrateJourneyProgressIfNeeded(project);
-
-    const dataset = await this.getDatasetForProject(migratedProject.id);
-    const stateRow = await this.getProjectStateRow(migratedProject.id);
-    return projectToDataProject(migratedProject, dataset, stateRow);
-  }
-
-  // ============================================
-  // DEC-002: Lazy Migration for Journey Progress
-  // Migrates legacy data to new journeyProgress structure on first access
-  // See: docs/DESIGN_DECISIONS.md, docs/COMPREHENSIVE_JOURNEY_FIX_PLAN.md
-  // ============================================
-  private async migrateJourneyProgressIfNeeded(project: typeof projects.$inferSelect): Promise<typeof projects.$inferSelect> {
-    const projectRecord = project as any;
-    const existingProgress = this.parseExistingJourneyProgress(projectRecord.journeyProgress);
-
-    // Skip migration if already migrated
-    if (existingProgress.migratedFromLegacy === true) {
-      return project;
-    }
-
-    // Check if migration is needed (journeyProgress is empty or missing key fields)
-    const needsMigration = this.journeyProgressNeedsMigration(existingProgress);
-    if (!needsMigration) {
-      return project;
-    }
-
-    console.log(`🔄 [DEC-002] Starting lazy migration for project ${project.id}`);
-
-    try {
-      // Gather data from legacy sources
-      const migratedProgress = await this.buildMigratedJourneyProgress(project, existingProgress);
-
-      // Save migrated progress back to database
-      const projectIdStr = String(project.id);
-      const progressJson = JSON.stringify(migratedProgress);
-      await db.execute(
-        sql`UPDATE projects
-            SET journey_progress = ${progressJson}::jsonb,
-                updated_at = NOW()
-            WHERE id = ${projectIdStr}::text`
-      );
-
-      console.log(`✅ [DEC-002] Lazy migration completed for project ${project.id}`);
-
-      // Return updated project
-      const [updatedProject] = await db
-        .select()
-        .from(projects)
-        .where(eq(projects.id, project.id));
-
-      return updatedProject || project;
-    } catch (error) {
-      console.error(`❌ [DEC-002] Lazy migration failed for project ${project.id}:`, error);
-      // Return original project on error to avoid breaking reads
-      return project;
-    }
-  }
-
-  private parseExistingJourneyProgress(raw: unknown): Partial<JourneyProgress> & { migratedFromLegacy?: boolean } {
-    if (!raw) return {};
-    if (typeof raw === 'string') {
-      try {
-        return JSON.parse(raw);
-      } catch {
-        return {};
-      }
-    }
-    return raw as any;
-  }
-
-  private journeyProgressNeedsMigration(progress: Partial<JourneyProgress>): boolean {
-    // Check if this is a new-format progress (has completedSteps array)
-    if (Array.isArray(progress.completedSteps) && progress.completedSteps.length > 0) {
-      return false; // Already has new format data
-    }
-
-    // Check if stepTimestamps has entries
-    if (progress.stepTimestamps && Object.keys(progress.stepTimestamps).length > 0) {
-      return false; // Already has new format data
-    }
-
-    return true; // Needs migration
-  }
-
-  private async buildMigratedJourneyProgress(
-    project: typeof projects.$inferSelect,
-    existingProgress: Partial<JourneyProgress>
-  ): Promise<JourneyProgress> {
-    const projectRecord = project as any;
-    const migratedProgress: JourneyProgress = {
-      ...createEmptyJourneyProgress(),
-      ...existingProgress,
-    };
-
-    // 1. Migrate step completion status
-    const stepCompletionStatus = projectRecord.stepCompletionStatus || {};
-    if (typeof stepCompletionStatus === 'object') {
-      const completedSteps: string[] = [];
-      const stepTimestamps: Record<string, string> = {};
-
-      for (const [step, completed] of Object.entries(stepCompletionStatus)) {
-        if (completed === true) {
-          completedSteps.push(step);
-          stepTimestamps[step] = new Date().toISOString(); // Approximate timestamp
-        }
-      }
-
-      if (completedSteps.length > 0) {
-        migratedProgress.completedSteps = completedSteps;
-        migratedProgress.stepTimestamps = stepTimestamps;
-      }
-    }
-
-    // 2. Migrate current step
-    if (projectRecord.lastAccessedStep) {
-      migratedProgress.currentStep = projectRecord.lastAccessedStep;
-    }
-
-    // 3. Try to get data from project_sessions table
-    try {
-      const session = await this.getProjectSessionForMigration(project.id);
-      if (session) {
-        // Migrate session data
-        if (session.currentStep && !migratedProgress.currentStep) {
-          migratedProgress.currentStep = session.currentStep;
-        }
-
-        // Migrate prepare step data
-        const prepareData = session.prepare as any;
-        if (prepareData) {
-          if (prepareData.analysisGoal) {
-            migratedProgress.analysisGoal = prepareData.analysisGoal;
-          }
-          if (prepareData.questions && Array.isArray(prepareData.questions)) {
-            migratedProgress.userQuestions = prepareData.questions.map((q: any, idx: number) => ({
-              id: q.id || `q_${idx}`,
-              text: typeof q === 'string' ? q : q.text,
-              category: q.category,
-            }));
-          }
-          if (prepareData.selectedAnalysisTypes) {
-            migratedProgress.selectedAnalysisTypes = prepareData.selectedAnalysisTypes;
-          }
-        }
-
-        // Migrate data step data
-        const dataStepData = session.data as any;
-        if (dataStepData) {
-          if (dataStepData.uploadedDatasetIds) {
-            migratedProgress.uploadedDatasetIds = dataStepData.uploadedDatasetIds;
-          }
-          if (dataStepData.piiDecision) {
-            migratedProgress.piiDecision = dataStepData.piiDecision;
-          }
-        }
-
-        // Migrate transformation data
-        const transformData = session.transformation as any;
-        if (transformData) {
-          if (transformData.joinedData) {
-            migratedProgress.joinedData = transformData.joinedData;
-          }
-          if (transformData.transformedDatasetId) {
-            migratedProgress.transformedDatasetId = transformData.transformedDatasetId;
-          }
-        }
-      }
-    } catch (error) {
-      console.warn(`[DEC-002] Could not migrate session data for project ${project.id}:`, error);
-    }
-
-    // 4. Get dataset IDs from project_datasets table
-    try {
-      const projectDatasetsRaw = await db
-        .select()
-        .from(projectDatasets)
-        .where(eq(projectDatasets.projectId, project.id));
-
-      if (projectDatasetsRaw.length > 0 && migratedProgress.uploadedDatasetIds.length === 0) {
-        migratedProgress.uploadedDatasetIds = projectDatasetsRaw.map((pd: { datasetId: string }) => pd.datasetId);
-      }
-    } catch (error) {
-      console.warn(`[DEC-002] Could not migrate dataset IDs for project ${project.id}:`, error);
-    }
-
-    // 5. Mark as migrated
-    migratedProgress.migratedFromLegacy = true;
-    migratedProgress.migrationTimestamp = new Date().toISOString();
-
-    return migratedProgress;
-  }
-
-  private async getProjectSessionForMigration(projectId: string): Promise<any | null> {
-    try {
-      const [session] = await db
-        .select()
-        .from(projectSessions)
-        .where(eq(projectSessions.projectId, projectId));
-
-      return session || null;
-    } catch {
-      return null;
-    }
+    const dataset = await this.getDatasetForProject(project.id);
+    const stateRow = await this.getProjectStateRow(project.id);
+    return projectToDataProject(project, dataset, stateRow);
   }
 
   async getAllProjects(): Promise<DataProject[]> {
@@ -2691,13 +2496,23 @@ export class DatabaseStorage implements IStorage {
       .orderBy(agentCheckpoints.timestamp);
   }
 
+  async getAgentCheckpoint(checkpointId: string): Promise<AgentCheckpoint | null> {
+    const [result] = await db
+      .select()
+      .from(agentCheckpoints)
+      .where(eq(agentCheckpoints.id, checkpointId))
+      .limit(1);
+
+    return result ?? null;
+  }
+
   async updateAgentCheckpoint(checkpointId: string, updates: Partial<Omit<AgentCheckpoint, 'id' | 'createdAt'>>): Promise<AgentCheckpoint | null> {
     const [result] = await db
       .update(agentCheckpoints)
       .set(updates)
       .where(eq(agentCheckpoints.id, checkpointId))
       .returning();
-    
+
     return result || null;
   }
 

@@ -421,9 +421,9 @@ export const UNIFIED_SUBSCRIPTION_TIERS: Record<string, UnifiedSubscriptionTier>
       llmDistributed: true,       // YES multi-GPU training
       customMLModels: true,       // YES bring your own models
       
-      // ML/LLM Quotas
-      mlTrainingJobs: -1,         // Unlimited ML jobs
-      mlAutoMLTrials: -1,         // Unlimited AutoML trials
+      // ML/LLM Quotas (10x Professional for enterprise scale)
+      mlTrainingJobs: 5000,       // 10x Professional (500)
+      mlAutoMLTrials: 10000,      // 10x Professional (1000)
       llmFineTuningJobs: 100,     // Higher LLM limit
       
       exportOptions: ['CSV', 'Excel', 'PDF', 'JSON', 'API'],

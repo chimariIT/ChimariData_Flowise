@@ -2,21 +2,22 @@ import { Router } from 'express';
 import { getBillingService } from '../services/billing/unified-billing-service';
 import { ensureAuthenticated } from './auth';
 import { db } from '../db';
-import { subscriptionTierPricing, servicePricing } from '@shared/schema';
+import { subscriptionTierPricing, servicePricing, billingCampaigns } from '@shared/schema';
 import { eq } from 'drizzle-orm';
 import { getStripeSyncService } from '../services/stripe-sync';
+import { AdminAuditLogService } from '../services/admin-audit-log';
+// FIX: Production Readiness - Use standardized admin middleware from RBAC
+import { requireAdmin } from '../middleware/rbac';
+// PHASE 6: Import PricingService for admin-configurable analysis pricing
+import { PricingService, type AnalysisPricingConfig } from '../services/pricing';
 
 const billingService = getBillingService();
 
 const router = Router();
 
-// Middleware to ensure admin access
-const ensureAdmin = (req: any, res: any, next: any) => {
-    if (!req.user || req.user.role !== 'admin') {
-        return res.status(403).json({ error: 'Admin access required' });
-    }
-    next();
-};
+// FIX: Production Readiness - Use standardized requireAdmin from RBAC
+// This ensures consistent admin validation (checks isAdmin flag, role, and super_admin)
+const ensureAdmin = requireAdmin;
 
 // Get billing overview
 router.get('/overview', ensureAuthenticated, ensureAdmin, async (req, res) => {
@@ -104,6 +105,17 @@ router.post('/tiers', ensureAuthenticated, ensureAdmin, async (req, res) => {
                 }
             }
 
+            // Log audit trail
+            await AdminAuditLogService.log({
+                action: 'tier_updated',
+                adminId: (req as any).user?.id || 'unknown',
+                entityType: 'subscription',
+                changes: { before: existing, after: updated },
+                reason: 'Admin tier configuration update',
+                ipAddress: (req as any).ip,
+                userAgent: (req as any).headers?.['user-agent']
+            });
+
             res.json({ success: true, message: 'Tier updated successfully', tier: updated });
         } else {
             // Create new tier
@@ -150,6 +162,17 @@ router.post('/tiers', ensureAuthenticated, ensureAdmin, async (req, res) => {
                     console.warn(`⚠️  Stripe sync failed for tier ${tier.id}:`, syncResult.error);
                 }
             }
+
+            // Log audit trail
+            await AdminAuditLogService.log({
+                action: 'tier_created',
+                adminId: (req as any).user?.id || 'unknown',
+                entityType: 'subscription',
+                changes: { tier: newTier },
+                reason: 'Admin created new subscription tier',
+                ipAddress: (req as any).ip,
+                userAgent: (req as any).headers?.['user-agent']
+            });
 
             res.json({ success: true, message: 'Tier created successfully', tier: newTier });
         }
@@ -222,13 +245,17 @@ router.post('/consumption-rates', ensureAuthenticated, ensureAdmin, async (req, 
     }
 });
 
-// Campaign Management
+// Campaign Management - Now reads from database
 router.get('/campaigns', ensureAuthenticated, ensureAdmin, async (req, res) => {
     try {
+        // Fetch campaigns from database for persistence
+        const dbCampaigns = await db.select().from(billingCampaigns);
+        res.json({ success: true, campaigns: dbCampaigns });
+    } catch (error: any) {
+        console.error('Error fetching campaigns:', error);
+        // Fallback to in-memory if database fails
         const config = (billingService as any).config;
         res.json({ success: true, campaigns: config.campaigns });
-    } catch (error: any) {
-        res.status(500).json({ success: false, error: error.message });
     }
 });
 
@@ -258,22 +285,37 @@ router.post('/campaigns', ensureAuthenticated, ensureAdmin, async (req, res) => 
 router.put('/campaigns/:campaignId/toggle', ensureAuthenticated, ensureAdmin, async (req, res) => {
     try {
         const { campaignId } = req.params;
-        const config = (billingService as any).config;
 
-        const campaign = config.campaigns.find((c: any) => c.id === campaignId);
+        // Fetch from database
+        const [campaign] = await db.select().from(billingCampaigns).where(eq(billingCampaigns.id, campaignId));
         if (!campaign) {
             return res.status(404).json({ success: false, error: 'Campaign not found' });
         }
 
-        campaign.isActive = !campaign.isActive;
-        await billingService.updateBillingConfiguration({ campaigns: config.campaigns });
+        const newIsActive = !campaign.isActive;
+
+        // Update in database
+        await db.update(billingCampaigns)
+            .set({
+                isActive: newIsActive,
+                updatedAt: new Date(),
+            })
+            .where(eq(billingCampaigns.id, campaignId));
+
+        // Also update in-memory cache
+        const config = (billingService as any).config;
+        const memCampaign = config.campaigns.find((c: any) => c.id === campaignId);
+        if (memCampaign) {
+            memCampaign.isActive = newIsActive;
+        }
 
         res.json({
             success: true,
-            message: `Campaign ${campaign.isActive ? 'activated' : 'deactivated'} successfully`,
-            isActive: campaign.isActive
+            message: `Campaign ${newIsActive ? 'activated' : 'deactivated'} successfully`,
+            isActive: newIsActive
         });
     } catch (error: any) {
+        console.error('Error toggling campaign:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -595,6 +637,178 @@ router.post('/test/apply-campaign', ensureAuthenticated, ensureAdmin, async (req
             message: applied ? 'Campaign applied successfully' : 'Campaign could not be applied'
         });
     } catch (error: any) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================================================
+// PHASE 6: Analysis Pricing Configuration Endpoints
+// ============================================================================
+
+/**
+ * GET /api/admin/billing/analysis-pricing
+ * Get current analysis pricing configuration
+ */
+router.get('/analysis-pricing', ensureAuthenticated, ensureAdmin, async (req, res) => {
+    try {
+        const config = PricingService.getPricingConfig();
+        console.log(`📊 [Admin] Retrieved analysis pricing config`);
+
+        res.json({
+            success: true,
+            config,
+            description: {
+                baseCost: 'Base cost for any analysis ($)',
+                dataSizeCostPer1K: 'Cost per 1000 records ($)',
+                platformFee: 'Platform fee added to each project ($)',
+                complexityMultipliers: 'Multipliers for different complexity levels',
+                analysisTypeFactors: 'Cost multipliers for each analysis type'
+            }
+        });
+    } catch (error: any) {
+        console.error('❌ [Admin] Error fetching analysis pricing:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * PUT /api/admin/billing/analysis-pricing
+ * Update analysis pricing configuration
+ */
+router.put('/analysis-pricing', ensureAuthenticated, ensureAdmin, async (req, res) => {
+    try {
+        const updates: Partial<AnalysisPricingConfig> = req.body;
+
+        // Validate input
+        if (updates.baseCost !== undefined && (typeof updates.baseCost !== 'number' || updates.baseCost < 0)) {
+            return res.status(400).json({
+                success: false,
+                error: 'baseCost must be a non-negative number'
+            });
+        }
+
+        if (updates.dataSizeCostPer1K !== undefined && (typeof updates.dataSizeCostPer1K !== 'number' || updates.dataSizeCostPer1K < 0)) {
+            return res.status(400).json({
+                success: false,
+                error: 'dataSizeCostPer1K must be a non-negative number'
+            });
+        }
+
+        if (updates.platformFee !== undefined && (typeof updates.platformFee !== 'number' || updates.platformFee < 0)) {
+            return res.status(400).json({
+                success: false,
+                error: 'platformFee must be a non-negative number'
+            });
+        }
+
+        // Validate complexity multipliers
+        if (updates.complexityMultipliers) {
+            for (const [key, value] of Object.entries(updates.complexityMultipliers)) {
+                if (typeof value !== 'number' || value < 0) {
+                    return res.status(400).json({
+                        success: false,
+                        error: `complexityMultipliers.${key} must be a non-negative number`
+                    });
+                }
+            }
+        }
+
+        // Validate analysis type factors
+        if (updates.analysisTypeFactors) {
+            for (const [key, value] of Object.entries(updates.analysisTypeFactors)) {
+                if (typeof value !== 'number' || value < 0) {
+                    return res.status(400).json({
+                        success: false,
+                        error: `analysisTypeFactors.${key} must be a non-negative number`
+                    });
+                }
+            }
+        }
+
+        const updatedConfig = PricingService.updatePricingConfig(updates);
+
+        // Log the admin action
+        const userId = (req.user as any)?.id;
+        console.log(`✅ [Admin] User ${userId} updated analysis pricing config:`, updates);
+
+        res.json({
+            success: true,
+            config: updatedConfig,
+            message: 'Analysis pricing configuration updated successfully'
+        });
+    } catch (error: any) {
+        console.error('❌ [Admin] Error updating analysis pricing:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * POST /api/admin/billing/analysis-pricing/reset
+ * Reset analysis pricing to defaults
+ */
+router.post('/analysis-pricing/reset', ensureAuthenticated, ensureAdmin, async (req, res) => {
+    try {
+        const config = PricingService.resetPricingConfig();
+
+        const userId = (req.user as any)?.id;
+        console.log(`🔄 [Admin] User ${userId} reset analysis pricing to defaults`);
+
+        res.json({
+            success: true,
+            config,
+            message: 'Analysis pricing reset to defaults'
+        });
+    } catch (error: any) {
+        console.error('❌ [Admin] Error resetting analysis pricing:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * POST /api/admin/billing/analysis-pricing/preview
+ * Preview cost calculation with current or proposed config
+ */
+router.post('/analysis-pricing/preview', ensureAuthenticated, ensureAdmin, async (req, res) => {
+    try {
+        const { analysisType, recordCount, complexity, proposedConfig } = req.body;
+
+        // If proposedConfig provided, temporarily apply it for preview
+        let originalConfig: AnalysisPricingConfig | null = null;
+        if (proposedConfig) {
+            originalConfig = PricingService.getPricingConfig();
+            PricingService.updatePricingConfig(proposedConfig);
+        }
+
+        try {
+            const costResult = PricingService.calculateAnalysisCost(
+                analysisType || 'statistical',
+                recordCount || 10000,
+                complexity || 'intermediate'
+            );
+
+            // Add platform fee for total project cost
+            const platformFee = PricingService.getPlatformFee();
+            const totalProjectCost = costResult.totalCost + platformFee;
+
+            res.json({
+                success: true,
+                preview: {
+                    analysisType: analysisType || 'statistical',
+                    recordCount: recordCount || 10000,
+                    complexity: complexity || 'intermediate',
+                    analysisCost: costResult,
+                    platformFee,
+                    totalProjectCost: parseFloat(totalProjectCost.toFixed(2))
+                }
+            });
+        } finally {
+            // Restore original config if we changed it
+            if (originalConfig) {
+                PricingService.updatePricingConfig(originalConfig);
+            }
+        }
+    } catch (error: any) {
+        console.error('❌ [Admin] Error previewing analysis cost:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });

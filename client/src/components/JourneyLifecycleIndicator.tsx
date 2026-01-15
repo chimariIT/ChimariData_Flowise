@@ -166,11 +166,18 @@ export function JourneyLifecycleIndicator({ projectId, className }: JourneyLifec
           </div>
         </div>
 
+        {/* PHASE 5 FIX: Enhanced journey step display with agent assignments and details */}
         <div className="space-y-2">
           <p className="text-sm font-medium text-muted-foreground">Lifecycle Steps</p>
           <ul className="space-y-2">
-            {steps.map((step) => {
+            {steps.map((step, index) => {
               const status = formatStepStatus(step.id, completedSteps, currentStep.id);
+              // Determine if this step requires user approval (checkpoint)
+              const requiresApproval = step.id.includes('verification') ||
+                                        step.id.includes('approval') ||
+                                        step.id.includes('review') ||
+                                        step.id.includes('transformation') ||
+                                        step.id.includes('plan');
               return (
                 <li
                   key={step.id}
@@ -194,11 +201,30 @@ export function JourneyLifecycleIndicator({ projectId, className }: JourneyLifec
                       {step.description ? (
                         <p className="text-xs text-muted-foreground">{step.description}</p>
                       ) : null}
+                      {/* PHASE 5: Show step metadata */}
+                      <div className="flex items-center gap-2 mt-1">
+                        {(step as any).estimatedDuration && (
+                          <span className="text-xs text-gray-400">
+                            ~{(step as any).estimatedDuration}
+                          </span>
+                        )}
+                        {requiresApproval && status !== "completed" && (
+                          <Badge variant="outline" className="text-xs text-amber-600 border-amber-300 bg-amber-50">
+                            Requires Approval
+                          </Badge>
+                        )}
+                      </div>
                     </div>
                   </div>
-                  <Badge variant="outline" className="capitalize">
-                    {step.agent.replace(/_/g, " ")}
-                  </Badge>
+                  <div className="flex flex-col items-end gap-1">
+                    <Badge variant="outline" className="capitalize">
+                      {step.agent.replace(/_/g, " ")}
+                    </Badge>
+                    {/* PHASE 5: Show step number */}
+                    <span className="text-xs text-muted-foreground">
+                      Step {index + 1} of {steps.length}
+                    </span>
+                  </div>
                 </li>
               );
             })}

@@ -23,7 +23,59 @@ export interface LLMCost {
     currency: string;
 }
 
+// PHASE 6: Admin-configurable analysis pricing
+export interface AnalysisPricingConfig {
+    baseCost: number;                        // Base cost for any analysis ($)
+    dataSizeCostPer1K: number;               // Cost per 1000 records ($)
+    platformFee: number;                     // Platform fee ($)
+    complexityMultipliers: {
+        basic: number;
+        intermediate: number;
+        advanced: number;
+    };
+    analysisTypeFactors: {
+        statistical: number;
+        machine_learning: number;
+        visualization: number;
+        business_intelligence: number;
+        time_series: number;
+        correlation: number;
+        regression: number;
+        clustering: number;
+        sentiment: number;
+        default: number;
+    };
+}
+
+// Default pricing configuration
+const DEFAULT_PRICING_CONFIG: AnalysisPricingConfig = {
+    baseCost: 10.00,
+    dataSizeCostPer1K: 0.05,
+    platformFee: 5.00,
+    complexityMultipliers: {
+        basic: 1.0,
+        intermediate: 1.5,
+        advanced: 2.5
+    },
+    analysisTypeFactors: {
+        statistical: 1.0,
+        machine_learning: 2.5,
+        visualization: 0.5,
+        business_intelligence: 1.5,
+        time_series: 2.0,
+        correlation: 1.2,
+        regression: 1.5,
+        clustering: 2.0,
+        sentiment: 1.8,
+        default: 1.0
+    }
+};
+
 export class PricingService {
+    // Dynamic pricing config - can be updated by admin
+    private static pricingConfig: AnalysisPricingConfig = { ...DEFAULT_PRICING_CONFIG };
+
+    // Legacy static costFactors for backwards compatibility
     private static costFactors = {
         'statistical': 1.0,
         'machine_learning': 2.5,
@@ -33,6 +85,59 @@ export class PricingService {
         'default': 1.0
     };
 
+    /**
+     * Get current pricing configuration (for admin UI)
+     */
+    static getPricingConfig(): AnalysisPricingConfig {
+        return { ...this.pricingConfig };
+    }
+
+    /**
+     * Update pricing configuration (from admin UI)
+     */
+    static updatePricingConfig(newConfig: Partial<AnalysisPricingConfig>): AnalysisPricingConfig {
+        this.pricingConfig = {
+            ...this.pricingConfig,
+            ...newConfig,
+            complexityMultipliers: {
+                ...this.pricingConfig.complexityMultipliers,
+                ...(newConfig.complexityMultipliers || {})
+            },
+            analysisTypeFactors: {
+                ...this.pricingConfig.analysisTypeFactors,
+                ...(newConfig.analysisTypeFactors || {})
+            }
+        };
+
+        // Also update legacy costFactors for backward compatibility
+        this.costFactors = {
+            statistical: this.pricingConfig.analysisTypeFactors.statistical,
+            machine_learning: this.pricingConfig.analysisTypeFactors.machine_learning,
+            visualization: this.pricingConfig.analysisTypeFactors.visualization,
+            business_intelligence: this.pricingConfig.analysisTypeFactors.business_intelligence,
+            time_series: this.pricingConfig.analysisTypeFactors.time_series,
+            default: this.pricingConfig.analysisTypeFactors.default
+        };
+
+        console.log(`✅ [PricingService] Updated pricing config:`, this.pricingConfig);
+        return this.getPricingConfig();
+    }
+
+    /**
+     * Reset pricing to defaults
+     */
+    static resetPricingConfig(): AnalysisPricingConfig {
+        this.pricingConfig = { ...DEFAULT_PRICING_CONFIG };
+        return this.getPricingConfig();
+    }
+
+    /**
+     * Get platform fee (for cost estimate endpoint)
+     */
+    static getPlatformFee(): number {
+        return this.pricingConfig.platformFee;
+    }
+
     static getFreeTrialLimits() {
         return {
             maxFileSize: 1024 * 1024 * 5, // 5MB
@@ -40,20 +145,20 @@ export class PricingService {
     }
 
     static calculateAnalysisCost(analysisType: string, recordCount: number, complexity: 'basic' | 'intermediate' | 'advanced' = 'basic'): AnalysisCost {
-        const baseCost = 10.00; // Base cost for any analysis
-        
-        const typeFactor = this.costFactors[analysisType as keyof typeof this.costFactors] || this.costFactors['default'];
-        
-        // Cost based on data size
-        const dataSizeCost = (recordCount / 1000) * 0.05; // $0.05 per 1000 records
+        // PHASE 6: Use dynamic pricing config from admin
+        const config = this.pricingConfig;
+        const baseCost = config.baseCost;
 
-        // Cost based on complexity
-        let complexityMultiplier = 1.0;
-        if (complexity === 'intermediate') {
-            complexityMultiplier = 1.5;
-        } else if (complexity === 'advanced') {
-            complexityMultiplier = 2.5;
-        }
+        // Get type factor from config (with fallback to legacy costFactors for compatibility)
+        const typeFactor = (config.analysisTypeFactors as any)[analysisType]
+            || this.costFactors[analysisType as keyof typeof this.costFactors]
+            || config.analysisTypeFactors.default;
+
+        // Cost based on data size (using config)
+        const dataSizeCost = (recordCount / 1000) * config.dataSizeCostPer1K;
+
+        // Cost based on complexity (using config)
+        const complexityMultiplier = config.complexityMultipliers[complexity] || 1.0;
         const complexityCost = baseCost * (complexityMultiplier - 1);
 
         const totalCost = (baseCost + dataSizeCost) * typeFactor + complexityCost;
@@ -88,25 +193,25 @@ export class PricingService {
             const baseUnits = Math.ceil(params.datasetSize / 10000); // 1 unit per 10K rows
             const autoMLMultiplier = params.useAutoML ? 5 : 1;
             billingUnits = baseUnits * autoMLMultiplier;
-            
+
             baseCost = baseUnits * 0.10; // $0.10 per base unit
             autoMLCost = params.useAutoML ? (baseUnits * 4) * 0.10 : 0; // 4x additional cost for AutoML
             explainabilityCost = params.enableExplainability ? baseUnits * 0.05 : 0; // $0.05 per unit for explainability
         }
-        
+
         // AutoML Optimizer
         else if (params.toolName === 'automl_optimizer') {
             const trials = params.trials || 50;
             billingUnits = Math.ceil(trials / 10); // 1 unit per 10 trials
             baseCost = billingUnits * 0.10;
         }
-        
+
         // Library Selector
         else if (params.toolName === 'ml_library_selector') {
             billingUnits = 0.1; // Minimal cost
             baseCost = 0.01;
         }
-        
+
         // Health Check
         else if (params.toolName === 'ml_health_check') {
             billingUnits = 0; // Free
@@ -154,22 +259,22 @@ export class PricingService {
                 lora: 3,
                 qlora: 2
             };
-            
+
             const samplesInK = params.datasetSize / 1000;
             const epochs = params.numEpochs || 3;
             const methodCost = baseCostPer1K[params.method || 'qlora'];
             billingUnits = Math.ceil(methodCost * samplesInK * epochs);
-            
+
             baseCost = billingUnits * 0.10; // $0.10 per billing unit
             methodMultiplier = methodCost;
         }
-        
+
         // Method Recommendation
         else if (params.toolName === 'llm_method_recommendation') {
             billingUnits = 0.1; // Minimal cost
             baseCost = 0.01;
         }
-        
+
         // Health Check
         else if (params.toolName === 'llm_health_check') {
             billingUnits = 0; // Free
@@ -249,20 +354,5 @@ export class PricingService {
         };
     }
 
-    static async createCheckoutSession(projectId: string, amount: number, currency: string): Promise<{ sessionId: string, url: string }> {
-        // This is a mock implementation. In a real application, you would integrate
-        // with a payment provider like Stripe, Braintree, or Adyen.
-        console.log(`Creating checkout session for project ${projectId} with amount ${amount} ${currency}`);
-        
-        const sessionId = `sess_${projectId}_${Date.now()}`;
-        const checkoutUrl = `/checkout/success?session_id=${sessionId}`;
-
-        // Simulate an asynchronous operation
-        await new Promise(resolve => setTimeout(resolve, 500));
-
-        return {
-            sessionId,
-            url: checkoutUrl
-        };
-    }
+    // Mock createCheckoutSession removed. Use UnifiedBillingService.createCheckoutSession instead.
 }

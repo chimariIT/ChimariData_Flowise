@@ -13,7 +13,8 @@ export const JourneyTemplateStepSchema = z.object({
   id: z.string(),
   name: z.string(),
   description: z.string().optional(),
-  agent: z.enum(['technical_ai_agent', 'business_agent', 'project_manager', 'data_engineer']),
+  // GAP F + G: Added template_research_agent and data_scientist for PM-coordinated workflow
+  agent: z.enum(['technical_ai_agent', 'business_agent', 'project_manager', 'data_engineer', 'template_research_agent', 'data_scientist']),
   tools: z.array(z.string()).min(1),
   estimatedDuration: z.number().nonnegative().default(0),
   dependencies: z.array(z.string()).optional(),
@@ -33,7 +34,8 @@ export const JourneyTemplateSchema = z.object({
   title: z.string(),
   summary: z.string(),
   persona: z.string().optional(),
-  primaryAgent: z.enum(['technical_ai_agent', 'business_agent', 'project_manager', 'data_engineer']),
+  // GAP F + G: Added template_research_agent and data_scientist for PM-coordinated workflow
+  primaryAgent: z.enum(['technical_ai_agent', 'business_agent', 'project_manager', 'data_engineer', 'template_research_agent', 'data_scientist']),
   defaultConfidence: z.number().min(0).max(1).default(0.9),
   expectedArtifacts: z.array(z.string()).optional(),
   communicationStyle: z

@@ -14,7 +14,7 @@
 
 import { Router } from 'express';
 import { db } from '../db';
-import { projectSessions } from '@shared/schema';
+import { projectSessions, projectQuestions } from '@shared/schema';
 import { eq, and, desc, lt } from 'drizzle-orm';
 import { ensureAuthenticated } from './auth';
 import crypto from 'crypto';
@@ -24,12 +24,12 @@ type SessionJourneyType = 'non-tech' | 'business' | 'technical' | 'consultation'
 const JOURNEY_TYPE_NORMALIZATION: Record<string, SessionJourneyType> = {
   'non-tech': 'non-tech',
   'non_tech': 'non-tech',
-  'ai_guided': 'non-tech',
+  'ai_guided': 'non-tech',  // Legacy mapping - deprecated
   guided: 'non-tech',
   business: 'business',
-  'template_based': 'business',
+  'template_based': 'business',  // Legacy mapping - deprecated
   technical: 'technical',
-  'self_service': 'technical',
+  'self_service': 'technical',  // Legacy mapping - deprecated
   consultation: 'consultation',
   custom: 'custom',
 };
@@ -43,8 +43,10 @@ function normalizeJourneyType(value?: string | string[]): SessionJourneyType | n
 
 const router = Router();
 
-// Session expires after 7 days of inactivity
-const SESSION_EXPIRY_DAYS = 7;
+// Session expires after 14 days of inactivity (extended for long-running journeys)
+const SESSION_EXPIRY_DAYS = 14;
+// Grace period for expired sessions (48 hours to allow recovery)
+const GRACE_PERIOD_HOURS = 48;
 
 /**
  * Generate integrity hash for session data
@@ -52,6 +54,69 @@ const SESSION_EXPIRY_DAYS = 7;
 function generateDataHash(data: any): string {
   const dataString = JSON.stringify(data);
   return crypto.createHash('sha256').update(dataString).digest('hex');
+}
+
+/**
+ * Encrypt sensitive session data to protect from browser log exposure
+ * Uses AES-256-GCM for authenticated encryption
+ */
+function encryptSessionData(data: any): string {
+  const ENCRYPTION_KEY = process.env.SESSION_ENCRYPTION_KEY || process.env.JWT_SECRET || 'fallback-key-change-in-production';
+
+  // Derive a 32-byte key from the secret
+  const key = crypto.createHash('sha256').update(ENCRYPTION_KEY).digest();
+
+  // Generate a random 16-byte IV for each encryption
+  const iv = crypto.randomBytes(16);
+
+  // Create cipher
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+
+  // Encrypt the data
+  const dataString = JSON.stringify(data);
+  let encrypted = cipher.update(dataString, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+
+  // Get authentication tag
+  const authTag = cipher.getAuthTag();
+
+  // Return IV + Auth Tag + Encrypted Data (all in hex)
+  return iv.toString('hex') + ':' + authTag.toString('hex') + ':' + encrypted;
+}
+
+/**
+ * Decrypt session data
+ */
+function decryptSessionData(encryptedData: string): any {
+  try {
+    const ENCRYPTION_KEY = process.env.SESSION_ENCRYPTION_KEY || process.env.JWT_SECRET || 'fallback-key-change-in-production';
+
+    // Derive the same 32-byte key
+    const key = crypto.createHash('sha256').update(ENCRYPTION_KEY).digest();
+
+    // Split the encrypted string
+    const parts = encryptedData.split(':');
+    if (parts.length !== 3) {
+      throw new Error('Invalid encrypted data format');
+    }
+
+    const iv = Buffer.from(parts[0], 'hex');
+    const authTag = Buffer.from(parts[1], 'hex');
+    const encrypted = parts[2];
+
+    // Create decipher
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(authTag);
+
+    // Decrypt
+    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+
+    return JSON.parse(decrypted);
+  } catch (error) {
+    console.error('❌ Failed to decrypt session data:', error);
+    return null;
+  }
 }
 
 /**
@@ -172,14 +237,14 @@ router.post('/:sessionId/update-step', ensureAuthenticated, async (req, res) => 
       updatedAt: new Date(),
     };
 
-    // Check session expiry with 1-hour grace period for active users
+    // ✅ Activity-based session management: extend expiry on any user activity
     const now = new Date();
     if (session.expiresAt) {
       const expiresAt = new Date(session.expiresAt);
       const hoursSinceExpiry = (now.getTime() - expiresAt.getTime()) / (1000 * 60 * 60);
 
-      // ✅ Allow 24-hour grace period for recently expired sessions (increased for long operations)
-      if (hoursSinceExpiry > 24) {
+      // ✅ Allow grace period for recently expired sessions
+      if (hoursSinceExpiry > GRACE_PERIOD_HOURS) {
         console.warn(`⚠️ Session ${sessionId} expired ${hoursSinceExpiry.toFixed(1)} hours ago at ${expiresAt}`);
         return res.status(410).json({
           error: 'Session expired',
@@ -188,19 +253,19 @@ router.post('/:sessionId/update-step', ensureAuthenticated, async (req, res) => 
         });
       }
 
-      // ✅ Auto-renew if expired within grace period OR within 2 days of expiry
-      if (expiresAt < now && hoursSinceExpiry <= 24) {
-        console.log(`🔄 Auto-renewing recently expired session ${sessionId} (expired ${hoursSinceExpiry.toFixed(1)} hours ago)`);
+      // ✅ Auto-renew on ANY activity if expired within grace period
+      if (expiresAt < now && hoursSinceExpiry <= GRACE_PERIOD_HOURS) {
+        console.log(`🔄 Auto-renewing recently expired session ${sessionId} (expired ${hoursSinceExpiry.toFixed(1)} hours ago) due to user activity`);
         const newExpiresAt = new Date();
         newExpiresAt.setDate(newExpiresAt.getDate() + SESSION_EXPIRY_DAYS);
         updateData.expiresAt = newExpiresAt;
       } else {
-        // Extend session if it's within 2 days of expiring (proactive renewal for long operations)
+        // ✅ Proactive renewal: extend session on any activity if within 2 days of expiring
         const daysUntilExpiry = (expiresAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
         if (daysUntilExpiry < 2) {
           const newExpiresAt = new Date();
           newExpiresAt.setDate(newExpiresAt.getDate() + SESSION_EXPIRY_DAYS);
-          console.log(`🔄 Auto-extending session ${sessionId} expiry from ${expiresAt} to ${newExpiresAt}`);
+          console.log(`🔄 Auto-extending session ${sessionId} expiry from ${expiresAt} to ${newExpiresAt} due to user activity`);
           updateData.expiresAt = newExpiresAt;
         }
       }
@@ -216,6 +281,54 @@ router.post('/:sessionId/update-step', ensureAuthenticated, async (req, res) => 
     switch (step) {
       case 'prepare':
         updateData.prepareData = data;
+
+        // R4 FIX: Save business questions to project_questions table for pipeline linking
+        if (data?.businessQuestions && session.projectId) {
+          const projectId = session.projectId;
+          const questionsText = typeof data.businessQuestions === 'string'
+            ? data.businessQuestions.split('\n').map((q: string) => q.trim()).filter((q: string) => q)
+            : Array.isArray(data.businessQuestions) ? data.businessQuestions : [];
+
+          if (questionsText.length > 0) {
+            console.log(`📝 [R4 Fix] Saving ${questionsText.length} questions to project_questions for project ${projectId}`);
+
+            for (let idx = 0; idx < questionsText.length; idx++) {
+              const questionText = questionsText[idx];
+              // Generate stable question ID from project and question text
+              const questionId = `q_${projectId.slice(0, 8)}_${idx + 1}`;
+
+              try {
+                // Upsert: check if exists first
+                const existing = await db
+                  .select()
+                  .from(projectQuestions)
+                  .where(and(
+                    eq(projectQuestions.projectId, projectId),
+                    eq(projectQuestions.questionText, questionText)
+                  ))
+                  .limit(1);
+
+                if (existing.length === 0) {
+                  await db.insert(projectQuestions).values({
+                    id: questionId,
+                    projectId: projectId,
+                    questionText: questionText,
+                    questionOrder: idx,
+                    status: 'pending'
+                  });
+                  console.log(`✅ [R4 Fix] Inserted question ${questionId}: "${questionText.slice(0, 50)}..."`);
+                } else {
+                  console.log(`⏭️ [R4 Fix] Question already exists: "${questionText.slice(0, 50)}..."`);
+                }
+              } catch (insertErr: any) {
+                // Ignore duplicate key errors (question already exists)
+                if (!insertErr.message?.includes('duplicate') && !insertErr.message?.includes('unique')) {
+                  console.warn(`⚠️ [R4 Fix] Failed to insert question: ${insertErr.message}`);
+                }
+              }
+            }
+          }
+        }
         break;
       case 'data':
         updateData.dataUploadData = data;

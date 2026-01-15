@@ -39,7 +39,7 @@ try {
     DROP TABLE IF EXISTS artifact_templates CASCADE;
   `));
   console.log('✅ Existing objects dropped');
-} catch (error) {
+} catch (error: any) {
   console.error('⚠️  Warning during drop:', error.message);
 }
 

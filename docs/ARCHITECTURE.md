@@ -669,19 +669,26 @@ question_answers (id, question_id, answer_text, embedding vector(1536), confiden
 
 ### 4. Agent Checkpoint DB-First Architecture
 
-**Current Problem**: Checkpoints stored in-memory Map, lost on server restart.
+**Status**: ✅ Implemented (January 2026)
 
-**Target Architecture**:
+**Implementation**:
 ```typescript
-// All checkpoints go to DB first
-class CheckpointManager {
-  async createCheckpoint(checkpoint): Promise<string>;     // DB write
-  async getCheckpoints(projectId): Promise<Checkpoint[]>;  // DB read (cached)
-  async approveCheckpoint(id, feedback): Promise<void>;    // Atomic DB update
-}
+// All checkpoints use agentCheckpoints table in shared/schema.ts
+// Storage methods in server/storage.ts:
+await storage.createAgentCheckpoint({
+  projectId,
+  stepName: 'quality_validation',  // Not 'stage'
+  agentType: 'data_engineer',      // Not 'agentId'
+  status: 'pending',
+  message: 'Agent message to user',
+  data: { /* structured data */ }  // Not 'metadata' (JSONB, not stringified)
+});
 
-// No in-memory state - DB is source of truth
+await storage.getProjectCheckpoints(projectId);  // Returns AgentCheckpoint[]
+await storage.updateAgentCheckpoint(id, { status: 'approved', userFeedback });
 ```
+
+**Database Table**: `agent_checkpoints` (see `shared/schema.ts:1041`)
 
 ### 5. Semantic Data Pipeline (IMPLEMENTED - Dec 2025)
 
@@ -769,15 +776,19 @@ const schema = project[0].schema || {};        // Column metadata
 ### Separate Datasets Table (For Large Data)
 
 ```typescript
-// Fetch project with linked datasets
-const projectDatasets = await db.select()
+// Fetch datasets linked to a project via projectDatasets join table
+// Note: datasets table has NO projectId column - must use join table
+import { datasets, projectDatasets } from '@shared/schema';
+
+const projectDatasetsJoin = await db.select({ dataset: datasets })
   .from(projectDatasets)
+  .innerJoin(datasets, eq(projectDatasets.datasetId, datasets.id))
   .where(eq(projectDatasets.projectId, projectId));
 
-const datasets = await db.select()
-  .from(datasets)
-  .where(inArray(datasets.id, datasetIds));
+const datasetsForProject = projectDatasetsJoin.map((r: any) => r.dataset);
 ```
+
+**Important**: The `datasets` table does NOT have a `projectId` column. Use the `projectDatasets` junction table for many-to-many relationships.
 
 **Use Cases**:
 - Datasets >100MB
@@ -795,41 +806,6 @@ const datasets = await db.select()
 - Complex multi-table joins
 
 **→ See**: [SPARK_FULL_SETUP_GUIDE.md](../SPARK_FULL_SETUP_GUIDE.md)
-
-### Journey Session Data Normalization
-
-```
-prepare-step.tsx → project-session routes           →   journey-state-manager  → dashboards/agents
-                     (project_sessions table)           (`projects.journeyProgress` JSON)
-```
-
-- **`project_sessions`** (`shared/schema.ts`) is the server-authoritative record for every multi-step journey. Each phase writes into the JSON buckets (`prepareData`, `dataUploadData`, `executeData`, `workflowState`) so we no longer depend on `localStorage` or scattered columns.
-- **`project_questions`** stores each business question with ordering, status, and embeddings. Services such as `analysis-execution.ts` and `server/routes/semantic-pipeline.ts` already query this table, so it is the single source of truth for question text.
-- **`projects.journeyProgress`** captures the durable journey summary (`status`, `currentPhase`, `phaseCompletionStatus`, `goals[]`). Dashboards, billing, and support tooling should hydrate from this JSON rather than bespoke columns like `journeyStatus`.
-- **`JourneyExecutionMachine`** persists transient orchestration state through `project_sessions.workflowState`, then emits normalized snapshots via `journey-state-manager`. When a session links to a project, `journeyProgress` keeps only the summarized view needed for resumes, analytics, and approvals.
-
-**Field responsibilities**:
-
-| Concern | Runtime store | Durable store | Consumers |
-|---------|---------------|---------------|-----------|
-| Analysis goal text | `project_sessions.prepareData.analysisGoal` | `projects.journeyProgress.goals[]` | Template selection, recommendation agents, billing guardrails |
-| Business questions | `project_sessions.prepareData.businessQuestions` | `project_questions` rows | Project Manager agent, DS agent, dashboards |
-| Journey step/phase | `project_sessions.currentStep` + `workflowState` | `projects.journeyProgress.status` + `stepCompletionStatus` | Journey UI, checkpoint system, billing |
-| Agent execution state | `project_sessions.workflowState` | `agent_executions` + `projects.journeyProgress.phaseCompletionStatus` | Agent orchestrator, realtime fan-out |
-
-### Legacy Field Decommission Plan
-
-| Legacy field/table | Successor | Migration notes |
-|--------------------|-----------|-----------------|
-| `projects.analysis_goals` | `project_sessions.prepareData.analysisGoal` → `projects.journeyProgress.goals[]` | Backfill the JSONB goals array for existing projects, update `analysis-execution.ts` & `template.ts` to read from `project_sessions` when present, then drop the column after one release. |
-| `projects.business_questions` | `project_questions` rows + `project_sessions.prepareData.businessQuestions` | Split newline or comma-delimited strings into ordered rows, persist edits in the session, and treat the table as the only query source for agents/tests. |
-| `projects."journeyStatus"` | `project_sessions.currentStep` + `projects.journeyProgress.status` | Dashboards should compute status from the JSON block; add a fallback getter that derives it from `journeyStatus` during the cutover to avoid regressions. |
-| `journey_execution_states` table | `project_sessions.workflowState` + summarized `journeyProgress` | Wire `JourneyExecutionMachine.persistState/restoreState` to the session table so restarts never consult the deprecated table; once the hooks land, archive the standalone table. |
-
-**Rollout guardrails**
-- Run `npm run db:push` after updating `shared/schema.ts` to ensure the JSON columns stay in sync.
-- Add dual-write shims inside `project-session` routes so QA can flip `DISABLE_LEGACY_JOURNEY_FIELDS=true` in `.env` and run `npm run test:user-journeys` before the final drop.
-- Monitor `PROJECT_DASHBOARD_ISSUES_AND_FIXES.md` KPIs (resume rate, paused journeys) to confirm the normalized data feeds every widget before removing the legacy schema.
 
 ---
 

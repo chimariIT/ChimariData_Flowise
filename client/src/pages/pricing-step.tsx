@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -144,6 +145,20 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
   const [paymentProcessing, setPaymentProcessing] = useState<boolean>(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
 
+  // ✅ PHASE 7 FIX: Backend cost estimate - single source of truth for pricing
+  const [backendCostEstimate, setBackendCostEstimate] = useState<{
+    totalCost: number;
+    breakdown: {
+      basePlatformFee?: number;
+      dataProcessing?: number;
+      analysisExecution?: number;
+      rowsProcessed?: number;
+      analysisTypes?: number;
+    };
+    isLocked: boolean;
+  } | null>(null);
+  const [backendCostLoading, setBackendCostLoading] = useState(false);
+
   // Cost confirmation checkpoint state (U2A2A2U pattern)
   const [showCostConfirmation, setShowCostConfirmation] = useState<boolean>(false);
   const [costConfirmed, setCostConfirmed] = useState<boolean>(false);
@@ -157,12 +172,69 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
     isLoading: projectLoading
   } = useProject(localStorage.getItem('currentProjectId') || undefined);
 
+  // ✅ PHASE 3 FIX: Fetch datasets to get actual recordCount for pricing display
+  // This fixes "Data Rows = 0" issue - previously read from executionSummary which is only populated after execution
+  const { data: datasetsResponse } = useQuery({
+    queryKey: ['project-datasets', projectId],
+    queryFn: async () => {
+      if (!projectId) return { datasets: [] };
+      const response = await apiClient.get(`/api/projects/${projectId}/datasets`);
+      return response as { datasets: Array<{ id: string; recordCount?: number; name?: string; [key: string]: any }> };
+    },
+    enabled: Boolean(projectId),
+    staleTime: 1000 * 60, // 1 minute cache
+  });
+  const datasets = datasetsResponse?.datasets || [];
+
   const {
     data: journeyState,
     isLoading: journeyStateLoading,
     isFetching: journeyStateFetching,
     error: journeyStateError
   } = useJourneyState(projectId ?? undefined, { enabled: Boolean(projectId) });
+
+  // ✅ PHASE 7 FIX: Fetch cost estimate from backend - AUTHORITATIVE pricing source
+  // This ensures frontend displays the SAME price that will be charged at checkout
+  useEffect(() => {
+    if (!projectId) {
+      setBackendCostEstimate(null);
+      return;
+    }
+
+    let cancelled = false;
+    async function fetchCostEstimate() {
+      setBackendCostLoading(true);
+      try {
+        const response = await fetch(`/api/projects/${projectId}/cost-estimate`, {
+          method: 'GET',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' }
+        });
+
+        if (!response.ok) {
+          throw new Error(`Cost estimate failed: ${response.status}`);
+        }
+
+        const data = await response.json();
+        if (!cancelled && data.success) {
+          console.log(`✅ [Pricing] Backend cost estimate: $${data.totalCost} (${data.isLocked ? 'LOCKED' : 'estimated'})`);
+          setBackendCostEstimate({
+            totalCost: data.totalCost,
+            breakdown: data.breakdown || {},
+            isLocked: data.isLocked || false
+          });
+        }
+      } catch (error) {
+        console.warn('⚠️ [Pricing] Failed to fetch backend cost estimate:', error);
+        // Don't fail - fall back to frontend calculation
+      } finally {
+        if (!cancelled) setBackendCostLoading(false);
+      }
+    }
+
+    fetchCostEstimate();
+    return () => { cancelled = true; };
+  }, [projectId]);
 
   const getJourneyTypeInfo = () => {
     switch (journeyType) {
@@ -260,9 +332,21 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
     return { summary, warning };
   }, [journeyProgress]);
 
-  // Compute dataset size in MB from rows (rough estimate: 10,000 rows ~ 100 MB)
-  // If dataSize is already in MB, use it directly; otherwise convert from rows
+  // ✅ PHASE 3 FIX: Compute dataset size from actual datasets.recordCount first
+  // Previously read from executionSummary.dataSize which is only populated AFTER execution
+  // Now reads from datasets fetched via useQuery - this shows correct row count on pricing page
   const datasetSizeMB = useMemo(() => {
+    // Priority 1: Get actual row counts from datasets (BEFORE execution)
+    if (datasets && datasets.length > 0) {
+      const totalRows = datasets.reduce((sum, ds) => sum + (ds.recordCount || 0), 0);
+      if (totalRows > 0) {
+        console.log(`✅ [Pricing] Using datasets recordCount: ${totalRows} rows`);
+        // Convert rows to MB (rough estimate: 10,000 rows ~ 100 MB)
+        return Math.max(1, Math.round(totalRows / 100));
+      }
+    }
+
+    // Priority 2: Use execution summary if available (AFTER execution)
     const size = analysisResults.dataSize || 0;
     // If size is less than 1000, assume it's already in MB; otherwise assume it's row count
     if (size < 1000) {
@@ -270,7 +354,15 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
     }
     // Convert rows to MB (rough estimate: 10,000 rows ~ 100 MB)
     return Math.max(1, Math.round(size / 100));
-  }, [analysisResults.dataSize]);
+  }, [datasets, analysisResults.dataSize]);
+
+  // ✅ Also compute actual row count for display purposes
+  const totalDataRows = useMemo(() => {
+    if (datasets && datasets.length > 0) {
+      return datasets.reduce((sum, ds) => sum + (ds.recordCount || 0), 0);
+    }
+    return analysisResults.dataSize || 0;
+  }, [datasets, analysisResults.dataSize]);
 
   const calculatePricing = useMemo(() => {
     let basePrice = journeyInfo.basePrice;
@@ -308,27 +400,37 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
   const spentCostCents = useMemo(() => toCents(journeyState?.costs?.spent), [journeyState]);
   const remainingCostCents = useMemo(() => toCents(journeyState?.costs?.remaining), [journeyState]);
 
-  // FIX Issue #10: Unified cost calculation with clear source hierarchy
-  // Priority: 1. Server-locked cost from plan, 2. Server billing calculation, 3. Client fallback (with warning)
+  // ✅ PHASE 7 FIX: Unified cost calculation with clear source hierarchy
+  // Priority: 1. Backend cost estimate (authoritative), 2. Server-locked cost, 3. Billing calculation, 4. Client fallback
   const authoritativeCostCents = useMemo(() => {
+    // Priority 1: Backend cost estimate from /api/projects/:id/cost-estimate (AUTHORITATIVE)
+    if (backendCostEstimate?.totalCost && backendCostEstimate.totalCost > 0) {
+      const costCents = Math.round(backendCostEstimate.totalCost * 100);
+      console.log(`💰 [PHASE 7] Using backend cost estimate: $${backendCostEstimate.totalCost} (${backendCostEstimate.isLocked ? 'LOCKED' : 'calculated'})`);
+      return costCents;
+    }
+    // Priority 2: Server-locked cost from journey state
     if (lockedCostCents !== null) {
-      console.log('💰 [Issue #10 Fix] Using server-locked cost from plan:', lockedCostCents / 100);
+      console.log('💰 [Pricing] Using server-locked cost from plan:', lockedCostCents / 100);
       return lockedCostCents;
     }
+    // Priority 3: Billing service calculation
     if (typeof billingBreakdown?.totalCost === 'number') {
-      console.log('💰 [Issue #10 Fix] Using server billing calculation:', billingBreakdown.totalCost / 100);
+      console.log('💰 [Pricing] Using server billing calculation:', billingBreakdown.totalCost / 100);
       return billingBreakdown.totalCost;
     }
-    // Fallback to client-side calculation - warn about potential mismatch
-    console.warn('⚠️ [Issue #10 Fix] Using client-side fallback pricing. Server cost not available.');
-    console.warn('⚠️ [Issue #10 Fix] This may differ from actual server pricing. User should see "estimate" label.');
+    // Priority 4: Fallback to client-side calculation - warn about potential mismatch
+    console.warn('⚠️ [Pricing] Using client-side fallback pricing. Server cost not available.');
     return Math.round(finalPrice * 100);
-  }, [lockedCostCents, billingBreakdown?.totalCost, finalPrice]);
+  }, [backendCostEstimate, lockedCostCents, billingBreakdown?.totalCost, finalPrice]);
 
   // Track if we're using estimated vs locked pricing
   const isEstimatedPricing = useMemo(() => {
+    // Not estimated if we have backend locked cost or backend estimate
+    if (backendCostEstimate?.isLocked) return false;
+    if (backendCostEstimate?.totalCost && backendCostEstimate.totalCost > 0) return false;
     return lockedCostCents === null && typeof billingBreakdown?.totalCost !== 'number';
-  }, [lockedCostCents, billingBreakdown?.totalCost]);
+  }, [backendCostEstimate, lockedCostCents, billingBreakdown?.totalCost]);
 
   const pricingPlans = useMemo(() => {
     const perAnalysisPriceDisplay = formatCurrency(authoritativeCostCents, true);
@@ -348,8 +450,15 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
           '30-day access to results'
         ],
         popular: true,
-        locked: Boolean(lockedCostCents),
-        pricingDetails: {
+        locked: Boolean(backendCostEstimate?.isLocked || lockedCostCents),
+        // ✅ PHASE 7 FIX: Use backend breakdown when available for accurate display
+        pricingDetails: backendCostEstimate?.breakdown ? {
+          baseCost: backendCostEstimate.breakdown.basePlatformFee || 5,
+          dataSizeCost: backendCostEstimate.breakdown.dataProcessing || 0,
+          analysisExecutionCost: backendCostEstimate.breakdown.analysisExecution || 0,
+          rowsProcessed: backendCostEstimate.breakdown.rowsProcessed || 0,
+          analysisCount: backendCostEstimate.breakdown.analysisTypes || 1
+        } : {
           baseCost: journeyInfo.basePrice,
           dataSizeCost: Math.max(0, (analysisResults.dataSize - 1000) * 0.001),
           complexityMultiplier: analysisResults.complexity === 'moderate' ? 1.2 : analysisResults.complexity === 'complex' ? 1.5 : analysisResults.complexity === 'expert' ? 2.0 : 1.0,
@@ -393,7 +502,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
         minVolume: '100+ analyses/month'
       }
     ];
-  }, [analysisResults, authoritativeCostCents, journeyInfo.basePrice, lockedCostCents]);
+  }, [analysisResults, authoritativeCostCents, journeyInfo.basePrice, lockedCostCents, backendCostEstimate]);
 
   // Load billing breakdown from server so subscription credits are applied
   useEffect(() => {
@@ -570,11 +679,30 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
     setPaymentError(null);
 
     try {
+      // PHASE 6 FIX: Lock cost to project BEFORE creating checkout session
+      // This ensures Stripe checkout uses the SAME cost displayed in UI
+      const costToCharge = authoritativeCostCents ? authoritativeCostCents / 100 : finalPrice;
+      console.log(`💰 [Payment] Locking cost $${costToCharge.toFixed(2)} to project before checkout`);
+
+      // Save locked cost to project so backend uses it
+      try {
+        await fetch(`/api/projects/${projectId}/lock-cost`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ lockedCostEstimate: costToCharge })
+        });
+        console.log(`✅ [Payment] Locked cost estimate saved: $${costToCharge.toFixed(2)}`);
+      } catch (lockError) {
+        console.warn('⚠️ [Payment] Could not lock cost estimate, proceeding anyway:', lockError);
+      }
+
       // Call the payment endpoint to create Stripe checkout session
       const response: any = await apiClient.post('/api/payment/create-checkout-session', {
         projectId,
         paymentMethod,
         costConfirmed: true, // Indicate cost was explicitly confirmed
+        amount: costToCharge, // Pass the exact amount displayed to user
       });
 
       if (response?.error) {

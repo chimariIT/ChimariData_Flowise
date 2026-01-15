@@ -1,6 +1,6 @@
 import { nanoid } from 'nanoid';
 import { and, desc, eq, ilike, inArray, sql } from 'drizzle-orm';
-import { db } from '../db.ts';
+import { db } from '../db';
 import {
   analysisPatternSources,
   analysisPatterns,

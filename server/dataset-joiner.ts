@@ -14,6 +14,22 @@ export interface JoinResult {
 }
 
 export class DatasetJoiner {
+  /**
+   * Get a safe dataset name for column prefixing during joins.
+   * Prevents "undefined_" prefix when project.name is undefined.
+   */
+  private static getSafeDatasetName(project: any, index: number): string {
+    const rawName = project.originalFileName || project.name || project.fileName;
+    if (rawName && rawName !== 'undefined' && String(rawName).trim()) {
+      // Remove file extension and sanitize for use in column names
+      return String(rawName)
+        .replace(/\.[^.]+$/, '')  // Remove extension
+        .replace(/[^a-zA-Z0-9_]/g, '_')  // Replace special chars
+        .substring(0, 50);  // Limit length
+    }
+    return `Dataset${index + 1}`;
+  }
+
   static async joinDatasets(
     baseProject: any,
     joinProjects: any[],
@@ -70,23 +86,28 @@ export class DatasetJoiner {
         joinedFields = Object.keys(baseProject.schema || {});
         
         // Process each project to join
-        for (const joinProject of joinProjects) {
+        for (let jpIdx = 0; jpIdx < joinProjects.length; jpIdx++) {
+          const joinProject = joinProjects[jpIdx];
           const joinKey = config.joinKeys[joinProject.id];
           const joinData = joinProject.data || [];
-          
+
+          // Get safe name for column prefixing (prevents "undefined_" prefix)
+          const safeName = this.getSafeDatasetName(joinProject, jpIdx + 1);
+          console.log(`✅ [DatasetJoiner] Using safe name: ${safeName} for join (original: ${joinProject.name})`);
+
           if (!joinKey) {
-            throw new Error(`No join key specified for project ${joinProject.name}`);
+            throw new Error(`No join key specified for project ${safeName}`);
           }
-          
+
           // Get fields from join project (exclude the join key to avoid duplication)
           const projectFields = Object.keys(joinProject.schema || {}).filter(field => field !== joinKey);
-          
+
           // Add prefix to field names to avoid conflicts
-          const prefixedFields = projectFields.map(field => `${joinProject.name}_${field}`);
+          const prefixedFields = projectFields.map(field => `${safeName}_${field}`);
           joinedFields = [...joinedFields, ...prefixedFields];
-          
-          // Perform the join operation
-          resultData = this.performJoin(resultData, joinData, baseJoinKey, joinKey, config.joinType, joinProject.name);
+
+          // Perform the join operation with safe name
+          resultData = this.performJoin(resultData, joinData, baseJoinKey, joinKey, config.joinType, safeName);
         }
       }
       
@@ -98,13 +119,15 @@ export class DatasetJoiner {
         newSchema[field] = info;
       });
       
-      // Add joined project schemas with prefixes
-      for (const joinProject of joinProjects) {
+      // Add joined project schemas with prefixes (using safe names)
+      for (let jpIdx = 0; jpIdx < joinProjects.length; jpIdx++) {
+        const joinProject = joinProjects[jpIdx];
+        const safeName = this.getSafeDatasetName(joinProject, jpIdx + 1);
         Object.entries(joinProject.schema || {}).forEach(([field, info]) => {
           if (field !== config.joinKeys[joinProject.id]) {
-            newSchema[`${joinProject.name}_${field}`] = {
+            newSchema[`${safeName}_${field}`] = {
               ...(info as object),
-              description: `${field} from ${joinProject.name}`
+              description: `${field} from ${safeName}`
             };
           }
         });
@@ -159,76 +182,99 @@ export class DatasetJoiner {
     rightPrefix: string
   ): any[] {
     const result: any[] = [];
-    
-    // Create lookup map for right data
+
+    // ENHANCED: Find actual column names (case-insensitive matching)
+    const leftCols = leftData.length > 0 ? Object.keys(leftData[0]) : [];
+    const rightCols = rightData.length > 0 ? Object.keys(rightData[0]) : [];
+
+    const actualLeftKey = leftCols.find(c => c.toLowerCase() === leftKey.toLowerCase()) || leftKey;
+    const actualRightKey = rightCols.find(c => c.toLowerCase() === rightKey.toLowerCase()) || rightKey;
+
+    console.log(`🔗 [DatasetJoiner] Join keys: left="${actualLeftKey}" (from ${leftKey}), right="${actualRightKey}" (from ${rightKey})`);
+    console.log(`🔗 [DatasetJoiner] Left columns: ${leftCols.join(', ')}`);
+    console.log(`🔗 [DatasetJoiner] Right columns: ${rightCols.join(', ')}`);
+
+    // Create lookup map for right data - use NORMALIZED key values for matching
     const rightMap = new Map();
     rightData.forEach(row => {
-      const keyValue = row[rightKey];
-      if (!rightMap.has(keyValue)) {
+      const keyValue = String(row[actualRightKey] ?? '').toLowerCase().trim();
+      if (keyValue && !rightMap.has(keyValue)) {
         rightMap.set(keyValue, []);
       }
-      rightMap.get(keyValue).push(row);
+      if (keyValue) {
+        rightMap.get(keyValue).push(row);
+      }
     });
+
+    console.log(`🔗 [DatasetJoiner] Built right lookup with ${rightMap.size} unique keys from ${rightData.length} rows`);
     
     // Track which right rows were matched
     const matchedRightKeys = new Set();
-    
-    // Process left data
+    let matchCount = 0;
+    let unmatchedCount = 0;
+
+    // Process left data - use NORMALIZED key values for lookup
     leftData.forEach(leftRow => {
-      const leftKeyValue = leftRow[leftKey];
+      const leftKeyValue = String(leftRow[actualLeftKey] ?? '').toLowerCase().trim();
       const rightMatches = rightMap.get(leftKeyValue) || [];
-      
+
       if (rightMatches.length > 0) {
+        matchCount++;
         // Inner and Left joins: include matched rows
         rightMatches.forEach((rightRow: any) => {
           matchedRightKeys.add(leftKeyValue);
           const joinedRow = { ...leftRow };
-          
-          // Add right row data with prefix
+
+          // Add right row data with prefix - use actual column names
           Object.entries(rightRow).forEach(([field, value]) => {
-            if (field !== rightKey) {
+            if (field.toLowerCase() !== actualRightKey.toLowerCase()) {
               joinedRow[`${rightPrefix}_${field}`] = value;
             }
           });
-          
+
           result.push(joinedRow);
         });
-      } else if (joinType === 'left' || joinType === 'outer') {
-        // Left and Outer joins: include unmatched left rows
-        const joinedRow = { ...leftRow };
-        
-        // Add null values for right fields
-        rightData[0] && Object.keys(rightData[0]).forEach(field => {
-          if (field !== rightKey) {
-            joinedRow[`${rightPrefix}_${field}`] = null;
-          }
-        });
-        
-        result.push(joinedRow);
+      } else {
+        unmatchedCount++;
+        if (joinType === 'left' || joinType === 'outer') {
+          // Left and Outer joins: include unmatched left rows
+          const joinedRow = { ...leftRow };
+
+          // Add null values for right fields
+          rightData[0] && Object.keys(rightData[0]).forEach(field => {
+            if (field.toLowerCase() !== actualRightKey.toLowerCase()) {
+              joinedRow[`${rightPrefix}_${field}`] = null;
+            }
+          });
+
+          result.push(joinedRow);
+        }
       }
     });
+
+    console.log(`🔗 [DatasetJoiner] Join stats: ${matchCount} matched, ${unmatchedCount} unmatched, ${result.length} result rows`);
     
     // For right and outer joins: add unmatched right rows
     if (joinType === 'right' || joinType === 'outer') {
       rightData.forEach(rightRow => {
-        const rightKeyValue = rightRow[rightKey];
+        const rightKeyValue = String(rightRow[actualRightKey] ?? '').toLowerCase().trim();
         if (!matchedRightKeys.has(rightKeyValue)) {
           const joinedRow: any = {};
-          
+
           // Add null values for left fields
           leftData[0] && Object.keys(leftData[0]).forEach(field => {
             joinedRow[field] = null;
           });
-          
+
           // Add right row data with prefix
           Object.entries(rightRow).forEach(([field, value]) => {
-            if (field !== rightKey) {
+            if (field.toLowerCase() !== actualRightKey.toLowerCase()) {
               joinedRow[`${rightPrefix}_${field}`] = value;
             } else {
-              joinedRow[leftKey] = value; // Use the join key
+              joinedRow[actualLeftKey] = value; // Use the join key
             }
           });
-          
+
           result.push(joinedRow);
         }
       });

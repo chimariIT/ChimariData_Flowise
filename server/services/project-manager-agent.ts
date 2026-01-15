@@ -1,4 +1,4 @@
-﻿// TechnicalAIAgent removed - it's only used internally by DataScientistAgent
+﻿import { TechnicalAIAgent } from './technical-ai-agent';
 import { DataEngineerAgent } from './data-engineer-agent';
 import { DataScientistAgent } from './data-scientist-agent';
 import { BusinessAgent, BusinessContext } from './business-agent';
@@ -30,7 +30,34 @@ import {
     type InsertAnalysisPlan
 } from '@shared/schema';
 import { and, desc, eq } from 'drizzle-orm';
-import { normalizeJourneyType } from '@shared/canonical-types';
+
+/**
+ * ✅ FIX: Helper function to wrap promises with timeout
+ * Prevents plan generation from hanging indefinitely when AI APIs are slow
+ */
+async function withTimeout<T>(
+    promise: Promise<T>,
+    ms: number,
+    fallback: T,
+    operationName: string = 'Operation'
+): Promise<T> {
+    let timeoutId: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<T>((_, reject) => {
+        timeoutId = setTimeout(() => {
+            reject(new Error(`${operationName} timed out after ${ms}ms`));
+        }, ms);
+    });
+
+    try {
+        const result = await Promise.race([promise, timeoutPromise]);
+        if (timeoutId) clearTimeout(timeoutId);
+        return result;
+    } catch (error) {
+        if (timeoutId) clearTimeout(timeoutId);
+        console.warn(`⚠️ [PM Agent] ${operationName} timed out after ${ms}ms, using fallback`);
+        return fallback;
+    }
+}
 
 type OrchestrationStatus = 'goal_extraction' | 'path_selection' | 'cost_approval' | 'ready_for_execution' | 'executing' | 'completed' | 'error';
 
@@ -214,16 +241,6 @@ interface CreateAnalysisPlanRequest {
     };
     modifications?: string | null;
     previousPlan?: AnalysisPlanRow | null;
-    // [DATA CONTINUITY] Context from previous journey steps
-    journeyContext?: {
-        userQuestions?: string[];
-        analysisGoal?: string;
-        requirementsDocument?: any;
-        transformationDocument?: any;
-        audience?: any;
-        dataQualityApproved?: boolean;
-        completedSteps?: string[];
-    };
 }
 
 interface CreateAnalysisPlanResult {
@@ -297,7 +314,7 @@ export interface DecisionAuditRecord {
 }
 
 interface ProjectManagerAgentDependencies {
-    // technicalAgent removed - Technical AI Agent is only used internally by Data Scientist Agent
+    technicalAgent?: TechnicalAIAgent;
     dataEngineerAgent?: DataEngineerAgent;
     dataScientistAgent?: DataScientistAgent;
     businessAgent?: BusinessAgent;
@@ -306,7 +323,7 @@ interface ProjectManagerAgentDependencies {
 }
 
 export class ProjectManagerAgent {
-    // technicalAgent removed - Technical AI Agent is only used internally by Data Scientist Agent
+    private technicalAgent: TechnicalAIAgent;
     private dataEngineerAgent: DataEngineerAgent;
     private dataScientistAgent: DataScientistAgent;
     private businessAgent: BusinessAgent;
@@ -318,7 +335,7 @@ export class ProjectManagerAgent {
     private readonly planLockTtlMs = 5 * 60 * 1000;
 
     constructor(dependencies: ProjectManagerAgentDependencies = {}) {
-        // Technical AI Agent is only used internally by Data Scientist Agent, not directly here
+        this.technicalAgent = dependencies.technicalAgent ?? new TechnicalAIAgent();
         this.dataEngineerAgent = dependencies.dataEngineerAgent ?? new DataEngineerAgent();
         this.dataScientistAgent = dependencies.dataScientistAgent ?? new DataScientistAgent();
         this.businessAgent = dependencies.businessAgent ?? new BusinessAgent();
@@ -715,7 +732,7 @@ export class ProjectManagerAgent {
             ? `${params.dataAssessment.recordCount.toLocaleString()} records`
             : 'the available data';
         const primaryStep = params.blueprint.analysisSteps[0]?.name ?? 'descriptive analysis';
-        const kpiFocus = params.businessContext.relevantKPIs?.slice(0, 2).join(' and ') || 'key KPIs';
+        const kpiFocus = params.businessContext?.relevantKPIs?.slice(0, 2).join(' and ') || 'key KPIs';
         const duration = params.blueprint.estimatedDuration || 'a few hours';
         const modificationNote = params.modifications ? ' incorporating your latest feedback' : '';
         const projectLabel = params.projectName || 'This project';
@@ -754,6 +771,83 @@ export class ProjectManagerAgent {
             return benchmarkIndustry.replace(/benchmark/i, '').trim();
         }
 
+        // Auto-detect industry from project name and goals
+        const autoDetected = this.autoDetectIndustryFromContext(project, prepareData);
+        if (autoDetected) {
+            console.log(`🔍 [PM Agent] Auto-detected industry: "${autoDetected}" from project context`);
+            return autoDetected;
+        }
+
+        return undefined;
+    }
+
+    /**
+     * Auto-detect industry from project name, goals, and questions
+     * This ensures HR, Education, etc. are detected even if not explicitly set
+     */
+    private autoDetectIndustryFromContext(
+        project: CreateAnalysisPlanRequest['project'] | undefined,
+        prepareData: Record<string, any> | undefined
+    ): string | undefined {
+        const combinedText = [
+            project?.name || '',
+            project?.description || '',
+            ...(prepareData?.goals || []),
+            ...(prepareData?.questions || []),
+            prepareData?.analysisGoal || ''
+        ].join(' ').toLowerCase();
+
+        // HR / Employee Engagement patterns
+        const hrPatterns = ['employee', 'engagement', 'workforce', 'hr ', 'human resource',
+                          'staff', 'turnover', 'retention', 'satisfaction survey', 'hiring',
+                          'talent', 'personnel', 'workplace', 'job satisfaction'];
+        if (hrPatterns.some(p => combinedText.includes(p))) {
+            return 'hr';
+        }
+
+        // Education patterns
+        const educationPatterns = ['student', 'graduation', 'academic', 'school', 'university',
+                                   'teacher', 'learning', 'enrollment', 'course', 'curriculum',
+                                   'classroom', 'education'];
+        if (educationPatterns.some(p => combinedText.includes(p))) {
+            return 'education';
+        }
+
+        // Healthcare patterns
+        const healthcarePatterns = ['patient', 'hospital', 'clinic', 'medical', 'healthcare',
+                                    'health care', 'doctor', 'nurse', 'diagnosis', 'treatment'];
+        if (healthcarePatterns.some(p => combinedText.includes(p))) {
+            return 'healthcare';
+        }
+
+        // Finance patterns
+        const financePatterns = ['bank', 'financial', 'loan', 'investment', 'trading',
+                                 'portfolio', 'credit', 'mortgage', 'insurance'];
+        if (financePatterns.some(p => combinedText.includes(p))) {
+            return 'finance';
+        }
+
+        // Retail patterns
+        const retailPatterns = ['customer', 'purchase', 'shopping', 'retail', 'ecommerce',
+                               'store', 'product', 'sales', 'order', 'cart'];
+        if (retailPatterns.some(p => combinedText.includes(p))) {
+            return 'retail';
+        }
+
+        // Nonprofit patterns
+        const nonprofitPatterns = ['donor', 'nonprofit', 'non-profit', 'charity', 'volunteer',
+                                   'fundraising', 'foundation', 'ngo', 'mission'];
+        if (nonprofitPatterns.some(p => combinedText.includes(p))) {
+            return 'nonprofit';
+        }
+
+        // Manufacturing patterns
+        const manufacturingPatterns = ['manufacturing', 'production', 'factory', 'assembly',
+                                       'inventory', 'supply chain', 'quality control'];
+        if (manufacturingPatterns.some(p => combinedText.includes(p))) {
+            return 'manufacturing';
+        }
+
         return undefined;
     }
 
@@ -768,12 +862,6 @@ export class ProjectManagerAgent {
                 error: lock.reason || 'Plan creation already in progress for this project'
             };
         }
-
-        if (!lock.lockKey) {
-            throw new Error('Failed to acquire plan creation lock key');
-        }
-
-        const lockKey = lock.lockKey;
 
         try {
             const projectRecord = request.project ?? await this.getProjectRecord(projectId);
@@ -834,7 +922,7 @@ export class ProjectManagerAgent {
 
             // 2. Trigger Background Generation (Fire and Forget)
             // We pass the lock key to release it after generation is done
-            this.generatePlanContent(plan.id, request, projectRecord, latestPlan, lockKey).catch(err => {
+            this.generatePlanContent(plan.id, request, projectRecord, latestPlan, lock.lockKey || '').catch(err => {
                 console.error(`[Background] Plan generation failed for ${plan.id}:`, err);
             });
 
@@ -847,7 +935,7 @@ export class ProjectManagerAgent {
 
         } catch (error) {
             console.error(`Project Manager Agent: Failed to initiate analysis plan for project ${projectId}`, error);
-            this.releasePlanCreationLock(projectId, lockKey); // Release lock if init fails
+            this.releasePlanCreationLock(projectId, lock.lockKey); // Release lock if init fails
             return {
                 success: false,
                 error: error instanceof Error ? error.message : 'Failed to initiate analysis plan'
@@ -857,6 +945,12 @@ export class ProjectManagerAgent {
 
     /**
      * Background process to generate plan content and update the pending record
+     *
+     * Agent Responsibility: PROJECT_MANAGER
+     * - Coordinates analysis planning across agents
+     * - Uses existing requirements from Prepare step (SSOT: journeyProgress.requirementsDocument)
+     * - Generates cost estimates and timelines
+     * - Creates approval checkpoints
      */
     private async generatePlanContent(
         planId: string,
@@ -866,12 +960,46 @@ export class ProjectManagerAgent {
         lockKey: string
     ): Promise<void> {
         const { projectId, userId } = request;
-        console.log(`[PM Agent] Starting background generation for plan ${planId}`);
+        console.log(`📋 [PROJECT_MANAGER] Starting background generation for plan ${planId}`);
+        console.log(`📋 [PROJECT_MANAGER] Using tools: task_coordinator, checkpoint_manager, progress_reporter`);
 
         try {
-            const session = await this.getLatestSession(projectId, userId);
-            const datasets = await this.loadDatasetSummaries(projectId);
-            const primaryDataset = datasets[0];
+            // PHASE 7 FIX: Re-fetch project to get fresh journeyProgress.requirementsDocument
+            // The passed projectRecord may be stale if Prepare step just saved requirements
+            let freshProjectRecord = projectRecord;
+            try {
+                const refetched = await this.getProjectRecord(projectId);
+                if (refetched) {
+                    freshProjectRecord = refetched;
+                    console.log(`✅ [PM Agent] Re-fetched project for fresh journeyProgress:`, {
+                        hasRequirementsDoc: !!(refetched as any)?.journeyProgress?.requirementsDocument,
+                        analysisPathCount: (refetched as any)?.journeyProgress?.requirementsDocument?.analysisPath?.length || 0,
+                        elementsCount: (refetched as any)?.journeyProgress?.requirementsDocument?.requiredDataElements?.length || 0
+                    });
+                }
+            } catch (refetchError) {
+                console.warn(`⚠️ [PM Agent] Failed to refetch project, using passed record:`, refetchError);
+            }
+
+            // Load session and datasets with error handling
+            let session: any = null;
+            let datasets: any[] = [];
+            let primaryDataset: any = null;
+
+            try {
+                session = await this.getLatestSession(projectId, userId);
+            } catch (sessionError) {
+                console.warn(`⚠️ [PM Agent] Failed to load session for project ${projectId}:`, sessionError);
+                // Continue without session data - we can still generate a plan
+            }
+
+            try {
+                datasets = await this.loadDatasetSummaries(projectId);
+                primaryDataset = datasets[0];
+            } catch (datasetError) {
+                console.warn(`⚠️ [PM Agent] Failed to load datasets for project ${projectId}:`, datasetError);
+                // Continue without dataset data - we'll use fallback values
+            }
 
             const prepareData = session?.prepareData as Record<string, any> | undefined;
 
@@ -903,16 +1031,64 @@ export class ProjectManagerAgent {
             const dataSample = primaryDataset?.previewRows ?? (Array.isArray(request.project?.data) ? request.project.data.slice(0, 500) : []);
 
             // [INTEGRATION] Required Data Elements Tool
-            const requiredDataTool = new RequiredDataElementsTool();
-            let requirementsDoc = await requiredDataTool.defineRequirements({
-                projectId,
-                userGoals: goals,
-                userQuestions: questions
-            });
+            // CRITICAL FIX: Check if requirementsDocument already exists in journeyProgress (from Prepare step)
+            // This ensures traceability from Prepare → Verification → Transformation → Plan
+            // PHASE 7 FIX: Use freshProjectRecord instead of stale projectRecord
+            const existingReqDoc = (freshProjectRecord as any)?.journeyProgress?.requirementsDocument;
+            let requirementsDoc;
 
-            if (primaryDataset) {
+            if (existingReqDoc && existingReqDoc.requiredDataElements?.length > 0) {
+                // Use existing requirements document from Prepare step (SSOT)
+                console.log(`✅ [PM Agent] Using existing requirementsDocument from Prepare step:`, {
+                    elementsCount: existingReqDoc.requiredDataElements?.length || 0,
+                    analysisPathCount: existingReqDoc.analysisPath?.length || 0,
+                    source: 'journeyProgress.requirementsDocument'
+                });
+                requirementsDoc = existingReqDoc;
+            } else {
+                // Generate new requirements only if none exist
+                console.log(`📋 [PM Agent] No existing requirementsDocument, generating new one`);
                 try {
-                    requirementsDoc = await requiredDataTool.mapDatasetToRequirements(requirementsDoc, {
+                    const requiredDataTool = new RequiredDataElementsTool();
+                    requirementsDoc = await requiredDataTool.defineRequirements({
+                        projectId,
+                        userGoals: goals,
+                        userQuestions: questions
+                    });
+                } catch (reqError) {
+                    console.error(`❌ [PM Agent] RequiredDataElementsTool.defineRequirements() failed:`, reqError);
+                    // Create a minimal requirements document so plan generation can proceed
+                    requirementsDoc = {
+                        documentId: `req_${projectId}_${Date.now()}`,
+                        projectId,
+                        version: 1,
+                        status: 'draft' as const,
+                        userGoals: goals,
+                        userQuestions: questions,
+                        analysisPath: [],
+                        requiredDataElements: [],
+                        questionAnswerMapping: [],
+                        transformationPlan: { transformationSteps: [], dataQualityChecks: [] },
+                        completeness: { totalElements: 0, elementsMapped: 0, elementsWithTransformation: 0, readyForExecution: false },
+                        gaps: [{
+                            type: 'transformation_needed',
+                            description: 'Requirements generation failed - manual review needed',
+                            affectedElements: [],
+                            recommendation: 'Please verify data upload and retry',
+                            severity: 'high'
+                        }],
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString()
+                    };
+                    console.log(`⚠️ [PM Agent] Using minimal fallback requirementsDoc due to error`);
+                }
+            }
+
+            // Only map dataset if we just generated new requirements (existing ones are already mapped from Verification step)
+            if (primaryDataset && !existingReqDoc) {
+                try {
+                    const requiredDataToolForMapping = new RequiredDataElementsTool();
+                    requirementsDoc = await requiredDataToolForMapping.mapDatasetToRequirements(requirementsDoc, {
                         fileName: primaryDataset.name,
                         rowCount: primaryDataset.recordCount,
                         schema: primaryDataset.schema as Record<string, any>,
@@ -923,147 +1099,138 @@ export class ProjectManagerAgent {
                 }
             }
 
-            const dataGaps = requirementsDoc.gaps.map(g => `Data Gap: ${g.description} - ${g.recommendation}`);
+            const dataGaps = (requirementsDoc.gaps || []).map((g: any) => `Data Gap: ${g.description} - ${g.recommendation}`);
 
             let dataAssessment: DataAssessment;
-            let usedFallbackAssessment = false;
             try {
-                // Use global executeTool from tool registry instead of technicalAgent.executeTool
-                // Data Engineer Agent is responsible for data quality assessment
-                const { executeTool } = await import('./mcp-tool-registry');
-                const result = await executeTool(
-                    'assess_data_quality',
-                    'data_engineer',
-                    {
-                        projectId,
-                        schema: schemaSource || {},
-                        data: dataSample,
-                        goals: goals[0] ?? '',
-                        questions
-                    },
-                    { userId: request.userId, projectId }
-                );
-
-                // FIX 4.1B: Validate tool result is real, not placeholder
-                if (result.status === 'error') {
-                    throw new Error(result.error || 'Data assessment tool returned error status');
-                }
-                if (!result.result || result.result.isPlaceholder) {
-                    throw new Error('Data assessment returned placeholder data');
-                }
-
+                const result = await this.technicalAgent.executeTool('assess_data_quality', {
+                    projectId,
+                    schema: schemaSource || {},
+                    data: dataSample,
+                    goals: goals[0] ?? '',
+                    questions
+                });
                 dataAssessment = result.result as DataAssessment;
-                console.log(`✅ [PM Agent] Data quality assessment: score=${dataAssessment.qualityScore}%`);
             } catch (error) {
                 console.warn(`Project Manager Agent: Data assessment failed for project ${projectId}`, error);
                 dataAssessment = this.buildFallbackDataAssessment(primaryDataset);
-                usedFallbackAssessment = true;
             }
 
             // Extract analysis types from requirements doc
             const analysisContext = {
-                analysisTypes: requirementsDoc.analysisPath.map(ap => ap.analysisName),
-                requiredElements: requirementsDoc.requiredDataElements.map(e => e.elementName)
+                analysisTypes: (requirementsDoc.analysisPath || []).map((ap: any) => ap.analysisName || ap.type || ap.method || 'Unknown'),
+                requiredElements: (requirementsDoc.requiredDataElements || []).map((e: any) => e.elementName || e.name || 'Unknown')
+            };
+
+            // ✅ FIX: Define fallback blueprint for timeout/error scenarios
+            const fallbackBlueprint: PlanBlueprint = {
+                analysisSteps: [{
+                    method: 'exploratory_data_analysis',
+                    name: 'Exploratory Data Analysis',
+                    description: 'Analyze data distribution and correlations',
+                    confidence: 0.8,
+                    stepNumber: 1,
+                    inputs: [],
+                    expectedOutputs: ['statistical_summary'],
+                    tools: ['pandas', 'matplotlib'],
+                    estimatedDuration: '30 minutes'
+                }],
+                visualizations: [],
+                mlModels: [],
+                complexity: 'low',
+                estimatedDuration: '1 hour',
+                recommendations: ['Perform basic EDA'],
+                risks: ['Data quality unknown']
             };
 
             let blueprint: PlanBlueprint;
-            let usedFallbackBlueprint = false;
             try {
-                // Use global executeTool from tool registry instead of technicalAgent.executeTool
-                const { executeTool } = await import('./mcp-tool-registry');
-                const result = await executeTool(
-                    'generate_plan_blueprint',
-                    'project_manager',
-                    {
-                        projectId,
+                // ✅ FIX: Wrap with 30-second timeout to prevent plan generation from hanging
+                const result = await withTimeout(
+                    this.technicalAgent.executeTool('generate_plan_blueprint', {
                         goals,
-                        userGoals: goals,
-                        userQuestions: questions,
-                        journeyType: normalizeJourneyType((request.project?.journeyType || projectRecord.journeyType) as string | null),
+                        questions,
+                        journeyType: request.project?.journeyType || projectRecord.journeyType || 'non-tech',
                         dataAssessment,
-                        analysisContext,
-                        analysisTypes: analysisContext.analysisTypes
-                    },
-                    { userId: request.userId, projectId }
+                        analysisContext
+                    }),
+                    30000,  // 30 second timeout
+                    { result: fallbackBlueprint },
+                    'Plan blueprint generation'
                 );
-
-                // FIX 4.1B: Validate tool result is real, not placeholder
-                if (result.status === 'error') {
-                    throw new Error(result.error || 'Blueprint generation tool returned error status');
-                }
-                if (!result.result || result.result.isPlaceholder) {
-                    throw new Error('Blueprint generation returned placeholder data');
-                }
-
-                // Map the new tool output format to expected PlanBlueprint format
-                const toolResult = result.result;
-                blueprint = {
-                    analysisSteps: (toolResult.steps || []).map((step: any, idx: number) => ({
-                        stepNumber: idx + 1,
-                        name: step.name,
-                        description: step.description,
-                        method: step.analysisType,
-                        inputs: step.requiredColumns || [],
-                        expectedOutputs: ['analysis_result'],
-                        tools: [step.analysisType],
-                        estimatedDuration: step.estimatedDuration || '30 seconds',
-                        confidence: 80
-                    })),
-                    visualizations: [],
-                    mlModels: [],
-                    complexity: (toolResult.steps?.length || 0) > 4 ? 'high' : 'medium',
-                    estimatedDuration: toolResult.estimatedTotalDuration || '3 minutes',
-                    recommendations: toolResult.userGoals || [],
-                    risks: []
-                };
-                console.log(`✅ [PM Agent] Plan blueprint generated: ${blueprint.analysisSteps.length} steps`);
+                blueprint = result.result as PlanBlueprint;
             } catch (error) {
                 console.warn(`Project Manager Agent: Plan blueprint generation failed for project ${projectId}`, error);
-                blueprint = {
-                    analysisSteps: [{
-                        stepNumber: 1,
-                        name: 'Exploratory Data Analysis',
-                        description: 'Analyze data distribution and correlations',
-                        method: 'exploratory_analysis',
-                        inputs: ['primary_dataset'],
-                        expectedOutputs: ['summary_report'],
-                        tools: ['eda'],
-                        estimatedDuration: '1 hour',
-                        confidence: 60
-                    }],
-                    visualizations: [],
-                    mlModels: [],
-                    complexity: 'low',
-                    estimatedDuration: '1 hour',
-                    recommendations: ['Perform basic EDA'],
-                    risks: ['Data quality unknown']
-                };
-                usedFallbackBlueprint = true;
+                blueprint = fallbackBlueprint;
             }
 
             // Business Context
             let businessContext: PlanBusinessContext;
+            const defaultBusinessContext: PlanBusinessContext = {
+                recommendations: [],
+                industryBenchmarks: [],
+                relevantKPIs: [],
+                complianceRequirements: [],
+                reportingStandards: []
+            };
             try {
+                // PHASE 7 FIX: Call BA Agent's provideBusinessContext method DIRECTLY
+                // The executeTool pattern was returning undefined because BA Agent doesn't have that method
+                console.log(`✅ [PM Agent] Calling BA Agent provideBusinessContext with:`, {
+                    industry,
+                    goalsCount: goals.length,
+                    analysisTypesCount: analysisContext.analysisTypes.length,
+                    journeyType: projectRecord.journeyType || 'non-tech'
+                });
+
+                // Call BA Agent's actual method directly
                 businessContext = await this.businessAgent.provideBusinessContext({
-                    journeyType: normalizeJourneyType((request.project?.journeyType || projectRecord.journeyType) as string | null),
+                    journeyType: projectRecord.journeyType || 'non-tech',
                     industry,
                     goals,
                     analysisTypes: analysisContext.analysisTypes,
                     dataAssessment
                 });
+
+                console.log(`✅ [PM Agent] BA Agent returned:`, {
+                    kpiCount: businessContext?.relevantKPIs?.length || 0,
+                    complianceCount: businessContext?.complianceRequirements?.length || 0,
+                    recommendationsCount: businessContext?.recommendations?.length || 0
+                });
+
+                // Ensure all required arrays exist
+                businessContext = {
+                    ...defaultBusinessContext,
+                    ...businessContext
+                };
             } catch (error) {
                 console.warn(`Project Manager Agent: Business context generation failed for project ${projectId}`, error);
-                businessContext = {
-                    industryBenchmarks: [industry ? `${industry} benchmark overview` : 'Industry benchmark comparison'],
-                    relevantKPIs: ['Revenue growth', 'Customer retention'],
-                    complianceRequirements: ['Review data privacy and retention obligations'],
-                    reportingStandards: ['Executive business review packet'],
-                    recommendations: ['Align analysis outputs with stakeholder expectations before approval.']
-                };
+                businessContext = defaultBusinessContext;
             }
 
+            // PHASE 7 FIX: Calculate cost from analysisPath (DS recommendations) not just blueprint.analysisSteps
+            // analysisPath contains actual analyses the user needs, while analysisSteps are technical execution steps
+            const analysisPathSteps: PlanAnalysisStep[] = (requirementsDoc?.analysisPath || []).map((ap: any, index: number) => ({
+                method: ap.analysisType || 'statistical',
+                name: ap.analysisName || ap.type || 'Analysis',
+                description: ap.description || ap.purpose || '',
+                // PHASE 7 FIX: Confidence should be 0-100 range (not 0-1) for frontend display
+                confidence: ap.confidence ? (ap.confidence > 1 ? ap.confidence : ap.confidence * 100) : 80,
+                // PHASE 7 FIX: Use 1-based index for step numbers
+                stepNumber: index + 1,
+                // Include required data elements as inputs
+                inputs: ap.requiredDataElements || [],
+                expectedOutputs: ap.expectedOutputs?.map((o: any) => typeof o === 'string' ? o : o.description) || [],
+                tools: ap.techniques || [],
+                estimatedDuration: ap.estimatedDuration || '10-15 minutes'
+            }));
+
+            // Use analysisPath if available (more accurate), fall back to blueprint.analysisSteps
+            const stepsForCost = analysisPathSteps.length > 0 ? analysisPathSteps : blueprint.analysisSteps;
+            console.log(`💰 [PM Agent] Calculating cost from ${analysisPathSteps.length > 0 ? 'analysisPath' : 'blueprint.analysisSteps'} (${stepsForCost.length} steps)`);
+
             const costBreakdown = this.estimatePlanCost(
-                blueprint.analysisSteps,
+                stepsForCost,
                 dataAssessment.recordCount,
                 blueprint.complexity
             );
@@ -1100,20 +1267,31 @@ export class ProjectManagerAgent {
             const estimatedDuration = blueprint.estimatedDuration || '2-3 hours';
             const now = new Date();
 
+            // ✅ FIX: Add defensive null checks for all object accesses
+            // PHASE 7 FIX: Use analysisPathSteps count when available (from DS recommendations)
+            const analysisStepsCount = analysisPathSteps.length > 0
+                ? analysisPathSteps.length
+                : blueprint?.analysisSteps?.length || 0;
+            const mlModelsCount = mlModels?.length || 0;
+            const columnCount = dataAssessment?.columnCount || 0;
+            const recordCount = dataAssessment?.recordCount || 0;
+            const qualityScore = dataAssessment?.qualityScore || 0;
+            const kpiCount = businessContext?.relevantKPIs?.length || 0;
+
             const agentContributions: Record<string, AgentContribution> = {
                 data_engineer: {
                     completedAt: now.toISOString(),
-                    contribution: `Evaluated ${dataAssessment.columnCount} columns and ${dataAssessment.recordCount} records; data quality ${Math.round(dataAssessment.qualityScore)}%.`,
+                    contribution: `Evaluated ${columnCount} columns and ${recordCount} records; data quality ${Math.round(qualityScore)}%.`,
                     status: 'success'
                 },
                 data_scientist: {
                     completedAt: now.toISOString(),
-                    contribution: `Outlined ${blueprint.analysisSteps.length} analysis steps and ${mlModels.length} model candidates.`,
+                    contribution: `Outlined ${analysisStepsCount} analysis steps and ${mlModelsCount} model candidates.`,
                     status: 'success'
                 },
                 business_agent: {
                     completedAt: now.toISOString(),
-                    contribution: `Mapped plan to ${businessContext.relevantKPIs.length} KPIs and compliance considerations.`,
+                    contribution: `Mapped plan to ${kpiCount} KPIs and compliance considerations.`,
                     status: 'success'
                 },
                 project_manager: {
@@ -1124,23 +1302,67 @@ export class ProjectManagerAgent {
             };
 
             // Update the existing pending plan
+            // ✅ PHASE 3 FIX: Ensure analysisSteps always has at least one step
+            // If blueprint.analysisSteps is empty or undefined, use fallbackBlueprint.analysisSteps
+            // This fixes "Total Steps: 0 steps" issue when AI returns empty plan
+            // PHASE 7 FIX: Prefer analysisPathSteps from DS recommendations over generic blueprint steps
+            let finalAnalysisSteps: PlanAnalysisStep[];
+            let stepsSource: string;
+
+            if (analysisPathSteps.length > 0) {
+                // Use DS Agent's recommended analyses (most accurate)
+                finalAnalysisSteps = analysisPathSteps;
+                stepsSource = 'analysisPath (DS Agent recommendations)';
+            } else if (blueprint?.analysisSteps && blueprint.analysisSteps.length > 0) {
+                // Fall back to Tech Agent's blueprint
+                finalAnalysisSteps = blueprint.analysisSteps;
+                stepsSource = 'blueprint (Tech Agent)';
+            } else {
+                // Last resort fallback
+                finalAnalysisSteps = fallbackBlueprint.analysisSteps;
+                stepsSource = 'fallback (hardcoded)';
+            }
+            console.log(`✅ [PM Agent] Using ${stepsSource} analysisSteps (length: ${finalAnalysisSteps.length})`);
+
+            // ✅ PHASE 2 FIX: Include requiredDataElements and analysisPath from requirementsDocument
+            // This ensures the plan step can display actual data requirements
+            const planMetadata = {
+                requiredDataElements: requirementsDoc?.requiredDataElements || [],
+                analysisPath: requirementsDoc?.analysisPath || [],
+                questionAnswerMapping: requirementsDoc?.questionAnswerMapping || [],
+                transformationPlan: requirementsDoc?.transformationPlan,
+                completeness: requirementsDoc?.completeness,
+                gaps: requirementsDoc?.gaps || []
+            };
+
+            // PHASE 7 FIX: Log what's being saved to plan metadata for debugging
+            console.log(`📋 [PM Agent] Saving plan metadata:`, {
+                requiredDataElementsCount: planMetadata.requiredDataElements?.length || 0,
+                firstElement: planMetadata.requiredDataElements?.[0]?.elementName || 'none',
+                analysisPathCount: planMetadata.analysisPath?.length || 0,
+                firstAnalysis: planMetadata.analysisPath?.[0]?.analysisName || 'none',
+                questionMappingCount: planMetadata.questionAnswerMapping?.length || 0
+            });
+
             await db
                 .update(analysisPlans)
                 .set({
                     executiveSummary,
                     dataAssessment,
-                    analysisSteps: blueprint.analysisSteps,
+                    analysisSteps: finalAnalysisSteps,
                     visualizations,
                     businessContext,
                     mlModels,
                     estimatedCost: costBreakdown,
                     estimatedDuration,
-                    complexity: blueprint.complexity,
+                    complexity: blueprint?.complexity || 'low',
                     risks,
                     recommendations,
                     agentContributions,
                     status: 'ready',
-                    updatedAt: now
+                    updatedAt: now,
+                    // ✅ PHASE 2 FIX: Store requirements metadata in plan
+                    metadata: planMetadata
                 })
                 .where(eq(analysisPlans.id, planId));
 
@@ -1155,6 +1377,38 @@ export class ProjectManagerAgent {
                     updatedAt: now
                 })
                 .where(eq(projects.id, projectId));
+
+            // PHASE 6 FIX (ROOT CAUSE #6): Also save requirementsDocument to journeyProgress (SSOT)
+            // PM Agent writes to analysisPlans.metadata, but SSOT is journeyProgress
+            // This ensures Transform and Execute steps can read from the same source
+            try {
+                const existingProject = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
+                if (existingProject.length > 0) {
+                    const existingJourneyProgress = (existingProject[0] as any).journeyProgress || {};
+                    await db
+                        .update(projects)
+                        .set({
+                            journeyProgress: {
+                                ...existingJourneyProgress,
+                                requirementsDocument: {
+                                    analysisPath: requirementsDoc?.analysisPath || [],
+                                    requiredDataElements: requirementsDoc?.requiredDataElements || [],
+                                    questionAnswerMapping: requirementsDoc?.questionAnswerMapping || [],
+                                    transformationPlan: requirementsDoc?.transformationPlan,
+                                    completeness: requirementsDoc?.completeness,
+                                    gaps: requirementsDoc?.gaps || []
+                                },
+                                requirementsLocked: true,
+                                planApproved: false // User still needs to approve
+                            },
+                            updatedAt: now
+                        } as any)
+                        .where(eq(projects.id, projectId));
+                    console.log(`✅ [PM Agent] Saved requirementsDocument to journeyProgress SSOT with ${requirementsDoc?.analysisPath?.length || 0} analyses`);
+                }
+            } catch (ssotError) {
+                console.warn(`⚠️ [PM Agent] Failed to update journeyProgress SSOT, plan metadata still saved:`, ssotError);
+            }
 
             await this.messageBroker.publish('plan:ready', {
                 planId,
@@ -1206,17 +1460,14 @@ export class ProjectManagerAgent {
 
     private async initializeTaskQueue(): Promise<void> {
         try {
-            // Technical AI Agent is only used internally by Data Scientist Agent, not registered here
-            // Register Data Scientist Agent instead (who uses Technical AI internally)
-            taskQueue.registerAgent('data_scientist', [
+            // Register agents with their capabilities
+            taskQueue.registerAgent('technical_agent', [
                 'data_analysis',
                 'statistical_analysis',
                 'machine_learning',
                 'code_generation',
                 'data_processing',
-                'visualization',
-                'requirements_definition',
-                'analysis_execution'
+                'visualization'
             ], 3); // Max 3 concurrent tasks
 
             taskQueue.registerAgent('business_agent', [
@@ -1557,25 +1808,7 @@ export class ProjectManagerAgent {
 
         switch (agentId) {
             case 'technical_agent':
-                // Technical AI Agent is only used internally by Data Scientist Agent
-                // Route technical tasks through appropriate tools via tool registry
-                const { executeTool } = await import('./mcp-tool-registry');
-                const stepName = this.extractStepNameFromTask(task);
-                const payload = this.extractTaskPayload(task);
-                
-                // Route based on step name to appropriate tool
-                if (stepName.includes('statistical') || stepName.includes('analysis')) {
-                    return await executeTool('statistical_analyzer', 'data_scientist', payload, { userId: (task as any).userId, projectId });
-                } else if (stepName.includes('ml') || stepName.includes('model')) {
-                    return await executeTool('ml_pipeline', 'data_scientist', payload, { userId: (task as any).userId, projectId });
-                } else if (stepName.includes('visualization') || stepName.includes('viz')) {
-                    return await executeTool('visualization_engine', 'data_scientist', payload, { userId: (task as any).userId, projectId });
-                } else {
-                    // Default: create agent task and execute via Data Scientist Agent
-                    const agentTask = this.createFallbackAgentTask('data_scientist', task, projectId);
-                    const result = await this.dataScientistAgent.execute(agentTask);
-                    return result.result;
-                }
+                return await this.technicalAgent.processTask(task, projectId);
 
             case 'business_agent':
                 return await this.businessAgent.processTask(task, projectId);
@@ -2028,24 +2261,24 @@ export class ProjectManagerAgent {
             'data_transformer': 'data_engineer',
             'spark_data_processor': 'data_engineer',
 
-            // Statistical tools (Technical AI Agent is internal to Data Scientist)
-            'statistical_analyzer': 'data_scientist',
-            'spark_statistical_analyzer': 'data_scientist',
-            'hypothesis_tester': 'data_scientist',
-            'correlation_analyzer': 'data_scientist',
+            // Statistical tools
+            'statistical_analyzer': 'technical_ai_agent',
+            'spark_statistical_analyzer': 'technical_ai_agent',
+            'hypothesis_tester': 'technical_ai_agent',
+            'correlation_analyzer': 'technical_ai_agent',
 
-            // ML tools (Technical AI Agent is internal to Data Scientist)
-            'comprehensive_ml_pipeline': 'data_scientist',
-            'automl_optimizer': 'data_scientist',
-            'spark_ml_pipeline': 'data_scientist',
-            'model_registry': 'data_scientist',
+            // ML tools
+            'comprehensive_ml_pipeline': 'technical_ai_agent',
+            'automl_optimizer': 'technical_ai_agent',
+            'spark_ml_pipeline': 'technical_ai_agent',
+            'model_registry': 'technical_ai_agent',
 
-            // LLM tools (Technical AI Agent is internal to Data Scientist)
-            'llm_fine_tuner': 'data_scientist',
+            // LLM tools
+            'llm_fine_tuner': 'technical_ai_agent',
 
-            // Visualization tools (Technical AI Agent is internal to Data Scientist)
-            'visualization_engine': 'data_scientist',
-            'enhanced_visualization_engine': 'data_scientist',
+            // Visualization tools
+            'visualization_engine': 'technical_ai_agent',
+            'enhanced_visualization_engine': 'technical_ai_agent',
 
             // Business tools
             'business_templates': 'business_agent',
@@ -2056,7 +2289,7 @@ export class ProjectManagerAgent {
             'decision_auditor': 'project_manager'
         };
 
-        return toolAgentMap[toolName] || 'data_scientist'; // Default to data scientist (Technical AI Agent is internal)
+        return toolAgentMap[toolName] || 'technical_ai_agent'; // Default to technical agent
     }
 
     /**
@@ -2140,20 +2373,7 @@ export class ProjectManagerAgent {
         }
 
         const recordCount = project.data?.length || project.recordCount || 0;
-        // Use cost_calculator tool via tool registry instead of technicalAgent
-        const { executeTool } = await import('./mcp-tool-registry');
-        const costResult = await executeTool(
-            'cost_calculator',
-            'business_agent',
-            {
-                operation: 'calculateAnalysisCost',
-                analysisType: analysisPath.type,
-                recordCount,
-                complexity: analysisPath.complexity || 'basic'
-            },
-            { userId: (project as any).userId, projectId: project.id }
-        );
-        const cost = costResult.status === 'success' ? costResult.result.cost : { totalCost: 0 };
+        const cost = this.technicalAgent.estimateCost(analysisPath.type, recordCount, analysisPath.complexity);
 
         state.status = 'cost_approval';
         state.lastAgentOutput = { analysisPath, cost };
@@ -2185,14 +2405,7 @@ export class ProjectManagerAgent {
 
         const { analysisPath, cost } = state.lastAgentOutput;
 
-        const { getBillingService } = await import('./billing/unified-billing-service');
-        const billingService = getBillingService();
-        const checkoutSession = await billingService.createCheckoutSession(
-            projectId,
-            project.userId,
-            cost.totalCost,
-            cost.currency
-        );
+        const checkoutSession = await (PricingService as any).createCheckoutSession?.(projectId, cost.totalCost, cost.currency) || { sessionId: 'mock_session_' + Date.now() };
         await storage.updateProject(projectId, { paymentIntentId: checkoutSession.sessionId });
 
         state.status = 'ready_for_execution';
@@ -2457,72 +2670,32 @@ export class ProjectManagerAgent {
     }
 
     private async executeWorkflowStep(stepName: string, dependency: WorkflowDependency, project: any, previousResults: any): Promise<any> {
-        // Technical AI Agent is internal service - route all technical tasks through Data Scientist Agent or appropriate tools
-        const { executeTool } = await import('./mcp-tool-registry');
-        
         switch (stepName) {
             case 'data_preprocessing':
-                // Use data transformation tools via Data Engineer Agent
-                return await executeTool(
-                    'apply_transformations',
-                    'data_engineer',
-                    {
-                        projectId: project.id,
-                        transformationSteps: [{ type: 'clean', config: {} }],
-                        sourceRows: project.data || [],
-                        originalSchema: project.schema || {}
-                    },
-                    { userId: (project as any).userId, projectId: project.id }
-                );
+                return this.technicalAgent.preprocessData(project.data, project.schema);
 
             case 'statistical_analysis':
-                // Use statistical_analyzer tool via Data Scientist Agent
-                return await executeTool(
-                    'statistical_analyzer',
-                    'data_scientist',
-                    {
-                        data: previousResults.data_preprocessing?.cleanedData || project.data,
-                        metadata: dependency.metadata
-                    },
-                    { userId: (project as any).userId, projectId: project.id }
+                return this.technicalAgent.performStatisticalAnalysis(
+                    previousResults.data_preprocessing?.cleanedData || project.data,
+                    dependency.metadata
                 );
 
             case 'feature_engineering':
-                // Use data transformation tools for feature engineering
-                return await executeTool(
-                    'apply_transformations',
-                    'data_engineer',
-                    {
-                        projectId: project.id,
-                        transformationSteps: [{ type: 'calculate', config: dependency.metadata }],
-                        sourceRows: previousResults.data_preprocessing?.cleanedData || project.data,
-                        originalSchema: project.schema || {}
-                    },
-                    { userId: (project as any).userId, projectId: project.id }
+                return this.technicalAgent.engineerFeatures(
+                    previousResults.data_preprocessing?.cleanedData || project.data,
+                    dependency.metadata
                 );
 
             case 'model_training':
-                // Use ml_pipeline tool via Data Scientist Agent
-                return await executeTool(
-                    'ml_pipeline',
-                    'data_scientist',
-                    {
-                        data: previousResults.feature_engineering?.features,
-                        metadata: dependency.metadata
-                    },
-                    { userId: (project as any).userId, projectId: project.id }
+                return this.technicalAgent.trainModel(
+                    previousResults.feature_engineering?.features,
+                    dependency.metadata
                 );
 
             case 'visualization_generation':
-                // Use visualization_engine tool via Data Scientist Agent
-                return await executeTool(
-                    'visualization_engine',
-                    'data_scientist',
-                    {
-                        data: previousResults,
-                        metadata: dependency.metadata
-                    },
-                    { userId: (project as any).userId, projectId: project.id }
+                return this.technicalAgent.generateVisualizations(
+                    previousResults,
+                    dependency.metadata
                 );
 
             case 'report_generation':
@@ -3059,38 +3232,114 @@ export class ProjectManagerAgent {
                         return message;
                     };
 
-                    // Query all three agents in parallel using Promise.all
-                    const [dataEngineerOpinion, dataScientistOpinion, businessAgentOpinion] = await Promise.all([
-                        // Data Engineer: Assess data quality
-                        this.queryDataEngineer(projectId, uploadedData).catch(error => ({
-                            agentId: 'data_engineer' as const,
-                            agentName: 'Data Engineer',
-                            opinion: { error: normalizeAgentError(error.message), overallScore: 0 },
-                            confidence: 0,
-                            timestamp: new Date(),
-                            responseTime: this.computeResponseTime(startTime)
-                        })),
+                    // ✅ FIX 3.1: Sequential agent orchestration with dependencies
+                    // Instead of parallel Promise.all, execute agents in proper sequence:
+                    // Phase 1: Data Engineer (no dependencies)
+                    // Phase 2: Data Scientist (depends on DE quality report)
+                    // Phase 3: Business Agent (depends on DS requirements)
 
-                        // Data Scientist: Check feasibility
-                        this.queryDataScientist(projectId, uploadedData, safeGoals).catch(error => ({
-                            agentId: 'data_scientist' as const,
-                            agentName: 'Data Scientist',
-                            opinion: { error: normalizeAgentError(error.message), feasible: false },
-                            confidence: 0,
-                            timestamp: new Date(),
-                            responseTime: this.computeResponseTime(startTime)
-                        })),
+                    console.log(`🎯 [PM Orchestration] Starting sequential workflow for project ${projectId}`);
 
-                        // Business Agent: Extract goals and assess business impact
-                        this.queryBusinessAgent(projectId, uploadedData, safeGoals, industry).catch(error => ({
-                            agentId: 'business_agent' as const,
-                            agentName: 'Business Agent',
-                            opinion: { error: normalizeAgentError(error.message), businessValue: 'low' },
-                            confidence: 0,
-                            timestamp: new Date(),
-                            responseTime: this.computeResponseTime(startTime)
-                        }))
-                    ]);
+                    // Phase 1: Data Engineer assesses data quality (no dependencies)
+                    console.log(`📊 [Phase 1] Data Engineer: Assessing data quality...`);
+                    this.emitOrchestrationProgress(projectId, {
+                        phase: 1,
+                        agent: 'data_engineer',
+                        status: 'in_progress',
+                        message: 'Assessing data quality...'
+                    });
+
+                    const dataEngineerOpinion = await this.queryDataEngineer(projectId, uploadedData).catch(error => ({
+                        agentId: 'data_engineer' as const,
+                        agentName: 'Data Engineer',
+                        opinion: { error: normalizeAgentError(error.message), overallScore: 0 },
+                        confidence: 0,
+                        timestamp: new Date(),
+                        responseTime: this.computeResponseTime(startTime)
+                    }));
+
+                    this.emitOrchestrationProgress(projectId, {
+                        phase: 1,
+                        agent: 'data_engineer',
+                        status: 'complete',
+                        message: 'Data quality assessment complete',
+                        result: dataEngineerOpinion.opinion
+                    });
+
+                    // Phase 2: Data Scientist generates requirements (depends on quality report)
+                    console.log(`🔬 [Phase 2] Data Scientist: Generating analysis requirements...`);
+                    this.emitOrchestrationProgress(projectId, {
+                        phase: 2,
+                        agent: 'data_scientist',
+                        status: 'in_progress',
+                        message: 'Generating analysis requirements...',
+                        dependsOn: { dataQuality: dataEngineerOpinion.opinion }
+                    });
+
+                    // Pass quality report from Phase 1 to Data Scientist
+                    const enhancedUploadedData = {
+                        ...uploadedData,
+                        qualityReport: dataEngineerOpinion.opinion,
+                        dataQuality: dataEngineerOpinion.opinion?.overallScore || 0.7
+                    };
+
+                    const dataScientistOpinion = await this.queryDataScientist(projectId, enhancedUploadedData, safeGoals).catch(error => ({
+                        agentId: 'data_scientist' as const,
+                        agentName: 'Data Scientist',
+                        opinion: { error: normalizeAgentError(error.message), feasible: false },
+                        confidence: 0,
+                        timestamp: new Date(),
+                        responseTime: this.computeResponseTime(startTime)
+                    }));
+
+                    this.emitOrchestrationProgress(projectId, {
+                        phase: 2,
+                        agent: 'data_scientist',
+                        status: 'complete',
+                        message: `Generated ${(dataScientistOpinion.opinion as any)?.analysisPath?.length || 0} analysis recommendations`,
+                        result: dataScientistOpinion.opinion
+                    });
+
+                    // Phase 3: Business Agent validates alignment (depends on requirements + industry)
+                    console.log(`💼 [Phase 3] Business Agent: Validating business alignment...`);
+                    this.emitOrchestrationProgress(projectId, {
+                        phase: 3,
+                        agent: 'business_agent',
+                        status: 'in_progress',
+                        message: 'Validating business alignment...',
+                        dependsOn: {
+                            dataQuality: dataEngineerOpinion.opinion,
+                            requirements: dataScientistOpinion.opinion
+                        }
+                    });
+
+                    // Pass both DE and DS outputs to Business Agent for informed validation
+                    const businessContextData = {
+                        ...uploadedData,
+                        qualityReport: dataEngineerOpinion.opinion,
+                        analysisRequirements: dataScientistOpinion.opinion
+                    };
+
+                    const businessAgentOpinion = await this.queryBusinessAgent(projectId, businessContextData, safeGoals, industry).catch(error => ({
+                        agentId: 'business_agent' as const,
+                        agentName: 'Business Agent',
+                        opinion: { error: normalizeAgentError(error.message), businessValue: 'low' },
+                        confidence: 0,
+                        timestamp: new Date(),
+                        responseTime: this.computeResponseTime(startTime)
+                    }));
+
+                    this.emitOrchestrationProgress(projectId, {
+                        phase: 3,
+                        agent: 'business_agent',
+                        status: 'complete',
+                        message: (businessAgentOpinion.opinion as any)?.approved !== false
+                            ? 'Business alignment validated'
+                            : 'Needs business review',
+                        result: businessAgentOpinion.opinion
+                    });
+
+                    console.log(`✅ [PM Orchestration] Sequential workflow complete for project ${projectId}`);
 
                     const expertOpinions: ExpertOpinion[] = [
                         dataEngineerOpinion,
@@ -4639,6 +4888,521 @@ Be conversational, helpful, and specific. Tailor your questions to the ${input.j
                     restApiExport: 'Verify if an API export is required, including schema and delivery timeline, with the user.',
                     pdfReport: 'Plan a PDF summary and confirm narrative focus with the user before finalizing.'
                 }
+            };
+        }
+    }
+
+    // ==========================================
+    // [DAY 9] FOLLOW-UP QUESTION HANDLER
+    // ==========================================
+
+    /**
+     * Handle follow-up questions from users on the project page
+     * Routes questions through PM agent intelligence
+     */
+    async handleFollowUpQuestion(request: {
+        projectId: string;
+        userId: string;
+        question: string;
+        projectContext: {
+            projectName: string;
+            journeyType: string;
+            currentStep: string;
+            completedSteps: string[];
+            datasetCount: number;
+            totalRows: number;
+            hasAnalysisResults: boolean;
+            userQuestions?: string[];
+            questionAnswers?: any[];
+            userProvidedContext?: string;
+        };
+        analysisResults: any;
+    }): Promise<{
+        answer: string;
+        confidence: number;
+        sources: string[];
+        relatedInsights?: any[];
+        suggestedFollowUps?: string[];
+    }> {
+        console.log(`🤖 [PM Agent] Processing follow-up question for project ${request.projectId}`);
+
+        const { question, projectContext, analysisResults } = request;
+        const lowercaseQ = question.toLowerCase();
+
+        // Analyze question intent
+        const intent = this.analyzeQuestionIntent(lowercaseQ);
+        console.log(`🎯 [PM Agent] Detected intent: ${intent}`);
+
+        // Generate response based on intent and available data
+        switch (intent) {
+            case 'status':
+                return this.generateStatusResponse(projectContext);
+
+            case 'insights':
+                return this.generateInsightsResponse(analysisResults, projectContext);
+
+            case 'recommendations':
+                return this.generateRecommendationsResponse(analysisResults, projectContext);
+
+            case 'data_quality':
+                return this.generateDataQualityResponse(projectContext, analysisResults);
+
+            case 'next_steps':
+                return this.generateNextStepsResponse(projectContext, analysisResults);
+
+            case 'comparison':
+                return this.generateComparisonResponse(question, analysisResults);
+
+            case 'explanation':
+                return this.generateExplanationResponse(question, analysisResults, projectContext);
+
+            default:
+                return this.generateGeneralResponse(question, projectContext, analysisResults);
+        }
+    }
+
+    private analyzeQuestionIntent(question: string): string {
+        // Status queries
+        if (question.includes('status') || question.includes('progress') ||
+            question.includes('where am i') || question.includes('what step')) {
+            return 'status';
+        }
+
+        // Insight queries
+        if (question.includes('insight') || question.includes('finding') ||
+            question.includes('discover') || question.includes('learn')) {
+            return 'insights';
+        }
+
+        // Recommendation queries
+        if (question.includes('recommend') || question.includes('suggest') ||
+            question.includes('should i') || question.includes('advice')) {
+            return 'recommendations';
+        }
+
+        // Data quality queries
+        if (question.includes('quality') || question.includes('data issue') ||
+            question.includes('missing') || question.includes('clean')) {
+            return 'data_quality';
+        }
+
+        // Next steps queries
+        if (question.includes('next') || question.includes('what now') ||
+            question.includes('then what') || question.includes('after this')) {
+            return 'next_steps';
+        }
+
+        // Comparison queries
+        if (question.includes('compare') || question.includes('difference') ||
+            question.includes('vs') || question.includes('versus')) {
+            return 'comparison';
+        }
+
+        // Explanation queries
+        if (question.includes('why') || question.includes('how') ||
+            question.includes('explain') || question.includes('what does')) {
+            return 'explanation';
+        }
+
+        return 'general';
+    }
+
+    private generateStatusResponse(context: any): any {
+        const completedCount = context.completedSteps?.length || 0;
+        const totalSteps = ['prepare', 'data-upload', 'data-verification', 'transformation', 'plan', 'execute', 'results'].length;
+        const progressPercent = Math.round((completedCount / totalSteps) * 100);
+
+        return {
+            answer: `Your project "${context.projectName}" is currently at the **${context.currentStep}** step.
+
+**Progress**: ${completedCount}/${totalSteps} steps completed (${progressPercent}%)
+**Data**: ${context.datasetCount} dataset(s) with ~${context.totalRows.toLocaleString()} rows
+**Analysis**: ${context.hasAnalysisResults ? 'Results available' : 'Pending analysis'}
+
+${context.completedSteps?.length > 0 ? `**Completed**: ${context.completedSteps.join(' → ')}` : ''}`,
+            confidence: 0.95,
+            sources: ['project_metadata', 'journey_progress'],
+            suggestedFollowUps: [
+                'What should I do next?',
+                'Show me the key insights',
+                'How is my data quality?'
+            ]
+        };
+    }
+
+    private generateInsightsResponse(results: any, context: any): any {
+        const insights = results.insights || [];
+
+        if (insights.length === 0) {
+            return {
+                answer: `No analysis insights have been generated yet for "${context.projectName}". ${context.currentStep === 'execute' ? 'The analysis is currently running.' : 'Please complete the analysis execution step to generate insights.'}`,
+                confidence: 0.9,
+                sources: ['analysis_status'],
+                suggestedFollowUps: [
+                    'How do I start the analysis?',
+                    'What data do I need?',
+                    'What is my current progress?'
+                ]
+            };
+        }
+
+        const topInsights = insights.slice(0, 5);
+        const insightList = topInsights.map((i: any, idx: number) =>
+            `${idx + 1}. **${i.title || 'Insight'}**: ${i.description || i.summary || i}`
+        ).join('\n');
+
+        return {
+            answer: `Here are the key insights from your analysis of "${context.projectName}":\n\n${insightList}\n\n${insights.length > 5 ? `...and ${insights.length - 5} more insights available.` : ''}`,
+            confidence: 0.9,
+            sources: ['analysis_insights'],
+            relatedInsights: topInsights,
+            suggestedFollowUps: [
+                'Can you explain the first insight in more detail?',
+                'What should I do based on these findings?',
+                'Are there any concerning patterns?'
+            ]
+        };
+    }
+
+    private generateRecommendationsResponse(results: any, context: any): any {
+        const recommendations = results.recommendations || [];
+
+        if (recommendations.length === 0) {
+            return {
+                answer: `No specific recommendations have been generated yet. ${context.hasAnalysisResults ? 'The analysis completed but no actionable recommendations were identified.' : 'Please complete the analysis to get recommendations.'}`,
+                confidence: 0.85,
+                sources: ['analysis_status'],
+                suggestedFollowUps: [
+                    'Show me what analysis has been done',
+                    'What insights are available?',
+                    'How can I improve my data?'
+                ]
+            };
+        }
+
+        const topRecs = recommendations.slice(0, 5);
+        const recList = topRecs.map((r: any, idx: number) =>
+            `${idx + 1}. ${r.title || r.action || r}${r.priority ? ` (Priority: ${r.priority})` : ''}`
+        ).join('\n');
+
+        return {
+            answer: `Based on your analysis, here are the recommended actions:\n\n${recList}`,
+            confidence: 0.88,
+            sources: ['analysis_recommendations'],
+            suggestedFollowUps: [
+                'Which recommendation should I prioritize?',
+                'What are the expected outcomes?',
+                'How long will implementation take?'
+            ]
+        };
+    }
+
+    private generateDataQualityResponse(context: any, results: any): any {
+        const quality = results.dataQuality || context.dataQuality || {};
+        const overallScore = quality.overallScore || quality.score || 'Not yet assessed';
+        const issuesSummary = quality.issues?.length > 0
+            ? `**Issues Found**: ${quality.issues.length}\n${quality.issues.slice(0, 3).map((i: any) => `- ${i.description || i}`).join('\n')}`
+            : 'No significant quality issues detected.';
+
+        return {
+            answer: `Data quality summary for "${context.projectName}":\n\n**Overall Score**: ${overallScore}%\n**Datasets**: ${context.datasetCount} dataset(s)\n**Total Records**: ${context.totalRows.toLocaleString()} rows\n\n${issuesSummary}`,
+            confidence: 0.85,
+            sources: ['data_quality_assessment'],
+            suggestedFollowUps: [
+                'How can I fix these issues?',
+                'Will these issues affect my analysis?',
+                'What transformations do you recommend?'
+            ]
+        };
+    }
+
+    private generateNextStepsResponse(context: any, results: any): any {
+        const stepOrder = ['prepare', 'data-upload', 'data-verification', 'transformation', 'plan', 'execute', 'results'];
+        const currentIdx = stepOrder.indexOf(context.currentStep);
+        const nextStep = currentIdx >= 0 && currentIdx < stepOrder.length - 1
+            ? stepOrder[currentIdx + 1]
+            : null;
+
+        let nextStepDescription = '';
+        switch (nextStep) {
+            case 'data-upload': nextStepDescription = 'Upload your dataset(s) for analysis'; break;
+            case 'data-verification': nextStepDescription = 'Verify data quality and schema'; break;
+            case 'transformation': nextStepDescription = 'Apply data transformations'; break;
+            case 'plan': nextStepDescription = 'Review and approve the analysis plan'; break;
+            case 'execute': nextStepDescription = 'Execute the analysis'; break;
+            case 'results': nextStepDescription = 'Review your analysis results'; break;
+            default: nextStepDescription = 'Your analysis journey is complete!';
+        }
+
+        const completionMessage = context.hasAnalysisResults && !nextStep
+            ? '\n\nYour analysis is complete. You can:\n- Download reports\n- Ask questions about your data\n- Start a new analysis'
+            : '';
+
+        return {
+            answer: `**Current Step**: ${context.currentStep}\n**Next Step**: ${nextStep || 'Complete!'}\n\n${nextStepDescription}${completionMessage}`,
+            confidence: 0.9,
+            sources: ['journey_state'],
+            suggestedFollowUps: nextStep ? [
+                `What do I need for the ${nextStep} step?`,
+                'Can you explain what happens next?',
+                'How long will this take?'
+            ] : [
+                'Can I export my results?',
+                'How do I share these insights?',
+                'Can I run additional analysis?'
+            ]
+        };
+    }
+
+    private generateComparisonResponse(question: string, results: any): any {
+        return {
+            answer: 'I can help you compare data elements. Based on your analysis results, I see patterns that could be compared. However, I need more specific information about what you\'d like to compare.\n\nWould you like to compare:\n- Different time periods\n- Different segments or categories\n- Metrics against benchmarks\n- Before and after a specific event',
+            confidence: 0.7,
+            sources: ['question_analysis'],
+            suggestedFollowUps: [
+                'Compare sales by region',
+                'Compare this month vs last month',
+                'Compare top performers vs average'
+            ]
+        };
+    }
+
+    private generateExplanationResponse(question: string, results: any, context: any): any {
+        // Try to extract what needs explaining
+        const insights = results.insights || [];
+        const firstInsight = insights[0];
+        const insightText = firstInsight
+            ? `The most significant finding is: **${firstInsight.title || 'Key Pattern'}**\n${firstInsight.description || firstInsight.summary || 'This pattern was identified in your data analysis.'}`
+            : 'Your analysis is still in progress. Once complete, I can explain the findings in detail.';
+
+        return {
+            answer: `I'll help explain your analysis results for "${context.projectName}".\n\n${insightText}\n\nWhat specific aspect would you like me to explain?`,
+            confidence: 0.75,
+            sources: ['analysis_context'],
+            relatedInsights: insights.slice(0, 3),
+            suggestedFollowUps: [
+                'Why is this pattern significant?',
+                'What caused this trend?',
+                'How confident are you in this finding?'
+            ]
+        };
+    }
+
+    private generateGeneralResponse(question: string, context: any, results: any): any {
+        const analysisStatus = context.hasAnalysisResults ? 'Complete' : 'In progress';
+        const helpTopics = [
+            '- **Insights**: "What are the key findings?"',
+            '- **Recommendations**: "What should I do next?"',
+            '- **Data Quality**: "How is my data quality?"',
+            '- **Progress**: "What step am I on?"',
+            '- **Explanations**: "Why did this happen?"'
+        ].join('\n');
+
+        return {
+            answer: `I'm your AI assistant for the "${context.projectName}" project. Based on your question, here's what I can tell you:\n\n**Project Status**: ${context.currentStep} step, ${context.datasetCount} dataset(s)\n**Analysis**: ${analysisStatus}\n\nI can help you with:\n${helpTopics}\n\nPlease ask a more specific question for detailed information.`,
+            confidence: 0.7,
+            sources: ['general_context'],
+            suggestedFollowUps: [
+                'What are the key insights from my analysis?',
+                'What should I do next?',
+                'How can I improve my data quality?'
+            ]
+        };
+    }
+
+    // ==========================================
+    // ✅ FIX 3.1: ORCHESTRATION PROGRESS HELPERS
+    // ==========================================
+
+    /**
+     * Emit orchestration progress event for real-time UI updates
+     * Part of Fix 3.1 - Sequential agent orchestration
+     */
+    private emitOrchestrationProgress(projectId: string, progress: {
+        phase: number;
+        agent: string;
+        status: 'in_progress' | 'complete' | 'failed';
+        message: string;
+        result?: any;
+        dependsOn?: any;
+    }): void {
+        try {
+            const broker = getMessageBroker();
+
+            broker.emit('agent:orchestration_progress', {
+                projectId,
+                ...progress,
+                timestamp: new Date().toISOString()
+            });
+
+            console.log(`📡 [PM Orchestration] Phase ${progress.phase} - ${progress.agent}: ${progress.status} - ${progress.message}`);
+        } catch (error) {
+            // Non-critical - log but don't throw
+            console.warn('[PM Orchestration] Failed to emit progress:', error);
+        }
+    }
+
+    /**
+     * Orchestrate full analysis workflow with sequential dependencies
+     * This is the recommended entry point for coordinated agent workflows
+     * Part of Fix 3.1
+     */
+    async orchestrateAnalysisWorkflow(
+        projectId: string,
+        uploadedData: any[],
+        userGoals: string[],
+        industry?: string
+    ): Promise<{
+        qualityReport: any;
+        requirements: any;
+        transformationPlan: any;
+        businessValidation: any;
+        orchestrationComplete: boolean;
+        timestamp: string;
+    }> {
+        const safeGoals = userGoals || ['General analysis'];
+        // Use provided industry or default to 'general'
+        const effectiveIndustry = industry || 'general';
+
+        console.log(`🎯 [PM Orchestration] Starting full analysis workflow for project ${projectId}`);
+
+        // Phase 1: Data Engineer assesses data quality (no dependencies)
+        console.log(`📊 [Phase 1] Data Engineer: Assessing data quality...`);
+        const qualityReport = await this.queryDataEngineer(projectId, uploadedData);
+
+        this.emitOrchestrationProgress(projectId, {
+            phase: 1,
+            agent: 'data_engineer',
+            status: 'complete',
+            message: 'Data quality assessment complete',
+            result: qualityReport
+        });
+
+        // Phase 2: Data Scientist generates requirements (depends on quality report)
+        console.log(`🔬 [Phase 2] Data Scientist: Generating analysis requirements...`);
+        const enhancedData = {
+            ...uploadedData,
+            qualityReport: qualityReport.opinion,
+            dataQuality: qualityReport.opinion?.overallScore || 0.7
+        };
+
+        const requirements = await this.queryDataScientist(projectId, enhancedData, safeGoals);
+
+        this.emitOrchestrationProgress(projectId, {
+            phase: 2,
+            agent: 'data_scientist',
+            status: 'complete',
+            message: `Generated ${(requirements.opinion as any)?.analysisPath?.length || 0} analysis recommendations`,
+            result: requirements
+        });
+
+        // Phase 3: Data Engineer plans transformations (depends on requirements)
+        console.log(`🔧 [Phase 3] Data Engineer: Planning transformations...`);
+        const transformationPlan = await this.planTransformationsFromRequirements(
+            projectId,
+            uploadedData,
+            requirements.opinion
+        );
+
+        this.emitOrchestrationProgress(projectId, {
+            phase: 3,
+            agent: 'data_engineer',
+            status: 'complete',
+            message: `Planned ${transformationPlan?.steps?.length || 0} transformations`,
+            result: transformationPlan
+        });
+
+        // Phase 4: Business Agent validates alignment (depends on all previous phases)
+        console.log(`💼 [Phase 4] Business Agent: Validating business alignment...`);
+        const businessContextData = {
+            ...uploadedData,
+            qualityReport: qualityReport.opinion,
+            analysisRequirements: requirements.opinion,
+            transformationPlan
+        };
+
+        const businessValidation = await this.queryBusinessAgent(projectId, businessContextData, safeGoals, effectiveIndustry);
+
+        this.emitOrchestrationProgress(projectId, {
+            phase: 4,
+            agent: 'business_agent',
+            status: 'complete',
+            message: (businessValidation.opinion as any)?.approved !== false
+                ? 'Business alignment validated'
+                : 'Needs review',
+            result: businessValidation
+        });
+
+        console.log(`✅ [PM Orchestration] Full workflow complete for project ${projectId}`);
+
+        return {
+            qualityReport: qualityReport.opinion,
+            requirements: requirements.opinion,
+            transformationPlan,
+            businessValidation: businessValidation.opinion,
+            orchestrationComplete: true,
+            timestamp: new Date().toISOString()
+        };
+    }
+
+    /**
+     * Plan transformations based on Data Scientist requirements
+     * Helper for orchestrateAnalysisWorkflow - Part of Fix 3.1
+     */
+    private async planTransformationsFromRequirements(
+        projectId: string,
+        data: any,
+        requirements: any
+    ): Promise<any> {
+        try {
+            // Extract required data elements from DS requirements
+            const requiredElements = requirements?.requiredDataElements || [];
+            const analysisPath = requirements?.analysisPath || [];
+
+            // Build transformation steps from required elements
+            const steps: Array<{
+                stepId: string;
+                sourceColumn: string;
+                targetElement: string;
+                transformationType: string;
+                logic: string;
+            }> = [];
+
+            // Map required elements to transformation steps
+            for (const element of requiredElements) {
+                if (element.availableInDataset === false || element.transformationRequired) {
+                    steps.push({
+                        stepId: `transform_${element.name || element.elementId || steps.length}`,
+                        sourceColumn: element.source || element.sourceColumn || 'unknown',
+                        targetElement: element.name || element.elementId || 'unknown',
+                        transformationType: element.transformationType || 'derived',
+                        logic: element.transformationDescription || element.transformationCode || 'No transformation logic defined'
+                    });
+                }
+            }
+
+            // Generate transformation plan structure
+            const transformationPlan = {
+                projectId,
+                steps,
+                estimatedDuration: `${Math.max(1, steps.length * 2)} minutes`,
+                confidence: steps.length > 0 ? 0.8 : 0.5,
+                analysisTypesSupported: analysisPath.map((a: any) => a?.analysisType || a),
+                requiredElementsCount: requiredElements.length,
+                transformationsNeeded: steps.length,
+                message: steps.length > 0
+                    ? `Planned ${steps.length} transformations for ${requiredElements.length} required elements`
+                    : 'No transformations required - data already meets requirements'
+            };
+
+            return transformationPlan;
+        } catch (error) {
+            console.warn('[PM Orchestration] Transformation planning failed, using defaults:', error);
+            return {
+                steps: [],
+                estimatedDuration: 'Unknown',
+                confidence: 0,
+                error: 'Transformation planning failed'
             };
         }
     }

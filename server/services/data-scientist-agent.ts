@@ -3,7 +3,9 @@ import { AgentHandler, AgentTask, AgentResult, AgentStatus, AgentCapability } fr
 import { TechnicalAIAgent } from './technical-ai-agent';
 import { SparkProcessor } from './spark-processor';
 import { nanoid } from 'nanoid';
+import { normalizeQuestions, standardizeElementName } from '../utils/question-normalizer';
 import type { AnalysisStep, MLModelSpec, VisualizationSpec, DataAssessment } from '@shared/schema';
+import { ChimaridataAI } from '../chimaridata-ai';
 
 // ==========================================
 // CONSULTATION INTERFACES (Multi-Agent Coordination)
@@ -223,7 +225,7 @@ export class DataScientistAgent implements AgentHandler {
             },
             completedAt: new Date()
           };
-        
+
         case 'validate_methodology':
           const validationResult = await this.validateMethodology(
             task.payload.analysisParams,
@@ -241,7 +243,7 @@ export class DataScientistAgent implements AgentHandler {
             },
             completedAt: new Date()
           };
-        
+
         case 'estimate_confidence':
           const confidenceScore = await this.estimateConfidence(
             task.payload.analysisType,
@@ -259,7 +261,7 @@ export class DataScientistAgent implements AgentHandler {
             },
             completedAt: new Date()
           };
-        
+
         // Existing analysis execution methods
         case 'statistical_analysis':
           return await this.performStatisticalAnalysis(task);
@@ -921,12 +923,12 @@ export class DataScientistAgent implements AgentHandler {
    * Check if proposed analysis is feasible with current data
    */
   async checkFeasibility(
-    goals: string[], 
-    dataSchema: any, 
+    goals: string[],
+    dataSchema: any,
     dataQuality: any
   ): Promise<FeasibilityReport> {
     console.log(`🔬 Data Scientist: Checking feasibility for ${goals.length} goals`);
-    
+
     // Handle null/undefined inputs gracefully
     if (!goals || !Array.isArray(goals)) {
       return {
@@ -966,7 +968,7 @@ export class DataScientistAgent implements AgentHandler {
       : [];
     const schemaKeys = schemaEntries.map(([key]) => key);
     const dataSize = schemaKeys.length;
-    
+
     const requiredAnalyses: string[] = [];
     const dataRequirements = {
       met: [] as string[],
@@ -975,20 +977,20 @@ export class DataScientistAgent implements AgentHandler {
     };
     const concerns: string[] = [];
     const recommendations: string[] = [];
-    
+
     // Analyze goals to determine required analyses
     const goalsLower = goals.map(g => g.toLowerCase()).join(' ');
-    
+
     if (goalsLower.includes('segment') || goalsLower.includes('cluster') || goalsLower.includes('group')) {
       requiredAnalyses.push('clustering', 'segmentation');
 
       // Check for segmentation columns
-      const hasSegmentData = schemaKeys.some(col => 
-        col.toLowerCase().includes('segment') || 
+      const hasSegmentData = schemaKeys.some(col =>
+        col.toLowerCase().includes('segment') ||
         col.toLowerCase().includes('category') ||
         col.toLowerCase().includes('group')
       );
-      
+
       if (hasSegmentData) {
         dataRequirements.met.push('segment_column');
       } else {
@@ -996,13 +998,13 @@ export class DataScientistAgent implements AgentHandler {
         recommendations.push('Use RFM analysis to create customer segments from behavioral data');
       }
     }
-    
+
     if (goalsLower.includes('predict') || goalsLower.includes('forecast') || goalsLower.includes('trend')) {
       // Check if it's time series forecasting or general prediction
       const hasTimeData = schemaKeys.some(col =>
         col.toLowerCase().includes('date') || col.toLowerCase().includes('time')
       );
-      
+
       if (hasTimeData && (goalsLower.includes('forecast') || goalsLower.includes('trend'))) {
         // Time series forecasting
         requiredAnalyses.push('time_series_analysis', 'regression');
@@ -1010,30 +1012,30 @@ export class DataScientistAgent implements AgentHandler {
       } else {
         // General prediction/regression
         requiredAnalyses.push('regression');
-        
+
         if (goalsLower.includes('forecast') && !hasTimeData) {
           dataRequirements.missing.push('temporal_data');
           concerns.push('Forecasting typically requires date/time columns for time-based predictions');
         }
       }
     }
-    
+
     if (goalsLower.includes('correlat') || goalsLower.includes('relationship') || goalsLower.includes('impact')) {
       requiredAnalyses.push('correlation_analysis', 'regression_analysis');
-      
+
       const numericColumns = schemaEntries
         .map(([, value]) => value)
-        .filter((col: any) => 
-        col.type === 'number' || col.type === 'integer' || col.type === 'float'
-      ).length;
-      
+        .filter((col: any) =>
+          col.type === 'number' || col.type === 'integer' || col.type === 'float'
+        ).length;
+
       if (numericColumns >= 2) {
         dataRequirements.met.push('numeric_variables');
       } else {
         concerns.push('Correlation analysis requires at least 2 numeric variables');
       }
     }
-    
+
     // Check data quality impact
     let qualityScore: number | undefined;
     if (typeof dataQuality === 'number') {
@@ -1042,12 +1044,12 @@ export class DataScientistAgent implements AgentHandler {
       const qualityObj = dataQuality as { overallScore?: number; score?: number };
       qualityScore = qualityObj.overallScore ?? qualityObj.score;
     }
-    
+
     if (qualityScore !== undefined && qualityScore < 0.5) {
       concerns.push('Critical: Data quality too low for reliable analysis');
       concerns.push('Data quality score must be at least 0.5 for analysis');
       recommendations.push('Perform comprehensive data cleaning before attempting analysis');
-      
+
       // Return early with infeasible status for very poor quality
       return {
         feasible: false,
@@ -1062,21 +1064,21 @@ export class DataScientistAgent implements AgentHandler {
       concerns.push('Low data quality may affect analysis accuracy');
       recommendations.push('Consider data cleaning before analysis');
     }
-    
+
     // Estimate duration based on complexity
-  const estimatedMinutes = requiredAnalyses.length * 5 + schemaKeys.length;
+    const estimatedMinutes = requiredAnalyses.length * 5 + schemaKeys.length;
     const estimatedDuration = `${estimatedMinutes}-${estimatedMinutes + 10} minutes`;
-    
+
     // Determine feasibility
     const feasible = dataRequirements.missing.length === 0 || dataRequirements.canDerive.length > 0;
-    const confidence = feasible ? 
-      (dataRequirements.missing.length === 0 ? 0.90 : 0.85) : 
+    const confidence = feasible ?
+      (dataRequirements.missing.length === 0 ? 0.90 : 0.85) :
       0.50;
-    
+
     if (feasible && requiredAnalyses.length > 0) {
       recommendations.push(`Recommended analyses: ${requiredAnalyses.join(', ')}`);
     }
-    
+
     return {
       feasible,
       confidence,
@@ -1092,11 +1094,11 @@ export class DataScientistAgent implements AgentHandler {
    * Validate proposed analysis methodology
    */
   async validateMethodology(
-    analysisParams: any, 
+    analysisParams: any,
     dataCharacteristics: any
   ): Promise<ValidationResult> {
     console.log(`🔬 Data Scientist: Validating methodology`);
-    
+
     // Handle null/undefined inputs gracefully
     if (!analysisParams || typeof analysisParams !== 'object' || Array.isArray(analysisParams) || typeof analysisParams.type !== 'string') {
       return {
@@ -1120,22 +1122,22 @@ export class DataScientistAgent implements AgentHandler {
         recommendations: ['Please provide valid data characteristics for validation']
       };
     }
-    
+
     const warnings: string[] = [];
     const alternatives: string[] = [];
     let valid = true;
     let confidence = 0.88;
-    
+
     // Handle both rowCount and recordCount
     const recordCount = dataCharacteristics.rowCount || dataCharacteristics.recordCount || 0;
     const columnCount = dataCharacteristics.columnCount || 0;
-    
+
     // Check sample size
     if (recordCount < 30) {
       warnings.push('Small sample size (n < 30) may limit statistical power');
       confidence -= 0.15;
       alternatives.push('Consider collecting more data or using non-parametric tests');
-      
+
       // Add analysis-specific alternatives for small samples
       if (analysisParams.type === 'clustering') {
         alternatives.push('Use simple segmentation based on business rules instead of clustering');
@@ -1145,12 +1147,12 @@ export class DataScientistAgent implements AgentHandler {
         alternatives.push('Consider non-parametric methods like bootstrapping');
       }
     }
-    
+
     // Check for clustering with small datasets
     if (analysisParams.type === 'clustering' && recordCount < 100) {
       warnings.push('Clustering with small datasets may not produce stable segments');
       confidence -= 0.10;
-      
+
       // Add clustering-specific alternatives
       if (alternatives.length === 0) {
         alternatives.push('Use k-means with k=2 or k=3 (fewer clusters for small data)');
@@ -1158,14 +1160,14 @@ export class DataScientistAgent implements AgentHandler {
         alternatives.push('Increase sample size to at least 100 observations');
       }
     }
-    
+
     // Check for time series without sufficient history
     if (analysisParams.type === 'time_series' && recordCount < 24) {
       warnings.push('Insufficient historical data for reliable forecasting');
       alternatives.push('Collect at least 2 years of data for seasonal pattern detection');
       valid = false;
     }
-    
+
     // Check for regression with high dimensionality
     if (analysisParams.type === 'regression' && columnCount > recordCount * 0.1) {
       warnings.push('High feature-to-sample ratio may cause overfitting');
@@ -1174,7 +1176,7 @@ export class DataScientistAgent implements AgentHandler {
       alternatives.push('Use regularization (Ridge/Lasso) to prevent overfitting');
       alternatives.push('Perform feature selection to reduce dimensionality');
     }
-    
+
     return {
       valid,
       confidence: Math.max(0.5, confidence),
@@ -1307,11 +1309,26 @@ export class DataScientistAgent implements AgentHandler {
 
       // Normalize data characteristics (default to conservative assumptions)
       const rawCharacteristics = dataEstimate.characteristics || dataEstimate.dataCharacteristics || {};
+
+      // If datasetMetadata is available, derive characteristics from it
+      let derivedCharacteristics = {};
+      if (params.datasetMetadata && params.datasetMetadata.schema) {
+        const schema = params.datasetMetadata.schema;
+        const types = Object.values(schema).map((meta: any) => meta.type?.toLowerCase() || '');
+
+        derivedCharacteristics = {
+          hasTimeSeries: types.some((t: string) => ['date', 'datetime', 'timestamp'].includes(t)),
+          hasCategories: types.some((t: string) => ['string', 'text', 'varchar', 'char'].includes(t)),
+          hasNumeric: types.some((t: string) => ['number', 'integer', 'float', 'decimal', 'double'].includes(t)),
+          hasText: types.some((t: string) => ['text', 'longtext', 'blob'].includes(t))
+        };
+      }
+
       const dataCharacteristics = {
-        hasTimeSeries: Boolean(rawCharacteristics.hasTimeSeries),
-        hasCategories: Boolean(rawCharacteristics.hasCategories ?? true),
-        hasText: Boolean(rawCharacteristics.hasText),
-        hasNumeric: Boolean(rawCharacteristics.hasNumeric ?? true)
+        hasTimeSeries: Boolean(rawCharacteristics.hasTimeSeries ?? (derivedCharacteristics as any).hasTimeSeries),
+        hasCategories: Boolean(rawCharacteristics.hasCategories ?? (derivedCharacteristics as any).hasCategories ?? true),
+        hasText: Boolean(rawCharacteristics.hasText ?? (derivedCharacteristics as any).hasText),
+        hasNumeric: Boolean(rawCharacteristics.hasNumeric ?? (derivedCharacteristics as any).hasNumeric ?? true)
       };
 
       // Determine the record count from the richest available source
@@ -1329,9 +1346,13 @@ export class DataScientistAgent implements AgentHandler {
 
       const questions = userQuestions.length > 0 ? userQuestions : params.questions || [];
 
+      // Combine questions and goal for comprehensive analysis context
+      const combinedContext = [...questions, analysisGoal].filter(Boolean);
+
       // Reuse existing scoring utilities for consistency with legacy behaviour
-      const questionComplexity = this.analyzeQuestions(questions);
-      const mappedAnalyses = this.mapQuestionsToAnalyses(questions, dataCharacteristics);
+      // Now using combined context to ensure goals are considered in mapping
+      const questionComplexity = this.analyzeQuestions(combinedContext);
+      const mappedAnalyses = this.mapQuestionsToAnalyses(combinedContext, dataCharacteristics);
       const complexity = this.calculateComplexity({
         dataSize: derivedRecordCount,
         questionComplexity,
@@ -1369,14 +1390,47 @@ export class DataScientistAgent implements AgentHandler {
       if (allText.includes('predict') || allText.includes('forecast')) suggestedVisualizations.push('Forecast Curves');
       if (suggestedVisualizations.length === 0) suggestedVisualizations.push('Bar Charts', 'Histograms');
 
-      const estimatedProcessingTime =
-        complexity === 'very_high' ? '10-15 minutes' :
-        complexity === 'high' ? '5-10 minutes' :
-        complexity === 'medium' ? '2-5 minutes' :
-        '1-2 minutes';
-
+      // Calculate more dynamic processing time based on multiple factors
       const uniqueRecommendedAnalyses = Array.from(new Set([...mappedAnalyses, ...heuristicAnalyses]));
       const uniqueSuggestedVisualizations = Array.from(new Set(suggestedVisualizations));
+
+      // Base time calculation
+      let baseMinutes = 1; // Minimum base time
+
+      // Add time per analysis type (some analyses take longer)
+      uniqueRecommendedAnalyses.forEach(analysis => {
+        const analysisLower = analysis.toLowerCase();
+        if (analysisLower.includes('predictive') || analysisLower.includes('modeling')) {
+          baseMinutes += 3;
+        } else if (analysisLower.includes('clustering') || analysisLower.includes('segmentation')) {
+          baseMinutes += 2;
+        } else if (analysisLower.includes('time series') || analysisLower.includes('trend')) {
+          baseMinutes += 1.5;
+        } else if (analysisLower.includes('correlation') || analysisLower.includes('text')) {
+          baseMinutes += 1;
+        } else {
+          baseMinutes += 0.5; // Simple analyses
+        }
+      });
+
+      // Factor in data size
+      if (derivedRecordCount > 50000) {
+        baseMinutes *= 1.5;
+      } else if (derivedRecordCount > 10000) {
+        baseMinutes *= 1.3;
+      } else if (derivedRecordCount > 5000) {
+        baseMinutes *= 1.1;
+      }
+
+      // Factor in number of questions
+      if (questions.length > 5) {
+        baseMinutes *= 1.2;
+      }
+
+      // Round and format as range
+      const minTime = Math.max(1, Math.floor(baseMinutes * 0.8));
+      const maxTime = Math.ceil(baseMinutes * 1.2);
+      const estimatedProcessingTime = `${minTime}-${maxTime} minutes`;
 
       return {
         complexity,
@@ -1439,28 +1493,46 @@ export class DataScientistAgent implements AgentHandler {
     questions: string[];
     journeyType: string;
     dataAssessment: DataAssessment;
+    analysisContext?: {
+      analysisTypes: string[];
+      requiredElements: string[];
+    };
   }): Promise<PlanAnalysisBlueprint> {
     const goals = params.goals || [];
     const questions = params.questions || [];
 
-    const config = await this.recommendAnalysisConfig({
-      dataAnalysis: {
-        estimatedRows: params.dataAssessment.recordCount,
-        dataCharacteristics: {
-          hasTimeSeries: false,
-          hasCategories: params.dataAssessment.columnCount > 0,
-          hasText: false,
-          hasNumeric: true
-        }
-      },
-      userQuestions: questions,
-      analysisGoal: goals.join('; '),
-      journeyType: params.journeyType
-    });
+    // Use injected analysis types if available, otherwise fallback to recommendation engine
+    let analyses: string[] = [];
+    let config: any = {};
 
-    const analyses = (config.recommendedAnalyses || config.analyses || ['Descriptive Statistics'])
-      .map(item => item.trim())
-      .filter(Boolean);
+    if (params.analysisContext?.analysisTypes && params.analysisContext.analysisTypes.length > 0) {
+      analyses = params.analysisContext.analysisTypes;
+      // Mock config for context-driven path
+      config = {
+        confidence: 0.9,
+        estimatedProcessingTime: '2-3 hours',
+        rationale: 'Analysis plan aligned with defined data requirements.'
+      };
+    } else {
+      config = await this.recommendAnalysisConfig({
+        dataAnalysis: {
+          estimatedRows: params.dataAssessment.recordCount,
+          dataCharacteristics: {
+            hasTimeSeries: false,
+            hasCategories: params.dataAssessment.columnCount > 0,
+            hasText: false,
+            hasNumeric: true
+          }
+        },
+        userQuestions: questions,
+        analysisGoal: goals.join('; '),
+        journeyType: params.journeyType
+      });
+
+      analyses = (config.recommendedAnalyses || config.analyses || ['Descriptive Statistics'])
+        .map((item: string) => item.trim())
+        .filter(Boolean);
+    }
 
     const confidenceScore = Math.max(0.6, Math.min(0.95, config.confidence || 0.8));
     const estimatedDuration = config.estimatedProcessingTime || '2-3 hours';
@@ -1504,7 +1576,7 @@ export class DataScientistAgent implements AgentHandler {
     }
 
     const visualizations: VisualizationSpec[] = (config.suggestedVisualizations || [])
-      .map(viz => this.visualizationFromSuggestion(viz));
+      .map((viz: any) => this.visualizationFromSuggestion(viz));
 
     if (visualizations.length === 0) {
       visualizations.push(
@@ -1624,9 +1696,11 @@ export class DataScientistAgent implements AgentHandler {
    * Analyze complexity of user questions
    */
   private analyzeQuestions(questions: string[]): number {
+    // Normalize questions to handle object/string mix (fixes: question.toLowerCase crash)
+    const normalizedQuestions = normalizeQuestions(questions);
     let complexityScore = 0;
 
-    for (const question of questions) {
+    for (const question of normalizedQuestions) {
       const questionLower = question.toLowerCase();
 
       // High complexity indicators
@@ -1667,55 +1741,69 @@ export class DataScientistAgent implements AgentHandler {
     questions: string[],
     dataCharacteristics: any
   ): string[] {
+    // Normalize questions to handle object/string mix (fixes: question.toLowerCase crash)
+    const normalizedQuestions = normalizeQuestions(questions);
     const analyses: Set<string> = new Set();
 
     // Always start with descriptive statistics
-    analyses.add('Descriptive statistics');
+    analyses.add('Descriptive Statistics');
 
-    for (const question of questions) {
+    for (const question of normalizedQuestions) {
       const questionLower = question.toLowerCase();
 
       // Time series analysis
       if (dataCharacteristics.hasTimeSeries &&
-          (questionLower.includes('trend') || questionLower.includes('over time') ||
-           questionLower.includes('change'))) {
-        analyses.add('Trend analysis (engagement over time)');
-        analyses.add('Time series visualization');
+        (questionLower.includes('trend') || questionLower.includes('over time') ||
+          questionLower.includes('change') || questionLower.includes('temporal') ||
+          questionLower.includes('when') || questionLower.includes('date'))) {
+        analyses.add('Time Series Analysis');
+        analyses.add('Trend Analysis');
       }
 
       // Group comparisons
       if (questionLower.includes('compare') || questionLower.includes('each') ||
-          questionLower.includes('team') || questionLower.includes('group')) {
-        analyses.add('Comparative analysis (team benchmarking)');
-        analyses.add('Group-by aggregations');
+        questionLower.includes('team') || questionLower.includes('group') ||
+        questionLower.includes('which')) {
+        analyses.add('Comparative Analysis');
+        analyses.add('Group Analysis');
       }
 
       // Averages and aggregations
-      if (questionLower.includes('average') || questionLower.includes('score')) {
-        analyses.add('Statistical aggregations');
+      if (questionLower.includes('average') || questionLower.includes('score') ||
+        questionLower.includes('mean') || questionLower.includes('median')) {
+        analyses.add('Statistical Aggregation');
       }
 
       // Sentiment / text analysis
       if (questionLower.includes('sentiment') || questionLower.includes('view') ||
-          questionLower.includes('opinion') || questionLower.includes('policy')) {
-        analyses.add('Text analysis (sentiment/views)');
+        questionLower.includes('opinion') || questionLower.includes('policy') ||
+        dataCharacteristics.hasText) {
+        analyses.add('Text Analysis');
       }
 
       // Correlation / relationships
       if (questionLower.includes('correlat') || questionLower.includes('relationship') ||
-          questionLower.includes('impact')) {
-        analyses.add('Correlation analysis');
+        questionLower.includes('impact') || questionLower.includes('affect') ||
+        questionLower.includes('influence')) {
+        analyses.add('Correlation Analysis');
       }
 
       // Predictive modeling
-      if (questionLower.includes('predict') || questionLower.includes('forecast')) {
-        analyses.add('Predictive modeling');
+      if (questionLower.includes('predict') || questionLower.includes('forecast') ||
+        questionLower.includes('future') || questionLower.includes('will')) {
+        analyses.add('Predictive Modeling');
       }
 
       // Clustering / segmentation
       if (questionLower.includes('segment') || questionLower.includes('cluster') ||
-          questionLower.includes('group')) {
-        analyses.add('Clustering/segmentation analysis');
+        questionLower.includes('group') || questionLower.includes('pattern')) {
+        analyses.add('Clustering Analysis');
+      }
+
+      // Count/frequency analysis
+      if (questionLower.includes('how many') || questionLower.includes('count') ||
+        questionLower.includes('number of') || questionLower.includes('total')) {
+        analyses.add('Frequency Analysis');
       }
     }
 
@@ -1777,13 +1865,13 @@ export class DataScientistAgent implements AgentHandler {
     // Data size multiplier
     const sizeMultiplier =
       params.dataSize > 10000 ? 2 :
-      params.dataSize > 1000 ? 1.5 : 1;
+        params.dataSize > 1000 ? 1.5 : 1;
 
     // Complexity multiplier
     const complexityMultiplier =
       params.complexity === 'very_high' ? 2 :
-      params.complexity === 'high' ? 1.5 :
-      params.complexity === 'medium' ? 1.2 : 1;
+        params.complexity === 'high' ? 1.5 :
+          params.complexity === 'medium' ? 1.2 : 1;
 
     const estimatedCost = baseCost * sizeMultiplier * complexityMultiplier;
 
@@ -1890,6 +1978,1410 @@ export class DataScientistAgent implements AgentHandler {
   async shutdown(): Promise<void> {
     console.log('🔬 Data Scientist Agent shutting down...');
     this.activeAnalyses.clear();
+  }
+
+  /**
+   * Core method to answer: "What data do I need to answer these questions and achieve these goals?"
+   * This is the Phase 1 data requirements inference - before any data is uploaded.
+   *
+   * ENHANCED: Each element now includes calculationDefinition with how to calculate/derive the value
+   */
+  async inferRequiredDataElements(params: {
+    userQuestions: string[];
+    userGoals: string[];
+    analysisTypes?: string[];
+  }): Promise<Array<{
+    elementName: string;
+    description: string;
+    dataType: 'numeric' | 'categorical' | 'datetime' | 'text' | 'boolean';
+    purpose: string;
+    required: boolean;
+    derivedFrom?: string;
+    relatedQuestions: string[];
+    // NEW: Calculation definition - HOW to calculate/derive this element
+    calculationDefinition?: {
+      calculationType: 'direct' | 'derived' | 'aggregated' | 'grouped' | 'composite';
+      formula?: {
+        businessDescription: string;
+        componentFields?: string[];
+        aggregationMethod?: 'average' | 'sum' | 'count' | 'min' | 'max' | 'median' | 'weighted_average' | 'custom';
+        pseudoCode?: string;
+      };
+      categorization?: {
+        categoryDescription: string;
+        categories?: Array<{ name: string; rule: string }>;
+      };
+      notes?: string;
+    };
+  }>> {
+    const { userQuestions, userGoals, analysisTypes = [] } = params;
+
+    console.log(`🔬 [Data Scientist] Inferring required data elements for ${userQuestions.length} questions and ${userGoals.length} goals`);
+
+    // ✅ PHASE 3 FIX: Try AI-powered inference first with fallback chain
+    try {
+      const aiElements = await this.inferRequiredDataElementsWithAI(params);
+      if (aiElements && aiElements.length > 0) {
+        console.log(`✅ [DS Agent] AI inference successful: ${aiElements.length} elements identified`);
+        return aiElements;
+      }
+    } catch (aiError) {
+      console.warn(`⚠️ [DS Agent] AI inference failed, falling back to pattern matching:`, aiError);
+    }
+
+    // Fallback to regex-based pattern matching
+    console.log(`🔬 [Data Scientist] Using pattern-based inference (fallback mode)`);
+    console.log(`🔬 [Data Scientist] Each element will include calculationDefinition with how to derive it`);
+
+    const requiredElements: Array<any> = [];
+
+    // Combine goals and questions for context analysis
+    const allText = [...userGoals, ...userQuestions].join(' ').toLowerCase();
+
+    // Always need a unique identifier
+    requiredElements.push({
+      elementName: 'Unique Identifier',
+      description: 'Unique ID for each record in the dataset',
+      dataType: 'text' as const,
+      purpose: 'Uniquely identify and track each record throughout the analysis',
+      required: true,
+      relatedQuestions: [],
+      calculationDefinition: {
+        calculationType: 'direct' as const,
+        formula: {
+          businessDescription: 'Direct mapping from source ID column (e.g., employee_id, record_id, row_number)',
+          pseudoCode: 'SELECT id_column AS unique_identifier FROM source_data'
+        },
+        notes: 'Use existing ID column or generate row numbers if none exists'
+      }
+    });
+
+    // For each question, use AI reasoning to infer what data is needed
+    for (const question of userQuestions) {
+      const questionLower = question.toLowerCase();
+
+      // Temporal data requirements
+      if (/when|date|time|trend|over time|temporal|seasonal|period|year|month|day/i.test(questionLower)) {
+        const existingTemporal = requiredElements.find(e => e.dataType === 'datetime');
+        if (!existingTemporal) {
+          requiredElements.push({
+            elementName: 'Timestamp',
+            description: 'Date and time information for temporal analysis',
+            dataType: 'datetime' as const,
+            purpose: 'Enable time-based analysis, trends, and temporal patterns',
+            required: true,
+            relatedQuestions: [question],
+            calculationDefinition: {
+              calculationType: 'direct' as const,
+              formula: {
+                businessDescription: 'Map from date/time column. Parse various formats (ISO, US, EU) to standardized datetime',
+                pseudoCode: 'PARSE_DATE(source_date_column, format) AS timestamp'
+              },
+              notes: 'Support multiple date formats: YYYY-MM-DD, MM/DD/YYYY, DD-MM-YYYY'
+            }
+          });
+        } else {
+          existingTemporal.relatedQuestions.push(question);
+        }
+      }
+
+      // Who/Which questions - need categorical identifiers
+      const whoMatch = questionLower.match(/who|which\s+([\w\s]+?)(?:\s+are|\s+is|\s+were|\s+was|\?|$)/i);
+      if (whoMatch) {
+        const entity = whoMatch[1]?.trim();
+        if (entity && entity.length > 2 && entity.length < 40) {
+          const entityName = this.capitalizeWords(entity);
+          const existing = requiredElements.find(e => e.elementName.toLowerCase().includes(entity.toLowerCase()));
+          if (!existing) {
+            requiredElements.push({
+              elementName: `${entityName} Identifier`,
+              description: `Identifier or category for ${entityName.toLowerCase()}`,
+              dataType: 'categorical' as const,
+              purpose: `Answer the question: "${question}"`,
+              required: true,
+              relatedQuestions: [question],
+              calculationDefinition: {
+                calculationType: 'direct' as const,
+                categorization: {
+                  categoryDescription: `Categories representing different ${entityName.toLowerCase()} values`,
+                  categories: [] // Will be populated from data
+                },
+                formula: {
+                  businessDescription: `Direct mapping from source column identifying ${entityName.toLowerCase()}`,
+                  pseudoCode: `SELECT ${entity.toLowerCase().replace(/\s+/g, '_')}_column AS ${entityName.toLowerCase().replace(/\s+/g, '_')}_identifier`
+                },
+                notes: `Extract distinct values from source column to populate categories`
+              }
+            });
+          } else {
+            existing.relatedQuestions.push(question);
+          }
+        }
+      }
+
+      // How many/count questions - need the thing being counted
+      const countMatch = questionLower.match(/how\s+many\s+([\w\s]+?)(?:\s+are|\s+is|\s+were|\s+was|\?|$)/i);
+      if (countMatch) {
+        const countedEntity = countMatch[1]?.trim();
+        if (countedEntity && countedEntity.length > 2 && countedEntity.length < 40) {
+          const entityName = this.capitalizeWords(countedEntity);
+          const existing = requiredElements.find(e => e.elementName.toLowerCase().includes(countedEntity.toLowerCase()));
+          if (!existing) {
+            requiredElements.push({
+              elementName: entityName,
+              description: `Count or frequency of ${entityName.toLowerCase()}`,
+              dataType: 'numeric' as const,
+              purpose: `Count items to answer: "${question}"`,
+              required: true,
+              relatedQuestions: [question],
+              calculationDefinition: {
+                calculationType: 'aggregated' as const,
+                formula: {
+                  businessDescription: `Count the number of ${entityName.toLowerCase()} records`,
+                  aggregationMethod: 'count' as const,
+                  pseudoCode: `COUNT(*) WHERE ${countedEntity.toLowerCase().replace(/\s+/g, '_')}_indicator IS NOT NULL`
+                },
+                notes: `Aggregation: Count distinct or total occurrences based on context`
+              }
+            });
+          } else {
+            existing.relatedQuestions.push(question);
+          }
+        }
+      }
+
+      // How much/amount questions - need numeric values
+      const amountMatch = questionLower.match(/how\s+much|what\s+(?:is\s+)?(?:the\s+)?(?:amount|value|price|cost)\s+(?:of\s+)?([\w\s]+?)(?:\?|$)/i);
+      if (amountMatch) {
+        const metric = amountMatch[1]?.trim();
+        if (metric && metric.length > 2 && metric.length < 40) {
+          const metricName = this.capitalizeWords(metric);
+          const existing = requiredElements.find(e => e.elementName.toLowerCase().includes(metric.toLowerCase()));
+          if (!existing) {
+            requiredElements.push({
+              elementName: metricName,
+              description: `Monetary or quantitative value for ${metricName.toLowerCase()}`,
+              dataType: 'numeric' as const,
+              purpose: `Measure amount/value to answer: "${question}"`,
+              required: true,
+              relatedQuestions: [question],
+              calculationDefinition: {
+                calculationType: 'direct' as const,
+                formula: {
+                  businessDescription: `Numeric value representing ${metricName.toLowerCase()}. Map from source numeric column`,
+                  pseudoCode: `CAST(${metric.toLowerCase().replace(/\s+/g, '_')}_column AS NUMERIC) AS ${metricName.toLowerCase().replace(/\s+/g, '_')}`
+                },
+                notes: `Ensure numeric format. Handle currency symbols if present`
+              }
+            });
+          } else {
+            existing.relatedQuestions.push(question);
+          }
+        }
+      }
+
+      // What/average questions - need the metric being averaged
+      const avgMatch = questionLower.match(/(?:what\s+(?:is\s+)?(?:the\s+)?)?average\s+([\w\s]+?)(?:\?|$)/i);
+      if (avgMatch) {
+        const metric = avgMatch[1]?.trim();
+        if (metric && metric.length > 2 && metric.length < 40) {
+          const metricName = this.capitalizeWords(metric);
+          const existing = requiredElements.find(e => e.elementName.toLowerCase().includes(metric.toLowerCase()));
+          if (!existing) {
+            requiredElements.push({
+              elementName: metricName,
+              description: `Metric for calculating average ${metricName.toLowerCase()}`,
+              dataType: 'numeric' as const,
+              purpose: `Calculate average to answer: "${question}"`,
+              required: true,
+              relatedQuestions: [question],
+              calculationDefinition: {
+                calculationType: 'aggregated' as const,
+                formula: {
+                  businessDescription: `Calculate the mean (average) of ${metricName.toLowerCase()} values`,
+                  aggregationMethod: 'average' as const,
+                  pseudoCode: `AVG(${metric.toLowerCase().replace(/\s+/g, '_')}_column) AS avg_${metric.toLowerCase().replace(/\s+/g, '_')}`
+                },
+                notes: `Aggregation over all records or per group if grouping specified`
+              }
+            });
+          } else {
+            existing.relatedQuestions.push(question);
+          }
+        }
+      }
+
+      // Compare/group questions - need grouping variables
+      if (/compare|group\s+by|each\s+|per\s+|by\s+([\w\s]+)/i.test(questionLower)) {
+        const groupMatch = questionLower.match(/(?:compare|group\s+by|each|per|by)\s+([\w\s]+?)(?:\?|,|and|$)/i);
+        if (groupMatch) {
+          const groupVar = groupMatch[1]?.trim();
+          if (groupVar && groupVar.length > 2 && groupVar.length < 40 && !['the', 'a', 'an', 'is', 'are'].includes(groupVar)) {
+            const groupName = this.capitalizeWords(groupVar);
+            const existing = requiredElements.find(e => e.elementName.toLowerCase().includes(groupVar.toLowerCase()));
+            if (!existing) {
+              requiredElements.push({
+                elementName: groupName,
+                description: `Grouping variable for ${groupName.toLowerCase()}`,
+                dataType: 'categorical' as const,
+                purpose: `Enable grouping/comparison to answer: "${question}"`,
+                required: false,
+                relatedQuestions: [question],
+                calculationDefinition: {
+                  calculationType: 'grouped' as const,
+                  categorization: {
+                    categoryDescription: `Distinct groups for ${groupName.toLowerCase()} comparison`,
+                    categories: [] // Will be populated from data
+                  },
+                  formula: {
+                    businessDescription: `Group data by ${groupName.toLowerCase()} for comparative analysis`,
+                    pseudoCode: `GROUP BY ${groupVar.toLowerCase().replace(/\s+/g, '_')}_column`
+                  },
+                  notes: `Extract unique values to determine comparison groups`
+                }
+              });
+            } else {
+              existing.relatedQuestions.push(question);
+            }
+          }
+        }
+      }
+
+      // FIX: Handle "What are the X?" and "What is the X?" patterns (common question format)
+      // This catches questions like "What are the engagement scores?" or "What is the retention rate?"
+      const whatAreMatch = questionLower.match(/what\s+(?:are|is|were|was)\s+(?:the|our|my|your)?\s*([a-z]+(?:\s+[a-z]+){0,3})(?:\?|$)/i);
+      if (whatAreMatch) {
+        const entity = whatAreMatch[1]?.trim();
+        const stopWords = ['the', 'a', 'an', 'is', 'are', 'was', 'were', 'has', 'have', 'main', 'key', 'most', 'best', 'top'];
+        if (entity && entity.length > 2 && entity.length < 50 && !stopWords.includes(entity.split(' ')[0])) {
+          const entityName = this.capitalizeWords(entity);
+          const existing = requiredElements.find(e =>
+            e.elementName.toLowerCase().includes(entity.toLowerCase().substring(0, 10)) ||
+            entity.toLowerCase().includes(e.elementName.toLowerCase().substring(0, 10))
+          );
+          if (!existing) {
+            // Infer data type from entity name
+            const isNumeric = /score|rate|count|number|amount|percent|value|metric|level|index/i.test(entity);
+            const isTemporal = /date|time|period|year|month|day|week/i.test(entity);
+            const dataType = isTemporal ? 'datetime' as const : (isNumeric ? 'numeric' as const : 'categorical' as const);
+
+            // Build calculation definition based on inferred type
+            const calculationDef = {
+              calculationType: isNumeric ? 'derived' as const : 'direct' as const,
+              formula: {
+                businessDescription: isNumeric
+                  ? `Calculate or extract ${entityName.toLowerCase()} value. May require aggregation or formula`
+                  : `Map ${entityName.toLowerCase()} directly from source column`,
+                aggregationMethod: isNumeric ? 'average' as const : undefined,
+                pseudoCode: isNumeric
+                  ? `COALESCE(source_column, computed_value) AS ${entity.toLowerCase().replace(/\s+/g, '_')}`
+                  : `source_column AS ${entity.toLowerCase().replace(/\s+/g, '_')}`
+              },
+              notes: isNumeric
+                ? `May require calculation from component fields. Check for existing metric columns`
+                : `Map from categorical source column`
+            };
+
+            requiredElements.push({
+              elementName: entityName,
+              description: `${entityName} data needed to answer the question`,
+              dataType: dataType,
+              purpose: `Provide ${entityName.toLowerCase()} to answer: "${question}"`,
+              required: true,
+              relatedQuestions: [question],
+              calculationDefinition: calculationDef
+            });
+          } else {
+            existing.relatedQuestions.push(question);
+          }
+        }
+      }
+    }
+
+    // Infer data elements based on analysis types - aligned to specific analysis needs
+    if (analysisTypes.length > 0) {
+      for (const analysisType of analysisTypes) {
+        const analysisLower = analysisType.toLowerCase();
+        const analysisSpecificElements = this.getAnalysisTypeRequirements(analysisType, userQuestions);
+
+        // Add analysis-specific elements if not already present
+        for (const reqElement of analysisSpecificElements) {
+          const exists = requiredElements.find(e =>
+            e.elementName.toLowerCase() === reqElement.elementName.toLowerCase() ||
+            e.purpose.toLowerCase().includes(reqElement.purpose.toLowerCase().substring(0, 20))
+          );
+
+          if (!exists) {
+            requiredElements.push(reqElement);
+          } else {
+            // Merge related questions and mark as required if analysis needs it
+            exists.relatedQuestions = [...new Set([...exists.relatedQuestions, ...reqElement.relatedQuestions])];
+            if (reqElement.required) {
+              exists.required = true;
+            }
+          }
+        }
+      }
+    }
+
+    // Extract key business entities and metrics from goals and questions
+    // This makes elements more specific and relevant
+    const keyEntities = this.extractKeyBusinessEntities([...userGoals, ...userQuestions]);
+
+    for (const entity of keyEntities) {
+      const exists = requiredElements.find(e =>
+        e.elementName.toLowerCase().includes(entity.name.toLowerCase()) ||
+        entity.name.toLowerCase().includes(e.elementName.toLowerCase().substring(0, 10))
+      );
+
+      if (!exists) {
+        requiredElements.push({
+          elementName: entity.name,
+          description: entity.description,
+          dataType: entity.dataType,
+          purpose: entity.purpose,
+          required: entity.required,
+          relatedQuestions: entity.relatedQuestions
+        });
+      } else {
+        // Merge related questions
+        exists.relatedQuestions = [...new Set([...exists.relatedQuestions, ...entity.relatedQuestions])];
+      }
+    }
+
+    // Infer common domain entities from goals
+    for (const goal of userGoals) {
+      const goalLower = goal.toLowerCase();
+
+      // Customer/user analysis
+      if (/customer|user|client|buyer|purchaser/i.test(goalLower)) {
+        const hasCustomer = requiredElements.some(e => /customer|user|client/i.test(e.elementName));
+        if (!hasCustomer) {
+          requiredElements.push({
+            elementName: 'Customer Identifier',
+            description: 'Unique identifier for each customer',
+            dataType: 'categorical' as const,
+            purpose: 'Enable customer-level analysis',
+            required: false,
+            relatedQuestions: []
+          });
+        }
+      }
+
+      // Revenue/financial analysis
+      if (/revenue|sales|income|profit|cost|price|financial/i.test(goalLower)) {
+        const hasRevenue = requiredElements.some(e => /revenue|sales|income|amount/i.test(e.elementName));
+        if (!hasRevenue) {
+          requiredElements.push({
+            elementName: 'Revenue',
+            description: 'Monetary value of revenue or sales',
+            dataType: 'numeric' as const,
+            purpose: 'Enable financial analysis and revenue tracking',
+            required: false,
+            relatedQuestions: []
+          });
+        }
+      }
+
+      // Geographic analysis
+      if (/location|region|country|city|geographic|geo/i.test(goalLower)) {
+        const hasLocation = requiredElements.some(e => /location|region|country|city/i.test(e.elementName));
+        if (!hasLocation) {
+          requiredElements.push({
+            elementName: 'Location',
+            description: 'Geographic location information',
+            dataType: 'categorical' as const,
+            purpose: 'Enable geographic analysis and regional comparisons',
+            required: false,
+            relatedQuestions: []
+          });
+        }
+      }
+    }
+
+    console.log(`✅ [Data Scientist] Identified ${requiredElements.length} required data elements`);
+
+    return requiredElements;
+  }
+
+  /**
+   * AI-powered inference of required data elements using ChimaridataAI
+   * Uses fallback chain: Gemini → OpenAI → Claude
+   * Returns structured data elements with calculation definitions
+   */
+  private async inferRequiredDataElementsWithAI(params: {
+    userQuestions: string[];
+    userGoals: string[];
+    analysisTypes?: string[];
+    datasetSchema?: Record<string, any>;
+  }): Promise<Array<{
+    elementName: string;
+    description: string;
+    dataType: 'numeric' | 'categorical' | 'datetime' | 'text' | 'boolean';
+    purpose: string;
+    required: boolean;
+    relatedQuestions: string[];
+    calculationDefinition?: {
+      calculationType: 'direct' | 'derived' | 'aggregated' | 'grouped' | 'composite';
+      formula?: {
+        businessDescription: string;
+        componentFields?: string[];
+        aggregationMethod?: 'average' | 'sum' | 'count' | 'min' | 'max' | 'median' | 'weighted_average' | 'custom';
+        pseudoCode?: string;
+      };
+      categorization?: {
+        categoryDescription: string;
+        categories?: Array<{ name: string; rule: string }>;
+      };
+      notes?: string;
+    };
+  }>> {
+    const { userQuestions, userGoals, analysisTypes = [], datasetSchema } = params;
+
+    console.log(`🤖 [DS Agent AI] Starting AI-powered element inference...`);
+    console.log(`   Questions: ${userQuestions.length}, Goals: ${userGoals.length}, Analysis Types: ${analysisTypes.length}`);
+
+    const ai = new ChimaridataAI();
+
+    // Build comprehensive prompt for AI inference
+    const schemaDescription = datasetSchema
+      ? Object.entries(datasetSchema).map(([col, info]) => `  - ${col}: ${typeof info === 'object' ? (info as any).type || 'unknown' : info}`).join('\n')
+      : '  (No schema available - infer from questions and goals)';
+
+    const prompt = `You are an expert data scientist. Analyze the following business questions and goals to determine the required data elements for analysis.
+
+## User Questions:
+${userQuestions.map((q, i) => `${i + 1}. ${q}`).join('\n')}
+
+## User Goals:
+${userGoals.map((g, i) => `${i + 1}. ${g}`).join('\n')}
+
+## Planned Analysis Types:
+${analysisTypes.length > 0 ? analysisTypes.map((a, i) => `${i + 1}. ${a}`).join('\n') : '(None specified - infer from questions)'}
+
+## Available Dataset Schema:
+${schemaDescription}
+
+## Your Task:
+Identify ALL data elements required to answer these questions and achieve these goals. For each element, provide:
+1. A clear business-friendly name
+2. The data type needed
+3. How it should be calculated or mapped from source data
+4. Which questions it helps answer
+
+## Response Format (JSON array):
+[
+  {
+    "elementName": "Employee Engagement Score",
+    "description": "Composite metric measuring employee engagement levels",
+    "dataType": "numeric",
+    "purpose": "Measure and compare employee engagement across teams",
+    "required": true,
+    "relatedQuestions": ["What is the average engagement score by department?"],
+    "calculationDefinition": {
+      "calculationType": "derived",
+      "formula": {
+        "businessDescription": "Average of survey response scores for engagement-related questions",
+        "componentFields": ["Q1_Score", "Q2_Score", "Q3_Score"],
+        "aggregationMethod": "average",
+        "pseudoCode": "AVERAGE(Q1_Score, Q2_Score, Q3_Score)"
+      },
+      "notes": "User should identify which survey questions relate to engagement"
+    }
+  }
+]
+
+## Rules:
+1. Return ONLY a valid JSON array - no markdown, no explanation text
+2. Include at least one "Unique Identifier" element
+3. Each element must have calculationDefinition explaining HOW to derive it
+4. Match dataType to one of: numeric, categorical, datetime, text, boolean
+5. calculationType must be one of: direct, derived, aggregated, grouped, composite
+6. aggregationMethod (if applicable) must be one of: average, sum, count, min, max, median, weighted_average, custom
+
+Respond with the JSON array ONLY:`;
+
+    try {
+      const { text, provider } = await ai.generateText({
+        prompt,
+        maxTokens: 4000,
+        temperature: 0.3  // Lower temperature for more consistent structured output
+      });
+
+      console.log(`🤖 [DS Agent AI] Response received from ${provider}`);
+
+      // Parse the JSON response
+      let elements: any[];
+      try {
+        // Clean up response - remove markdown code blocks if present
+        let cleanedText = text.trim();
+        if (cleanedText.startsWith('```json')) {
+          cleanedText = cleanedText.slice(7);
+        } else if (cleanedText.startsWith('```')) {
+          cleanedText = cleanedText.slice(3);
+        }
+        if (cleanedText.endsWith('```')) {
+          cleanedText = cleanedText.slice(0, -3);
+        }
+        cleanedText = cleanedText.trim();
+
+        elements = JSON.parse(cleanedText);
+
+        if (!Array.isArray(elements)) {
+          throw new Error('Response is not an array');
+        }
+      } catch (parseError: any) {
+        console.warn(`⚠️ [DS Agent AI] Failed to parse AI response as JSON:`, parseError.message);
+        console.log(`   Raw response: ${text.substring(0, 500)}...`);
+        throw new Error(`JSON parse failed: ${parseError.message}`);
+      }
+
+      // Validate and normalize elements
+      const validatedElements = elements.map((el: any, idx: number) => {
+        // Ensure required fields
+        if (!el.elementName) {
+          el.elementName = `Element_${idx + 1}`;
+        }
+
+        // Normalize dataType
+        const validDataTypes = ['numeric', 'categorical', 'datetime', 'text', 'boolean'];
+        if (!validDataTypes.includes(el.dataType)) {
+          el.dataType = 'text';  // Default to text
+        }
+
+        // Normalize calculationType
+        if (el.calculationDefinition?.calculationType) {
+          const validCalcTypes = ['direct', 'derived', 'aggregated', 'grouped', 'composite'];
+          if (!validCalcTypes.includes(el.calculationDefinition.calculationType)) {
+            el.calculationDefinition.calculationType = 'direct';
+          }
+        }
+
+        // Normalize aggregationMethod
+        if (el.calculationDefinition?.formula?.aggregationMethod) {
+          const validAggMethods = ['average', 'sum', 'count', 'min', 'max', 'median', 'weighted_average', 'custom'];
+          if (!validAggMethods.includes(el.calculationDefinition.formula.aggregationMethod)) {
+            el.calculationDefinition.formula.aggregationMethod = 'custom';
+          }
+        }
+
+        return {
+          elementName: el.elementName || `Element_${idx + 1}`,
+          description: el.description || `Data element for analysis`,
+          dataType: el.dataType as 'numeric' | 'categorical' | 'datetime' | 'text' | 'boolean',
+          purpose: el.purpose || 'Enable analysis',
+          required: el.required !== false,  // Default to true
+          relatedQuestions: Array.isArray(el.relatedQuestions) ? el.relatedQuestions : [],
+          calculationDefinition: el.calculationDefinition || {
+            calculationType: 'direct' as const,
+            notes: 'Direct mapping from source column'
+          }
+        };
+      });
+
+      // Ensure we have at least a unique identifier
+      const hasUniqueId = validatedElements.some(el =>
+        /unique.*id|identifier|record.*id|primary.*key/i.test(el.elementName)
+      );
+
+      if (!hasUniqueId) {
+        validatedElements.unshift({
+          elementName: 'Unique Identifier',
+          description: 'Unique ID for each record in the dataset',
+          dataType: 'text' as const,
+          purpose: 'Uniquely identify and track each record throughout the analysis',
+          required: true,
+          relatedQuestions: [],
+          calculationDefinition: {
+            calculationType: 'direct' as const,
+            formula: {
+              businessDescription: 'Direct mapping from source ID column (e.g., employee_id, record_id, row_number)',
+              pseudoCode: 'SELECT id_column AS unique_identifier FROM source_data'
+            },
+            notes: 'Use existing ID column or generate row numbers if none exists'
+          }
+        });
+      }
+
+      console.log(`✅ [DS Agent AI] Successfully inferred ${validatedElements.length} elements using ${provider}`);
+      return validatedElements;
+
+    } catch (aiError: any) {
+      console.error(`❌ [DS Agent AI] AI inference failed:`, aiError.message);
+      throw aiError;  // Let caller handle fallback to regex
+    }
+  }
+
+  /**
+   * Get required data elements for specific analysis types
+   * Aligns data requirements to the exact needs of each analysis
+   */
+  private getAnalysisTypeRequirements(analysisType: string, userQuestions: string[]): Array<{
+    elementName: string;
+    description: string;
+    dataType: 'numeric' | 'categorical' | 'datetime' | 'text' | 'boolean';
+    purpose: string;
+    required: boolean;
+    relatedQuestions: string[];
+  }> {
+    const elements: any[] = [];
+    const analysisLower = analysisType.toLowerCase();
+    const relevantQuestions = userQuestions.filter(q =>
+      this.isQuestionRelevantToAnalysis(q, analysisType)
+    );
+
+    // Descriptive/Exploratory Analysis - with domain-specific naming
+    if (/descriptive|exploratory|summary|overview|understand/i.test(analysisLower)) {
+      // Check for domain context from user questions to generate meaningful element names
+      const questionContext = userQuestions.join(' ').toLowerCase();
+      const isEmployeeAnalysis = /employee|staff|worker|hr|engagement|workforce|turnover/i.test(questionContext);
+      const isSurveyAnalysis = /survey|feedback|response|satisfaction|opinion|questionnaire/i.test(questionContext);
+      const isCustomerAnalysis = /customer|client|buyer|user|consumer/i.test(questionContext);
+      const isFinancialAnalysis = /revenue|sales|profit|cost|financial|budget/i.test(questionContext);
+
+      if (isEmployeeAnalysis) {
+        elements.push({
+          elementName: 'Employee Engagement Score',
+          description: 'Composite metric measuring employee engagement levels',
+          dataType: 'numeric' as const,
+          purpose: 'Measure and compare employee engagement across teams/departments',
+          required: true,
+          relatedQuestions: relevantQuestions,
+          // DS Agent defines HOW this should be calculated
+          calculationDefinition: {
+            calculationType: 'derived' as const,
+            formula: {
+              businessDescription: 'Average of survey response scores (e.g., Q1, Q2, Q3) that measure engagement-related factors like satisfaction, motivation, and commitment',
+              componentFields: ['survey_scores', 'engagement_questions'],
+              aggregationMethod: 'average' as const,
+              pseudoCode: 'AVERAGE(Q1_Score, Q2_Score, Q3_Score, ...engagement_related_questions)'
+            },
+            comparisonGroups: {
+              groupingField: 'Department',
+              comparisonType: 'between_groups' as const
+            },
+            notes: 'User should identify which survey questions relate to engagement and specify the averaging method'
+          }
+        });
+        elements.push({
+          elementName: 'Employee Identifier',
+          description: 'Unique employee ID for tracking individual responses',
+          dataType: 'categorical' as const,
+          purpose: 'Track and link employee data across analyses',
+          required: true,
+          relatedQuestions: relevantQuestions,
+          calculationDefinition: {
+            calculationType: 'direct' as const,
+            notes: 'Direct mapping to employee ID column'
+          }
+        });
+        elements.push({
+          elementName: 'Department/Team',
+          description: 'Organizational unit for grouping employees',
+          dataType: 'categorical' as const,
+          purpose: 'Enable department-level comparison and aggregation',
+          required: false,
+          relatedQuestions: relevantQuestions,
+          calculationDefinition: {
+            calculationType: 'grouped' as const,
+            comparisonGroups: {
+              comparisonType: 'between_groups' as const
+            },
+            notes: 'Used as grouping variable for comparative analysis between departments'
+          }
+        });
+        elements.push({
+          elementName: 'Manager/Leader Identifier',
+          description: 'Reference to employee manager for hierarchy analysis',
+          dataType: 'categorical' as const,
+          purpose: 'Analyze manager impact on engagement and team dynamics',
+          required: false,
+          relatedQuestions: relevantQuestions,
+          calculationDefinition: {
+            calculationType: 'direct' as const,
+            notes: 'Direct mapping to manager ID or name column'
+          }
+        });
+      } else if (isSurveyAnalysis) {
+        elements.push({
+          elementName: 'Survey Response Score',
+          description: 'Individual survey response value or rating',
+          dataType: 'numeric' as const,
+          purpose: 'Calculate average scores, distributions, and trends from survey data',
+          required: true,
+          relatedQuestions: relevantQuestions,
+          calculationDefinition: {
+            calculationType: 'aggregated' as const,
+            formula: {
+              businessDescription: 'Average or sum of numeric survey response values',
+              aggregationMethod: 'average' as const,
+              pseudoCode: 'AVERAGE(response_column) or SUM(response_column)'
+            },
+            notes: 'Map to the column containing numeric survey scores (1-5, 1-10, etc.)'
+          }
+        });
+        elements.push({
+          elementName: 'Respondent Identifier',
+          description: 'Unique respondent ID for tracking survey responses',
+          dataType: 'categorical' as const,
+          purpose: 'Track and link respondent data across multiple surveys',
+          required: true,
+          relatedQuestions: relevantQuestions,
+          calculationDefinition: {
+            calculationType: 'direct' as const,
+            notes: 'Direct mapping to respondent/user ID column'
+          }
+        });
+        elements.push({
+          elementName: 'Survey Category',
+          description: 'Topic or question category within the survey',
+          dataType: 'categorical' as const,
+          purpose: 'Group survey questions by theme for category-level analysis',
+          required: false,
+          relatedQuestions: relevantQuestions,
+          calculationDefinition: {
+            calculationType: 'grouped' as const,
+            categorization: {
+              categoryDescription: 'Survey questions grouped by theme (e.g., Work Environment, Leadership, Growth)',
+              categories: []
+            },
+            notes: 'Map to question category column or derive from question text'
+          }
+        });
+      } else if (isCustomerAnalysis) {
+        elements.push({
+          elementName: 'Customer Satisfaction Score',
+          description: 'Customer satisfaction metric (e.g., CSAT, NPS)',
+          dataType: 'numeric' as const,
+          purpose: 'Measure customer satisfaction and loyalty metrics',
+          required: true,
+          relatedQuestions: relevantQuestions,
+          calculationDefinition: {
+            calculationType: 'derived' as const,
+            formula: {
+              businessDescription: 'Customer satisfaction score calculated from survey responses or transaction data',
+              aggregationMethod: 'average' as const,
+              pseudoCode: 'For NPS: (Promoters% - Detractors%); For CSAT: AVERAGE(satisfaction_ratings)'
+            },
+            notes: 'Common calculations: NPS (9-10 are promoters, 0-6 are detractors), CSAT (average of ratings)'
+          }
+        });
+        elements.push({
+          elementName: 'Customer Identifier',
+          description: 'Unique customer ID for tracking',
+          dataType: 'categorical' as const,
+          purpose: 'Track individual customer behavior and preferences',
+          required: true,
+          relatedQuestions: relevantQuestions
+        });
+      } else if (isFinancialAnalysis) {
+        elements.push({
+          elementName: 'Financial Amount',
+          description: 'Monetary value for financial analysis',
+          dataType: 'numeric' as const,
+          purpose: 'Calculate financial totals, averages, and trends',
+          required: true,
+          relatedQuestions: relevantQuestions
+        });
+        elements.push({
+          elementName: 'Transaction Category',
+          description: 'Category of financial transaction',
+          dataType: 'categorical' as const,
+          purpose: 'Enable category-level financial breakdowns',
+          required: false,
+          relatedQuestions: relevantQuestions
+        });
+      } else {
+        // Generic fallback for unrecognized domains
+        elements.push({
+          elementName: 'Primary Metric',
+          description: 'Main quantitative measure for descriptive statistics',
+          dataType: 'numeric' as const,
+          purpose: `Calculate summary statistics (mean, median, std dev) for ${analysisType}`,
+          required: true,
+          relatedQuestions: relevantQuestions
+        });
+        elements.push({
+          elementName: 'Grouping Variable',
+          description: 'Categorical variable for grouping and comparison',
+          dataType: 'categorical' as const,
+          purpose: `Enable group-by analysis and comparisons in ${analysisType}`,
+          required: false,
+          relatedQuestions: relevantQuestions
+        });
+      }
+    }
+
+    // Time-Series/Trend Analysis
+    if (/time.*series|trend|forecast|temporal|seasonal|predict.*future/i.test(analysisLower)) {
+      elements.push({
+        elementName: 'Date/Time',
+        description: 'Timestamp for chronological ordering',
+        dataType: 'datetime' as const,
+        purpose: `Track temporal patterns and trends for ${analysisType}`,
+        required: true,
+        relatedQuestions: relevantQuestions
+      });
+      elements.push({
+        elementName: 'Time-Series Value',
+        description: 'Numeric value to track over time',
+        dataType: 'numeric' as const,
+        purpose: `Measure change over time for ${analysisType}`,
+        required: true,
+        relatedQuestions: relevantQuestions
+      });
+      if (/seasonal/i.test(analysisLower)) {
+        elements.push({
+          elementName: 'Seasonal Indicator',
+          description: 'Month, quarter, or season identifier',
+          dataType: 'categorical' as const,
+          purpose: 'Identify seasonal patterns and cycles',
+          required: false,
+          relatedQuestions: relevantQuestions
+        });
+      }
+    }
+
+    // Correlation/Relationship Analysis
+    if (/correlation|relationship|association|depends?.*on/i.test(analysisLower)) {
+      const numericCount = 2; // Need at least 2 variables
+      elements.push({
+        elementName: 'Independent Variable',
+        description: 'Predictor or explanatory variable',
+        dataType: 'numeric' as const,
+        purpose: `Identify relationships and correlations in ${analysisType}`,
+        required: true,
+        relatedQuestions: relevantQuestions
+      });
+      elements.push({
+        elementName: 'Dependent Variable',
+        description: 'Outcome or response variable',
+        dataType: 'numeric' as const,
+        purpose: `Measure correlation strength in ${analysisType}`,
+        required: true,
+        relatedQuestions: relevantQuestions
+      });
+    }
+
+    // Segmentation/Clustering Analysis
+    if (/segment|cluster|group|pattern.*recognition|customer.*type/i.test(analysisLower)) {
+      elements.push({
+        elementName: 'Clustering Feature 1',
+        description: 'First feature for identifying patterns',
+        dataType: 'numeric' as const,
+        purpose: `Identify natural groupings in ${analysisType}`,
+        required: true,
+        relatedQuestions: relevantQuestions
+      });
+      elements.push({
+        elementName: 'Clustering Feature 2',
+        description: 'Second feature for multi-dimensional segmentation',
+        dataType: 'numeric' as const,
+        purpose: `Enable multi-dimensional clustering in ${analysisType}`,
+        required: true,
+        relatedQuestions: relevantQuestions
+      });
+      elements.push({
+        elementName: 'Entity Identifier',
+        description: 'Unique identifier for entities being segmented',
+        dataType: 'text' as const,
+        purpose: 'Track which entity belongs to which segment',
+        required: true,
+        relatedQuestions: relevantQuestions
+      });
+    }
+
+    // Predictive Modeling/Classification
+    if (/predict|classification|regression|model|machine.*learning/i.test(analysisLower)) {
+      elements.push({
+        elementName: 'Target Variable',
+        description: 'Outcome variable to predict',
+        dataType: /classification|categor/i.test(analysisLower) ? 'categorical' as const : 'numeric' as const,
+        purpose: `Target variable for prediction in ${analysisType}`,
+        required: true,
+        relatedQuestions: relevantQuestions
+      });
+      elements.push({
+        elementName: 'Predictor Features',
+        description: 'Input variables for making predictions',
+        dataType: 'numeric' as const,
+        purpose: `Features used by predictive model in ${analysisType}`,
+        required: true,
+        relatedQuestions: relevantQuestions
+      });
+    }
+
+    // Comparative Analysis - with domain-specific naming and calculation definitions
+    if (/compar|contrast|vs\.|versus|difference.*between/i.test(analysisLower)) {
+      const questionContext = userQuestions.join(' ').toLowerCase();
+      const isEmployeeAnalysis = /employee|staff|team|department|manager|leader/i.test(questionContext);
+      const isSurveyAnalysis = /survey|feedback|response|score/i.test(questionContext);
+
+      if (isEmployeeAnalysis) {
+        elements.push({
+          elementName: 'Team/Department',
+          description: 'Organizational unit for comparison',
+          dataType: 'categorical' as const,
+          purpose: 'Compare performance, engagement, or metrics across teams/departments',
+          required: true,
+          relatedQuestions: relevantQuestions,
+          calculationDefinition: {
+            calculationType: 'grouped' as const,
+            comparisonGroups: {
+              groupingField: 'Department',
+              groupValues: ['Team A', 'Team B', 'Team C'],
+              comparisonType: 'between_groups' as const
+            },
+            notes: 'Map to department/team column. Values will be used for grouping and comparison.'
+          }
+        });
+        elements.push({
+          elementName: 'Performance/Engagement Metric',
+          description: 'Score or metric to compare across groups',
+          dataType: 'numeric' as const,
+          purpose: 'Measure and compare team/department performance differences',
+          required: true,
+          relatedQuestions: relevantQuestions,
+          calculationDefinition: {
+            calculationType: 'aggregated' as const,
+            formula: {
+              businessDescription: 'Calculate group averages of engagement/performance scores for comparison',
+              aggregationMethod: 'average' as const,
+              pseudoCode: 'GROUP BY Department; AVERAGE(engagement_score) per group'
+            },
+            comparisonGroups: {
+              comparisonType: 'between_groups' as const
+            },
+            notes: 'Map to numeric score column. Will calculate mean per group for t-test or ANOVA comparison.'
+          }
+        });
+      } else if (isSurveyAnalysis) {
+        elements.push({
+          elementName: 'Response Category',
+          description: 'Categories or segments of respondents to compare',
+          dataType: 'categorical' as const,
+          purpose: 'Compare survey responses across different respondent groups',
+          required: true,
+          relatedQuestions: relevantQuestions,
+          calculationDefinition: {
+            calculationType: 'grouped' as const,
+            comparisonGroups: {
+              comparisonType: 'between_groups' as const
+            },
+            notes: 'Map to column that segments respondents (e.g., age group, department, role)'
+          }
+        });
+        elements.push({
+          elementName: 'Response Score',
+          description: 'Survey score or rating to compare',
+          dataType: 'numeric' as const,
+          purpose: 'Measure differences in satisfaction/feedback across groups',
+          required: true,
+          relatedQuestions: relevantQuestions,
+          calculationDefinition: {
+            calculationType: 'aggregated' as const,
+            formula: {
+              businessDescription: 'Calculate average response score per category for statistical comparison',
+              aggregationMethod: 'average' as const,
+              pseudoCode: 'GROUP BY category; AVERAGE(score) per category'
+            },
+            notes: 'Map to numeric survey response column (e.g., 1-5 rating scale)'
+          }
+        });
+      } else {
+        elements.push({
+          elementName: 'Comparison Groups',
+          description: 'Categories or groups to compare',
+          dataType: 'categorical' as const,
+          purpose: `Define groups for comparison in ${analysisType}`,
+          required: true,
+          relatedQuestions: relevantQuestions,
+          calculationDefinition: {
+            calculationType: 'grouped' as const,
+            comparisonGroups: {
+              comparisonType: 'between_groups' as const
+            },
+            notes: 'Map to categorical column that defines comparison segments'
+          }
+        });
+        elements.push({
+          elementName: 'Comparison Metric',
+          description: 'Metric to compare across groups',
+          dataType: 'numeric' as const,
+          purpose: `Measure differences between groups in ${analysisType}`,
+          required: true,
+          relatedQuestions: relevantQuestions,
+          calculationDefinition: {
+            calculationType: 'aggregated' as const,
+            formula: {
+              businessDescription: 'Numeric value aggregated per group for statistical comparison',
+              aggregationMethod: 'average' as const,
+              pseudoCode: 'GROUP BY group_column; AVERAGE(metric) per group'
+            },
+            notes: 'Map to numeric column to compare across groups'
+          }
+        });
+      }
+    }
+
+    // Group Analysis - with calculation definitions
+    if (/group|segment|cluster|cohort/i.test(analysisLower)) {
+      const questionContext = userQuestions.join(' ').toLowerCase();
+      const isEmployeeAnalysis = /employee|staff|team|department|manager|leader|engagement/i.test(questionContext);
+
+      elements.push({
+        elementName: 'Grouping Variable',
+        description: 'Variable used to define groups or segments',
+        dataType: 'categorical' as const,
+        purpose: 'Define how data should be segmented for group-level analysis',
+        required: true,
+        relatedQuestions: relevantQuestions,
+        calculationDefinition: {
+          calculationType: 'grouped' as const,
+          comparisonGroups: {
+            groupingField: isEmployeeAnalysis ? 'Department' : 'Segment',
+            comparisonType: 'between_groups' as const
+          },
+          notes: 'Map to categorical column that defines natural groupings (e.g., department, region, segment)'
+        }
+      });
+      elements.push({
+        elementName: 'Group Metric',
+        description: 'Numeric metric to analyze within and across groups',
+        dataType: 'numeric' as const,
+        purpose: 'Calculate group-level statistics and compare group performance',
+        required: true,
+        relatedQuestions: relevantQuestions,
+        calculationDefinition: {
+          calculationType: 'aggregated' as const,
+          formula: {
+            businessDescription: 'Calculate summary statistics per group (mean, median, std)',
+            aggregationMethod: 'average' as const,
+            pseudoCode: 'GROUP BY grouping_var; CALCULATE mean, median, std(metric) per group'
+          },
+          notes: 'Map to numeric column. Will compute descriptive statistics per group.'
+        }
+      });
+    }
+
+    // Statistical Aggregation - with calculation definitions
+    if (/statistic|aggregat|summary|average|mean|median/i.test(analysisLower)) {
+      elements.push({
+        elementName: 'Aggregation Metric',
+        description: 'Numeric values to aggregate',
+        dataType: 'numeric' as const,
+        purpose: 'Calculate statistical summaries (mean, median, sum, count)',
+        required: true,
+        relatedQuestions: relevantQuestions,
+        calculationDefinition: {
+          calculationType: 'aggregated' as const,
+          formula: {
+            businessDescription: 'Calculate summary statistics across all data or by groups',
+            componentFields: ['numeric_columns'],
+            aggregationMethod: 'average' as const,
+            pseudoCode: 'CALCULATE mean, median, sum, count, std for numeric columns'
+          },
+          notes: 'Map to numeric columns you want to aggregate'
+        }
+      });
+      elements.push({
+        elementName: 'Aggregation Grouping',
+        description: 'Optional grouping for aggregation',
+        dataType: 'categorical' as const,
+        purpose: 'Group aggregations by category (optional)',
+        required: false,
+        relatedQuestions: relevantQuestions,
+        calculationDefinition: {
+          calculationType: 'grouped' as const,
+          notes: 'Optional: Map to categorical column to get grouped statistics'
+        }
+      });
+    }
+
+    // Correlation Analysis - with calculation definitions
+    if (/correlat|relationship|association|impact|influence/i.test(analysisLower)) {
+      const questionContext = userQuestions.join(' ').toLowerCase();
+      const isEngagementAnalysis = /engagement|retention|satisfaction|turnover/i.test(questionContext);
+
+      elements.push({
+        elementName: isEngagementAnalysis ? 'Engagement Score' : 'Primary Variable',
+        description: isEngagementAnalysis ? 'Employee engagement metric' : 'First variable in correlation analysis',
+        dataType: 'numeric' as const,
+        purpose: 'Measure correlation with other variables',
+        required: true,
+        relatedQuestions: relevantQuestions,
+        calculationDefinition: {
+          calculationType: isEngagementAnalysis ? 'derived' : 'direct' as const,
+          formula: isEngagementAnalysis ? {
+            businessDescription: 'Engagement score calculated from survey responses',
+            aggregationMethod: 'average' as const,
+            pseudoCode: 'AVERAGE(Q1, Q2, Q3, ...) engagement questions'
+          } : undefined,
+          notes: 'Map to numeric column for correlation analysis'
+        }
+      });
+      elements.push({
+        elementName: isEngagementAnalysis ? 'Retention Indicator' : 'Secondary Variable',
+        description: isEngagementAnalysis ? 'Whether employee was retained (0/1 or tenure)' : 'Second variable to correlate with',
+        dataType: 'numeric' as const,
+        purpose: 'Calculate Pearson/Spearman correlation coefficient',
+        required: true,
+        relatedQuestions: relevantQuestions,
+        calculationDefinition: {
+          calculationType: 'direct' as const,
+          formula: {
+            businessDescription: 'Correlation analysis between variables',
+            pseudoCode: 'CORR(var1, var2) - Pearson or Spearman correlation'
+          },
+          notes: 'Map to second numeric column. Will calculate correlation coefficient.'
+        }
+      });
+      elements.push({
+        elementName: isEngagementAnalysis ? 'Satisfaction Score' : 'Additional Variables',
+        description: isEngagementAnalysis ? 'Organization satisfaction rating' : 'Additional variables for multivariate correlation',
+        dataType: 'numeric' as const,
+        purpose: 'Include in correlation matrix',
+        required: false,
+        relatedQuestions: relevantQuestions,
+        calculationDefinition: {
+          calculationType: 'direct' as const,
+          notes: 'Map additional numeric columns to build correlation matrix'
+        }
+      });
+    }
+
+    // Text/Sentiment Analysis - with calculation definitions
+    if (/text|sentiment|opinion|review|comment|feedback|nlp/i.test(analysisLower)) {
+      elements.push({
+        elementName: 'Text Content',
+        description: 'Free text for analysis',
+        dataType: 'text' as const,
+        purpose: `Text data for sentiment/content analysis in ${analysisType}`,
+        required: true,
+        relatedQuestions: relevantQuestions,
+        calculationDefinition: {
+          calculationType: 'derived' as const,
+          formula: {
+            businessDescription: 'Extract sentiment, themes, or keywords from text content',
+            pseudoCode: 'SENTIMENT_SCORE(text) or EXTRACT_KEYWORDS(text) or TOPIC_MODEL(text)'
+          },
+          notes: 'Map to text/comment column. Will apply NLP analysis (sentiment scoring, topic extraction).'
+        }
+      });
+      elements.push({
+        elementName: 'Text Source',
+        description: 'Origin or category of text',
+        dataType: 'categorical' as const,
+        purpose: 'Group texts by source for comparative sentiment analysis',
+        required: false,
+        relatedQuestions: relevantQuestions,
+        calculationDefinition: {
+          calculationType: 'grouped' as const,
+          notes: 'Optional: Map to column that categorizes text sources for group comparison'
+        }
+      });
+    }
+
+    // Churn/Retention Analysis
+    if (/churn|retention|attrition|lifetime.*value|ltv/i.test(analysisLower)) {
+      elements.push({
+        elementName: 'Customer/Entity ID',
+        description: 'Unique identifier for tracking',
+        dataType: 'text' as const,
+        purpose: 'Track individual entities over time for churn analysis',
+        required: true,
+        relatedQuestions: relevantQuestions
+      });
+      elements.push({
+        elementName: 'Activity Date',
+        description: 'Last activity or interaction date',
+        dataType: 'datetime' as const,
+        purpose: 'Measure time since last activity for churn prediction',
+        required: true,
+        relatedQuestions: relevantQuestions
+      });
+      elements.push({
+        elementName: 'Engagement Metrics',
+        description: 'Measures of activity level',
+        dataType: 'numeric' as const,
+        purpose: 'Quantify engagement for churn modeling',
+        required: true,
+        relatedQuestions: relevantQuestions
+      });
+    }
+
+    // Geographic/Spatial Analysis
+    if (/geographic|spatial|location|regional|map|geospatial/i.test(analysisLower)) {
+      elements.push({
+        elementName: 'Location',
+        description: 'Geographic identifier (region, city, coordinates)',
+        dataType: 'categorical' as const,
+        purpose: `Enable geographic analysis in ${analysisType}`,
+        required: true,
+        relatedQuestions: relevantQuestions
+      });
+      elements.push({
+        elementName: 'Location Metric',
+        description: 'Value measured at each location',
+        dataType: 'numeric' as const,
+        purpose: 'Quantify regional patterns and comparisons',
+        required: true,
+        relatedQuestions: relevantQuestions
+      });
+    }
+
+    return elements;
+  }
+
+  /**
+   * Determine if a question is relevant to a specific analysis type
+   */
+  private isQuestionRelevantToAnalysis(question: string, analysisType: string): boolean {
+    const questionLower = question.toLowerCase();
+    const analysisLower = analysisType.toLowerCase();
+
+    // Time-series questions
+    if (/time.*series|trend|forecast/i.test(analysisLower)) {
+      return /when|over time|trend|forecast|temporal|historical|change/i.test(questionLower);
+    }
+
+    // Correlation questions
+    if (/correlation|relationship/i.test(analysisLower)) {
+      return /relationship|correlat|affect|impact|influence|depend/i.test(questionLower);
+    }
+
+    // Segmentation questions
+    if (/segment|cluster/i.test(analysisLower)) {
+      return /group|segment|type|pattern|similar|cluster/i.test(questionLower);
+    }
+
+    // Predictive questions
+    if (/predict|forecast|classification/i.test(analysisLower)) {
+      return /predict|forecast|will|future|likely|probability/i.test(questionLower);
+    }
+
+    // Comparative questions
+    if (/compar/i.test(analysisLower)) {
+      return /compar|versus|vs\.|difference|better|worse/i.test(questionLower);
+    }
+
+    // Default: consider question relevant if it contains analysis keywords
+    return analysisLower.split(' ').some(word =>
+      word.length > 4 && questionLower.includes(word)
+    );
+  }
+
+  /**
+   * Extract key business entities and metrics from user input
+   * Makes data elements more specific and relevant to actual business questions
+   */
+  private extractKeyBusinessEntities(texts: string[]): Array<{
+    name: string;
+    description: string;
+    dataType: 'numeric' | 'categorical' | 'datetime' | 'text' | 'boolean';
+    purpose: string;
+    required: boolean;
+    relatedQuestions: string[];
+  }> {
+    const entities: any[] = [];
+    const combinedText = texts.join(' ');
+
+    // Common business metrics and their patterns
+    const metricPatterns = [
+      { patterns: [/revenue|sales|income|earnings/i], name: 'Revenue', dataType: 'numeric' as const, purpose: 'Track financial performance and sales' },
+      { patterns: [/cost|expense|spending/i], name: 'Cost', dataType: 'numeric' as const, purpose: 'Analyze expenses and cost management' },
+      { patterns: [/profit|margin/i], name: 'Profit', dataType: 'numeric' as const, purpose: 'Measure profitability and margins' },
+      { patterns: [/price|pricing|amount\s+paid/i], name: 'Price', dataType: 'numeric' as const, purpose: 'Analyze pricing strategies and payment amounts' },
+      { patterns: [/quantity|volume|units/i], name: 'Quantity', dataType: 'numeric' as const, purpose: 'Track quantities and volumes' },
+      { patterns: [/satisfaction|rating|score/i], name: 'Satisfaction Score', dataType: 'numeric' as const, purpose: 'Measure satisfaction and ratings' },
+      { patterns: [/employee|staff|worker/i], name: 'Employee', dataType: 'categorical' as const, purpose: 'Analyze employee-related metrics' },
+      { patterns: [/department|division|team/i], name: 'Department', dataType: 'categorical' as const, purpose: 'Group and compare by department' },
+      { patterns: [/product|item|sku/i], name: 'Product', dataType: 'categorical' as const, purpose: 'Analyze product performance' },
+      { patterns: [/category|classification|type/i], name: 'Category', dataType: 'categorical' as const, purpose: 'Classify and group data' },
+      { patterns: [/region|location|geography|area/i], name: 'Region', dataType: 'categorical' as const, purpose: 'Geographic analysis and segmentation' },
+      { patterns: [/status|state/i], name: 'Status', dataType: 'categorical' as const, purpose: 'Track status and state changes' },
+      { patterns: [/age|tenure|experience/i], name: 'Age', dataType: 'numeric' as const, purpose: 'Analyze age-related patterns' },
+      { patterns: [/count|number\s+of|total\s+/i], name: 'Count', dataType: 'numeric' as const, purpose: 'Count occurrences and frequencies' },
+    ];
+
+    for (const question of texts) {
+      for (const metricPattern of metricPatterns) {
+        if (metricPattern.patterns.some(p => p.test(question))) {
+          const exists = entities.find(e => e.name === metricPattern.name);
+          if (!exists) {
+            entities.push({
+              name: metricPattern.name,
+              description: `${metricPattern.name} data extracted from: "${question.substring(0, 80)}..."`,
+              dataType: metricPattern.dataType,
+              purpose: metricPattern.purpose,
+              required: true,
+              relatedQuestions: [question]
+            });
+          } else {
+            exists.relatedQuestions.push(question);
+          }
+        }
+      }
+    }
+
+    // Extract specific entities mentioned in questions
+    // Look for patterns like "Which [entity]...", "What [entity]...", etc.
+    for (const text of texts) {
+      const entityMatches = [
+        ...text.matchAll(/(?:which|what|who)\s+([a-z]+(?:\s+[a-z]+){0,2})\s+(?:are|is|has|have|shows|shows)/gi),
+        // FIX: Handle "What are the [entity]?" pattern (common English format)
+        ...text.matchAll(/what\s+(?:are|is|were|was)\s+(?:the|our|my|your)?\s*([a-z]+(?:\s+[a-z]+){0,3})(?:\?|$)/gi),
+        // FIX: Handle "What [entity]?" without are/is (e.g., "What factors influence...")
+        ...text.matchAll(/what\s+([a-z]+(?:\s+[a-z]+){0,2})\s+(?:influence|affect|drive|impact|cause|determine)/gi),
+        // FIX: Handle "How does [entity] affect..." pattern
+        ...text.matchAll(/how\s+(?:does|do|did)\s+([a-z]+(?:\s+[a-z]+){0,2})\s+(?:affect|impact|influence)/gi),
+        ...text.matchAll(/(?:by|per|for\s+each)\s+([a-z]+(?:\s+[a-z]+){0,2})(?:\?|,|\.|\s|$)/gi),
+        ...text.matchAll(/([a-z]+(?:\s+[a-z]+){0,2})\s+(?:performance|analysis|metrics|trends)/gi)
+      ];
+
+      for (const match of entityMatches) {
+        const entity = match[1]?.trim();
+        if (entity && entity.length > 2 && entity.length < 40) {
+          const stopWords = ['the', 'a', 'an', 'is', 'are', 'was', 'were', 'has', 'have', 'will', 'be', 'been'];
+          if (!stopWords.includes(entity.toLowerCase())) {
+            const entityName = this.capitalizeWords(entity);
+            const exists = entities.find(e => e.name.toLowerCase().includes(entity.toLowerCase()));
+            if (!exists) {
+              // Infer data type from context
+              const isNumeric = /count|amount|total|sum|average|number/i.test(entity);
+              const isTemporal = /date|time|period|year|month|day/i.test(entity);
+
+              entities.push({
+                name: entityName,
+                description: `${entityName} information needed for analysis`,
+                dataType: isTemporal ? 'datetime' as const : (isNumeric ? 'numeric' as const : 'categorical' as const),
+                purpose: `Answer questions about ${entityName.toLowerCase()}`,
+                required: false,
+                relatedQuestions: [text]
+              });
+            } else {
+              if (!exists.relatedQuestions.includes(text)) {
+                exists.relatedQuestions.push(text);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return entities;
+  }
+
+  /**
+   * Capitalizes and standardizes element names
+   * Uses the standardizeElementName utility to fix common typos and apply proper casing
+   */
+  private capitalizeWords(str: string): string {
+    // Use the standardizeElementName utility which handles:
+    // - Common typos (e.g., "ofthe" -> "of the")
+    // - Title case capitalization
+    // - Double space removal
+    return standardizeElementName(str);
   }
 
   // Public methods for analysis management

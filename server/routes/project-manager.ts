@@ -4,6 +4,7 @@ import { ensureAuthenticated } from './auth';
 import { db } from '../db';
 import { projectSessions } from '@shared/schema';
 import { eq, and, desc } from 'drizzle-orm';
+import { requiredDataElementsTool } from '../services/tools/required-data-elements-tool';
 
 const router = Router();
 
@@ -186,16 +187,18 @@ router.post('/clarify-goal', ensureAuthenticated, async (req, res) => {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
-    const { sessionId, analysisGoal, businessQuestions, journeyType } = req.body;
+    const { sessionId, projectId, analysisGoal, businessQuestions, journeyType } = req.body;
 
-    if (!sessionId || !analysisGoal) {
+    // FIX: Accept either sessionId or projectId from client
+    const lookupId = sessionId || projectId;
+    if (!lookupId || !analysisGoal) {
       return res.status(400).json({
         success: false,
-        error: 'Session ID and analysis goal are required'
+        error: 'Session ID (or Project ID) and analysis goal are required'
       });
     }
 
-    console.log(`🤖 PM Agent clarifying goal for session ${sessionId}`);
+    console.log(`🤖 PM Agent clarifying goal for ${sessionId ? 'session' : 'project'} ${lookupId}`);
     console.log(`📝 Goal: ${analysisGoal.substring(0, 100)}...`);
 
     // Initialize PM Agent
@@ -242,12 +245,14 @@ router.post('/recommend-datasets', ensureAuthenticated, async (req, res) => {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
-    const { sessionId, analysisGoal, businessQuestions, clarificationAnswers } = req.body;
+    const { sessionId, projectId, analysisGoal, businessQuestions, clarificationAnswers } = req.body;
 
-    if (!sessionId || !analysisGoal) {
+    // FIX: Accept either sessionId or projectId from client
+    const lookupId = sessionId || projectId;
+    if (!lookupId || !analysisGoal) {
       return res.status(400).json({
         success: false,
-        error: 'Session ID and analysis goal are required'
+        error: 'Session ID (or Project ID) and analysis goal are required'
       });
     }
 
@@ -257,20 +262,46 @@ router.post('/recommend-datasets', ensureAuthenticated, async (req, res) => {
     const pmAgent = new ProjectManagerAgent();
     await pmAgent.initialize();
 
-    // Get session to retrieve full context
-    const [session] = await db
-      .select()
-      .from(projectSessions)
-      .where(eq(projectSessions.id, sessionId));
-
-    if (!session || session.userId !== userId) {
-      return res.status(403).json({
-        success: false,
-        error: 'Session not found or access denied'
-      });
+    // FIX: Get session by sessionId OR by projectId
+    let session: any = null;
+    if (sessionId) {
+      // Direct session lookup
+      const [foundSession] = await db
+        .select()
+        .from(projectSessions)
+        .where(eq(projectSessions.id, sessionId));
+      session = foundSession;
+    } else if (projectId) {
+      // Find session by projectId (get most recent for this project)
+      const [foundSession] = await db
+        .select()
+        .from(projectSessions)
+        .where(and(
+          eq(projectSessions.projectId, projectId),
+          eq(projectSessions.userId, userId)
+        ))
+        .orderBy(desc(projectSessions.updatedAt))
+        .limit(1);
+      session = foundSession;
     }
 
-    const prepareData = (session.prepareData as any) || {};
+    // If no session exists for projectId, create minimal context without failing
+    let prepareData: any = {};
+    let journeyType = 'non-tech';
+
+    if (session) {
+      if (session.userId !== userId) {
+        return res.status(403).json({
+          success: false,
+          error: 'Session not found or access denied'
+        });
+      }
+      prepareData = (session.prepareData as any) || {};
+      journeyType = session.journeyType || 'non-tech';
+    } else {
+      // No session found - proceed with provided data (projectId case)
+      console.log(`📋 No session found for project ${projectId}, proceeding with provided data`);
+    }
 
     // Prepare data for multi-agent analysis
     const uploadedData = {
@@ -278,7 +309,7 @@ router.post('/recommend-datasets', ensureAuthenticated, async (req, res) => {
       businessQuestions: businessQuestions || prepareData.businessQuestions || '',
       clarificationAnswers: clarificationAnswers || prepareData.clarificationAnswers || {},
       audience: prepareData.audience || { primaryAudience: 'mixed' },
-      journeyType: session.journeyType,
+      journeyType,  // FIX: Use extracted journeyType variable (handles null session)
       templates: prepareData.selectedTemplates || []
     };
 
@@ -286,6 +317,15 @@ router.post('/recommend-datasets', ensureAuthenticated, async (req, res) => {
     if (businessQuestions) {
       userGoals.push(...businessQuestions.split('\n').filter((q: string) => q.trim()));
     }
+
+    // ✅ PHASE 1: Generate Required Data Elements (before dataset available)
+    console.log('📋 Phase 1: Generating required data elements from goals...');
+    const dataRequirementsDoc = await requiredDataElementsTool.defineRequirements({
+      projectId: projectId || session?.projectId || 'temp_project_id',  // FIX: Use actual projectId when available
+      userGoals,
+      userQuestions: businessQuestions ? businessQuestions.split('\n').filter((q: string) => q.trim()) : []
+    });
+    console.log(`✅ Generated ${dataRequirementsDoc.analysisPath.length} analysis paths with ${dataRequirementsDoc.requiredDataElements.length} required data elements`);
 
     // Coordinate with Business, DE, and DS agents
     console.log(`🔄 Coordinating with Business Agent, Data Engineer, and Data Scientist...`);
@@ -300,14 +340,22 @@ router.post('/recommend-datasets', ensureAuthenticated, async (req, res) => {
     // Generate natural language advice
     const advice = {
       summary: coordination.synthesis.overallAssessment,
-      recommendedDatasets: extractDatasetRecommendations(coordination, uploadedData, safeGoals),
-      dataRequirements: extractDataRequirements(coordination, uploadedData, safeGoals),
-      qualityExpectations: extractQualityExpectations(coordination, uploadedData, safeGoals),
+      recommendedDatasets: extractDatasetRecommendations(coordination, uploadedData, userGoals),
+      dataRequirements: extractDataRequirements(coordination, uploadedData, userGoals),
+      qualityExpectations: extractQualityExpectations(coordination, uploadedData, userGoals),
       naturalLanguageAdvice: generateNaturalLanguageAdvice(coordination, analysisGoal),
       technicalDetails: {
         dataEngineerOpinion: coordination.expertOpinions.find((o: any) => o.agentId === 'data_engineer')?.opinion,
         dataScientistOpinion: coordination.expertOpinions.find((o: any) => o.agentId === 'data_scientist')?.opinion,
         businessAgentOpinion: coordination.expertOpinions.find((o: any) => o.agentId === 'business_agent')?.opinion
+      },
+      // ✅ NEW: Include progressive data requirements mapping
+      dataRequirementsMapping: {
+        documentId: dataRequirementsDoc.documentId,
+        analysisPath: dataRequirementsDoc.analysisPath,
+        requiredDataElements: dataRequirementsDoc.requiredDataElements,
+        status: dataRequirementsDoc.status,
+        completeness: dataRequirementsDoc.completeness
       }
     };
 
@@ -318,7 +366,9 @@ router.post('/recommend-datasets', ensureAuthenticated, async (req, res) => {
         coordinationId: coordination.coordinationId,
         timestamp: coordination.timestamp,
         expertConsensus: coordination.synthesis.expertConsensus
-      }
+      },
+      // ✅ NEW: Return data requirements for user to review immediately
+      dataRequirementsDocument: dataRequirementsDoc
     });
 
   } catch (error: any) {
@@ -637,9 +687,16 @@ router.post('/update-goal-after-clarification', ensureAuthenticated, async (req,
       return res.status(401).json({ error: 'Authentication required' });
     }
 
+    console.log('📝 [PM] Received clarification update request:', {
+      body: req.body,
+      bodyKeys: Object.keys(req.body),
+      hasSessionId: !!req.body.sessionId
+    });
+
     const { sessionId, refinedGoal, answersToQuestions, confirmedUnderstanding } = req.body;
 
     if (!sessionId) {
+      console.error('❌ [PM] SessionId is missing from request body');
       return res.status(400).json({
         success: false,
         error: 'Session ID is required'

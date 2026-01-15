@@ -8,11 +8,11 @@ import { Separator } from "@/components/ui/separator";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { 
-  BarChart3, 
-  LineChart, 
-  PieChart, 
-  ScatterChart, 
+import {
+  BarChart3,
+  LineChart,
+  PieChart,
+  ScatterChart,
   Activity,
   TrendingUp,
   Loader2,
@@ -32,20 +32,21 @@ import { useToast } from "@/hooks/use-toast";
 interface VisualizationWorkshopProps {
   project: any;
   onClose: () => void;
+  onSave?: (config: any, imageData?: string) => void;
 }
 
-export default function VisualizationWorkshop({ project, onClose }: VisualizationWorkshopProps) {
+export default function VisualizationWorkshop({ project, onClose, onSave }: VisualizationWorkshopProps) {
   const { toast } = useToast();
   const [selectedVisualization, setSelectedVisualization] = useState("");
   const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
   const [groupByColumn, setGroupByColumn] = useState("");
   const [colorByColumn, setColorByColumn] = useState("");
-  
+
   // Multiple field selection for advanced charts
   const [multipleFields, setMultipleFields] = useState<string[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedChart, setGeneratedChart] = useState<any>(null);
-  
+
   // Enhanced configuration options
   const [chartConfig, setChartConfig] = useState({
     xAxis: "",
@@ -59,7 +60,7 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
     showLegend: true,
     orientation: "vertical" // for bar charts
   });
-  
+
   const [showAdvancedConfig, setShowAdvancedConfig] = useState(false);
 
   // Handle URL query parameters for chart type selection
@@ -71,42 +72,64 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
     }
   }, []);
 
-  // Get fields from schema or infer from data
-  const schema = project?.schema || {};
+  // Get fields from schema - prioritize transformed schema if available
+  // Check multiple possible locations for schema data
+  const transformedSchema = project?.transformedSchema ||
+                           project?.datasets?.[0]?.dataset?.transformedSchema ||
+                           project?.datasets?.[0]?.transformedSchema ||
+                           null;
+  const originalSchema = project?.schema ||
+                        project?.datasets?.[0]?.dataset?.schema ||
+                        project?.datasets?.[0]?.schema ||
+                        {};
+  // Use transformed schema if available, otherwise fall back to original
+  const schema = transformedSchema || originalSchema;
   let fields = Object.keys(schema);
-  
-  // Fallback: infer fields from project data if schema is empty
-  if (fields.length === 0 && project?.data && Array.isArray(project.data) && project.data.length > 0) {
-    fields = Object.keys(project.data[0]);
+
+  // Fallback: infer fields from transformed data first, then original data
+  const transformedData = project?.transformedPreview ||
+                         project?.datasets?.[0]?.dataset?.transformedPreview ||
+                         null;
+  const originalData = project?.data ||
+                      project?.datasets?.[0]?.dataset?.preview ||
+                      null;
+  const dataSource = (Array.isArray(transformedData) && transformedData.length > 0)
+    ? transformedData
+    : (Array.isArray(originalData) && originalData.length > 0) ? originalData : null;
+
+  if (fields.length === 0 && dataSource && dataSource.length > 0) {
+    fields = Object.keys(dataSource[0]);
   }
 
   // If no project data is available, show sample field types for demo purposes
   if (fields.length === 0) {
     fields = ['sales', 'date', 'category', 'region']; // Sample fields for demo
   }
-  
+
   const numericFields = fields.filter(field => {
     if (schema[field]) {
-      return schema[field]?.type === 'number' || schema[field]?.type === 'float' || schema[field]?.type === 'int';
+      const fieldType = schema[field]?.type;
+      return fieldType === 'number' || fieldType === 'float' || fieldType === 'int' || fieldType === 'integer' || fieldType === 'decimal';
     }
-    // Fallback: infer from data
-    if (project?.data && project.data.length > 0) {
-      const value = project.data[0][field];
+    // Fallback: infer from data (use transformed or original data source)
+    if (dataSource && dataSource.length > 0) {
+      const value = dataSource[0][field];
       return typeof value === 'number';
     }
     return false;
   });
-  
+
   const categoricalFields = fields.filter(field => {
     if (schema[field]) {
-      return schema[field]?.type === 'string' || schema[field]?.type === 'text';
+      return schema[field]?.type === 'string' || schema[field]?.type === 'text' || schema[field]?.type === 'category';
     }
-    // Fallback: infer from data
-    if (project?.data && project.data.length > 0) {
-      const value = project.data[0][field];
+    // Fallback: infer from data (use transformed or original data source)
+    if (dataSource && dataSource.length > 0) {
+      const value = dataSource[0][field];
       return typeof value === 'string' && !numericFields.includes(field);
     }
-    return false;
+    // If no data available, assume non-numeric fields are categorical
+    return !numericFields.includes(field);
   });
 
   const visualizationTypes = [
@@ -123,7 +146,7 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
       supportsMultipleFields: true
     },
     {
-      type: "line_chart", 
+      type: "line_chart",
       name: "Line Chart",
       description: "Show trends over time or continuous data",
       icon: LineChart,
@@ -136,7 +159,7 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
     },
     {
       type: "scatter_plot",
-      name: "Scatter Plot", 
+      name: "Scatter Plot",
       description: "Explore relationships between two variables",
       icon: ScatterChart,
       requiredFields: { numeric: 2 },
@@ -213,7 +236,7 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
   const canCreateVisualization = (vizType: any) => {
     const numericCount = numericFields.length;
     const categoricalCount = categoricalFields.length;
-    
+
     if (vizType.requiredFields.numeric && numericCount < vizType.requiredFields.numeric) {
       return false;
     }
@@ -303,8 +326,8 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
             showLegend: chartConfig.showLegend
           },
           fields: multipleFields.length > 0 ? multipleFields : [chartConfig.xAxis, chartConfig.yAxis].filter(Boolean),
-          groupByColumn: groupByColumn || undefined,
-          colorByColumn: colorByColumn || undefined
+          groupByColumn: groupByColumn && groupByColumn !== '__none__' ? groupByColumn : undefined,
+          colorByColumn: colorByColumn && colorByColumn !== '__default__' ? colorByColumn : undefined
         })
       });
 
@@ -314,22 +337,47 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
       }
 
       const result = await response.json();
-      
+
       // Handle successful response
       if (result.success) {
+        // Extract chart data from visualization object (backend returns nested structure)
+        const visualization = result.visualization || {};
+        const chartData = visualization.chart_data || visualization.engine_chart_data || null;
+        const insights = visualization.insights || result.insights || [`${selectedVizType?.name} chart generated successfully`];
+        const warnings = visualization.warnings || [];
+
         setGeneratedChart({
           type: selectedVisualization,
-          imageData: result.imageData,
-          insights: result.insights || [`${selectedVizType?.name} chart generated successfully`],
+          chartData: chartData,  // Chart.js/ECharts data structure
+          imageData: result.imageData || chartData?.imageData, // If available
+          insights: insights,
+          warnings: warnings,
           config: chartConfig,
           message: result.message || 'Visualization created successfully',
-          demo: !result.imageData // Flag for demo mode if no actual image
+          demo: !chartData, // Flag for demo mode if no chart data
+          metadata: visualization.metadata
         });
-        
+
         toast({
           title: "Visualization Created",
-          description: result.message || `${selectedVizType?.name} chart generated successfully`,
+          description: warnings.length > 0
+            ? `Chart generated with ${warnings.length} warning(s)`
+            : "Chart has been generated successfully",
         });
+
+        // Pass chart config and available image data to parent
+        // FIX: Pass imageData (base64 string) instead of chartData (object)
+        // Also include chartData in config for interactive rendering fallback
+        if (onSave) {
+          const imageData = result.imageData || chartData?.imageData;
+          const enrichedConfig = {
+            ...chartConfig,
+            chartType: selectedVisualization,
+            chartData: chartData  // Include for interactive fallback
+          };
+          onSave(enrichedConfig, imageData);
+        }
+        // Note: Don't auto-close so user can see the chart
       } else {
         throw new Error(result.error || 'Failed to create visualization');
       }
@@ -395,9 +443,9 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
   // Auto-suggest field assignments based on chart type
   const suggestFields = (vizType: any) => {
     if (!vizType || fields.length === 0) return;
-    
+
     let newConfig = { ...chartConfig };
-    
+
     switch (vizType.type) {
       case "bar_chart":
       case "pie_chart":
@@ -420,7 +468,7 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
         if (numericFields.length > 0) newConfig.xAxis = numericFields[0];
         break;
     }
-    
+
     setChartConfig(newConfig);
   };
 
@@ -468,17 +516,16 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
               {visualizationTypes.map((viz) => {
                 const Icon = viz.icon;
                 const isAvailable = canCreateVisualization(viz);
-                
+
                 return (
                   <div
                     key={viz.type}
-                    className={`p-3 border rounded-lg cursor-pointer transition-all ${
-                      selectedVisualization === viz.type
-                        ? 'border-blue-500 bg-blue-50'
-                        : isAvailable
+                    className={`p-3 border rounded-lg cursor-pointer transition-all ${selectedVisualization === viz.type
+                      ? 'border-blue-500 bg-blue-50'
+                      : isAvailable
                         ? 'border-gray-200 hover:border-gray-300'
                         : 'border-gray-100 bg-gray-50 opacity-60 cursor-not-allowed'
-                    }`}
+                      }`}
                     onClick={() => isAvailable && setSelectedVisualization(viz.type)}
                   >
                     <div className="flex items-start gap-3">
@@ -520,27 +567,27 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                     <TabsTrigger value="fields">Field Mapping</TabsTrigger>
                     <TabsTrigger value="styling">Chart Styling</TabsTrigger>
                   </TabsList>
-                  
+
                   <TabsContent value="fields" className="space-y-4 mt-4">
                     {/* Chart-specific field configuration */}
                     {selectedVizType?.configFields.includes("xAxis") && (
                       <div className="space-y-2">
                         <Label className="text-sm font-medium">
-                          X-Axis Field * 
+                          X-Axis Field *
                           <span className="text-xs font-normal text-gray-500 ml-1">
                             (categorical/discrete data)
                           </span>
                         </Label>
-                        <Select 
-                          value={chartConfig.xAxis} 
-                          onValueChange={(value) => setChartConfig({...chartConfig, xAxis: value})}
+                        <Select
+                          value={chartConfig.xAxis}
+                          onValueChange={(value) => setChartConfig({ ...chartConfig, xAxis: value })}
                         >
                           <SelectTrigger>
                             <SelectValue placeholder="Choose X-axis field" />
                           </SelectTrigger>
                           <SelectContent>
-                            {fields.map(field => (
-                              <SelectItem key={field} value={field || ""}>
+                            {fields.filter(f => f && f.trim()).map(field => (
+                              <SelectItem key={field} value={field}>
                                 {field}
                                 <span className="ml-2 text-xs text-gray-500">
                                   ({schema[field]?.type || 'unknown'})
@@ -560,16 +607,16 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                             (numeric values for measurement)
                           </span>
                         </Label>
-                        <Select 
-                          value={chartConfig.yAxis} 
-                          onValueChange={(value) => setChartConfig({...chartConfig, yAxis: value})}
+                        <Select
+                          value={chartConfig.yAxis}
+                          onValueChange={(value) => setChartConfig({ ...chartConfig, yAxis: value })}
                         >
                           <SelectTrigger>
                             <SelectValue placeholder="Choose Y-axis field" />
                           </SelectTrigger>
                           <SelectContent>
-                            {numericFields.map(field => (
-                              <SelectItem key={field} value={field || ""}>
+                            {numericFields.filter(f => f && f.trim()).map(field => (
+                              <SelectItem key={field} value={field}>
                                 {field}
                                 <span className="ml-2 text-xs text-gray-500">
                                   ({schema[field]?.type || 'number'})
@@ -585,9 +632,9 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                     {selectedVizType?.configFields.includes("aggregation") && (
                       <div className="space-y-2">
                         <Label className="text-sm font-medium">Data Aggregation</Label>
-                        <Select 
-                          value={chartConfig.aggregation} 
-                          onValueChange={(value) => setChartConfig({...chartConfig, aggregation: value})}
+                        <Select
+                          value={chartConfig.aggregation}
+                          onValueChange={(value) => setChartConfig({ ...chartConfig, aggregation: value })}
                         >
                           <SelectTrigger>
                             <SelectValue />
@@ -607,9 +654,9 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                     {selectedVizType?.configFields.includes("orientation") && (
                       <div className="space-y-2">
                         <Label className="text-sm font-medium">Chart Orientation</Label>
-                        <Select 
-                          value={chartConfig.orientation} 
-                          onValueChange={(value) => setChartConfig({...chartConfig, orientation: value})}
+                        <Select
+                          value={chartConfig.orientation}
+                          onValueChange={(value) => setChartConfig({ ...chartConfig, orientation: value })}
                         >
                           <SelectTrigger>
                             <SelectValue />
@@ -631,9 +678,9 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                             <SelectValue placeholder="Select grouping field" />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="">None</SelectItem>
-                            {categoricalFields.map(field => (
-                              <SelectItem key={field} value={field || ""}>{field}</SelectItem>
+                            <SelectItem value="__none__">None</SelectItem>
+                            {categoricalFields.filter(f => f && f.trim()).map(field => (
+                              <SelectItem key={field} value={field}>{field}</SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
@@ -701,9 +748,9 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                             <SelectValue placeholder="Select color field" />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="">Default Colors</SelectItem>
-                            {categoricalFields.map(field => (
-                              <SelectItem key={field} value={field || ""}>{field}</SelectItem>
+                            <SelectItem value="__default__">Default Colors</SelectItem>
+                            {categoricalFields.filter(f => f && f.trim()).map(field => (
+                              <SelectItem key={field} value={field}>{field}</SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
@@ -711,11 +758,11 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                     )}
 
                     <Separator />
-                    
+
                     {/* Auto-suggest button */}
-                    <Button 
-                      variant="outline" 
-                      size="sm" 
+                    <Button
+                      variant="outline"
+                      size="sm"
                       onClick={() => suggestFields(selectedVizType)}
                       className="w-full"
                     >
@@ -723,14 +770,14 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                       Auto-suggest Fields
                     </Button>
                   </TabsContent>
-                  
+
                   <TabsContent value="styling" className="space-y-4 mt-4">
                     {/* Chart Title */}
                     <div className="space-y-2">
                       <Label className="text-sm font-medium">Chart Title</Label>
                       <Input
                         value={chartConfig.title}
-                        onChange={(e) => setChartConfig({...chartConfig, title: e.target.value})}
+                        onChange={(e) => setChartConfig({ ...chartConfig, title: e.target.value })}
                         placeholder="Enter chart title"
                       />
                     </div>
@@ -741,7 +788,7 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                         <Label className="text-sm font-medium">X-Axis Label</Label>
                         <Input
                           value={chartConfig.xlabel}
-                          onChange={(e) => setChartConfig({...chartConfig, xlabel: e.target.value})}
+                          onChange={(e) => setChartConfig({ ...chartConfig, xlabel: e.target.value })}
                           placeholder="X-axis label"
                         />
                       </div>
@@ -749,7 +796,7 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                         <Label className="text-sm font-medium">Y-Axis Label</Label>
                         <Input
                           value={chartConfig.ylabel}
-                          onChange={(e) => setChartConfig({...chartConfig, ylabel: e.target.value})}
+                          onChange={(e) => setChartConfig({ ...chartConfig, ylabel: e.target.value })}
                           placeholder="Y-axis label"
                         />
                       </div>
@@ -758,9 +805,9 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                     {/* Chart Style */}
                     <div className="space-y-2">
                       <Label className="text-sm font-medium">Chart Style</Label>
-                      <Select 
-                        value={chartConfig.chartStyle} 
-                        onValueChange={(value) => setChartConfig({...chartConfig, chartStyle: value})}
+                      <Select
+                        value={chartConfig.chartStyle}
+                        onValueChange={(value) => setChartConfig({ ...chartConfig, chartStyle: value })}
                       >
                         <SelectTrigger>
                           <SelectValue />
@@ -780,7 +827,7 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                         <Checkbox
                           id="show-grid"
                           checked={chartConfig.showGrid}
-                          onCheckedChange={(checked) => setChartConfig({...chartConfig, showGrid: !!checked})}
+                          onCheckedChange={(checked) => setChartConfig({ ...chartConfig, showGrid: !!checked })}
                         />
                         <Label htmlFor="show-grid" className="text-sm">Show Grid</Label>
                       </div>
@@ -788,7 +835,7 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                         <Checkbox
                           id="show-legend"
                           checked={chartConfig.showLegend}
-                          onCheckedChange={(checked) => setChartConfig({...chartConfig, showLegend: !!checked})}
+                          onCheckedChange={(checked) => setChartConfig({ ...chartConfig, showLegend: !!checked })}
                         />
                         <Label htmlFor="show-legend" className="text-sm">Show Legend</Label>
                       </div>
@@ -797,7 +844,7 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                 </Tabs>
 
                 <div className="mt-6 flex gap-2">
-                  <Button 
+                  <Button
                     onClick={generateVisualization}
                     disabled={isGenerating || (!chartConfig.xAxis && selectedVizType?.configFields.includes("xAxis"))}
                     className="flex-1"
@@ -809,7 +856,7 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                     )}
                     Generate Chart
                   </Button>
-                  <Button 
+                  <Button
                     variant="outline"
                     onClick={resetConfiguration}
                     disabled={isGenerating}
@@ -838,16 +885,16 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                 <div className="flex gap-2">
                   {generatedChart && (
                     <>
-                      <Button 
-                        variant="outline" 
+                      <Button
+                        variant="outline"
                         size="sm"
-                        onClick={() => {/* Save to project */}}
+                        onClick={() => {/* Save to project */ }}
                       >
                         <Save className="w-4 h-4 mr-2" />
                         Save to Project
                       </Button>
-                      <Button 
-                        variant="outline" 
+                      <Button
+                        variant="outline"
                         size="sm"
                         onClick={downloadVisualization}
                       >
@@ -861,8 +908,8 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
               {selectedVisualization && !generatedChart && (
                 <CardDescription className="flex items-center gap-2">
                   <div className="text-sm">
-                    Ready to generate: {chartConfig.xAxis && chartConfig.yAxis ? 
-                      `${chartConfig.xAxis} vs ${chartConfig.yAxis}` : 
+                    Ready to generate: {chartConfig.xAxis && chartConfig.yAxis ?
+                      `${chartConfig.xAxis} vs ${chartConfig.yAxis}` :
                       'Configure fields to preview'
                     }
                   </div>
@@ -897,11 +944,51 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                   {/* Chart Display */}
                   <div className="border rounded-lg overflow-hidden">
                     {generatedChart.imageData ? (
-                      <img 
+                      <img
                         src={`data:image/png;base64,${generatedChart.imageData}`}
                         alt="Generated Visualization"
                         className="w-full h-auto"
                       />
+                    ) : generatedChart.chartData ? (
+                      <div className="p-6 bg-gradient-to-br from-green-50 to-emerald-50">
+                        <div className="max-w-full mx-auto">
+                          <div className="flex items-center gap-3 mb-4">
+                            <TrendingUp className="w-8 h-8 text-green-600" />
+                            <h3 className="text-lg font-medium text-gray-900">
+                              {selectedVizType?.name} - Data Ready
+                            </h3>
+                          </div>
+                          <p className="text-green-700 mb-4">
+                            {generatedChart.message || "Chart data generated successfully"}
+                          </p>
+                          {/* Show chart data summary */}
+                          <div className="bg-white rounded-lg p-4 shadow-sm">
+                            <div className="text-sm text-gray-600 mb-2">Chart Configuration:</div>
+                            <div className="grid grid-cols-2 gap-2 text-xs">
+                              <div><strong>Type:</strong> {generatedChart.type}</div>
+                              <div><strong>X-Axis:</strong> {chartConfig.xAxis || 'Auto'}</div>
+                              <div><strong>Y-Axis:</strong> {chartConfig.yAxis || 'Auto'}</div>
+                              <div><strong>Aggregation:</strong> {chartConfig.aggregation}</div>
+                            </div>
+                            {generatedChart.chartData?.labels && (
+                              <div className="mt-3 text-xs text-gray-500">
+                                Data points: {generatedChart.chartData.labels.length || 'N/A'}
+                              </div>
+                            )}
+                          </div>
+                          {/* Display warnings if any */}
+                          {generatedChart.warnings && generatedChart.warnings.length > 0 && (
+                            <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
+                              <div className="text-sm font-medium text-yellow-800 mb-1">Warnings:</div>
+                              <ul className="text-xs text-yellow-700 list-disc list-inside">
+                                {generatedChart.warnings.map((w: string, i: number) => (
+                                  <li key={i}>{w}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     ) : generatedChart.demo ? (
                       <div className="p-8 text-center bg-gradient-to-br from-blue-50 to-indigo-50">
                         <div className="max-w-md mx-auto">
@@ -916,16 +1003,16 @@ export default function VisualizationWorkshop({ project, onClose }: Visualizatio
                         </div>
                       </div>
                     ) : (
-                      <div className="p-8 text-center bg-gradient-to-br from-green-50 to-emerald-50">
+                      <div className="p-8 text-center bg-gradient-to-br from-gray-50 to-gray-100">
                         <div className="max-w-md mx-auto">
-                          <TrendingUp className="w-16 h-16 text-green-600 mx-auto mb-4" />
+                          <TrendingUp className="w-16 h-16 text-gray-400 mx-auto mb-4" />
                           <h3 className="text-lg font-medium text-gray-900 mb-2">
-                            {selectedVizType?.name} Generated
+                            {selectedVizType?.name}
                           </h3>
-                          <p className="text-green-700 mb-4">
-                            {generatedChart.message || "Chart created successfully"}
+                          <p className="text-gray-600 mb-4">
+                            {generatedChart.message || "Visualization configuration saved"}
                           </p>
-                          <div className="text-xs text-gray-600">
+                          <div className="text-xs text-gray-500">
                             Configuration: {multipleFields.length > 0 ? multipleFields.join(', ') : [chartConfig.xAxis, chartConfig.yAxis].filter(Boolean).join(' vs ')}
                           </div>
                         </div>

@@ -18,7 +18,7 @@ if (result.error) {
 // Verify DATABASE_URL is loaded
 if (!process.env.DATABASE_URL) {
   console.error('❌ DATABASE_URL not found in environment variables.');
-  process.error('   .env path:', envPath);
+  console.error('   .env path:', envPath);
   process.exit(1);
 }
 

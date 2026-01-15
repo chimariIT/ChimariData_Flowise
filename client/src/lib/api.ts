@@ -1,6 +1,6 @@
 // IMPORTANT: Direct backend connection to preserve Authorization headers
 // Vite proxy strips headers, so we connect directly in development
-const API_BASE = import.meta.env.DEV ? 'http://localhost:5000' : window.location.origin;
+export const API_BASE = import.meta.env.DEV ? 'http://localhost:5000' : window.location.origin;
 const RETRYABLE_STATUS_CODES = [429, 502, 503, 504];
 const DEFAULT_RETRY_COUNT = 2;
 
@@ -123,7 +123,7 @@ export class APIClient {
       const isFormData = init.body instanceof FormData;
       const headersInit = init.headers as HeadersInit | undefined;
       const initialHeaders = headersInit ? new Headers(headersInit) : new Headers();
-      
+
       // Build auth headers (always include Authorization)
       const mergedHeaders = this.buildAuthHeaders(Object.fromEntries(initialHeaders.entries()));
 
@@ -305,10 +305,11 @@ export class APIClient {
     piiHandled?: boolean;
     anonymizationApplied?: boolean;
     selectedColumns?: string[];
+    journeyType?: string;
   }): Promise<any> {
     const formData = new FormData();
     formData.append('file', file);
-    
+
     if (options.name) {
       formData.append('name', options.name);
     }
@@ -329,6 +330,9 @@ export class APIClient {
     }
     if (options.selectedColumns) {
       formData.append('selectedColumns', JSON.stringify(options.selectedColumns));
+    }
+    if (options.journeyType) {
+      formData.append('journeyType', options.journeyType);
     }
 
     const endpoint = '/api/projects/upload'; // Correct endpoint path
@@ -394,6 +398,41 @@ export class APIClient {
     return this.request(`/api/projects/${projectId}/datasets`, {
       method: 'GET'
     });
+  }
+
+  /**
+   * Submit feedback for a checkpoint
+   */
+  async submitCheckpointFeedback(
+    projectId: string,
+    checkpointId: string,
+    feedback: string,
+    approved: boolean
+  ): Promise<any> {
+    return this.post(`/api/projects/${projectId}/checkpoints/${checkpointId}/feedback`, {
+      feedback,
+      approved
+    });
+  }
+
+  /**
+   * Upload a file to a project
+   */
+  async uploadFileToProject(projectId: string, file: File, options?: { onProgress?: (percent: number) => void }): Promise<any> {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    return this.request(`/api/projects/${projectId}/upload`, {
+      method: 'POST',
+      body: formData
+    });
+  }
+
+  /**
+   * Update project progress/journey state
+   */
+  async updateProjectProgress(projectId: string, progress: Record<string, any>): Promise<any> {
+    return this.put(`/api/projects/${projectId}/progress`, progress);
   }
 
   async detectTimeSeriesColumns(projectId: string): Promise<any> {
@@ -494,7 +533,7 @@ export class APIClient {
     const headers: any = {
       'Content-Type': 'application/json',
     };
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -609,14 +648,17 @@ export class APIClient {
     return this.get(`/api/analysis-execution/results/${projectId}`);
   }
 
+
   async deleteProject(id: string): Promise<any> {
     return this.request(`/api/projects/${id}`, { method: 'DELETE' });
   }
 
-  // Project-Dataset Association methods
-  async getProjectDatasets(projectId: string): Promise<any> {
-    return this.request(`/api/projects/${projectId}/datasets`, { method: 'GET' });
+  async updateProjectSchema(projectId: string, schema: Record<string, any>): Promise<any> {
+    return this.put(`/api/projects/${projectId}/schema`, { schema });
   }
+
+  // Project-Dataset Association methods
+  // Note: getProjectDatasets already defined earlier in the class (line 393)
 
   async addDatasetToProject(projectId: string, datasetId: string, role?: string): Promise<any> {
     return this.request(`/api/projects/${projectId}/datasets`, {
@@ -655,26 +697,7 @@ export class APIClient {
   }
 
   // Project Artifact methods
-  async getProjectArtifacts(projectId: string): Promise<any> {
-    const token = localStorage.getItem('auth_token');
-    const headers: any = {};
-    
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
-    const response = await fetch(`${API_BASE}/api/projects/${projectId}/artifacts`, {
-      method: 'GET',
-      headers,
-      credentials: 'include',
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch project artifacts: ${response.status}`);
-    }
-
-    return await response.json();
-  }
+  // Note: getProjectArtifacts already defined earlier in the class (line 387)
 
   async createProjectArtifact(projectId: string, data: {
     type: string;
@@ -687,7 +710,7 @@ export class APIClient {
     const headers: any = {
       'Content-Type': 'application/json',
     };
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -710,7 +733,7 @@ export class APIClient {
   async getProjectArtifact(projectId: string, artifactId: string): Promise<any> {
     const token = localStorage.getItem('auth_token');
     const headers: any = {};
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -740,7 +763,7 @@ export class APIClient {
     const headers: any = {
       'Content-Type': 'application/json',
     };
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -799,7 +822,7 @@ export class APIClient {
     const headers: any = {
       'Content-Type': 'application/json',
     };
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -1016,7 +1039,7 @@ export class APIClient {
     const headers: any = {
       'Content-Type': 'application/json',
     };
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -1044,7 +1067,7 @@ export class APIClient {
   }): Promise<any> {
     const token = localStorage.getItem('auth_token');
     const headers: any = {};
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -1075,7 +1098,7 @@ export class APIClient {
   async getStreamingSource(id: string): Promise<any> {
     const token = localStorage.getItem('auth_token');
     const headers: any = {};
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -1108,7 +1131,7 @@ export class APIClient {
     const headers: any = {
       'Content-Type': 'application/json',
     };
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -1133,7 +1156,7 @@ export class APIClient {
     const headers: any = {
       'Content-Type': 'application/json',
     };
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -1157,7 +1180,7 @@ export class APIClient {
     const headers: any = {
       'Content-Type': 'application/json',
     };
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -1179,7 +1202,7 @@ export class APIClient {
   async deleteStreamingSource(id: string): Promise<any> {
     const token = localStorage.getItem('auth_token');
     const headers: any = {};
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -1232,7 +1255,7 @@ export class APIClient {
     const headers: any = {
       'Content-Type': 'application/json',
     };
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -1260,7 +1283,7 @@ export class APIClient {
   }): Promise<any> {
     const token = localStorage.getItem('auth_token');
     const headers: any = {};
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -1291,7 +1314,7 @@ export class APIClient {
   async getScrapingJob(id: string): Promise<any> {
     const token = localStorage.getItem('auth_token');
     const headers: any = {};
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -1324,7 +1347,7 @@ export class APIClient {
     const headers: any = {
       'Content-Type': 'application/json',
     };
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -1349,7 +1372,7 @@ export class APIClient {
     const headers: any = {
       'Content-Type': 'application/json',
     };
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -1373,7 +1396,7 @@ export class APIClient {
     const headers: any = {
       'Content-Type': 'application/json',
     };
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -1397,7 +1420,7 @@ export class APIClient {
     const headers: any = {
       'Content-Type': 'application/json',
     };
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -1419,7 +1442,7 @@ export class APIClient {
   async deleteScrapingJob(id: string): Promise<any> {
     const token = localStorage.getItem('auth_token');
     const headers: any = {};
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -1440,7 +1463,7 @@ export class APIClient {
   async getScrapingJobRuns(id: string): Promise<any> {
     const token = localStorage.getItem('auth_token');
     const headers: any = {};
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -1462,7 +1485,7 @@ export class APIClient {
   async getLiveSourcesOverview(projectId?: string): Promise<any> {
     const token = localStorage.getItem('auth_token');
     const headers: any = {};
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -1493,7 +1516,7 @@ export class APIClient {
     const headers: any = {
       'Content-Type': 'application/json',
     };
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -1522,7 +1545,7 @@ export class APIClient {
     const headers: any = {
       'Content-Type': 'application/json',
     };
-    
+
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -1579,6 +1602,15 @@ export class APIClient {
 
   async getTemplateCatalog(): Promise<any> {
     return this.get('/api/templates/catalog');
+  }
+
+  // Data Quality Methods
+  async analyzeDataQuality(datasetId: string): Promise<any> {
+    return this.post('/api/data-quality/analyze', { datasetId });
+  }
+
+  async autoFixDataQuality(datasetId: string, issueIds: string[]): Promise<any> {
+    return this.post('/api/data-quality/auto-fix', { datasetId, issueIds });
   }
 }
 

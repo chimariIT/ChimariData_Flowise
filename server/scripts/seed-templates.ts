@@ -418,11 +418,15 @@ async function seedTemplates() {
         const steps = createDefaultSteps(template.id, industry);
         const journeyType = industry === 'finance' || industry === 'marketing' || industry === 'sales' || industry === 'retail' ? 'business' : 'business';
 
+        // Match the actual database schema (includes all NOT NULL columns)
         await db.execute(sql.raw(`
           INSERT INTO artifact_templates (
             id, name, title, summary, journey_type, industry, persona,
             primary_agent, default_confidence, expected_artifacts,
-            communication_style, steps, is_system, is_active, created_at, updated_at
+            communication_style, steps, is_system, is_active, created_by,
+            created_at, updated_at,
+            target_role, target_seniority, target_maturity,
+            artifact_types, narrative_style, content_depth
           ) VALUES (
             '${template.id}',
             '${template.name.replace(/'/g, "''")}',
@@ -430,22 +434,29 @@ async function seedTemplates() {
             '${template.summary.replace(/'/g, "''")}',
             '${journeyType}',
             '${industry}',
-            '${template.persona}',
+            '${template.persona || 'business analyst'}',
             '${template.primaryAgent}',
-            ${template.expectedArtifacts ? '0.85' : '0.80'},
+            ${template.expectedArtifacts ? 85 : 80},
             '${JSON.stringify(template.expectedArtifacts)}'::jsonb,
             'professional',
             '${JSON.stringify(steps)}'::jsonb,
             true,
             true,
+            'system',
             now(),
-            now()
+            now(),
+            '${template.persona || 'analyst'}',
+            'senior',
+            'intermediate',
+            '${JSON.stringify(template.expectedArtifacts || [])}'::jsonb,
+            'professional',
+            'standard'
           );
         `));
 
         console.log(`   ✅ Inserted: ${template.name}`);
         totalInserted++;
-      } catch (error) {
+      } catch (error: any) {
         console.error(`   ❌ Failed to insert ${template.name}:`, error.message);
       }
     }

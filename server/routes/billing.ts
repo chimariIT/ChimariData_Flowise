@@ -6,6 +6,7 @@ import { tokenStorage } from '../token-storage';
 import { PricingService } from '../services/pricing';
 import { mlLLMUsageTracker } from '../services/ml-llm-usage-tracker';
 import { getAuthHeader } from '../utils/auth-headers';
+import type { FeatureComplexity, JourneyType } from '@shared/canonical-types';
 
 const billingService = getBillingService();
 
@@ -137,11 +138,33 @@ router.get('/quota-check/compute', billingAuth, async (req, res) => {
 // Routes use individual authentication as needed
 
 // Request validation schemas
+// Accept both old and new journey type names for backwards compatibility
 const billingCalculationSchema = z.object({
-  journeyType: z.enum(['non-tech', 'business', 'technical']),
+  journeyType: z.enum([
+    // New canonical names
+    'non-tech', 'business', 'technical', 'consultation', 'custom',
+    // Old legacy names (for backwards compatibility) - now deprecated
+    'ai_guided', 'template_based', 'self_service'
+  ]),
   datasetSizeMB: z.number().min(0),
   additionalFeatures: z.array(z.string()).optional(),
 });
+
+// Map old journey types to new canonical names
+const normalizeJourneyType = (journeyType: string): string => {
+  const mapping: Record<string, string> = {
+    'ai_guided': 'non-tech',
+    'template_based': 'business',
+    'self_service': 'technical',
+    // New names pass through unchanged
+    'non-tech': 'non-tech',
+    'business': 'business',
+    'technical': 'technical',
+    'consultation': 'consultation',
+    'custom': 'custom'
+  };
+  return mapping[journeyType] || journeyType;
+};
 
 const capacitySummarySchema = z.object({
   userId: z.string(),
@@ -284,7 +307,10 @@ router.post('/journey-breakdown', ensureAuthenticated, async (req, res) => {
       });
     }
 
-    const { journeyType, datasetSizeMB, additionalFeatures } = validation.data;
+    const { journeyType: rawJourneyType, datasetSizeMB, additionalFeatures } = validation.data;
+
+    // Normalize journey type (convert old names to new canonical names)
+    const journeyType = normalizeJourneyType(rawJourneyType);
 
     const result = await billingService.calculateBillingWithCapacity(
       userId,
@@ -465,7 +491,7 @@ router.post('/llm-cost-estimate', billingAuth, async (req, res) => {
 router.get('/ml-pricing-examples', async (req, res) => {
   try {
     const examples = PricingService.getMLPricingExamples();
-    
+
     res.json({
       success: true,
       pricing_examples: examples
@@ -475,6 +501,250 @@ router.get('/ml-pricing-examples', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to get ML pricing examples'
+    });
+  }
+});
+
+// ============================================================
+// QUOTA STATUS ENDPOINTS (Subscription-Aligned Billing)
+// ============================================================
+
+/**
+ * GET /api/billing/quota-status
+ * Get user's current quota status for all features
+ * Returns quota info per feature for the user's subscription tier
+ */
+router.get('/quota-status', ensureAuthenticated, async (req, res) => {
+  try {
+    const userId = (req.user as any)?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Authentication required' });
+    }
+
+    const user = await storage.getUser(userId);
+    const userTier = (user as any)?.subscriptionTier || 'trial';
+    const subscriptionStatus = (user as any)?.subscriptionStatus || 'inactive';
+
+    // Get quota status for common features
+    const featureIds = ['statistical_analysis', 'visualization', 'data_upload', 'machine_learning'];
+    const complexities: FeatureComplexity[] = ['small', 'medium', 'large', 'extra_large'];
+
+    const features: Record<string, Record<string, any>> = {};
+
+    for (const featureId of featureIds) {
+      features[featureId] = {};
+      for (const complexity of complexities) {
+        const status = await billingService.getQuotaStatus(userId, featureId, complexity);
+        if (status) {
+          features[featureId][complexity] = status;
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      userId,
+      subscriptionTier: userTier,
+      subscriptionStatus,
+      features,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    console.error('Error getting quota status:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to get quota status'
+    });
+  }
+});
+
+/**
+ * GET /api/billing/quota-status/:featureId
+ * Get quota status for a specific feature
+ */
+router.get('/quota-status/:featureId', ensureAuthenticated, async (req, res) => {
+  try {
+    const userId = (req.user as any)?.id;
+    const { featureId } = req.params;
+    const complexity = (req.query.complexity as FeatureComplexity) || 'small';
+
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Authentication required' });
+    }
+
+    const status = await billingService.getQuotaStatus(userId, featureId, complexity);
+
+    if (!status) {
+      return res.status(404).json({
+        success: false,
+        error: `Quota status not found for feature: ${featureId}`
+      });
+    }
+
+    const user = await storage.getUser(userId);
+
+    res.json({
+      success: true,
+      featureId,
+      complexity,
+      subscriptionTier: (user as any)?.subscriptionTier || 'trial',
+      ...status,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    console.error('Error getting feature quota status:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to get quota status'
+    });
+  }
+});
+
+/**
+ * GET /api/billing/subscription-status
+ * Get current subscription status and tier info
+ */
+router.get('/subscription-status', ensureAuthenticated, async (req, res) => {
+  try {
+    const userId = (req.user as any)?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Authentication required' });
+    }
+
+    const user = await storage.getUser(userId);
+    const userTier = (user as any)?.subscriptionTier || 'none';
+    const subscriptionStatus = (user as any)?.subscriptionStatus || 'inactive';
+
+    // Get tier configuration
+    const tierConfig = billingService.getTierConfig(userTier);
+
+    res.json({
+      success: true,
+      userId,
+      subscription: {
+        tier: userTier,
+        status: subscriptionStatus,
+        displayName: tierConfig?.displayName || userTier,
+        expiresAt: (user as any)?.subscriptionExpiresAt || null,
+        stripeSubscriptionId: (user as any)?.stripeSubscriptionId || null
+      },
+      quotas: tierConfig ? {
+        maxProjects: tierConfig.quotas.maxProjects,
+        maxDatasetsPerProject: tierConfig.quotas.maxDatasetsPerProject,
+        maxDataUploadsMB: tierConfig.quotas.maxDataUploadsMB,
+        maxAIQueries: tierConfig.quotas.maxAIQueries,
+        allowedJourneys: tierConfig.quotas.allowedJourneys,
+        featureQuotas: tierConfig.quotas.featureQuotas
+      } : null,
+      features: tierConfig?.features || [],
+      pricing: tierConfig ? {
+        monthly: tierConfig.pricing.monthly,
+        yearly: tierConfig.pricing.yearly,
+        currency: tierConfig.pricing.currency
+      } : null,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    console.error('Error getting subscription status:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to get subscription status'
+    });
+  }
+});
+
+/**
+ * POST /api/billing/check-journey-access
+ * Check if user can access a specific journey type
+ */
+router.post('/check-journey-access', ensureAuthenticated, async (req, res) => {
+  try {
+    const userId = (req.user as any)?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Authentication required' });
+    }
+
+    const { journeyType } = req.body;
+    if (!journeyType) {
+      return res.status(400).json({
+        success: false,
+        error: 'journeyType is required'
+      });
+    }
+
+    const access = await billingService.canAccessJourney(userId, journeyType as JourneyType);
+
+    res.json({
+      success: true,
+      journeyType,
+      ...access
+    });
+  } catch (error: any) {
+    console.error('Error checking journey access:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to check journey access'
+    });
+  }
+});
+
+/**
+ * GET /api/billing/usage-metrics
+ * Get detailed usage metrics for current billing period
+ */
+router.get('/usage-metrics', ensureAuthenticated, async (req, res) => {
+  try {
+    const userId = (req.user as any)?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Authentication required' });
+    }
+
+    const metrics = await billingService.getUsageMetrics(userId);
+
+    if (!metrics) {
+      return res.status(404).json({
+        success: false,
+        error: 'Usage metrics not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      metrics
+    });
+  } catch (error: any) {
+    console.error('Error getting usage metrics:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to get usage metrics'
+    });
+  }
+});
+
+/**
+ * GET /api/billing/available-tiers
+ * Get all available subscription tiers for upgrade
+ */
+router.get('/available-tiers', async (req, res) => {
+  try {
+    const tiers = billingService.config.tiers.filter(tier => tier.isActive);
+
+    res.json({
+      success: true,
+      tiers: tiers.map(tier => ({
+        id: tier.id,
+        displayName: tier.displayName,
+        description: tier.description,
+        pricing: tier.pricing,
+        quotas: tier.quotas,
+        features: tier.features
+      }))
+    });
+  } catch (error: any) {
+    console.error('Error getting available tiers:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to get available tiers'
     });
   }
 });

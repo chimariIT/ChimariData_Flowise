@@ -6,6 +6,7 @@
  */
 
 import { intelligentLibrarySelector, DatasetCharacteristics, VisualizationRequirements } from './intelligent-library-selector';
+import { DataTransformationService } from './data-transformation';
 
 export interface VisualizationRequest {
   data: any[];
@@ -20,6 +21,10 @@ export interface VisualizationRequest {
     sizeBy?: string;
     filters?: Record<string, any>;
     styling?: Record<string, any>;
+    aggregation?: {
+      groupBy?: string[];
+      aggregations?: Array<{ field: string; operation: string; alias?: string }>;
+    };
   };
 }
 
@@ -37,6 +42,7 @@ export interface VisualizationResult {
     formats: string[];
     urls?: Record<string, string>;
   };
+  imageData?: string; // Base64 encoded image
   error?: string;
 }
 
@@ -48,13 +54,29 @@ export class EnhancedVisualizationEngine {
    */
   async createVisualization(request: VisualizationRequest): Promise<VisualizationResult> {
     const startTime = Date.now();
-    
+
     try {
       // Get library recommendations
       const recommendations = this.librarySelector.selectVisualizationLibrary(
         request.datasetCharacteristics,
         request.requirements
       );
+
+      // Apply aggregation if requested
+      let visualizationData = request.data;
+      if (request.customizations?.aggregation) {
+        const { groupBy, aggregations } = request.customizations.aggregation;
+        if (groupBy && groupBy.length > 0 && aggregations && aggregations.length > 0) {
+          console.log(`Applying aggregation: Group by ${groupBy.join(', ')}`);
+          const aggResult = await DataTransformationService.applyTransformations(request.data, [{
+            type: 'aggregate',
+            config: { groupBy, aggregations }
+          }]);
+          visualizationData = aggResult.rows;
+          // Update request data with aggregated data for visualization
+          request.data = visualizationData;
+        }
+      }
 
       if (recommendations.length === 0) {
         throw new Error('No suitable visualization library found for the given requirements');
@@ -65,7 +87,13 @@ export class EnhancedVisualizationEngine {
 
       // Create visualization based on selected library
       const result = await this.createWithLibrary(selectedLibrary.library, request);
-      
+
+      // Ensure imageData is present for frontend preview
+      if (!result.imageData) {
+        const svg = this.generateSimpleSvg(request.chartType, request.data, request.customizations);
+        result.imageData = Buffer.from(svg).toString('base64');
+      }
+
       return {
         success: true,
         library: selectedLibrary.library,
@@ -77,6 +105,7 @@ export class EnhancedVisualizationEngine {
           interactive: request.requirements.interactivity !== 'static'
         },
         exportOptions: result.exportOptions,
+        imageData: result.imageData,
         ...result
       };
 
@@ -137,9 +166,13 @@ export class EnhancedVisualizationEngine {
       }
     };
 
+    const svg = this.generateSimpleSvg(request.chartType, request.data, request.customizations);
+    const base64Image = Buffer.from(svg).toString('base64');
+
     return {
       chartData,
       fileSize: request.data.length * 0.1, // Estimate
+      imageData: base64Image,
       exportOptions: {
         formats: ['png', 'svg', 'pdf', 'eps'],
         urls: {
@@ -363,6 +396,46 @@ export class EnhancedVisualizationEngine {
     requirements: VisualizationRequirements
   ) {
     return this.librarySelector.selectVisualizationLibrary(datasetCharacteristics, requirements);
+  }
+
+
+  /**
+   * Generate a simple SVG for preview purposes
+   */
+  private generateSimpleSvg(chartType: string, data: any[], config: any): string {
+    const width = 800;
+    const height = 400;
+    const padding = 40;
+
+    // Simple mock SVG generation
+    let content = '';
+
+    if (chartType === 'bar_chart' || chartType === 'bar') {
+      const barWidth = (width - 2 * padding) / Math.min(data.length, 20);
+      content = data.slice(0, 20).map((d, i) => {
+        const val = typeof Object.values(d)[0] === 'number' ? Object.values(d)[0] as number : Math.random() * 100;
+        const h = (val / 100) * (height - 2 * padding);
+        return `<rect x="${padding + i * barWidth}" y="${height - padding - h}" width="${barWidth - 5}" height="${h}" fill="#4f46e5" />`;
+      }).join('');
+    } else if (chartType === 'line_chart' || chartType === 'line') {
+      const points = data.slice(0, 20).map((d, i) => {
+        const val = typeof Object.values(d)[0] === 'number' ? Object.values(d)[0] as number : Math.random() * 100;
+        const x = padding + i * ((width - 2 * padding) / 20);
+        const y = height - padding - ((val / 100) * (height - 2 * padding));
+        return `${x},${y}`;
+      }).join(' ');
+      content = `<polyline points="${points}" fill="none" stroke="#4f46e5" stroke-width="2" />`;
+    } else {
+      // Default placeholder
+      content = `<text x="${width / 2}" y="${height / 2}" text-anchor="middle" fill="#666">Preview for ${chartType}</text>`;
+    }
+
+    return `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+      <rect width="100%" height="100%" fill="#f8fafc" />
+      <line x1="${padding}" y1="${height - padding}" x2="${width - padding}" y2="${height - padding}" stroke="#cbd5e1" stroke-width="2" />
+      <line x1="${padding}" y1="${padding}" x2="${padding}" y2="${height - padding}" stroke="#cbd5e1" stroke-width="2" />
+      ${content}
+    </svg>`;
   }
 }
 

@@ -10,6 +10,10 @@ import os
 from typing import Dict, List, Any, Optional
 import logging
 
+# Setup logging early so Spark import diagnostics are captured
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # Spark imports - these will be available in production with proper Spark setup
 try:
     from pyspark.sql import SparkSession, DataFrame
@@ -23,7 +27,8 @@ try:
     from pyspark.ml.evaluation import RegressionEvaluator, BinaryClassificationEvaluator
     from pyspark.ml.stat import Correlation
     SPARK_AVAILABLE = True
-except ImportError:
+except ImportError as import_error:
+    logger.warning("PySpark import failed: %s", import_error)
     SPARK_AVAILABLE = False
     # Mock classes for development
     class SparkSession:
@@ -55,11 +60,6 @@ except ImportError:
         def toPandas(self): 
             import pandas as pd
             return pd.DataFrame()
-
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 class SparkBridge:
     def __init__(self, config: Dict[str, Any]):
         """Initialize Spark session with provided configuration"""
@@ -220,6 +220,67 @@ class SparkBridge:
                 'error': str(e)
             }
     
+    def test_connection(self) -> Dict[str, Any]:
+        """Verify Spark connectivity and basic operation"""
+        if self.is_mock:
+            return {
+                'success': False,
+                'error': 'Spark not available (mock mode)',
+                'mock': True
+            }
+
+        try:
+            # Simple job to confirm the session is responsive
+            count = self.spark.range(1).count()
+            return {
+                'success': True,
+                'message': 'Spark connection successful',
+                'count': int(count),
+                'version': self.spark.version,
+                'appId': self.spark.sparkContext.applicationId,
+                'master': self.spark.sparkContext.master
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
+    def cluster_status(self) -> Dict[str, Any]:
+        """Return Spark cluster status and lightweight metrics"""
+        if self.is_mock:
+            return {
+                'success': True,
+                'status': 'mock',
+                'available': False,
+                'details': 'Spark bridge running in mock mode'
+            }
+
+        try:
+            sc = self.spark.sparkContext
+            tracker = sc.statusTracker()
+            return {
+                'success': True,
+                'status': 'running',
+                'available': True,
+                'version': self.spark.version,
+                'appId': sc.applicationId,
+                'appName': sc.appName,
+                'master': sc.master,
+                'activeJobs': len(tracker.getActiveJobIds()),
+                'activeStages': len(tracker.getActiveStageIds()),
+                'completedStages': len(tracker.getCompletedStageIds()),
+                'executorMemory': self.config.get('executorMemory'),
+                'driverMemory': self.config.get('driverMemory')
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'status': 'error',
+                'available': False,
+                'error': str(e)
+            }
+
     def _load_data(self, data_path: str, format: str = 'csv') -> DataFrame:
         """Load data from various sources"""
         if format.lower() == 'csv':
@@ -438,6 +499,10 @@ def main():
             result = bridge.perform_analysis(args['data_path'], args['analysis_type'], args['parameters'])
         elif operation == 'apply_transformations':
             result = bridge.apply_transformations(args['data_path'], args['transformations'])
+        elif operation == 'test_connection':
+            result = bridge.test_connection()
+        elif operation == 'cluster_status':
+            result = bridge.cluster_status()
         else:
             result = {'success': False, 'error': f'Unknown operation: {operation}'}
         

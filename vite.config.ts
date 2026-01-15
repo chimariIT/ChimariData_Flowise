@@ -114,6 +114,16 @@ export default defineConfig({
         target: 'ws://localhost:5000',  // Must match PORT in .env
         ws: true,
         changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('error', (err) => {
+            // Suppress transient WebSocket connection errors
+            if (err.message?.includes('ECONNREFUSED')) {
+              console.log('[vite] WebSocket reconnecting...');
+            } else {
+              console.error('[vite] WebSocket proxy error:', err.message);
+            }
+          });
+        },
       },
     },
     fs: {

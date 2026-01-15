@@ -111,12 +111,89 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
   const [loadingDataElements, setLoadingDataElements] = useState(false);
   const [dataElementsError, setDataElementsError] = useState<string | null>(null);
 
+  // Industry auto-detection state
+  const [detectedIndustry, setDetectedIndustry] = useState<string>('general');
+  const [industryOverride, setIndustryOverride] = useState<string | null>(null);
+
+  // Industry auto-detection function based on analysis goal and business questions
+  const detectIndustry = useCallback((goal: string, questions: string, projectName?: string): string => {
+    const combined = `${goal} ${questions} ${projectName || ''}`.toLowerCase();
+
+    // HR / Employee Engagement patterns
+    const hrPatterns = [
+      'employee', 'engagement', 'workforce', 'hr', 'human resources',
+      'turnover', 'retention', 'hiring', 'talent', 'staff', 'personnel',
+      'satisfaction survey', 'performance review', 'training', 'onboarding',
+      'attrition', 'workplace', 'team morale', 'employee experience'
+    ];
+    if (hrPatterns.some(p => combined.includes(p))) {
+      return 'hr';
+    }
+
+    // Education patterns
+    const educationPatterns = [
+      'student', 'education', 'school', 'university', 'college', 'academic',
+      'graduation', 'enrollment', 'teacher', 'classroom', 'curriculum',
+      'learning', 'course', 'grades', 'parent conference', 'semester'
+    ];
+    if (educationPatterns.some(p => combined.includes(p))) {
+      return 'education';
+    }
+
+    // Healthcare patterns
+    const healthcarePatterns = [
+      'patient', 'healthcare', 'hospital', 'clinical', 'medical',
+      'readmission', 'treatment', 'diagnosis', 'health outcomes'
+    ];
+    if (healthcarePatterns.some(p => combined.includes(p))) {
+      return 'healthcare';
+    }
+
+    // Finance patterns
+    const financePatterns = [
+      'financial', 'investment', 'portfolio', 'risk', 'trading',
+      'loan', 'credit', 'banking', 'roi', 'revenue', 'profit margin'
+    ];
+    if (financePatterns.some(p => combined.includes(p))) {
+      return 'finance';
+    }
+
+    // Retail patterns
+    const retailPatterns = [
+      'customer', 'sales', 'retail', 'ecommerce', 'conversion',
+      'purchase', 'cart', 'order', 'shopping', 'lifetime value'
+    ];
+    if (retailPatterns.some(p => combined.includes(p))) {
+      return 'retail';
+    }
+
+    // Manufacturing patterns
+    const manufacturingPatterns = [
+      'manufacturing', 'production', 'quality control', 'defect',
+      'throughput', 'oee', 'supply chain', 'inventory'
+    ];
+    if (manufacturingPatterns.some(p => combined.includes(p))) {
+      return 'manufacturing';
+    }
+
+    // Non-profit patterns
+    const nonprofitPatterns = [
+      'nonprofit', 'non-profit', 'donor', 'fundraising', 'charity',
+      'volunteer', 'grant', 'mission impact', 'beneficiary'
+    ];
+    if (nonprofitPatterns.some(p => combined.includes(p))) {
+      return 'nonprofit';
+    }
+
+    return 'general';
+  }, []);
+
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
   // Centralized project data and state (DEC-003)
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(() => urlProjectId || localStorage.getItem('currentProjectId'));
-  const { project, journeyProgress, updateProgress, isLoading: projectLoading, isUpdating } = useProject(currentProjectId || undefined);
+  const { project, journeyProgress, updateProgress, updateProgressAsync, isLoading: projectLoading, isUpdating } = useProject(currentProjectId || undefined);
 
   // Track if this is a fresh start
   const [isNewJourney, setIsNewJourney] = useState(false);
@@ -264,6 +341,17 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
         isUpdatingRef.current = true;
         lastSavedRef.current = dataToSave;
 
+        // Auto-detect industry based on analysis goal, questions, and project name
+        const autoDetectedIndustry = detectIndustry(
+          analysisGoal,
+          businessQuestions,
+          (project as any)?.name
+        );
+        // Use override if manually set, otherwise use auto-detected
+        const effectiveIndustry = industryOverride || autoDetectedIndustry;
+        setDetectedIndustry(autoDetectedIndustry);
+        console.log(`🏢 [Industry Detection] Detected: ${autoDetectedIndustry}, Effective: ${effectiveIndustry}`);
+
         await updateProgress({
           analysisGoal,
           userQuestions: currentQuestions,
@@ -272,6 +360,7 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
             secondary: secondaryAudiences,
             decisionContext
           },
+          industry: effectiveIndustry, // Save detected/selected industry to journeyProgress
           currentStep: 'prepare'
         });
       } catch (error) {
@@ -289,7 +378,7 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
 
     const timeoutId = setTimeout(saveData, 2000); // Debounce to 2s to reduce frequency
     return () => clearTimeout(timeoutId);
-  }, [analysisGoal, businessQuestions, primaryAudience, secondaryAudiences, decisionContext, currentProjectId, isSaving, updateProgress]); // Removed journeyProgress from deps to prevent re-trigger
+  }, [analysisGoal, businessQuestions, primaryAudience, secondaryAudiences, decisionContext, currentProjectId, isSaving, updateProgress, project, detectIndustry, industryOverride]); // Removed journeyProgress from deps to prevent re-trigger
 
   // Backwards compatibility: Also cache in localStorage for offline access
   useEffect(() => {
@@ -516,7 +605,8 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
   };
 
   // Generate required data elements from goals/questions
-  const generateDataRequirements = async () => {
+  // FIX: Return the document so callers can use it directly without waiting for state update
+  const generateDataRequirements = async (): Promise<any | null> => {
     // CRITICAL FIX: Use currentProjectId from useProject hook (most reliable source)
     // Also check URL and localStorage as fallbacks
     const projectId = currentProjectId || urlProjectId || localStorage.getItem('currentProjectId');
@@ -530,7 +620,7 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
         urlProjectId,
         localStorageId: localStorage.getItem('currentProjectId')
       });
-      return;
+      return null;
     }
 
     if (!effectiveGoal.trim()) {
@@ -538,7 +628,7 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
         analysisGoalState: analysisGoal,
         journeyProgressGoal: (journeyProgress as any)?.analysisGoal
       });
-      return;
+      return null;
     }
 
     setLoadingDataElements(true);
@@ -617,56 +707,40 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
       if (data.success && data.document) {
         setRequiredDataElements(data.document);
 
-        // CRITICAL FIX: Backend endpoint already stores requirementsDocument AND sets requirementsLocked: true
-        // We should NOT call updateProgress immediately because it can race with the backend's atomic JSONB update
-        // Wait a bit for the backend's atomic JSONB update to complete before calling updateProgress
-        
-        // Wait for backend's atomic JSONB update to complete (prevents race condition)
-        await new Promise(resolve => setTimeout(resolve, 300));
-        
-        // Refresh project data to verify lock was set
-        try {
-          const verifyProject = await apiClient.get(`/api/projects/${projectId}`);
-          const verifyProgress = (verifyProject as any)?.journeyProgress;
-          const isLocked = verifyProgress?.requirementsLocked === true;
-          const hasDocument = !!verifyProgress?.requirementsDocument;
-          
-          if (isLocked && hasDocument) {
-            console.log('✅ [SSOT] Verified: Requirements document locked successfully by backend');
-            // Update local state to match backend
-            setRequiredDataElements(verifyProgress.requirementsDocument);
-            // CRITICAL FIX: Invalidate React Query cache so Verification step sees the updated requirementsDocument
-            queryClient.invalidateQueries({ queryKey: ["project", projectId] });
-            console.log('✅ [SSOT] Invalidated project query cache to refresh requirementsDocument');
-          } else {
-            console.warn('⚠️ [SSOT] Warning: Requirements document not locked yet - backend may still be processing, retrying...');
-            // Retry after another delay
-            setTimeout(async () => {
-              try {
-                const retryProject = await apiClient.get(`/api/projects/${projectId}`);
-                const retryProgress = (retryProject as any)?.journeyProgress;
-                if (retryProgress?.requirementsLocked === true && retryProgress?.requirementsDocument) {
-                  console.log('✅ [SSOT] Verified on retry: Requirements document locked successfully');
-                  setRequiredDataElements(retryProgress.requirementsDocument);
-                  // CRITICAL FIX: Invalidate cache on retry as well
-                  queryClient.invalidateQueries({ queryKey: ["project", projectId] });
-                }
-              } catch (retryError) {
-                console.warn('⚠️ Could not verify requirements lock status on retry:', retryError);
-              }
-            }, 500);
+        // FIX Issue #7: Backend now returns requirementsLocked in response
+        // No need for arbitrary 300ms delay or polling - backend confirms lock atomically
+        if (data.requirementsLocked) {
+          console.log('✅ [Issue #7 Fix] Backend confirmed requirements locked at:', data.requirementsLockedAt);
+          // Invalidate React Query cache so Verification step sees the updated requirementsDocument
+          await queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+          console.log('✅ [SSOT] Invalidated project query cache to refresh requirementsDocument');
+        } else {
+          // Fallback: If backend didn't confirm lock (old API), do one verification check
+          console.warn('⚠️ [SSOT] Backend did not confirm lock status, verifying...');
+          try {
+            const verifyProject = await apiClient.get(`/api/projects/${projectId}`);
+            const verifyProgress = (verifyProject as any)?.journeyProgress;
+            if (verifyProgress?.requirementsLocked === true && verifyProgress?.requirementsDocument) {
+              console.log('✅ [SSOT] Verified: Requirements document locked successfully');
+              setRequiredDataElements(verifyProgress.requirementsDocument);
+              await queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+            }
+          } catch (verifyError) {
+            console.warn('⚠️ Could not verify requirements lock status:', verifyError);
           }
-        } catch (verifyError) {
-          console.warn('⚠️ Could not verify requirements lock status:', verifyError);
         }
-        
-        // Only update currentStep AFTER verifying lock is set (backend handles requirementsDocument)
-        // The PATCH endpoint now has protection to preserve the lock
+
+        // PHASE 6 FIX (ROOT CAUSE #1): Save requirementsDocument to journeyProgress IMMEDIATELY
+        // Don't rely solely on backend - ensure SSOT is updated from frontend
         await updateProgress({
-          currentStep: 'prepare'
+          currentStep: 'prepare',
+          requirementsDocument: data.document,
+          requirementsLocked: true
         });
 
-        console.log('✅ [SSOT] Generated data requirements - backend will persist and lock the document');
+        console.log(`✅ [Prepare] Saved requirementsDocument with ${data.document.analysisPath?.length || 0} analyses to journeyProgress SSOT`);
+        // FIX: Return the document so callers can use it immediately without waiting for state update
+        return data.document;
       } else {
         throw new Error('Invalid response from server');
       }
@@ -678,6 +752,7 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
         description: "Failed to generate data requirements. Please try again.",
         variant: "destructive"
       });
+      return null;
     } finally {
       setLoadingDataElements(false);
     }
@@ -1396,12 +1471,20 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
                   return;
                 }
 
+                // FIX: Track the document from auto-generation so we can use it even before React state updates
+                let generatedDocument: any = null;
+
                 // Auto-generate requirements document before proceeding
                 // This ensures Verification, Transformation, and Execute steps have data
                 if (!requiredDataElements && analysisGoal.trim() && businessQuestions.trim()) {
                   console.log('📋 [Auto-Generate] Generating requirements before navigation...');
                   try {
-                    await generateDataRequirements();
+                    // FIX: Capture the returned document directly (don't rely on state update)
+                    generatedDocument = await generateDataRequirements();
+                    console.log('📋 [Auto-Generate] Got document directly:', {
+                      hasDocument: !!generatedDocument,
+                      elementsCount: generatedDocument?.requiredDataElements?.length || 0
+                    });
                   } catch (error) {
                     console.warn('⚠️ [Auto-Generate] Failed to generate requirements, proceeding anyway:', error);
                   }
@@ -1413,9 +1496,34 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
                   text: q.trim()
                 }));
 
+                // FIX: Use the freshly generated document OR the state value (state may be stale)
+                const effectiveRequirementsDoc = generatedDocument || requiredDataElements;
+
                 // Mark step as complete and save all step data
+                // FIX: Use async version and await completion before navigation
+                // This ensures data is persisted to database before verification step loads
                 try {
-                  updateProgress({
+                  // FIX: ALWAYS include requirementsDocument in the progress update
+                  // This ensures the document flows from Prepare step to Verification step
+
+                  // ✅ FIX: Extract analysis types from analysisPath for non-business journeys
+                  // For business journeys, use selectedTemplates (user picks templates)
+                  // For non-tech/technical journeys, extract from DS Agent's analysisPath
+                  let analysisTypesToSave = selectedTemplates;
+
+                  if (selectedTemplates.length === 0 && effectiveRequirementsDoc?.analysisPath?.length > 0) {
+                    // Extract analysis type IDs from analysisPath
+                    analysisTypesToSave = effectiveRequirementsDoc.analysisPath.map((a: any) => {
+                      // Priority: analysisType > analysisId > analysisName (normalized)
+                      const typeId = a.analysisType || a.analysisId ||
+                        (a.analysisName?.toLowerCase().replace(/\s+/g, '-'));
+                      return typeId;
+                    }).filter(Boolean);
+
+                    console.log('📋 [Prepare] Extracted analysis types from analysisPath:', analysisTypesToSave);
+                  }
+
+                  const progressPayload: any = {
                     currentStep: 'data-verification',
                     completedSteps: [...(journeyProgress?.completedSteps || []), 'prepare'],
                     analysisGoal: analysisGoal.trim(),
@@ -1425,15 +1533,71 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
                       secondary: secondaryAudiences,
                       decisionContext: decisionContext.trim() || undefined
                     },
-                    selectedAnalysisTypes: selectedTemplates,
+                    selectedAnalysisTypes: analysisTypesToSave,
                     stepTimestamps: {
                       ...(journeyProgress?.stepTimestamps || {}),
                       prepareCompleted: new Date().toISOString()
                     }
+                  };
+
+                  // CRITICAL: Include requirementsDocument if available
+                  // FIX: Use effectiveRequirementsDoc which includes freshly generated document
+                  // This prevents data loss when the backend merge doesn't preserve it
+                  if (effectiveRequirementsDoc) {
+                    progressPayload.requirementsDocument = effectiveRequirementsDoc;
+                    progressPayload.requirementsLocked = true;
+                    console.log('📋 [Navigation Fix] Including requirementsDocument in progress update:', {
+                      elementsCount: effectiveRequirementsDoc.requiredDataElements?.length || 0,
+                      analysisPathCount: effectiveRequirementsDoc.analysisPath?.length || 0,
+                      source: generatedDocument ? 'freshly-generated' : 'state'
+                    });
+                  } else {
+                    console.warn('⚠️ [Navigation] No requirementsDocument available - Verification step may redirect back');
+                  }
+
+                  console.log('📋 [Navigation] Sending progressPayload to backend:', {
+                    hasRequirementsDocument: !!progressPayload.requirementsDocument,
+                    requirementsLocked: progressPayload.requirementsLocked,
+                    currentStep: progressPayload.currentStep,
+                    keys: Object.keys(progressPayload)
                   });
 
-                  // Navigate to next step
+                  const saveResult = await updateProgressAsync(progressPayload);
+                  console.log('📋 [Navigation] Backend save result:', {
+                    success: !!saveResult,
+                    hasJourneyProgress: !!saveResult?.journeyProgress,
+                    hasRequirementsDoc: !!saveResult?.journeyProgress?.requirementsDocument,
+                    requirementsLocked: saveResult?.journeyProgress?.requirementsLocked
+                  });
+
+                  // Force cache refresh to ensure verification step gets fresh data
+                  await queryClient.refetchQueries({ queryKey: ["project", currentProjectId] });
+
+                  // CRITICAL: Verify data actually persisted before navigation
+                  // This prevents navigation to Verification step with stale/missing data
+                  const verifiedProject = queryClient.getQueryData(["project", currentProjectId]) as any;
+                  const verifiedReqDoc = verifiedProject?.journeyProgress?.requirementsDocument;
+
+                  console.log('📋 [Navigation] Pre-navigation verification:', {
+                    hasVerifiedProject: !!verifiedProject,
+                    hasVerifiedRequirementsDoc: !!verifiedReqDoc,
+                    verifiedElementsCount: verifiedReqDoc?.requiredDataElements?.length || 0,
+                    verifiedLocked: verifiedProject?.journeyProgress?.requirementsLocked
+                  });
+
+                  if (!verifiedReqDoc) {
+                    console.error('❌ [Navigation] Requirements document did not persist! Blocking navigation.');
+                    toast({
+                      title: "Save Error",
+                      description: "Failed to save requirements. Please try again.",
+                      variant: "destructive"
+                    });
+                    return; // Block navigation
+                  }
+
+                  // Navigate to next step (only after data is confirmed persisted)
                   if (onNext) {
+                    console.log('✅ [Navigation] Verified persistence, proceeding to Verification step');
                     onNext();
                   }
                 } catch (error: any) {

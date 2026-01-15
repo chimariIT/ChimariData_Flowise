@@ -7,6 +7,8 @@
 
 import { BusinessDomain, AnalysisGoal, BusinessTemplate, TemplateWorkflowStep, TemplateDataField, TemplateVisualization, TemplateDeliverable } from './business-templates';
 import { nanoid } from 'nanoid';
+import { semanticSearchService } from './semantic-search-service';
+import { executeTool } from './mcp-tool-registry';
 
 export interface TemplateResearchRequest {
     industry?: BusinessDomain;
@@ -196,29 +198,82 @@ export class TemplateResearchAgent {
 
     /**
      * Research and generate template based on request
+     * Now uses vector search to find existing templates first, then falls back to web research,
+     * and finally generates from knowledge base if no matches found.
      */
     async researchTemplate(request: TemplateResearchRequest): Promise<ResearchedTemplate> {
-        console.log('Researching template for:', request);
+        console.log('🔍 [TemplateResearchAgent] Researching template for:', request);
 
-        // Step 1: Identify relevant use case
+        // Build search query from request
+        const searchQuery = [
+            request.useCase,
+            ...(request.businessGoals || []),
+            ...(request.keywords || [])
+        ].filter(Boolean).join(' ');
+
+        // Step 1: Check for existing templates via vector search
+        if (searchQuery.length > 0) {
+            console.log('🔍 [TemplateResearchAgent] Searching existing templates with query:', searchQuery);
+
+            try {
+                const existingMatches = await semanticSearchService.findSimilarTemplates(searchQuery, {
+                    limit: 3,
+                    minSimilarity: 0.6,
+                    industry: request.industry,
+                    isActive: true
+                });
+
+                if (existingMatches.length > 0 && existingMatches[0].similarity >= 0.75) {
+                    console.log(`✅ [TemplateResearchAgent] Found high-confidence match: ${existingMatches[0].item.name} (similarity: ${existingMatches[0].similarity.toFixed(3)})`);
+                    return this.convertToResearchedTemplate(existingMatches[0]);
+                }
+
+                // If medium confidence match found (0.6-0.75), return with lower confidence
+                if (existingMatches.length > 0 && existingMatches[0].similarity >= 0.6) {
+                    console.log(`📊 [TemplateResearchAgent] Found medium-confidence match: ${existingMatches[0].item.name} (similarity: ${existingMatches[0].similarity.toFixed(3)})`);
+                    return this.convertToResearchedTemplate(existingMatches[0]);
+                }
+            } catch (error) {
+                console.warn('⚠️ [TemplateResearchAgent] Vector search failed, continuing with generation:', error);
+            }
+        }
+
+        // Step 2: Try web research if no good database match
+        if (searchQuery.length > 0) {
+            console.log('🌐 [TemplateResearchAgent] No database match, trying web research...');
+            try {
+                const webResults = await this.researchFromWeb(searchQuery, request.industry);
+                if (webResults.length > 0) {
+                    console.log(`✅ [TemplateResearchAgent] Found web research result: ${webResults[0].title}`);
+                    return this.convertWebResultToTemplate(webResults[0], request);
+                }
+            } catch (error) {
+                console.warn('⚠️ [TemplateResearchAgent] Web research failed, continuing with generation:', error);
+            }
+        }
+
+        // Step 3: Generate from knowledge base (original logic)
+        console.log('🔧 [TemplateResearchAgent] Generating template from knowledge base');
+
+        // Step 3a: Identify relevant use case
         const useCase = this.identifyUseCase(request);
 
-        // Step 2: Determine analysis pattern
+        // Step 3b: Determine analysis pattern
         const analysisPattern = this.determineAnalysisPattern(useCase, request);
 
-        // Step 3: Generate workflow steps
+        // Step 3c: Generate workflow steps
         const workflow = this.generateWorkflow(analysisPattern, request);
 
-        // Step 4: Identify required data fields
+        // Step 3d: Identify required data fields
         const dataFields = this.identifyRequiredDataFields(useCase, request);
 
-        // Step 5: Determine visualizations
+        // Step 3e: Determine visualizations
         const visualizations = this.determineVisualizations(useCase, analysisPattern);
 
-        // Step 6: Define deliverables
+        // Step 3f: Define deliverables
         const deliverables = this.defineDeliverables(useCase, request);
 
-        // Step 7: Map business goals
+        // Step 3g: Map business goals
         const goals = this.mapBusinessGoals(request);
 
         // Generate template
@@ -249,6 +304,138 @@ export class TemplateResearchAgent {
             marketDemand,
             implementationComplexity,
             estimatedPopularity
+        };
+    }
+
+    /**
+     * Convert a vector search match to ResearchedTemplate format
+     */
+    private convertToResearchedTemplate(match: any): ResearchedTemplate {
+        const item = match.item;
+        return {
+            template: {
+                templateId: item.id,
+                name: item.name,
+                description: item.summary || item.description,
+                domain: item.industry as BusinessDomain,
+                goals: (item.metadata as any)?.goals || [],
+                workflow: item.steps || [],
+                requiredDataFields: ((item.metadata as any)?.requiredElements || []).map((e: string) => ({
+                    fieldName: e,
+                    dataType: 'string' as const,
+                    description: `Required: ${e}`,
+                    example: ''
+                })),
+                visualizations: (item.visualizationTypes || []).map((v: string) => ({
+                    type: v.includes('bar') ? 'bar' : v.includes('line') ? 'line' : 'scatter',
+                    title: v,
+                    xAxis: 'category',
+                    yAxis: 'value'
+                })),
+                deliverables: (item.expectedArtifacts || []).map((a: string) => ({
+                    name: a,
+                    type: 'report' as const,
+                    format: ['PDF']
+                })),
+                complexity: item.contentDepth as 'beginner' | 'intermediate' | 'advanced' || 'intermediate',
+                tags: (item.metadata as any)?.tags || []
+            },
+            confidence: match.similarity,
+            researchSources: ['Template database (vector search)'],
+            marketDemand: match.similarity >= 0.85 ? 'high' : match.similarity >= 0.7 ? 'medium' : 'low',
+            implementationComplexity: item.contentDepth === 'comprehensive' ? 'high' : item.contentDepth === 'standard' ? 'medium' : 'low',
+            estimatedPopularity: Math.round(match.similarity * 100)
+        };
+    }
+
+    /**
+     * Search the web for template information using the web_researcher tool
+     */
+    private async researchFromWeb(query: string, industry?: BusinessDomain): Promise<any[]> {
+        try {
+            console.log('🌐 [TemplateResearchAgent] Searching web for:', query);
+
+            const result = await executeTool('web_researcher', 'template_research_agent', {
+                query: `${industry || ''} data analysis template ${query} best practices`,
+                depth: 'standard',
+                sources: ['industry_reports', 'best_practices', 'academic']
+            });
+
+            if (result && (result as any).success && (result as any).results?.length > 0) {
+                console.log(`✅ [TemplateResearchAgent] Found ${(result as any).results.length} web results`);
+                return (result as any).results.map((r: any) => ({
+                    title: r.title,
+                    description: r.snippet || r.description,
+                    url: r.url,
+                    relevance: r.relevance || 0.7,
+                    content: this.extractTemplateElements(r.content || r.description || '')
+                }));
+            }
+
+            return [];
+        } catch (error) {
+            console.warn('⚠️ [TemplateResearchAgent] Web research unavailable:', error);
+            return [];
+        }
+    }
+
+    /**
+     * Extract structured template elements from web content
+     */
+    private extractTemplateElements(content: string): { dataElements?: string[]; analysisTypes?: string[]; visualizations?: string[] } {
+        const dataElements: string[] = [];
+        const analysisTypes: string[] = [];
+        const visualizations: string[] = [];
+
+        // Common data element patterns
+        const elementPatterns = ['customer_id', 'employee_id', 'transaction_date', 'amount', 'revenue', 'satisfaction', 'engagement'];
+        // Common analysis types
+        const analysisPatterns = ['regression', 'correlation', 'clustering', 'time series', 'forecasting', 'segmentation'];
+        // Common visualizations
+        const vizPatterns = ['bar chart', 'line chart', 'scatter plot', 'heatmap', 'dashboard'];
+
+        const contentLower = content?.toLowerCase() || '';
+
+        elementPatterns.forEach(p => { if (contentLower.includes(p)) dataElements.push(p); });
+        analysisPatterns.forEach(p => { if (contentLower.includes(p)) analysisTypes.push(p); });
+        vizPatterns.forEach(p => { if (contentLower.includes(p)) visualizations.push(p); });
+
+        return { dataElements, analysisTypes, visualizations };
+    }
+
+    /**
+     * Convert a web research result to ResearchedTemplate format
+     */
+    private convertWebResultToTemplate(webResult: any, request: TemplateResearchRequest): ResearchedTemplate {
+        return {
+            template: {
+                templateId: `web_${nanoid(8)}`,
+                name: webResult.title,
+                description: webResult.description,
+                domain: request.industry,
+                goals: this.mapBusinessGoals(request),
+                workflow: this.generateWorkflow('predictive_ml', request),
+                requiredDataFields: (webResult.content?.dataElements || []).map((e: string) => ({
+                    fieldName: e,
+                    dataType: 'string' as const,
+                    description: `Required: ${e}`,
+                    example: ''
+                })),
+                visualizations: (webResult.content?.visualizations || []).map((v: string) => ({
+                    type: v.includes('bar') ? 'bar' : v.includes('line') ? 'line' : 'scatter',
+                    title: v,
+                    xAxis: 'category',
+                    yAxis: 'value'
+                })),
+                deliverables: [{ name: 'Analysis Report', type: 'report' as const, format: ['PDF'] }],
+                complexity: 'intermediate',
+                tags: [...(request.keywords || []), request.industry || 'general']
+            },
+            confidence: webResult.relevance * 0.8, // Slightly lower confidence for web-sourced
+            researchSources: [`Web research: ${webResult.url}`],
+            marketDemand: 'medium',
+            implementationComplexity: 'medium',
+            estimatedPopularity: 70
         };
     }
 

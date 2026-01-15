@@ -7,6 +7,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Edit3, Save, X, Plus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { apiClient } from "@/lib/api";
+import { queryClient } from "@/lib/queryClient";
 
 interface SchemaEditorProps {
   project: any;
@@ -43,13 +45,31 @@ export default function SchemaEditor({ project }: SchemaEditorProps) {
     });
   };
 
-  const handleSaveField = (fieldName: string) => {
-    // Here you would typically save to the backend
-    toast({
-      title: "Field updated",
-      description: `${fieldName} has been updated successfully`,
-    });
-    setEditingField(null);
+
+  const handleSaveField = async (fieldName: string) => {
+    try {
+      const updatedSchema = {
+        ...schema,
+        [fieldName]: fieldEdits[fieldName] || schema[fieldName]
+      };
+
+      await apiClient.updateProjectSchema(project.id, updatedSchema);
+
+      toast({
+        title: "Field updated",
+        description: `${fieldName} has been updated successfully`,
+      });
+      setEditingField(null);
+      // Trigger a refresh
+      await queryClient.invalidateQueries({ queryKey: ['/api/projects', project.id] });
+    } catch (error) {
+      console.error('Failed to update schema:', error);
+      toast({
+        title: "Update failed",
+        description: "Failed to save schema changes",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleCancelEdit = () => {
@@ -67,12 +87,24 @@ export default function SchemaEditor({ project }: SchemaEditorProps) {
     });
   };
 
-  const handleSaveDescription = () => {
-    // Here you would typically save to the backend
-    toast({
-      title: "Description updated",
-      description: "Project description has been saved",
-    });
+  const handleSaveDescription = async () => {
+    try {
+      await apiClient.put(`/api/projects/${project.id}`, { description: projectDescription });
+
+      await queryClient.invalidateQueries({ queryKey: ['/api/projects', project.id] });
+
+      toast({
+        title: "Description updated",
+        description: "Project description has been saved successfully",
+      });
+    } catch (error) {
+      console.error('Failed to update description:', error);
+      toast({
+        title: "Update failed",
+        description: "Failed to save description",
+        variant: "destructive",
+      });
+    }
   };
 
   return (
@@ -146,7 +178,7 @@ export default function SchemaEditor({ project }: SchemaEditorProps) {
                           </Select>
                         </div>
                       </div>
-                      
+
                       <div>
                         <label className="text-sm font-medium mb-2 block">Description</label>
                         <Textarea
@@ -178,11 +210,11 @@ export default function SchemaEditor({ project }: SchemaEditorProps) {
                             <Badge variant="secondary">Nullable</Badge>
                           )}
                         </div>
-                        
+
                         {fieldInfo.description && (
                           <p className="text-gray-600 text-sm mb-2">{fieldInfo.description}</p>
                         )}
-                        
+
                         {fieldInfo.sampleValues && fieldInfo.sampleValues.length > 0 && (
                           <div className="flex flex-wrap gap-1">
                             <span className="text-xs text-gray-500 mr-2">Sample values:</span>
@@ -199,7 +231,7 @@ export default function SchemaEditor({ project }: SchemaEditorProps) {
                           </div>
                         )}
                       </div>
-                      
+
                       <Button
                         size="sm"
                         variant="ghost"

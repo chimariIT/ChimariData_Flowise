@@ -747,12 +747,16 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
                             <p className="text-sm font-medium text-slate-500 mb-2 uppercase tracking-wide">Data Sources Used</p>
                             <div className="flex flex-wrap gap-2">
                               {qam.requiredDataElements && qam.requiredDataElements.length > 0 ? (
-                                qam.requiredDataElements.map((elemId: string) => (
-                                  <Badge key={elemId} variant="outline" className="bg-white text-slate-700">
-                                    <Database className="w-3 h-3 mr-1 text-blue-500" />
-                                    {elemId}
-                                  </Badge>
-                                ))
+                                qam.requiredDataElements.map((elem: any, elemIdx: number) => {
+                                  // Handle both string IDs and object format
+                                  const elemId = typeof elem === 'string' ? elem : (elem.elementId || elem.elementName || elem.id || elem.name || `element-${elemIdx}`);
+                                  return (
+                                    <Badge key={elemId} variant="outline" className="bg-white text-slate-700">
+                                      <Database className="w-3 h-3 mr-1 text-blue-500" />
+                                      {elemId}
+                                    </Badge>
+                                  );
+                                })
                               ) : (
                                 <span className="text-sm text-slate-400 italic">No specific elements linked</span>
                               )}

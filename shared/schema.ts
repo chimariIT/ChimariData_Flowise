@@ -16,9 +16,33 @@ import {
   check,
   foreignKey,
   uniqueIndex,
+  customType,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
+
+// pgvector helper (1536 dimensions)
+const vector = customType<{ data: number[] }>({
+  dataType: () => "vector(1536)",
+  fromDriver: (value) => {
+    if (typeof value === "string") {
+      try {
+        // pgvector returns vectors in format [1,2,3,...]
+        return JSON.parse(value) as number[];
+      } catch {
+        return value as unknown as number[];
+      }
+    }
+    return value as unknown as number[];
+  },
+  toDriver: (value) => {
+    // pgvector expects vectors in format [1,2,3,...]
+    if (Array.isArray(value)) {
+      return `[${value.join(',')}]`;
+    }
+    return value;
+  },
+});
 
 // User role and permission types
 export const UserRoleEnum = z.enum(["non-tech", "business", "technical", "consultation", "custom"]);
@@ -27,7 +51,7 @@ export type UserRole = z.infer<typeof UserRoleEnum>;
 export const TechnicalLevelEnum = z.enum(["beginner", "intermediate", "advanced", "expert"]);
 export type TechnicalLevel = z.infer<typeof TechnicalLevelEnum>;
 
-export const JourneyTypeEnum = z.enum(["ai_guided", "template_based", "self_service", "consultation", "custom"]);
+export const JourneyTypeEnum = z.enum(["non-tech", "business", "technical", "consultation", "custom"]);
 export type JourneyType = z.infer<typeof JourneyTypeEnum>;
 
 // User role configuration schema
@@ -58,6 +82,7 @@ export const userPermissionsSchema = z.object({
   maxDatasetSizeMB: z.number().default(5),
   maxAiQueriesPerMonth: z.number().default(10),
   maxVisualizationsPerProject: z.number().default(3),
+  maxComputeMinutesPerMonth: z.number().default(60),
   allowedAiProviders: z.array(z.string()).default(["gemini"]),
   canUseAdvancedModels: z.boolean().default(false),
   createdAt: z.date(),
@@ -72,7 +97,7 @@ export type TechnicalQueryType = z.infer<typeof TechnicalQuery>;
 export const dataProjectSchema = z.object({
   id: z.string(),
   userId: z.string(),
-  journeyType: JourneyTypeEnum.default("ai_guided"),
+  journeyType: JourneyTypeEnum.default("non-tech"),
   name: z.string(),
   fileName: z.string(),
   fileSize: z.number(),
@@ -188,7 +213,32 @@ export const dataProjectSchema = z.object({
     name: z.string(),
     config: z.any(),
   })).optional(),
-  multiAgentCoordination: z.any().optional(),
+  multiAgentCoordination: z.object({
+    coordinationId: z.string().optional(),
+    projectId: z.string().optional(),
+    expertOpinions: z.array(z.object({
+      agentId: z.string(),
+      agentName: z.string().optional(),
+      opinion: z.record(z.any()).optional(),
+      confidence: z.number().optional(),
+      timestamp: z.string().optional(),
+    })).optional(),
+    synthesis: z.object({
+      overallAssessment: z.enum(["proceed", "proceed_with_caution", "revise_approach", "not_feasible"]).optional(),
+      confidence: z.number().optional(),
+      keyFindings: z.array(z.string()).optional(),
+      actionableRecommendations: z.array(z.string()).optional(),
+      estimatedTimeline: z.string().optional(),
+      estimatedCost: z.string().optional(),
+      expertConsensus: z.object({
+        dataQuality: z.string().optional(),
+        technicalFeasibility: z.string().optional(),
+        businessValue: z.string().optional(),
+      }).optional(),
+    }).optional(),
+    timestamp: z.union([z.string(), z.date()]).optional(),
+    totalResponseTime: z.number().optional(),
+  }).optional(),
   purchasedFeatures: z.array(z.enum(["transformation", "analysis", "visualization", "ai_insights"])).optional(),
   isPaid: z.boolean().default(false),
   selectedFeatures: z.array(z.string()).optional(),
@@ -287,16 +337,16 @@ export const users = pgTable("users", {
   profileImageUrl: varchar("profile_image_url"),
   provider: varchar("provider").notNull().default("email"), // "email", "google", "github"
   providerId: varchar("provider_id"), // OAuth provider user ID
-  
+
   // Email verification
   emailVerified: boolean("email_verified").default(false),
   emailVerificationToken: varchar("email_verification_token"),
   emailVerificationExpires: timestamp("email_verification_expires"),
-  
+
   // Password reset
   passwordResetToken: varchar("password_reset_token"),
   passwordResetExpires: timestamp("password_reset_expires"),
-  
+
   // Subscription and payment tiers
   subscriptionTier: varchar("subscription_tier").notNull().default("none").$type<"none" | "trial" | "starter" | "professional" | "enterprise">(), // Admin-configured tiers tied to Stripe
   subscriptionStatus: varchar("subscription_status").default("inactive").$type<"active" | "inactive" | "cancelled" | "past_due" | "expired">(), // Stripe subscription status
@@ -305,7 +355,7 @@ export const users = pgTable("users", {
   subscriptionExpiresAt: timestamp("subscription_expires_at"),
   credits: decimal("credits").default("0"),
   isPaid: boolean("is_paid").default(false), // Added field
-  
+
   // Usage tracking for tier limits
   monthlyUploads: integer("monthly_uploads").default(0),
   monthlyDataVolume: integer("monthly_data_volume").default(0), // in MB
@@ -335,29 +385,29 @@ export const users = pgTable("users", {
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => ({
   // CHECK constraints to enforce admin-configured subscription tiers
-  subscriptionTierCheck: check("subscription_tier_check", 
+  subscriptionTierCheck: check("subscription_tier_check",
     sql`${table.subscriptionTier} IN ('none', 'trial', 'starter', 'professional', 'enterprise')`
   ),
-  subscriptionStatusCheck: check("subscription_status_check", 
+  subscriptionStatusCheck: check("subscription_status_check",
     sql`${table.subscriptionStatus} IN ('active', 'inactive', 'cancelled', 'past_due', 'expired')`
   ),
-  userRoleCheck: check("user_role_check", 
+  userRoleCheck: check("user_role_check",
     sql`${table.userRole} IN ('non-tech', 'business', 'technical', 'consultation', 'custom')`
   ),
-  technicalLevelCheck: check("technical_level_check", 
+  technicalLevelCheck: check("technical_level_check",
     sql`${table.technicalLevel} IN ('beginner', 'intermediate', 'advanced', 'expert')`
   ),
-  preferredJourneyCheck: check("preferred_journey_check", 
-    sql`${table.preferredJourney} IS NULL OR ${table.preferredJourney} IN ('ai_guided', 'template_based', 'self_service', 'consultation')`
+  preferredJourneyCheck: check("preferred_journey_check",
+    sql`${table.preferredJourney} IS NULL OR ${table.preferredJourney} IN ('non-tech', 'business', 'technical', 'consultation', 'custom')`
   ),
   // Ensure non-negative usage values
-  monthlyUploadsCheck: check("monthly_uploads_check", 
+  monthlyUploadsCheck: check("monthly_uploads_check",
     sql`${table.monthlyUploads} >= 0`
   ),
-  monthlyDataVolumeCheck: check("monthly_data_volume_check", 
+  monthlyDataVolumeCheck: check("monthly_data_volume_check",
     sql`${table.monthlyDataVolume} >= 0`
   ),
-  monthlyAIInsightsCheck: check("monthly_ai_insights_check", 
+  monthlyAIInsightsCheck: check("monthly_ai_insights_check",
     sql`${table.monthlyAIInsights} >= 0`
   ),
   // Indexes for performance
@@ -421,6 +471,7 @@ export const userPermissions = pgTable("user_permissions", {
   maxDatasetSizeMB: integer("max_dataset_size_mb").default(5), // 5MB for free tier
   maxAiQueriesPerMonth: integer("max_ai_queries_per_month").default(10),
   maxVisualizationsPerProject: integer("max_visualizations_per_project").default(3),
+  maxComputeMinutesPerMonth: integer("max_compute_minutes_per_month").default(60),
 
   // AI service permissions
   allowedAiProviders: jsonb("allowed_ai_providers").default(['gemini']), // JSON array of provider names
@@ -610,10 +661,11 @@ export const projects = pgTable("projects", {
   userId: varchar("user_id").notNull(), // Reference to users.id (consistent with analysis service)
   name: varchar("name").notNull(),
   description: text("description"),
-    status: varchar("status").notNull().default("draft"), // "draft", "uploading", "processing", "pii_review", "ready", "analyzing", "checkpoint", "generating", "completed", "error", "cancelled", plan_*
-  journeyType: varchar("journey_type").notNull(), // "ai_guided", "template_based", "self_service", "consultation"
+  status: varchar("status").notNull().default("draft"), // "draft", "uploading", "processing", "pii_review", "ready", "analyzing", "checkpoint", "generating", "completed", "error", "cancelled", plan_*
+  journeyType: varchar("journey_type").notNull(), // "non-tech", "business", "technical", "consultation", "custom"
   lastArtifactId: varchar("last_artifact_id"), // Quick reference to latest artifact
   analysisResults: jsonb("analysis_results"), // Store analysis results from analysis-execution service
+  multiAgentCoordination: jsonb("multi_agent_coordination"), // Store multi-agent coordination results
   consultationProposalId: varchar("consultation_proposal_id"), // Legacy column that exists in database
 
   // Journey lifecycle billing fields
@@ -634,12 +686,12 @@ export const projects = pgTable("projects", {
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => ({
-    // CHECK constraints for projects table
-    projectStatusCheck: check("project_status_check",
-      sql`${table.status} IN ('draft', 'uploading', 'processing', 'pii_review', 'ready', 'analyzing', 'checkpoint', 'generating', 'plan_creation', 'plan_review', 'plan_approved', 'completed', 'error', 'cancelled')`
-    ),
+  // CHECK constraints for projects table
+  projectStatusCheck: check("project_status_check",
+    sql`${table.status} IN ('draft', 'uploading', 'processing', 'pii_review', 'ready', 'analyzing', 'checkpoint', 'generating', 'plan_creation', 'plan_review', 'plan_approved', 'completed', 'error', 'cancelled')`
+  ),
   projectJourneyTypeCheck: check("project_journey_type_check",
-    sql`${table.journeyType} IN ('ai_guided', 'template_based', 'self_service', 'consultation', 'custom')`
+    sql`${table.journeyType} IN ('non-tech', 'business', 'technical', 'consultation', 'custom')`
   ),
   // Foreign key constraints
   userIdFk: foreignKey({
@@ -690,6 +742,87 @@ export const projectSessions = pgTable("project_sessions", {
   projectIdIdx: index("project_sessions_project_id_idx").on(table.projectId),
   journeyTypeIdx: index("project_sessions_journey_type_idx").on(table.journeyType),
   expiresAtIdx: index("project_sessions_expires_at_idx").on(table.expiresAt),
+}));
+
+// Project questions table - stores user questions for analysis
+export const projectQuestions = pgTable("project_questions", {
+  id: varchar("id").primaryKey().notNull(),
+  projectId: varchar("project_id").notNull(),
+  questionText: text("question_text").notNull(),
+  questionOrder: integer("question_order").default(0),
+  status: varchar("status").default("pending"), // pending, answered, skipped
+  answer: text("answer"),
+  evidence: jsonb("evidence"), // Supporting data for the answer
+  confidenceScore: doublePrecision("confidence_score"),
+  answeredAt: timestamp("answered_at"),
+  // Semantic Search - for finding similar questions across projects
+  // Vector embedding (1536 dimensions) for cross-project learning
+  embedding: vector("embedding").$type<number[] | null>(), // semantic embedding vector (pgvector)
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  projectIdIdx: index("project_questions_project_id_idx").on(table.projectId),
+  statusIdx: index("project_questions_status_idx").on(table.status),
+}));
+
+// Data Scientist Analysis Results - stores structured analysis outputs
+export const dsAnalysisResults = pgTable("ds_analysis_results", {
+  id: varchar("id").primaryKey().notNull(),
+  projectId: varchar("project_id").notNull(),
+  executionId: varchar("execution_id"),
+  analysisType: varchar("analysis_type").notNull(), // correlation, regression, clustering, etc.
+  resultData: jsonb("result_data"), // The actual analysis results
+  statistics: jsonb("statistics"), // Statistical measures
+  visualizationConfig: jsonb("visualization_config"), // Chart configuration
+  confidenceScore: doublePrecision("confidence_score"),
+  status: varchar("status").default("completed"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  projectIdIdx: index("ds_analysis_results_project_id_idx").on(table.projectId),
+  executionIdIdx: index("ds_analysis_results_execution_id_idx").on(table.executionId),
+  analysisTypeIdx: index("ds_analysis_results_type_idx").on(table.analysisType),
+}));
+
+// Insights - AI-generated business insights from analysis
+export const insights = pgTable("insights", {
+  id: varchar("id").primaryKey().notNull(),
+  projectId: varchar("project_id").notNull(),
+  executionId: varchar("execution_id"),
+  questionId: varchar("question_id"), // Link to projectQuestions
+  insightType: varchar("insight_type").notNull(), // key_finding, recommendation, warning, opportunity
+  title: varchar("title").notNull(),
+  description: text("description").notNull(),
+  evidence: jsonb("evidence"), // Supporting data
+  confidence: doublePrecision("confidence"),
+  priority: integer("priority").default(0), // For ranking insights
+  tags: jsonb("tags").$type<string[]>(),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  projectIdIdx: index("insights_project_id_idx").on(table.projectId),
+  executionIdIdx: index("insights_execution_id_idx").on(table.executionId),
+  typeIdx: index("insights_type_idx").on(table.insightType),
+}));
+
+// Data Engineer PII Detections - tracks PII columns and anonymization
+export const dePiiDetections = pgTable("de_pii_detections", {
+  id: varchar("id").primaryKey().notNull(),
+  projectId: varchar("project_id").notNull(),
+  datasetId: varchar("dataset_id"),
+  columnName: varchar("column_name").notNull(),
+  piiType: varchar("pii_type").notNull(), // email, phone, ssn, name, address, etc.
+  confidence: doublePrecision("confidence"),
+  sampleValues: jsonb("sample_values").$type<string[]>(),
+  action: varchar("action").default("pending"), // pending, exclude, anonymize, keep
+  anonymizationMethod: varchar("anonymization_method"), // hash, mask, redact, generalize
+  userDecision: varchar("user_decision"), // User's choice
+  decisionTimestamp: timestamp("decision_timestamp"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  projectIdIdx: index("de_pii_detections_project_id_idx").on(table.projectId),
+  columnNameIdx: index("de_pii_detections_column_name_idx").on(table.columnName),
+  actionIdx: index("de_pii_detections_action_idx").on(table.action),
 }));
 
 // Enterprise inquiries table
@@ -823,6 +956,31 @@ export const subscriptionTierPricing = pgTable("subscription_tier_pricing", {
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => ({
   activeIdx: index("subscription_tier_pricing_active_idx").on(table.isActive),
+}));
+
+// Billing campaigns table (admin-managed promotional campaigns)
+export const billingCampaigns = pgTable("billing_campaigns", {
+  id: varchar("id").primaryKey().notNull(),
+  name: varchar("name").notNull(),
+  type: varchar("type").notNull(), // 'percentage_discount', 'fixed_discount', 'trial_extension', 'quota_boost'
+  value: integer("value").notNull(), // Percentage or fixed amount (in cents for fixed)
+  targetTiers: jsonb("target_tiers").default('[]'), // Array of tier IDs to apply to
+  targetRoles: jsonb("target_roles").default('[]'), // Array of role names to apply to
+  validFrom: timestamp("valid_from").notNull(),
+  validTo: timestamp("valid_to").notNull(),
+  maxUses: integer("max_uses"), // null = unlimited
+  currentUses: integer("current_uses").default(0).notNull(),
+  couponCode: varchar("coupon_code"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  activeIdx: index("billing_campaigns_active_idx").on(table.isActive),
+  validDatesIdx: index("billing_campaigns_valid_dates_idx").on(table.validFrom, table.validTo),
+  couponCodeIdx: index("billing_campaigns_coupon_code_idx").on(table.couponCode),
+  campaignTypeCheck: check("billing_campaigns_type_check",
+    sql`${table.type} IN ('percentage_discount', 'fixed_discount', 'trial_extension', 'quota_boost')`
+  ),
 }));
 
 // Guided analysis orders table
@@ -970,34 +1128,34 @@ export const audienceProfiles = pgTable("audience_profiles", {
   name: varchar("name").notNull(), // e.g., "Executive Leadership", "Technical Team", "Business Analysts"
   description: text("description"),
   journeyType: varchar("journey_type").notNull(), // non-tech, business, technical, consultation
-  
+
   // Core fields for artifact decision-making
   role: varchar("role").notNull(), // executive, analyst, manager, specialist, sme, consultant
   industry: varchar("industry"), // healthcare, finance, retail, etc.
   seniority: varchar("seniority").notNull(), // junior, senior, director, vp, c_suite
   analyticalMaturity: varchar("analytical_maturity").notNull(), // basic, intermediate, advanced, expert
-  
+
   // Artifact preferences - what types of deliverables this audience prefers
   preferredArtifacts: jsonb("preferred_artifacts").notNull().default('[]'), // ['executive_summary', 'dashboard', 'detailed_report', 'data_export', 'presentation_deck', 'action_plan']
-  
+
   // Communication preferences
   communicationStyle: varchar("communication_style").notNull().default('formal'), // formal, casual, technical, simplified
   detailLevel: varchar("detail_level").notNull().default('medium'), // high, medium, low
   technicalProficiency: varchar("technical_proficiency").notNull().default('intermediate'), // beginner, intermediate, advanced, expert
-  
+
   // Visualization and reporting preferences
   visualizationPreferences: jsonb("visualization_preferences").default('{}'), // Chart types, complexity, interactivity preferences
   reportingFrequency: varchar("reporting_frequency").default('on-demand'), // daily, weekly, monthly, quarterly, on-demand
-  
+
   // Business context for better artifact targeting
   businessContext: text("business_context"), // Specific responsibilities, decision-making authority, team size
   decisionMakingAuthority: varchar("decision_authority"), // individual, team_lead, department_head, executive
   primaryUseCases: jsonb("primary_use_cases").default('[]'), // ['strategic_planning', 'operational_monitoring', 'compliance_reporting', 'performance_analysis']
-  
+
   // Settings
   isDefault: boolean("is_default").default(false), // Whether this is the default profile for the user
   isActive: boolean("is_active").default(true), // Whether this profile is currently active
-  
+
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
@@ -1038,84 +1196,89 @@ export const conversationStates = pgTable("conversation_states", {
 // Default artifact templates for different audience types - helps agents decide what to generate
 export const artifactTemplates = pgTable("artifact_templates", {
   id: varchar("id").primaryKey().notNull(),
-  name: varchar("name").notNull(), // "Executive Dashboard", "Analyst Deep Dive", "SME Technical Report"
-  description: text("description"),
-  targetRole: varchar("target_role").notNull(), // executive, analyst, manager, specialist, sme
-  targetSeniority: varchar("target_seniority").notNull(), // junior, senior, director, vp, c_suite  
-  targetMaturity: varchar("target_maturity").notNull(), // basic, intermediate, advanced, expert
-  
-  // What artifacts this template generates
-  artifactTypes: jsonb("artifact_types").notNull(), // ['executive_summary', 'kpi_dashboard', 'recommendations']
-  
-  // Template configuration
-  visualizationTypes: jsonb("visualization_types").default('[]'), // ['trend_charts', 'kpi_cards', 'comparison_tables']
-  narrativeStyle: varchar("narrative_style").notNull(), // 'executive', 'analytical', 'technical', 'conversational'
-  contentDepth: varchar("content_depth").notNull(), // 'summary', 'detailed', 'comprehensive'
-  interactivityLevel: varchar("interactivity_level").default('medium'), // low, medium, high
-  
-  // Business context
-  useCases: jsonb("use_cases").default('[]'), // ['decision_making', 'monitoring', 'compliance', 'analysis']
-  deliveryFormat: jsonb("delivery_format").default('[]'), // ['pdf', 'dashboard', 'presentation', 'email']
-  
-  // Template priority and usage
-  priority: integer("priority").default(100), // Higher number = higher priority when multiple templates match
-  isActive: boolean("is_active").default(true),
-  usageCount: integer("usage_count").default(0), // Track how often this template is used
-  
+  name: varchar("name").notNull(), // Template name for lookups
+  title: varchar("title").notNull(),
+  summary: text("summary").notNull(),
+  description: text("description"), // Detailed description
+  journeyType: varchar("journey_type").notNull(), // non-tech, business, technical, consultation
+  industry: varchar("industry").notNull().default("general"),
+  persona: varchar("persona"),
+  primaryAgent: varchar("primary_agent"),
+  defaultConfidence: decimal("default_confidence", { precision: 5, scale: 2 }).default("0.8"),
+  expectedArtifacts: jsonb("expected_artifacts").default(sql`'[]'::jsonb`).notNull(),
+  communicationStyle: varchar("communication_style").default("professional"),
+  steps: jsonb("steps").default(sql`'[]'::jsonb`).notNull(),
+  metadata: jsonb("metadata").default(sql`'{}'::jsonb`).notNull(),
+  isSystem: boolean("is_system").default(false),
+  isActive: boolean("is_active").default(true), // Template active status
+  createdBy: varchar("created_by"),
+  embedding: vector("embedding").$type<number[] | null>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-}, (table) => ({
-  roleIdx: index("artifact_templates_role_idx").on(table.targetRole),
-  seniorityIdx: index("artifact_templates_seniority_idx").on(table.targetSeniority),
-  maturityIdx: index("artifact_templates_maturity_idx").on(table.targetMaturity),
-  priorityIdx: index("artifact_templates_priority_idx").on(table.priority),
-  isActiveIdx: index("artifact_templates_is_active_idx").on(table.isActive),
-}));
+
+  // Audience targeting (added for personalization)
+  targetRole: varchar("target_role").default("executive").notNull(), // executive, analyst, manager, specialist, sme
+  targetSeniority: varchar("target_seniority").default("senior").notNull(), // junior, senior, director, vp, c_suite
+  targetMaturity: varchar("target_maturity").default("intermediate").notNull(), // basic, intermediate, advanced, expert
+
+  // Artifact configuration
+  artifactTypes: jsonb("artifact_types").default(sql`'[]'::jsonb`).notNull(), // Types of artifacts this template generates
+  visualizationTypes: jsonb("visualization_types").default(sql`'[]'::jsonb`), // Preferred visualization types
+  narrativeStyle: varchar("narrative_style").default("executive").notNull(), // executive, technical, conversational
+  contentDepth: varchar("content_depth").default("standard").notNull(), // summary, standard, comprehensive
+  interactivityLevel: varchar("interactivity_level").default('medium'), // low, medium, high
+
+  // Template metadata
+  useCases: jsonb("use_cases").default(sql`'[]'::jsonb`), // Common use cases
+  deliveryFormat: jsonb("delivery_format").default(sql`'[]'::jsonb`), // pdf, dashboard, presentation, etc.
+  priority: integer("priority").default(100), // Display/selection priority
+  usageCount: integer("usage_count").default(0), // Track template usage
+});
 
 // Data artifacts for audience-specific data views and exports
 export const dataArtifacts = pgTable("data_artifacts", {
   id: varchar("id").primaryKey().notNull(),
   name: varchar("name").notNull(), // "Executive KPI Summary", "Analyst Dataset", "SME Technical Data"
   description: text("description"),
-  
+
   // Audience targeting
   targetRole: varchar("target_role").notNull(), // executive, analyst, manager, specialist, sme
   targetSeniority: varchar("target_seniority").notNull(), // junior, senior, director, vp, c_suite
   targetMaturity: varchar("target_maturity").notNull(), // basic, intermediate, advanced, expert
-  
+
   // Data characteristics
   dataType: varchar("data_type").notNull(), // aggregated, detailed, raw, filtered, transformed
   aggregationLevel: varchar("aggregation_level").notNull(), // summary, monthly, daily, transaction, individual
   granularity: varchar("granularity").notNull(), // high_level, medium, detailed, comprehensive
-  
+
   // Data content configuration
   includedColumns: jsonb("included_columns").notNull().default('[]'), // Which columns/fields to include
   excludedColumns: jsonb("excluded_columns").default('[]'), // Which columns/fields to exclude (PII, technical details, etc.)
   calculatedFields: jsonb("calculated_fields").default('[]'), // Computed metrics like growth rates, percentages, etc.
-  
+
   // Data filtering and segmentation
   defaultFilters: jsonb("default_filters").default('{}'), // Default data filters (date ranges, categories, etc.)
   segmentationRules: jsonb("segmentation_rules").default('[]'), // How to segment data (by region, department, etc.)
-  
+
   // Export and format preferences  
   exportFormats: jsonb("export_formats").notNull().default('["csv"]'), // csv, excel, json, pdf, dashboard
   visualizationHints: jsonb("visualization_hints").default('{}'), // Suggested chart types for this data
-  
+
   // Data privacy and security
   piiHandling: varchar("pii_handling").default('exclude'), // exclude, anonymize, aggregate, include
   sensitivityLevel: varchar("sensitivity_level").default('public'), // public, internal, confidential, restricted
   accessControls: jsonb("access_controls").default('{}'), // Role-based access rules
-  
+
   // Business context
   useCases: jsonb("use_cases").default('[]'), // ['performance_monitoring', 'strategic_planning', 'operational_analysis']
   businessMetrics: jsonb("business_metrics").default('[]'), // Which KPIs/metrics this data supports
   refreshFrequency: varchar("refresh_frequency").default('on-demand'), // real-time, hourly, daily, weekly, monthly
-  
+
   // Template settings
   priority: integer("priority").default(100), // Higher number = higher priority
   isActive: boolean("is_active").default(true),
   usageCount: integer("usage_count").default(0),
-  
+
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
@@ -1233,6 +1396,7 @@ export const analysisPatterns = pgTable("analysis_patterns", {
   requestedBy: varchar("requested_by"),
   discoveredAt: timestamp("discovered_at"),
   approvedAt: timestamp("approved_at"),
+  embedding: vector("embedding").$type<number[] | null>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
@@ -1994,6 +2158,255 @@ export type InsertKnowledgeNode = typeof knowledgeNodes.$inferInsert;
 export type KnowledgeEdge = typeof knowledgeEdges.$inferSelect;
 export type InsertKnowledgeEdge = typeof knowledgeEdges.$inferInsert;
 
+// ============================================
+// Business Definition Registry
+// Stores business metric definitions for data element mapping
+// Used by BA Agent to translate requirements to transformations
+// ============================================
+
+/**
+ * Business Definitions Registry
+ * Stores how business concepts (e.g., "engagement_score") map to data operations
+ * Enables BA/Researcher agents to lookup and apply business logic
+ */
+export const businessDefinitions = pgTable("business_definitions", {
+  id: varchar("id").primaryKey().$defaultFn(() => nanoid()),
+
+  // Ownership (can be global or project-specific)
+  projectId: varchar("project_id").references(() => projects.id, { onDelete: 'cascade' }),
+  userId: varchar("user_id").references(() => users.id, { onDelete: 'cascade' }),
+
+  // Definition identity
+  conceptName: varchar("concept_name", { length: 200 }).notNull(), // e.g., "engagement_score", "churn_rate"
+  displayName: varchar("display_name", { length: 200 }), // Human-friendly name
+  industry: varchar("industry", { length: 100 }).default("general"), // HR, Finance, Sales, etc.
+  domain: varchar("domain", { length: 100 }), // Specific sub-domain (e.g., "employee_engagement")
+
+  // Business definition (what it means)
+  businessDescription: text("business_description").notNull(), // "Average of Q1-Q5 survey scores"
+  businessContext: text("business_context"), // When/why this metric is used
+
+  // Calculation specification (how to compute it)
+  calculationType: varchar("calculation_type", { length: 50 }).notNull(), // 'direct', 'derived', 'aggregated', 'composite'
+  formula: text("formula"), // Mathematical formula: "(Q1 + Q2 + Q3 + Q4 + Q5) / 5"
+  pseudoCode: text("pseudo_code"), // Step-by-step calculation logic
+  componentFields: jsonb("component_fields").default("[]"), // ["Q1_score", "Q2_score", ...]
+  aggregationMethod: varchar("aggregation_method", { length: 50 }), // 'average', 'sum', 'count', 'weighted_average'
+
+  // Data type expectations
+  expectedDataType: varchar("expected_data_type", { length: 50 }).default("numeric"), // numeric, categorical, boolean
+  valueRange: jsonb("value_range"), // { min: 0, max: 100 } or { values: ["High", "Medium", "Low"] }
+  unit: varchar("unit", { length: 50 }), // "percent", "dollars", "count", etc.
+
+  // Matching patterns (for automatic field detection)
+  matchPatterns: jsonb("match_patterns").default("[]"), // ["engagement", "eng_score", "satisfaction"]
+  synonyms: jsonb("synonyms").default("[]"), // Alternative names for the concept
+
+  // Source tracking
+  sourceType: varchar("source_type", { length: 50 }).default("manual"), // 'manual', 'ai_inferred', 'external_research', 'template'
+  sourceReference: text("source_reference"), // URL or citation for external definitions
+  sourceAgentId: varchar("source_agent_id", { length: 50 }), // Which agent created this
+
+  // Quality metrics
+  confidence: doublePrecision("confidence").default(0.8), // 0-1 confidence in definition
+  usageCount: integer("usage_count").default(0), // How many times used
+  successRate: doublePrecision("success_rate"), // Rate of successful mappings
+  lastUsedAt: timestamp("last_used_at"),
+
+  // Status
+  status: varchar("status", { length: 50 }).default("active"), // 'active', 'deprecated', 'pending_review'
+
+  // Semantic Search
+  // Vector embedding for semantic similarity search (stored as JSONB array, uses pgvector if available)
+  // 1536 dimensions to match OpenAI text-embedding-ada-002 / Gemini padded embeddings
+  embedding: vector("embedding").$type<number[] | null>(), // semantic embedding vector (pgvector)
+
+  // Timestamps
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  conceptNameIdx: index("bd_concept_name_idx").on(table.conceptName),
+  industryIdx: index("bd_industry_idx").on(table.industry),
+  domainIdx: index("bd_domain_idx").on(table.domain),
+  projectIdIdx: index("bd_project_id_idx").on(table.projectId),
+  calculationTypeIdx: index("bd_calculation_type_idx").on(table.calculationType),
+  statusIdx: index("bd_status_idx").on(table.status),
+  // Composite index for lookups
+  industryConceptIdx: index("bd_industry_concept_idx").on(table.industry, table.conceptName),
+}));
+
+export type BusinessDefinition = typeof businessDefinitions.$inferSelect;
+export type InsertBusinessDefinition = typeof businessDefinitions.$inferInsert;
+
+// ============================================
+// Cost Tracking Tables (3-Table Architecture)
+// ============================================
+
+/**
+ * Project Cost Tracking
+ * Aggregated cost tracking per project with category breakdowns
+ */
+export const projectCostTracking = pgTable("project_cost_tracking", {
+  id: varchar("id").primaryKey().$defaultFn(() => nanoid()),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+
+  // Cost breakdown by category (in cents)
+  dataProcessingCost: integer("data_processing_cost").default(0).notNull(),
+  aiQueryCost: integer("ai_query_cost").default(0).notNull(),
+  analysisExecutionCost: integer("analysis_execution_cost").default(0).notNull(),
+  visualizationCost: integer("visualization_cost").default(0).notNull(),
+  exportCost: integer("export_cost").default(0).notNull(),
+  collaborationCost: integer("collaboration_cost").default(0).notNull(),
+  totalCost: integer("total_cost").default(0).notNull(),
+
+  // Journey context
+  journeyType: varchar("journey_type"),
+  subscriptionTier: varchar("subscription_tier"),
+
+  // Billing cycle tracking
+  billingCycle: varchar("billing_cycle").default("monthly"),
+  periodStart: timestamp("period_start").defaultNow().notNull(),
+  periodEnd: timestamp("period_end"),
+
+  // Timestamps
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  projectIdIdx: index("pct_project_id_idx").on(table.projectId),
+  userIdIdx: index("pct_user_id_idx").on(table.userId),
+  billingCycleIdx: index("pct_billing_cycle_idx").on(table.billingCycle),
+}));
+
+/**
+ * Cost Line Items
+ * Detailed transaction log for every cost-incurring action
+ * Stores pricing snapshots for historical accuracy
+ */
+export const costLineItems = pgTable("cost_line_items", {
+  id: varchar("id").primaryKey().$defaultFn(() => nanoid()),
+  projectId: varchar("project_id").references(() => projects.id, { onDelete: 'cascade' }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+
+  // Cost details
+  category: varchar("category").notNull(),
+  description: text("description").notNull(),
+  unitCost: integer("unit_cost").notNull(), // Cost per unit in cents
+  quantity: integer("quantity").default(1).notNull(),
+  totalCost: integer("total_cost").notNull(), // unitCost * quantity (in cents)
+
+  // Pricing context (for audit trail)
+  pricingTierId: varchar("pricing_tier_id"),
+  pricingRuleId: varchar("pricing_rule_id"),
+  pricingSnapshot: jsonb("pricing_snapshot"), // Full pricing config at time of transaction
+
+  // Metadata for attribution
+  metadata: jsonb("metadata").default(sql`'{}'::jsonb`),
+
+  // Timestamps
+  incurredAt: timestamp("incurred_at").defaultNow().notNull(),
+}, (table) => ({
+  projectIdIdx: index("cli_project_id_idx").on(table.projectId),
+  userIdIdx: index("cli_user_id_idx").on(table.userId),
+  categoryIdx: index("cli_category_idx").on(table.category),
+  incurredAtIdx: index("cli_incurred_at_idx").on(table.incurredAt),
+}));
+
+/**
+ * User Monthly Billing
+ * Aggregated monthly billing summaries per user
+ * Used for invoice generation and billing reconciliation
+ */
+export const userMonthlyBilling = pgTable("user_monthly_billing", {
+  id: varchar("id").primaryKey().$defaultFn(() => nanoid()),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+
+  // Billing period
+  billingMonth: varchar("billing_month").notNull(), // Format: YYYY-MM
+  periodStart: timestamp("period_start").notNull(),
+  periodEnd: timestamp("period_end").notNull(),
+
+  // Cost breakdown (in cents)
+  subscriptionCost: integer("subscription_cost").default(0).notNull(),
+  usageCost: integer("usage_cost").default(0).notNull(),
+  overageCost: integer("overage_cost").default(0).notNull(),
+  totalCost: integer("total_cost").notNull(),
+
+  // Category breakdown (JSONB for flexibility)
+  categoryBreakdown: jsonb("category_breakdown").default(sql`'{}'::jsonb`),
+
+  // Billing status
+  status: varchar("status").default("pending").notNull(),
+  invoiceId: varchar("invoice_id"),
+
+  // Timestamps
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  userIdIdx: index("umb_user_id_idx").on(table.userId),
+  billingMonthIdx: index("umb_billing_month_idx").on(table.billingMonth),
+  statusIdx: index("umb_status_idx").on(table.status),
+  uniqueUserMonth: uniqueIndex("umb_user_month_unique").on(table.userId, table.billingMonth),
+}));
+
+// Zod Schemas for Cost Tracking Tables
+export const projectCostTrackingSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  userId: z.string(),
+  dataProcessingCost: z.number().int().nonnegative(),
+  aiQueryCost: z.number().int().nonnegative(),
+  analysisExecutionCost: z.number().int().nonnegative(),
+  visualizationCost: z.number().int().nonnegative(),
+  exportCost: z.number().int().nonnegative(),
+  collaborationCost: z.number().int().nonnegative(),
+  totalCost: z.number().int().nonnegative(),
+  journeyType: z.string().optional(),
+  subscriptionTier: z.string().optional(),
+  billingCycle: z.string(),
+  periodStart: z.date(),
+  periodEnd: z.date().optional(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
+export const costLineItemSchema = z.object({
+  id: z.string(),
+  projectId: z.string().optional(),
+  userId: z.string(),
+  category: z.string(),
+  description: z.string(),
+  unitCost: z.number().int(),
+  quantity: z.number().int().positive(),
+  totalCost: z.number().int(),
+  pricingTierId: z.string().optional(),
+  pricingRuleId: z.string().optional(),
+  pricingSnapshot: z.any().optional(),
+  metadata: z.record(z.any()),
+  incurredAt: z.date(),
+});
+
+export const userMonthlyBillingSchema = z.object({
+  id: z.string(),
+  userId: z.string(),
+  billingMonth: z.string(),
+  periodStart: z.date(),
+  periodEnd: z.date(),
+  subscriptionCost: z.number().int().nonnegative(),
+  usageCost: z.number().int().nonnegative(),
+  overageCost: z.number().int().nonnegative(),
+  totalCost: z.number().int(),
+  categoryBreakdown: z.record(z.number().int().nonnegative()),
+  status: z.enum(["pending", "invoiced", "paid", "overdue", "cancelled"]),
+  invoiceId: z.string().optional(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
+export type ProjectCostTracking = z.infer<typeof projectCostTrackingSchema>;
+export type CostLineItem = z.infer<typeof costLineItemSchema>;
+export type UserMonthlyBilling = z.infer<typeof userMonthlyBillingSchema>;
+
 // Journey Tracking Schemas - Added for step-by-step user journey management
 export const journeySchema = z.object({
   id: z.string(),
@@ -2182,6 +2595,41 @@ export const eligibilityChecks = pgTable(
     userFeatureIdx: index("eligibility_checks_user_feature_idx").on(table.userId, table.feature),
   })
 );
+
+// Agent execution tracking for normalized multi-agent logs
+export const agentExecutions = pgTable(
+  "agent_executions",
+  {
+    id: varchar("id", { length: 50 }).primaryKey(),
+    projectId: varchar("project_id", { length: 50 })
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    agentType: varchar("agent_type", { length: 30 })
+      .$type<'project_manager' | 'data_engineer' | 'data_scientist' | 'business_agent' | 'template_research' | 'customer_support'>()
+      .notNull(),
+    status: varchar("status", { length: 20 })
+      .$type<'pending' | 'running' | 'success' | 'partial' | 'failed' | 'cancelled'>()
+      .default("pending")
+      .notNull(),
+    startedAt: timestamp("started_at").defaultNow().notNull(),
+    completedAt: timestamp("completed_at"),
+    executionTimeMs: integer("execution_time_ms"),
+    tokensUsed: integer("tokens_used"),
+    modelUsed: varchar("model_used", { length: 100 }),
+    errorMessage: text("error_message"),
+    errorCode: varchar("error_code", { length: 50 }),
+    dependsOnIds: varchar("depends_on_ids", { length: 50 }).array(),
+    workflowId: varchar("workflow_id", { length: 50 }),
+  },
+  (table) => ({
+    projectIdx: index("idx_executions_project").on(table.projectId),
+    projectAgentIdx: index("idx_executions_project_agent").on(table.projectId, table.agentType),
+    workflowIdx: index("idx_executions_workflow").on(table.workflowId),
+  })
+);
+
+export type AgentExecution = typeof agentExecutions.$inferSelect;
+export type InsertAgentExecution = typeof agentExecutions.$inferInsert;
 
 // ML/LLM Usage Log Table
 export const mlUsageLog = pgTable(
@@ -2654,3 +3102,172 @@ export const TechnicalQuery = z.object({
     domain: z.string().optional(),
   }).optional(),
 });
+
+// ============================================================================
+// Phase 2: Enterprise Security Tables
+// ============================================================================
+
+// Row-Level Security Policies
+export const rlsPolicies = pgTable("rls_policies", {
+  id: varchar("id").primaryKey().notNull(),
+  tableName: varchar("table_name").notNull(),
+  operation: varchar("operation").notNull(), // SELECT, INSERT, UPDATE, DELETE
+  userRole: varchar("user_role").notNull(),
+  condition: text("condition").notNull(), // SQL WHERE clause template
+  enabled: boolean("enabled").default(true),
+  priority: integer("priority").default(100),
+  description: text("description"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  tableNameIdx: index("rls_policies_table_name_idx").on(table.tableName),
+  userRoleIdx: index("rls_policies_user_role_idx").on(table.userRole),
+  enabledIdx: index("rls_policies_enabled_idx").on(table.enabled),
+}));
+
+// Audit Logs
+export const auditLogs = pgTable("audit_logs", {
+  id: varchar("id").primaryKey().notNull(),
+  timestamp: timestamp("timestamp").defaultNow().notNull(),
+  userId: varchar("user_id").notNull(),
+  userEmail: varchar("user_email").notNull(),
+  userRole: varchar("user_role").notNull(),
+  action: varchar("action").notNull(), // READ, WRITE, UPDATE, DELETE, LOGIN, etc.
+  resource: varchar("resource").notNull(), // project, dataset, user, etc.
+  resourceId: varchar("resource_id").notNull(),
+  details: jsonb("details").default('{}'),
+  severity: varchar("severity").notNull(), // INFO, WARNING, ERROR, CRITICAL
+  category: varchar("category").notNull(), // DATA_ACCESS, AUTH, ADMIN, COMPLIANCE, SECURITY
+  success: boolean("success").default(true),
+  errorMessage: text("error_message"),
+}, (table) => ({
+  userIdIdx: index("audit_logs_user_id_idx").on(table.userId),
+  timestampIdx: index("audit_logs_timestamp_idx").on(table.timestamp),
+  actionIdx: index("audit_logs_action_idx").on(table.action),
+  categoryIdx: index("audit_logs_category_idx").on(table.category),
+  severityIdx: index("audit_logs_severity_idx").on(table.severity),
+}));
+
+// Data Masking Rules
+export const maskingRules = pgTable("masking_rules", {
+  id: varchar("id").primaryKey().notNull(),
+  columnPattern: varchar("column_pattern").notNull(), // Regex or column name
+  dataType: varchar("data_type").notNull(), // SSN, EMAIL, PHONE, CREDIT_CARD, etc.
+  strategy: varchar("strategy").notNull(), // redaction, hashing, tokenization, partial, etc.
+  config: jsonb("config").default('{}'),
+  applyToRoles: jsonb("apply_to_roles").default('[]'), // Array of role names
+  enabled: boolean("enabled").default(true),
+  description: text("description"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  dataTypeIdx: index("masking_rules_data_type_idx").on(table.dataType),
+  enabledIdx: index("masking_rules_enabled_idx").on(table.enabled),
+}));
+
+// ============================================================================
+// Phase 2.2: GDPR/CCPA Compliance Tables
+// ============================================================================
+
+// Privacy Requests
+export const privacyRequests = pgTable("privacy_requests", {
+  id: varchar("id").primaryKey().notNull(),
+  userId: varchar("user_id").notNull(),
+  requestType: varchar("request_type").notNull(), // ACCESS, ERASURE, RECTIFICATION, PORTABILITY
+  status: varchar("status").notNull(), // PENDING, APPROVED, REJECTED, COMPLETED
+  details: jsonb("details").default('{}'),
+  submittedAt: timestamp("submitted_at").defaultNow().notNull(),
+  processedAt: timestamp("processed_at"),
+  processedBy: varchar("processed_by"),
+  completedAt: timestamp("completed_at"),
+}, (table) => ({
+  userIdIdx: index("privacy_requests_user_id_idx").on(table.userId),
+  statusIdx: index("privacy_requests_status_idx").on(table.status),
+  submittedAtIdx: index("privacy_requests_submitted_at_idx").on(table.submittedAt),
+}));
+
+// User Consents
+export const userConsents = pgTable("user_consents", {
+  id: varchar("id").primaryKey().notNull(),
+  userId: varchar("user_id").notNull(),
+  consentType: varchar("consent_type").notNull(), // MARKETING, ANALYTICS, DATA_PROCESSING, THIRD_PARTY_SHARING
+  granted: boolean("granted").notNull(),
+  grantedAt: timestamp("granted_at").defaultNow().notNull(),
+  revokedAt: timestamp("revoked_at"),
+  ipAddress: varchar("ip_address"),
+}, (table) => ({
+  userIdIdx: index("user_consents_user_id_idx").on(table.userId),
+  consentTypeIdx: index("user_consents_consent_type_idx").on(table.consentType),
+}));
+
+// Data Processing Records
+export const dataProcessingRecords = pgTable("data_processing_records", {
+  id: varchar("id").primaryKey().notNull(),
+  userId: varchar("user_id").notNull(),
+  processingType: varchar("processing_type").notNull(),
+  purpose: text("purpose").notNull(),
+  legalBasis: varchar("legal_basis").notNull(),
+  dataCategories: jsonb("data_categories").default('[]'),
+  timestamp: timestamp("timestamp").defaultNow().notNull(),
+}, (table) => ({
+  userIdIdx: index("data_processing_records_user_id_idx").on(table.userId),
+  timestampIdx: index("data_processing_records_timestamp_idx").on(table.timestamp),
+}));
+
+// ============================================================================
+// Phase 2.3: Data Lineage & Metadata Management Tables
+// ============================================================================
+
+// Data Lineage
+export const dataLineage = pgTable("data_lineage", {
+  id: varchar("id").primaryKey().notNull(),
+  projectId: varchar("project_id").notNull(),
+  nodeType: varchar("node_type").notNull(), // SOURCE, TRANSFORMATION, OUTPUT
+  nodeName: varchar("node_name").notNull(),
+  nodeDetails: jsonb("node_details").default('{}'),
+  parentNodes: jsonb("parent_nodes").default('[]'), // Array of parent node IDs
+  metadata: jsonb("metadata").default('{}'),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  projectIdIdx: index("data_lineage_project_id_idx").on(table.projectId),
+  nodeTypeIdx: index("data_lineage_node_type_idx").on(table.nodeType),
+}));
+
+// Metadata Entries
+export const metadataEntries = pgTable("metadata_entries", {
+  id: varchar("id").primaryKey().notNull(),
+  entityType: varchar("entity_type").notNull(), // DATASET, COLUMN, PROJECT, ANALYSIS
+  entityId: varchar("entity_id").notNull(),
+  name: varchar("name").notNull(),
+  description: text("description"),
+  owner: varchar("owner"),
+  tags: jsonb("tags").default('[]'),
+  customFields: jsonb("custom_fields").default('{}'),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  entityTypeIdIdx: index("metadata_entries_entity_type_id_idx").on(table.entityType, table.entityId),
+  nameIdx: index("metadata_entries_name_idx").on(table.name),
+}));
+
+// Data Tags
+export const dataTags = pgTable("data_tags", {
+  id: varchar("id").primaryKey().notNull(),
+  name: varchar("name").notNull().unique(),
+  category: varchar("category"),
+  color: varchar("color"),
+  description: text("description"),
+});
+
+// Business Glossary
+export const businessGlossary = pgTable("business_glossary", {
+  id: varchar("id").primaryKey().notNull(),
+  term: varchar("term").notNull().unique(),
+  definition: text("definition").notNull(),
+  category: varchar("category"),
+  relatedTerms: jsonb("related_terms").default('[]'),
+  owner: varchar("owner"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  termIdx: index("business_glossary_term_idx").on(table.term),
+}));

@@ -7,9 +7,22 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api";
-import { ArrowLeft, Download, Share, Database, Lightbulb, BarChart3, PieChart, Calendar, CheckCircle, Settings, CreditCard, Zap, Brain, MessageSquare, Eye, FileSpreadsheet, FileText, ChevronDown } from "lucide-react";
+import { ArrowLeft, Download, Share, Database, Lightbulb, BarChart3, PieChart, Calendar, CheckCircle, Settings, CreditCard, Zap, Brain, MessageSquare, Eye, FileSpreadsheet, FileText, ChevronDown, XCircle, AlertCircle, Loader2, Filter } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart as RechartsPieChart, Cell, Pie } from "recharts";
 import { AIChatLazy, AIInsightsPanelLazy } from "@/components/LazyComponents";
+// ✅ FIX 3.3: Import PaymentStatusBanner for visual payment status indicators
+import { PaymentStatusBanner } from "@/components/PaymentStatusBanner";
+
+// Phase 7: Per-Analysis Status Interface (Jan 2026)
+interface AnalysisStatusItem {
+  analysisId: string;
+  analysisName?: string;
+  analysisType?: string;
+  status: 'completed' | 'failed' | 'skipped' | 'pending';
+  insightCount: number;
+  errorMessage?: string;
+  executionTimeMs?: number;
+}
 
 interface ProjectResultsProps {
   projectId: string;
@@ -27,6 +40,9 @@ export default function ProjectResults({
   onSchemaEdit,
 }: ProjectResultsProps) {
   const { toast } = useToast();
+
+  // Phase 7: Selected analysis filter state for per-analysis breakdown view
+  const [selectedAnalysis, setSelectedAnalysis] = useState<string | 'all'>('all');
 
   const {
     data: project,
@@ -106,6 +122,56 @@ export default function ProjectResults({
           : summary.averageConfidence ?? null,
     };
   }, [analysisResults, insightList.length]);
+
+  // Phase 7: Extract per-analysis breakdown from analysisResults
+  const perAnalysisBreakdown = useMemo(() => {
+    return analysisResults?.perAnalysisBreakdown || {};
+  }, [analysisResults]);
+
+  const analysisStatuses: AnalysisStatusItem[] = useMemo(() => {
+    // Try to get from analysisResults.analysisStatuses first (from Phase 6 execution)
+    if (Array.isArray(analysisResults?.analysisStatuses)) {
+      return analysisResults.analysisStatuses;
+    }
+
+    // Fallback: Build from perAnalysisBreakdown if available
+    if (Object.keys(perAnalysisBreakdown).length > 0) {
+      return Object.entries(perAnalysisBreakdown).map(([analysisId, result]: [string, any]) => ({
+        analysisId,
+        analysisName: result.analysisName || analysisId.replace(/_/g, ' '),
+        analysisType: result.analysisType || analysisId,
+        status: result.status || 'completed',
+        insightCount: result.insights?.length || 0,
+        errorMessage: result.error,
+        executionTimeMs: result.executionTimeMs,
+      }));
+    }
+
+    // Final fallback: Derive from analysisTypes if available
+    if (Array.isArray(analysisResults?.analysisTypes)) {
+      return analysisResults.analysisTypes.map((type: string) => ({
+        analysisId: type,
+        analysisName: type.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
+        analysisType: type,
+        status: 'completed' as const,
+        insightCount: insightList.filter((i: any) => i.sourceAnalysisType === type || i.category === type).length,
+      }));
+    }
+
+    return [];
+  }, [analysisResults, perAnalysisBreakdown, insightList]);
+
+  // Phase 7: Filter insights by selected analysis
+  const filteredInsights = useMemo(() => {
+    if (selectedAnalysis === 'all') {
+      return insightList;
+    }
+    return insightList.filter((insight: any) =>
+      insight.sourceAnalysisId === selectedAnalysis ||
+      insight.sourceAnalysisType === selectedAnalysis ||
+      insight.analysisId === selectedAnalysis
+    );
+  }, [insightList, selectedAnalysis]);
 
   if (pageLoading) {
     return (
@@ -406,6 +472,21 @@ export default function ProjectResults({
           </div>
         )}
 
+        {/* ✅ FIX 3.3: Payment Status Banner */}
+        <PaymentStatusBanner
+          projectId={projectId}
+          isPaid={(project as any)?.isPaid === true}
+          isPreview={(analysisResults as any)?.isPreview === true}
+          previewLimits={(analysisResults as any)?.isPreview ? {
+            insightsShown: insightList.length,
+            totalInsights: (analysisResults as any)?.fullInsightCount || insightList.length,
+            chartsShown: (analysisResults as any)?.visualizations?.length || 0,
+            totalCharts: (analysisResults as any)?.fullVisualizationCount || 0,
+            answersShown: (analysisResults as any)?.questionAnswers?.length || 0,
+            totalAnswers: (analysisResults as any)?.totalQuestionCount || 0
+          } : undefined}
+        />
+
         {/* Stats Overview */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
           <Card>
@@ -469,12 +550,94 @@ export default function ProjectResults({
           </Card>
         </div>
 
+        {/* Phase 7: Per-Analysis Status Overview (Jan 2026) */}
+        {analysisStatuses.length > 0 && (
+          <div className="mb-8">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
+                <Filter className="w-5 h-5 text-slate-600" />
+                Analysis Breakdown
+              </h3>
+              <Badge variant="outline" className="text-xs">
+                {analysisStatuses.length} analysis type{analysisStatuses.length !== 1 ? 's' : ''}
+              </Badge>
+            </div>
+
+            {/* Per-Analysis Status Cards Grid */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+              {analysisStatuses.map((status) => (
+                <Card
+                  key={status.analysisId}
+                  className={`cursor-pointer transition-all hover:shadow-md ${
+                    selectedAnalysis === status.analysisId
+                      ? 'ring-2 ring-primary border-primary'
+                      : status.status === 'failed'
+                        ? 'border-red-200 bg-red-50'
+                        : status.status === 'skipped'
+                          ? 'border-yellow-200 bg-yellow-50'
+                          : 'border-slate-200'
+                  }`}
+                  onClick={() => setSelectedAnalysis(
+                    selectedAnalysis === status.analysisId ? 'all' : status.analysisId
+                  )}
+                >
+                  <CardContent className="pt-4 pb-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-medium text-sm text-slate-900 truncate">
+                        {status.analysisName || status.analysisId.replace(/_/g, ' ')}
+                      </span>
+                      {status.status === 'completed' ? (
+                        <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0" />
+                      ) : status.status === 'failed' ? (
+                        <XCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
+                      ) : status.status === 'skipped' ? (
+                        <AlertCircle className="w-4 h-4 text-yellow-500 flex-shrink-0" />
+                      ) : (
+                        <Loader2 className="w-4 h-4 animate-spin text-blue-500 flex-shrink-0" />
+                      )}
+                    </div>
+                    <div className="text-xs text-slate-500">
+                      {status.insightCount} insight{status.insightCount !== 1 ? 's' : ''}
+                      {status.executionTimeMs && (
+                        <span className="ml-2">• {(status.executionTimeMs / 1000).toFixed(1)}s</span>
+                      )}
+                    </div>
+                    {status.errorMessage && (
+                      <div className="text-xs text-red-600 mt-1 truncate" title={status.errorMessage}>
+                        {status.errorMessage}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+
+            {/* Analysis Filter Indicator */}
+            {selectedAnalysis !== 'all' && (
+              <div className="flex items-center gap-2 mb-4 p-3 bg-primary/5 rounded-lg border border-primary/20">
+                <Filter className="w-4 h-4 text-primary" />
+                <span className="text-sm text-slate-700">
+                  Filtering by: <strong>{analysisStatuses.find(s => s.analysisId === selectedAnalysis)?.analysisName || selectedAnalysis}</strong>
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="ml-auto text-xs"
+                  onClick={() => setSelectedAnalysis('all')}
+                >
+                  Clear Filter
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* AI Analysis Tabs */}
         <Tabs defaultValue="insights" className="space-y-6">
           <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="insights" className="flex items-center gap-2">
               <Brain className="w-4 h-4" />
-              AI Insights
+              AI Insights ({selectedAnalysis === 'all' ? insightList.length : filteredInsights.length})
             </TabsTrigger>
             <TabsTrigger value="chat" className="flex items-center gap-2">
               <MessageSquare className="w-4 h-4" />
@@ -492,20 +655,75 @@ export default function ProjectResults({
 
           {/* AI Insights Tab */}
           <TabsContent value="insights">
-            <AIInsightsPanelLazy 
-              projectId={projectId} 
-              onPaymentRequired={(requestedProjectId: string, analysisType: string) => {
-                if (onPayForAnalysis) {
-                  onPayForAnalysis({
-                    name: project.name,
-                    recordCount: project.recordCount || 0,
-                    dataSizeMB: Math.max(1, Math.round((project.recordCount || 0) * 0.001)),
-                    schema: project.schema || {},
-                    questions: Array.isArray(project.questions) ? project.questions : []
-                  });
-                }
-              }}
-            />
+            {/* Phase 7: Show filtered insights when an analysis is selected */}
+            {selectedAnalysis !== 'all' ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Lightbulb className="w-5 h-5 text-amber-500" />
+                    Insights from {analysisStatuses.find(s => s.analysisId === selectedAnalysis)?.analysisName || selectedAnalysis}
+                  </CardTitle>
+                  <CardDescription>
+                    {filteredInsights.length} insight{filteredInsights.length !== 1 ? 's' : ''} from this analysis
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {filteredInsights.length === 0 ? (
+                    <div className="text-center py-8 text-slate-500">
+                      <AlertCircle className="w-8 h-8 mx-auto mb-2 text-slate-400" />
+                      <p>No insights found for this analysis type.</p>
+                      <Button
+                        variant="link"
+                        onClick={() => setSelectedAnalysis('all')}
+                        className="mt-2"
+                      >
+                        View all insights
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {filteredInsights.map((insight: any, index: number) => (
+                        <Card key={insight.id || index} className="border-l-4 border-l-amber-400">
+                          <CardContent className="pt-4">
+                            <div className="flex items-start justify-between gap-4">
+                              <div className="flex-1">
+                                <h4 className="font-semibold text-slate-900">{insight.title}</h4>
+                                <p className="text-slate-600 mt-1">{insight.description}</p>
+                                {insight.category && (
+                                  <Badge variant="outline" className="mt-2">
+                                    {insight.category}
+                                  </Badge>
+                                )}
+                              </div>
+                              {insight.confidence && (
+                                <Badge className="bg-amber-100 text-amber-800 flex-shrink-0">
+                                  {insight.confidence}% confidence
+                                </Badge>
+                              )}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            ) : (
+              <AIInsightsPanelLazy
+                projectId={projectId}
+                onPaymentRequired={(requestedProjectId: string, analysisType: string) => {
+                  if (onPayForAnalysis) {
+                    onPayForAnalysis({
+                      name: project.name,
+                      recordCount: project.recordCount || 0,
+                      dataSizeMB: Math.max(1, Math.round((project.recordCount || 0) * 0.001)),
+                      schema: project.schema || {},
+                      questions: Array.isArray(project.questions) ? project.questions : []
+                    });
+                  }
+                }}
+              />
+            )}
           </TabsContent>
 
           {/* AI Chat Tab */}
@@ -617,14 +835,20 @@ export default function ProjectResults({
                 </CardHeader>
                 <CardContent className="space-y-4">
                   {project.questions && Array.isArray(project.questions) && project.questions.length > 0 ? (
-                    project.questions.map((question: string, index: number) => (
-                      <div key={index} className="p-4 bg-blue-50 rounded-lg border-l-4 border-primary/80">
-                        <p className="font-medium text-slate-900 mb-2">{question}</p>
-                        <p className="text-sm text-slate-600">
-                          {project.insights?.[question] || "Analysis in progress..."}
-                        </p>
-                      </div>
-                    ))
+                    project.questions.map((question: any, index: number) => {
+                      // Handle both string and object format
+                      const questionText = typeof question === 'string'
+                        ? question
+                        : (question.text || question.question || question.content || 'Unknown question');
+                      return (
+                        <div key={index} className="p-4 bg-blue-50 rounded-lg border-l-4 border-primary/80">
+                          <p className="font-medium text-slate-900 mb-2">{questionText}</p>
+                          <p className="text-sm text-slate-600">
+                            {project.insights?.[questionText] || "Analysis in progress..."}
+                          </p>
+                        </div>
+                      );
+                    })
                   ) : (
                     <p className="text-slate-500 text-sm">No business questions specified.</p>
                   )}

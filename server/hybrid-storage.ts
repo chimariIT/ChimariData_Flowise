@@ -41,7 +41,7 @@ type InsertGuidedAnalysisOrder = typeof guidedAnalysisOrders.$inferInsert;
 
 // Convert between DataProject and Project types
 function projectToDataProject(project: Project): DataProject {
-  const journeyType = (project.journeyType || "ai_guided") as DataProject["journeyType"];
+  const journeyType = (project.journeyType || "non-tech") as DataProject["journeyType"];
 
   return {
     id: project.id,
@@ -85,7 +85,7 @@ function projectToDataProject(project: Project): DataProject {
 function dataProjectToInsertProject(dataProject: InsertDataProject): Omit<InsertProject, "id"> {
   return {
     userId: dataProject.userId || "",
-    journeyType: dataProject.journeyType || "ai_guided",
+    journeyType: dataProject.journeyType || "non-tech",
     name: dataProject.name,
     description: dataProject.description || null,
   };

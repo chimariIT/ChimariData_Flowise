@@ -42,12 +42,12 @@ export interface SourceAdapter {
   sourceType: string;
   supportedMimeTypes: string[];
   supportedExtensions: string[];
-  
+
   /**
    * Check if this adapter can handle the given file/source
    */
   canHandle(mimeType: string, fileName: string): boolean;
-  
+
   /**
    * Process the source and return normalized dataset information
    */
@@ -59,14 +59,14 @@ export interface SourceInput {
   buffer?: Buffer;
   fileName?: string;
   mimeType?: string;
-  
+
   // For web/API sources
   url?: string;
-  
+
   // For cloud storage
   cloudPath?: string;
   cloudProvider?: 'aws' | 'azure' | 'gcp';
-  
+
   // Processing options
   options?: {
     selectedSheet?: string;
@@ -88,7 +88,7 @@ export interface SourceResult {
   }>;
   recordCount: number;
   preview: any[];
-  
+
   // Source metadata for storage
   sourceMetadata: {
     originalFileName: string;
@@ -99,7 +99,7 @@ export interface SourceResult {
     rawDataPreserved?: boolean;
     sourceType: string;
   };
-  
+
   // For dataset creation
   storageUri: string; // Where the raw data is stored
   checksum?: string;
@@ -109,13 +109,13 @@ export interface SourceResult {
 export interface ScrapingSourceAdapter extends SourceAdapter {
   sourceType: 'scrape';
   strategy: 'http' | 'puppeteer';
-  
+
   // Lifecycle methods for scraping jobs
   createJob(config: ScrapingJobConfig): Promise<string>; // Returns jobId
   startJob(jobId: string): Promise<void>;
   stopJob(jobId: string): Promise<void>;
   getJobStatus(jobId: string): Promise<ScrapingJobStatus>;
-  
+
   // Manual execution
   runOnce(config: ScrapingJobConfig): Promise<SourceResult>;
 }
@@ -234,13 +234,27 @@ async function getRobotsParser() {
   return robotsParserClass;
 }
 
+let pdfParseClass: any = null;
+
+async function getPdfParse() {
+  if (!pdfParseClass) {
+    try {
+      const pdfParse = await import('pdf-parse');
+      pdfParseClass = pdfParse.default;
+    } catch (error) {
+      throw new Error('PDF parsing requires "pdf-parse" package: npm install pdf-parse');
+    }
+  }
+  return pdfParseClass;
+}
+
 /**
  * Rate Limiter - Enforces respectful scraping practices with domain-based rate limiting
  */
 export class RateLimiter {
   private requestTimes: Map<string, number[]> = new Map();
   private cleanupInterval: NodeJS.Timeout;
-  
+
   constructor() {
     // Clean up old request records every 5 minutes
     this.cleanupInterval = setInterval(() => {
@@ -254,10 +268,10 @@ export class RateLimiter {
   async checkRateLimit(domain: string, rpm: number): Promise<boolean> {
     const now = Date.now();
     const requests = this.requestTimes.get(domain) || [];
-    
+
     // Clean up requests older than 1 minute
     this.cleanupOldRequests(domain);
-    
+
     const recentRequests = requests.filter(time => now - time < 60000); // 1 minute window
     return recentRequests.length < rpm;
   }
@@ -279,7 +293,7 @@ export class RateLimiter {
         await this.sleep(1000); // Default 1 second wait
       }
     }
-    
+
     // Record the request time
     this.recordRequest(domain);
   }
@@ -301,7 +315,7 @@ export class RateLimiter {
     const now = Date.now();
     const requests = this.requestTimes.get(domain) || [];
     const recentRequests = requests.filter(time => now - time < 60000); // Keep only last minute
-    
+
     if (recentRequests.length === 0) {
       this.requestTimes.delete(domain);
     } else {
@@ -333,7 +347,7 @@ export class RateLimiter {
   getTimeToNextSlot(domain: string, rpm: number): number {
     const requests = this.requestTimes.get(domain) || [];
     if (requests.length < rpm) return 0;
-    
+
     const now = Date.now();
     const oldestRequest = Math.min(...requests);
     return Math.max(0, 60000 - (now - oldestRequest));
@@ -445,7 +459,7 @@ export class DataExtractor {
       const rpm = options.rateLimitRPM || this.securityConfig.defaultRateLimitRPM;
       await options.rateLimiter.waitForSlot(domain, rpm);
     }
-    
+
     switch (this.strategy) {
       case 'http':
         return this.extractWithHTTP(url, config, options);
@@ -462,11 +476,11 @@ export class DataExtractor {
   private async extractWithHTTP(url: string, config: ExtractionConfig, options?: any, redirectCount = 0): Promise<any[]> {
     // Validate URL for security first
     await this.validateUrl(url);
-    
+
     const fetch = await getFetch();
     const controller = new AbortController();
     const timeout = options?.timeout || this.securityConfig.requestTimeout;
-    
+
     const timeoutId = setTimeout(() => {
       controller.abort();
     }, timeout);
@@ -481,15 +495,15 @@ export class DataExtractor {
           ...options?.headers
         }
       });
-      
+
       clearTimeout(timeoutId);
-      
+
       // Handle redirects securely with limit enforcement
       if (response.status >= 300 && response.status < 400) {
         if (redirectCount >= this.securityConfig.maxRedirects) {
           throw new Error(`Too many redirects: exceeded limit of ${this.securityConfig.maxRedirects}`);
         }
-        
+
         const location = response.headers.get('location');
         if (!location) {
           throw new Error('Redirect response missing Location header');
@@ -498,7 +512,7 @@ export class DataExtractor {
         await this.validateUrl(redirectUrl);
         return this.extractWithHTTP(redirectUrl, config, options, redirectCount + 1);
       }
-      
+
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
@@ -506,11 +520,11 @@ export class DataExtractor {
       // Validate content type
       const contentType = response.headers.get('content-type') || '';
       this.validateContentType(contentType);
-      
+
       // Stream body with size limit enforcement
       const bodyBytes = await this.readResponseWithSizeLimit(response);
       const bodyText = bodyBytes.toString('utf-8');
-      
+
       let extractedData: any[];
       if (contentType.includes('application/json')) {
         const jsonData = JSON.parse(bodyText);
@@ -542,16 +556,16 @@ export class DataExtractor {
   private async extractWithPuppeteer(url: string, config: ExtractionConfig, options?: any): Promise<any[]> {
     // Validate URL for security first
     await this.validateUrl(url);
-    
+
     const puppeteer = await getPuppeteer();
     let browser = null;
     let page = null;
 
     try {
-      browser = await puppeteer.launch({ 
+      browser = await puppeteer.launch({
         headless: true,
         args: [
-          '--no-sandbox', 
+          '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
           '--no-first-run',
@@ -561,13 +575,13 @@ export class DataExtractor {
           '--disable-backgrounding-occluded-windows'
         ]
       });
-      
+
       page = await browser.newPage();
-      
+
       // Set security headers and user agent
       await page.setUserAgent('ChimariData-ScrapeAdapter/1.0 (SSRF-Protected)');
       await page.setViewport({ width: 1920, height: 1080 });
-      
+
       // Block access to private networks via request interception
       await page.setRequestInterception(true);
       page.on('request', async (request) => {
@@ -583,9 +597,9 @@ export class DataExtractor {
 
       // Navigate to page with timeout
       const timeout = options?.timeout || this.securityConfig.requestTimeout;
-      await page.goto(url, { 
-        waitUntil: 'networkidle2', 
-        timeout 
+      await page.goto(url, {
+        waitUntil: 'networkidle2',
+        timeout
       });
 
       // Handle login if specified
@@ -600,21 +614,21 @@ export class DataExtractor {
       if (config.followPagination) {
         const allData = [data];
         let currentPage = 1;
-        
+
         while (currentPage < config.followPagination.maxPages) {
           const nextButton = await page.$(config.followPagination.nextSelector);
           if (!nextButton) break;
-          
+
           await nextButton.click();
           await page.waitForTimeout(2000); // Wait for page load
-          
+
           const pageData = await this.extractFromPage(page, config);
           if (pageData.length === 0) break; // No more data
-          
+
           allData.push(pageData);
           currentPage++;
         }
-        
+
         return allData.flat();
       }
 
@@ -642,7 +656,7 @@ export class DataExtractor {
         return Array.isArray(result) ? result : [result];
       }
     }
-    
+
     // If no JSONPath, assume data is already in the right format
     return Array.isArray(data) ? data : [data];
   }
@@ -655,31 +669,31 @@ export class DataExtractor {
       const cheerio = await getCheerio();
       const $ = cheerio.load(html);
       const data: any[] = [];
-      
+
       if (config.tableSelector) {
         // Extract table data using cheerio
         $(config.tableSelector).each((tableIndex, table) => {
           const $table = $(table);
           const headers: string[] = [];
-          
+
           // Extract headers
           $table.find('thead tr:first th, tr:first th, tr:first td').each((i, header) => {
             headers.push($(header).text().trim());
           });
-          
+
           // Extract data rows
           const selector = headers.length > 0 ? 'tbody tr, tr:not(:first)' : 'tr';
           $table.find(selector).each((rowIndex, row) => {
             const $row = $(row);
             const rowData: any = {};
-            
+
             $row.find('td, th').each((cellIndex, cell) => {
               const cellText = $(cell).text().trim();
               const header = headers[cellIndex] || `column_${cellIndex}`;
               const numValue = parseFloat(cellText);
               rowData[header] = !isNaN(numValue) && cellText !== '' ? numValue : cellText;
             });
-            
+
             if (Object.keys(rowData).length > 0) {
               data.push(rowData);
             }
@@ -691,12 +705,12 @@ export class DataExtractor {
         $(mainSelector).each((index, element) => {
           const $element = $(element);
           const itemData: any = {};
-          
+
           for (const [key, selector] of Object.entries(config.selectors)) {
             const $target = selector === mainSelector ? $element : $element.find(selector);
             itemData[key] = $target.length > 0 ? $target.first().text().trim() : '';
           }
-          
+
           if (Object.keys(itemData).length > 0 && Object.values(itemData).some(v => v !== '')) {
             data.push(itemData);
           }
@@ -735,11 +749,11 @@ export class DataExtractor {
       return await page.evaluate((selector: string) => {
         const table = document.querySelector(selector);
         if (!table) return [];
-        
+
         const rows = Array.from(table.querySelectorAll('tr'));
         const headers = Array.from(rows[0]?.querySelectorAll('th, td') || [])
           .map((cell: any) => cell.textContent.trim());
-        
+
         return rows.slice(1).map((row: any) => {
           const cells = Array.from(row.querySelectorAll('td, th'));
           const rowData: any = {};
@@ -770,7 +784,7 @@ export class DataExtractor {
         const element = document.querySelector(selector);
         return element ? element.textContent.trim() : '';
       }, config.textSelector);
-      
+
       return [{ content }];
     }
 
@@ -804,10 +818,10 @@ export class DataExtractor {
   private evaluateJsonPath(data: any, path: string): any {
     const parts = path.replace(/^\$\./, '').split('.');
     let current = data;
-    
+
     for (const part of parts) {
       if (current === null || current === undefined) return null;
-      
+
       if (part.includes('[') && part.includes(']')) {
         // Handle array indices like items[0]
         const [key, indexStr] = part.split('[');
@@ -817,7 +831,7 @@ export class DataExtractor {
         current = current[part];
       }
     }
-    
+
     return current;
   }
 
@@ -826,12 +840,12 @@ export class DataExtractor {
    */
   private fallbackHtmlExtraction(html: string, config: ExtractionConfig): any[] {
     const data: any[] = [];
-    
+
     if (config.tableSelector) {
       // Extract table data using regex
       const tableRegex = /<table[^>]*>[\s\S]*?<\/table>/gi;
       const tables = html.match(tableRegex);
-      
+
       if (tables && tables.length > 0) {
         for (const table of tables) {
           data.push(...this.extractTableWithRegex(table));
@@ -841,7 +855,7 @@ export class DataExtractor {
       // Extract text content
       const bodyRegex = /<body[^>]*>([\s\S]*?)<\/body>/i;
       const bodyMatch = html.match(bodyRegex);
-      
+
       if (bodyMatch) {
         const textContent = bodyMatch[1].replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
         data.push({ content: textContent });
@@ -850,30 +864,30 @@ export class DataExtractor {
 
     return data;
   }
-  
+
   /**
    * Extract table data using regex fallback
    */
   private extractTableWithRegex(tableHtml: string): any[] {
     const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
     const cellRegex = /<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi;
-    
+
     const data: any[] = [];
     const rows = Array.from(tableHtml.matchAll(rowRegex));
-    
+
     if (rows.length === 0) return data;
-    
+
     // Extract headers
     const headerRow = rows[0][1];
     const headers = Array.from(headerRow.matchAll(cellRegex))
       .map(match => match[1].replace(/<[^>]*>/g, '').trim());
-    
+
     // Extract data rows
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i][1];
       const cells = Array.from(row.matchAll(cellRegex))
         .map(match => match[1].replace(/<[^>]*>/g, '').trim());
-      
+
       const rowData: any = {};
       cells.forEach((cell, index) => {
         const header = headers[index] || `column_${index}`;
@@ -882,7 +896,7 @@ export class DataExtractor {
       });
       data.push(rowData);
     }
-    
+
     return data;
   }
 
@@ -891,7 +905,7 @@ export class DataExtractor {
    */
   private async validateUrl(url: string): Promise<void> {
     let urlObj: URL;
-    
+
     try {
       urlObj = new URL(url);
     } catch (error) {
@@ -924,13 +938,13 @@ export class DataExtractor {
       throw new Error(`Access to path ${urlObj.pathname} is not allowed`);
     }
   }
-  
+
   /**
    * Check if domain is in the allowlist
    */
   private isDomainAllowed(hostname: string): boolean {
     const cleanHostname = hostname.toLowerCase();
-    
+
     return this.securityConfig.allowedDomains.some(allowedDomain => {
       const cleanAllowed = allowedDomain.toLowerCase();
       // Exact match or subdomain match
@@ -957,7 +971,7 @@ export class DataExtractor {
       try {
         const result = await lookup(hostname);
         const ipAddress = result.address;
-        
+
         if (this.isPrivateIpAddress(ipAddress)) {
           throw new Error(`Hostname ${hostname} resolves to private IP address ${ipAddress} which is not allowed`);
         }
@@ -986,14 +1000,14 @@ export class DataExtractor {
 
     return privateRanges.some(range => range.test(ip));
   }
-  
+
   /**
    * Validate response content type
    */
   private validateContentType(contentType: string): void {
     const cleanContentType = contentType.split(';')[0].trim().toLowerCase();
-    
-    if (!this.securityConfig.allowedContentTypes.some(allowed => 
+
+    if (!this.securityConfig.allowedContentTypes.some(allowed =>
       cleanContentType.includes(allowed.toLowerCase())
     )) {
       throw new Error(`Content type ${cleanContentType} is not allowed. Allowed types: ${this.securityConfig.allowedContentTypes.join(', ')}`);
@@ -1016,17 +1030,17 @@ export class DataExtractor {
     try {
       while (true) {
         const { done, value } = await reader.read();
-        
+
         if (done) break;
-        
+
         if (value) {
           totalSize += value.length;
-          
+
           // Enforce size limit during streaming
           if (totalSize > this.securityConfig.maxResponseSize) {
             throw new Error(`Response too large: ${totalSize} bytes exceeds ${this.securityConfig.maxResponseSize} bytes`);
           }
-          
+
           chunks.push(value);
         }
       }
@@ -1042,7 +1056,7 @@ export class DataExtractor {
       result.set(chunk, offset);
       offset += chunk.length;
     }
-    
+
     return Buffer.from(result);
   }
 
@@ -1051,7 +1065,7 @@ export class DataExtractor {
    */
   async validateUrl(url: string): Promise<void> {
     let urlObj: URL;
-    
+
     try {
       urlObj = new URL(url);
     } catch (error) {
@@ -1090,7 +1104,7 @@ export class DataExtractor {
    */
   private isDomainAllowed(hostname: string): boolean {
     const cleanHostname = hostname.toLowerCase();
-    
+
     return this.securityConfig.allowedDomains.some(allowedDomain => {
       const cleanAllowed = allowedDomain.toLowerCase();
       // Exact match or subdomain match
@@ -1117,7 +1131,7 @@ export class DataExtractor {
       try {
         const result = await lookup(hostname);
         const ipAddress = result.address;
-        
+
         if (this.isPrivateIpAddress(ipAddress)) {
           throw new Error(`Hostname ${hostname} resolves to private IP address ${ipAddress} which is not allowed`);
         }
@@ -1174,19 +1188,19 @@ export class DataExtractor {
    * Handle HTTP pagination by following next page links
    */
   private async handleHttpPagination(
-    baseUrl: string, 
-    config: ExtractionConfig, 
-    initialData: any[], 
+    baseUrl: string,
+    config: ExtractionConfig,
+    initialData: any[],
     options: any,
     redirectCount: number
   ): Promise<any[]> {
     const allData = [...initialData];
     let currentPage = 1;
     let currentUrl = baseUrl;
-    
+
     try {
       const cheerio = await getCheerio();
-      
+
       while (currentPage < (config.followPagination?.maxPages || 10)) {
         // Get the current page HTML to find next page link
         const fetch = await getFetch();
@@ -1197,49 +1211,49 @@ export class DataExtractor {
             ...options?.headers
           }
         });
-        
+
         if (!response.ok) break;
-        
+
         const bodyBytes = await this.readResponseWithSizeLimit(response);
         const html = bodyBytes.toString('utf-8');
         const $ = cheerio.load(html);
-        
+
         // Look for next page link
         const nextPageElement = $(config.followPagination!.nextSelector).first();
         if (!nextPageElement.length) break;
-        
+
         const nextPageHref = nextPageElement.attr('href');
         if (!nextPageHref) break;
-        
+
         // Convert relative URLs to absolute
         const nextPageUrl = new URL(nextPageHref, currentUrl).toString();
-        
+
         // Validate next page URL for security
         await this.validateUrl(nextPageUrl);
-        
+
         // Apply rate limiting between pages
         if (options?.rateLimiter) {
           const domain = RateLimiter.getDomainFromUrl(nextPageUrl);
           const rpm = options?.rateLimitRPM || this.securityConfig.defaultRateLimitRPM;
           await options.rateLimiter.waitForSlot(domain, rpm);
         }
-        
+
         // Extract data from next page
         const nextPageData = await this.extractWithHTTP(nextPageUrl, config, options, redirectCount);
-        
+
         if (nextPageData.length === 0) break; // No more data
-        
+
         allData.push(...nextPageData);
         currentUrl = nextPageUrl;
         currentPage++;
-        
+
         // Small delay between pages to be respectful
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
     } catch (error: any) {
       console.warn(`HTTP pagination stopped at page ${currentPage}: ${error.message}`);
     }
-    
+
     return allData;
   }
 
@@ -1250,12 +1264,12 @@ export class DataExtractor {
     // Very basic text extraction - would need proper HTML parser
     const bodyRegex = /<body[^>]*>([\s\S]*?)<\/body>/i;
     const bodyMatch = html.match(bodyRegex);
-    
+
     if (bodyMatch) {
       // Remove HTML tags and return text
       return bodyMatch[1].replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
     }
-    
+
     return '';
   }
 }
@@ -1286,7 +1300,7 @@ export class JobScheduler {
    */
   async scheduleJob(config: ScrapingJobConfig, datasetId: string): Promise<string> {
     const jobId = nanoid();
-    
+
     // Parse schedule if provided
     let nextRunAt: Date | undefined;
     if (config.schedule) {
@@ -1325,7 +1339,7 @@ export class JobScheduler {
       try {
         // Schedule with node-cron for persistence
         await this.scheduleJobWithCron(jobId, config.schedule);
-        
+
         this.activeJobs.set(jobId, {
           jobId,
           config,
@@ -1333,7 +1347,7 @@ export class JobScheduler {
           nextRunAt,
           isRunning: false
         });
-        
+
         console.log(`Scheduled job ${jobId} with cron: ${config.schedule}`);
       } catch (cronError: any) {
         console.warn(`Failed to schedule job with cron, using fallback: ${cronError.message}`);
@@ -1397,13 +1411,13 @@ export class JobScheduler {
     const runs = await this.storage.getScrapingRuns(jobId);
     const completedRuns = runs.filter((r: any) => r.status === 'completed');
     const totalRecords = completedRuns.reduce((sum: number, r: any) => sum + (r.recordCount || 0), 0);
-    
+
     let avgDuration = 0;
     if (completedRuns.length > 0) {
       const durations = completedRuns
         .filter((r: any) => r.finishedAt && r.startedAt)
         .map((r: any) => new Date(r.finishedAt!).getTime() - new Date(r.startedAt).getTime());
-      
+
       if (durations.length > 0) {
         avgDuration = durations.reduce((sum: number, d: number) => sum + d, 0) / durations.length;
       }
@@ -1411,7 +1425,7 @@ export class JobScheduler {
 
     const activeJob = this.activeJobs.get(jobId);
     let status: 'scheduled' | 'running' | 'completed' | 'failed' | 'stopped';
-    
+
     if (activeJob?.isRunning) {
       status = 'running';
     } else if (job.status === 'active' && job.schedule) {
@@ -1441,9 +1455,9 @@ export class JobScheduler {
    */
   private startScheduler(): void {
     if (this.isRunning) return;
-    
+
     this.isRunning = true;
-    
+
     // Check for jobs to run every minute
     this.schedulerInterval = setInterval(async () => {
       await this.checkAndExecuteJobs();
@@ -1458,7 +1472,7 @@ export class JobScheduler {
    */
   stopScheduler(): void {
     this.isRunning = false;
-    
+
     if (this.schedulerInterval) {
       clearInterval(this.schedulerInterval);
       this.schedulerInterval = null;
@@ -1475,20 +1489,20 @@ export class JobScheduler {
         console.warn('Storage does not implement getJobsToRun method');
         return;
       }
-      
+
       const activeJobs = await this.storage.getJobsToRun();
-      
+
       for (const job of activeJobs) {
         if (job.schedule && job.nextRunAt) {
           const config = this.convertDbJobToConfig(job);
-          
+
           // Schedule with node-cron if available
           try {
             await this.scheduleJobWithCron(job.id, job.schedule);
           } catch (cronError: any) {
             console.warn(`Failed to schedule job ${job.id} with cron: ${cronError.message}`);
           }
-          
+
           this.activeJobs.set(job.id, {
             jobId: job.id,
             config,
@@ -1498,7 +1512,7 @@ export class JobScheduler {
           });
         }
       }
-      
+
       console.log(`Loaded ${this.activeJobs.size} active scraping jobs`);
     } catch (error: any) {
       console.error('Failed to load active scraping jobs:', error.message);
@@ -1510,7 +1524,7 @@ export class JobScheduler {
    */
   private async checkAndExecuteJobs(): Promise<void> {
     const now = new Date();
-    
+
     for (const [jobId, scheduledJob] of this.activeJobs.entries()) {
       if (!scheduledJob.isRunning && scheduledJob.nextRunAt <= now) {
         // Time to execute this job
@@ -1532,13 +1546,13 @@ export class JobScheduler {
 
     try {
       await this.executeJobOnce(jobId);
-      
+
       // Schedule next run if job still active
       const jobData = await this.storage.getScrapingJob(jobId);
       if (jobData && jobData.status === 'active' && jobData.schedule) {
         const nextRunAt = this.getNextRunTime(jobData.schedule);
         scheduledJob.nextRunAt = nextRunAt;
-        
+
         await this.storage.updateScrapingJob(jobId, {
           nextRunAt,
           lastRunAt: new Date()
@@ -1546,7 +1560,7 @@ export class JobScheduler {
       }
     } catch (error: any) {
       console.error(`Job execution failed for ${jobId}:`, error);
-      
+
       await this.storage.updateScrapingJob(jobId, {
         lastError: error.message,
         lastRunAt: new Date()
@@ -1578,7 +1592,7 @@ export class JobScheduler {
       // If ScrapeAdapter is provided, execute the actual scraping
       if (scrapeAdapter && typeof scrapeAdapter.executeJobById === 'function') {
         const result = await scrapeAdapter.executeJobById(jobId);
-        
+
         // Update run with success and record count
         const finishTime = new Date();
         await this.storage.updateScrapingRun(runId, {
@@ -1607,13 +1621,13 @@ export class JobScheduler {
         finishedAt: new Date(),
         status: 'failed'
       });
-      
+
       // Update job with error information
       await this.storage.updateScrapingJob(jobId, {
         lastError: error.message,
         lastRunAt: new Date()
       });
-      
+
       throw error;
     }
   }
@@ -1630,14 +1644,14 @@ export class JobScheduler {
         if (!isValid) {
           throw new Error(`Invalid cron expression: ${schedule}`);
         }
-        
+
         // Use node-cron to schedule and get next execution time
         const now = new Date();
-        const task = cronParser.schedule(schedule, () => {}, { 
+        const task = cronParser.schedule(schedule, () => { }, {
           scheduled: false,
           timezone: 'UTC' // Use UTC for consistency
         });
-        
+
         // Get the next execution time from the task
         if (task && typeof task.getSchedule === 'function') {
           const nextDate = task.getSchedule().next();
@@ -1656,7 +1670,7 @@ export class JobScheduler {
       return this.getNextRunTimeBasic(schedule);
     }
   }
-  
+
   /**
    * Calculate next cron run time (simplified implementation)
    */
@@ -1664,10 +1678,10 @@ export class JobScheduler {
     const parts = schedule.trim().split(/\s+/);
     const now = new Date();
     const next = new Date(now);
-    
+
     // Parse parts: minute hour day month day-of-week
     const [minute, hour, day, month, dayOfWeek] = parts;
-    
+
     // For complex cron expressions, use approximation
     if (minute === '*' && hour === '*') {
       // Every minute
@@ -1684,23 +1698,23 @@ export class JobScheduler {
       // Default to next hour
       next.setHours(next.getHours() + 1, 0, 0, 0);
     }
-    
+
     return next;
   }
-  
+
   /**
    * Basic cron parsing (fallback)
    */
   private getNextRunTimeBasic(schedule: string): Date {
     const parts = schedule.trim().split(/\s+/);
-    
+
     if (parts.length !== 5 && parts.length !== 6) {
       throw new Error(`Invalid cron schedule: ${schedule}`);
     }
 
     const now = new Date();
     const next = new Date(now);
-    
+
     // Simple patterns
     if (schedule === '0 0 * * *') {
       // Daily at midnight
@@ -1718,7 +1732,7 @@ export class JobScheduler {
       // Default to 1 hour from now
       next.setHours(next.getHours() + 1);
     }
-    
+
     return next;
   }
 
@@ -1752,7 +1766,7 @@ export class JobScheduler {
       if (!cronParser || typeof cronParser.schedule !== 'function') {
         throw new Error('node-cron not available');
       }
-      
+
       // Create a persistent cron job
       const task = cronParser.schedule(schedule, async () => {
         try {
@@ -1764,13 +1778,13 @@ export class JobScheduler {
         scheduled: true,
         timezone: 'UTC'
       });
-      
+
       // Store the task reference for cleanup
       if (!this.cronTasks) {
         this.cronTasks = new Map();
       }
       this.cronTasks.set(jobId, task);
-      
+
     } catch (error: any) {
       console.warn(`Failed to schedule cron job ${jobId}: ${error.message}`);
       throw error;
@@ -1795,7 +1809,7 @@ export class JobScheduler {
    */
   destroy(): void {
     this.stopScheduler();
-    
+
     // Cancel all cron jobs
     if (this.cronTasks) {
       for (const [jobId] of this.cronTasks) {
@@ -1805,7 +1819,7 @@ export class JobScheduler {
       }
       this.cronTasks.clear();
     }
-    
+
     this.activeJobs.clear();
   }
 }
@@ -1839,7 +1853,7 @@ export class ScrapeAdapter implements ScrapingSourceAdapter {
     this.jobScheduler = new JobScheduler(storage);
     this.dataExtractor = new DataExtractor(strategy);
     this.rateLimiter = new RateLimiter();
-    
+
     // Wire JobScheduler to this ScrapeAdapter for execution
     this.jobScheduler.setScrapeAdapter(this);
   }
@@ -1908,7 +1922,7 @@ export class ScrapeAdapter implements ScrapingSourceAdapter {
 
     // Create the scraping job
     const jobId = await this.jobScheduler.scheduleJob(config, createdDataset.id);
-    
+
     return jobId;
   }
 
@@ -1941,7 +1955,7 @@ export class ScrapeAdapter implements ScrapingSourceAdapter {
     await this.validateScrapingConfig(config);
 
     const domain = RateLimiter.getDomainFromUrl(config.targetUrl);
-    
+
     return await this.executeWithRetry(async () => {
       // Check and respect robots.txt if required
       if (config.respectRobots) {
@@ -1953,7 +1967,7 @@ export class ScrapeAdapter implements ScrapingSourceAdapter {
 
       // Extract data using the configured strategy with rate limiter integration
       const extractedData = await this.dataExtractor.extract(
-        config.targetUrl, 
+        config.targetUrl,
         config.extractionSpec,
         {
           timeout: config.requestTimeout || 30000,
@@ -1970,7 +1984,7 @@ export class ScrapeAdapter implements ScrapingSourceAdapter {
       // Generate schema from extracted data
       const schema = this.generateSchemaFromData(extractedData);
       const preview = extractedData.slice(0, 100);
-      
+
       // Create storage URI for the scraped data
       const storageUri = `scraping/${nanoid()}-${Date.now()}.json`;
       const dataJson = JSON.stringify(extractedData);
@@ -2015,29 +2029,29 @@ export class ScrapeAdapter implements ScrapingSourceAdapter {
 
       const urlObj = new URL(targetUrl);
       const robotsUrl = `${urlObj.protocol}//${urlObj.host}/robots.txt`;
-      
+
       const fetch = await getFetch();
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
-      
+
       try {
         const robotsResponse = await fetch(robotsUrl, {
           signal: controller.signal,
           headers: { 'User-Agent': 'ChimariData-ScrapeAdapter/1.0 (Robots Compliance)' }
         });
         clearTimeout(timeoutId);
-        
+
         if (robotsResponse.ok) {
           const robotsTxt = await robotsResponse.text();
           const robots = robotsParser.parse(robotsTxt);
-          
+
           const userAgent = 'ChimariData-ScrapeAdapter';
           const isAllowed = robots.isAllowed(userAgent, urlObj.pathname);
-          
+
           if (!isAllowed) {
             throw new Error(`Robots.txt disallows access to ${urlObj.pathname} for user agent ${userAgent}`);
           }
-          
+
           // Check crawl delay
           const crawlDelay = robots.getCrawlDelay(userAgent);
           if (crawlDelay && crawlDelay > 0) {
@@ -2068,21 +2082,21 @@ export class ScrapeAdapter implements ScrapingSourceAdapter {
     context: string
   ): Promise<T> {
     let lastError: Error;
-    
+
     for (let attempt = 0; attempt <= retryConfig.maxRetries; attempt++) {
       try {
         return await operation();
       } catch (error: any) {
         lastError = error;
-        
+
         // Don't retry on certain types of errors
-        if (error.message.includes('SSRF') || 
-            error.message.includes('not allowed') ||
-            error.message.includes('security') ||
-            error.message.includes('robots.txt disallows')) {
+        if (error.message.includes('SSRF') ||
+          error.message.includes('not allowed') ||
+          error.message.includes('security') ||
+          error.message.includes('robots.txt disallows')) {
           throw error; // Security errors should not be retried
         }
-        
+
         if (attempt < retryConfig.maxRetries) {
           const delay = retryConfig.backoffMs * Math.pow(2, attempt);
           console.log(`${context} attempt ${attempt + 1} failed, retrying in ${delay}ms: ${error.message}`);
@@ -2090,7 +2104,7 @@ export class ScrapeAdapter implements ScrapingSourceAdapter {
         }
       }
     }
-    
+
     throw new Error(`${context} failed after ${retryConfig.maxRetries + 1} attempts. Last error: ${lastError.message}`);
   }
 
@@ -2233,13 +2247,13 @@ export class ScrapeAdapter implements ScrapingSourceAdapter {
         finishedAt: new Date(),
         status: 'failed'
       });
-      
+
       // Update job with error
       await this.storage.updateScrapingJob(jobId, {
         lastError: error.message,
         lastRunAt: new Date()
       });
-      
+
       throw error;
     }
   }
@@ -2278,10 +2292,10 @@ export class ScrapeAdapter implements ScrapingSourceAdapter {
       const values = sampleData
         .map(item => item?.[key])
         .filter(val => val !== null && val !== undefined && val !== '');
-      
+
       const nullCount = sampleSize - values.length;
       const nullable = nullCount > 0;
-      
+
       let type = 'text';
       if (values.length > 0) {
         const firstValue = values[0];
@@ -2342,18 +2356,18 @@ export class ScrapeAdapter implements ScrapingSourceAdapter {
     try {
       const urlObj = new URL(url);
       const robotsUrl = `${urlObj.protocol}//${urlObj.host}/robots.txt`;
-      
+
       // Check if robots.txt parsing is available
       const robotsParser = await getRobotsParser();
       if (!robotsParser) {
         console.warn('Robots.txt parser not available, skipping robots compliance check');
         return;
       }
-      
+
       const fetch = await getFetch();
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
-      
+
       try {
         const response = await fetch(robotsUrl, {
           signal: controller.signal,
@@ -2361,12 +2375,12 @@ export class ScrapeAdapter implements ScrapingSourceAdapter {
             'User-Agent': 'ChimariData-ScrapeAdapter/1.0 (SSRF-Protected)'
           }
         });
-        
+
         clearTimeout(timeoutId);
-        
+
         if (response.ok) {
           const robotsContent = await response.text();
-          
+
           // Use robots parser if available, otherwise fallback to simple regex
           if (typeof robotsParser.canFetch === 'function') {
             const canFetch = robotsParser.canFetch(robotsContent, url);
@@ -2391,14 +2405,14 @@ export class ScrapeAdapter implements ScrapingSourceAdapter {
       console.warn(`Robots.txt check failed for ${url}:`, error.message);
     }
   }
-  
+
   /**
    * Simple regex-based robots.txt checking (fallback)
    */
   private checkRobotsWithRegex(robotsContent: string, urlObj: URL): void {
     const userAgentPattern = /User-agent:\s*\*/i;
     const disallowPattern = /Disallow:\s*(.*)/gi;
-    
+
     if (userAgentPattern.test(robotsContent)) {
       let match;
       while ((match = disallowPattern.exec(robotsContent)) !== null) {
@@ -2434,13 +2448,13 @@ export class ScrapeAdapter implements ScrapingSourceAdapter {
       this.basicCronValidation(schedule);
     }
   }
-  
+
   /**
    * Basic cron validation (fallback)
    */
   private basicCronValidation(schedule: string): void {
     const parts = schedule.trim().split(/\s+/);
-    
+
     if (parts.length !== 5 && parts.length !== 6) {
       throw new Error('Cron expression must have 5 or 6 parts');
     }
@@ -2484,10 +2498,10 @@ export class ScrapeAdapter implements ScrapingSourceAdapter {
       const values = sampleData
         .map(row => row[key])
         .filter(val => val !== null && val !== undefined && val !== '');
-      
+
       const nullCount = sampleData.length - values.length;
       const nullable = nullCount > 0;
-      
+
       let type = 'text';
       if (values.length > 0) {
         const firstValue = values[0];
@@ -2577,8 +2591,8 @@ export class CsvAdapter implements SourceAdapter {
   supportedExtensions = ['.csv'];
 
   canHandle(mimeType: string, fileName: string): boolean {
-    return this.supportedMimeTypes.includes(mimeType) || 
-           this.supportedExtensions.some(ext => fileName.toLowerCase().endsWith(ext));
+    return this.supportedMimeTypes.includes(mimeType) ||
+      this.supportedExtensions.some(ext => fileName.toLowerCase().endsWith(ext));
   }
 
   async process(input: SourceInput): Promise<SourceResult> {
@@ -2590,7 +2604,7 @@ export class CsvAdapter implements SourceAdapter {
     const data = this.parseCSV(text);
     const schema = this.generateSchema(data);
     const preview = data.slice(0, 100);
-    
+
     // Generate storage URI and checksum
     const storageUri = `datasets/${nanoid()}-${input.fileName}`;
     const checksum = this.generateChecksum(input.buffer);
@@ -2617,25 +2631,25 @@ export class CsvAdapter implements SourceAdapter {
   private parseCSV(text: string): any[] {
     const lines = text.trim().split('\n');
     if (lines.length < 2) return [];
-    
+
     // Smart header detection
     const headerRowIndex = this.detectHeaderRow(lines);
     const headers = lines[headerRowIndex].split(',').map(h => h.trim().replace(/"/g, ''));
     const data: any[] = [];
-    
+
     for (let i = headerRowIndex + 1; i < lines.length; i++) {
       const values = lines[i].split(',').map(v => v.trim().replace(/"/g, ''));
       const row: any = {};
-      
+
       headers.forEach((header, index) => {
         const value = values[index] || '';
         const numValue = parseFloat(value);
         row[header] = !isNaN(numValue) && value !== '' ? numValue : value;
       });
-      
+
       data.push(row);
     }
-    
+
     return data;
   }
 
@@ -2643,19 +2657,19 @@ export class CsvAdapter implements SourceAdapter {
     for (let i = 0; i < Math.min(5, lines.length - 1); i++) {
       const currentRow = lines[i].split(',').map(v => v.trim().replace(/"/g, ''));
       const nextRow = lines[i + 1].split(',').map(v => v.trim().replace(/"/g, ''));
-      
+
       const currentHasNumbers = currentRow.some(val => !isNaN(parseFloat(val)) && val !== '');
       const nextHasNumbers = nextRow.some(val => !isNaN(parseFloat(val)) && val !== '');
-      
+
       if (!currentHasNumbers && nextHasNumbers) return i;
-      
-      const currentHasDescriptiveNames = currentRow.some(val => 
+
+      const currentHasDescriptiveNames = currentRow.some(val =>
         val.length > 3 && /^[a-zA-Z_][a-zA-Z0-9_\s]*$/.test(val)
       );
-      
+
       if (currentHasDescriptiveNames && nextHasNumbers) return i;
     }
-    
+
     return 0;
   }
 
@@ -2677,10 +2691,10 @@ export class CsvAdapter implements SourceAdapter {
       const values = sampleData
         .map(row => row[key])
         .filter(val => val !== null && val !== undefined && val !== '');
-      
+
       const nullCount = sampleData.length - values.length;
       const nullable = nullCount > 0;
-      
+
       let type = 'text';
       if (values.length > 0) {
         const firstValue = values[0];
@@ -2752,8 +2766,8 @@ export class JsonAdapter implements SourceAdapter {
   supportedExtensions = ['.json'];
 
   canHandle(mimeType: string, fileName: string): boolean {
-    return this.supportedMimeTypes.includes(mimeType) || 
-           this.supportedExtensions.some(ext => fileName.toLowerCase().endsWith(ext));
+    return this.supportedMimeTypes.includes(mimeType) ||
+      this.supportedExtensions.some(ext => fileName.toLowerCase().endsWith(ext));
   }
 
   async process(input: SourceInput): Promise<SourceResult> {
@@ -2763,7 +2777,7 @@ export class JsonAdapter implements SourceAdapter {
 
     const text = input.buffer.toString('utf-8');
     const parsed = JSON.parse(text);
-    
+
     let data: any[];
     if (Array.isArray(parsed)) {
       data = parsed;
@@ -2775,7 +2789,7 @@ export class JsonAdapter implements SourceAdapter {
 
     const schema = this.generateSchema(data);
     const preview = data.slice(0, 100);
-    
+
     const storageUri = `datasets/${nanoid()}-${input.fileName}`;
     const checksum = this.generateChecksum(input.buffer);
 
@@ -2822,8 +2836,8 @@ export class ExcelAdapter implements SourceAdapter {
   supportedExtensions = ['.xlsx', '.xls'];
 
   canHandle(mimeType: string, fileName: string): boolean {
-    return this.supportedMimeTypes.includes(mimeType) || 
-           this.supportedExtensions.some(ext => fileName.toLowerCase().endsWith(ext));
+    return this.supportedMimeTypes.includes(mimeType) ||
+      this.supportedExtensions.some(ext => fileName.toLowerCase().endsWith(ext));
   }
 
   async process(input: SourceInput): Promise<SourceResult> {
@@ -2833,15 +2847,15 @@ export class ExcelAdapter implements SourceAdapter {
 
     const workbook = XLSX.read(input.buffer, { type: 'buffer' });
     const sheetName = input.options?.selectedSheet || workbook.SheetNames[0];
-    
+
     if (!sheetName) {
       throw new Error('No sheets found in Excel file');
     }
 
     const worksheet = workbook.Sheets[sheetName];
-    const rawData = XLSX.utils.sheet_to_json(worksheet, { 
-      header: 1, 
-      defval: null 
+    const rawData = XLSX.utils.sheet_to_json(worksheet, {
+      header: 1,
+      defval: null
     });
 
     if (rawData.length < 2) {
@@ -2863,7 +2877,7 @@ export class ExcelAdapter implements SourceAdapter {
 
     const schema = this.generateSchema(data);
     const preview = data.slice(0, 100);
-    
+
     const storageUri = `datasets/${nanoid()}-${input.fileName}`;
     const checksum = this.generateChecksum(input.buffer);
 
@@ -2877,10 +2891,10 @@ export class ExcelAdapter implements SourceAdapter {
         mimeType: input.mimeType || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         fileSize: input.buffer.length,
         extractionMethod: 'excel_sheet_parse',
-        processingOptions: { 
-          ...input.options, 
+        processingOptions: {
+          ...input.options,
           selectedSheet: sheetName,
-          availableSheets: workbook.SheetNames 
+          availableSheets: workbook.SheetNames
         },
         rawDataPreserved: true,
         sourceType: this.sourceType
@@ -2894,19 +2908,19 @@ export class ExcelAdapter implements SourceAdapter {
     for (let i = 0; i < Math.min(5, data.length - 1); i++) {
       const currentRow = data[i] || [];
       const nextRow = data[i + 1] || [];
-      
+
       const currentHasNumbers = currentRow.some(val => typeof val === 'number');
       const nextHasNumbers = nextRow.some(val => typeof val === 'number');
-      
+
       if (!currentHasNumbers && nextHasNumbers) return i;
-      
-      const currentHasDescriptiveNames = currentRow.some(val => 
+
+      const currentHasDescriptiveNames = currentRow.some(val =>
         typeof val === 'string' && val.length > 3 && /^[a-zA-Z_][a-zA-Z0-9_\s]*$/.test(val)
       );
-      
+
       if (currentHasDescriptiveNames && nextHasNumbers) return i;
     }
-    
+
     return 0;
   }
 
@@ -2930,8 +2944,8 @@ export class PdfAdapter implements SourceAdapter {
   supportedExtensions = ['.pdf'];
 
   canHandle(mimeType: string, fileName: string): boolean {
-    return this.supportedMimeTypes.includes(mimeType) || 
-           this.supportedExtensions.some(ext => fileName.toLowerCase().endsWith(ext));
+    return this.supportedMimeTypes.includes(mimeType) ||
+      this.supportedExtensions.some(ext => fileName.toLowerCase().endsWith(ext));
   }
 
   async process(input: SourceInput): Promise<SourceResult> {
@@ -2942,7 +2956,7 @@ export class PdfAdapter implements SourceAdapter {
     // For now, implement basic text extraction
     // TODO: Add proper PDF parsing with libraries like pdf-parse or pdf2pic
     const extractedText = await this.extractTextFromPDF(input.buffer);
-    
+
     let data: any[];
     if (input.options?.tableDetection) {
       data = this.extractTablesFromText(extractedText);
@@ -2952,7 +2966,7 @@ export class PdfAdapter implements SourceAdapter {
 
     const schema = this.generateSchema(data);
     const preview = data.slice(0, 100);
-    
+
     const storageUri = `datasets/${nanoid()}-${input.fileName}`;
     const checksum = this.generateChecksum(input.buffer);
 
@@ -2976,11 +2990,12 @@ export class PdfAdapter implements SourceAdapter {
   }
 
   private async extractTextFromPDF(buffer: Buffer): Promise<string> {
-    // Placeholder implementation - in production, use pdf-parse or similar
     try {
-      // For now, return a simple message indicating PDF processing is needed
-      return "PDF text extraction requires additional setup. Raw PDF data preserved for future processing.";
+      const pdfParse = await getPdfParse();
+      const data = await pdfParse(buffer);
+      return data.text;
     } catch (error: any) {
+      console.error('PDF extraction error:', error);
       throw new Error(`PDF extraction failed: ${error.message}`);
     }
   }
@@ -2988,7 +3003,7 @@ export class PdfAdapter implements SourceAdapter {
   private extractTablesFromText(text: string): any[] {
     // Simple table detection from text
     const lines = text.split('\n').filter(line => line.trim());
-    
+
     // Look for lines that might be table rows (contain multiple words/numbers separated by spaces or tabs)
     const tableLines = lines.filter(line => {
       const parts = line.split(/\s{2,}|\t/);
@@ -3096,7 +3111,7 @@ export class WebAdapter implements SourceAdapter {
     try {
       const fetchFn = await getFetch();
       const response = await this.secureHttpRequest(input.url);
-      
+
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
@@ -3106,7 +3121,7 @@ export class WebAdapter implements SourceAdapter {
       this.validateContentType(contentType);
 
       const buffer = Buffer.from(await response.arrayBuffer());
-      
+
       // Validate response size
       if (buffer.length > this.securityConfig.maxResponseSize) {
         throw new Error(`Response too large: ${buffer.length} bytes exceeds ${this.securityConfig.maxResponseSize} bytes`);
@@ -3156,7 +3171,7 @@ export class WebAdapter implements SourceAdapter {
    */
   private async validateUrl(url: string): Promise<void> {
     let urlObj: URL;
-    
+
     try {
       urlObj = new URL(url);
     } catch (error) {
@@ -3195,7 +3210,7 @@ export class WebAdapter implements SourceAdapter {
    */
   private isDomainAllowed(hostname: string): boolean {
     const cleanHostname = hostname.toLowerCase();
-    
+
     return this.securityConfig.allowedDomains.some(allowedDomain => {
       const cleanAllowed = allowedDomain.toLowerCase();
       // Exact match or subdomain match
@@ -3222,7 +3237,7 @@ export class WebAdapter implements SourceAdapter {
       try {
         const result = await lookup(hostname);
         const ipAddress = result.address;
-        
+
         if (this.isPrivateIpAddress(ipAddress)) {
           throw new Error(`Hostname ${hostname} resolves to private IP address ${ipAddress} which is not allowed`);
         }
@@ -3257,8 +3272,8 @@ export class WebAdapter implements SourceAdapter {
    */
   private validateContentType(contentType: string): void {
     const cleanContentType = contentType.split(';')[0].trim().toLowerCase();
-    
-    if (!this.securityConfig.allowedContentTypes.some(allowed => 
+
+    if (!this.securityConfig.allowedContentTypes.some(allowed =>
       cleanContentType.includes(allowed.toLowerCase())
     )) {
       throw new Error(`Content type ${cleanContentType} is not allowed. Allowed types: ${this.securityConfig.allowedContentTypes.join(', ')}`);
@@ -3446,7 +3461,7 @@ export class BatchWriter {
       if (this.flushPromise) {
         await this.flushPromise;
       }
-      
+
       // If still full after flush, drop oldest records (circular buffer behavior)
       if (this.buffer.length >= this.config.maxBuffer) {
         const dropCount = Math.floor(this.config.maxBuffer * 0.1); // Drop 10%
@@ -3477,7 +3492,7 @@ export class BatchWriter {
 
     this.flushPromise = this.processBatch(batch);
     await this.flushPromise;
-    
+
     this.isFlushingBatch = false;
     this.flushPromise = undefined;
   }
@@ -3530,7 +3545,7 @@ export class BatchWriter {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
     }
-    
+
     // Final flush
     if (this.buffer.length > 0) {
       await this.flush();
@@ -3556,7 +3571,7 @@ export class ConnectionManager {
     private onData: (data: any) => void,
     private onStatusChange: (status: string) => void,
     private onError: (error: Error) => void
-  ) {}
+  ) { }
 
   /**
    * Establish connection based on protocol
@@ -3564,7 +3579,7 @@ export class ConnectionManager {
   async connect(): Promise<void> {
     try {
       this.onStatusChange('connecting');
-      
+
       switch (this.protocol) {
         case 'websocket':
           await this.connectWebSocket();
@@ -3578,7 +3593,7 @@ export class ConnectionManager {
         default:
           throw new Error(`Unsupported protocol: ${this.protocol}`);
       }
-      
+
       this.isConnected = true;
       this.reconnectAttempts = 0;
       this.onStatusChange('connected');
@@ -3594,10 +3609,10 @@ export class ConnectionManager {
    */
   private async connectWebSocket(): Promise<void> {
     const headers = this.buildHeaders();
-    
+
     const WebSocketClass = await getWebSocket();
     const ws = new WebSocketClass(this.endpoint, { headers });
-    
+
     return new Promise((resolve, reject) => {
       ws.on('open', () => {
         this.connection = ws;
@@ -3632,10 +3647,10 @@ export class ConnectionManager {
   private async connectSSE(): Promise<void> {
     // Node.js SSE implementation using fetch + stream parsing
     const fetchFn = await getFetch();
-    
+
     // Validate URL security before connecting
     await this.validateStreamingUrl(this.endpoint);
-    
+
     const response = await fetchFn(this.endpoint, {
       headers: {
         ...this.buildHeaders(),
@@ -3663,15 +3678,15 @@ export class ConnectionManager {
           // Modern fetch API with ReadableStream
           const reader = stream.getReader();
           const decoder = new TextDecoder();
-          
+
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
-            
+
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split('\n');
             buffer = lines.pop() || ''; // Keep incomplete line
-            
+
             for (const line of lines) {
               this.processSseLine(line);
             }
@@ -3682,7 +3697,7 @@ export class ConnectionManager {
             buffer += chunk.toString('utf-8');
             const lines = buffer.split('\n');
             buffer = lines.pop() || ''; // Keep incomplete line
-            
+
             for (const line of lines) {
               this.processSseLine(line);
             }
@@ -3707,12 +3722,12 @@ export class ConnectionManager {
       }
     };
 
-    this.connection = { 
+    this.connection = {
       close: () => {
         if ('destroy' in stream && typeof stream.destroy === 'function') {
           stream.destroy();
         }
-      } 
+      }
     } as any;
     readStream();
   }
@@ -3739,14 +3754,14 @@ export class ConnectionManager {
    */
   private async startPolling(): Promise<void> {
     const fetchFn = await getFetch();
-    
+
     const poll = async (): Promise<void> => {
       try {
         const url = this.buildPollUrl();
-        
+
         // Validate URL security before polling
         await this.validateStreamingUrl(url);
-        
+
         const response = await fetchFn(url, {
           headers: this.buildHeaders()
         });
@@ -3759,14 +3774,14 @@ export class ConnectionManager {
         if (data.trim()) {
           const parsed = this.parseIncomingData(data);
           this.onData(parsed);
-          
+
           // Update cursor for next poll if applicable
           this.updatePollCursor(parsed);
         }
       } catch (error: any) {
         this.onError(new Error(`Poll error: ${error.message}`));
       }
-      
+
       // Schedule next poll
       if (this.isConnected) {
         this.pollTimer = setTimeout(poll, this.config.pollInterval || 5000);
@@ -3781,7 +3796,7 @@ export class ConnectionManager {
    */
   private parseIncomingData(rawData: string): any {
     const { format, textDelimiter } = this.config.parseSpec;
-    
+
     if (format === 'json') {
       try {
         return JSON.parse(rawData);
@@ -3839,7 +3854,7 @@ export class ConnectionManager {
    */
   private async validateStreamingUrl(url: string): Promise<void> {
     let urlObj: URL;
-    
+
     try {
       urlObj = new URL(url);
     } catch (error) {
@@ -3867,7 +3882,7 @@ export class ConnectionManager {
       'api.slack.com',
       'hooks.slack.com'
     ];
-    
+
     if (!this.isDomainAllowedForStreaming(urlObj.hostname, allowedDomains)) {
       throw new Error(`Domain ${urlObj.hostname} is not in the streaming allowed domains list. Contact administrator to add trusted streaming domains.`);
     }
@@ -3895,7 +3910,7 @@ export class ConnectionManager {
    */
   private isDomainAllowedForStreaming(hostname: string, allowedDomains: string[]): boolean {
     const cleanHostname = hostname.toLowerCase();
-    
+
     return allowedDomains.some(allowedDomain => {
       const cleanAllowed = allowedDomain.toLowerCase();
       // Exact match or subdomain match
@@ -3920,7 +3935,7 @@ export class ConnectionManager {
     try {
       const result = await lookup(hostname);
       const ipAddress = result.address;
-      
+
       if (this.isPrivateIpAddressStreaming(ipAddress)) {
         throw new Error(`Streaming hostname ${hostname} resolves to private IP address ${ipAddress} which is not allowed`);
       }
@@ -4005,11 +4020,11 @@ export class ConnectionManager {
    */
   async disconnect(): Promise<void> {
     this.isConnected = false;
-    
+
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
     }
-    
+
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
     }
@@ -4043,12 +4058,12 @@ export class ConnectionManager {
 export interface StreamingSourceAdapter extends SourceAdapter {
   sourceType: 'stream';
   protocol: 'websocket' | 'sse' | 'poll';
-  
+
   // Lifecycle methods for streaming
   start(config: StreamingSourceConfig, storage: any): Promise<void>;
   stop(): Promise<void>;
   getStatus(): StreamingStatus;
-  
+
   // Override process to handle continuous data
   process(input: SourceInput): Promise<SourceResult>;
 }
@@ -4100,9 +4115,9 @@ export class StreamingAdapter implements StreamingSourceAdapter {
         this.protocol,
         config.endpoint,
         config,
-        () => {}, // Dummy handlers for validation
-        () => {},
-        () => {}
+        () => { }, // Dummy handlers for validation
+        () => { },
+        () => { }
       );
       await (connectionManager as any).validateStreamingUrl(config.endpoint);
     } catch (error: any) {
@@ -4111,7 +4126,7 @@ export class StreamingAdapter implements StreamingSourceAdapter {
     if (this.isRunning) {
       throw new Error('Streaming adapter is already running');
     }
-    
+
     // Additional validation passed, continue with startup
 
     this.config = config;
@@ -4198,7 +4213,7 @@ export class StreamingAdapter implements StreamingSourceAdapter {
   getStatus(): StreamingStatus {
     const now = Date.now();
     const uptime = this.startTime ? now - this.startTime.getTime() : 0;
-    
+
     return {
       ...this.status,
       uptime,
@@ -4219,7 +4234,7 @@ export class StreamingAdapter implements StreamingSourceAdapter {
   private async handleIncomingData(rawData: any): Promise<void> {
     try {
       const records = this.parseAndNormalizeData(rawData);
-      
+
       for (const record of records) {
         // Check for duplicates
         if (record.dedupeKey && this.deduplicationSet.has(record.dedupeKey)) {
@@ -4228,7 +4243,7 @@ export class StreamingAdapter implements StreamingSourceAdapter {
 
         if (record.dedupeKey) {
           this.deduplicationSet.add(record.dedupeKey);
-          
+
           // Limit deduplication set size
           if (this.deduplicationSet.size > 10000) {
             const keys = Array.from(this.deduplicationSet);
@@ -4284,7 +4299,7 @@ export class StreamingAdapter implements StreamingSourceAdapter {
           parseFormat: this.config!.parseSpec.format
         }
       };
-      
+
       records.push(record);
     }
 
@@ -4296,7 +4311,7 @@ export class StreamingAdapter implements StreamingSourceAdapter {
    */
   private extractTimestamp(data: any): Date {
     const timestampPath = this.config?.parseSpec.timestampPath;
-    
+
     if (timestampPath && typeof data === 'object') {
       const timestamp = this.getValueByPath(data, timestampPath);
       if (timestamp) {
@@ -4306,7 +4321,7 @@ export class StreamingAdapter implements StreamingSourceAdapter {
         }
       }
     }
-    
+
     return new Date(); // Default to current time
   }
 
@@ -4315,12 +4330,12 @@ export class StreamingAdapter implements StreamingSourceAdapter {
    */
   private extractDedupeKey(data: any): string | undefined {
     const dedupePath = this.config?.parseSpec.dedupeKeyPath;
-    
+
     if (dedupePath && typeof data === 'object') {
       const key = this.getValueByPath(data, dedupePath);
       return key ? String(key) : undefined;
     }
-    
+
     return undefined;
   }
 
@@ -4354,7 +4369,7 @@ export class StreamingAdapter implements StreamingSourceAdapter {
       };
 
       await this.storage.createStreamChunk(chunkData);
-      
+
       // Update checkpoint
       const checkpoint: InsertStreamCheckpoint = {
         sourceId: this.datasetId,
@@ -4363,7 +4378,7 @@ export class StreamingAdapter implements StreamingSourceAdapter {
       };
 
       await this.storage.createStreamCheckpoint(checkpoint);
-      
+
       this.status.recordsProcessed += batch.length;
       this.status.lastRecord = batch[batch.length - 1]?.timestamp;
     } catch (error: any) {
@@ -4395,7 +4410,7 @@ export class StreamingAdapter implements StreamingSourceAdapter {
   private handleStatusChange(status: string): void {
     this.status.connectionStatus = status as any;
     console.log(`Streaming connection status changed to: ${status}`);
-    
+
     // Emit real-time status change event
     this.emitRealtimeEvent('status_change', {
       status,
@@ -4489,14 +4504,14 @@ export class SourceAdapterManager {
 
     // For file uploads
     if (input.buffer && input.fileName && input.mimeType) {
-      const adapter = this.adapters.find(adapter => 
+      const adapter = this.adapters.find(adapter =>
         adapter.canHandle(input.mimeType!, input.fileName!)
       );
-      
+
       if (!adapter) {
         throw new Error(`No adapter found for file type: ${input.mimeType}`);
       }
-      
+
       return adapter;
     }
 
@@ -4524,16 +4539,16 @@ export class SourceAdapterManager {
    * Start a streaming adapter with configuration
    */
   async startStreamingAdapter(
-    id: string, 
-    config: StreamingSourceConfig, 
-    storage: any, 
+    id: string,
+    config: StreamingSourceConfig,
+    storage: any,
     datasetId?: string
   ): Promise<void> {
     const adapter = this.streamingAdapters.get(id);
     if (!adapter) {
       throw new Error(`Streaming adapter not found: ${id}`);
     }
-    
+
     await adapter.start(config, storage, datasetId);
   }
 
@@ -4545,7 +4560,7 @@ export class SourceAdapterManager {
     if (!adapter) {
       throw new Error(`Streaming adapter not found: ${id}`);
     }
-    
+
     await adapter.stop();
     this.streamingAdapters.delete(id);
   }
@@ -4574,7 +4589,7 @@ export class SourceAdapterManager {
         }
       }
     );
-    
+
     await Promise.all(stopPromises);
     this.streamingAdapters.clear();
   }

@@ -707,7 +707,7 @@ export class AgentInitializationService {
             } else if (payload.dataCharacteristics) {
               resultData = await projectManager.generateTransformationRecommendations(
                 payload.dataCharacteristics,
-                payload.journeyType ?? 'ai_guided'
+                payload.journeyType ?? 'non-tech'
               );
             } else if (Array.isArray(payload.transformations)) {
               resultData = await projectManager.coordinateTransformationExecution({
