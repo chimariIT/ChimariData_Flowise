@@ -1,0 +1,6 @@
+id,customer_name,email,join_date,monthly_bill,contract_type
+1,John Doe,john@example.com,2023-01-15,125.50,Premium
+2,Jane Smith,jane@test.org,2023-02-20,85.00,Basic
+3,Bob Johnson,bob@company.net,2023-03-10,200.00,Premium
+4,Alice Brown,alice@domain.com,2023-04-05,150.75,Basic
+5,Charlie Wilson,charlie@email.com,2023-05-12,175.25,Premium
