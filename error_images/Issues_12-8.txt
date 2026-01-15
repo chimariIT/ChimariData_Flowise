@@ -1,0 +1,7 @@
+>The project page still has lots of issues including; 1. Not being able toget a user journey started where the user left off. User gets pending approval message but they cannot get to do those approvals since "Approvals" and "Review Agent Checkpoint" buttons do not work, See bowserconsole logs below;
+"Failed to load resource: the server responded with a status of 409 (Conflict)Understand this error
+user-dashboard.tsx:121 Failed to resume journey: Error: Pending approvals required before resuming the journey
+    at APIClient.request (api.ts:214:30)
+    at async handleResumeJourney (user-dashboard.tsx:112:7)"
+2. The price estimates look hardcoded andare notat all related to the estimates that appearedon the user journey.
+3. View statistic button leads to a page with a non functional "Adavanced Analysis", "export" and "Generate Visualizations" buttons and Analysis Paths section. We need to make sure that export andgenerate visualizations work and users only have access to information about their current project and cannot access advanced analystics. 

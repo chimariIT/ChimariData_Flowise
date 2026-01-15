@@ -1,0 +1,297 @@
+[RealtimeClient] WebSocket connection closed 
+Object { code: 1001, reason: "" }
+realtime.ts:49:15
+[RealtimeClient] Connection state changed to: disconnected realtime.ts:49:15
+[RealtimeClient] Page hidden - maintaining connection realtime.ts:49:15
+unreachable code after return statement execute-step.tsx:182:5
+GET
+http://localhost:5173/favicon.ico
+[HTTP/1.1 404 Not Found 1ms]
+
+🌐 [REQUEST] GET /api/auth/user - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/user/role-permissions - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/usage/current - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+📤 Uploading file: English Survey for Teacher Conferences Week Online (Responses).xlsx using apiClient data-step.tsx:343:17
+🔍 Upload request - token exists: true token preview: eyJhbGciOiJIUzI1NiIs api.ts:256:13
+🔍 Building headers for upload: 
+Object { isFormData: true, hasAuthInMerged: true, authPreview: "Bearer eyJhbGciOiJIUzI1NiIsInR", allHeaderKeys: (2) […] }
+api.ts:99:17
+🌐 [REQUEST] POST /api/projects/upload - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+📥 Upload response received for English Survey for Teacher Conferences Week Online (Responses).xlsx data-step.tsx:370:17
+📈 Real data loaded: 
+Object { file: "English Survey for Teacher Conferences Week Online (Responses).xlsx", rows: 10, columns: 21, quality: 72 }
+data-step.tsx:429:17
+🌐 [REQUEST] GET /api/projects/SerI2Zt2Fj4Ti6_GSMbH6/datasets - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] POST /api/performance/metrics/batch - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/usage/current - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/auth/user - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+XHRGET
+http://localhost:5173/api/projects
+[HTTP/1.1 500 Internal Server Error 13219ms]
+
+🌐 [REQUEST] GET /api/project-session/current?journeyType=non-tech - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/projects/SerI2Zt2Fj4Ti6_GSMbH6 - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/projects/SerI2Zt2Fj4Ti6_GSMbH6/datasets - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+📊 Datasets response: 
+Object { success: true, datasets: (1) […], count: 1 }
+data-verification-step.tsx:112:17
+📁 Dataset found: 
+Object { hasPreview: true, previewLength: 10, hasSchema: true, schemaKeys: (21) […] }
+data-verification-step.tsx:116:19
+✅ Preview data loaded: 10 rows data-verification-step.tsx:132:21
+🌐 [REQUEST] GET /api/projects/SerI2Zt2Fj4Ti6_GSMbH6/data-quality - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/projects/SerI2Zt2Fj4Ti6_GSMbH6/pii-analysis - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/projects/SerI2Zt2Fj4Ti6_GSMbH6/schema-analysis - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/projects/SerI2Zt2Fj4Ti6_GSMbH6/required-data-elements - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/usage/current - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+This site appears to use a scroll-linked positioning effect. This may not work well with asynchronous panning; see https://firefox-source-docs.mozilla.org/performance/scroll-linked_effects.html for further details and to join the discussion on related tools and features! data-verification
+Uncaught TypeError: can't access property "map", pii.types is undefined
+    children PIIDetectionDialog.tsx:119
+    PIIDetectionDialog PIIDetectionDialog.tsx:107
+    React 16
+    handlePIIReview data-verification-step.tsx:230
+    React 23
+    <anonymous> main.tsx:5
+PIIDetectionDialog.tsx:168:84
+Uncaught TypeError: can't access property "map", pii.types is undefined
+    children PIIDetectionDialog.tsx:119
+    PIIDetectionDialog PIIDetectionDialog.tsx:107
+    React 17
+    handlePIIReview data-verification-step.tsx:230
+    React 23
+    <anonymous> main.tsx:5
+PIIDetectionDialog.tsx:168:84
+The above error occurred in the <PIIDetectionDialog> component:
+
+PIIDetectionDialog@http://localhost:5173/src/components/PIIDetectionDialog.tsx:26:35
+div
+DataVerificationStep@http://localhost:5173/src/pages/data-verification-step.tsx:48:45
+div
+div
+div
+JourneyWizard@http://localhost:5173/src/components/JourneyWizard.tsx:48:30
+Route@http://localhost:5173/@fs/C:/Users/scmak/Documents/Work/Projects/Chimari/chimariapp2/ChimariData_Flowise-chimaridataApp2/node_modules/.vite/deps/wouter.js?v=5a1bd176:205:13
+Switch@http://localhost:5173/@fs/C:/Users/scmak/Documents/Work/Projects/Chimari/chimariapp2/ChimariData_Flowise-chimaridataApp2/node_modules/.vite/deps/wouter.js?v=5a1bd176:261:14
+Suspense
+div
+ProjectProvider@http://localhost:5173/src/hooks/useProjectContext.tsx:20:32
+UsageMonitoringProvider@http://localhost:5173/src/hooks/useUsageMonitoring.tsx:23:40
+UserRoleProvider@http://localhost:5173/src/hooks/useUserRole.tsx:21:33
+QueryClientProvider@http://localhost:5173/@fs/C:/Users/scmak/Documents/Work/Projects/Chimari/chimariapp2/ChimariData_Flowise-chimaridataApp2/node_modules/.vite/deps/@tanstack_react-query.js?v=5a1bd176:3015:27
+ErrorBoundary@http://localhost:5173/src/components/ErrorBoundary.tsx:10:5
+App@http://localhost:5173/src/App.tsx?t=1764708036533:89:35
+
+React will try to recreate this component tree from scratch using the error boundary you provided, ErrorBoundary. chunk-NXESFFTV.js:14080:23
+ErrorBoundary caught an error: TypeError: can't access property "map", pii.types is undefined
+    children PIIDetectionDialog.tsx:119
+    PIIDetectionDialog PIIDetectionDialog.tsx:107
+    React 14
+    handlePIIReview data-verification-step.tsx:230
+    React 23
+    <anonymous> main.tsx:5
+ 
+Object { componentStack: "\nPIIDetectionDialog@http://localhost:5173/src/components/PIIDetectionDialog.tsx:26:35\ndiv\nDataVerificationStep@http://localhost:5173/src/pages/data-verification-step.tsx:48:45\ndiv\ndiv\ndiv\nJourneyWizard@http://localhost:5173/src/components/JourneyWizard.tsx:48:30\nRoute@http://localhost:5173/@fs/C:/Users/scmak/Documents/Work/Projects/Chimari/chimariapp2/ChimariData_Flowise-chimaridataApp2/node_modules/.vite/deps/wouter.js?v=5a1bd176:205:13\nSwitch@http://localhost:5173/@fs/C:/Users/scmak/Documents/Work/Projects/Chimari/chimariapp2/ChimariData_Flowise-chimaridataApp2/node_modules/.vite/deps/wouter.js?v=5a1bd176:261:14\nSuspense\ndiv\nProjectProvider@http://localhost:5173/src/hooks/useProjectContext.tsx:20:32\nUsageMonitoringProvider@http://localhost:5173/src/hooks/useUsageMonitoring.tsx:23:40\nUserRoleProvider@http://localhost:5173/src/hooks/useUserRole.tsx:21:33\nQueryClientProvider@http://localhost:5173/@fs/C:/Users/scmak/Documents/Work/Projects/Chimari/chimariapp2/ChimariData_Flowise-chimaridataApp2/node_modules/.vite/deps/@tanstack_react-query.js?v=5a1bd176:3015:27\nErrorBoundary@http://localhost:5173/src/components/ErrorBoundary.tsx:10:5\nApp@http://localhost:5173/src/App.tsx?t=1764708036533:89:35" }
+ErrorBoundary.tsx:22:13
+🌐 [REQUEST] GET /api/projects/SerI2Zt2Fj4Ti6_GSMbH6 - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/user/role-permissions - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/usage/current - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/projects/SerI2Zt2Fj4Ti6_GSMbH6/datasets - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+📊 Datasets response: 
+Object { success: true, datasets: (1) […], count: 1 }
+data-verification-step.tsx:112:17
+📁 Dataset found: 
+Object { hasPreview: true, previewLength: 10, hasSchema: true, schemaKeys: (21) […] }
+data-verification-step.tsx:116:19
+✅ Preview data loaded: 10 rows data-verification-step.tsx:132:21
+🌐 [REQUEST] GET /api/projects/SerI2Zt2Fj4Ti6_GSMbH6/data-quality - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/projects/SerI2Zt2Fj4Ti6_GSMbH6/pii-analysis - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/projects/SerI2Zt2Fj4Ti6_GSMbH6/schema-analysis - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/projects/SerI2Zt2Fj4Ti6_GSMbH6/required-data-elements - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+Uncaught TypeError: can't access property "map", pii.types is undefined
+    children PIIDetectionDialog.tsx:119
+    PIIDetectionDialog PIIDetectionDialog.tsx:107
+    React 16
+    handlePIIReview data-verification-step.tsx:230
+    React 23
+    <anonymous> main.tsx:5
+PIIDetectionDialog.tsx:168:84
+Uncaught TypeError: can't access property "map", pii.types is undefined
+    children PIIDetectionDialog.tsx:119
+    PIIDetectionDialog PIIDetectionDialog.tsx:107
+    React 17
+    handlePIIReview data-verification-step.tsx:230
+    React 23
+    <anonymous> main.tsx:5
+PIIDetectionDialog.tsx:168:84
+The above error occurred in the <PIIDetectionDialog> component:
+
+PIIDetectionDialog@http://localhost:5173/src/components/PIIDetectionDialog.tsx:26:35
+div
+DataVerificationStep@http://localhost:5173/src/pages/data-verification-step.tsx:48:45
+div
+div
+div
+JourneyWizard@http://localhost:5173/src/components/JourneyWizard.tsx:48:30
+Route@http://localhost:5173/@fs/C:/Users/scmak/Documents/Work/Projects/Chimari/chimariapp2/ChimariData_Flowise-chimaridataApp2/node_modules/.vite/deps/wouter.js?v=5a1bd176:205:13
+Switch@http://localhost:5173/@fs/C:/Users/scmak/Documents/Work/Projects/Chimari/chimariapp2/ChimariData_Flowise-chimaridataApp2/node_modules/.vite/deps/wouter.js?v=5a1bd176:261:14
+Suspense
+div
+ProjectProvider@http://localhost:5173/src/hooks/useProjectContext.tsx:20:32
+UsageMonitoringProvider@http://localhost:5173/src/hooks/useUsageMonitoring.tsx:23:40
+UserRoleProvider@http://localhost:5173/src/hooks/useUserRole.tsx:21:33
+QueryClientProvider@http://localhost:5173/@fs/C:/Users/scmak/Documents/Work/Projects/Chimari/chimariapp2/ChimariData_Flowise-chimaridataApp2/node_modules/.vite/deps/@tanstack_react-query.js?v=5a1bd176:3015:27
+ErrorBoundary@http://localhost:5173/src/components/ErrorBoundary.tsx:10:5
+App@http://localhost:5173/src/App.tsx?t=1764708036533:89:35
+
+React will try to recreate this component tree from scratch using the error boundary you provided, ErrorBoundary. chunk-NXESFFTV.js:14080:23
+ErrorBoundary caught an error: TypeError: can't access property "map", pii.types is undefined
+    children PIIDetectionDialog.tsx:119
+    PIIDetectionDialog PIIDetectionDialog.tsx:107
+    React 14
+    handlePIIReview data-verification-step.tsx:230
+    React 23
+    <anonymous> main.tsx:5
+ 
+Object { componentStack: "\nPIIDetectionDialog@http://localhost:5173/src/components/PIIDetectionDialog.tsx:26:35\ndiv\nDataVerificationStep@http://localhost:5173/src/pages/data-verification-step.tsx:48:45\ndiv\ndiv\ndiv\nJourneyWizard@http://localhost:5173/src/components/JourneyWizard.tsx:48:30\nRoute@http://localhost:5173/@fs/C:/Users/scmak/Documents/Work/Projects/Chimari/chimariapp2/ChimariData_Flowise-chimaridataApp2/node_modules/.vite/deps/wouter.js?v=5a1bd176:205:13\nSwitch@http://localhost:5173/@fs/C:/Users/scmak/Documents/Work/Projects/Chimari/chimariapp2/ChimariData_Flowise-chimaridataApp2/node_modules/.vite/deps/wouter.js?v=5a1bd176:261:14\nSuspense\ndiv\nProjectProvider@http://localhost:5173/src/hooks/useProjectContext.tsx:20:32\nUsageMonitoringProvider@http://localhost:5173/src/hooks/useUsageMonitoring.tsx:23:40\nUserRoleProvider@http://localhost:5173/src/hooks/useUserRole.tsx:21:33\nQueryClientProvider@http://localhost:5173/@fs/C:/Users/scmak/Documents/Work/Projects/Chimari/chimariapp2/ChimariData_Flowise-chimaridataApp2/node_modules/.vite/deps/@tanstack_react-query.js?v=5a1bd176:3015:27\nErrorBoundary@http://localhost:5173/src/components/ErrorBoundary.tsx:10:5\nApp@http://localhost:5173/src/App.tsx?t=1764708036533:89:35" }
+ErrorBoundary.tsx:22:13
+🌐 [REQUEST] GET /api/projects/SerI2Zt2Fj4Ti6_GSMbH6 - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/user/role-permissions - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/projects/SerI2Zt2Fj4Ti6_GSMbH6/datasets - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+📊 Datasets response: 
+Object { success: true, datasets: (1) […], count: 1 }
+data-verification-step.tsx:112:17
+📁 Dataset found: 
+Object { hasPreview: true, previewLength: 10, hasSchema: true, schemaKeys: (21) […] }
+data-verification-step.tsx:116:19
+✅ Preview data loaded: 10 rows data-verification-step.tsx:132:21
+🌐 [REQUEST] GET /api/projects/SerI2Zt2Fj4Ti6_GSMbH6/data-quality - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/projects/SerI2Zt2Fj4Ti6_GSMbH6/pii-analysis - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/projects/SerI2Zt2Fj4Ti6_GSMbH6/schema-analysis - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/projects/SerI2Zt2Fj4Ti6_GSMbH6/required-data-elements - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/usage/current - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/auth/user - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/analysis-execution/results/SerI2Zt2Fj4Ti6_GSMbH6 - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/projects/SerI2Zt2Fj4Ti6_GSMbH6/datasets - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+XHRGET
+http://localhost:5000/api/analysis-execution/results/SerI2Zt2Fj4Ti6_GSMbH6
+[HTTP/1.1 404 Not Found 268ms]
+
+Loaded primary template: Survey Response Analysis execute-step.tsx:256:17
+🌐 [REQUEST] GET /api/templates/journey/business - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+XHRGET
+http://localhost:5173/api/templates/Survey Response Analysis/config
+[HTTP/1.1 404 Not Found 122ms]
+
+🌐 [REQUEST] GET /api/project-session/current?journeyType=business - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+🌐 [REQUEST] GET /api/analysis-execution/results/E9TkvM3V0ugoWDsbJ4Apa - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+XHRGET
+http://localhost:5000/api/analysis-execution/results/E9TkvM3V0ugoWDsbJ4Apa
+[HTTP/1.1 404 Not Found 25ms]
+
+🌐 [REQUEST] GET /api/projects/E9TkvM3V0ugoWDsbJ4Apa/datasets - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+Loaded primary template: Survey Response Analysis execute-step.tsx:256:17
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. 2 socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+🌐 [REQUEST] GET /api/auth/user - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. 2 socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+🌐 [REQUEST] GET /api/auth/user - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+🌐 [REQUEST] GET /api/auth/user - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. 2 socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+🌐 [REQUEST] GET /api/auth/user - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+🌐 [REQUEST] GET /api/auth/user - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+🌐 [REQUEST] GET /api/auth/user - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+🌐 [REQUEST] GET /api/auth/user - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+🌐 [REQUEST] GET /api/usage/current - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+🌐 [REQUEST] GET /api/auth/user - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+🌐 [REQUEST] GET /api/auth/user - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+Analysis plan approved <empty string> execute-step.tsx:683:13
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+🌐 [REQUEST] GET /api/auth/user - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Analysis plan approved <empty string> execute-step.tsx:683:13
+🚀 Executing real analysis for project E9TkvM3V0ugoWDsbJ4Apa execute-step.tsx:513:15
+📊 Analysis types: descriptive, clustering, correlation execute-step.tsx:514:15
+🌐 [REQUEST] GET /api/auth/user - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+WebSocket connected websocket.ts:55:15
+WebSocket connection confirmed by server websocket.ts:67:19
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+🌐 [REQUEST] GET /api/auth/user - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+🌐 [REQUEST] GET /api/auth/user - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+🌐 [REQUEST] GET /api/auth/user - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+🌐 [REQUEST] GET /api/auth/user - Auth: Bearer eyJhbGciOiJIU... api.ts:127:15
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77
+Firefox can’t establish a connection to the server at ws://localhost:5173/socket.io/?EIO=4&transport=websocket. socket__io-client.js:1059:77
+The connection to ws://localhost:5173/socket.io/?EIO=4&transport=websocket was interrupted while the page was loading. socket__io-client.js:1059:77

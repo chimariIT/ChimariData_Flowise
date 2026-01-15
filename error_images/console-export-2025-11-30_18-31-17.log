@@ -1,0 +1,71 @@
+[vite] connecting... client:733:9
+[vite] connected. client:827:12
+Download the React DevTools for a better development experience: https://reactjs.org/link/react-devtools chunk-NXESFFTV.js:21609:25
+Warning: Each child in a list should have a unique "key" prop.
+
+Check the render method of `ProjectDatasetsList`. See https://reactjs.org/link/warning-keys for more information.
+div
+ProjectDatasetsList@http://localhost:5173/src/components/EnhancedDataWorkflow.tsx:43:29
+div
+div
+_c9@http://localhost:5173/src/components/ui/card.tsx:106:9
+div
+_c@http://localhost:5173/src/components/ui/card.tsx:20:8
+div
+EnhancedDataWorkflow@http://localhost:5173/src/components/EnhancedDataWorkflow.tsx:113:37
+div
+Primitive</Node<@http://localhost:5173/@fs/C:/Users/scmak/Documents/Work/Projects/Chimari/chimariapp2/ChimariData_Flowise-chimaridataApp2/node_modules/.vite/deps/chunk-2NITXCUT.js?v=5a1bd176:43:44
+Presence@http://localhost:5173/@fs/C:/Users/scmak/Documents/Work/Projects/Chimari/chimariapp2/ChimariData_Flowise-chimaridataApp2/node_modules/.vite/deps/chunk-PSQJSOUE.js?v=5a1bd176:24:33
+TabsContent<@http://localhost:5173/@fs/C:/Users/scmak/Documents/Work/Projects/Chimari/chimariapp2/ChimariData_Flowise-chimaridataApp2/node_modules/.vite/deps/@radix-ui_react-tabs.js?v=5a1bd176:178:75
+_c5@http://localhost:5173/src/components/ui/tabs.tsx:68:9
+div
+Primitive</Node<@http://localhost:5173/@fs/C:/Users/scmak/Documents/Work/Projects/Chimari/chimariapp2/ChimariData_Flowise-chimaridataApp2/node_modules/.vite/deps/chunk-2NITXCUT.js?v=5a1bd176:43:44
+Provider@http://localhost:5173/@fs/C:/Users/scmak/Documents/Work/Projects/Chimari/chimariapp2/ChimariData_Flowise-chimaridataApp2/node_modules/.vite/deps/chunk-C6BJTAFJ.js?v=5a1bd176:37:47
+Tabs<@http://localhost:5173/@fs/C:/Users/scmak/Documents/Work/Projects/Chimari/chimariapp2/ChimariData_Flowise-chimaridataApp2/node_modules/.vite/deps/@radix-ui_react-tabs.js?v=5a1bd176:63:9
+div
+div
+ProjectPage@http://localhost:5173/src/pages/project-page.tsx:41:36
+Route@http://localhost:5173/@fs/C:/Users/scmak/Documents/Work/Projects/Chimari/chimariapp2/ChimariData_Flowise-chimaridataApp2/node_modules/.vite/deps/wouter.js?v=5a1bd176:205:13
+Switch@http://localhost:5173/@fs/C:/Users/scmak/Documents/Work/Projects/Chimari/chimariapp2/ChimariData_Flowise-chimaridataApp2/node_modules/.vite/deps/wouter.js?v=5a1bd176:261:14
+Suspense
+div
+ProjectProvider@http://localhost:5173/src/hooks/useProjectContext.tsx:20:32
+UsageMonitoringProvider@http://localhost:5173/src/hooks/useUsageMonitoring.tsx:23:40
+UserRoleProvider@http://localhost:5173/src/hooks/useUserRole.tsx:21:33
+QueryClientProvider@http://localhost:5173/@fs/C:/Users/scmak/Documents/Work/Projects/Chimari/chimariapp2/ChimariData_Flowise-chimaridataApp2/node_modules/.vite/deps/@tanstack_react-query.js?v=5a1bd176:3015:27
+ErrorBoundary@http://localhost:5173/src/components/ErrorBoundary.tsx:10:5
+App@http://localhost:5173/src/App.tsx:89:35 react_jsx-dev-runtime.js:64:38
+`DialogContent` requires a `DialogTitle` for the component to be accessible for screen reader users.
+
+If you want to hide the `DialogTitle`, you can wrap it with our VisuallyHidden component.
+
+For more information, see https://radix-ui.com/primitives/docs/components/dialog chunk-NKKOMYHP.js:323:30
+    TitleWarning dialog.tsx:520
+    React 12
+`DialogContent` requires a `DialogTitle` for the component to be accessible for screen reader users.
+
+If you want to hide the `DialogTitle`, you can wrap it with our VisuallyHidden component.
+
+For more information, see https://radix-ui.com/primitives/docs/components/dialog chunk-NKKOMYHP.js:323:30
+`DialogContent` requires a `DialogTitle` for the component to be accessible for screen reader users.
+
+If you want to hide the `DialogTitle`, you can wrap it with our VisuallyHidden component.
+
+For more information, see https://radix-ui.com/primitives/docs/components/dialog chunk-NKKOMYHP.js:323:30
+`DialogContent` requires a `DialogTitle` for the component to be accessible for screen reader users.
+
+If you want to hide the `DialogTitle`, you can wrap it with our VisuallyHidden component.
+
+For more information, see https://radix-ui.com/primitives/docs/components/dialog chunk-NKKOMYHP.js:323:30
+XHRPUT
+http://localhost:5000/api/projects/GEGNwrxzHN8t5zOZsue7d/schema
+[HTTP/1.1 400 Bad Request 10ms]
+
+Failed to update schema: Error: Invalid input detected. Please remove special characters.
+    request api.ts:214
+    put api.ts:287
+    updateProjectSchema api.ts:618
+    handleSaveField schema-editor.tsx:56
+    onClick schema-editor.tsx:192
+    React 15
+schema-editor.tsx:71:15

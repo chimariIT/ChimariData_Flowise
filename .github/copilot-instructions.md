@@ -1,24 +1,24 @@
 # Copilot Instructions for ChimariData Platform
-- **Mission**: Deliver multi-agent analytics journeys; every agent output pauses for user approval before advancing the workflow.
-- **Primary references**: `CLAUDE.md` covers architecture and workflows; `README.md` and `docs/` outline setup; keep `.env` in sync with `.env.example` before running agents.
-- **Runtime shape**: `client/` React 18 + TypeScript UI, `server/` Express + TypeScript services, `shared/` Zod + Drizzle schemas, `python_scripts/` analytics routines invoked through the Python bridge.
-- **Dev startup**: `npm run dev` launches Vite + Express; fallback to `npm run dev:server-only` or `npm run dev:client` when isolating layers; production build via `npm run build` then `npm run start`.
-- **Type & lint gates**: `npm run check` (all TS) and `npm run check:client`; add schema fields in `shared/schema.ts` then run `npm run db:push` to sync Drizzle migrations.
-- **Data contracts**: `shared/schema.ts` + `shared/subscription-tiers.ts` drive API payloads; keep Zod schemas and Drizzle table definitions aligned with agent expectations before exposing endpoints.
-- **Critical tests**: Always execute `npm run test:user-journeys` before merging; supplement with `npm run test:backend` (Vitest), `npm run test:unit`, `npm run test:e2e-tools`, and targeted suites like `npm run test:auth` or `npm run test:dashboard` when touching those flows.
-- **Agent locations**: Project Manager, Data Scientist, Business, Data Engineer, Template Research, and Support agents live in `server/services/*-agent.ts`; PM helpers reside in `server/services/project-manager/`.
-- **Agent coordination**: Route handlers in `server/routes/project.ts` orchestrate agents via `AgentMessageBroker`; publish events only after agent calls and rely on WebSocket fan-out (`server/realtime.ts` → `client/src/lib/realtime.ts`).
-- **Tool registry contract**: All agent capabilities go through `server/services/mcp-tool-registry.ts` (`executeTool`) which gates permissions and dispatches to `server/services/real-tool-handlers.ts`; add metadata + handler wiring for any new tool.
-- **MCP integration**: `server/services/mcpai.ts` and `server/enhanced-mcp-service.ts` form the MCP entrypoint—extend capabilities through the registry rather than calling downstream services directly.
-- **Python bridge**: Long-running analytics route through `server/services/python-processor.ts`, which shells into `python_scripts/` (e.g., `data_analyzer.py`); maintain JSON request/response parity with shared schemas.
-- **Spark delegation**: Heavy jobs use `server/services/spark-processor.ts`; ensure idempotent payloads and normalized responses so agents can replay or resume work.
-- **HTTP surface**: Keep Express handlers in `server/routes/` thin—validate input with shared Zod schemas, hand off to `server/services/**`, and broadcast outcomes via the message broker when workflows matter.
-- **File ingestion**: `server/services/file-processor.ts` and `server/services/unified-upload-service.ts` normalize uploads; client-side upload flows live under `client/src/components/upload/`.
-- **Journey persistence**: Project + artifact records persist via Drizzle models in `shared/schema.ts`; cache-friendly selectors live in `client/src/hooks/projects/`.
-- **Billing & pricing**: Capacity and pricing logic lives in `server/services/enhanced-billing-service.ts` and `server/services/pricing.ts`; corresponding checkout UI sits in `client/src/pages/checkout.tsx`.
-- **Security surfaces**: OAuth + Passport configuration in `server/oauth-config.ts` and `server/oauth-providers.ts`; PII scanning routed through `server/unified-pii-processor.ts` and `server/file-processor.ts`.
-- **Frontend conventions**: Routing is Wouter-based in `client/src/App.tsx`; network access funnels through `client/src/lib/api.ts` + `client/src/lib/queryClient.ts`; Tailwind tokens configured in `tailwind.config.ts`; use Vite aliases `@`, `@shared`, `@assets` defined in `vite.config.ts`.
-- **Real-time UX**: `client/src/pages/dashboard.tsx` and `client/src/pages/project-page.tsx` listen for `agent:message`, `project:update`, `analysis:progress`, and `checkpoint:*` events from `client/src/lib/realtime.ts`.
-- **Templates & journeys**: Journey templates and planning live under `server/services/project-manager/` with shared artifacts persisted via `shared/schema.ts`; journey UI modules render from `client/src/pages/project-page.tsx`.
-- **Testing artifacts**: Playwright configuration in `playwright.config.ts`; targeted UI capture flows run through `npm run test:ui-screens` and `capture-screenshots.mjs`.
-- **Docs trail**: `ADMIN_*`, `PLAN_*`, and `docs/` capture historical decisions; review before restructuring workflows or billing logic.
+- **Mission**: Deliver multi-agent analytics journeys where every agent pause awaits user approval before advancing.
+- **Primary references**: `CLAUDE.md` (commands + architecture), `AGENTIC_FLOW_INTEGRATION.md` (journey state roles), `docs/AGENTIC_ORCHESTRATION_DESIGN.md` (dynamic tool discovery), and `README.md` (stack overview).
+- **Runtime layout**: `client/` React 18 + TypeScript (Wouter + React Query), `server/` Express + TypeScript services, `shared/` Drizzle tables + Zod schemas, `python/` + `python_scripts/` analytics helpers.
+- **Dev loop**: `npm run dev` runs Vite + server; isolate with `npm run dev:client` or `npm run dev:server-only` when debugging.
+- **Prod build**: `npm run build` then `npm run start`; keep `.env` aligned with `.env.example` before running agents or tests.
+- **Type gates**: `npm run check` (full TS, 8GB heap) and `npm run check:client`; push schema changes with `npm run db:push` or author SQL in `migrations/`.
+- **Data contracts**: Update Drizzle + Zod definitions in `shared/schema.ts` and tier logic in `shared/subscription-tiers.ts` before exposing new payloads.
+- **Journey persistence**: `journeyProgress.completedSteps` + `currentStep` fields on projects drive orchestration; keep frontend PATCH flows and backend state updates consistent.
+- **Execution stack**: `server/services/project-manager/journey-execution-machine.ts`, `journey-state-manager.ts`, and `project-agent-orchestrator.ts` determine which steps run; never bypass them when extending workflows.
+- **HTTP entry**: `server/routes/project.ts` connects requests to `AgentMessageBroker`; handlers stay thin (validate → delegate → broadcast via `server/realtime.ts`).
+- **Agents**: Specialized agents live in `server/services/*-agent.ts`; PM delegates to Research/Data Scientist/Data Engineer/etc. via the broker.
+- **Tool registry**: All capabilities route through `server/services/mcp-tool-registry.ts#executeTool`; wire metadata + handlers in `server/services/real-tool-handlers.ts` instead of calling downstream services directly.
+- **Dynamic discovery**: Agents call `findToolsByCapability` per `docs/AGENTIC_ORCHESTRATION_DESIGN.md`; Research phase selects templates before execution—avoid hardcoding tool names.
+- **Data flow**: Upload → verification → transformation → analysis spans `server/services/file-processor.ts`, `unified-upload-service.ts`, `python-processor.ts`, and `analysis-execution.ts`; mirror payloads with `shared/schema.ts`.
+- **Python & Spark**: Heavy analytics shell out via `server/services/python-processor.ts` (invokes `python_scripts/`) or `spark-processor.ts`; maintain JSON parity and idempotent payloads.
+- **Realtime UX**: `server/realtime.ts` publishes `agent:message`, `project:update`, `analysis:progress`, and `checkpoint:*` events; clients subscribe through `client/src/lib/realtime.ts` powering `dashboard.tsx` and `project-page.tsx`.
+- **Frontend conventions**: Use Tailwind tokens in `tailwind.config.ts`, shared UI blocks in `client/src/components/`, and network helpers in `client/src/lib/api.ts` + `queryClient.ts`.
+- **Templates & planning**: Journey planning pieces live in `server/services/project-manager/` and `shared/journey-templates.ts`; keep selectors in `client/src/hooks/projects/` synced when schemas change.
+- **Billing & pricing**: `server/services/enhanced-billing-service.ts` + `server/services/pricing.ts` enforce limits; checkout UI resides in `client/src/pages/checkout.tsx`.
+- **Security surfaces**: OAuth + Passport config in `server/oauth-config.ts`/`server/oauth-providers.ts`; PII enforcement via `server/unified-pii-processor.ts` and `file-processor.ts`.
+- **Testing gates**: `npm run test:user-journeys` is mandatory before merge; supplement with `npm run test:backend`, `npm run test:unit`, `npm run test:e2e-tools`, and targeted flows (`npm run test:auth`, `npm run test:dashboard`, etc.).
+- **UI screenshots & docs**: Playwright config in `playwright.config.ts`; capture flows via `npm run test:ui-screens` or `capture-screenshots.mjs`.
+- **Operational docs**: Review `docs/ARCHITECTURE.md`, `docs/AGENTIC_SYSTEM.md`, `docs/USER_JOURNEYS.md`, and `docs/BILLING_ADMIN.md` before refactoring shared pipelines or billing logic.
