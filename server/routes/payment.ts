@@ -209,6 +209,7 @@ router.post('/verify-session', ensureAuthenticated, async (req, res) => {
         res.json({
             success: verification.success,
             status: verification.status,
+            paymentStatus: verification.success ? 'paid' : verification.status,
             projectId,
             message: verification.success ? 'Payment verified successfully' : 'Payment verification failed'
         });

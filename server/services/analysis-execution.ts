@@ -90,9 +90,10 @@ interface AnalysisRecommendation {
   id: number;
   title: string;
   description: string;
-  priority: 'High' | 'Medium' | 'Low';
+  priority: 'High' | 'Medium' | 'Low' | 'high' | 'medium' | 'low';
   effort: 'High' | 'Medium' | 'Low';
   expectedImpact?: string;
+  impact?: string; // Extended from DataScienceOrchestrator
 }
 
 // Phase 3: Question-to-Analysis Mapping
@@ -125,6 +126,11 @@ interface AnalysisResults {
     executedAt: Date;
     datasetNames: string[];
     techniques: string[];
+    // Extended metadata from DataScienceOrchestrator
+    totalRows?: number;
+    totalColumns?: number;
+    analysisTypes?: string[];
+    executionTimeMs?: number;
   };
   questionAnswers?: {
     projectId: string;
@@ -162,6 +168,61 @@ interface AnalysisResults {
     errorMessage?: string;
     executionTimeMs?: number;
   }>;
+  // Extended properties from DataScienceOrchestrator
+  dataQualityReport?: {
+    overallScore: number;
+    missingValueAnalysis?: any[];
+    outlierDetection?: any[];
+    completenessScore?: number;
+    consistencyScore?: number;
+    piiDetection?: any[];
+  };
+  statisticalAnalysisReport?: {
+    correlationMatrix?: {
+      matrix: number[][];
+      columns: string[];
+      significantCorrelations?: Array<{
+        var1: string;
+        var2: string;
+        correlation: number;
+        pValue?: number;
+      }>;
+    };
+    descriptiveStats?: Record<string, any>;
+    hypothesisTests?: any[];
+  };
+  mlModels?: Array<{
+    modelType: string;
+    problemType: string;
+    targetColumn?: string;
+    features?: string[];
+    metrics: {
+      accuracy?: number;
+      r2?: number;
+      rmse?: number;
+      silhouetteScore?: number;
+    };
+    featureImportance?: Array<{
+      feature: string;
+      importance: number;
+    }>;
+  }>;
+  executiveSummary?: {
+    keyFindings?: string[];
+    answersToQuestions?: Array<{
+      question: string;
+      answer: string;
+      confidence: number;
+      evidence?: string[];
+    }>;
+    recommendations?: Array<{
+      text: string;
+      priority: string;
+      expectedImpact?: string;
+    }>;
+    nextSteps?: string[];
+  };
+  businessKPIs?: any[];
 }
 
 export class AnalysisExecutionService {
@@ -360,6 +421,8 @@ export class AnalysisExecutionService {
    */
   static async executeAnalysis(request: AnalysisRequest): Promise<AnalysisResults> {
     const startTime = Date.now();
+    // ✅ TypeScript fix: Declare dsExecutionId at function scope so it's accessible in catch block
+    let dsExecutionId: string | null = null;
 
     console.log(`🔬 [DATA_SCIENTIST] Starting analysis for project ${request.projectId}`);
     console.log(`🔬 [DATA_SCIENTIST] Using tools: statistical_analyzer, ml_pipeline, visualization_engine`);
@@ -392,11 +455,15 @@ export class AnalysisExecutionService {
       throw new Error('Access denied. You do not have permission to run analysis on this project.');
     }
 
-    // GAP 2 FIX: Load PII decision from project metadata to enforce filtering
+    // PII FIX: Read from journeyProgress (SSOT) first, then fall back to project.metadata
+    const journeyProgress = (project as any).journeyProgress || {};
     const projectMetadata = (project as any).metadata || {};
-    const piiDecision = projectMetadata.piiDecision;
-    const excludedColumns: string[] = projectMetadata.excludedColumns || [];
-    const piiColumnsToRemove: string[] = piiDecision?.selectedColumns || [];
+    const piiDecisionFromProgress = journeyProgress.piiDecision || journeyProgress.piiDecisions;
+    const piiDecisionFromMetadata = projectMetadata.piiDecision;
+    const piiDecision = piiDecisionFromProgress || piiDecisionFromMetadata;
+    // Normalize field names: frontend saves as excludedColumns, some paths save as selectedColumns
+    const excludedColumns: string[] = piiDecision?.excludedColumns || projectMetadata.excludedColumns || [];
+    const piiColumnsToRemove: string[] = piiDecision?.selectedColumns || piiDecision?.piiColumnsRemoved || [];
     const columnsToExclude = new Set([...excludedColumns, ...piiColumnsToRemove]);
 
     if (columnsToExclude.size > 0) {
@@ -805,11 +872,11 @@ export class AnalysisExecutionService {
       // ============================================
       // SAVE TO U2A2A2U NORMALIZED TABLES
       // ============================================
-      let dsExecutionId: string | null = null;
+      // Note: dsExecutionId is declared at function scope (line 364) for catch block access
       try {
         // 1. Create agent_executions record for data_scientist
         const executionId = nanoid();
-        dsExecutionId = executionId;
+        dsExecutionId = executionId;  // Assign to function-scoped variable
 
         await db.insert(agentExecutions).values({
           id: executionId,
@@ -1080,6 +1147,13 @@ export class AnalysisExecutionService {
         const totalSizeBytes = projectDatasetList.reduce((acc: number, ds: any) => acc + (ds.fileSize || 0), 0);
         const totalSizeMB = totalSizeBytes / (1024 * 1024);
 
+        // ✅ Fetch fresh project data to get businessKPIs from journeyProgress
+        const freshProject = await db.query.projects.findFirst({
+          where: eq(projects.id, request.projectId)
+        });
+        const freshJourneyProgress = (freshProject as any)?.journeyProgress || {};
+        const storedBusinessKPIs = freshJourneyProgress.businessKPIs || [];
+
         console.log(`📦 Artifact generation config:`, {
           projectId: request.projectId,
           projectName: project.name,
@@ -1087,8 +1161,85 @@ export class AnalysisExecutionService {
           journeyType: (project.journeyType as any) || 'non-tech',
           insightCount: allInsights.length,
           visualizationCount: allVisualizations.length,
-          datasetSizeMB: totalSizeMB || 1
+          datasetSizeMB: totalSizeMB || 1,
+          hasBusinessKPIs: storedBusinessKPIs.length > 0
         });
+
+        // ✅ GAP FIX: Map DataScienceOrchestrator results to comprehensiveResults for enhanced PDF
+        const comprehensiveResults = {
+          dataQualityReport: {
+            overallScore: results.dataQualityReport?.overallScore || 85,
+            missingValueAnalysis: results.dataQualityReport?.missingValueAnalysis || [],
+            outlierDetection: results.dataQualityReport?.outlierDetection || []
+          },
+          statisticalAnalysisReport: {
+            correlationMatrix: (() => {
+              const statReport = results.statisticalAnalysisReport;
+              const corrMatrix = statReport?.correlationMatrix;
+              if (corrMatrix?.matrix?.length && corrMatrix?.columns?.length) {
+                return corrMatrix.columns.reduce((acc: Record<string, Record<string, number>>, col: string, i: number) => {
+                  acc[col] = {};
+                  corrMatrix.columns.forEach((col2: string, j: number) => {
+                    acc[col][col2] = corrMatrix.matrix?.[i]?.[j] ?? 0;
+                  });
+                  return acc;
+                }, {} as Record<string, Record<string, number>>);
+              }
+              return undefined;
+            })(),
+            significantCorrelations: results.statisticalAnalysisReport?.correlationMatrix?.significantCorrelations?.map((corr: any) => ({
+              var1: corr.var1,
+              var2: corr.var2,
+              correlation: corr.correlation,
+              pValue: corr.pValue
+            })) || [],
+            regressionResults: (() => {
+              const regressionModel = results.mlModels?.find((m: any) => m.problemType === 'regression');
+              if (regressionModel) {
+                return {
+                  r2: regressionModel.metrics?.r2,
+                  rmse: regressionModel.metrics?.rmse,
+                  features: regressionModel.features
+                };
+              }
+              return undefined;
+            })()
+          },
+          mlModels: results.mlModels?.map(model => ({
+            modelType: model.modelType,
+            metrics: {
+              accuracy: model.metrics.accuracy,
+              r2: model.metrics.r2,
+              rmse: model.metrics.rmse,
+              silhouetteScore: model.metrics.silhouetteScore
+            },
+            featureImportance: model.featureImportance?.slice(0, 10).map(fi => ({
+              feature: fi.feature,
+              importance: fi.importance
+            }))
+          })) || [],
+          executiveSummary: {
+            keyFindings: results.executiveSummary?.keyFindings || allInsights.slice(0, 5).map(i => i.title),
+            recommendations: allRecommendations.map(rec => ({
+              title: rec.title || 'Recommendation',
+              description: rec.description,
+              priority: rec.priority || 'medium',
+              impact: rec.impact
+            })),
+            answeredQuestions: results.executiveSummary?.answersToQuestions?.map(qa => ({
+              question: qa.question,
+              answer: qa.answer,
+              confidence: qa.confidence
+            })) || []
+          },
+          businessKPIs: storedBusinessKPIs.length > 0 ? storedBusinessKPIs : ((results as any).businessKPIs || []),
+          metadata: {
+            totalRows: results.metadata?.totalRows || 0,
+            totalColumns: results.metadata?.totalColumns || 0,
+            analysisTypes: results.metadata?.analysisTypes || request.analysisTypes || [],
+            executionTimeMs: results.metadata?.executionTimeMs || 0
+          }
+        };
 
         const artifactResult = await artifactGenerator.generateArtifacts({
           projectId: request.projectId,
@@ -1098,7 +1249,8 @@ export class AnalysisExecutionService {
           analysisResults: [results], // Wrap in array as expected by interface
           visualizations: allVisualizations,
           insights: allInsights.map(i => `${i.title}: ${i.description}`),
-          datasetSizeMB: totalSizeMB || 1 // Default to 1MB if unknown
+          datasetSizeMB: totalSizeMB || 1, // Default to 1MB if unknown
+          comprehensiveResults // ✅ Pass comprehensive results to artifact generator
         });
 
         console.log(`✅ Artifacts generated successfully for project ${request.projectId}:`, {
@@ -1220,6 +1372,25 @@ export class AnalysisExecutionService {
         console.warn('Auto-translation failed:', translationError);
       }
 
+      // P2-2: Final execution summary logging
+      const executionEndTime = Date.now();
+      // ✅ TypeScript fix: Use startTime (declared at line 362) instead of undefined executionStartTime
+      const totalExecutionTimeMs = executionEndTime - startTime;
+      console.log(`\n${'='.repeat(80)}`);
+      // ✅ TypeScript fix: Use dsExecutionId (declared at line 808) instead of out-of-scope executionId
+      console.log(`✅ [Analysis Execution ${dsExecutionId || 'unknown'}] COMPLETED SUCCESSFULLY`);
+      console.log(`${'='.repeat(80)}`);
+      console.log(`📊 Results Summary:`);
+      console.log(`   - Total Insights: ${results.insights?.length || 0}`);
+      console.log(`   - Visualizations: ${results.visualizations?.length || 0}`);
+      console.log(`   - Recommendations: ${results.recommendations?.length || 0}`);
+      // ✅ TypeScript fix: questionAnswers is an object with answeredCount, not an array with length
+      console.log(`   - Question Answers: ${(results.questionAnswers as any)?.answeredCount || Object.keys(results.questionAnswers || {}).length || 0}`);
+      console.log(`   - Execution Time: ${(totalExecutionTimeMs / 1000).toFixed(2)}s`);
+      // ✅ TypeScript fix: Cast to any for artifacts property that may not be in AnalysisResults type
+      console.log(`   - Artifacts Generated: ${(results as any).artifacts ? 'Yes' : 'No'}`);
+      console.log(`${'='.repeat(80)}\n`);
+
       return results;
     } catch (error: any) {
       // Roll back plan status if it was marked as executing
@@ -1238,9 +1409,24 @@ export class AnalysisExecutionService {
         }
       }
 
-      // Categorize and enhance error messages for better user feedback
+      // P2-2: Error logging for debugging
+      const executionEndTime = Date.now();
+      // ✅ TypeScript fix: Use startTime (declared at line 362) instead of undefined executionStartTime
+      const totalExecutionTimeMs = executionEndTime - startTime;
       const errorMsg = error?.message || String(error);
-      console.error(`❌ Analysis execution failed: ${errorMsg}`);
+
+      console.log(`\n${'='.repeat(80)}`);
+      // ✅ TypeScript fix: Use dsExecutionId (declared at line 808) instead of out-of-scope executionId
+      console.error(`❌ [Analysis Execution ${dsExecutionId || 'unknown'}] FAILED`);
+      console.log(`${'='.repeat(80)}`);
+      console.error(`💥 Error Details:`);
+      console.error(`   - Error: ${errorMsg}`);
+      console.error(`   - Stack: ${error?.stack?.split('\n').slice(0, 5).join('\n   ') || 'No stack trace'}`);
+      console.error(`   - Project: ${request.projectId}`);
+      console.error(`   - Time Elapsed: ${(totalExecutionTimeMs / 1000).toFixed(2)}s`);
+      console.log(`${'='.repeat(80)}\n`);
+
+      // Categorize and enhance error messages for better user feedback
 
       // Provide user-friendly error messages based on error type
       if (errorMsg.includes('timeout') || errorMsg.includes('ETIMEDOUT')) {
@@ -1891,7 +2077,20 @@ export class AnalysisExecutionService {
    * - Executive Summary
    */
   static async executeComprehensiveAnalysis(request: AnalysisRequest): Promise<AnalysisResults> {
-    console.log(`🔬 [Comprehensive] Starting data science workflow for project ${request.projectId}`);
+    const executionStartTime = Date.now();
+    const executionId = nanoid(8);
+
+    // P2-2: Comprehensive execution logging for debugging
+    console.log(`\n${'='.repeat(80)}`);
+    console.log(`🔬 [Analysis Execution ${executionId}] Starting comprehensive workflow`);
+    console.log(`${'='.repeat(80)}`);
+    console.log(`📋 Request Details:`);
+    console.log(`   - Project ID: ${request.projectId}`);
+    console.log(`   - User ID: ${request.userId}`);
+    console.log(`   - Requested Types: ${(request.analysisTypes || []).join(', ') || 'auto-select'}`);
+    console.log(`   - Analysis Path: ${request.analysisPath?.length || 0} recommended analyses`);
+    console.log(`   - Question Mappings: ${request.questionAnswerMapping?.length || 0} questions mapped`);
+    console.log(`${'='.repeat(80)}\n`);
 
     // Get user context
     const userContext = await this.getUserContext(request.projectId, request.userId);
@@ -1997,14 +2196,19 @@ export class AnalysisExecutionService {
         console.log(`  🚀 Launching parallel: ${analysis.analysisName} (${analysisType})`);
 
         try {
-          // Execute single analysis
+          // VI-1 FIX: Execute single analysis with optimal compute engine
           const singleResult = await dataScienceOrchestrator.executeWorkflow({
             projectId: request.projectId,
             userId: request.userId,
             analysisTypes: [analysisType],
             userGoals,
             userQuestions,
-            datasetIds: request.datasetIds
+            datasetIds: request.datasetIds,
+            computeEngine: selectedEngine.engine,
+            computeEngineConfig: ComputeEngineSelector.getEngineConfig(selectedEngine.engine, {
+              recordCount: totalRecordCount,
+              analysisType: analysisType
+            })
           });
 
           const executionTimeMs = Date.now() - startTime;
