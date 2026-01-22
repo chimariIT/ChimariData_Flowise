@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Last Updated**: January 12, 2026 | **Status**: Active Development | **Server Port**: 5000 | **Client Port**: 5173
+**Last Updated**: January 22, 2026 | **Status**: Active Development | **Server Port**: 5000 | **Client Port**: 5173
 
 ---
 
@@ -103,7 +103,13 @@ npx vitest run --testNamePattern="should generate"          # Vitest pattern mat
 | **WebSocket client** | `client/src/lib/realtime.ts` |
 | **Main app routes** | `client/src/App.tsx` |
 | **Payment status banner** | `client/src/components/PaymentStatusBanner.tsx` |
+| **Payment routes** | `server/routes/payment.ts` |
+| **Analysis payment** | `server/routes/analysis-payment.ts` |
+| **Cost estimation service** | `server/services/cost-estimation-service.ts` |
+| **Feature gate middleware** | `server/middleware/feature-gate.ts` |
+| **Clarification service** | `server/services/clarification-service.ts` |
 | **Fix plans documentation** | `FIX_PLANS.md` |
+| **Platform fix plans (Jan 21-22)** | `PLATFORM_FIX_PLAN_JAN21.md`, `COMPREHENSIVE_PLATFORM_FIX_PLAN.md` |
 | **Production readiness report** | `PRODUCTION_READINESS_REPORT.md` |
 
 ### Quick Decision Tree
@@ -474,11 +480,11 @@ Server validates on startup and **exits with code 1** if validation fails in pro
 - **Production-Ready Components**: Enhanced platform capabilities with production hardening
 
 **Git Commits** (Most Recent):
-- `8766464` - Fix user journey flow, context-aware KPIs, payment redirects, analysis gating
-- `51d54f6` - Consolidate documentation - archive session-specific docs
-- `9c887b0` - Complete Phase 3 production polish - error recovery, timeouts, checkpoints
-- `396fc32` - Fix data elements flow: Preparation creates, Verification maps only
-- `e89529e` - Fix project creation and PII confidence display
+- `b557a0f` - Comprehensive platform fixes: pricing, payments, data flow, navigation
+- `8eb706b` - Fix PII decisions SSOT and payment verification response mismatch
+- `8713afd` - Clean up archived documentation and update config files
+- `054048f` - Add ML pipeline, synthetic data generator, and test scripts
+- `2ab324c` - Fix user journey flow, context-aware KPIs, payment redirects, analysis gating
 
 ### 4. Recent Bug Fixes (Dec 8, 2025) ✅ FIXED
 
@@ -809,6 +815,54 @@ Three critical issues fixed to ensure proper user journey flow, context-aware an
 - No-journey state shows blue info card with "Choose Your Journey" button
 - Visualizations and Insights tabs show lock icon and are disabled when journey incomplete
 
+### 16. Comprehensive Platform Fixes (Jan 22, 2026) ✅ COMPLETE
+
+Full audit and fix of 5 recurring issues across pricing, payments, data flow, and navigation. Two critical hotfixes also applied.
+
+**Issue 1: Pricing Unification**
+
+| Problem | Fix | Location |
+|---------|-----|----------|
+| 3 competing pricing systems produced different costs | Aligned `buildPricing()` with CostEstimationService constants ($0.50 base, $0.10/1K rows, type multipliers) | `server/routes/analysis-payment.ts:36-81` |
+| Frontend `calculatePricing` used journey-based base prices ($29-$99) | Client now relies entirely on `backendCostEstimate` from `/api/projects/:id/cost-estimate` | `client/src/pages/pricing-step.tsx` |
+
+**Issue 2: Subscription Price ID Bug**
+
+| Problem | Fix | Location |
+|---------|-----|----------|
+| `stripeYearlyPriceId` used same value as `stripeMonthlyPriceId` | Query `subscriptionTierPricing` DB table for distinct monthly/yearly IDs | `server/routes/pricing.ts:477-487` |
+
+**Issue 3: Navigation Cache Staleness**
+
+| Problem | Fix | Location |
+|---------|-----|----------|
+| Data elements not refreshing after prepare step saves | Added `refetchOnMount: 'always'` to useProject hook | `client/src/hooks/useProject.ts:82` |
+| Transformation step loads stale cached data | Added cache invalidation on mount before loading transformation inputs | `client/src/pages/data-transformation-step.tsx` |
+
+**Issue 4: PII Decisions SSOT**
+
+| Problem | Fix | Location |
+|---------|-----|----------|
+| Analysis execution read PII from `project.metadata` (not SSOT) | Now reads from `journeyProgress.piiDecision` first, falls back to metadata | `server/services/analysis-execution.ts:458-463` |
+| Multiple field names for excluded columns | Normalized: `excludedColumns`, `selectedColumns`, `piiColumnsRemoved` all checked | `server/services/analysis-execution.ts` |
+
+**Issue 5: Payment Verification Response Mismatch**
+
+| Problem | Fix | Location |
+|---------|-----|----------|
+| Frontend checks `response.paymentStatus === 'paid'` but backend only returned `status` | Added `paymentStatus` field to verify-session response | `server/routes/payment.ts:209-215` |
+| Successful payments shown as FAILED to users | Response now includes both `status` and `paymentStatus` for compatibility | `server/routes/payment.ts` |
+
+**Key Architecture Principle Reinforced**:
+- `journeyProgress` is the SSOT for all user journey state (PII decisions, cost estimates, requirements, execution config)
+- Backend services must read from `journeyProgress` first, with fallback to legacy locations
+- Frontend-backend contract: always include expected response fields even if redundant
+
+**Console Indicators** (verify in server logs):
+- `💰 [Payment] Locked cost sources: journeyProgress=X, project=Y, using=Z` - Cost SSOT active
+- `✅ [Payment] Using locked cost` - Locked pricing enforced
+- `🔴 CRITICAL: Stripe not configured in production!` - Production safety check working
+
 ---
 
 ## 🐛 Common Debugging Scenarios
@@ -1050,6 +1104,9 @@ npm run dev
 
 ### Implementation Summaries
 - **[FIX_PLANS.md](FIX_PLANS.md)** - Comprehensive fix plan with P0-P3 priorities and code examples
+- **[COMPREHENSIVE_PLATFORM_FIX_PLAN.md](COMPREHENSIVE_PLATFORM_FIX_PLAN.md)** - Jan 22 platform-wide fix plan (pricing, payments, navigation)
+- **[PLATFORM_FIX_PLAN_JAN21.md](PLATFORM_FIX_PLAN_JAN21.md)** - Jan 21 fix plan (pricing conflicts, subscriptions)
+- **[USER_JOURNEY_GAP_ANALYSIS_JAN19.md](USER_JOURNEY_GAP_ANALYSIS_JAN19.md)** - Jan 19 user journey gap analysis
 - **[PRODUCTION_READINESS_REPORT.md](PRODUCTION_READINESS_REPORT.md)** - Production audit report (Jan 2, 2026)
 - **[docs/SYSTEM_STATUS.md](docs/SYSTEM_STATUS.md)** - System health status and phase completion
 

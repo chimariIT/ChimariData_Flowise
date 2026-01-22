@@ -1,9 +1,9 @@
 # ChimariData Fix Plans
 
 **Created**: January 7, 2026
-**Last Updated**: January 7, 2026
-**Status**: P0, P1, and P2 Fixes IMPLEMENTED ✅
-**Total Issues**: 25+
+**Last Updated**: January 22, 2026
+**Status**: P0-P2 IMPLEMENTED ✅ | Jan 22 Comprehensive Platform Fixes ✅
+**Total Issues**: 30+
 **Estimated Total Effort**: 25-30 hours
 
 ---
@@ -15,10 +15,12 @@
 | **P0 Critical** | 4 | ✅ COMPLETE | Jan 7, 2026 |
 | **P1 High** | 3 | ✅ COMPLETE | Jan 7, 2026 |
 | **P2 Medium** | 3 | ✅ COMPLETE | Jan 7, 2026 |
+| **Jan 22 Platform** | 5 | ✅ COMPLETE | Jan 22, 2026 |
+| **Jan 22 Hotfixes** | 2 | ✅ COMPLETE | Jan 22, 2026 |
 | **P3 Low** | 2 | 📋 Planned | - |
 | **Agent Overhaul** | 1 | 📋 Planned | - |
 
-### Files Modified
+### Files Modified (Jan 7)
 - `server/routes/project.ts` - Added column mappings, PII persistence, 4 new endpoints
 - `server/routes/analysis-execution.ts` - Payment gates for execution and results, BA translation trigger
 - `server/services/analysis-execution.ts` - Business Agent translation integration
@@ -27,15 +29,25 @@
 - `client/src/components/PaymentStatusBanner.tsx` - NEW: Payment status UI banner
 - `client/src/pages/project-results.tsx` - Added PaymentStatusBanner integration
 
+### Files Modified (Jan 22 - Comprehensive Platform Fixes)
+- `server/routes/analysis-payment.ts` - Pricing unification (aligned buildPricing with CostEstimationService)
+- `server/routes/payment.ts` - Payment verify-session response fix (added paymentStatus field)
+- `server/routes/pricing.ts` - Subscription price ID fix (yearly != monthly)
+- `server/services/analysis-execution.ts` - PII decisions SSOT (read from journeyProgress first)
+- `client/src/hooks/useProject.ts` - Navigation cache fix (refetchOnMount: 'always')
+- `client/src/pages/data-transformation-step.tsx` - Cache invalidation on mount
+- `client/src/pages/pricing-step.tsx` - Rely on backend cost estimate, pre-execution display fix
+
 ---
 
 ## Table of Contents
 
 1. [P0 Critical Fixes](#p0-critical-fixes) - 4 issues ✅ IMPLEMENTED
 2. [P1 High Priority Fixes](#p1-high-priority-fixes) - 3 issues ✅ IMPLEMENTED
-3. [P2 Medium Priority Fixes](#p2-medium-priority-fixes) - 3 issues, ~11 hours
-4. [P3 Low Priority Fixes](#p3-low-priority-fixes) - 2 issues, ~8 hours
-5. [Agent Coordination Overhaul](#agent-coordination-overhaul) - Full architecture fix
+3. [P2 Medium Priority Fixes](#p2-medium-priority-fixes) - 3 issues ✅ IMPLEMENTED
+4. [Jan 22 Comprehensive Platform Fixes](#jan-22-comprehensive-platform-fixes) - 7 issues ✅ IMPLEMENTED
+5. [P3 Low Priority Fixes](#p3-low-priority-fixes) - 2 issues, ~8 hours
+6. [Agent Coordination Overhaul](#agent-coordination-overhaul) - Full architecture fix
 
 ---
 
@@ -1310,15 +1322,94 @@ const WORKFLOW_TRANSITIONS: WorkflowTransition[] = [
 
 ---
 
+## Jan 22 Comprehensive Platform Fixes
+
+**Date**: January 22, 2026
+**Status**: ✅ ALL COMPLETE
+**Commits**: `8eb706b`, `b557a0f`
+
+These fixes address 5 recurring issues identified from pattern analysis across all previous fix plans, plus 2 critical hotfixes discovered during comprehensive audit.
+
+### Fix JP-1: Pricing Unification ✅
+
+**Root Cause**: 3 competing pricing systems produced different costs:
+- `CostEstimationService`: $0.50 base + type multipliers
+- `buildPricing()` in analysis-payment.ts: $5 flat base + size/complexity
+- Frontend `calculatePricing`: Journey-based prices ($29-$99)
+
+**Fix**: Aligned `buildPricing()` with CostEstimationService constants. Frontend now relies entirely on backend estimate.
+
+**Files Modified**:
+- `server/routes/analysis-payment.ts:36-81` - buildPricing uses $0.50 base, $0.10/1K rows, type multipliers matching CostEstimationService
+- `client/src/pages/pricing-step.tsx` - Removed client-side journey base prices, uses backendCostEstimate as authority
+
+### Fix JP-2: Subscription Price ID Bug ✅
+
+**Root Cause**: `server/routes/pricing.ts:477-487` used `tier.stripePriceId` for BOTH monthly and yearly fields.
+
+**Fix**: Query `subscriptionTierPricing` DB table for distinct price IDs per billing period.
+
+**Files Modified**:
+- `server/routes/pricing.ts:477-487` - Yearly uses `dbTier?.stripeYearlyPriceId`, monthly uses `dbTier?.stripeMonthlyPriceId`
+
+### Fix JP-3: Navigation Cache Staleness ✅
+
+**Root Cause**: `useProject` hook had `staleTime: 30000` (30s). After prepare step saves data and navigates, next component reads from stale cache.
+
+**Fix**: Added `refetchOnMount: 'always'` to useQuery config, plus cache invalidation on component mount.
+
+**Files Modified**:
+- `client/src/hooks/useProject.ts:82` - Added `refetchOnMount: 'always'`
+- `client/src/pages/data-transformation-step.tsx` - Invalidates project query on mount
+
+### Fix JP-4: PII Decisions SSOT ✅ (Hotfix)
+
+**Root Cause**: `analysis-execution.ts` read PII decisions from `project.metadata.piiDecision` which diverged from the SSOT (`journeyProgress.piiDecision`).
+
+**Fix**: Read from `journeyProgress` first, normalize multiple field names (`excludedColumns`, `selectedColumns`, `piiColumnsRemoved`).
+
+**Files Modified**:
+- `server/services/analysis-execution.ts:458-463` - Priority: journeyProgress > project.metadata, with field name normalization
+
+### Fix JP-5: Payment Verify-Session Response Mismatch ✅ (Hotfix)
+
+**Root Cause**: Frontend checked `response.paymentStatus === 'paid'` but backend only returned `status` field. Successful payments appeared FAILED.
+
+**Fix**: Added `paymentStatus` field to verify-session response.
+
+**Files Modified**:
+- `server/routes/payment.ts:209-215` - Added `paymentStatus: verification.success ? 'paid' : verification.status`
+
+### Recurring Pattern Analysis
+
+The audit identified 8 recurring patterns across all fix plans:
+
+| Pattern | Occurrences | Root Cause |
+|---------|-------------|------------|
+| SSOT violations | 4 | Multiple data locations, unclear priority |
+| Frontend-backend contract mismatch | 3 | Response fields don't match what UI expects |
+| Cache staleness | 2 | React Query staleTime too aggressive |
+| Mock data leaks | 3 | No production guards on fallback paths |
+| Missing production safety | 2 | Dev-only code paths reachable in production |
+| Field name inconsistency | 2 | Same concept stored under different keys |
+| Circular pricing | 2 | Multiple pricing systems calculating differently |
+| Navigation state loss | 2 | Data not persisted before navigation |
+
+**Key Architecture Principle**: `journeyProgress` is the SSOT for all user journey state. All backend services must read from it first, with fallback to legacy locations for backwards compatibility.
+
+---
+
 ## Summary
 
-| Priority | Issues | Effort |
-|----------|--------|--------|
-| P0 Critical | 4 | 3 hours |
-| P1 High | 3 | 6 hours |
-| P2 Medium | 3 | 7 hours |
-| P3 Low | 2 | 6-8 hours |
-| Agent Overhaul | 1 | 40+ hours |
+| Priority | Issues | Effort | Status |
+|----------|--------|--------|--------|
+| P0 Critical | 4 | 3 hours | ✅ Complete |
+| P1 High | 3 | 6 hours | ✅ Complete |
+| P2 Medium | 3 | 7 hours | ✅ Complete |
+| Jan 22 Platform | 5 | 4 hours | ✅ Complete |
+| Jan 22 Hotfixes | 2 | 1 hour | ✅ Complete |
+| P3 Low | 2 | 6-8 hours | 📋 Planned |
+| Agent Overhaul | 1 | 40+ hours | 📋 Planned |
 
 **Recommended Implementation Order**:
 1. P0 fixes first (3 hours) - Enables basic data-to-results flow
@@ -1366,7 +1457,7 @@ Each journey step should have clear user touchpoints where agents provide value.
 | **5. Plan** | Analysis plan review, cost estimate | DS → PM | ✅ Working |
 | **6. Execute** | Real-time progress, checkpoints | PM orchestrates all | ✅ Working |
 | **7. Billing** | Payment flow, invoice | N/A (Stripe) | ✅ Working |
-| **8. Dashboard** | Results, artifacts, downloads | BA (translation) | ⚠️ BA not triggered |
+| **8. Dashboard** | Results, artifacts, downloads | BA (translation) | ✅ Working (Fixed Jan 12) |
 
 ---
 
@@ -1462,7 +1553,7 @@ server/services/enhanced-task-queue.ts:373    - 5% failure rate simulation
 | "Smart transformation suggestions" | Transformation | ✅ DE Agent recommendations | None |
 | "Cost estimates before execution" | Plan | ⚠️ Fallback estimates used | Minor |
 | "Real-time agent activity" | Execute | ✅ WebSocket updates work | None |
-| "Business-friendly results" | Dashboard | ❌ BA translation not triggered | **Gap** |
+| "Business-friendly results" | Dashboard | ✅ BA translation triggered post-analysis | Fixed |
 | "Download executive reports" | Dashboard | ⚠️ PPTX is placeholder file | **Gap** |
 | "Ask questions about your data" | Dashboard | ❌ Conversational AI not connected | **Gap** |
 | "Workflow decision trail" | Dashboard | ⚠️ Endpoint exists, sparse data | Minor |
