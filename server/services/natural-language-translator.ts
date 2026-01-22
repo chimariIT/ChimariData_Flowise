@@ -1,6 +1,87 @@
-// server/services/natural-language-translator.ts
-import type { UserRole } from '../../shared/schema';
+/**
+ * Natural Language Translation Service
+ *
+ * Translates technical data science output to plain language for different audience types.
+ * This is the core service for the u2a2a2u pattern's "back to user" phase.
+ *
+ * Key features:
+ * - AI-powered translation using ChimaridataAI
+ * - Audience-aware translation (executive, business, technical, general)
+ * - Schema field translation to business terms
+ * - Analysis results translation
+ * - Data quality metrics to business impact
+ * - Error message humanization
+ * - Grammar checking and clarification
+ * - Caching to reduce API calls
+ */
 
+import type { UserRole } from '../../shared/schema';
+import { ChimaridataAI, chimaridataAI } from '../chimaridata-ai';
+
+// ==========================================
+// TYPES AND INTERFACES
+// ==========================================
+
+export type AudienceType = 'executive' | 'business' | 'technical' | 'general';
+
+export interface TranslationContext {
+  audience: AudienceType;
+  industry?: string;
+  projectName?: string;
+  userRole?: string;
+  technicalLevel?: 'beginner' | 'intermediate' | 'expert';
+}
+
+export interface AITranslationResult<T> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  cached: boolean;
+  provider?: string;
+}
+
+export interface AIResultsTranslation {
+  executiveSummary: string;
+  keyFindings: Array<{
+    finding: string;
+    impact: string;
+    confidence: string;
+    actionable: boolean;
+  }>;
+  recommendations: Array<{
+    action: string;
+    rationale: string;
+    priority: 'high' | 'medium' | 'low';
+    expectedOutcome: string;
+  }>;
+  visualizationNarrative?: string;
+  nextSteps: string[];
+  caveats?: string[];
+}
+
+export interface AIQualityTranslation {
+  overallAssessment: string;
+  businessImpact: string;
+  trustLevel: 'high' | 'medium' | 'low';
+  issues: Array<{
+    issue: string;
+    businessRisk: string;
+    recommendation: string;
+  }>;
+  readyForAnalysis: boolean;
+  confidence: number;
+}
+
+export interface AISchemaTranslation {
+  originalField: string;
+  businessName: string;
+  description: string;
+  dataType: string;
+  businessContext: string;
+  examples?: string[];
+}
+
+// Legacy interfaces (backward compatibility)
 export interface DataSchema {
   [fieldName: string]: {
     type: string;
@@ -56,16 +137,622 @@ export interface UserFriendlyInsights {
   nextSteps: string[];
 }
 
+// ==========================================
+// TRANSLATION CACHE
+// ==========================================
+
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+  audience: AudienceType | UserRole;
+}
+
+class TranslationCache {
+  private cache: Map<string, CacheEntry<any>> = new Map();
+  private readonly TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+  private generateKey(type: string, content: any, audience: AudienceType | UserRole): string {
+    const contentHash = JSON.stringify(content).slice(0, 500);
+    return `${type}:${audience}:${Buffer.from(contentHash).toString('base64').slice(0, 50)}`;
+  }
+
+  get<T>(type: string, content: any, audience: AudienceType | UserRole): T | null {
+    const key = this.generateKey(type, content, audience);
+    const entry = this.cache.get(key);
+
+    if (!entry) return null;
+    if (Date.now() - entry.timestamp > this.TTL_MS) {
+      this.cache.delete(key);
+      return null;
+    }
+
+    return entry.data as T;
+  }
+
+  set<T>(type: string, content: any, audience: AudienceType | UserRole, data: T): void {
+    const key = this.generateKey(type, content, audience);
+    this.cache.set(key, {
+      data,
+      timestamp: Date.now(),
+      audience
+    });
+  }
+
+  clear(): void {
+    this.cache.clear();
+  }
+}
+
+// ==========================================
+// AUDIENCE PROMPTS FOR AI TRANSLATION
+// ==========================================
+
+const AUDIENCE_PERSONAS: Record<AudienceType, string> = {
+  executive: `You are translating for C-suite executives. Use:
+- Strategic, high-level language
+- Focus on ROI, risk, and competitive advantage
+- Bullet points and clear headlines
+- Business impact over technical details
+- 30-second scannable summaries
+- Financial implications and timelines`,
+
+  business: `You are translating for business analysts and managers. Use:
+- Clear business terminology
+- Operational impact and efficiency gains
+- KPI-focused insights
+- Actionable recommendations
+- Moderate technical depth when relevant
+- Process improvement focus`,
+
+  technical: `You are translating for data professionals. Use:
+- Accurate statistical terminology
+- Methodology transparency
+- Confidence intervals and p-values
+- Technical caveats and limitations
+- Code references when helpful
+- Reproducibility considerations`,
+
+  general: `You are translating for general audiences. Use:
+- Simple, everyday language
+- Relatable analogies and examples
+- Avoid jargon entirely
+- Step-by-step explanations
+- Visual metaphors
+- Encouraging, supportive tone`
+};
+
 /**
  * Natural Language Translator Service
  *
  * Translates technical outputs to business-friendly language
  * based on user role (non-tech, business, technical, consultation)
+ *
+ * Supports both synchronous (hardcoded) and async (AI-powered) translation:
+ * - Sync methods: translateSchema, translateFindings, etc. (fast, no API calls)
+ * - Async methods: translateSchemaWithAI, translateResultsWithAI, etc. (AI-powered, more nuanced)
  */
 export class NaturalLanguageTranslator {
+  private ai: ChimaridataAI;
+  private cache: TranslationCache;
+
+  constructor(aiService?: ChimaridataAI) {
+    this.ai = aiService || chimaridataAI;
+    this.cache = new TranslationCache();
+  }
+
+  // ==========================================
+  // AI-POWERED TRANSLATION METHODS (Async)
+  // ==========================================
 
   /**
-   * Translate data schema to natural language
+   * Translate data schema to business-friendly descriptions using AI
+   */
+  async translateSchemaWithAI(
+    schema: Record<string, any>,
+    context: TranslationContext
+  ): Promise<AITranslationResult<AISchemaTranslation[]>> {
+    const cached = this.cache.get<AISchemaTranslation[]>('ai-schema', schema, context.audience);
+    if (cached) {
+      console.log('[NL Translator] Using cached schema translation');
+      return { success: true, data: cached, cached: true };
+    }
+
+    try {
+      const prompt = this.buildAISchemaPrompt(schema, context);
+      const result = await this.ai.generateText({ prompt, temperature: 0.3 });
+      const translations = this.parseAISchemaResponse(result.text, schema);
+
+      this.cache.set('ai-schema', schema, context.audience, translations);
+      console.log(`[NL Translator] Schema translated for ${context.audience} audience`);
+
+      return {
+        success: true,
+        data: translations,
+        cached: false,
+        provider: result.provider
+      };
+    } catch (error: any) {
+      console.error('[NL Translator] AI schema translation failed:', error.message);
+      return {
+        success: false,
+        error: error.message,
+        cached: false,
+        data: this.fallbackAISchemaTranslation(schema)
+      };
+    }
+  }
+
+  private buildAISchemaPrompt(schema: Record<string, any>, context: TranslationContext): string {
+    const fields = Object.entries(schema).map(([name, info]) => {
+      const type = typeof info === 'object' ? info.type || 'unknown' : info;
+      return `- ${name}: ${type}`;
+    }).join('\n');
+
+    return `${AUDIENCE_PERSONAS[context.audience]}
+
+TASK: Translate these data column names into business-friendly terms.
+
+${context.industry ? `INDUSTRY: ${context.industry}` : ''}
+${context.projectName ? `PROJECT: ${context.projectName}` : ''}
+
+DATA COLUMNS:
+${fields}
+
+For each column, provide a JSON array with objects containing:
+- originalField: the original column name
+- businessName: a clear business-friendly name
+- description: what this data represents in business terms
+- dataType: simplified type (text, number, date, category, etc.)
+- businessContext: why this matters for business decisions
+
+Respond with ONLY a valid JSON array.`;
+  }
+
+  private parseAISchemaResponse(response: string, originalSchema: Record<string, any>): AISchemaTranslation[] {
+    try {
+      const jsonMatch = response.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        return JSON.parse(jsonMatch[0]);
+      }
+    } catch (e) {
+      console.warn('[NL Translator] Failed to parse AI schema response, using fallback');
+    }
+    return this.fallbackAISchemaTranslation(originalSchema);
+  }
+
+  private fallbackAISchemaTranslation(schema: Record<string, any>): AISchemaTranslation[] {
+    return Object.entries(schema).map(([field, info]) => ({
+      originalField: field,
+      businessName: this.humanizeFieldName(field),
+      description: `Data field: ${field}`,
+      dataType: typeof info === 'object' ? info.type || 'unknown' : String(info),
+      businessContext: 'Contains data relevant to your analysis'
+    }));
+  }
+
+  /**
+   * Translate analysis results for the target audience using AI
+   */
+  async translateResultsWithAI(
+    results: any,
+    context: TranslationContext
+  ): Promise<AITranslationResult<AIResultsTranslation>> {
+    const cached = this.cache.get<AIResultsTranslation>('ai-results', results, context.audience);
+    if (cached) {
+      console.log('[NL Translator] Using cached results translation');
+      return { success: true, data: cached, cached: true };
+    }
+
+    try {
+      const prompt = this.buildAIResultsPrompt(results, context);
+      const result = await this.ai.generateText({ prompt, temperature: 0.4 });
+      const translation = this.parseAIResultsResponse(result.text, results, context);
+
+      this.cache.set('ai-results', results, context.audience, translation);
+      console.log(`[NL Translator] Results translated for ${context.audience} audience`);
+
+      return {
+        success: true,
+        data: translation,
+        cached: false,
+        provider: result.provider
+      };
+    } catch (error: any) {
+      console.error('[NL Translator] AI results translation failed:', error.message);
+      return {
+        success: false,
+        error: error.message,
+        cached: false,
+        data: this.fallbackAIResultsTranslation(results, context)
+      };
+    }
+  }
+
+  private buildAIResultsPrompt(results: any, context: TranslationContext): string {
+    const resultsStr = JSON.stringify(results, null, 2).slice(0, 4000);
+
+    return `${AUDIENCE_PERSONAS[context.audience]}
+
+TASK: Translate these analysis results into a clear, actionable report.
+
+${context.industry ? `INDUSTRY: ${context.industry}` : ''}
+${context.projectName ? `PROJECT: ${context.projectName}` : ''}
+${context.userRole ? `USER ROLE: ${context.userRole}` : ''}
+
+ANALYSIS RESULTS:
+${resultsStr}
+
+Provide a JSON object with:
+- executiveSummary: 2-3 sentence overview of key findings
+- keyFindings: array of { finding, impact, confidence, actionable }
+- recommendations: array of { action, rationale, priority, expectedOutcome }
+- visualizationNarrative: describe what the charts show in plain language
+- nextSteps: array of concrete next actions
+- caveats: any limitations or considerations
+
+Respond with ONLY a valid JSON object.`;
+  }
+
+  private parseAIResultsResponse(response: string, originalResults: any, context: TranslationContext): AIResultsTranslation {
+    try {
+      const jsonMatch = response.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        return {
+          executiveSummary: parsed.executiveSummary || 'Analysis complete.',
+          keyFindings: parsed.keyFindings || [],
+          recommendations: parsed.recommendations || [],
+          visualizationNarrative: parsed.visualizationNarrative,
+          nextSteps: parsed.nextSteps || [],
+          caveats: parsed.caveats
+        };
+      }
+    } catch (e) {
+      console.warn('[NL Translator] Failed to parse AI results response, using fallback');
+    }
+    return this.fallbackAIResultsTranslation(originalResults, context);
+  }
+
+  private fallbackAIResultsTranslation(results: any, context: TranslationContext): AIResultsTranslation {
+    const insights = results.insights || [];
+    const recommendations = results.recommendations || [];
+
+    return {
+      executiveSummary: `Analysis completed with ${insights.length} insights and ${recommendations.length} recommendations.`,
+      keyFindings: insights.slice(0, 5).map((insight: any) => ({
+        finding: typeof insight === 'string' ? insight : insight.title || insight.description || 'Finding',
+        impact: 'Requires review',
+        confidence: 'Medium',
+        actionable: true
+      })),
+      recommendations: recommendations.slice(0, 5).map((rec: any, i: number) => ({
+        action: typeof rec === 'string' ? rec : rec.title || rec.description || 'Action needed',
+        rationale: 'Based on analysis findings',
+        priority: i < 2 ? 'high' as const : 'medium' as const,
+        expectedOutcome: 'Improved outcomes'
+      })),
+      nextSteps: ['Review the detailed findings', 'Discuss with stakeholders', 'Plan implementation'],
+      caveats: ['Results should be validated with domain expertise']
+    };
+  }
+
+  /**
+   * Translate data quality metrics to business impact using AI
+   */
+  async translateQualityWithAI(
+    qualityReport: any,
+    context: TranslationContext
+  ): Promise<AITranslationResult<AIQualityTranslation>> {
+    const cached = this.cache.get<AIQualityTranslation>('ai-quality', qualityReport, context.audience);
+    if (cached) {
+      console.log('[NL Translator] Using cached quality translation');
+      return { success: true, data: cached, cached: true };
+    }
+
+    try {
+      const prompt = this.buildAIQualityPrompt(qualityReport, context);
+      const result = await this.ai.generateText({ prompt, temperature: 0.3 });
+      const translation = this.parseAIQualityResponse(result.text, qualityReport);
+
+      this.cache.set('ai-quality', qualityReport, context.audience, translation);
+      console.log(`[NL Translator] Quality translated for ${context.audience} audience`);
+
+      return {
+        success: true,
+        data: translation,
+        cached: false,
+        provider: result.provider
+      };
+    } catch (error: any) {
+      console.error('[NL Translator] AI quality translation failed:', error.message);
+      return {
+        success: false,
+        error: error.message,
+        cached: false,
+        data: this.fallbackAIQualityTranslation(qualityReport)
+      };
+    }
+  }
+
+  private buildAIQualityPrompt(report: any, context: TranslationContext): string {
+    const reportStr = JSON.stringify(report, null, 2).slice(0, 3000);
+
+    return `${AUDIENCE_PERSONAS[context.audience]}
+
+TASK: Translate this data quality report into business terms.
+
+${context.industry ? `INDUSTRY: ${context.industry}` : ''}
+
+DATA QUALITY REPORT:
+${reportStr}
+
+Provide a JSON object with:
+- overallAssessment: 1-2 sentence summary of data quality
+- businessImpact: what this quality level means for business decisions
+- trustLevel: "high", "medium", or "low"
+- issues: array of { issue, businessRisk, recommendation }
+- readyForAnalysis: boolean
+- confidence: 0-100 score
+
+Respond with ONLY a valid JSON object.`;
+  }
+
+  private parseAIQualityResponse(response: string, originalReport: any): AIQualityTranslation {
+    try {
+      const jsonMatch = response.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        return {
+          overallAssessment: parsed.overallAssessment || 'Data quality assessment complete.',
+          businessImpact: parsed.businessImpact || 'Review quality issues before proceeding.',
+          trustLevel: parsed.trustLevel || 'medium',
+          issues: parsed.issues || [],
+          readyForAnalysis: parsed.readyForAnalysis ?? true,
+          confidence: parsed.confidence ?? 70
+        };
+      }
+    } catch (e) {
+      console.warn('[NL Translator] Failed to parse AI quality response, using fallback');
+    }
+    return this.fallbackAIQualityTranslation(originalReport);
+  }
+
+  private fallbackAIQualityTranslation(report: any): AIQualityTranslation {
+    const score = report.overallScore || report.qualityScore || report.score || 70;
+    const trustLevel = score >= 80 ? 'high' : score >= 50 ? 'medium' : 'low';
+
+    return {
+      overallAssessment: `Data quality score: ${score}%. ${trustLevel === 'high' ? 'Good quality for analysis.' : 'Some issues may affect results.'}`,
+      businessImpact: trustLevel === 'high'
+        ? 'High confidence in analysis results'
+        : 'Results should be interpreted with some caution',
+      trustLevel,
+      issues: (report.issues || []).slice(0, 5).map((issue: any) => ({
+        issue: typeof issue === 'string' ? issue : issue.description || 'Data issue detected',
+        businessRisk: 'May affect accuracy of insights',
+        recommendation: 'Review and clean data if possible'
+      })),
+      readyForAnalysis: score >= 50,
+      confidence: score
+    };
+  }
+
+  /**
+   * Translate technical error messages to user-friendly text using AI
+   */
+  async translateErrorWithAI(
+    error: string | Error,
+    context: TranslationContext
+  ): Promise<AITranslationResult<{ message: string; suggestion: string; technical?: string }>> {
+    const errorStr = error instanceof Error ? error.message : error;
+
+    const cached = this.cache.get<{ message: string; suggestion: string }>('ai-error', errorStr, context.audience);
+    if (cached) {
+      return { success: true, data: cached, cached: true };
+    }
+
+    try {
+      const prompt = `${AUDIENCE_PERSONAS[context.audience]}
+
+TASK: Translate this technical error into a friendly, helpful message.
+
+ERROR: ${errorStr}
+
+Provide a JSON object with:
+- message: user-friendly explanation of what happened
+- suggestion: what the user can do to resolve it
+- technical: (only for technical audience) the original error
+
+Keep the tone helpful and non-alarming. Respond with ONLY a valid JSON object.`;
+
+      const result = await this.ai.generateText({ prompt, temperature: 0.3 });
+      const translation = this.parseAIErrorResponse(result.text, errorStr, context);
+
+      this.cache.set('ai-error', errorStr, context.audience, translation);
+
+      return {
+        success: true,
+        data: translation,
+        cached: false,
+        provider: result.provider
+      };
+    } catch (e: any) {
+      return {
+        success: false,
+        error: e.message,
+        cached: false,
+        data: this.fallbackAIErrorTranslation(errorStr, context)
+      };
+    }
+  }
+
+  private parseAIErrorResponse(response: string, original: string, context: TranslationContext): { message: string; suggestion: string; technical?: string } {
+    try {
+      const jsonMatch = response.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        return {
+          message: parsed.message || 'Something went wrong',
+          suggestion: parsed.suggestion || 'Please try again or contact support',
+          technical: context.audience === 'technical' ? original : undefined
+        };
+      }
+    } catch (e) {
+      // Fallback
+    }
+    return this.fallbackAIErrorTranslation(original, context);
+  }
+
+  private fallbackAIErrorTranslation(error: string, context: TranslationContext): { message: string; suggestion: string; technical?: string } {
+    return {
+      message: 'We encountered an issue processing your request.',
+      suggestion: 'Please try again. If the problem persists, contact our support team.',
+      technical: context.audience === 'technical' ? error : undefined
+    };
+  }
+
+  /**
+   * Check and fix grammar in text using AI
+   */
+  async checkGrammarWithAI(text: string): Promise<AITranslationResult<{ corrected: string; changes: string[] }>> {
+    try {
+      const prompt = `TASK: Fix any grammar, spelling, or clarity issues in this text.
+
+TEXT: "${text}"
+
+Provide a JSON object with:
+- corrected: the corrected text
+- changes: array of changes made (empty if no changes needed)
+
+Keep the original meaning and tone. Respond with ONLY a valid JSON object.`;
+
+      const result = await this.ai.generateText({ prompt, temperature: 0.1 });
+
+      try {
+        const jsonMatch = result.text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          return {
+            success: true,
+            data: {
+              corrected: parsed.corrected || text,
+              changes: parsed.changes || []
+            },
+            cached: false,
+            provider: result.provider
+          };
+        }
+      } catch (e) {
+        // Fallback - return original
+      }
+
+      return {
+        success: true,
+        data: { corrected: text, changes: [] },
+        cached: false
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+        cached: false,
+        data: { corrected: text, changes: [] }
+      };
+    }
+  }
+
+  /**
+   * Clarify a technical term for the target audience using AI
+   */
+  async clarifyTermWithAI(
+    term: string,
+    technicalContext: string,
+    audience: AudienceType
+  ): Promise<AITranslationResult<{ explanation: string; example?: string }>> {
+    const cacheKey = `${term}:${technicalContext}`;
+    const cached = this.cache.get<{ explanation: string; example?: string }>('ai-term', cacheKey, audience);
+    if (cached) {
+      return { success: true, data: cached, cached: true };
+    }
+
+    try {
+      const prompt = `${AUDIENCE_PERSONAS[audience]}
+
+TASK: Explain this technical term in accessible language.
+
+TERM: ${term}
+CONTEXT: ${technicalContext}
+
+Provide a JSON object with:
+- explanation: clear explanation appropriate for the audience
+- example: a relatable real-world example (optional)
+
+Respond with ONLY a valid JSON object.`;
+
+      const result = await this.ai.generateText({ prompt, temperature: 0.4 });
+
+      try {
+        const jsonMatch = result.text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          const data = {
+            explanation: parsed.explanation || `${term}: A data analysis concept`,
+            example: parsed.example
+          };
+          this.cache.set('ai-term', cacheKey, audience, data);
+          return {
+            success: true,
+            data,
+            cached: false,
+            provider: result.provider
+          };
+        }
+      } catch (e) {
+        // Fallback
+      }
+
+      return {
+        success: true,
+        data: { explanation: `${term}: A technical concept used in data analysis` },
+        cached: false
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+        cached: false,
+        data: { explanation: `${term}: A technical concept used in data analysis` }
+      };
+    }
+  }
+
+  /**
+   * Clear translation cache
+   */
+  clearCache(): void {
+    this.cache.clear();
+    console.log('[NL Translator] Cache cleared');
+  }
+
+  /**
+   * Map UserRole to AudienceType
+   */
+  userRoleToAudience(userRole: UserRole): AudienceType {
+    switch (userRole) {
+      case 'non-tech': return 'general';
+      case 'business': return 'business';
+      case 'technical': return 'technical';
+      case 'consultation': return 'executive';
+      default: return 'business';
+    }
+  }
+
+  // ==========================================
+  // SYNCHRONOUS TRANSLATION METHODS (Legacy)
+  // ==========================================
+
+  /**
+   * Translate data schema to natural language (synchronous, no AI call)
    */
   translateSchema(schema: DataSchema, userRole: UserRole): NaturalLanguageExplanation {
     const fieldCount = Object.keys(schema).length;

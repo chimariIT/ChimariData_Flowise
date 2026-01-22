@@ -393,15 +393,37 @@ export class AIPaymentIntegrationService {
     error?: string;
   }> {
     try {
-      // Mock payment processing - in production would integrate with Stripe
-      const transactionId = `ai_charge_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      // P0-6 FIX: Block mock payments in production
+      const isProduction = process.env.NODE_ENV === 'production';
+      const stripeConfigured = !!process.env.STRIPE_SECRET_KEY &&
+        process.env.STRIPE_SECRET_KEY !== 'sk_test_your_stripe_secret_key';
 
-      // Simulate payment processing
-      if (amount > 0) {
-        console.log(`Processing payment: $${amount.toFixed(2)} for user ${userId}`);
-        console.log(`Description: ${description}`);
-        console.log(`Transaction ID: ${transactionId}`);
+      if (isProduction && !stripeConfigured) {
+        console.error('🔴 CRITICAL: AI payment processing called in production without Stripe!');
+        return {
+          success: false,
+          error: 'Payment service unavailable. Please contact support.'
+        };
       }
+
+      if (isProduction) {
+        // In production, AI usage charges should go through the billing service
+        // which properly integrates with Stripe
+        console.error('🔴 AI payment integration should use UnifiedBillingService in production');
+        return {
+          success: false,
+          error: 'Use billing service for production charges'
+        };
+      }
+
+      // Development mode only: Mock payment processing
+      const crypto = await import('crypto');
+      const transactionId = `ai_charge_dev_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`;
+
+      // Log mock payment for development
+      console.log(`[DEV] Mock AI payment: $${amount.toFixed(2)} for user ${userId}`);
+      console.log(`[DEV] Description: ${description}`);
+      console.log(`[DEV] Transaction ID: ${transactionId}`);
 
       return {
         success: true,

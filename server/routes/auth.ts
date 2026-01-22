@@ -77,8 +77,23 @@ router.use((req, res, next) => {
 // OAuth providers endpoint
 router.get("/providers", async (req, res) => {
     try {
-        // Return empty array since OAuth is not configured in this environment
-        res.json([]);
+        // Dynamically return configured OAuth providers based on environment variables
+        const providers: Array<{ id: string; name: string; icon: string }> = [];
+
+        if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+            providers.push({ id: 'google', name: 'Google', icon: 'google' });
+        }
+        if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
+            providers.push({ id: 'github', name: 'GitHub', icon: 'github' });
+        }
+        if (process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET) {
+            providers.push({ id: 'microsoft', name: 'Microsoft', icon: 'microsoft' });
+        }
+        if (process.env.APPLE_CLIENT_ID && process.env.APPLE_CLIENT_SECRET) {
+            providers.push({ id: 'apple', name: 'Apple', icon: 'apple' });
+        }
+
+        res.json(providers);
     } catch (error: any) {
         console.error('Error fetching OAuth providers:', error);
         res.status(500).json({ error: 'Failed to fetch OAuth providers' });
@@ -559,7 +574,8 @@ router.post("/login-test", async (req, res) => {
                     lastName: 'User',
                     hashedPassword: 'dummy-password', // Not used for test login
                     provider: 'local',
-                    subscriptionTier: 'professional',
+                    subscriptionTier: 'enterprise', // Full access for testing
+                    subscriptionStatus: 'active',
                     isPaid: true,
                 });
             } catch (createError: any) {
@@ -572,6 +588,21 @@ router.post("/login-test", async (req, res) => {
                     throw new Error(`Failed to create or retrieve test user: ${createError.message}`);
                 }
             }
+        }
+
+        // Ensure test user has active enterprise tier for full access
+        if (user && (user.subscriptionTier !== 'enterprise' || user.subscriptionStatus !== 'active')) {
+            await storage.updateUser(testUserId, {
+                subscriptionTier: 'enterprise',
+                subscriptionStatus: 'active',
+                isPaid: true
+            } as any);
+            user = await storage.getUser(testUserId);
+        }
+
+        // ✅ TypeScript fix: Add null check after storage.getUser()
+        if (!user) {
+            throw new Error('Failed to retrieve test user after update');
         }
 
         const token = tokenStorage.generateToken(user.id, user.email);

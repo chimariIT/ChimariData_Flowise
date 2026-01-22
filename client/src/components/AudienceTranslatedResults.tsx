@@ -23,7 +23,9 @@ import {
   ChevronUp,
   Download,
   Loader2,
-  RefreshCw
+  RefreshCw,
+  Eye,
+  Lock
 } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 import { toast } from '@/hooks/use-toast';
@@ -31,6 +33,7 @@ import { toast } from '@/hooks/use-toast';
 interface AudienceTranslatedResultsProps {
   project: any;
   journeyType?: string;
+  isPreview?: boolean; // P0-4 FIX: Show limited content for unpaid users
 }
 
 type AudienceType = 'executive' | 'business' | 'technical' | 'general';
@@ -93,7 +96,7 @@ const audienceConfig: Record<AudienceType, { label: string; icon: any; color: st
   }
 };
 
-export default function AudienceTranslatedResults({ project, journeyType = 'business' }: AudienceTranslatedResultsProps) {
+export default function AudienceTranslatedResults({ project, journeyType = 'business', isPreview = false }: AudienceTranslatedResultsProps) {
   const [selectedAudience, setSelectedAudience] = useState<AudienceType>(
     journeyType === 'technical' ? 'technical' : journeyType === 'consultation' ? 'executive' : 'business'
   );
@@ -364,6 +367,21 @@ export default function AudienceTranslatedResults({ project, journeyType = 'busi
       {/* Translated Results */}
       {translatedResults && !isLoading && (
         <>
+          {/* P0-4 FIX: Preview Mode Banner */}
+          {isPreview && (
+            <Card className="border-amber-200 bg-amber-50">
+              <CardContent className="py-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Eye className="w-5 h-5 text-amber-600" />
+                    <span className="text-amber-800 font-medium">Preview Mode</span>
+                    <span className="text-amber-700 text-sm">- Showing limited results. Unlock full access to see all findings and recommendations.</span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Executive Summary */}
           <Card className="border-blue-200 bg-gradient-to-br from-blue-50 to-indigo-50">
             <CardHeader>
@@ -376,11 +394,18 @@ export default function AudienceTranslatedResults({ project, journeyType = 'busi
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <p className="text-gray-800 leading-relaxed">{translatedResults.executiveSummary}</p>
+              <p className="text-gray-800 leading-relaxed">
+                {isPreview
+                  ? translatedResults.executiveSummary.slice(0, 200) + (translatedResults.executiveSummary.length > 200 ? '...' : '')
+                  : translatedResults.executiveSummary}
+              </p>
+              {isPreview && translatedResults.executiveSummary.length > 200 && (
+                <p className="text-amber-600 text-sm mt-2">[Preview truncated - unlock for full summary]</p>
+              )}
             </CardContent>
           </Card>
 
-          {/* Key Findings */}
+          {/* Key Findings - Limited in preview mode */}
           <Card>
             <CardHeader
               className="cursor-pointer hover:bg-gray-50 rounded-t-lg"
@@ -389,7 +414,7 @@ export default function AudienceTranslatedResults({ project, journeyType = 'busi
               <div className="flex items-center justify-between">
                 <CardTitle className="flex items-center gap-2">
                   <BarChart3 className="w-5 h-5 text-green-600" />
-                  Key Findings ({translatedResults.keyFindings.length})
+                  Key Findings ({isPreview ? `${Math.min(2, translatedResults.keyFindings.length)} of ${translatedResults.keyFindings.length}` : translatedResults.keyFindings.length})
                 </CardTitle>
                 {expandedSections.findings ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
               </div>
@@ -397,7 +422,8 @@ export default function AudienceTranslatedResults({ project, journeyType = 'busi
             {expandedSections.findings && (
               <CardContent>
                 <div className="space-y-4">
-                  {translatedResults.keyFindings.map((finding, idx) => (
+                  {/* P0-4 FIX: Limit findings in preview mode */}
+                  {(isPreview ? translatedResults.keyFindings.slice(0, 2) : translatedResults.keyFindings).map((finding, idx) => (
                     <div key={idx} className="p-4 bg-gray-50 rounded-lg border border-gray-100">
                       <div className="flex items-start justify-between gap-4">
                         <div className="flex-1">
@@ -416,12 +442,23 @@ export default function AudienceTranslatedResults({ project, journeyType = 'busi
                       </div>
                     </div>
                   ))}
+                  {/* P0-4 FIX: Show "unlock more" in preview mode */}
+                  {isPreview && translatedResults.keyFindings.length > 2 && (
+                    <div className="p-4 bg-amber-50 rounded-lg border border-amber-200 text-center">
+                      <Lock className="w-5 h-5 text-amber-600 mx-auto mb-2" />
+                      <p className="text-amber-800 font-medium">
+                        + {translatedResults.keyFindings.length - 2} more findings available
+                      </p>
+                      <p className="text-amber-600 text-sm">Unlock full access to view all findings</p>
+                    </div>
+                  )}
                 </div>
               </CardContent>
             )}
           </Card>
 
-          {/* Data Table */}
+          {/* Data Table - Hidden in preview mode */}
+          {!isPreview && (
           <Card>
             <CardHeader
               className="cursor-pointer hover:bg-gray-50 rounded-t-lg"
@@ -467,8 +504,25 @@ export default function AudienceTranslatedResults({ project, journeyType = 'busi
               </CardContent>
             )}
           </Card>
+          )}
 
-          {/* Recommendations */}
+          {/* Data Table placeholder in preview mode */}
+          {isPreview && (
+            <Card className="border-gray-200 bg-gray-50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-gray-500">
+                  <Lock className="w-5 h-5" />
+                  <FileText className="w-5 h-5" />
+                  Detailed Data Table
+                </CardTitle>
+                <CardDescription className="text-gray-500">
+                  {translatedResults.dataTable.rows.length} data rows available - unlock to view
+                </CardDescription>
+              </CardHeader>
+            </Card>
+          )}
+
+          {/* Recommendations - Show limited in preview mode */}
           {translatedResults.recommendations.length > 0 && (
             <Card>
               <CardHeader
@@ -478,7 +532,7 @@ export default function AudienceTranslatedResults({ project, journeyType = 'busi
                 <div className="flex items-center justify-between">
                   <CardTitle className="flex items-center gap-2">
                     <TrendingUp className="w-5 h-5 text-orange-600" />
-                    Recommendations ({translatedResults.recommendations.length})
+                    Recommendations ({isPreview ? `${Math.min(1, translatedResults.recommendations.length)} of ${translatedResults.recommendations.length}` : translatedResults.recommendations.length})
                   </CardTitle>
                   {expandedSections.recommendations ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
                 </div>
@@ -486,7 +540,8 @@ export default function AudienceTranslatedResults({ project, journeyType = 'busi
               {expandedSections.recommendations && (
                 <CardContent>
                   <div className="space-y-4">
-                    {translatedResults.recommendations.map((rec, idx) => (
+                    {/* P0-4 FIX: Limit recommendations in preview mode */}
+                    {(isPreview ? translatedResults.recommendations.slice(0, 1) : translatedResults.recommendations).map((rec, idx) => (
                       <div key={idx} className="p-4 bg-orange-50 rounded-lg border border-orange-100">
                         <div className="flex items-start justify-between gap-4">
                           <div className="flex-1">
@@ -504,6 +559,16 @@ export default function AudienceTranslatedResults({ project, journeyType = 'busi
                         </div>
                       </div>
                     ))}
+                    {/* P0-4 FIX: Show "unlock more" in preview mode */}
+                    {isPreview && translatedResults.recommendations.length > 1 && (
+                      <div className="p-4 bg-amber-50 rounded-lg border border-amber-200 text-center">
+                        <Lock className="w-5 h-5 text-amber-600 mx-auto mb-2" />
+                        <p className="text-amber-800 font-medium">
+                          + {translatedResults.recommendations.length - 1} more recommendations available
+                        </p>
+                        <p className="text-amber-600 text-sm">Unlock full access to view all recommendations</p>
+                      </div>
+                    )}
                   </div>
                 </CardContent>
               )}

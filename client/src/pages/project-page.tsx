@@ -18,6 +18,8 @@ import { EnhancedDataWorkflow } from "@/components/EnhancedDataWorkflow";
 import AgentActivityOverview from "@/components/agent-activity-overview";
 import AgentCheckpoints from "@/components/agent-checkpoints";
 import AudienceTranslatedResults from "@/components/AudienceTranslatedResults";
+import UserQuestionAnswers from "@/components/UserQuestionAnswers";
+import { PaymentStatusBanner } from "@/components/PaymentStatusBanner";
 import { useJourneyState } from "@/hooks/useJourneyState";
 import { toast } from "@/hooks/use-toast";
 
@@ -673,7 +675,7 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
             />
           </TabsContent>
 
-          {/* Analysis tab - gated by journey completion */}
+          {/* Analysis tab - gated by journey completion AND payment */}
           <TabsContent value="analysis" className="mt-6">
             {!journeyState || journeyState.percentComplete < 100 ? (
               <Card className="border-amber-200 bg-amber-50">
@@ -704,19 +706,48 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
                 </CardContent>
               </Card>
             ) : (
-              <DashboardBuilder
-                project={project}
-                onSave={() => {
-                  toast({
-                    title: "Dashboard saved",
-                    description: "Your dashboard has been saved to the project",
-                  });
-                }}
-              />
+              <>
+                {/* Payment status banner for visualizations */}
+                <PaymentStatusBanner
+                  projectId={projectId}
+                  isPaid={project?.isPaid ?? false}
+                  isPreview={!project?.isPaid && journeyState?.percentComplete === 100}
+                  previewLimits={!project?.isPaid ? {
+                    insightsShown: 0,
+                    totalInsights: project?.analysisResults?.insights?.length ?? 0,
+                    chartsShown: 2,
+                    totalCharts: project?.analysisResults?.visualizations?.length ?? 10
+                  } : undefined}
+                />
+                {project?.isPaid ? (
+                  <DashboardBuilder
+                    project={project}
+                    onSave={() => {
+                      toast({
+                        title: "Dashboard saved",
+                        description: "Your dashboard has been saved to the project",
+                      });
+                    }}
+                  />
+                ) : (
+                  <Card className="border-amber-200 bg-amber-50/50">
+                    <CardContent className="py-8 text-center">
+                      <BarChart3 className="w-12 h-12 mx-auto text-amber-400 mb-4" />
+                      <h3 className="text-lg font-semibold text-amber-800 mb-2">
+                        Visualizations Preview
+                      </h3>
+                      <p className="text-amber-700 mb-4">
+                        Full visualization dashboard and customization requires payment.
+                        Complete payment to unlock all charts and interactive dashboards.
+                      </p>
+                    </CardContent>
+                  </Card>
+                )}
+              </>
             )}
           </TabsContent>
 
-          {/* Insights tab - gated by journey completion */}
+          {/* Insights tab - gated by journey completion AND payment */}
           <TabsContent value="insights" className="mt-6 space-y-6">
             {!journeyState || journeyState.percentComplete < 100 ? (
               <Card className="border-amber-200 bg-amber-50">
@@ -748,6 +779,21 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
               </Card>
             ) : (
               <>
+                {/* Payment status banner for insights */}
+                <PaymentStatusBanner
+                  projectId={projectId}
+                  isPaid={project?.isPaid ?? false}
+                  isPreview={!project?.isPaid && journeyState?.percentComplete === 100}
+                  previewLimits={!project?.isPaid ? {
+                    insightsShown: Math.min(2, project?.analysisResults?.insights?.length ?? 0),
+                    totalInsights: project?.analysisResults?.insights?.length ?? 0,
+                    chartsShown: 2,
+                    totalCharts: project?.analysisResults?.visualizations?.length ?? 10,
+                    answersShown: 1,
+                    totalAnswers: project?.analysisResults?.questionAnswers?.length ?? 0
+                  } : undefined}
+                />
+
                 {/* PHASE 5 FIX: Analysis Execution Trace - Shows which analyses ran and their status */}
                 {project.analysisResults?.analysisStatuses?.length > 0 && (
                   <Card>
@@ -801,15 +847,83 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
                   </Card>
                 )}
 
-                {/* Show BA translated results if available (executive/technical/analyst views) */}
+                {/* P0-4 FIX: Show BA translated results for all users - full version for paid, preview for unpaid */}
                 {(project.journeyProgress?.translatedResults || project.analysisResults) && (
                   <AudienceTranslatedResults
                     project={project}
                     journeyType={project.journeyType}
+                    isPreview={!project?.isPaid}
                   />
                 )}
-                {/* AI Insights for Q&A and exploration */}
-                <AIInsights project={project} />
+
+                {/* GAP 5 FIX: Show User Question Answers with evidence chain - for paid users */}
+                {project?.isPaid && project?.analysisResults?.questionAnswers && (
+                  <UserQuestionAnswers project={project} />
+                )}
+
+                {/* AI Insights for Q&A and exploration - limited for unpaid users */}
+                {project?.isPaid ? (
+                  <AIInsights project={project} />
+                ) : (
+                  <Card className="border-amber-200 bg-amber-50/50">
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <Brain className="w-5 h-5 text-amber-500" />
+                        AI Insights Preview
+                      </CardTitle>
+                      <CardDescription>
+                        A preview of your AI-powered analysis insights
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      {/* Show limited insights preview */}
+                      {project?.analysisResults?.insights?.slice(0, 2).map((insight: any, idx: number) => (
+                        <div key={idx} className="p-3 bg-white rounded-lg border">
+                          <p className="text-sm text-gray-700">{insight.summary || insight.description || 'Key insight from your data analysis'}</p>
+                        </div>
+                      ))}
+
+                      {/* GAP 6 FIX: Show comprehensive counts of hidden content */}
+                      <div className="text-center py-4 space-y-2">
+                        {/* Insight count */}
+                        {(project?.analysisResults?.insights?.length ?? 0) > 2 && (
+                          <p className="text-amber-700 text-sm">
+                            + {(project?.analysisResults?.insights?.length ?? 0) - 2} more insights available
+                          </p>
+                        )}
+
+                        {/* Q&A count - GAP 5 & 6 FIX */}
+                        {(project?.analysisResults?.questionAnswers?.answers?.length ?? 0) > 0 && (
+                          <p className="text-amber-700 text-sm">
+                            {project?.analysisResults?.questionAnswers?.answers?.length} questions answered with evidence chain
+                          </p>
+                        )}
+
+                        {/* BA Translations count */}
+                        {project?.journeyProgress?.translatedResults && (
+                          <p className="text-amber-700 text-sm">
+                            Audience-specific translations available
+                          </p>
+                        )}
+
+                        {/* Recommendations count */}
+                        {(project?.analysisResults?.recommendations?.length ?? 0) > 0 && (
+                          <p className="text-amber-700 text-sm">
+                            {project?.analysisResults?.recommendations?.length} actionable recommendations
+                          </p>
+                        )}
+
+                        <Button
+                          size="sm"
+                          className="bg-amber-600 hover:bg-amber-700 mt-3"
+                          onClick={() => setLocation(`/projects/${projectId}/payment`)}
+                        >
+                          Unlock Full Insights
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
               </>
             )}
           </TabsContent>

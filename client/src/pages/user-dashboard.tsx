@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useLocation, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -77,6 +77,45 @@ export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
     },
     enabled: !!user?.id
   });
+
+  // ✅ P1 FIX: Format relative time for activity display
+  const formatRelativeTime = (dateString?: string) => {
+    if (!dateString) return 'Unknown time';
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / (1000 * 60));
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins} minute${diffMins !== 1 ? 's' : ''} ago`;
+    if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`;
+    if (diffDays < 7) return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`;
+    return date.toLocaleDateString();
+  };
+
+  // ✅ P1 FIX: Generate recent activity from real project data
+  const recentActivity = useMemo(() => {
+    if (!userProjects || userProjects.length === 0) return [];
+
+    return userProjects
+      .slice()
+      .sort((a, b) => {
+        const dateA = new Date(a.lastModified || a.createdAt || 0).getTime();
+        const dateB = new Date(b.lastModified || b.createdAt || 0).getTime();
+        return dateB - dateA;
+      })
+      .slice(0, 5)
+      .map(project => ({
+        type: project.status === 'completed' ? 'completed' :
+              project.status === 'in_progress' || project.status === 'in-progress' ? 'started' : 'created',
+        name: project.name,
+        timestamp: project.lastModified || project.createdAt,
+        color: project.status === 'completed' ? 'bg-green-500' :
+               project.status === 'in_progress' || project.status === 'in-progress' ? 'bg-blue-500' : 'bg-gray-400'
+      }));
+  }, [userProjects]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -345,34 +384,33 @@ export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
           )}
         </div>
 
-        {/* Recent Activity */}
+        {/* Recent Activity - P1 FIX: Now using real project data */}
         <div className="mb-8">
           <h3 className="text-2xl font-bold text-gray-900 mb-6">Recent Activity</h3>
           <Card>
             <CardContent className="p-6">
-              <div className="space-y-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                  <span className="text-sm text-gray-600">
-                    Completed analysis: Customer Behavior Analysis Q4 2024
-                  </span>
-                  <span className="text-xs text-gray-500 ml-auto">2 hours ago</span>
+              {recentActivity.length > 0 ? (
+                <div className="space-y-4">
+                  {recentActivity.map((activity, index) => (
+                    <div key={index} className="flex items-center gap-3">
+                      <div className={`w-2 h-2 ${activity.color} rounded-full`}></div>
+                      <span className="text-sm text-gray-600">
+                        {activity.type === 'completed' ? 'Completed analysis: ' :
+                         activity.type === 'started' ? 'Started project: ' : 'Created project: '}
+                        {activity.name}
+                      </span>
+                      <span className="text-xs text-gray-500 ml-auto">
+                        {formatRelativeTime(activity.timestamp)}
+                      </span>
+                    </div>
+                  ))}
                 </div>
-                <div className="flex items-center gap-3">
-                  <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                  <span className="text-sm text-gray-600">
-                    Started new project: Sales Performance Review
-                  </span>
-                  <span className="text-xs text-gray-500 ml-auto">1 day ago</span>
+              ) : (
+                <div className="text-center py-4 text-gray-500">
+                  <p className="text-sm">No recent activity yet.</p>
+                  <p className="text-xs mt-1">Start a new project to see your activity here.</p>
                 </div>
-                <div className="flex items-center gap-3">
-                  <div className="w-2 h-2 bg-gray-400 rounded-full"></div>
-                  <span className="text-sm text-gray-600">
-                    Created draft: Technical Data Pipeline Analysis
-                  </span>
-                  <span className="text-xs text-gray-500 ml-auto">2 days ago</span>
-                </div>
-              </div>
+              )}
             </CardContent>
           </Card>
         </div>

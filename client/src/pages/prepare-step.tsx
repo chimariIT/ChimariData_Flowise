@@ -1555,14 +1555,23 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
                     console.warn('⚠️ [Navigation] No requirementsDocument available - Verification step may redirect back');
                   }
 
+                  // FIX: Get the most reliable projectId source (state may be stale after initial mount)
+                  const reliableProjectId = currentProjectId || urlProjectId || localStorage.getItem('currentProjectId');
+
                   console.log('📋 [Navigation] Sending progressPayload to backend:', {
                     hasRequirementsDocument: !!progressPayload.requirementsDocument,
                     requirementsLocked: progressPayload.requirementsLocked,
                     currentStep: progressPayload.currentStep,
-                    keys: Object.keys(progressPayload)
+                    keys: Object.keys(progressPayload),
+                    projectId: reliableProjectId
                   });
 
-                  const saveResult = await updateProgressAsync(progressPayload);
+                  if (!reliableProjectId) {
+                    throw new Error('No project ID available. Please refresh the page and try again.');
+                  }
+
+                  // FIX: Pass _projectIdOverride to handle stale closure in useProject hook
+                  const saveResult = await updateProgressAsync({ ...progressPayload, _projectIdOverride: reliableProjectId });
                   console.log('📋 [Navigation] Backend save result:', {
                     success: !!saveResult,
                     hasJourneyProgress: !!saveResult?.journeyProgress,
@@ -1571,11 +1580,11 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
                   });
 
                   // Force cache refresh to ensure verification step gets fresh data
-                  await queryClient.refetchQueries({ queryKey: ["project", currentProjectId] });
+                  await queryClient.refetchQueries({ queryKey: ["project", reliableProjectId] });
 
                   // CRITICAL: Verify data actually persisted before navigation
                   // This prevents navigation to Verification step with stale/missing data
-                  const verifiedProject = queryClient.getQueryData(["project", currentProjectId]) as any;
+                  const verifiedProject = queryClient.getQueryData(["project", reliableProjectId]) as any;
                   const verifiedReqDoc = verifiedProject?.journeyProgress?.requirementsDocument;
 
                   console.log('📋 [Navigation] Pre-navigation verification:', {

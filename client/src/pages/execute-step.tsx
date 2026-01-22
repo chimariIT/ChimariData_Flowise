@@ -806,8 +806,9 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     if (recommendedAnalyses.length > 0) {
       console.log('📊 [Execute] Using DS Agent analysisPath with', recommendedAnalyses.length, 'analyses');
       return recommendedAnalyses.map((analysis: any, index: number) => ({
-        // Normalize ID to match selection state (using [_\s]+ to handle underscores)
-        id: analysis.analysisType?.toLowerCase().replace(/[_\s]+/g, '-') || `analysis-${index}`,
+        // ✅ FIX: Use unique ID combining analysisId + index to avoid duplicate key warnings
+        // Multiple analyses can have the same analysisType (e.g., 'descriptive')
+        id: analysis.analysisId || `${analysis.analysisType?.toLowerCase().replace(/[_\s]+/g, '-')}-${index}`,
         name: analysis.analysisName || analysis.analysisType?.replace(/_/g, ' ') || `Analysis ${index + 1}`,
         description: analysis.description || analysis.rationale || analysis.purpose || '',
         duration: analysis.estimatedDuration || '5-10 min',
@@ -932,7 +933,9 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     );
   };
 
-  const handleExecuteAnalysis = async () => {
+  // FIX P1-1: Accept optional isApprovedOverride to handle React state timing issue
+  // When called from checkpoint approval, state hasn't updated yet, so pass true directly
+  const handleExecuteAnalysis = async (isApprovedOverride?: boolean) => {
     // FIX Phase 3 - Checkpoint Enforcement: Verify plan was approved
     const planApproved = journeyProgress?.planApproved === true;
     const planApprovedAt = journeyProgress?.planApprovedAt;
@@ -957,7 +960,9 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     }
 
     // Phase 3 - Task 3.3: Show checkpoint dialog first
-    if (!checkpointApproved) {
+    // FIX P1-1: Use override if provided to handle async state timing
+    const isApproved = isApprovedOverride ?? checkpointApproved;
+    if (!isApproved) {
       setShowCheckpoint(true);
       return;
     }
@@ -971,12 +976,15 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         const cost = costResponse.estimatedCost || costResponse.totalCost || 0;
         setEstimatedCost(cost);
         setShowCostConfirmation(true);
+        setCostLoading(false);
+        return; // Wait for user to confirm in dialog
       } catch (costError) {
         console.warn('Cost estimate unavailable, proceeding without confirmation:', costError);
-        // Proceed without cost confirmation if endpoint not available
+        // ✅ P1-4 FIX: Do NOT return here - proceed with execution even if cost estimate fails
+        // The old code had `return;` after this catch block which blocked execution
       }
       setCostLoading(false);
-      return;
+      // Fall through to continue execution without cost dialog if estimate failed
     }
 
     // Reset cost confirmation for next execution
@@ -1758,7 +1766,8 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       console.log('⚡ [Legacy] Direct execution without U2A2A2U workflow');
       setCheckpointApproved(true);
       setShowCheckpoint(false);
-      handleExecuteAnalysis();
+      // FIX P1-1: Pass true as override since state hasn't updated yet
+      handleExecuteAnalysis(true);
     }
   };
 
@@ -1967,7 +1976,18 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         onClose={handleCheckpointClose}
         onApprove={handleCheckpointApprove}
         onModify={handleCheckpointModify}
-        analysisSteps={analysisOptions.filter((a: { id: string }) => selectedAnalyses.includes(a.id))}
+        // ✅ P1-6 FIX: selectedAnalyses contains normalized types like 'descriptive-statistics'
+        // But analysisOptions.id includes index suffix like 'descriptive-statistics-0'
+        // So we need to match on analysisType (normalized) instead of id
+        analysisSteps={analysisOptions.filter((a: any) => {
+          // Normalize analysisType to match selectedAnalyses format (lowercase, dashes)
+          const normalizedType = (a.analysisType || a.id || '').toLowerCase().replace(/[_\s]+/g, '-');
+          // Also check if the id WITHOUT the index suffix matches
+          const idWithoutIndex = a.id?.replace(/-\d+$/, '') || '';
+          return selectedAnalyses.includes(normalizedType) ||
+                 selectedAnalyses.includes(idWithoutIndex) ||
+                 selectedAnalyses.includes(a.id);
+        })}
         journeyType={journeyType}
         estimatedDuration={selectedAnalyses.length > 0 ? `${selectedAnalyses.length * 5}-${selectedAnalyses.length * 8} minutes` : undefined}
       />

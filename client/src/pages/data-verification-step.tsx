@@ -92,6 +92,8 @@ export default function DataVerificationStep({
   }, [journeyProgress?.verificationStatus]);
   const queryClient = useQueryClient();
   const hasRefreshedOnMount = useRef(false);
+  // FIX Jan 20: Track when local mapping was done to prevent stale SSOT from overwriting
+  const localMappingTimestampRef = useRef<number>(0);
 
   // Local data state (some will be migrated to journeyProgress/project from hook)
   const [projectData, setProjectData] = useState<any>(null);
@@ -276,13 +278,27 @@ export default function DataVerificationStep({
       console.log('📋 [P1-3 DEBUG] No requiredDataElements loaded');
       return [];
     }
+
+    // FIX Jan 20: Enhanced debug logging to trace mapping state
+    const rawElements = requiredDataElements.requiredDataElements || requiredDataElements.elements || (Array.isArray(requiredDataElements) ? requiredDataElements : []);
+    const mappedRawCount = rawElements.filter((el: any) => el.sourceField || el.sourceColumn || el.sourceAvailable).length;
+
     console.log('📋 [P1-3 DEBUG] requiredDataElements structure:', {
       isArray: Array.isArray(requiredDataElements),
       hasRequiredDataElements: !!requiredDataElements.requiredDataElements,
       requiredDataElementsLength: Array.isArray(requiredDataElements.requiredDataElements) ? requiredDataElements.requiredDataElements.length : 'N/A',
       hasElements: !!requiredDataElements.elements,
       elementsLength: Array.isArray(requiredDataElements.elements) ? requiredDataElements.elements.length : 'N/A',
-      keys: Object.keys(requiredDataElements || {})
+      keys: Object.keys(requiredDataElements || {}),
+      // FIX: Show mapping status of raw elements BEFORE transformation
+      rawMappedCount: mappedRawCount,
+      lastMappedAt: requiredDataElements.lastMappedAt,
+      sampleRawElement: rawElements[0] ? {
+        name: rawElements[0].elementName || rawElements[0].name,
+        sourceField: rawElements[0].sourceField,
+        sourceColumn: rawElements[0].sourceColumn,
+        sourceAvailable: rawElements[0].sourceAvailable
+      } : null
     });
 
     // Try different data structures - CRITICAL FIX: Check requirementsDocument structure correctly
@@ -310,7 +326,7 @@ export default function DataVerificationStep({
       purpose: el.purpose || el.derivation || '',
       required: el.required !== false, // Default to true
       sourceField: el.sourceField || el.mappedColumn || el.source || undefined,
-      sourceAvailable: el.sourceAvailable ?? (!!el.sourceField || !!el.mappedColumn),
+      sourceAvailable: el.sourceAvailable ?? (!!el.sourceField || !!el.sourceColumn || !!el.mappedColumn),
       transformationRequired: el.transformationRequired ?? (!!el.transformationLogic || !!el.derivation || !!el.calculationDefinition),
       transformationLogic: el.transformationLogic,
       alternatives: el.alternatives,
@@ -323,7 +339,22 @@ export default function DataVerificationStep({
       sourceColumn: el.sourceColumn
     }));
 
-    console.log(`📋 [Data Elements] Loaded ${mapped.length} required elements for mapping`);
+    // Calculate mapping statistics for debugging
+    const autoMappedCount = mapped.filter((el: any) => el.sourceAvailable || el.sourceField || el.sourceColumn).length;
+    const needTransformCount = mapped.filter((el: any) => el.transformationRequired).length;
+    const missingCount = mapped.filter((el: any) => !el.sourceAvailable && !el.sourceField && !el.sourceColumn && el.required).length;
+
+    console.log(`📋 [Data Elements] Loaded ${mapped.length} required elements for mapping`, {
+      autoMapped: autoMappedCount,
+      needTransform: needTransformCount,
+      missing: missingCount,
+      sampleElement: mapped[0] ? {
+        name: mapped[0].elementName,
+        sourceField: mapped[0].sourceField,
+        sourceColumn: mapped[0].sourceColumn,
+        sourceAvailable: mapped[0].sourceAvailable
+      } : null
+    });
 
     // DS-DE Agent Collaboration Logging
     const elementsWithCalcDef = mapped.filter((el: any) => el.calculationDefinition);
@@ -361,32 +392,82 @@ export default function DataVerificationStep({
       if (journeyProgress.requirementsDocument) {
         const reqDoc = journeyProgress.requirementsDocument as any;
         const isLocked = (journeyProgress as any).requirementsLocked === true;
+        const elements = reqDoc?.requiredDataElements || [];
+
+        // DEBUG: Log mapping status of first few elements
+        const sampleElements = elements.slice(0, 3).map((el: any) => ({
+          name: el.elementName || el.name,
+          sourceField: el.sourceField,
+          sourceColumn: el.sourceColumn,
+          sourceAvailable: el.sourceAvailable,
+          mappedColumn: el.mappedColumn
+        }));
+
+        const serverMappedCount = elements.filter((el: any) =>
+          el.sourceField || el.sourceColumn || el.sourceAvailable
+        ).length;
+
+        // FIX Jan 20: Check if SSOT data is newer than local mapping using ref (avoids stale closure issue)
+        // This prevents stale cached data from overwriting fresh mapping results
+        const serverLastMappedAt = reqDoc?.lastMappedAt ? new Date(reqDoc.lastMappedAt).getTime() : 0;
+        const localMappingTimestamp = localMappingTimestampRef.current;
+
+        // Only apply SSOT if:
+        // 1. No local mapping has been done (localMappingTimestamp is 0), OR
+        // 2. Server timestamp is newer than local mapping timestamp
+        const shouldApplySSOT =
+          localMappingTimestamp === 0 ||
+          serverLastMappedAt > localMappingTimestamp;
+
         console.log('✅ [SSOT] Loading requirementsDocument from journeyProgress:', {
-          elementsCount: reqDoc?.requiredDataElements?.length || 0,
+          elementsCount: elements.length,
+          serverMappedCount,
+          serverLastMappedAt: reqDoc?.lastMappedAt,
+          serverLastMappedAtMs: serverLastMappedAt,
+          localMappingTimestamp,
+          shouldApplySSOT,
           analysesCount: reqDoc?.analysisPath?.length || 0,
           isLocked,
+          sampleElements,
+          hasCompleteness: !!reqDoc?.completeness,
           source: 'journeyProgress.requirementsDocument',
-          action: 'LOADED_FROM_SSOT'
+          action: shouldApplySSOT ? 'APPLYING_SSOT' : 'SKIPPING_STALE_SSOT'
         });
-        setRequiredDataElements(reqDoc);
+
+        // Only apply if SSOT data is newer/better than local state
+        if (shouldApplySSOT) {
+          setRequiredDataElements(reqDoc);
+        } else {
+          console.log('⚠️ [SSOT] Skipping stale SSOT data - local state has newer/better mappings');
+        }
 
         // CRITICAL FIX: Restore element mappings from requirementsDocument
         // This ensures mappings persist across page navigation/refresh
-        const elements = reqDoc?.requiredDataElements || [];
-        const restoredMappings: any[] = [];
-        elements.forEach((elem: any) => {
-          if (elem.sourceColumn) {
-            restoredMappings.push({
-              elementId: elem.elementId || elem.id,
-              mappedColumn: elem.sourceColumn,
-              transformationDescription: elem.transformationDescription,
-              transformationCode: elem.transformationCode
-            });
+        // FIX Jan 20: Only restore if we're applying SSOT (not skipping due to stale data)
+        if (shouldApplySSOT) {
+          const restoredMappings: any[] = [];
+          elements.forEach((elem: any) => {
+            if (elem.sourceColumn || elem.sourceField) {
+              restoredMappings.push({
+                elementId: elem.elementId || elem.id,
+                mappedColumn: elem.sourceColumn || elem.sourceField,
+                transformationDescription: elem.transformationDescription,
+                transformationCode: elem.transformationCode
+              });
+            }
+          });
+          if (restoredMappings.length > 0) {
+            console.log('📋 [SSOT] Restoring', restoredMappings.length, 'element mappings from requirementsDocument');
+            setCurrentElementMappings(restoredMappings);
+            // FIX: Mark as mapped to prevent unnecessary re-mapping
+            setHasMappedElements(true);
           }
-        });
-        if (restoredMappings.length > 0) {
-          console.log('📋 [SSOT] Restoring', restoredMappings.length, 'element mappings from requirementsDocument');
-          setCurrentElementMappings(restoredMappings);
+
+          // FIX: Also check if elements have sourceAvailable set (from prior mapping)
+          if (serverMappedCount > 0) {
+            console.log(`📋 [SSOT] Found ${serverMappedCount}/${elements.length} elements already mapped`);
+            setHasMappedElements(true);
+          }
         }
 
         // Also log analysis recommendations and questions for debugging
@@ -399,9 +480,12 @@ export default function DataVerificationStep({
 
         // Enrich elements with business definitions if not already done
         // This connects BA Agent definitions to the data element pipeline
-        if (currentProjectId && !reqDoc.businessDefinitionsEnriched) {
+        // FIX Jan 20: Only trigger after page load completes to avoid race conditions
+        if (currentProjectId && !reqDoc.businessDefinitionsEnriched && !isLoading) {
           console.log('📚 [Business Definitions] Elements not yet enriched, triggering enrichment...');
           enrichDataElementsWithDefinitions(currentProjectId);
+        } else if (currentProjectId && !reqDoc.businessDefinitionsEnriched && isLoading) {
+          console.log('📚 [Business Definitions] Waiting for page load to complete before enrichment...');
         }
       } else {
         // DEBUG: Log when requirementsDocument is missing
@@ -413,7 +497,38 @@ export default function DataVerificationStep({
         });
       }
     }
-  }, [journeyProgress]);
+  }, [journeyProgress, currentProjectId, isLoading]);
+
+  // ✅ P0 FIX: Load mappings from DE Agent transformationPlan if no mappings yet
+  // This ensures mappings show on first visit (not just on revisit)
+  useEffect(() => {
+    // Skip if we already have mappings or no transformationPlan
+    if (currentElementMappings.length > 0) {
+      return; // Already have mappings, no need to load from plan
+    }
+
+    if (!journeyProgress?.transformationPlan) {
+      return; // No transformation plan available
+    }
+
+    const plan = journeyProgress.transformationPlan as any;
+    const planMappings = plan?.mappings || plan?.transformations || [];
+
+    if (planMappings.length > 0) {
+      console.log(`📋 [Verification] Loading ${planMappings.length} mappings from DE Agent transformationPlan`);
+      const restoredMappings = planMappings.map((m: any) => ({
+        elementId: m.targetElement || m.elementName || m.elementId,
+        mappedColumn: m.sourceColumn || m.sourceField,
+        transformationDescription: m.transformationLogic || m.suggestedTransformation,
+        confidence: m.confidence || 0.8
+      })).filter((m: any) => m.mappedColumn); // Only include mappings that have a source column
+
+      if (restoredMappings.length > 0) {
+        console.log(`✅ [Verification] Restored ${restoredMappings.length} mappings from transformationPlan`);
+        setCurrentElementMappings(restoredMappings);
+      }
+    }
+  }, [currentElementMappings.length, journeyProgress?.transformationPlan]);
 
   // FIX: Fallback API fetch for required data elements
   // Only runs when journeyProgress is loaded but doesn't have requirementsDocument
@@ -600,24 +715,53 @@ export default function DataVerificationStep({
   const [hasMappedElements, setHasMappedElements] = useState(false);
 
   // Data Engineer mapping: Trigger mapping when elements are loaded but not yet mapped to source fields
+  // FIX: Also check journeyProgress.requirementsDocument directly to handle navigation timing issues
+  // FIX Jan 20: Added isLoading check to wait for data to be loaded first
   useEffect(() => {
     const triggerDataEngineerMapping = async () => {
+      // FIX: Check both local state AND journeyProgress for requirements document
+      // This handles the case where local state hasn't updated yet after navigation
+      const reqDoc = requiredDataElements || journeyProgress?.requirementsDocument;
+
       // Skip if:
       // 1. No project ID
-      // 2. No required data elements loaded
+      // 2. No required data elements loaded (from either source)
       // 3. Already mapping or already mapped
-      // 4. Elements already have source fields mapped
-      if (!currentProjectId || !requiredDataElements || isMappingElements || hasMappedElements) {
+      // 4. FIX: Still loading data (wait for page load to complete)
+      if (!currentProjectId || !reqDoc || isMappingElements || hasMappedElements || isLoading) {
+        console.log('📋 [Auto-Map] Skipping - missing dependencies:', {
+          hasProjectId: !!currentProjectId,
+          hasReqDoc: !!reqDoc,
+          hasLocalState: !!requiredDataElements,
+          hasJourneyProgress: !!journeyProgress?.requirementsDocument,
+          isMappingElements,
+          hasMappedElements,
+          isLoading
+        });
         return;
       }
 
       // Check if elements need mapping (no sourceField set)
-      const elements = requiredDataElements.requiredDataElements || [];
-      const needsMapping = elements.some((el: any) => !el.sourceField && !el.sourceAvailable);
+      const elements = (reqDoc as any).requiredDataElements || [];
+      const unmappedCount = elements.filter((el: any) => !el.sourceField && !el.sourceColumn && !el.sourceAvailable).length;
+      const mappedCount = elements.filter((el: any) => el.sourceField || el.sourceColumn).length;
 
-      if (!needsMapping) {
-        console.log('✅ [Data Engineer] Elements already mapped to source fields');
+      console.log('📋 [Auto-Map] Element status:', {
+        total: elements.length,
+        mapped: mappedCount,
+        unmapped: unmappedCount
+      });
+
+      // FIX: Only skip if ALL elements are mapped (not if some are mapped)
+      if (elements.length > 0 && unmappedCount === 0) {
+        console.log('✅ [Data Engineer] All elements already mapped to source fields');
         setHasMappedElements(true);
+        return;
+      }
+
+      // If no elements at all, skip
+      if (elements.length === 0) {
+        console.log('⚠️ [Data Engineer] No elements to map');
         return;
       }
 
@@ -629,6 +773,25 @@ export default function DataVerificationStep({
 
         if (response.success && response.document) {
           console.log(`✅ [Data Engineer] Mapping complete:`, response.mappingStats);
+
+          // DEBUG: Log the mapping results for first few elements
+          const mappedElems = response.document.requiredDataElements || [];
+          console.log(`📊 [Data Engineer] Mapped elements sample:`, mappedElems.slice(0, 3).map((e: any) => ({
+            name: e.elementName,
+            sourceField: e.sourceField,
+            sourceColumn: e.sourceColumn,
+            sourceAvailable: e.sourceAvailable,
+            confidence: e.confidence
+          })));
+
+          // FIX Jan 20: Set the local mapping timestamp ref to prevent SSOT from overwriting
+          // Use the server's lastMappedAt timestamp or current time
+          const mappingTimestamp = response.document.lastMappedAt
+            ? new Date(response.document.lastMappedAt).getTime()
+            : Date.now();
+          localMappingTimestampRef.current = mappingTimestamp;
+          console.log(`📊 [Data Engineer] Set local mapping timestamp ref:`, mappingTimestamp);
+
           setRequiredDataElements(response.document);
           setHasMappedElements(true);
 
@@ -670,7 +833,7 @@ export default function DataVerificationStep({
     };
 
     triggerDataEngineerMapping();
-  }, [currentProjectId, requiredDataElements, isMappingElements, hasMappedElements, queryClient, onPrevious, toast]);
+  }, [currentProjectId, requiredDataElements, journeyProgress?.requirementsDocument, isMappingElements, hasMappedElements, isLoading, queryClient, onPrevious, toast]);
 
   const loadProjectData = async (projectId: string) => {
     try {
@@ -1297,6 +1460,7 @@ const createDataQualityCheckpoint = async () => {
 };
 
 // P0-2 FIX: Handle final approval after checkpoint review
+// ✅ GAP 1-3 FIX: Use dedicated PUT /verify endpoint instead of generic updateProgress
 const handleFinalApproval = async () => {
   try {
     setIsProcessing(true);
@@ -1324,33 +1488,31 @@ const handleFinalApproval = async () => {
       }
     }
 
-    // CRITICAL FIX: Include element mappings when approving
-    let progressUpdate: any = {
-      currentStep: 'transformation',
-      completedSteps: [...(journeyProgress?.completedSteps || []), 'data-verification'],
-      schemaValidated: verificationStatus.schemaValidation,
-      dataQualityApproved: true, // P0-2: Always set to true after explicit approval
-      verificationStatus: { ...verificationStatus, overallApproved: true },
-      dataQualityCheckpointId: dataQualityCheckpointId,
-      stepTimestamps: {
-        ...(journeyProgress?.stepTimestamps || {}),
-        dataVerificationCompleted: new Date().toISOString(),
-        dataQualityApprovedAt: new Date().toISOString() // P0-2: Track approval time
-      }
-    };
-
-    // Include element mappings if any exist
+    // ✅ GAP 1 FIX: Build element mappings in the format expected by backend
+    let elementMappings: Record<string, any> = {};
     if (currentElementMappings.length > 0) {
-      console.log('📋 [Verification Auto-Save] Including element mappings in approval:', currentElementMappings.length, 'mappings');
+      console.log('📋 [GAP 1 FIX] Building element mappings:', currentElementMappings.length, 'mappings');
+      currentElementMappings.forEach((mapping: any) => {
+        elementMappings[mapping.elementId] = {
+          sourceField: mapping.mappedColumn,
+          transformationCode: mapping.transformationCode,
+          transformationDescription: mapping.transformationDescription
+        };
+      });
+    }
 
-      const existingReqDoc = (journeyProgress as any)?.requirementsDocument || {};
-      const updatedElements = (existingReqDoc.requiredDataElements || requiredDataElements || []).map((elem: any) => {
+    // ✅ GAP 1 FIX: Build updated requirements document with mappings embedded
+    const existingReqDoc = (journeyProgress as any)?.requirementsDocument || {};
+    let updatedRequirementsDocument = existingReqDoc;
+    if (currentElementMappings.length > 0) {
+      const updatedElements = (existingReqDoc.requiredDataElements || requiredDataElements?.requiredDataElements || []).map((elem: any) => {
         const elemId = elem.id || elem.elementId;
         const mapping = currentElementMappings.find((m: any) => m.elementId === elemId);
         if (mapping) {
           return {
             ...elem,
             sourceColumn: mapping.mappedColumn,
+            sourceField: mapping.mappedColumn,
             transformationDescription: mapping.transformationDescription,
             transformationCode: mapping.transformationCode,
             mappingStatus: 'mapped' as const
@@ -1359,21 +1521,61 @@ const handleFinalApproval = async () => {
         return elem;
       });
 
-      progressUpdate.requirementsDocument = {
+      updatedRequirementsDocument = {
         ...existingReqDoc,
         requiredDataElements: updatedElements
       };
-      progressUpdate.requiredDataElements = updatedElements;
     }
 
-    // Mark project as verified in journeyProgress (SSOT)
-    updateProgress(progressUpdate);
+    // ✅ GAP 3 FIX: Collect PII decisions from journeyProgress
+    const piiDecisions = journeyProgress?.piiDecisions ||
+                        (journeyProgress?.piiDecision as any)?.masking_choices ||
+                        {};
+
+    console.log('🔒 [GAP 3 FIX] PII decisions to send:', Object.keys(piiDecisions).length);
+
+    // ✅ GAP 2 FIX: Call dedicated PUT /verify endpoint
+    // This endpoint saves to BOTH journeyProgress AND dataset.ingestionMetadata
+    // AND triggers DE Agent for transformation planning
+    const verifyResponse = await apiClient.put(`/api/projects/${projectId}/verify`, {
+      verificationStatus: 'approved',
+      verificationTimestamp: new Date().toISOString(),
+      verificationChecks: { ...verificationStatus, overallApproved: true },
+      piiDecisions: piiDecisions,
+      dataQuality: dataQuality || journeyProgress?.dataQuality,
+      schemaValidation: verificationStatus.schemaValidation,
+      elementMappings: elementMappings,
+      requirementsDocument: updatedRequirementsDocument,
+      dataQualityCheckpointId: dataQualityCheckpointId
+    });
+
+    console.log('✅ [GAP 1-3 FIX] Verification endpoint response:', {
+      success: verifyResponse.success,
+      deAgentTriggered: verifyResponse.deAgentTriggered,
+      message: verifyResponse.message
+    });
+
+    // Also update local cache for immediate UI feedback
+    updateProgress({
+      currentStep: 'transformation',
+      completedSteps: [...(journeyProgress?.completedSteps || []), 'data-verification'],
+      verificationCompleted: true,
+      dataQualityApproved: true,
+      verificationStatus: { ...verificationStatus, overallApproved: true },
+      elementMappings: elementMappings,
+      requirementsDocument: updatedRequirementsDocument,
+      stepTimestamps: {
+        ...(journeyProgress?.stepTimestamps || {}),
+        dataVerificationCompleted: new Date().toISOString(),
+        dataQualityApprovedAt: new Date().toISOString()
+      }
+    });
 
     setShowDataQualityApprovalDialog(false);
 
     toast({
       title: "Data Quality Approved",
-      description: "Your data has been verified and approved. Proceeding to transformation step.",
+      description: verifyResponse.message || "Your data has been verified and approved. Proceeding to transformation step.",
     });
 
     // Proceed to next step
@@ -1524,6 +1726,12 @@ const verificationSteps = [
 const completedSteps = verificationSteps.filter(step => step.status).length;
 const totalSteps = verificationSteps.length;
 const progressPercentage = (completedSteps / totalSteps) * 100;
+
+// I-2 FIX: Make PII decision mandatory before continue
+// If PII was detected, user MUST review and make a decision before proceeding
+const isPiiDetected = piiResults?.detectedPII && piiResults.detectedPII.length > 0;
+const isPiiReviewPending = isPiiDetected && !verificationStatus.piiReview;
+const canContinue = !isPiiReviewPending; // Can only continue if PII review is not pending
 
 return (
   <div className="space-y-6">
@@ -2118,6 +2326,20 @@ return (
                         ? projectData.preview.slice(0, 10)
                         : []
                   }
+                  isMapping={isMappingElements}
+                  // P0-1 FIX: Pass initialMappings to restore previously saved mappings
+                  initialMappings={Object.fromEntries(
+                    currentElementMappings
+                      .filter((m: any) => m.mappedColumn || m.sourceColumn || m.sourceField)
+                      .map((m: any) => [
+                        m.elementId,
+                        {
+                          sourceField: m.mappedColumn || m.sourceColumn || m.sourceField,
+                          transformationCode: m.transformationCode,
+                          transformationDescription: m.transformationDescription
+                        }
+                      ])
+                  )}
                   onSaveMapping={async (mappings) => {
                     // P1-3: Persist element mappings to journeyProgress
                     // Then call Data Engineer agent to add transformation logic in natural language
@@ -2270,6 +2492,27 @@ return (
       </CardHeader>
       <CardContent>
         <div className="space-y-4">
+          {/* I-2 FIX: PII Review Required Alert */}
+          {isPiiReviewPending && (
+            <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-200 rounded-lg">
+              <Shield className="w-6 h-6 text-red-600 flex-shrink-0" />
+              <div className="flex-1">
+                <h4 className="font-semibold text-red-800">PII Review Required</h4>
+                <p className="text-sm text-red-600">
+                  Personal identifiable information (PII) was detected in your data.
+                  You must review and make a decision about how to handle this data before continuing.
+                </p>
+              </div>
+              <Button
+                onClick={handlePIIReview}
+                variant="destructive"
+                size="sm"
+              >
+                Review PII Now
+              </Button>
+            </div>
+          )}
+
           {/* Progress Summary */}
           <div className="flex items-center justify-between p-4 bg-white rounded-lg border">
             <div className="flex items-center gap-4">
@@ -2305,15 +2548,20 @@ return (
 
               <Button
                 onClick={handleApproveData}
-                disabled={isProcessing || isLoading}
-                className={verificationStatus.overallApproved ? "bg-green-600 hover:bg-green-700" : "bg-yellow-600 hover:bg-yellow-700"}
+                disabled={isProcessing || isLoading || !canContinue}
+                className={verificationStatus.overallApproved ? "bg-green-600 hover:bg-green-700" : isPiiReviewPending ? "bg-red-600 hover:bg-red-700" : "bg-yellow-600 hover:bg-yellow-700"}
                 size="lg"
-                title={isLoading ? "Loading project data..." : !verificationStatus.overallApproved ? `${completedSteps}/${totalSteps} verification steps complete - Click to continue anyway` : "All verifications complete - Click to approve and continue"}
+                title={isLoading ? "Loading project data..." : isPiiReviewPending ? "PII Review Required - You must review detected PII before continuing" : !verificationStatus.overallApproved ? `${completedSteps}/${totalSteps} verification steps complete - Click to continue anyway` : "All verifications complete - Click to approve and continue"}
               >
                 {isProcessing ? (
                   <>
                     <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
                     Approving...
+                  </>
+                ) : isPiiReviewPending ? (
+                  <>
+                    <Shield className="w-4 h-4 mr-2" />
+                    PII Review Required
                   </>
                 ) : verificationStatus.overallApproved ? (
                   <>

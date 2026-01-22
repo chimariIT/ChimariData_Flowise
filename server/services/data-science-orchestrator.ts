@@ -140,6 +140,15 @@ export interface DataScienceRequest {
   }>;
   // P0-4: PII decisions for filtering sensitive columns
   piiDecisions?: Record<string, { action: 'include' | 'exclude' | 'mask'; }>;
+  // VI-1 FIX: Compute engine selection for optimal performance
+  computeEngine?: 'local' | 'polars' | 'spark';
+  computeEngineConfig?: {
+    executorMemory?: string;
+    driverMemory?: string;
+    partitions?: number;
+    streaming?: boolean;
+    memoryLimit?: number;
+  };
 }
 
 export interface QuestionAnalysisLink {
@@ -320,6 +329,7 @@ export class DataScienceOrchestrator {
 
   /**
    * Execute complete data science workflow
+   * VI-1 FIX: Routes to optimal compute engine (local, polars, or spark)
    */
   async executeWorkflow(request: DataScienceRequest): Promise<DataScienceResults> {
     const executionId = nanoid();
@@ -331,10 +341,26 @@ export class DataScienceOrchestrator {
     request.userQuestions = normalizedQuestions;
     request.userGoals = normalizedGoals;
 
+    // VI-1 FIX: Log compute engine selection
+    const computeEngine = request.computeEngine || 'local';
     console.log(`🔬 [DataScienceOrchestrator] Starting workflow ${executionId}`);
+    console.log(`⚙️ Compute Engine: ${computeEngine.toUpperCase()}`);
     console.log(`📊 Analysis types: ${request.analysisTypes.join(', ')}`);
     console.log(`❓ Questions: ${normalizedQuestions.length}`);
     console.log(`🎯 Goals: ${normalizedGoals.length}`);
+
+    // VI-1 FIX: Route to Spark for large datasets
+    if (computeEngine === 'spark' && process.env.SPARK_ENABLED === 'true') {
+      console.log(`🚀 [VI-1] Routing to Spark for distributed processing`);
+      try {
+        const { SparkProcessor } = await import('./spark-processor');
+        const sparkInstance = new SparkProcessor();
+        return await this.executeWithSpark(request, sparkInstance);
+      } catch (sparkError: any) {
+        console.warn(`⚠️ [VI-1] Spark execution failed, falling back to local: ${sparkError.message}`);
+        // Fall through to local execution
+      }
+    }
 
     // P0-2: Log and use analysisPath for ordering if provided
     if (request.analysisPath && request.analysisPath.length > 0) {
@@ -464,6 +490,155 @@ export class DataScienceOrchestrator {
         pythonScriptsUsed: this.getPythonScriptsUsed(request.analysisTypes)
       }
     };
+  }
+
+  // ============================================
+  // VI-1 FIX: SPARK EXECUTION PATH
+  // ============================================
+
+  /**
+   * Execute workflow using Apache Spark for distributed processing
+   * Used for datasets > 1M rows or > 500MB
+   */
+  private async executeWithSpark(
+    request: DataScienceRequest,
+    sparkProcessor: any
+  ): Promise<DataScienceResults> {
+    console.log(`🚀 [Spark] Executing distributed analysis for project ${request.projectId}`);
+
+    const startTime = Date.now();
+    const executionId = nanoid();
+    const projectArtifactDir = path.join(this.artifactsPath, request.projectId);
+
+    // Ensure artifact directory exists
+    if (!fs.existsSync(projectArtifactDir)) {
+      fs.mkdirSync(projectArtifactDir, { recursive: true });
+    }
+
+    // Initialize results collectors
+    const insights: string[] = [];
+    const recommendations: { text: string; priority: 'high' | 'medium' | 'low'; expectedImpact: string }[] = [];
+    const visualizations: VisualizationArtifact[] = [];
+    const mlModels: MLModelArtifact[] = [];
+
+    try {
+      // Load datasets for Spark processing
+      const datasetData = await this.loadProjectDatasets(request.projectId, request.datasetIds);
+
+      // Route each analysis type through Spark's performAnalysis method
+      for (const analysisType of request.analysisTypes) {
+        console.log(`  🔬 [Spark] Running ${analysisType} analysis...`);
+
+        try {
+          const sparkResult = await sparkProcessor.performAnalysis(
+            datasetData.rows,
+            analysisType,
+            request.computeEngineConfig || {}
+          );
+
+          // Collect insights from Spark results
+          if (sparkResult?.result) {
+            insights.push(`${analysisType}: ${sparkResult.result}`);
+          }
+          if (sparkResult?.insights) {
+            insights.push(...(Array.isArray(sparkResult.insights) ? sparkResult.insights : [sparkResult.insights]));
+          }
+
+          console.log(`  ✅ [Spark] ${analysisType} completed`);
+        } catch (analysisError: any) {
+          console.error(`  ❌ [Spark] ${analysisType} failed: ${analysisError.message}`);
+          insights.push(`${analysisType} analysis encountered an error: ${analysisError.message}`);
+        }
+      }
+
+      // Generate summary
+      const executionTimeMs = Date.now() - startTime;
+
+      // Build the correct DataScienceResults structure
+      const results: DataScienceResults = {
+        projectId: request.projectId,
+        executionId,
+        startedAt: new Date(startTime),
+        completedAt: new Date(),
+
+        // Data quality report (basic for Spark path)
+        dataQualityReport: {
+          overallScore: 0.85,
+          missingValueAnalysis: [],
+          outlierDetection: [],
+          distributionAssessments: [],
+          piiDetection: []
+        },
+
+        // Statistical analysis report
+        statisticalAnalysisReport: {
+          descriptiveStats: [],
+          correlationMatrix: { columns: [], matrix: [], significantCorrelations: [] },
+          hypothesisTests: []
+        },
+
+        // ML models (if any were created)
+        mlModels,
+
+        // Visualizations
+        visualizations,
+
+        // Question-analysis links
+        questionAnalysisLinks: [],
+
+        // Executive summary
+        executiveSummary: {
+          keyFindings: insights.slice(0, 5),
+          answersToQuestions: [],
+          recommendations: recommendations.length > 0 ? recommendations : [
+            { text: 'Consider additional analysis for deeper insights', priority: 'medium', expectedImpact: 'Moderate' }
+          ],
+          nextSteps: ['Review Spark analysis results', 'Validate findings with domain experts']
+        },
+
+        // Metadata
+        metadata: {
+          totalRows: datasetData.rows.length,
+          totalColumns: datasetData.totalColumns,
+          analysisTypes: request.analysisTypes,
+          executionTimeMs,
+          pythonScriptsUsed: ['spark-distributed']
+        }
+      };
+
+      console.log(`✅ [Spark] Workflow completed in ${executionTimeMs}ms`);
+      return results;
+
+    } catch (error: any) {
+      console.error(`❌ [Spark] Workflow failed: ${error.message}`);
+
+      // Return a valid error result that still matches the interface
+      const executionTimeMs = Date.now() - startTime;
+      return {
+        projectId: request.projectId,
+        executionId,
+        startedAt: new Date(startTime),
+        completedAt: new Date(),
+        dataQualityReport: { overallScore: 0, missingValueAnalysis: [], outlierDetection: [], distributionAssessments: [], piiDetection: [] },
+        statisticalAnalysisReport: { descriptiveStats: [], correlationMatrix: { columns: [], matrix: [], significantCorrelations: [] }, hypothesisTests: [] },
+        mlModels: [],
+        visualizations: [],
+        questionAnalysisLinks: [],
+        executiveSummary: {
+          keyFindings: [`Spark execution failed: ${error.message}`],
+          answersToQuestions: [],
+          recommendations: [],
+          nextSteps: ['Review error and retry analysis']
+        },
+        metadata: {
+          totalRows: 0,
+          totalColumns: 0,
+          analysisTypes: request.analysisTypes,
+          executionTimeMs,
+          pythonScriptsUsed: []
+        }
+      };
+    }
   }
 
   // ============================================

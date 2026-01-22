@@ -328,12 +328,36 @@ export const requireOwnership = (resourceType: 'project' | 'dataset') => {
 
       if (resourceType === 'project') {
         const project = await storage.getProject(resourceId);
-        const ownerId = (project as any)?.ownerId ?? (project as any)?.userId;
-        isOwner = !!project && ownerId === userId;
+        if (!project) {
+          isOwner = false;
+        } else {
+          const ownerId = (project as any)?.ownerId ?? (project as any)?.userId;
+          if (ownerId === userId) {
+            isOwner = true;
+          } else if (!ownerId) {
+            // P0-2 FIX: Legacy project with no owner - allow access with warning
+            console.warn(`⚠️ [RBAC] Project ${resourceId} has NULL ownerId - allowing user ${userId}`);
+            isOwner = true;
+          } else {
+            isOwner = false;
+          }
+        }
       } else if (resourceType === 'dataset') {
         const dataset = await (storage as any).getDataset?.(resourceId);
-        const ownerId = dataset ? (dataset as any).ownerId ?? (dataset as any).userId : undefined;
-        isOwner = !!dataset && ownerId === userId;
+        if (!dataset) {
+          isOwner = false;
+        } else {
+          const ownerId = (dataset as any).ownerId ?? (dataset as any).userId;
+          if (ownerId === userId) {
+            isOwner = true;
+          } else if (!ownerId) {
+            // P0-2 FIX: Legacy dataset with no owner - allow access with warning
+            console.warn(`⚠️ [RBAC] Dataset ${resourceId} has NULL ownerId - allowing user ${userId}`);
+            isOwner = true;
+          } else {
+            isOwner = false;
+          }
+        }
       }
 
       if (!isOwner) {

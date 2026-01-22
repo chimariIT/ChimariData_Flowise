@@ -903,12 +903,13 @@ export class SemanticDataPipelineService {
 
   /**
    * Create a simple fallback embedding when embedding service is unavailable
-   * Uses a deterministic hash-based approach for consistency
+   * P0-5 FIX: Returns zeros instead of random values for deterministic behavior
    */
   private createFallbackEmbedding(): number[] {
-    // Create a 1536-dimension zero vector
-    // In production, embedding service should be available
-    return new Array(1536).fill(0).map(() => (Math.random() - 0.5) * 0.1);
+    // P0-5 FIX: Return zero vector instead of random
+    // In production, embedding service MUST be available for semantic search to work
+    console.warn('[SemanticPipeline] Using fallback zero embedding - semantic search will not work correctly');
+    return new Array(1536).fill(0);
   }
 }
 

@@ -337,10 +337,12 @@ export class UnifiedBillingService {
       machine_learning: { small: 50, medium: 10, large: 2, extra_large: 0 },
     },
     enterprise: {
-      data_upload: { small: -1, medium: -1, large: -1, extra_large: -1 },
-      statistical_analysis: { small: -1, medium: -1, large: -1, extra_large: -1 },
-      visualization: { small: -1, medium: -1, large: -1, extra_large: -1 },
-      machine_learning: { small: -1, medium: -1, large: -1, extra_large: -1 },
+      // Quotas aligned with unified-subscription-tiers.ts enterprise limits
+      // maxFiles: 10, maxAnalysisComponents: 100, maxVisualizations: 50, mlTrainingJobs: 5000
+      data_upload: { small: 10, medium: 10, large: 10, extra_large: 5 },
+      statistical_analysis: { small: 100, medium: 100, large: 50, extra_large: 25 },
+      visualization: { small: 50, medium: 50, large: 25, extra_large: 10 },
+      machine_learning: { small: 5000, medium: 500, large: 100, extra_large: 50 },
     },
     none: {
       data_upload: { small: 0, medium: 0, large: 0, extra_large: 0 },
@@ -359,8 +361,10 @@ export class UnifiedBillingService {
     stripeSecretKey: string;
     webhookSecret: string;
   }) {
+    // FIX Jan 20: Use stable Stripe API version that matches installed package
+    // stripe@18.5.0 supports '2024-12-18.acacia' - using this stable version
     this.stripe = new Stripe(config.stripeSecretKey, {
-      apiVersion: '2025-08-27.basil',
+      apiVersion: '2024-12-18.acacia' as any,
     });
     this.webhookSecret = config.webhookSecret;
 
@@ -600,6 +604,38 @@ export class UnifiedBillingService {
     if (!this.configurationLoaded) {
       await this.configurationReady;
     }
+  }
+
+  /**
+   * Helper: Map analysis types to billing feature IDs
+   * Analysis types like 'descriptive-statistics', 'correlation-analysis' map to 'statistical_analysis'
+   */
+  private mapAnalysisTypeToFeature(featureId: string): string {
+    const analysisTypeMapping: Record<string, string> = {
+      // Statistical analysis types
+      'descriptive-statistics': 'statistical_analysis',
+      'correlation-analysis': 'statistical_analysis',
+      'regression-analysis': 'statistical_analysis',
+      'hypothesis-testing': 'statistical_analysis',
+      'factor-analysis': 'statistical_analysis',
+      'cluster-analysis': 'statistical_analysis',
+      'time-series-analysis': 'statistical_analysis',
+      // ML types
+      'machine-learning': 'machine_learning',
+      'predictive-modeling': 'machine_learning',
+      'classification': 'machine_learning',
+      'clustering-analysis': 'machine_learning',
+      // Visualization types
+      'chart-generation': 'visualization',
+      'dashboard-creation': 'visualization',
+      // Data types
+      'data-upload': 'data_upload',
+      'data-transformation': 'data_upload',
+      // Agent workflow
+      'agent_workflow': 'statistical_analysis',
+    };
+
+    return analysisTypeMapping[featureId] || featureId;
   }
 
   /**
@@ -1948,12 +1984,22 @@ export class UnifiedBillingService {
         }
 
         // Get quota for this feature
-        const featureQuotas = tierConfig.quotas.featureQuotas[featureId];
+        // Map analysis types to statistical_analysis feature if not explicitly defined
+        const mappedFeatureId = this.mapAnalysisTypeToFeature(featureId);
+        let featureQuotas = tierConfig.quotas.featureQuotas[mappedFeatureId];
+
+        // If feature quotas not in tier config, check default quotas for the tier
         if (!featureQuotas) {
-          return { allowed: false, cost: 0, remainingQuota: 0, message: 'Feature not available for tier' };
+          const tierDefaults = this.featureQuotaDefaults[user.subscriptionTier || 'trial'];
+          const baseDefaults = this.featureQuotaDefaults.default;
+          featureQuotas = tierDefaults?.[mappedFeatureId] || baseDefaults?.[mappedFeatureId];
+
+          if (!featureQuotas) {
+            return { allowed: false, cost: 0, remainingQuota: 0, message: 'Feature not available for tier' };
+          }
         }
 
-        const quota = featureQuotas[complexity] || 0;
+        const quota = featureQuotas[complexity] ?? featureQuotas['small'] ?? 0;
         const isUnlimited = quota === -1;
 
         // Get current usage
@@ -2087,6 +2133,182 @@ export class UnifiedBillingService {
     }
   }
 
+  // ==========================================
+  // TRIAL CREDITS SYSTEM
+  // ==========================================
+
+  /**
+   * Check if user has sufficient trial credits for an analysis
+   * Credits are used when user has no paid subscription
+   *
+   * Credit calculation:
+   * - Small complexity: 10 credits
+   * - Medium complexity: 25 credits
+   * - Large complexity: 50 credits
+   * - Extra large complexity: 100 credits
+   */
+  async checkTrialCredits(userId: string, requiredCredits: number): Promise<{
+    hasCredits: boolean;
+    remaining: number;
+    required: number;
+    expired: boolean;
+  }> {
+    try {
+      const [user] = await db.select().from(users).where(eq(users.id, userId));
+      if (!user) {
+        return { hasCredits: false, remaining: 0, required: requiredCredits, expired: false };
+      }
+
+      const totalCredits = (user as any).trialCredits || 100; // Default 100 credits for new users
+      const usedCredits = (user as any).trialCreditsUsed || 0;
+      const remaining = Math.max(0, totalCredits - usedCredits);
+
+      // Check if credits have expired
+      const expireAt = (user as any).trialCreditsExpireAt;
+      const expired = expireAt ? new Date(expireAt) < new Date() : false;
+
+      return {
+        hasCredits: !expired && remaining >= requiredCredits,
+        remaining,
+        required: requiredCredits,
+        expired
+      };
+    } catch (error: any) {
+      console.error('Check trial credits error:', error);
+      return { hasCredits: false, remaining: 0, required: requiredCredits, expired: false };
+    }
+  }
+
+  /**
+   * Deduct trial credits after successful analysis execution
+   *
+   * TRANSACTION-SAFE: Updates credits atomically
+   */
+  async deductTrialCredits(userId: string, credits: number): Promise<{
+    success: boolean;
+    newBalance: number;
+    message?: string;
+  }> {
+    try {
+      return await db.transaction(async (tx: typeof db) => {
+        // Lock user row for atomic update
+        await tx.execute(sql`SELECT ${users.id} FROM ${users} WHERE ${users.id} = ${userId} FOR UPDATE`);
+
+        const [user] = await tx.select().from(users).where(eq(users.id, userId));
+        if (!user) {
+          return { success: false, newBalance: 0, message: 'User not found' };
+        }
+
+        const totalCredits = (user as any).trialCredits || 100;
+        const usedCredits = (user as any).trialCreditsUsed || 0;
+        const remaining = totalCredits - usedCredits;
+
+        if (remaining < credits) {
+          return {
+            success: false,
+            newBalance: remaining,
+            message: `Insufficient credits. Required: ${credits}, Available: ${remaining}`
+          };
+        }
+
+        const newUsed = usedCredits + credits;
+
+        await tx.update(users)
+          .set({
+            trialCreditsUsed: newUsed,
+            updatedAt: new Date(),
+          } as any)
+          .where(eq(users.id, userId));
+
+        console.log(`💳 [Trial Credits] Deducted ${credits} credits from user ${userId}. New balance: ${totalCredits - newUsed}`);
+
+        return {
+          success: true,
+          newBalance: totalCredits - newUsed
+        };
+      });
+    } catch (error: any) {
+      console.error('Deduct trial credits error:', error);
+      return { success: false, newBalance: 0, message: error.message };
+    }
+  }
+
+  /**
+   * Get trial credits status for a user
+   */
+  async getTrialCreditsStatus(userId: string): Promise<{
+    total: number;
+    used: number;
+    remaining: number;
+    percentUsed: number;
+    expired: boolean;
+    expiresAt: Date | null;
+  } | null> {
+    try {
+      const [user] = await db.select().from(users).where(eq(users.id, userId));
+      if (!user) return null;
+
+      const total = (user as any).trialCredits || 100;
+      const used = (user as any).trialCreditsUsed || 0;
+      const remaining = Math.max(0, total - used);
+      const expireAt = (user as any).trialCreditsExpireAt;
+      const expired = expireAt ? new Date(expireAt) < new Date() : false;
+
+      return {
+        total,
+        used,
+        remaining,
+        percentUsed: total > 0 ? Math.min(100, (used / total) * 100) : 0,
+        expired,
+        expiresAt: expireAt ? new Date(expireAt) : null
+      };
+    } catch (error: any) {
+      console.error('Get trial credits status error:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Calculate credits required for an analysis based on complexity
+   */
+  calculateCreditsRequired(complexity: FeatureComplexity, analysisCount: number = 1): number {
+    const creditCosts: Record<FeatureComplexity, number> = {
+      small: 10,
+      medium: 25,
+      large: 50,
+      extra_large: 100
+    };
+    return (creditCosts[complexity] || 10) * analysisCount;
+  }
+
+  /**
+   * Initialize trial credits for a new user
+   * Called during user registration
+   */
+  async initializeTrialCredits(userId: string, credits: number = 100): Promise<boolean> {
+    try {
+      // Set expiration to 30 days from now
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 30);
+
+      await db.update(users)
+        .set({
+          trialCredits: credits,
+          trialCreditsUsed: 0,
+          trialCreditsRefreshedAt: new Date(),
+          trialCreditsExpireAt: expiresAt,
+          updatedAt: new Date(),
+        } as any)
+        .where(eq(users.id, userId));
+
+      console.log(`🎁 [Trial Credits] Initialized ${credits} credits for user ${userId}, expires ${expiresAt.toISOString()}`);
+      return true;
+    } catch (error: any) {
+      console.error('Initialize trial credits error:', error);
+      return false;
+    }
+  }
+
   /**
    * Get usage metrics for a user
    */
@@ -2118,10 +2340,12 @@ export class UnifiedBillingService {
       const tierConfig = this.getTierConfig(user.subscriptionTier as SubscriptionTier);
       const baseSubscriptionCost = tierConfig?.pricing.monthly || 0;
 
-      // TODO: Calculate actual overage costs and feature costs from database
-      const overageCosts = 0;
-      const featureCosts = 0;
-      const campaignDiscounts = 0;
+      // Calculate actual overage costs from subscription balances
+      // Note: Convert null to undefined for type compatibility
+      const overageResult = await this.calculateAccumulatedOverage(userId, tierConfig ?? undefined);
+      const overageCosts = overageResult.totalOverage;
+      const featureCosts = 0; // Feature costs are included in overage
+      const campaignDiscounts = 0; // TODO: Apply active campaigns
 
       return {
         userId,
@@ -2189,6 +2413,268 @@ export class UnifiedBillingService {
       console.error('Reset monthly quotas error:', error);
       return { success: false, error: error.message };
     }
+  }
+
+  // ==========================================
+  // OVERAGE TRACKING & BILLING
+  // ==========================================
+
+  /**
+   * Calculate accumulated overage charges for a user
+   * Checks all feature usage against quotas and calculates total overage
+   */
+  async calculateAccumulatedOverage(userId: string, tierConfig?: AdminSubscriptionTierConfig): Promise<{
+    hasOverage: boolean;
+    charges: Array<{
+      featureId: string;
+      complexity: FeatureComplexity;
+      quotaLimit: number;
+      used: number;
+      overage: number;
+      rate: number;
+      cost: number;
+    }>;
+    totalOverage: number;
+  }> {
+    try {
+      const [user] = await db.select().from(users).where(eq(users.id, userId));
+      if (!user) {
+        return { hasOverage: false, charges: [], totalOverage: 0 };
+      }
+
+      const config = tierConfig || this.getTierConfig(user.subscriptionTier as SubscriptionTier);
+      if (!config) {
+        return { hasOverage: false, charges: [], totalOverage: 0 };
+      }
+
+      const subscriptionBalances = user.subscriptionBalances as any || {};
+      const charges: Array<{
+        featureId: string;
+        complexity: FeatureComplexity;
+        quotaLimit: number;
+        used: number;
+        overage: number;
+        rate: number;
+        cost: number;
+      }> = [];
+
+      // Check each feature in subscription balances
+      for (const [featureId, complexityBalances] of Object.entries(subscriptionBalances)) {
+        const featureQuotas = config.quotas.featureQuotas[featureId];
+        const featureOveragePricing = config.overagePricing.featureOveragePricing[featureId];
+
+        if (!featureQuotas || !featureOveragePricing) continue;
+
+        // Check each complexity level
+        for (const complexity of this.featureComplexityLevels) {
+          const balance = (complexityBalances as any)[complexity];
+          if (!balance) continue;
+
+          const quota = featureQuotas[complexity] || 0;
+          const used = balance.used || 0;
+
+          // Skip unlimited quotas
+          if (quota === -1) continue;
+
+          // Check for overage
+          if (used > quota) {
+            const overage = used - quota;
+            const rate = featureOveragePricing[complexity] || 0;
+            const cost = overage * rate;
+
+            if (cost > 0) {
+              charges.push({
+                featureId,
+                complexity,
+                quotaLimit: quota,
+                used,
+                overage,
+                rate,
+                cost
+              });
+            }
+          }
+        }
+      }
+
+      // Also check legacy usage fields
+      const legacyOverage = this.calculateLegacyOverage(user, config);
+      charges.push(...legacyOverage);
+
+      const totalOverage = charges.reduce((sum, c) => sum + c.cost, 0);
+
+      return {
+        hasOverage: totalOverage > 0,
+        charges,
+        totalOverage
+      };
+    } catch (error: any) {
+      console.error('Calculate accumulated overage error:', error);
+      return { hasOverage: false, charges: [], totalOverage: 0 };
+    }
+  }
+
+  /**
+   * Calculate overage from legacy usage tracking fields
+   */
+  private calculateLegacyOverage(user: any, tierConfig: AdminSubscriptionTierConfig): Array<{
+    featureId: string;
+    complexity: FeatureComplexity;
+    quotaLimit: number;
+    used: number;
+    overage: number;
+    rate: number;
+    cost: number;
+  }> {
+    const charges: Array<{
+      featureId: string;
+      complexity: FeatureComplexity;
+      quotaLimit: number;
+      used: number;
+      overage: number;
+      rate: number;
+      cost: number;
+    }> = [];
+
+    // Check data uploads
+    const dataUsed = user.monthlyDataVolume || 0;
+    const dataLimit = tierConfig.quotas.maxDataUploadsMB;
+    if (dataUsed > dataLimit && dataLimit !== -1) {
+      const overage = dataUsed - dataLimit;
+      const rate = tierConfig.overagePricing.dataPerMB;
+      charges.push({
+        featureId: 'data_upload_legacy',
+        complexity: 'small',
+        quotaLimit: dataLimit,
+        used: dataUsed,
+        overage,
+        rate,
+        cost: overage * rate
+      });
+    }
+
+    // Check AI queries
+    const aiUsed = user.monthlyAIInsights || 0;
+    const aiLimit = tierConfig.quotas.maxAIQueries;
+    if (aiUsed > aiLimit && aiLimit !== -1) {
+      const overage = aiUsed - aiLimit;
+      const rate = tierConfig.overagePricing.aiQueryCost;
+      charges.push({
+        featureId: 'ai_query_legacy',
+        complexity: 'small',
+        quotaLimit: aiLimit,
+        used: aiUsed,
+        overage,
+        rate,
+        cost: overage * rate
+      });
+    }
+
+    // Check visualizations
+    const vizUsed = user.monthlyVisualizations || 0;
+    const vizLimit = tierConfig.quotas.maxVisualizationsPerProject * (tierConfig.quotas.maxProjects || 1);
+    if (vizUsed > vizLimit && vizLimit !== -1) {
+      const overage = vizUsed - vizLimit;
+      const rate = tierConfig.overagePricing.visualizationCost;
+      charges.push({
+        featureId: 'visualization_legacy',
+        complexity: 'small',
+        quotaLimit: vizLimit,
+        used: vizUsed,
+        overage,
+        rate,
+        cost: overage * rate
+      });
+    }
+
+    return charges;
+  }
+
+  /**
+   * Add overage charges to Stripe invoice for a user
+   * Call this at the end of billing period or when user upgrades
+   */
+  async addOverageToStripeInvoice(userId: string): Promise<{
+    success: boolean;
+    invoiceItemIds?: string[];
+    totalCharged?: number;
+    error?: string;
+  }> {
+    try {
+      const [user] = await db.select().from(users).where(eq(users.id, userId));
+      if (!user || !user.stripeCustomerId) {
+        return { success: false, error: 'User has no Stripe customer ID' };
+      }
+
+      const overageResult = await this.calculateAccumulatedOverage(userId);
+      if (!overageResult.hasOverage) {
+        return { success: true, invoiceItemIds: [], totalCharged: 0 };
+      }
+
+      const invoiceItemIds: string[] = [];
+      let totalCharged = 0;
+
+      for (const charge of overageResult.charges) {
+        if (charge.cost <= 0) continue;
+
+        try {
+          // Create invoice item in Stripe
+          const invoiceItem = await this.stripe.invoiceItems.create({
+            customer: user.stripeCustomerId,
+            amount: Math.round(charge.cost * 100), // Convert to cents
+            currency: 'usd',
+            description: `Overage: ${charge.featureId} (${charge.complexity}) - ${charge.overage} units at $${charge.rate.toFixed(4)}/unit`
+          });
+
+          invoiceItemIds.push(invoiceItem.id);
+          totalCharged += charge.cost;
+
+          console.log(`💰 [Overage] Added ${charge.featureId} overage charge: $${charge.cost.toFixed(2)} for user ${userId}`);
+        } catch (stripeError: any) {
+          console.error(`Failed to add overage item to Stripe: ${stripeError.message}`);
+        }
+      }
+
+      return {
+        success: true,
+        invoiceItemIds,
+        totalCharged
+      };
+    } catch (error: any) {
+      console.error('Add overage to Stripe invoice error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Get overage summary for display in UI
+   */
+  async getOverageSummary(userId: string): Promise<{
+    hasOverage: boolean;
+    totalOverage: number;
+    charges: Array<{
+      feature: string;
+      complexity: string;
+      overage: number;
+      cost: number;
+    }>;
+    message?: string;
+  }> {
+    const result = await this.calculateAccumulatedOverage(userId);
+
+    return {
+      hasOverage: result.hasOverage,
+      totalOverage: result.totalOverage,
+      charges: result.charges.map(c => ({
+        feature: c.featureId,
+        complexity: c.complexity,
+        overage: c.overage,
+        cost: c.cost
+      })),
+      message: result.hasOverage
+        ? `You have $${result.totalOverage.toFixed(2)} in overage charges that will be added to your next invoice.`
+        : undefined
+    };
   }
 
   // ==========================================

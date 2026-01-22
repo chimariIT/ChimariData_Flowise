@@ -50,6 +50,9 @@ export interface AgentCheckpoint {
   userFeedback?: string;
   timestamp: Date;
   requiresUserInput: boolean;
+  // Enhanced for checkpoint coordination workflow
+  displayMessage?: string;  // User-friendly translated message
+  originalMessage?: string; // Original technical message for debugging
 }
 
 export class ProjectAgentOrchestrator {
@@ -518,7 +521,8 @@ export class ProjectAgentOrchestrator {
   }
 
   /**
-   * Get checkpoints for a project
+   * Get checkpoints for a project with translated messages
+   * Enhanced for checkpoint coordination workflow
    */
   async getProjectCheckpoints(projectId: string): Promise<AgentCheckpoint[]> {
     const persisted = await storage.getProjectCheckpoints(projectId);
@@ -535,27 +539,128 @@ export class ProjectAgentOrchestrator {
       combined.set(checkpoint.id, checkpoint);
     }
 
-    return Array.from(combined.values()).sort((a, b) => (a.timestamp?.getTime?.() ?? 0) - (b.timestamp?.getTime?.() ?? 0));
+    // Get journey type for message translation
+    const context = this.activeProjects.get(projectId);
+    const journeyType = context?.journeyType || 'technical';
+
+    // Add translated messages to checkpoints for frontend display
+    const sortedCheckpoints = Array.from(combined.values()).sort(
+      (a, b) => (a.timestamp?.getTime?.() ?? 0) - (b.timestamp?.getTime?.() ?? 0)
+    );
+
+    return sortedCheckpoints.map(checkpoint => ({
+      ...checkpoint,
+      // Add user-friendly translated message while preserving original
+      displayMessage: this.translateCheckpointMessage(checkpoint, journeyType),
+      originalMessage: checkpoint.message
+    }));
+  }
+
+  /**
+   * Translate checkpoint message for user-friendly display
+   * Part of checkpoint coordination workflow enhancement
+   */
+  private translateCheckpointMessage(checkpoint: AgentCheckpoint, journeyType: string): string {
+    // Non-tech users get simplified, jargon-free messages
+    if (journeyType === 'non-tech' || journeyType === 'non_tech') {
+      return this.getSimplifiedCheckpointMessage(checkpoint);
+    }
+
+    // Business users get context-focused messages
+    if (journeyType === 'business') {
+      return this.getBusinessCheckpointMessage(checkpoint);
+    }
+
+    // Technical users get the full technical message
+    return checkpoint.message;
+  }
+
+  /**
+   * Generate simplified checkpoint messages for non-tech users
+   */
+  private getSimplifiedCheckpointMessage(checkpoint: AgentCheckpoint): string {
+    const stepMessages: Record<string, string> = {
+      'data_upload': '📤 Your data has been uploaded successfully. We\'re now analyzing it to understand what insights we can provide.',
+      'data_quality_review': '✅ We\'ve reviewed your data quality. Everything looks good, but please review the summary below.',
+      'schema_validation': '📋 We\'ve identified the structure of your data. Please confirm the column types look correct.',
+      'pii_detection': '🔒 We found some personal information in your data. Please decide how you\'d like us to handle it.',
+      'transformation': '🔄 We\'re preparing your data for analysis. This includes cleaning and organizing the information.',
+      'analysis_planning': '📊 We\'re creating a custom analysis plan based on your goals. Please review and approve to proceed.',
+      'execution': '⚙️ Your analysis is running! We\'re crunching the numbers and finding insights.',
+      'results_ready': '🎉 Your analysis is complete! View your insights, charts, and recommendations below.',
+      'initial_analysis': '👋 Welcome! Our AI assistants are ready to help analyze your data. Please upload your files to get started.',
+      'journey_complete': '🎉 Congratulations! Your data analysis journey is complete. All your insights and reports are ready.'
+    };
+
+    // Check for step-specific message
+    const stepName = checkpoint.stepName?.toLowerCase() || '';
+    for (const [key, message] of Object.entries(stepMessages)) {
+      if (stepName.includes(key.replace('_', ''))) {
+        return message;
+      }
+    }
+
+    // Default simplified message
+    return checkpoint.message
+      .replace(/schema/gi, 'data structure')
+      .replace(/transformation/gi, 'data preparation')
+      .replace(/artifact/gi, 'report')
+      .replace(/execution/gi, 'analysis')
+      .replace(/pipeline/gi, 'process')
+      .replace(/checkpoint/gi, 'review point')
+      .replace(/orchestrat/gi, 'coordinat');
+  }
+
+  /**
+   * Generate business-focused checkpoint messages
+   */
+  private getBusinessCheckpointMessage(checkpoint: AgentCheckpoint): string {
+    const stepMessages: Record<string, string> = {
+      'data_upload': '📤 Data uploaded. Analyzing business metrics and KPIs.',
+      'data_quality_review': '✅ Data quality assessment complete. Key business metrics validated.',
+      'analysis_planning': '📊 Analysis plan aligned with your business objectives. Review for approval.',
+      'execution': '⚙️ Running business analysis: KPIs, trends, and strategic insights.',
+      'results_ready': '🎉 Business insights ready: actionable recommendations and ROI impact.'
+    };
+
+    const stepName = checkpoint.stepName?.toLowerCase() || '';
+    for (const [key, message] of Object.entries(stepMessages)) {
+      if (stepName.includes(key.replace('_', ''))) {
+        return message;
+      }
+    }
+
+    return checkpoint.message;
   }
 
   /**
    * Notify frontend about agent activity
-   */
-  /**
-   * Notify frontend about agent activity
+   * Enhanced with checkpoint message translation for user-friendly display
    */
   private notifyAgentActivity(userId: string, projectId: string, data: any): void {
+    // Get journey type for message translation
+    const context = this.activeProjects.get(projectId);
+    const journeyType = context?.journeyType || 'technical';
+
+    // Translate checkpoint message for user if available
+    let displayMessage = data.message || data.checkpoint?.message || '';
+    if (data.checkpoint) {
+      displayMessage = this.translateCheckpointMessage(data.checkpoint, journeyType);
+    }
+
     SocketManager.getInstance().emitToProject(projectId, 'execution_progress', {
       projectId,
-      status: 'running', // Or derive from data
-      overallProgress: 50, // This is tricky without context, maybe we can pass it or estimate it
+      status: 'running',
+      overallProgress: 50,
       currentStep: {
         id: data.checkpoint?.stepName || 'agent_activity',
         name: data.checkpoint?.stepName || 'Agent Activity',
         status: data.checkpoint?.status || 'in_progress',
-        description: data.message || data.checkpoint?.message
+        description: displayMessage,
+        // Include original technical message for logging/debugging
+        technicalDescription: data.checkpoint?.message
       },
-      // Also emit the raw agent event for specific agent UI components if needed
+      // Also emit the raw agent event with translated message
       agentEvent: {
         type: 'progress',
         sourceType: 'streaming',
@@ -565,6 +670,8 @@ export class ProjectAgentOrchestrator {
         timestamp: new Date(),
         data: {
           ...data,
+          translatedMessage: displayMessage,
+          journeyType,
           source: 'agent_orchestrator'
         }
       }
@@ -2389,6 +2496,252 @@ export class ProjectAgentOrchestrator {
     };
     return names[type] || 'AI Agent';
   }
+
+  /**
+   * P1-3: Verify transformation plan with BA and DS agents before execution
+   * BA verifies business logic and alignment with goals
+   * DS verifies analytical validity and data type compatibility
+   */
+  async verifyTransformationPlan(projectId: string, transformationPlan: {
+    mappings: Array<{
+      targetElement: string;
+      sourceColumn: string | null;
+      sourceColumns?: string[];
+      transformationRequired: boolean;
+      suggestedTransformation?: string;
+      userDefinedLogic?: string;
+    }>;
+    businessContext?: {
+      industry?: string;
+      goals?: string[];
+      questions?: string[];
+    };
+    analysisPath?: Array<{
+      analysisId: string;
+      analysisType: string;
+      requiredElements: string[];
+    }>;
+    dataSchema?: Record<string, any>;
+  }): Promise<{
+    baApproval: {
+      approved: boolean;
+      confidence: number;
+      feedback: string;
+      recommendations: string[];
+      businessAlignmentScore: number;
+    };
+    dsApproval: {
+      approved: boolean;
+      confidence: number;
+      feedback: string;
+      analyticalConcerns: string[];
+      dataTypeIssues: string[];
+    };
+    overallApproved: boolean;
+    summary: string;
+  }> {
+    console.log(`🔍 [P1-3] Starting BA/DS transformation verification for project ${projectId}`);
+
+    const { mappings, businessContext, analysisPath, dataSchema } = transformationPlan;
+
+    // ========================
+    // Business Agent Verification
+    // ========================
+    let baApproval = {
+      approved: true,
+      confidence: 0.85,
+      feedback: '',
+      recommendations: [] as string[],
+      businessAlignmentScore: 0.8
+    };
+
+    try {
+      // Check business alignment
+      const goals = businessContext?.goals || [];
+      const goalsText = goals.join(' ').toLowerCase();
+
+      // Check if transformations support business goals
+      const transformationsWithLogic = mappings.filter(m => m.transformationRequired && (m.suggestedTransformation || m.userDefinedLogic));
+      const directMappings = mappings.filter(m => !m.transformationRequired && m.sourceColumn);
+
+      // BA evaluates transformation-to-goal alignment
+      let alignmentScore = 0.7; // Base score
+      const recommendations: string[] = [];
+
+      if (transformationsWithLogic.length > 0) {
+        alignmentScore += 0.1;
+        baApproval.feedback = `Found ${transformationsWithLogic.length} transformation rules defined.`;
+      }
+
+      if (directMappings.length / mappings.length > 0.5) {
+        alignmentScore += 0.1;
+        baApproval.feedback += ` ${directMappings.length} elements have direct column mappings.`;
+      }
+
+      // Check for missing critical elements based on goals
+      if (goalsText.includes('employee') || goalsText.includes('engagement')) {
+        const hasEngagementScore = mappings.some(m =>
+          m.targetElement.toLowerCase().includes('engagement') ||
+          m.targetElement.toLowerCase().includes('satisfaction')
+        );
+        if (!hasEngagementScore) {
+          recommendations.push('Consider mapping an Employee Engagement Score metric for HR analysis');
+          alignmentScore -= 0.05;
+        }
+      }
+
+      // Check unmapped required elements
+      const unmappedRequired = mappings.filter(m => !m.sourceColumn && !m.sourceColumns?.length);
+      if (unmappedRequired.length > mappings.length * 0.3) {
+        alignmentScore -= 0.1;
+        recommendations.push(`${unmappedRequired.length} required elements are not yet mapped to source columns`);
+      }
+
+      baApproval.businessAlignmentScore = Math.max(0, Math.min(1, alignmentScore));
+      baApproval.recommendations = recommendations;
+      baApproval.approved = alignmentScore >= 0.6;
+      baApproval.confidence = alignmentScore;
+
+      if (!baApproval.approved) {
+        baApproval.feedback = `Business alignment score (${(alignmentScore * 100).toFixed(0)}%) is below threshold. ` + baApproval.feedback;
+      }
+
+      console.log(`💼 [P1-3 BA] Verification complete: approved=${baApproval.approved}, score=${baApproval.businessAlignmentScore}`);
+
+    } catch (baError) {
+      console.error('❌ [P1-3 BA] Business verification failed:', baError);
+      baApproval.approved = true; // Don't block on BA errors
+      baApproval.feedback = 'Business verification could not complete - proceeding with caution';
+      baApproval.confidence = 0.5;
+    }
+
+    // ========================
+    // Data Scientist Verification
+    // ========================
+    let dsApproval = {
+      approved: true,
+      confidence: 0.85,
+      feedback: '',
+      analyticalConcerns: [] as string[],
+      dataTypeIssues: [] as string[]
+    };
+
+    try {
+      const analyticalConcerns: string[] = [];
+      const dataTypeIssues: string[] = [];
+      let dsScore = 0.8;
+
+      // Check data type compatibility
+      if (dataSchema) {
+        for (const mapping of mappings) {
+          if (mapping.sourceColumn && dataSchema[mapping.sourceColumn]) {
+            const sourceType = dataSchema[mapping.sourceColumn];
+            const targetElement = mapping.targetElement.toLowerCase();
+
+            // Check for type mismatches
+            if (targetElement.includes('date') && !['date', 'datetime', 'timestamp'].includes(sourceType)) {
+              dataTypeIssues.push(`"${mapping.sourceColumn}" may need date conversion for "${mapping.targetElement}"`);
+            }
+            if ((targetElement.includes('score') || targetElement.includes('rate')) &&
+                !['number', 'integer', 'float', 'decimal'].includes(sourceType)) {
+              dataTypeIssues.push(`"${mapping.sourceColumn}" should be numeric for "${mapping.targetElement}"`);
+            }
+          }
+        }
+      }
+
+      // Check if required analyses have sufficient data
+      // ✅ P0 FIX: Handle case where analysisPath.requiredElements is empty
+      // When requiredElements is empty, use overall mappings for coverage calculation
+      if (analysisPath && analysisPath.length > 0) {
+        for (const analysis of analysisPath) {
+          const requiredElements = analysis.requiredElements || [];
+
+          // If requiredElements is empty, use all mappings for this analysis type
+          if (requiredElements.length === 0) {
+            // Calculate coverage based on overall mapped elements
+            const mappedCount = mappings.filter(m => m.sourceColumn || m.sourceColumns?.length).length;
+            const totalCount = mappings.length;
+            const coverage = totalCount > 0 ? mappedCount / totalCount : 1;
+
+            if (coverage < 0.7) {
+              analyticalConcerns.push(
+                `${analysis.analysisType} analysis has only ${(coverage * 100).toFixed(0)}% data coverage (${mappedCount}/${totalCount} elements)`
+              );
+              dsScore -= 0.05;
+            }
+          } else {
+            // Original logic when requiredElements is specified
+            const mappedElements = mappings.filter(m =>
+              requiredElements.includes(m.targetElement) &&
+              (m.sourceColumn || m.sourceColumns?.length)
+            );
+
+            const coverage = mappedElements.length / Math.max(1, requiredElements.length);
+            if (coverage < 0.7) {
+              analyticalConcerns.push(
+                `${analysis.analysisType} analysis has only ${(coverage * 100).toFixed(0)}% data coverage (${mappedElements.length}/${requiredElements.length} elements)`
+              );
+              dsScore -= 0.1;
+            }
+          }
+        }
+      }
+
+      // Check for transformations on key analytical columns
+      const transformationsNeeded = mappings.filter(m => m.transformationRequired);
+      if (transformationsNeeded.length > 0) {
+        const withoutLogic = transformationsNeeded.filter(m => !m.suggestedTransformation && !m.userDefinedLogic);
+        if (withoutLogic.length > 0) {
+          analyticalConcerns.push(`${withoutLogic.length} elements require transformation but have no logic defined`);
+          dsScore -= 0.05 * withoutLogic.length;
+        }
+      }
+
+      dsApproval.analyticalConcerns = analyticalConcerns;
+      dsApproval.dataTypeIssues = dataTypeIssues;
+      dsApproval.confidence = Math.max(0, Math.min(1, dsScore));
+      dsApproval.approved = dsScore >= 0.5 && dataTypeIssues.length < 5;
+
+      if (analyticalConcerns.length > 0) {
+        dsApproval.feedback = `Found ${analyticalConcerns.length} analytical concerns and ${dataTypeIssues.length} data type issues.`;
+      } else {
+        dsApproval.feedback = 'Data structure and transformations look analytically sound.';
+      }
+
+      console.log(`🔬 [P1-3 DS] Verification complete: approved=${dsApproval.approved}, concerns=${analyticalConcerns.length}`);
+
+    } catch (dsError) {
+      console.error('❌ [P1-3 DS] Data science verification failed:', dsError);
+      dsApproval.approved = true; // Don't block on DS errors
+      dsApproval.feedback = 'Analytical verification could not complete - proceeding with caution';
+      dsApproval.confidence = 0.5;
+    }
+
+    // ========================
+    // Combined Result
+    // ========================
+    const overallApproved = baApproval.approved && dsApproval.approved;
+    let summary = '';
+
+    if (overallApproved) {
+      summary = `✅ Transformation plan verified by Business Analyst (${(baApproval.confidence * 100).toFixed(0)}% confidence) and Data Scientist (${(dsApproval.confidence * 100).toFixed(0)}% confidence).`;
+    } else {
+      const issues = [];
+      if (!baApproval.approved) issues.push('business alignment');
+      if (!dsApproval.approved) issues.push('analytical validity');
+      summary = `⚠️ Transformation plan has concerns with ${issues.join(' and ')}. Review recommendations before proceeding.`;
+    }
+
+    console.log(`📊 [P1-3] Verification summary: ${overallApproved ? 'APPROVED' : 'NEEDS REVIEW'}`);
+
+    return {
+      baApproval,
+      dsApproval,
+      overallApproved,
+      summary
+    };
+  }
 }
 
 // Export singleton instance with getter/setter for realtime server
@@ -2448,6 +2801,31 @@ class ProjectAgentOrchestratorSingleton {
     error?: string;
   }> {
     return this.instance.executePMSupervisedDataMappingFlow(projectId, datasetMetadata, userGoals, userQuestions);
+  }
+
+  // P1-3: Verify transformation plan with BA/DS agents
+  async verifyTransformationPlan(projectId: string, transformationPlan: {
+    mappings: Array<{
+      targetElement: string;
+      sourceColumn: string | null;
+      sourceColumns?: string[];
+      transformationRequired: boolean;
+      suggestedTransformation?: string;
+      userDefinedLogic?: string;
+    }>;
+    businessContext?: {
+      industry?: string;
+      goals?: string[];
+      questions?: string[];
+    };
+    analysisPath?: Array<{
+      analysisId: string;
+      analysisType: string;
+      requiredElements: string[];
+    }>;
+    dataSchema?: Record<string, any>;
+  }) {
+    return this.instance.verifyTransformationPlan(projectId, transformationPlan);
   }
 }
 

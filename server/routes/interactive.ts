@@ -21,6 +21,7 @@ router.post('/decide-project', ensureAuthenticated, async (req, res) => {
 });
 
 // Start the interactive session and get initial goals
+// Returns clarification questions if user input is ambiguous
 router.post('/start', ensureAuthenticated, async (req, res) => {
     try {
         const { projectId, userDescription, journeyType } = req.body;
@@ -28,6 +29,29 @@ router.post('/start', ensureAuthenticated, async (req, res) => {
             return res.status(400).json({ error: 'projectId, userDescription, and journeyType are required.' });
         }
         const result = await agent.startGoalExtraction(projectId, userDescription, journeyType);
+
+        // Check if clarification is needed
+        if (result.needsClarification) {
+            return res.json({
+                ...result,
+                status: 'clarification_needed'
+            });
+        }
+
+        res.json(result);
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Continue goal extraction after clarification answers are submitted
+router.post('/continue-after-clarification', ensureAuthenticated, async (req, res) => {
+    try {
+        const { projectId, journeyType } = req.body;
+        if (!projectId || !journeyType) {
+            return res.status(400).json({ error: 'projectId and journeyType are required.' });
+        }
+        const result = await agent.continueGoalExtractionAfterClarification(projectId, journeyType);
         res.json(result);
     } catch (error: any) {
         res.status(500).json({ error: error.message });

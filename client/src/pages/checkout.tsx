@@ -149,8 +149,78 @@ const GuidedAnalysisCheckout: React.FC = () => {
   const { toast } = useToast();
 
   useEffect(() => {
-    // Load checkout data from localStorage
-    const storedData = localStorage.getItem('guidedAnalysisCheckout');
+    // ✅ P0 FIX: Check for both guided analysis AND subscription checkout data
+    const guidedAnalysisData = localStorage.getItem('guidedAnalysisCheckout');
+    const subscriptionData = localStorage.getItem('subscriptionCheckout');
+
+    // Helper to create subscription intent
+    const createSubscriptionIntent = async (subData: any) => {
+      try {
+        console.log('💳 [Checkout] Creating subscription intent for:', subData.tierName);
+        // ✅ P1-5 FIX: Include Authorization header for subscription request
+        // Also include X-Forwarded-Authorization to match apiClient behavior and handle proxy scenarios
+        const token = localStorage.getItem('auth_token');
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+          headers['X-Forwarded-Authorization'] = `Bearer ${token}`;
+        }
+        // Use direct backend URL to bypass Vite proxy which strips headers
+        const apiBase = import.meta.env.DEV ? 'http://localhost:5000' : window.location.origin;
+        const resp = await fetch(`${apiBase}/api/pricing/subscription`, {
+          method: 'POST',
+          headers,
+          credentials: 'include',
+          body: JSON.stringify({
+            planType: subData.tierId || subData.tierName?.toLowerCase(),
+            billingCycle: subData.billingCycle || 'monthly'
+          })
+        });
+
+        if (resp.ok) {
+          const result = await resp.json();
+          if (result.success && result.clientSecret) {
+            const checkoutData: CheckoutData = {
+              clientSecret: result.clientSecret,
+              analysisId: `sub_${Date.now()}`,
+              analysisConfig: {
+                analysisType: 'subscription',
+                tier: subData.tierName,
+                deliverables: ['Subscription access'],
+                timeline: 'Immediate'
+              },
+              pricing: {
+                total: subData.amount || subData.pricing?.total || 0,
+                billingCycle: subData.billingCycle
+              },
+              projectId: 'subscription'
+            };
+            setCheckoutData(checkoutData);
+            setClientSecretValid(isValidClientSecret(result.clientSecret));
+            console.log('✅ [Checkout] Subscription intent created successfully');
+            return true;
+          }
+        }
+
+        const errorData = await resp.json().catch(() => ({}));
+        console.error('❌ [Checkout] Subscription intent failed:', errorData);
+        toast({
+          title: 'Subscription Error',
+          description: errorData.error || 'Failed to create subscription. Please try again.',
+          variant: 'destructive'
+        });
+        return false;
+      } catch (error) {
+        console.error('❌ [Checkout] Subscription error:', error);
+        toast({
+          title: 'Error',
+          description: 'Failed to create subscription. Please try again.',
+          variant: 'destructive'
+        });
+        return false;
+      }
+    };
+
     const tryAutoCreateIntent = async () => {
       try {
         // Minimal auto intent for demo/tests
@@ -180,12 +250,29 @@ const GuidedAnalysisCheckout: React.FC = () => {
         description: 'No checkout data found. Please start over.',
         variant: 'destructive'
       });
-      setLocation('/dashboard');
+      setLocation('/pricing');
     };
 
-    if (storedData) {
+    // Priority: 1) Subscription checkout 2) Guided analysis 3) Auto-create demo
+    if (subscriptionData) {
       try {
-        const data = JSON.parse(storedData);
+        const subData = JSON.parse(subscriptionData);
+        console.log('💳 [Checkout] Found subscription checkout data:', subData);
+        // Clear it immediately to avoid re-processing on reload
+        localStorage.removeItem('subscriptionCheckout');
+        createSubscriptionIntent(subData).then(success => {
+          if (!success) {
+            setLocation('/pricing');
+          }
+        });
+      } catch (error) {
+        console.error('Failed to parse subscription data:', error);
+        localStorage.removeItem('subscriptionCheckout');
+        tryAutoCreateIntent();
+      }
+    } else if (guidedAnalysisData) {
+      try {
+        const data = JSON.parse(guidedAnalysisData);
         setCheckoutData(data);
         setClientSecretValid(isValidClientSecret(data?.clientSecret));
       } catch (error) {
@@ -193,7 +280,23 @@ const GuidedAnalysisCheckout: React.FC = () => {
         tryAutoCreateIntent();
       }
     } else {
-      tryAutoCreateIntent();
+      // Check URL params for plan (fallback for direct navigation)
+      const urlParams = new URLSearchParams(window.location.search);
+      const planFromUrl = urlParams.get('plan');
+      if (planFromUrl) {
+        console.log('💳 [Checkout] Found plan in URL:', planFromUrl);
+        createSubscriptionIntent({
+          tierName: planFromUrl,
+          tierId: planFromUrl.toLowerCase(),
+          billingCycle: 'monthly'
+        }).then(success => {
+          if (!success) {
+            setLocation('/pricing');
+          }
+        });
+      } else {
+        tryAutoCreateIntent();
+      }
     }
   }, [setLocation, toast]);
 

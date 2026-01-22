@@ -7,6 +7,15 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import type { DataAssessment } from '@shared/schema';
 import { intelligentTransformer, type TransformationOperation } from './intelligent-data-transformer';
+import {
+  analysisRegistry,
+  getAnalysisRequirements,
+  getMergedRequirements,
+  generateTransformationRecommendations,
+  type AnalysisTypeKey,
+  type DataPreparationSpec,
+  type DataValidationResult
+} from './analysis-requirements-registry';
 
 // ==========================================
 // CONSULTATION INTERFACES (Multi-Agent Coordination)
@@ -361,7 +370,28 @@ export class DataEngineerAgent implements AgentHandler {
             },
             completedAt: new Date()
           };
-        
+
+        // Analysis-aware data preparation (uses Analysis Requirements Registry)
+        case 'prepare_data_for_analyses':
+          const analysisPrep = await this.suggestTransformationsForAnalyses({
+            analysisTypes: task.payload.analysisTypes || [],
+            availableColumns: task.payload.availableColumns || [],
+            columnTypes: task.payload.columnTypes || {},
+            dataStats: task.payload.dataStats || { rowCount: 0, nullPercents: {} }
+          });
+          return {
+            taskId: task.id,
+            agentId: 'data_engineer',
+            status: 'success',
+            result: analysisPrep,
+            metrics: {
+              duration: Date.now() - startTime,
+              resourcesUsed: ['compute'],
+              tokensConsumed: 0
+            },
+            completedAt: new Date()
+          };
+
         // Existing pipeline execution methods
         case 'data_pipeline_request':
           return await this.handlePipelineRequest(task);
@@ -1634,6 +1664,366 @@ How can I help you with your data engineering needs today?`;
       transformations,
       reasoning
     };
+  }
+
+  /**
+   * Suggest transformations specifically for analysis types
+   * Uses the Analysis Requirements Registry to generate analysis-aware transformations
+   */
+  async suggestTransformationsForAnalyses(params: {
+    analysisTypes: string[];
+    availableColumns: string[];
+    columnTypes: Record<string, 'numeric' | 'categorical' | 'datetime' | 'text'>;
+    dataStats: {
+      rowCount: number;
+      nullPercents: Record<string, number>;
+      hasOutliers?: boolean;
+      isNormalized?: boolean;
+      isSortedByTime?: boolean;
+    };
+    // P1-5 FIX: Element mappings for combined readiness calculation
+    elementMappings?: Array<{
+      elementId: string;
+      sourceColumn?: string;
+      isRequired?: boolean;
+    }>;
+  }): Promise<{
+    analysisPreparations: Array<{
+      analysisType: string;
+      displayName: string;
+      isDataReady: boolean;
+      requiredTransformations: Array<{
+        name: string;
+        reason: string;
+        priority: 'required' | 'recommended' | 'optional';
+        targetColumns?: string[];
+        transformationCode?: string;
+      }>;
+      validationResults: DataValidationResult;
+    }>;
+    mergedTransformations: Array<{
+      name: string;
+      reason: string;
+      priority: 'required' | 'recommended' | 'optional';
+      forAnalyses: string[];
+    }>;
+    overallReadiness: {
+      readyAnalyses: string[];
+      notReadyAnalyses: string[];
+      readinessPercentage: number;
+    };
+  }> {
+    console.log(`🔧 [DE Agent] Preparing data for ${params.analysisTypes.length} analysis types:`, params.analysisTypes);
+
+    const analysisPreparations: Array<{
+      analysisType: string;
+      displayName: string;
+      isDataReady: boolean;
+      requiredTransformations: Array<{
+        name: string;
+        reason: string;
+        priority: 'required' | 'recommended' | 'optional';
+        targetColumns?: string[];
+        transformationCode?: string;
+      }>;
+      validationResults: DataValidationResult;
+    }> = [];
+
+    const readyAnalyses: string[] = [];
+    const notReadyAnalyses: string[] = [];
+
+    // Analyze each requested analysis type
+    for (const analysisType of params.analysisTypes) {
+      const spec = getAnalysisRequirements(analysisType);
+      if (!spec) {
+        console.warn(`🔧 [DE Agent] Unknown analysis type: ${analysisType}, skipping`);
+        continue;
+      }
+
+      // Validate current data against analysis requirements
+      const validationResult = analysisRegistry.validateDataForAnalysis(
+        analysisType,
+        {
+          rowCount: params.dataStats.rowCount,
+          nullPercents: params.dataStats.nullPercents,
+          columnTypes: params.columnTypes,
+          hasOutliers: params.dataStats.hasOutliers,
+          isNormalized: params.dataStats.isNormalized,
+          isSortedByTime: params.dataStats.isSortedByTime
+        }
+      );
+
+      // Generate specific transformations needed
+      const transformations = this.generateAnalysisSpecificTransformations(
+        spec,
+        params.availableColumns,
+        params.columnTypes,
+        params.dataStats
+      );
+
+      const isReady = validationResult.isValid && transformations.filter(t => t.priority === 'required').length === 0;
+
+      if (isReady) {
+        readyAnalyses.push(spec.displayName);
+      } else {
+        notReadyAnalyses.push(spec.displayName);
+      }
+
+      analysisPreparations.push({
+        analysisType: spec.analysisType,
+        displayName: spec.displayName,
+        isDataReady: isReady,
+        requiredTransformations: transformations,
+        validationResults: validationResult
+      });
+
+      console.log(`📊 [DE Agent] ${spec.displayName}: ${isReady ? '✅ Ready' : '❌ Needs preparation'} (${transformations.filter(t => t.priority === 'required').length} required transformations)`);
+    }
+
+    // Merge transformations across all analyses to avoid duplicates
+    const mergedTransformations = this.mergeTransformationsAcrossAnalyses(analysisPreparations);
+
+    // P1-5 FIX: Combine validation readiness with mapping readiness for accurate percentage
+    const validationReadiness = params.analysisTypes.length > 0
+      ? readyAnalyses.length / params.analysisTypes.length
+      : 0;
+
+    let mappingReadiness = 1.0;
+    if (params.elementMappings && params.elementMappings.length > 0) {
+      const requiredMappings = params.elementMappings.filter(e => e.isRequired !== false);
+      const mappedElements = requiredMappings.filter(e => e.sourceColumn);
+      mappingReadiness = requiredMappings.length > 0 ? mappedElements.length / requiredMappings.length : 1.0;
+      console.log(`🔧 [DE Agent] Mapping readiness: ${Math.round(mappingReadiness * 100)}% (${mappedElements.length}/${requiredMappings.length} elements mapped)`);
+    }
+
+    const combinedReadiness = (validationReadiness + mappingReadiness) / 2;
+    const readinessPercentage = Math.round(combinedReadiness * 100);
+
+    console.log(`🔧 [DE Agent] Overall readiness: ${readinessPercentage}% (validation: ${Math.round(validationReadiness * 100)}%, mapping: ${Math.round(mappingReadiness * 100)}%)`);
+
+    return {
+      analysisPreparations,
+      mergedTransformations,
+      overallReadiness: {
+        readyAnalyses,
+        notReadyAnalyses,
+        readinessPercentage
+      }
+    };
+  }
+
+  /**
+   * Generate specific transformations for a given analysis type
+   */
+  private generateAnalysisSpecificTransformations(
+    spec: DataPreparationSpec,
+    availableColumns: string[],
+    columnTypes: Record<string, 'numeric' | 'categorical' | 'datetime' | 'text'>,
+    dataStats: {
+      rowCount: number;
+      nullPercents: Record<string, number>;
+      hasOutliers?: boolean;
+      isNormalized?: boolean;
+      isSortedByTime?: boolean;
+    }
+  ): Array<{
+    name: string;
+    reason: string;
+    priority: 'required' | 'recommended' | 'optional';
+    targetColumns?: string[];
+    transformationCode?: string;
+  }> {
+    const transformations: Array<{
+      name: string;
+      reason: string;
+      priority: 'required' | 'recommended' | 'optional';
+      targetColumns?: string[];
+      transformationCode?: string;
+    }> = [];
+
+    // Check row count requirement
+    if (dataStats.rowCount < spec.qualityRequirements.minRows) {
+      transformations.push({
+        name: 'increase_sample_size',
+        reason: `${spec.displayName} requires at least ${spec.qualityRequirements.minRows} rows; current: ${dataStats.rowCount}`,
+        priority: 'required'
+      });
+    }
+
+    // Check null handling
+    const highNullColumns = Object.entries(dataStats.nullPercents)
+      .filter(([_, pct]) => pct > spec.qualityRequirements.maxNullPercent)
+      .map(([col]) => col);
+
+    if (highNullColumns.length > 0) {
+      const strategy = spec.transformationRequirements.needsInterpolation
+        ? 'interpolation'
+        : 'imputation or removal';
+
+      transformations.push({
+        name: 'handle_missing_values',
+        reason: `${spec.displayName} requires <${(spec.qualityRequirements.maxNullPercent * 100).toFixed(0)}% nulls; columns with high nulls: ${highNullColumns.slice(0, 3).join(', ')}${highNullColumns.length > 3 ? '...' : ''}`,
+        priority: 'required',
+        targetColumns: highNullColumns,
+        transformationCode: spec.transformationRequirements.needsInterpolation
+          ? `df['column'].interpolate(method='linear')`
+          : `df['column'].fillna(df['column'].median())`
+      });
+    }
+
+    // Check outlier handling
+    if (spec.transformationRequirements.needsOutlierHandling && dataStats.hasOutliers !== false) {
+      const numericColumns = Object.entries(columnTypes)
+        .filter(([_, type]) => type === 'numeric')
+        .map(([col]) => col);
+
+      if (numericColumns.length > 0) {
+        transformations.push({
+          name: 'handle_outliers',
+          reason: `${spec.displayName} is sensitive to outliers; apply winsorization or IQR-based filtering`,
+          priority: spec.analysisType.includes('clustering') || spec.analysisType.includes('regression') ? 'required' : 'recommended',
+          targetColumns: numericColumns,
+          transformationCode: `from scipy.stats import zscore\ndf_clean = df[(np.abs(zscore(df[numeric_cols])) < 3).all(axis=1)]`
+        });
+      }
+    }
+
+    // Check normalization
+    if (spec.transformationRequirements.needsNormalization && !dataStats.isNormalized) {
+      const numericColumns = Object.entries(columnTypes)
+        .filter(([_, type]) => type === 'numeric')
+        .map(([col]) => col);
+
+      if (numericColumns.length > 0) {
+        transformations.push({
+          name: 'normalize_features',
+          reason: `${spec.displayName} requires features on same scale for accurate distance calculations`,
+          priority: 'required',
+          targetColumns: numericColumns,
+          transformationCode: `from sklearn.preprocessing import StandardScaler\nscaler = StandardScaler()\ndf[numeric_cols] = scaler.fit_transform(df[numeric_cols])`
+        });
+      }
+    }
+
+    // Check categorical encoding
+    const categoricalColumns = Object.entries(columnTypes)
+      .filter(([_, type]) => type === 'categorical')
+      .map(([col]) => col);
+
+    if (spec.transformationRequirements.needsCategoricalEncoding && categoricalColumns.length > 0) {
+      transformations.push({
+        name: 'encode_categorical',
+        reason: `${spec.displayName} requires numeric-only data; encode categorical columns`,
+        priority: 'required',
+        targetColumns: categoricalColumns,
+        transformationCode: `from sklearn.preprocessing import LabelEncoder\nfor col in categorical_cols:\n    df[col] = LabelEncoder().fit_transform(df[col].astype(str))`
+      });
+    }
+
+    // Check temporal sorting
+    const datetimeColumns = Object.entries(columnTypes)
+      .filter(([_, type]) => type === 'datetime')
+      .map(([col]) => col);
+
+    if (spec.transformationRequirements.needsTemporalSorting && datetimeColumns.length > 0 && !dataStats.isSortedByTime) {
+      transformations.push({
+        name: 'sort_by_datetime',
+        reason: `${spec.displayName} requires data sorted chronologically for proper temporal analysis`,
+        priority: 'required',
+        targetColumns: datetimeColumns,
+        transformationCode: `df = df.sort_values(by='${datetimeColumns[0]}', ascending=True).reset_index(drop=True)`
+      });
+    }
+
+    // Check text processing
+    const textColumns = Object.entries(columnTypes)
+      .filter(([_, type]) => type === 'text')
+      .map(([col]) => col);
+
+    if (spec.transformationRequirements.needsTextProcessing && textColumns.length > 0) {
+      transformations.push({
+        name: 'process_text',
+        reason: `${spec.displayName} requires cleaned and tokenized text data`,
+        priority: 'required',
+        targetColumns: textColumns,
+        transformationCode: `import re\ndf['text_clean'] = df['text'].str.lower().str.replace(r'[^a-z0-9\\s]', '', regex=True)`
+      });
+    }
+
+    // Check column type requirements
+    const existingTypes = new Set(Object.values(columnTypes));
+    for (const requiredType of spec.columnRequirements.requiredTypes) {
+      if (!existingTypes.has(requiredType)) {
+        transformations.push({
+          name: `add_${requiredType}_column`,
+          reason: `${spec.displayName} requires at least one ${requiredType} column but none found`,
+          priority: 'required'
+        });
+      }
+    }
+
+    // Check minimum numeric columns for correlation/clustering
+    if (spec.columnRequirements.minNumericColumns) {
+      const numericCount = Object.values(columnTypes).filter(t => t === 'numeric').length;
+      if (numericCount < spec.columnRequirements.minNumericColumns) {
+        transformations.push({
+          name: 'ensure_numeric_columns',
+          reason: `${spec.displayName} requires at least ${spec.columnRequirements.minNumericColumns} numeric columns; current: ${numericCount}`,
+          priority: 'required'
+        });
+      }
+    }
+
+    return transformations;
+  }
+
+  /**
+   * Merge transformations across multiple analyses to avoid duplicate work
+   */
+  private mergeTransformationsAcrossAnalyses(
+    analysisPreparations: Array<{
+      analysisType: string;
+      displayName: string;
+      requiredTransformations: Array<{
+        name: string;
+        reason: string;
+        priority: 'required' | 'recommended' | 'optional';
+      }>;
+    }>
+  ): Array<{
+    name: string;
+    reason: string;
+    priority: 'required' | 'recommended' | 'optional';
+    forAnalyses: string[];
+  }> {
+    const transformationMap = new Map<string, {
+      name: string;
+      reason: string;
+      priority: 'required' | 'recommended' | 'optional';
+      forAnalyses: string[];
+    }>();
+
+    for (const prep of analysisPreparations) {
+      for (const transformation of prep.requiredTransformations) {
+        const existing = transformationMap.get(transformation.name);
+        if (existing) {
+          existing.forAnalyses.push(prep.displayName);
+          // Escalate priority if any analysis requires it
+          if (transformation.priority === 'required') {
+            existing.priority = 'required';
+          }
+        } else {
+          transformationMap.set(transformation.name, {
+            name: transformation.name,
+            reason: transformation.reason,
+            priority: transformation.priority,
+            forAnalyses: [prep.displayName]
+          });
+        }
+      }
+    }
+
+    return Array.from(transformationMap.values());
   }
 
   /**

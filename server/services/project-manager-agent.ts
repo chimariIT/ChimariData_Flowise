@@ -2,6 +2,7 @@
 import { DataEngineerAgent } from './data-engineer-agent';
 import { DataScientistAgent } from './data-scientist-agent';
 import { BusinessAgent, BusinessContext } from './business-agent';
+import { clarificationService, type ClarificationResult, type ClarificationQuestion } from './clarification-service';
 import { storage } from './storage';
 import { PricingService } from './pricing';
 import { nanoid } from 'nanoid';
@@ -745,7 +746,8 @@ export class ProjectManagerAgent {
     private determineIndustry(
         project: CreateAnalysisPlanRequest['project'] | undefined,
         session: ProjectSessionRow | null,
-        previousPlan: AnalysisPlanRow | null
+        previousPlan: AnalysisPlanRow | null,
+        loadedDatasets?: DatasetSummary[]
     ): string | undefined {
         const fromProject = project?.industry && project.industry.trim();
         if (fromProject) {
@@ -772,7 +774,8 @@ export class ProjectManagerAgent {
         }
 
         // Auto-detect industry from project name and goals
-        const autoDetected = this.autoDetectIndustryFromContext(project, prepareData);
+        // P1-4 FIX: Pass loaded datasets to autoDetectIndustryFromContext for better detection
+        const autoDetected = this.autoDetectIndustryFromContext(project, prepareData, loadedDatasets);
         if (autoDetected) {
             console.log(`🔍 [PM Agent] Auto-detected industry: "${autoDetected}" from project context`);
             return autoDetected;
@@ -782,70 +785,173 @@ export class ProjectManagerAgent {
     }
 
     /**
-     * Auto-detect industry from project name, goals, and questions
+     * Auto-detect industry from project name, goals, questions, file names, and column names
+     * P1-2 FIX: Enhanced to also check file names (like "EmployeeRoster.xlsx") and column names
+     * P1-4 FIX: Accept loaded datasets for more accurate detection
      * This ensures HR, Education, etc. are detected even if not explicitly set
      */
     private autoDetectIndustryFromContext(
         project: CreateAnalysisPlanRequest['project'] | undefined,
-        prepareData: Record<string, any> | undefined
+        prepareData: Record<string, any> | undefined,
+        loadedDatasets?: DatasetSummary[]
     ): string | undefined {
-        const combinedText = [
+        // Collect all text signals from various sources
+        const textSignals: string[] = [
             project?.name || '',
             project?.description || '',
             ...(prepareData?.goals || []),
             ...(prepareData?.questions || []),
             prepareData?.analysisGoal || ''
-        ].join(' ').toLowerCase();
+        ];
 
-        // HR / Employee Engagement patterns
-        const hrPatterns = ['employee', 'engagement', 'workforce', 'hr ', 'human resource',
-                          'staff', 'turnover', 'retention', 'satisfaction survey', 'hiring',
-                          'talent', 'personnel', 'workplace', 'job satisfaction'];
-        if (hrPatterns.some(p => combinedText.includes(p))) {
-            return 'hr';
+        // P1-4 FIX: Check loaded datasets first (most reliable source)
+        // DatasetSummary uses 'name' property which contains the original file name
+        if (loadedDatasets && loadedDatasets.length > 0) {
+            loadedDatasets.forEach((ds: DatasetSummary) => {
+                const fileName = ds.name || '';
+                if (fileName) {
+                    textSignals.push(fileName);
+                    console.log(`🔍 [P1-4 Industry Detection] Checking loaded dataset file name: "${fileName}"`);
+                }
+                // Add column names from dataset schema
+                if (ds.schema && typeof ds.schema === 'object') {
+                    const columnNames = Object.keys(ds.schema);
+                    textSignals.push(...columnNames);
+                    console.log(`🔍 [P1-4 Industry Detection] Checking ${columnNames.length} columns from loaded dataset`);
+                }
+            });
         }
+
+        // P1-2 FIX: Add file names from datasets (key indicator for industry)
+        if (prepareData?.datasets && Array.isArray(prepareData.datasets)) {
+            prepareData.datasets.forEach((ds: any) => {
+                const fileName = ds.fileName || ds.name || ds.dataset?.fileName || ds.dataset?.name || '';
+                if (fileName) {
+                    textSignals.push(fileName);
+                    console.log(`🔍 [P1-2 Industry Detection] Checking file name: "${fileName}"`);
+                }
+            });
+        }
+
+        // P1-2 FIX: Add column names from schema (very strong indicator)
+        if (prepareData?.schema && typeof prepareData.schema === 'object') {
+            const columnNames = Object.keys(prepareData.schema);
+            textSignals.push(...columnNames);
+            console.log(`🔍 [P1-2 Industry Detection] Checking ${columnNames.length} column names`);
+        }
+
+        // Also check project datasets directly if available
+        if (project && (project as any).datasets && Array.isArray((project as any).datasets)) {
+            (project as any).datasets.forEach((ds: any) => {
+                if (ds.fileName) textSignals.push(ds.fileName);
+                if (ds.schema && typeof ds.schema === 'object') {
+                    textSignals.push(...Object.keys(ds.schema));
+                }
+            });
+        }
+
+        const combinedText = textSignals.join(' ').toLowerCase();
+
+        // Industry scoring - count matches for more accurate detection
+        const industryScores: Record<string, number> = {};
+
+        // HR / Employee Engagement patterns - high priority file name patterns
+        const hrFilePatterns = ['employeeroster', 'hrengagement', 'hrdata', 'employee_', 'staff_', 'workforce'];
+        const hrColumnPatterns = ['employee_id', 'employeeid', 'department', 'manager', 'hire_date', 'hiredate',
+                                  'engagement_score', 'engagementscore', 'tenure', 'job_title', 'jobtitle'];
+        const hrTextPatterns = ['employee', 'engagement', 'workforce', 'hr ', 'human resource',
+                               'staff', 'turnover', 'retention', 'satisfaction survey', 'hiring',
+                               'talent', 'personnel', 'workplace', 'job satisfaction', 'team performance'];
+
+        // Score HR
+        industryScores['hr'] = 0;
+        hrFilePatterns.forEach(p => { if (combinedText.includes(p)) industryScores['hr'] += 3; });
+        hrColumnPatterns.forEach(p => { if (combinedText.includes(p)) industryScores['hr'] += 2; });
+        hrTextPatterns.forEach(p => { if (combinedText.includes(p)) industryScores['hr'] += 1; });
 
         // Education patterns
-        const educationPatterns = ['student', 'graduation', 'academic', 'school', 'university',
-                                   'teacher', 'learning', 'enrollment', 'course', 'curriculum',
-                                   'classroom', 'education'];
-        if (educationPatterns.some(p => combinedText.includes(p))) {
-            return 'education';
-        }
+        const educationFilePatterns = ['student', 'enrollment', 'academic', 'gradebook', 'courselist'];
+        const educationColumnPatterns = ['student_id', 'studentid', 'grade_level', 'gradelevel', 'gpa',
+                                         'enrollment_date', 'credits', 'course_id', 'teacher_id'];
+        const educationTextPatterns = ['student', 'graduation', 'academic', 'school', 'university',
+                                       'teacher', 'learning', 'enrollment', 'course', 'curriculum',
+                                       'classroom', 'education', 'parent', 'conference'];
+
+        industryScores['education'] = 0;
+        educationFilePatterns.forEach(p => { if (combinedText.includes(p)) industryScores['education'] += 3; });
+        educationColumnPatterns.forEach(p => { if (combinedText.includes(p)) industryScores['education'] += 2; });
+        educationTextPatterns.forEach(p => { if (combinedText.includes(p)) industryScores['education'] += 1; });
 
         // Healthcare patterns
-        const healthcarePatterns = ['patient', 'hospital', 'clinic', 'medical', 'healthcare',
-                                    'health care', 'doctor', 'nurse', 'diagnosis', 'treatment'];
-        if (healthcarePatterns.some(p => combinedText.includes(p))) {
-            return 'healthcare';
-        }
+        const healthcareFilePatterns = ['patient', 'clinical', 'medical', 'diagnosis', 'treatment'];
+        const healthcareColumnPatterns = ['patient_id', 'patientid', 'diagnosis', 'treatment', 'prescription',
+                                          'appointment', 'doctor_id', 'admission_date'];
+        const healthcareTextPatterns = ['patient', 'hospital', 'clinic', 'medical', 'healthcare',
+                                        'health care', 'doctor', 'nurse', 'diagnosis', 'treatment'];
+
+        industryScores['healthcare'] = 0;
+        healthcareFilePatterns.forEach(p => { if (combinedText.includes(p)) industryScores['healthcare'] += 3; });
+        healthcareColumnPatterns.forEach(p => { if (combinedText.includes(p)) industryScores['healthcare'] += 2; });
+        healthcareTextPatterns.forEach(p => { if (combinedText.includes(p)) industryScores['healthcare'] += 1; });
 
         // Finance patterns
-        const financePatterns = ['bank', 'financial', 'loan', 'investment', 'trading',
-                                 'portfolio', 'credit', 'mortgage', 'insurance'];
-        if (financePatterns.some(p => combinedText.includes(p))) {
-            return 'finance';
-        }
+        const financeFilePatterns = ['transaction', 'account', 'portfolio', 'loan', 'investment'];
+        const financeColumnPatterns = ['account_id', 'accountid', 'transaction_id', 'balance', 'amount',
+                                       'interest_rate', 'loan_amount', 'credit_score'];
+        const financeTextPatterns = ['bank', 'financial', 'loan', 'investment', 'trading',
+                                     'portfolio', 'credit', 'mortgage', 'insurance'];
+
+        industryScores['finance'] = 0;
+        financeFilePatterns.forEach(p => { if (combinedText.includes(p)) industryScores['finance'] += 3; });
+        financeColumnPatterns.forEach(p => { if (combinedText.includes(p)) industryScores['finance'] += 2; });
+        financeTextPatterns.forEach(p => { if (combinedText.includes(p)) industryScores['finance'] += 1; });
 
         // Retail patterns
-        const retailPatterns = ['customer', 'purchase', 'shopping', 'retail', 'ecommerce',
-                               'store', 'product', 'sales', 'order', 'cart'];
-        if (retailPatterns.some(p => combinedText.includes(p))) {
-            return 'retail';
-        }
+        const retailFilePatterns = ['sales', 'order', 'product', 'inventory', 'customer'];
+        const retailColumnPatterns = ['product_id', 'productid', 'order_id', 'orderid', 'quantity',
+                                      'price', 'discount', 'customer_id', 'sku'];
+        const retailTextPatterns = ['customer', 'purchase', 'shopping', 'retail', 'ecommerce',
+                                    'store', 'product', 'sales', 'order', 'cart'];
+
+        industryScores['retail'] = 0;
+        retailFilePatterns.forEach(p => { if (combinedText.includes(p)) industryScores['retail'] += 3; });
+        retailColumnPatterns.forEach(p => { if (combinedText.includes(p)) industryScores['retail'] += 2; });
+        retailTextPatterns.forEach(p => { if (combinedText.includes(p)) industryScores['retail'] += 1; });
 
         // Nonprofit patterns
-        const nonprofitPatterns = ['donor', 'nonprofit', 'non-profit', 'charity', 'volunteer',
-                                   'fundraising', 'foundation', 'ngo', 'mission'];
-        if (nonprofitPatterns.some(p => combinedText.includes(p))) {
-            return 'nonprofit';
-        }
+        const nonprofitFilePatterns = ['donor', 'donation', 'volunteer', 'fundrais', 'campaign'];
+        const nonprofitColumnPatterns = ['donor_id', 'donorid', 'donation_amount', 'campaign_id',
+                                         'volunteer_hours', 'grant_amount'];
+        const nonprofitTextPatterns = ['donor', 'nonprofit', 'non-profit', 'charity', 'volunteer',
+                                       'fundraising', 'foundation', 'ngo', 'mission'];
+
+        industryScores['nonprofit'] = 0;
+        nonprofitFilePatterns.forEach(p => { if (combinedText.includes(p)) industryScores['nonprofit'] += 3; });
+        nonprofitColumnPatterns.forEach(p => { if (combinedText.includes(p)) industryScores['nonprofit'] += 2; });
+        nonprofitTextPatterns.forEach(p => { if (combinedText.includes(p)) industryScores['nonprofit'] += 1; });
 
         // Manufacturing patterns
-        const manufacturingPatterns = ['manufacturing', 'production', 'factory', 'assembly',
-                                       'inventory', 'supply chain', 'quality control'];
-        if (manufacturingPatterns.some(p => combinedText.includes(p))) {
-            return 'manufacturing';
+        const manufacturingFilePatterns = ['production', 'assembly', 'quality', 'defect', 'batch'];
+        const manufacturingColumnPatterns = ['batch_id', 'batchid', 'defect_count', 'quality_score',
+                                             'production_date', 'machine_id', 'yield'];
+        const manufacturingTextPatterns = ['manufacturing', 'production', 'factory', 'assembly',
+                                           'inventory', 'supply chain', 'quality control'];
+
+        industryScores['manufacturing'] = 0;
+        manufacturingFilePatterns.forEach(p => { if (combinedText.includes(p)) industryScores['manufacturing'] += 3; });
+        manufacturingColumnPatterns.forEach(p => { if (combinedText.includes(p)) industryScores['manufacturing'] += 2; });
+        manufacturingTextPatterns.forEach(p => { if (combinedText.includes(p)) industryScores['manufacturing'] += 1; });
+
+        // Find highest scoring industry (minimum score of 2 required)
+        const sortedIndustries = Object.entries(industryScores)
+            .filter(([_, score]) => score >= 2)
+            .sort((a, b) => b[1] - a[1]);
+
+        if (sortedIndustries.length > 0) {
+            const [topIndustry, topScore] = sortedIndustries[0];
+            console.log(`🏭 [P1-2 Industry Detection] Detected industry: "${topIndustry}" (score: ${topScore})`);
+            console.log(`   Industry scores: ${JSON.stringify(industryScores)}`);
+            return topIndustry;
         }
 
         return undefined;
@@ -1026,7 +1132,8 @@ export class ProjectManagerAgent {
                 questions.push('Which factors have the greatest impact on performance?');
             }
 
-            const industry = this.determineIndustry(request.project, session, latestPlan ?? null);
+            // P1-4 FIX: Pass loaded datasets to determineIndustry for better industry detection
+            const industry = this.determineIndustry(request.project, session, latestPlan ?? null, datasets);
             const schemaSource = primaryDataset?.schema ?? request.project?.schema ?? {};
             const dataSample = primaryDataset?.previewRows ?? (Array.isArray(request.project?.data) ? request.project.data.slice(0, 500) : []);
 
@@ -2345,13 +2452,117 @@ export class ProjectManagerAgent {
             dataSchema: project.schema,
         };
 
-        const extractedGoals = await this.businessAgent.extractGoals(userDescription, journeyType, context);
+        // ==========================================
+        // CLARIFICATION CHECK (u2a2a2u Pattern)
+        // ==========================================
+        // Check for pending clarifications first
+        const pendingClarifications = await clarificationService.getPendingClarifications(projectId);
+        if (pendingClarifications && pendingClarifications.status === 'pending') {
+            console.log(`📋 [PM Agent] Pending clarifications found for project ${projectId}, awaiting user input`);
+            return {
+                needsClarification: true,
+                clarificationRequest: pendingClarifications,
+                message: 'Please answer the clarifying questions before proceeding'
+            };
+        }
+
+        // Detect ambiguities in user description
+        const clarificationResult = await clarificationService.detectAmbiguities(
+            userDescription,
+            {
+                industry: project.industry,
+                journeyType,
+                existingColumns: project.schema ? Object.keys(project.schema) : [],
+                projectGoals: project.goals ? [project.goals] : []
+            },
+            'goal'
+        );
+
+        // If significant ambiguities found, request clarification before proceeding
+        if (clarificationResult.hasAmbiguities && clarificationResult.questions.some(q => q.required)) {
+            console.log(`🔍 [PM Agent] Ambiguities detected in goal: ${clarificationResult.questions.length} questions`);
+
+            // Create clarification request and store in project
+            const clarificationRequest = await clarificationService.createClarificationRequest(
+                projectId,
+                clarificationResult.questions,
+                userDescription,
+                'goal'
+            );
+
+            state.history.push({
+                step: 'clarificationRequested',
+                userInput: { userDescription, journeyType },
+                agentOutput: { clarificationRequest, originalConfidence: clarificationResult.confidenceScore },
+                timestamp: new Date(),
+            });
+            await this.updateProjectState(projectId, state);
+
+            return {
+                needsClarification: true,
+                clarificationRequest,
+                confidenceScore: clarificationResult.confidenceScore,
+                suggestedRevision: clarificationResult.suggestedRevision,
+                message: 'Please clarify the following to ensure accurate analysis'
+            };
+        }
+
+        // Use revised input if clarification provided a better version
+        const effectiveDescription = clarificationResult.suggestedRevision || userDescription;
+
+        const extractedGoals = await this.businessAgent.extractGoals(effectiveDescription, journeyType, context);
 
         state.status = 'path_selection';
         state.lastAgentOutput = extractedGoals;
         state.history.push({
             step: 'startGoalExtraction',
             userInput: { userDescription, journeyType },
+            agentOutput: extractedGoals,
+            timestamp: new Date(),
+        });
+
+        await this.updateProjectState(projectId, state);
+        return extractedGoals;
+    }
+
+    /**
+     * Continue goal extraction after clarification answers are submitted
+     * This is called after the user has answered clarification questions
+     */
+    async continueGoalExtractionAfterClarification(projectId: string, journeyType: string) {
+        const { project, state } = await this.getProjectAndState(projectId);
+
+        // Check if clarification was answered
+        const pending = await clarificationService.getPendingClarifications(projectId);
+        if (pending && pending.status === 'pending') {
+            throw new Error('Clarification questions must be answered before continuing');
+        }
+
+        // Get the revised input from the clarification history
+        const history = await clarificationService.getClarificationHistory(projectId);
+        const lastClarification = history[history.length - 1];
+        const revisedInput = lastClarification?.revisedInput || lastClarification?.originalInput;
+
+        if (!revisedInput) {
+            throw new Error('No clarification history found. Please restart goal extraction.');
+        }
+
+        const context: BusinessContext = {
+            projectName: project.name,
+            projectDescription: project.description,
+            recordCount: project.recordCount,
+            dataSchema: project.schema,
+        };
+
+        console.log(`✅ [PM Agent] Continuing goal extraction with clarified input for project ${projectId}`);
+
+        const extractedGoals = await this.businessAgent.extractGoals(revisedInput, journeyType, context);
+
+        state.status = 'path_selection';
+        state.lastAgentOutput = extractedGoals;
+        state.history.push({
+            step: 'startGoalExtractionAfterClarification',
+            userInput: { revisedInput, journeyType, clarificationHistory: lastClarification },
             agentOutput: extractedGoals,
             timestamp: new Date(),
         });

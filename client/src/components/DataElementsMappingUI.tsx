@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,6 +32,7 @@ interface RequiredDataElement {
   purpose: string;
   required: boolean;
   sourceField?: string;
+  sourceColumn?: string;  // FIX: Backend may set sourceColumn instead of sourceField
   sourceAvailable: boolean;
   transformationRequired: boolean;
   transformationLogic?: {
@@ -81,6 +82,8 @@ interface DataElementsMappingUIProps {
   }>;
   schema?: Record<string, any>;
   sampleData?: Record<string, any>[];
+  /** Show loading indicator while DE Agent is mapping elements */
+  isMapping?: boolean;
 }
 
 interface AIGenerationState {
@@ -114,7 +117,8 @@ export function DataElementsMappingUI({
   onSaveMapping,
   initialMappings,
   schema,
-  sampleData
+  sampleData,
+  isMapping = false
 }: DataElementsMappingUIProps) {
   const [editingElement, setEditingElement] = useState<string | null>(null);
   const [aiStates, setAIStates] = useState<Record<string, AIGenerationState>>({});
@@ -152,6 +156,48 @@ export function DataElementsMappingUI({
 
     return restoredMappings;
   });
+
+  // FIX Jan 20: Sync mappings state when requiredDataElements prop changes (e.g., after auto-mapping completes)
+  // useState initializer only runs once on mount, so we need useEffect to handle prop updates
+  useEffect(() => {
+    // Extract mappings from updated requiredDataElements
+    const newMappings: Record<string, any> = {};
+    let hasNewMappings = false;
+
+    requiredDataElements.forEach(elem => {
+      const sourceCol = (elem as any).sourceColumn || (elem as any).sourceField || (elem as any).mappedColumn;
+      if (sourceCol) {
+        newMappings[elem.elementId] = {
+          sourceField: sourceCol,
+          transformationCode: (elem as any).transformationCode,
+          transformationDescription: (elem as any).transformationDescription
+        };
+        hasNewMappings = true;
+      }
+    });
+
+    // Only update if we have new mappings and they differ from current state
+    if (hasNewMappings) {
+      const currentMappedCount = Object.keys(mappings).filter(k => mappings[k]?.sourceField).length;
+      const newMappedCount = Object.keys(newMappings).length;
+
+      // P0-1 FIX: Use content comparison, not just count
+      const currentKeys = Object.keys(mappings)
+        .filter(k => mappings[k]?.sourceField)
+        .sort()
+        .join(',');
+      const newKeys = Object.keys(newMappings).sort().join(',');
+
+      // Update if new mappings have different keys or more items (auto-mapping completed)
+      if (newKeys !== currentKeys || newMappedCount > currentMappedCount) {
+        console.log(`📋 [DataElementsMappingUI] Syncing mappings from props: ${newMappedCount} items`);
+        setMappings(prev => ({
+          ...prev,
+          ...newMappings
+        }));
+      }
+    }
+  }, [requiredDataElements]); // Re-run when requiredDataElements changes
 
   const handleEditElement = (elementId: string) => {
     setEditingElement(elementId);
@@ -371,10 +417,13 @@ export function DataElementsMappingUI({
 
   const getMappingStatus = (element: RequiredDataElement) => {
     const mapping = mappings[element.elementId];
-    if (mapping?.sourceField) {
+    // FIX: Check both mapping state AND element's sourceField/sourceColumn properties
+    const hasSourceMapping = mapping?.sourceField || element.sourceField || element.sourceColumn;
+    if (hasSourceMapping) {
       return element.transformationRequired ? 'needs_transformation' : 'mapped';
     }
-    return element.sourceAvailable ? 'auto_mapped' : 'missing';
+    // FIX: Also check sourceAvailable OR any source field
+    return (element.sourceAvailable || element.sourceField || element.sourceColumn) ? 'auto_mapped' : 'missing';
   };
 
   const getStatusBadge = (status: string) => {
@@ -448,6 +497,17 @@ export function DataElementsMappingUI({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
+        {/* Data Engineer Mapping In Progress Indicator */}
+        {isMapping && (
+          <Alert className="bg-blue-50 border-blue-200">
+            <Loader2 className="h-4 w-4 text-blue-600 animate-spin" />
+            <AlertDescription className="flex items-center gap-2">
+              <span className="font-medium text-blue-800">Data Engineer Agent is mapping elements to source fields...</span>
+              <span className="text-blue-600 text-sm">This may take a few moments.</span>
+            </AlertDescription>
+          </Alert>
+        )}
+
         {/* Summary */}
         <Alert className="bg-white">
           <AlertCircle className="h-4 w-4 text-blue-600" />
@@ -460,24 +520,44 @@ export function DataElementsMappingUI({
                 <div className="text-xs text-gray-600">Total Elements</div>
               </div>
               <div>
-                <div className="text-lg font-bold text-green-600">
-                  {requiredDataElements.filter(e => e.sourceAvailable).length}
+                <div className={`text-lg font-bold ${isMapping ? 'text-gray-400' : 'text-green-600'}`}>
+                  {isMapping ? <Loader2 className="h-5 w-5 animate-spin inline" /> : requiredDataElements.filter(e => e.sourceAvailable || e.sourceField || e.sourceColumn).length}
                 </div>
                 <div className="text-xs text-gray-600">Auto-Mapped</div>
               </div>
               <div>
-                <div className="text-lg font-bold text-yellow-600">
-                  {requiredDataElements.filter(e => e.transformationRequired).length}
+                <div className={`text-lg font-bold ${isMapping ? 'text-gray-400' : 'text-yellow-600'}`}>
+                  {isMapping ? '-' : requiredDataElements.filter(e => e.transformationRequired).length}
                 </div>
                 <div className="text-xs text-gray-600">Need Transform</div>
               </div>
               <div>
-                <div className="text-lg font-bold text-red-600">
-                  {requiredDataElements.filter(e => !e.sourceAvailable && e.required).length}
+                <div className={`text-lg font-bold ${isMapping ? 'text-gray-400' : 'text-red-600'}`}>
+                  {isMapping ? '-' : requiredDataElements.filter(e => !e.sourceAvailable && !e.sourceField && !e.sourceColumn && e.required).length}
                 </div>
                 <div className="text-xs text-gray-600">Missing</div>
               </div>
             </div>
+
+            {/* Mapping Progress Bar */}
+            {!isMapping && requiredDataElements.length > 0 && (
+              <div className="mt-4">
+                <div className="flex justify-between text-xs text-gray-600 mb-1">
+                  <span>Mapping Progress</span>
+                  <span>
+                    {Math.round((requiredDataElements.filter(e => e.sourceAvailable || e.sourceField || e.sourceColumn).length / requiredDataElements.length) * 100)}%
+                  </span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-2">
+                  <div
+                    className="bg-green-600 h-2 rounded-full transition-all duration-500"
+                    style={{
+                      width: `${(requiredDataElements.filter(e => e.sourceAvailable || e.sourceField || e.sourceColumn).length / requiredDataElements.length) * 100}%`
+                    }}
+                  />
+                </div>
+              </div>
+            )}
           </AlertDescription>
         </Alert>
 

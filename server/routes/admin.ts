@@ -1613,6 +1613,111 @@ router.put('/billing/tiers/:tier/features', async (req, res) => {
   }
 });
 
+// ==========================================
+// ANALYSIS PRICING CONFIGURATION
+// ==========================================
+
+/**
+ * GET /api/admin/billing/analysis-pricing
+ * Get current analysis pricing configuration
+ */
+router.get('/billing/analysis-pricing', async (req, res) => {
+  try {
+    const { CostEstimationService } = await import('../services/cost-estimation-service');
+    const config = await CostEstimationService.loadPricingConfig();
+
+    res.json({
+      success: true,
+      data: config
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get analysis pricing',
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * PUT /api/admin/billing/analysis-pricing
+ * Update analysis pricing configuration
+ */
+router.put('/billing/analysis-pricing', async (req, res) => {
+  try {
+    const config = req.body;
+
+    // Validate required fields
+    if (config.basePlatformFee !== undefined && typeof config.basePlatformFee !== 'number') {
+      return res.status(400).json({ success: false, error: 'basePlatformFee must be a number' });
+    }
+    if (config.baseAnalysisCost !== undefined && typeof config.baseAnalysisCost !== 'number') {
+      return res.status(400).json({ success: false, error: 'baseAnalysisCost must be a number' });
+    }
+    if (config.dataProcessingPer1K !== undefined && typeof config.dataProcessingPer1K !== 'number') {
+      return res.status(400).json({ success: false, error: 'dataProcessingPer1K must be a number' });
+    }
+
+    const { CostEstimationService } = await import('../services/cost-estimation-service');
+    const success = await CostEstimationService.savePricingConfig(config);
+
+    if (!success) {
+      return res.status(500).json({ success: false, error: 'Failed to save configuration' });
+    }
+
+    broadcastAdminEvent('analysis_pricing_updated', { config });
+
+    res.json({
+      success: true,
+      message: 'Analysis pricing updated successfully',
+      data: await CostEstimationService.loadPricingConfig()
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update analysis pricing',
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * POST /api/admin/billing/estimate-cost
+ * Preview cost estimation for given parameters
+ */
+router.post('/billing/estimate-cost', async (req, res) => {
+  try {
+    const { analysisTypes, dataSize, complexity, includeArtifacts } = req.body;
+
+    if (!analysisTypes || !Array.isArray(analysisTypes)) {
+      return res.status(400).json({ success: false, error: 'analysisTypes array required' });
+    }
+    if (!dataSize || typeof dataSize.rows !== 'number') {
+      return res.status(400).json({ success: false, error: 'dataSize.rows required' });
+    }
+
+    const { CostEstimationService } = await import('../services/cost-estimation-service');
+    const estimate = await CostEstimationService.estimateAnalysisCost(
+      'preview', // Use 'preview' as placeholder projectId
+      analysisTypes,
+      dataSize,
+      complexity || 'intermediate',
+      includeArtifacts || ['report']
+    );
+
+    res.json({
+      success: true,
+      data: estimate
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      error: 'Failed to estimate cost',
+      message: error.message,
+    });
+  }
+});
+
 /**
  * GET /api/admin/billing/analytics/revenue
  * Get revenue analytics
@@ -3182,8 +3287,9 @@ router.post('/users/:userId/refund', async (req: Request, res: Response) => {
     // Process Stripe refund if requested and user has Stripe customer ID
     if (stripeRefund && (user as any).stripeCustomerId) {
       try {
+        // FIX Jan 20: Use stable Stripe API version
         const stripe = new (await import('stripe')).default(process.env.STRIPE_SECRET_KEY!, {
-          apiVersion: '2025-08-27.basil'
+          apiVersion: '2024-12-18.acacia' as any
         });
 
         // Find recent charge to refund

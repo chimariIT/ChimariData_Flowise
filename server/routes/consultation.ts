@@ -56,8 +56,9 @@ router.get('/pricing', async (req, res) => {
 });
 
 // Initialize Stripe if configured
+// FIX Jan 20: Use stable Stripe API version
   const stripe = process.env.STRIPE_SECRET_KEY
-    ? new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2025-08-27.basil' })
+    ? new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-12-18.acacia' as any })
     : null;
 
 /**
@@ -283,6 +284,17 @@ router.post('/:id/approve', ensureAuthenticated, async (req, res) => {
     // Create Stripe PaymentIntent
     let paymentIntentId: string | null = null;
     let clientSecret: string | null = null;
+
+    // P0-6 FIX: Block mock payments in production
+    const isProduction = process.env.NODE_ENV === 'production';
+    if (!stripe && isProduction) {
+      console.error('🔴 CRITICAL: Stripe not configured in production - blocking consultation payment!');
+      return res.status(503).json({
+        success: false,
+        error: 'Payment service unavailable. Please contact support.',
+        code: 'STRIPE_NOT_CONFIGURED'
+      });
+    }
 
     if (stripe) {
       try {

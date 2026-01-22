@@ -19,6 +19,7 @@ import { ArtifactGenerator } from '../services/artifact-generator';
 import { storage } from '../storage';
 import { JourneyStateManager } from '../services/journey-state-manager';
 import { getBillingService } from '../services/billing/unified-billing-service';
+import { requireAnyFeature, GATED_FEATURES } from '../middleware/feature-gate';
 import type { CostBreakdown } from '@shared/schema';
 import type { FeatureComplexity, JourneyType } from '@shared/canonical-types';
 
@@ -114,7 +115,7 @@ function getRecommendedTier(currentTier: string): string {
  * 3. Check/track quota → trackFeatureUsage()
  * 4. Preview mode → Limited execution without consuming quota
  */
-router.post('/execute', ensureAuthenticated, async (req, res) => {
+router.post('/execute', ensureAuthenticated, requireAnyFeature([GATED_FEATURES.BASIC_ANALYSIS, GATED_FEATURES.ADVANCED_ANALYSIS]), async (req, res) => {
   // Declare variables outside try block so they're accessible in catch block
   const userId = (req.user as any)?.id;
   let projectId: string = '';
@@ -226,33 +227,63 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
         );
 
         if (!usageResult.allowed) {
-          // Quota exceeded - offer options
-          const quotaStatus = await billingService.getQuotaStatus(userId, analysisType, complexity);
+          // Quota exceeded - check if user has trial credits as fallback
+          const creditsRequired = billingService.calculateCreditsRequired(complexity, analysisTypes.length);
+          const creditCheck = await billingService.checkTrialCredits(userId, creditsRequired);
 
-          console.log(`⚠️ [Billing] Quota exceeded for ${analysisType} (${complexity})`);
+          if (creditCheck.hasCredits) {
+            // User has trial credits - deduct and allow execution
+            console.log(`💳 [Trial Credits] Using ${creditsRequired} trial credits for ${analysisType} (${complexity})`);
+            const deductResult = await billingService.deductTrialCredits(userId, creditsRequired);
 
-          return res.status(402).json({
-            success: false,
-            error: 'Quota exceeded',
-            message: usageResult.message || `Your ${complexity} ${analysisType} quota has been exceeded.`,
-            quotaStatus: quotaStatus || { quota: 0, used: 0, remaining: 0, percentUsed: 100, isExceeded: true },
-            options: {
-              payOverage: {
-                cost: usageResult.cost,
-                // PHASE 10 FIX: Route to payment page with overage flag instead of non-existent endpoint
-                url: `/projects/${projectId}/payment?type=overage&cost=${usageResult.cost}`
+            if (deductResult.success) {
+              console.log(`✅ [Trial Credits] Deducted ${creditsRequired} credits. Remaining: ${deductResult.newBalance}`);
+              quotaTracked = true; // Mark as tracked via credits
+              // Continue to execution - fall through to analysis
+            } else {
+              console.error(`❌ [Trial Credits] Failed to deduct credits: ${deductResult.message}`);
+              // Fall through to quota exceeded response
+            }
+          }
+
+          if (!creditCheck.hasCredits || !quotaTracked) {
+            // No credits available - return quota exceeded with options
+            const quotaStatus = await billingService.getQuotaStatus(userId, analysisType, complexity);
+            const trialCreditsStatus = await billingService.getTrialCreditsStatus(userId);
+
+            console.log(`⚠️ [Billing] Quota exceeded for ${analysisType} (${complexity}), no trial credits available`);
+
+            return res.status(402).json({
+              success: false,
+              error: 'Quota exceeded',
+              message: creditCheck.expired
+                ? 'Your trial credits have expired. Please upgrade to continue.'
+                : usageResult.message || `Your ${complexity} ${analysisType} quota has been exceeded.`,
+              quotaStatus: quotaStatus || { quota: 0, used: 0, remaining: 0, percentUsed: 100, isExceeded: true },
+              trialCredits: trialCreditsStatus ? {
+                remaining: trialCreditsStatus.remaining,
+                required: creditsRequired,
+                expired: trialCreditsStatus.expired,
+                expiresAt: trialCreditsStatus.expiresAt
+              } : null,
+              options: {
+                payOverage: {
+                  cost: usageResult.cost,
+                  // PHASE 10 FIX: Route to payment page with overage flag instead of non-existent endpoint
+                  url: `/projects/${projectId}/payment?type=overage&cost=${usageResult.cost}`
+                },
+                upgradeTier: {
+                  url: '/billing/upgrade',
+                  recommendedTier: getRecommendedTier(userTier)
+                },
+                payPerProject: {
+                  url: `/projects/${projectId}/payment`,
+                  description: 'Pay for this specific project analysis'
+                }
               },
-              upgradeTier: {
-                url: '/billing/upgrade',
-                recommendedTier: getRecommendedTier(userTier)
-              },
-              payPerProject: {
-                url: `/projects/${projectId}/payment`,
-                description: 'Pay for this specific project analysis'
-              }
-            },
-            code: 'QUOTA_EXCEEDED'
-          });
+              code: creditCheck.expired ? 'TRIAL_EXPIRED' : 'QUOTA_EXCEEDED'
+            });
+          }
         }
 
         quotaTracked = true;

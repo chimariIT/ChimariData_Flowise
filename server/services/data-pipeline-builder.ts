@@ -321,7 +321,15 @@ export class DataPipelineBuilder {
         message: 'Extracting data from source...'
       });
 
-      // Simulate data extraction
+      // P0-4 FIX: Production guard for simulated data extraction
+      const isProduction = process.env.NODE_ENV === 'production';
+      if (isProduction) {
+        // In production, this should integrate with actual data source
+        throw new Error('Pipeline execution requires actual data source integration in production. Configure source connection.');
+      }
+
+      // Development/staging only: Simulate data extraction
+      console.warn('⚠️ [Pipeline] Using simulated data extraction (dev mode only)');
       const recordsExtracted = Math.floor(Math.random() * 1000) + 100;
       execution.recordsProcessed = recordsExtracted;
 

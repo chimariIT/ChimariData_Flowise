@@ -1,6 +1,15 @@
 import { ChimaridataAI } from './chimaridata-ai';
 import { KnowledgeGraphService, type KnowledgeTemplate, type RegulationKnowledge } from './knowledge-graph-service';
 import type { BusinessContext as PlanBusinessContext, DataAssessment } from '@shared/schema';
+import {
+  NaturalLanguageTranslator,
+  naturalLanguageTranslator,
+  type AudienceType,
+  type TranslationContext,
+  type AIResultsTranslation,
+  type AIQualityTranslation,
+  type AISchemaTranslation
+} from './natural-language-translator';
 
 // ==========================================
 // CONSULTATION INTERFACES (Multi-Agent Coordination)
@@ -378,10 +387,12 @@ function getFallbackGoalExtraction(journeyType: string): any {
 export class BusinessAgent {
     private chimaridataAI: ChimaridataAI;
     private knowledgeGraph: KnowledgeGraphService;
+    private translator: NaturalLanguageTranslator;
 
     constructor() {
         this.chimaridataAI = new ChimaridataAI();
         this.knowledgeGraph = new KnowledgeGraphService();
+        this.translator = naturalLanguageTranslator;
     }
 
     /**
@@ -1194,6 +1205,113 @@ export class BusinessAgent {
     }
 
     /**
+     * Auto-detect industry from project context (file names, columns, questions)
+     * P1 FIX: Enhanced industry detection for context-aware KPIs
+     */
+    async autoDetectIndustryFromContext(context: {
+        fileNames?: string[];
+        columnNames?: string[];
+        userQuestions?: string[];
+        projectDescription?: string;
+    }): Promise<{ industry: string; confidence: number; signals: string[] }> {
+        const signals: string[] = [];
+        const industryScores: Record<string, number> = {};
+
+        // File name patterns for industry detection
+        const filePatterns: Record<string, string[]> = {
+            'hr': ['employee', 'roster', 'hr', 'engagement', 'turnover', 'retention', 'payroll', 'staff', 'workforce', 'talent'],
+            'education': ['student', 'grade', 'course', 'enrollment', 'academic', 'teacher', 'school', 'class', 'curriculum'],
+            'healthcare': ['patient', 'medical', 'diagnosis', 'treatment', 'clinical', 'health', 'hospital', 'doctor'],
+            'retail': ['sales', 'inventory', 'customer', 'order', 'product', 'store', 'retail', 'purchase'],
+            'finance': ['transaction', 'account', 'balance', 'payment', 'invoice', 'bank', 'loan', 'credit']
+        };
+
+        // Check file names
+        context.fileNames?.forEach(fileName => {
+            const lowerName = fileName.toLowerCase();
+            for (const [industry, patterns] of Object.entries(filePatterns)) {
+                if (patterns.some(p => lowerName.includes(p))) {
+                    industryScores[industry] = (industryScores[industry] || 0) + 2;
+                    signals.push(`File "${fileName}" suggests ${industry}`);
+                }
+            }
+        });
+
+        // Column name patterns for industry detection
+        const columnPatterns: Record<string, string[]> = {
+            'hr': ['employee_id', 'department', 'manager', 'hire_date', 'engagement', 'satisfaction', 'tenure', 'salary', 'performance', 'job_title'],
+            'education': ['student_id', 'grade_level', 'gpa', 'enrollment', 'credits', 'course_id', 'teacher_id', 'semester'],
+            'healthcare': ['patient_id', 'diagnosis', 'treatment', 'prescription', 'visit_date', 'doctor_id', 'symptoms'],
+            'retail': ['product_id', 'quantity', 'price', 'discount', 'customer_id', 'order_id', 'sku', 'category'],
+            'finance': ['account_id', 'transaction_id', 'amount', 'balance', 'interest_rate', 'due_date', 'credit_score']
+        };
+
+        // Check column names
+        context.columnNames?.forEach(colName => {
+            const lowerCol = colName.toLowerCase().replace(/[\s-]/g, '_');
+            for (const [industry, patterns] of Object.entries(columnPatterns)) {
+                if (patterns.some(p => lowerCol.includes(p.replace(/[\s-]/g, '_')))) {
+                    industryScores[industry] = (industryScores[industry] || 0) + 1;
+                    signals.push(`Column "${colName}" suggests ${industry}`);
+                }
+            }
+        });
+
+        // User question patterns
+        const questionPatterns: Record<string, string[]> = {
+            'hr': ['employee', 'team', 'manager', 'leader', 'engagement', 'turnover', 'department', 'hire', 'staff', 'workforce'],
+            'education': ['student', 'teacher', 'grade', 'class', 'course', 'school', 'academic', 'learning', 'graduation'],
+            'healthcare': ['patient', 'treatment', 'diagnosis', 'medical', 'health', 'hospital', 'doctor', 'clinical'],
+            'retail': ['customer', 'sales', 'product', 'order', 'purchase', 'store', 'inventory', 'revenue'],
+            'finance': ['transaction', 'account', 'payment', 'loan', 'credit', 'balance', 'financial', 'bank']
+        };
+
+        // Check user questions
+        context.userQuestions?.forEach(question => {
+            const lowerQuestion = question.toLowerCase();
+            for (const [industry, patterns] of Object.entries(questionPatterns)) {
+                const matches = patterns.filter(p => lowerQuestion.includes(p));
+                if (matches.length > 0) {
+                    industryScores[industry] = (industryScores[industry] || 0) + matches.length;
+                    signals.push(`Question mentions ${matches.join(', ')} (${industry})`);
+                }
+            }
+        });
+
+        // Check project description
+        if (context.projectDescription) {
+            const lowerDesc = context.projectDescription.toLowerCase();
+            for (const [industry, patterns] of Object.entries(questionPatterns)) {
+                const matches = patterns.filter(p => lowerDesc.includes(p));
+                if (matches.length > 0) {
+                    industryScores[industry] = (industryScores[industry] || 0) + matches.length;
+                    signals.push(`Description mentions ${matches.join(', ')} (${industry})`);
+                }
+            }
+        }
+
+        // Find highest scoring industry
+        const sortedIndustries = Object.entries(industryScores)
+            .sort((a, b) => b[1] - a[1]);
+
+        const topIndustry = sortedIndustries[0];
+
+        if (topIndustry && topIndustry[1] >= 2) {
+            const confidence = Math.min(topIndustry[1] / 10, 0.95);
+            console.log(`🏭 [Industry Detection] Detected: ${topIndustry[0]} (score: ${topIndustry[1]}, confidence: ${confidence.toFixed(2)})`);
+            console.log(`🏭 [Industry Detection] Signals: ${signals.slice(0, 5).join('; ')}`);
+            return {
+                industry: topIndustry[0],
+                confidence,
+                signals
+            };
+        }
+
+        console.log(`🏭 [Industry Detection] No strong industry signals detected, defaulting to general`);
+        return { industry: 'general', confidence: 0.5, signals: ['No strong industry signals detected'] };
+    }
+
+    /**
      * Suggest industry-specific business metrics
      */
     async suggestBusinessMetrics(
@@ -1210,7 +1328,7 @@ export class BusinessAgent {
             goals = industryOrRequest.goals ?? goalsArg;
         }
 
-        console.log(`💼 Business Agent: Suggesting metrics for ${industry || 'general'} industry`);
+        console.log(`💼 Business Agent: Suggesting metrics for industry="${industry || 'general'}", goals=[${Array.isArray(goals) ? goals.slice(0, 3).join(', ') : 'none'}]`);
 
         const hasGoalsArray = Array.isArray(goals);
         const sanitizedGoals = hasGoalsArray
@@ -1292,11 +1410,18 @@ export class BusinessAgent {
             });
         }
 
-        // HR/Employee engagement goals - check goals for HR keywords
-        if (goalsLower.includes('employee') || goalsLower.includes('engagement') ||
+        // HR/Employee engagement - check BOTH goals AND industry for HR keywords
+        // ✅ P1-3 FIX: Also check industryLower to ensure HR KPIs show for detected HR projects
+        const isHRIndustry = industryLower.includes('hr') || industryLower.includes('human resource') ||
+            industryLower.includes('employee') || industryLower === 'employee engagement' ||
+            industryLower.includes('workforce') || industryLower.includes('talent');
+        const hasHRGoals = goalsLower.includes('employee') || goalsLower.includes('engagement') ||
             goalsLower.includes('workforce') || goalsLower.includes('hr') ||
             goalsLower.includes('staff') || goalsLower.includes('turnover') ||
-            goalsLower.includes('retention rate') || goalsLower.includes('satisfaction')) {
+            goalsLower.includes('retention rate') || goalsLower.includes('satisfaction');
+
+        if (isHRIndustry || hasHRGoals) {
+            console.log(`✅ [P1-3 FIX] Adding HR KPIs - isHRIndustry=${isHRIndustry}, hasHRGoals=${hasHRGoals}, industryLower="${industryLower}"`);
             pushMetric(primaryMetrics, {
                 name: 'Employee Engagement Score',
                 description: 'Composite measure of employee commitment and satisfaction',
@@ -1337,10 +1462,16 @@ export class BusinessAgent {
             });
         }
 
-        // Education goals
-        if (goalsLower.includes('student') || goalsLower.includes('graduation') ||
+        // Education - check BOTH goals AND industry for education keywords
+        // ✅ P1-3 FIX: Also check industryLower to ensure Education KPIs show for detected education projects
+        const isEducationIndustry = industryLower.includes('education') || industryLower.includes('school') ||
+            industryLower.includes('university') || industryLower.includes('academic') ||
+            industryLower.includes('learning') || industryLower.includes('training');
+        const hasEducationGoals = goalsLower.includes('student') || goalsLower.includes('graduation') ||
             goalsLower.includes('academic') || goalsLower.includes('learning') ||
-            goalsLower.includes('teacher') || goalsLower.includes('school')) {
+            goalsLower.includes('teacher') || goalsLower.includes('school');
+
+        if (isEducationIndustry || hasEducationGoals) {
             pushMetric(primaryMetrics, {
                 name: 'Student Retention Rate',
                 description: 'Percentage of students who continue enrollment',
@@ -1763,6 +1894,192 @@ Tailor this recommendation for ${audience} audience. Keep it concise (1-2 senten
         );
 
         return tailoredRecommendations;
+    }
+
+    // ==========================================
+    // ENHANCED TRANSLATION METHODS (Using NL Translator)
+    // ==========================================
+
+    /**
+     * Translate analysis results using enhanced NL Translator with caching
+     * This provides more structured output than the basic translateResults method
+     */
+    async translateResultsEnhanced(params: {
+        results: any;
+        audience: AudienceType;
+        industry?: string;
+        projectName?: string;
+    }): Promise<AIResultsTranslation> {
+        const { results, audience, industry, projectName } = params;
+
+        console.log(`📊 [BA Agent] Enhanced translation for ${audience} audience`);
+
+        const context: TranslationContext = {
+            audience,
+            industry,
+            projectName
+        };
+
+        const translation = await this.translator.translateResultsWithAI(results, context);
+
+        if (translation.success && translation.data) {
+            console.log(`✅ [BA Agent] Enhanced translation complete (cached: ${translation.cached})`);
+            return translation.data;
+        }
+
+        // Fallback to basic translation structure
+        console.warn(`⚠️ [BA Agent] Enhanced translation failed, using fallback`);
+        return {
+            executiveSummary: 'Analysis complete.',
+            keyFindings: [],
+            recommendations: [],
+            nextSteps: ['Review results', 'Plan next steps'],
+            caveats: ['Results should be validated with domain expertise']
+        };
+    }
+
+    /**
+     * Translate data quality report to business impact
+     */
+    async translateDataQuality(params: {
+        qualityReport: any;
+        audience: AudienceType;
+        industry?: string;
+    }): Promise<AIQualityTranslation> {
+        const { qualityReport, audience, industry } = params;
+
+        console.log(`📊 [BA Agent] Translating data quality for ${audience} audience`);
+
+        const context: TranslationContext = {
+            audience,
+            industry
+        };
+
+        const translation = await this.translator.translateQualityWithAI(qualityReport, context);
+
+        if (translation.success && translation.data) {
+            console.log(`✅ [BA Agent] Quality translation complete (cached: ${translation.cached})`);
+            return translation.data;
+        }
+
+        // Fallback
+        return {
+            overallAssessment: 'Data quality assessment complete.',
+            businessImpact: 'Review quality metrics before proceeding.',
+            trustLevel: 'medium',
+            issues: [],
+            readyForAnalysis: true,
+            confidence: 70
+        };
+    }
+
+    /**
+     * Translate data schema to business-friendly descriptions
+     */
+    async translateSchemaForAudience(params: {
+        schema: Record<string, any>;
+        audience: AudienceType;
+        industry?: string;
+        projectName?: string;
+    }): Promise<AISchemaTranslation[]> {
+        const { schema, audience, industry, projectName } = params;
+
+        console.log(`📊 [BA Agent] Translating schema for ${audience} audience`);
+
+        const context: TranslationContext = {
+            audience,
+            industry,
+            projectName
+        };
+
+        const translation = await this.translator.translateSchemaWithAI(schema, context);
+
+        if (translation.success && translation.data) {
+            console.log(`✅ [BA Agent] Schema translation complete: ${translation.data.length} fields`);
+            return translation.data;
+        }
+
+        // Fallback - basic field humanization
+        return Object.entries(schema).map(([field, info]) => ({
+            originalField: field,
+            businessName: field.replace(/_/g, ' ').replace(/([A-Z])/g, ' $1').trim(),
+            description: `Data field: ${field}`,
+            dataType: typeof info === 'object' ? (info as any).type || 'unknown' : String(info),
+            businessContext: 'Contains data relevant to analysis'
+        }));
+    }
+
+    /**
+     * Translate technical error to user-friendly message
+     */
+    async translateError(params: {
+        error: string | Error;
+        audience: AudienceType;
+    }): Promise<{ message: string; suggestion: string; technical?: string }> {
+        const { error, audience } = params;
+
+        const translation = await this.translator.translateErrorWithAI(error, { audience });
+
+        if (translation.success && translation.data) {
+            return translation.data;
+        }
+
+        return {
+            message: 'We encountered an issue processing your request.',
+            suggestion: 'Please try again. If the problem persists, contact our support team.',
+            technical: audience === 'technical' ? (error instanceof Error ? error.message : error) : undefined
+        };
+    }
+
+    /**
+     * Clarify a technical term for the user
+     */
+    async clarifyTerm(params: {
+        term: string;
+        context: string;
+        audience: AudienceType;
+    }): Promise<{ explanation: string; example?: string }> {
+        const { term, context, audience } = params;
+
+        const result = await this.translator.clarifyTermWithAI(term, context, audience);
+
+        if (result.success && result.data) {
+            return result.data;
+        }
+
+        return {
+            explanation: `${term}: A technical concept used in data analysis`
+        };
+    }
+
+    /**
+     * Clear translation cache
+     */
+    clearTranslationCache(): void {
+        this.translator.clearCache();
+        console.log('[BA Agent] Translation cache cleared');
+    }
+
+    /**
+     * Map audience string to AudienceType
+     */
+    mapAudienceType(audience: string): AudienceType {
+        switch (audience.toLowerCase()) {
+            case 'executive':
+            case 'c-suite':
+            case 'leadership':
+                return 'executive';
+            case 'business':
+            case 'manager':
+            case 'analyst':
+                return 'business';
+            case 'technical':
+            case 'data':
+            case 'engineer':
+                return 'technical';
+            default:
+                return 'general';
+        }
     }
 }
 

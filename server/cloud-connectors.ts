@@ -151,13 +151,30 @@ export class CloudConnectorService {
     message: string;
     fileCount?: number;
   }> {
-    // This would integrate with the existing Google Drive service
-    // For now, return a placeholder implementation
-    return {
-      success: true,
-      message: 'GCP connection test - integrate with existing Google Drive service',
-      fileCount: 0
-    };
+    // Integration with Google Drive service
+    try {
+      const { GoogleDriveService } = await import('./services/google-drive');
+
+      // Check if we have OAuth tokens in the credentials
+      const accessToken = (config.credentials as any).accessToken;
+      const refreshToken = (config.credentials as any).refreshToken;
+
+      if (!accessToken) {
+        return {
+          success: false,
+          message: 'Google Drive requires OAuth access token. Use the OAuth flow to authenticate.'
+        };
+      }
+
+      const driveService = new GoogleDriveService();
+      await driveService.initializeWithToken(accessToken, refreshToken);
+      return await driveService.testConnection();
+    } catch (error: any) {
+      return {
+        success: false,
+        message: `Google Drive connection failed: ${error.message}`
+      };
+    }
   }
 
   async listFiles(config: CloudConnectorConfig, path?: string): Promise<CloudFile[]> {
@@ -243,8 +260,30 @@ export class CloudConnectorService {
   }
 
   private async listGCPFiles(config: CloudConnectorConfig, path?: string): Promise<CloudFile[]> {
-    // Integrate with existing Google Drive service
-    return [];
+    try {
+      const { GoogleDriveService } = await import('./services/google-drive');
+
+      const accessToken = (config.credentials as any).accessToken;
+      const refreshToken = (config.credentials as any).refreshToken;
+
+      if (!accessToken) {
+        throw new Error('Google Drive requires OAuth access token');
+      }
+
+      const driveService = new GoogleDriveService();
+      await driveService.initializeWithToken(accessToken, refreshToken);
+      const files = await driveService.listFiles(path);
+
+      return files.map(f => ({
+        name: f.name,
+        path: f.id, // Google Drive uses file IDs
+        size: f.size,
+        lastModified: new Date(f.modifiedTime),
+        contentType: f.mimeType
+      }));
+    } catch (error: any) {
+      throw new Error(`Failed to list Google Drive files: ${error.message}`);
+    }
   }
 
   async downloadFile(config: CloudConnectorConfig, filePath: string): Promise<Buffer> {
@@ -315,8 +354,22 @@ export class CloudConnectorService {
   }
 
   private async downloadGCPFile(config: CloudConnectorConfig, filePath: string): Promise<Buffer> {
-    // Integrate with existing Google Drive service
-    throw new Error('GCP download not implemented');
+    try {
+      const { GoogleDriveService } = await import('./services/google-drive');
+
+      const accessToken = (config.credentials as any).accessToken;
+      const refreshToken = (config.credentials as any).refreshToken;
+
+      if (!accessToken) {
+        throw new Error('Google Drive requires OAuth access token');
+      }
+
+      const driveService = new GoogleDriveService();
+      await driveService.initializeWithToken(accessToken, refreshToken);
+      return await driveService.downloadFile(filePath);
+    } catch (error: any) {
+      throw new Error(`Failed to download from Google Drive: ${error.message}`);
+    }
   }
 
   private inferContentType(filename: string): string {

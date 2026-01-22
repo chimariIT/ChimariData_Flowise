@@ -941,12 +941,19 @@ This should help with your query about "${query}". Would you like me to provide 
     }
   }
 
+  // P0-5 FIX: Return 0 for placeholder charges - actual charges come from billing service
   private getDataProcessingCharges(): string {
-    return (Math.random() * 50).toFixed(2);
+    // Real charges are calculated by the billing service based on actual usage
+    // This placeholder method should not be used for actual billing
+    console.warn('[CustomerSupportAgent] getDataProcessingCharges called - should use billing service for real charges');
+    return '0.00';
   }
 
   private getAdditionalFeatureCharges(): string {
-    return (Math.random() * 25).toFixed(2);
+    // Real charges are calculated by the billing service based on actual usage
+    // This placeholder method should not be used for actual billing
+    console.warn('[CustomerSupportAgent] getAdditionalFeatureCharges called - should use billing service for real charges');
+    return '0.00';
   }
 
   private initializeKnowledgeBase(): void {
@@ -1068,5 +1075,262 @@ This should help with your query about "${query}". Would you like me to provide 
 
   searchKnowledgeBasePublic(query: string): Promise<KnowledgeBaseArticle[]> {
     return this.searchKnowledgeBase(query);
+  }
+
+  // ============================================================================
+  // SPRINT 2 FIX: ADDITIONAL REQUIRED METHODS
+  // ============================================================================
+
+  /**
+   * Create a support ticket and attempt automated response
+   * Sprint 2 Fix: Public method for direct ticket creation with auto-response
+   */
+  async createSupportTicket(
+    userId: string,
+    issue: { description: string; category?: TicketCategory; priority?: TicketPriority; attachments?: any[] }
+  ): Promise<SupportTicket> {
+    console.log(`🎫 [CustomerSupport] Creating ticket for user ${userId}`);
+
+    // Analyze the issue to determine category and priority if not provided
+    const analysis = await this.analyzeQuery(issue.description);
+    const category = issue.category || (analysis.category as TicketCategory) || 'general_inquiry';
+    const priority = issue.priority || this.urgencyToPriority(analysis.urgency || 'normal');
+
+    // Create the ticket
+    const ticketId = await this.createTicket({
+      userId,
+      userEmail: `user_${userId}@example.com`, // Would be fetched from user profile
+      subject: this.extractSubject(issue.description),
+      description: issue.description,
+      category,
+      priority,
+      tags: analysis.keywords || []
+    });
+
+    const ticket = this.tickets.get(ticketId)!;
+
+    // Try automated response first
+    const autoResponse = await this.generateAutomatedResponse(ticket);
+    if (autoResponse.confidence > 0.8) {
+      await this.addResponse(ticketId, autoResponse.response, 'automated');
+      console.log(`  ✅ Automated response added (confidence: ${(autoResponse.confidence * 100).toFixed(0)}%)`);
+    } else if (autoResponse.confidence > 0.5) {
+      // Add suggestion but flag for human review
+      await this.addResponse(ticketId, autoResponse.response, 'suggestion');
+      console.log(`  ⚠️ Low-confidence response added as suggestion`);
+    } else {
+      // Escalate to human
+      await this.escalateToHuman(ticket, 'Low confidence automated response');
+      console.log(`  👤 Ticket escalated to human support`);
+    }
+
+    return ticket;
+  }
+
+  /**
+   * Generate an automated response based on knowledge base
+   */
+  async generateAutomatedResponse(ticket: SupportTicket): Promise<{
+    confidence: number;
+    response: string;
+    sourceArticles?: KnowledgeBaseArticle[];
+  }> {
+    console.log(`🤖 [CustomerSupport] Generating automated response for ticket ${ticket.id}`);
+
+    // Search knowledge base for relevant articles
+    const articles = await this.searchKnowledgeBase(ticket.description);
+
+    if (articles.length === 0) {
+      console.log(`  ℹ️ No relevant KB articles found`);
+      return { confidence: 0, response: '' };
+    }
+
+    // Calculate confidence based on best article match
+    const bestArticle = articles[0];
+    const confidence = Math.min(bestArticle.popularity / 100, 0.95);
+
+    if (confidence < 0.5) {
+      return { confidence, response: '', sourceArticles: articles.slice(0, 2) };
+    }
+
+    // Generate response based on knowledge base article
+    const response = await this.generateKnowledgeBaseResponse(articles, ticket.description);
+
+    return {
+      confidence,
+      response,
+      sourceArticles: articles.slice(0, 2)
+    };
+  }
+
+  /**
+   * Add a response message to a ticket's conversation history
+   */
+  async addResponse(
+    ticketId: string,
+    response: string,
+    responseType: 'automated' | 'suggestion' | 'human' | 'system'
+  ): Promise<void> {
+    const ticket = this.tickets.get(ticketId);
+    if (!ticket) {
+      throw new Error(`Ticket ${ticketId} not found`);
+    }
+
+    const message: SupportMessage = {
+      id: `msg_${nanoid()}`,
+      ticketId,
+      sender: responseType === 'human' ? 'agent' : 'system',
+      senderName: responseType === 'automated' ? 'Support Bot' : responseType === 'human' ? 'Support Agent' : 'System',
+      message: response,
+      messageType: responseType === 'suggestion' ? 'suggestion' : 'text',
+      timestamp: new Date(),
+      isInternal: responseType === 'suggestion',
+      metadata: { responseType }
+    };
+
+    ticket.conversationHistory.push(message);
+    ticket.updatedAt = new Date();
+
+    // Update ticket status if this is a proper response
+    if (responseType === 'automated' || responseType === 'human') {
+      ticket.status = 'open';
+    }
+
+    this.tickets.set(ticketId, ticket);
+    console.log(`  📝 Added ${responseType} response to ticket ${ticketId}`);
+  }
+
+  /**
+   * Escalate a ticket to human support
+   */
+  async escalateToHuman(ticket: SupportTicket, reason: string): Promise<void> {
+    console.log(`👤 [CustomerSupport] Escalating ticket ${ticket.id}: ${reason}`);
+
+    // Create escalation record
+    const escalation: EscalationRecord = {
+      id: `esc_${nanoid()}`,
+      ticketId: ticket.id,
+      fromAgent: 'customer_support_bot',
+      toAgent: this.determineEscalationTarget(ticket),
+      reason,
+      escalatedAt: new Date(),
+      context: {
+        ticketCategory: ticket.category,
+        ticketPriority: ticket.priority,
+        conversationLength: ticket.conversationHistory.length
+      }
+    };
+
+    // Update ticket
+    ticket.status = 'escalated';
+    ticket.updatedAt = new Date();
+    ticket.escalationHistory.push(escalation);
+
+    // Add system message about escalation
+    const escalationMessage: SupportMessage = {
+      id: `msg_${nanoid()}`,
+      ticketId: ticket.id,
+      sender: 'system',
+      senderName: 'System',
+      message: `Ticket escalated to human support: ${reason}`,
+      messageType: 'escalation',
+      timestamp: new Date(),
+      isInternal: false,
+      metadata: { escalation }
+    };
+
+    ticket.conversationHistory.push(escalationMessage);
+    this.tickets.set(ticket.id, ticket);
+
+    console.log(`  ✅ Ticket ${ticket.id} escalated to ${escalation.toAgent}`);
+  }
+
+  /**
+   * Determine the best agent to escalate to based on ticket category
+   */
+  private determineEscalationTarget(ticket: SupportTicket): string {
+    switch (ticket.category) {
+      case 'billing_subscription':
+        return 'billing_specialist';
+      case 'technical_support':
+      case 'data_analysis':
+      case 'integration_help':
+        return 'technical_specialist';
+      case 'feature_request':
+      case 'bug_report':
+        return 'product_team';
+      case 'training_onboarding':
+        return 'onboarding_specialist';
+      default:
+        return 'senior_support_agent';
+    }
+  }
+
+  /**
+   * Resolve a ticket with a resolution message
+   */
+  async resolveTicket(ticketId: string, resolution: string, satisfactionScore?: number): Promise<void> {
+    const ticket = this.tickets.get(ticketId);
+    if (!ticket) {
+      throw new Error(`Ticket ${ticketId} not found`);
+    }
+
+    ticket.status = 'resolved';
+    ticket.resolvedAt = new Date();
+    ticket.resolution = resolution;
+    ticket.updatedAt = new Date();
+
+    if (satisfactionScore !== undefined) {
+      ticket.customerSatisfaction = satisfactionScore;
+    }
+
+    // Add resolution message
+    const resolutionMessage: SupportMessage = {
+      id: `msg_${nanoid()}`,
+      ticketId,
+      sender: 'system',
+      senderName: 'System',
+      message: `Ticket resolved: ${resolution}`,
+      messageType: 'text',
+      timestamp: new Date(),
+      isInternal: false,
+      metadata: { resolution, satisfactionScore }
+    };
+
+    ticket.conversationHistory.push(resolutionMessage);
+    this.tickets.set(ticketId, ticket);
+
+    console.log(`✅ [CustomerSupport] Ticket ${ticketId} resolved`);
+  }
+
+  /**
+   * Get ticket statistics for a user or overall
+   */
+  getTicketStats(userId?: string): {
+    total: number;
+    open: number;
+    resolved: number;
+    escalated: number;
+    avgResolutionTimeHours: number;
+  } {
+    const tickets = userId
+      ? this.getTicketsByUser(userId)
+      : this.getAllTickets();
+
+    const resolvedTickets = tickets.filter(t => t.status === 'resolved' && t.resolvedAt);
+    const totalResolutionTime = resolvedTickets.reduce((sum, t) => {
+      const resolutionTime = t.resolvedAt!.getTime() - t.createdAt.getTime();
+      return sum + resolutionTime;
+    }, 0);
+
+    return {
+      total: tickets.length,
+      open: tickets.filter(t => t.status === 'open' || t.status === 'new').length,
+      resolved: resolvedTickets.length,
+      escalated: tickets.filter(t => t.status === 'escalated').length,
+      avgResolutionTimeHours: resolvedTickets.length > 0
+        ? Math.round(totalResolutionTime / resolvedTickets.length / (1000 * 60 * 60) * 10) / 10
+        : 0
+    };
   }
 }

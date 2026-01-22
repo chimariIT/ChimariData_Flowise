@@ -34,24 +34,47 @@ function sanitizeCurrency(value: number): number {
 }
 
 function buildPricing(input: PricingInput, overrideFinalPrice?: number, source: 'locked' | 'calculated' = 'calculated'): PricingResponse {
-  const basePrice = 5.0;
-  const dataSizeCharge = Math.max(0, (input.dataSizeMB - 10) * 0.1);
-  const complexityCharge = input.recordCount > 100_000 ? 15.0 : input.recordCount > 10_000 ? 8.0 : 0;
-  const questionsCharge = Math.max(0, (input.questionsCount - 3) * 1.0);
-  const analysisTypeCharge = input.analysisType === 'advanced' ? 10.0 : input.analysisType === 'custom' ? 20.0 : 0;
+  // Aligned with CostEstimationService DEFAULT_PRICING_CONFIG for consistent pricing
+  const basePlatformFee = 0.50;
+  const dataProcessingPer1K = 0.10;
+  const baseAnalysisCost = 1.00;
 
-  const calculatedFinal = basePrice + dataSizeCharge + complexityCharge + questionsCharge + analysisTypeCharge;
+  // Analysis type factors (matching CostEstimationService)
+  const analysisTypeFactors: Record<string, number> = {
+    descriptive: 1.0, diagnostic: 1.3, predictive: 2.0, prescriptive: 2.5,
+    statistical: 1.2, machine_learning: 3.0, visualization: 0.8,
+    time_series: 1.8, clustering: 1.5, regression: 1.6, correlation: 1.2,
+    business_intelligence: 2.2, sentiment: 1.8, advanced: 2.5, custom: 3.0, default: 1.0
+  };
+
+  // Complexity based on record count (matching CostEstimationService multipliers)
+  const complexityMultiplier = input.recordCount > 100_000 ? 2.5
+    : input.recordCount > 10_000 ? 1.5 : 1.0;
+
+  // Data processing charge based on row count
+  const dataRowsK = input.recordCount / 1000;
+  const dataSizeCharge = sanitizeCurrency(dataRowsK * dataProcessingPer1K);
+
+  // Analysis type charge
+  const normalizedType = (input.analysisType || 'default').toLowerCase().replace(/[^a-z_]/g, '_');
+  const typeFactor = analysisTypeFactors[normalizedType] || analysisTypeFactors.default;
+  const analysisTypeCharge = sanitizeCurrency(baseAnalysisCost * typeFactor * complexityMultiplier);
+
+  // Questions don't directly affect cost in CostEstimationService - keep minimal charge for extras
+  const questionsCharge = sanitizeCurrency(Math.max(0, (input.questionsCount - 5) * 0.10));
+
+  const calculatedFinal = basePlatformFee + dataSizeCharge + analysisTypeCharge + questionsCharge;
   const finalPrice = sanitizeCurrency(overrideFinalPrice ?? calculatedFinal);
 
   return {
     finalPrice,
     priceInCents: Math.round(finalPrice * 100),
     breakdown: {
-      basePrice: sanitizeCurrency(basePrice),
-      dataSizeCharge: sanitizeCurrency(dataSizeCharge),
-      complexityCharge: sanitizeCurrency(complexityCharge),
-      questionsCharge: sanitizeCurrency(questionsCharge),
-      analysisTypeCharge: sanitizeCurrency(analysisTypeCharge),
+      basePrice: sanitizeCurrency(basePlatformFee),
+      dataSizeCharge,
+      complexityCharge: sanitizeCurrency(analysisTypeCharge - baseAnalysisCost * typeFactor), // complexity portion only
+      questionsCharge,
+      analysisTypeCharge,
     },
     source,
   };
@@ -117,7 +140,21 @@ router.post('/create-intent', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Project not found' });
     }
 
-    const lockedCost = Number((project as any).lockedCostEstimate ?? 0);
+    // ✅ P0 FIX: Read locked cost from journeyProgress SSOT (matching frontend logic)
+    // Previously: only read from project.lockedCostEstimate which was often NULL
+    // Now: check journeyProgress first (SSOT), then fall back to project column
+    const journeyProgress = (project as any).journeyProgress || {};
+    const lockedCostFromProgress = journeyProgress.lockedCostEstimate;
+    const lockedCostFromProject = (project as any).lockedCostEstimate;
+
+    // Priority: journeyProgress > project table (journeyProgress is SSOT for frontend)
+    const lockedCostRaw = lockedCostFromProgress ?? lockedCostFromProject ?? 0;
+    const lockedCost = typeof lockedCostRaw === 'string'
+      ? parseFloat(lockedCostRaw)
+      : (typeof lockedCostRaw === 'number' ? lockedCostRaw : 0);
+
+    console.log(`💰 [Payment] Locked cost sources: journeyProgress=${lockedCostFromProgress}, project=${lockedCostFromProject}, using=${lockedCost}`);
+
     const totalCostIncurred = Number((project as any).totalCostIncurred ?? 0);
     const lockedCostCents = Math.max(Math.round(Number.isFinite(lockedCost) ? lockedCost * 100 : 0), 0);
     const spentCostCents = Math.max(Math.round(Number.isFinite(totalCostIncurred) ? totalCostIncurred * 100 : 0), 0);
@@ -169,13 +206,28 @@ router.post('/create-intent', async (req, res) => {
     let clientSecret: string;
     let paymentIntentId: string;
 
-    if (stripeSecretKey && stripeSecretKey !== 'sk_test_your_stripe_secret_key') {
+    // P0-6 FIX: Check if Stripe is properly configured
+    const isStripeConfigured = stripeSecretKey && stripeSecretKey !== 'sk_test_your_stripe_secret_key';
+    const isProduction = process.env.NODE_ENV === 'production';
+
+    // CRITICAL: Block mock payments in production
+    if (!isStripeConfigured && isProduction) {
+      console.error('🔴 CRITICAL: Stripe not configured in production - blocking payment!');
+      return res.status(503).json({
+        success: false,
+        error: 'Payment service unavailable. Please contact support.',
+        code: 'STRIPE_NOT_CONFIGURED'
+      });
+    }
+
+    if (isStripeConfigured) {
       // Real Stripe integration
       console.log(`💳 Creating real Stripe PaymentIntent for project ${projectId}: ${amountCents} cents`);
 
       try {
+        // FIX Jan 20: Use stable Stripe API version
         const Stripe = (await import('stripe')).default;
-        const stripe = new Stripe(stripeSecretKey, { apiVersion: '2025-08-27.basil' });
+        const stripe = new Stripe(stripeSecretKey, { apiVersion: '2024-12-18.acacia' as any });
 
         const paymentIntent = await stripe.paymentIntents.create({
           amount: amountCents,

@@ -28,8 +28,9 @@ export class StripeSyncService {
       // Create a dummy stripe instance to prevent errors
       this.stripe = {} as Stripe;
     } else {
+      // FIX Jan 20: Use stable Stripe API version
       this.stripe = new Stripe(secretKey, {
-        apiVersion: '2025-08-27.basil',
+        apiVersion: '2024-12-18.acacia' as any,
       });
       this.isConfigured = true;
     }

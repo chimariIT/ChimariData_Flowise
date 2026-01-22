@@ -244,12 +244,16 @@ async function checkSparkCluster(): Promise<ServiceStatus> {
  */
 async function checkRedisConnection(): Promise<ServiceStatus> {
     const isProduction = process.env.NODE_ENV === 'production';
-    const redisEnabled = process.env.REDIS_ENABLED === 'true' || isProduction;
+    // ✅ P1-8 FIX: Also enable Redis check if REDIS_URL is set (user wants Redis)
+    // This allows Redis to work without explicitly setting REDIS_ENABLED=true
+    const redisEnabled = process.env.REDIS_ENABLED === 'true' ||
+                         !!process.env.REDIS_URL ||
+                         isProduction;
 
     if (!redisEnabled) {
         return {
             available: false,
-            details: 'Redis disabled in development mode',
+            details: 'Redis disabled (set REDIS_ENABLED=true or REDIS_URL to enable)',
             critical: false
         };
     }

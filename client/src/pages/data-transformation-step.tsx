@@ -14,7 +14,7 @@ import { Progress } from '@/components/ui/progress';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Popover, PopoverContent, PopoverTrigger, PopoverClose } from '@/components/ui/popover';
 import { apiClient } from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
 import { formatConfidence, getConfidenceBadgeVariant } from '@/lib/utils';
@@ -120,9 +120,59 @@ export default function DataTransformationStep({
     const [isGeneratingTransformations, setIsGeneratingTransformations] = useState(false);
     const [deAgentProgress, setDeAgentProgress] = useState<string | null>(null);
 
+    // P2-1: Enhanced loading state with progress tracking
+    const [pollingAttempt, setPollingAttempt] = useState(0);
+    const MAX_POLLING_ATTEMPTS = 30; // 30 attempts * 3 seconds = 90 seconds max
+
+    // P1-3: BA/DS Verification state
+    const [isVerifying, setIsVerifying] = useState(false);
+    const [agentVerification, setAgentVerification] = useState<{
+        baApproval?: { approved: boolean; confidence: number; feedback: string; recommendations: string[]; businessAlignmentScore: number };
+        dsApproval?: { approved: boolean; confidence: number; feedback: string; analyticalConcerns: string[]; dataTypeIssues: string[] };
+        overallApproved?: boolean;
+        summary?: string;
+    } | null>(null);
+
     // Analysis-Centric View state (Phase 2)
     const [viewMode, setViewMode] = useState<'by-element' | 'by-analysis'>('by-element');
     const [selectedAnalysisId, setSelectedAnalysisId] = useState<string | null>(null);
+
+    // Analysis-aware data preparation state (DE/DS alignment)
+    const [analysisPreparations, setAnalysisPreparations] = useState<{
+        analysisPreparations: Array<{
+            analysisType: string;
+            displayName: string;
+            isDataReady: boolean;
+            requiredTransformations: Array<{
+                name: string;
+                reason: string;
+                priority: 'required' | 'recommended' | 'optional';
+                targetColumns?: string[];
+                transformationCode?: string;
+            }>;
+            validationResults: {
+                isValid: boolean;
+                passedChecks: string[];
+                failedChecks: Array<{ check: string; reason: string }>;
+                warnings: string[];
+            };
+        }>;
+        mergedTransformations: Array<{
+            name: string;
+            reason: string;
+            priority: 'required' | 'recommended' | 'optional';
+            forAnalyses: string[];
+        }>;
+        overallReadiness: {
+            readyAnalyses: string[];
+            notReadyAnalyses: string[];
+            readinessPercentage: number;
+        };
+    } | null>(null);
+    const [isLoadingAnalysisPrep, setIsLoadingAnalysisPrep] = useState(false);
+
+    // Auto-execution: Track whether auto-execute has been triggered for this session
+    const [autoExecuteTriggered, setAutoExecuteTriggered] = useState(false);
 
     // Phase 5: Column search filter state for mapping UX
     const [columnSearchFilter, setColumnSearchFilter] = useState<string>('');
@@ -195,6 +245,42 @@ export default function DataTransformationStep({
         };
     }, [currentSchema]);
 
+    // ✅ P0 FIX: Calculate completeness with frontend fallback if server doesn't provide it
+    const computedCompleteness = useMemo(() => {
+        // Priority 1: Use server-provided completeness
+        if (requiredDataElements?.completeness?.totalElements > 0) {
+            return requiredDataElements.completeness;
+        }
+
+        // Priority 2: Calculate from elements array as fallback
+        const elements = requiredDataElements?.requiredDataElements || [];
+        if (elements.length === 0) {
+            return {
+                totalElements: 0,
+                elementsMapped: 0,
+                elementsUnmapped: 0,
+                elementsWithTransformation: 0,
+                readyForExecution: false,
+                mappingPercentage: 0
+            };
+        }
+
+        const mapped = elements.filter((e: any) => e.sourceField || e.sourceColumn || e.sourceAvailable).length;
+        const needsTransform = elements.filter((e: any) => e.transformationRequired).length;
+        const unmapped = elements.length - mapped;
+
+        console.log(`📊 [Completeness Fallback] Calculated: ${mapped}/${elements.length} mapped`);
+
+        return {
+            totalElements: elements.length,
+            elementsMapped: mapped,
+            elementsUnmapped: unmapped,
+            elementsWithTransformation: needsTransform,
+            readyForExecution: elements.every((e: any) => e.sourceField || e.sourceColumn || e.sourceAvailable || !e.required),
+            mappingPercentage: elements.length > 0 ? Math.round((mapped / elements.length) * 100) : 0
+        };
+    }, [requiredDataElements]);
+
     // Synchronize local state with journeyProgress (SSOT)
     useEffect(() => {
         if (journeyProgress) {
@@ -205,8 +291,41 @@ export default function DataTransformationStep({
             }
 
             // Priority 2: Use journeyProgress requirementsDocument for mappings
+            // ✅ GAP FIX: Merge elementMappings from verification into requiredDataElements
             if (journeyProgress.requirementsDocument) {
-                setRequiredDataElements(journeyProgress.requirementsDocument);
+                const reqDoc = { ...journeyProgress.requirementsDocument };
+                const elementMappings = (journeyProgress as any).elementMappings || {};
+
+                // If we have element mappings from verification, merge them into requiredDataElements
+                if (Object.keys(elementMappings).length > 0 && reqDoc.requiredDataElements) {
+                    console.log(`🔗 [GAP FIX] Merging ${Object.keys(elementMappings).length} element mappings from verification`);
+                    reqDoc.requiredDataElements = reqDoc.requiredDataElements.map((el: any) => {
+                        const mapping = elementMappings[el.id || el.elementId];
+                        if (mapping) {
+                            return {
+                                ...el,
+                                sourceColumn: mapping.sourceField || el.sourceColumn,
+                                sourceField: mapping.sourceField || el.sourceField,
+                                transformationCode: mapping.transformationCode || el.transformationCode,
+                                transformationDescription: mapping.transformationDescription || el.transformationDescription,
+                                sourceAvailable: true
+                            };
+                        }
+                        return el;
+                    });
+
+                    // Recalculate completeness
+                    const mapped = reqDoc.requiredDataElements.filter((e: any) => e.sourceField || e.sourceColumn || e.sourceAvailable).length;
+                    reqDoc.completeness = {
+                        ...(reqDoc.completeness || {}),
+                        elementsMapped: mapped,
+                        totalElements: reqDoc.requiredDataElements.length,
+                        mappingPercentage: Math.round((mapped / reqDoc.requiredDataElements.length) * 100)
+                    };
+                    console.log(`✅ [GAP FIX] Updated completeness: ${mapped}/${reqDoc.requiredDataElements.length} elements mapped`);
+                }
+
+                setRequiredDataElements(reqDoc);
             }
 
             // Priority 3: Join Config from SSOT
@@ -232,6 +351,28 @@ export default function DataTransformationStep({
             }
         }
     }, [journeyProgress]);
+
+    // P1-1 FIX: Pre-populate transformationLogic from suggestedTransformation when mappings load
+    // This ensures the natural language transformation column shows AI-suggested transformations by default
+    useEffect(() => {
+        if (transformationMappings.length > 0) {
+            const initialLogic: Record<string, string> = {};
+            let populatedCount = 0;
+
+            transformationMappings.forEach(mapping => {
+                // Only pre-populate if we have a suggestion AND user hasn't already entered custom logic
+                if (mapping.suggestedTransformation && !transformationLogic[mapping.targetElement]) {
+                    initialLogic[mapping.targetElement] = mapping.suggestedTransformation;
+                    populatedCount++;
+                }
+            });
+
+            if (Object.keys(initialLogic).length > 0) {
+                console.log(`✅ [P1-1 FIX] Pre-populated ${populatedCount} transformation logic fields from suggestedTransformation`);
+                setTransformationLogic(prev => ({ ...initialLogic, ...prev }));
+            }
+        }
+    }, [transformationMappings]); // Only run when mappings change, not when transformationLogic changes
 
     // Initialize from context if available (avoids redundant API calls)
     useEffect(() => {
@@ -262,6 +403,59 @@ export default function DataTransformationStep({
     }, [journeyContext, journeyProgress]);
 
     // ============================================================
+    // Analysis-Aware Data Preparation: Fetch requirements per analysis type
+    // ============================================================
+    useEffect(() => {
+        // Only fetch if we have analysis types defined
+        const analysisPath = requiredDataElements?.analysisPath ||
+            journeyProgress?.requirementsDocument?.analysisPath ||
+            (journeyProgress as any)?.analysisPlans?.metadata?.analysisPath;
+
+        if (!pid || !analysisPath || analysisPath.length === 0) {
+            return;
+        }
+
+        // Extract analysis types from analysisPath
+        const analysisTypes = analysisPath.map((a: any) =>
+            a.analysisType || a.type || 'descriptive_statistics'
+        );
+
+        const fetchAnalysisPreparation = async () => {
+            setIsLoadingAnalysisPrep(true);
+            try {
+                console.log(`📊 [Analysis Prep UI] Fetching preparation requirements for ${analysisTypes.length} analysis types`);
+
+                // P1-5 FIX: Include element mapping status for accurate readiness calculation
+                const elementMappings = transformationMappings.map((m: any) => ({
+                    elementId: m.elementId || m.targetElement,
+                    sourceColumn: m.sourceColumn,
+                    isRequired: m.transformationRequired !== false
+                }));
+
+                const response = await apiClient.post(`/api/projects/${pid}/analysis-preparation`, {
+                    analysisTypes,
+                    elementMappings
+                });
+
+                if (response.success && response.preparations) {
+                    setAnalysisPreparations(response.preparations);
+                    console.log(`✅ [Analysis Prep UI] Loaded preparation requirements:`);
+                    console.log(`   Readiness: ${response.preparations.overallReadiness.readinessPercentage}%`);
+                    console.log(`   Ready: ${response.preparations.overallReadiness.readyAnalyses.join(', ') || 'None'}`);
+                    console.log(`   Needs prep: ${response.preparations.overallReadiness.notReadyAnalyses.join(', ') || 'None'}`);
+                }
+            } catch (error: any) {
+                console.error('❌ [Analysis Prep UI] Failed to load preparation requirements:', error);
+            } finally {
+                setIsLoadingAnalysisPrep(false);
+            }
+        };
+
+        fetchAnalysisPreparation();
+    // P1-5 FIX: Re-fetch when transformationMappings change to update readiness
+    }, [pid, requiredDataElements?.analysisPath, journeyProgress, transformationMappings]);
+
+    // ============================================================
     // DE Agent Async Polling: Check for transformation plan generated after verification
     // ============================================================
     useEffect(() => {
@@ -280,10 +474,15 @@ export default function DataTransformationStep({
 
         // Start showing loading indicator
         setIsGeneratingTransformations(true);
+        setPollingAttempt(0); // P2-1: Reset polling counter
         setDeAgentProgress('AI Agent is analyzing your data and creating transformation mappings...');
         console.log('🔄 [DE Agent Polling] Starting poll for transformation plan...');
 
+        let attemptCount = 0;
         const pollInterval = setInterval(async () => {
+            attemptCount++;
+            setPollingAttempt(attemptCount); // P2-1: Update polling counter for progress UI
+
             try {
                 const freshProject = await apiClient.getProject(pid);
                 const plan = freshProject?.journeyProgress?.transformationPlan;
@@ -292,6 +491,7 @@ export default function DataTransformationStep({
                     console.log('✅ [DE Agent Polling] Transformation plan received!');
                     setIsGeneratingTransformations(false);
                     setDeAgentProgress(null);
+                    setPollingAttempt(0); // P2-1: Reset counter
                     clearInterval(pollInterval);
 
                     // Load the generated mappings
@@ -307,6 +507,7 @@ export default function DataTransformationStep({
             clearInterval(pollInterval);
             setIsGeneratingTransformations(false);
             setDeAgentProgress(null);
+            setPollingAttempt(0); // P2-1: Reset counter
             console.warn('⚠️ [DE Agent Polling] Timeout - user can configure manually');
             toast({
                 title: "AI Analysis Complete",
@@ -318,6 +519,7 @@ export default function DataTransformationStep({
         return () => {
             clearInterval(pollInterval);
             clearTimeout(timeout);
+            setPollingAttempt(0); // P2-1: Reset counter on cleanup
         };
     }, [pid, journeyProgress?.verificationCompleted, journeyProgress?.transformationPlan, isLoading, transformationMappings.length]);
 
@@ -364,10 +566,57 @@ export default function DataTransformationStep({
         }
     }, [journeyProgress?.transformationPlan, transformationMappings.length, isLoading]);
 
+    // P1 FIX: Pre-populate transformation logic from suggestedTransformation when mappings are loaded
+    // This ensures the natural language column shows suggested transformations instead of being blank
+    useEffect(() => {
+        if (transformationMappings.length > 0) {
+            const initialLogic: Record<string, string> = {};
+            transformationMappings.forEach(mapping => {
+                // Only set if transformation is required and there's a suggestion, and not already set by user
+                if (mapping.transformationRequired && mapping.suggestedTransformation && !transformationLogic[mapping.targetElement]) {
+                    initialLogic[mapping.targetElement] = mapping.suggestedTransformation;
+                }
+            });
+            if (Object.keys(initialLogic).length > 0) {
+                console.log(`📝 [P1 Fix] Pre-populating ${Object.keys(initialLogic).length} transformation logic fields from suggestedTransformation`);
+                setTransformationLogic(prev => ({ ...initialLogic, ...prev }));
+            }
+        }
+    }, [transformationMappings]);
+
+    // Auto-execute transformations when DE Agent plan is loaded and all required mappings have source columns
+    useEffect(() => {
+        if (autoExecuteTriggered || isExecuting || transformedPreview || transformationMappings.length === 0) return;
+
+        const requiredMappings = transformationMappings.filter(m => m.transformationRequired);
+        if (requiredMappings.length === 0) return;
+
+        // Check all required mappings have source columns assigned
+        const allMapped = requiredMappings.every(m =>
+            m.sourceColumn || (m.sourceColumns && m.sourceColumns.length > 0)
+        );
+
+        if (allMapped) {
+            console.log(`🚀 [Auto-Execute] All ${requiredMappings.length} required transformations have source columns mapped. Auto-executing...`);
+            setAutoExecuteTriggered(true);
+            // Delay slightly to let UI settle after mapping load
+            setTimeout(() => {
+                executeTransformations();
+            }, 500);
+        }
+    }, [transformationMappings, autoExecuteTriggered, isExecuting, transformedPreview]);
+
+    // Force cache invalidation on mount to ensure fresh data after navigation from prepare step
     useEffect(() => {
         if (pid) {
+            queryClient.invalidateQueries({ queryKey: ["project", pid] });
+        }
+    }, [pid, queryClient]);
+
+    useEffect(() => {
+        if (pid && !projectLoading) {
             loadTransformationInputs(pid);
-        } else {
+        } else if (!pid) {
             const storedId = localStorage.getItem('currentProjectId');
             if (!storedId) {
                 toast({
@@ -380,7 +629,7 @@ export default function DataTransformationStep({
             }
             setPid(storedId);
         }
-    }, [pid, journeyType, setLocation, toast]);
+    }, [pid, journeyType, setLocation, toast, projectLoading, journeyProgress?.requirementsDocument]);
 
     const loadTransformationInputs = async (pid: string) => {
         try {
@@ -639,8 +888,57 @@ export default function DataTransformationStep({
                     } else {
                         setRequiredDataElements(reqElements.document);
 
-                        // Only generate new mappings if none were loaded from saved state
-                        if (datasetList.length > 0) {
+                        // ✅ P0 FIX: Check if elements have mappings, if not trigger auto-mapping
+                        const hasMappedElements = reqElements.document?.requiredDataElements?.some(
+                            (el: any) => el.sourceField || el.sourceColumn
+                        );
+
+                        if (!hasMappedElements && datasetList.length > 0) {
+                            console.log('🔄 [Transformation] No mappings found, triggering auto-mapping...');
+                            try {
+                                const mapResult = await apiClient.post(`/api/projects/${pid}/map-data-elements`, {
+                                    forceRemap: false
+                                });
+
+                                // ✅ P1-7 FIX: Backend returns elementsMapped, not mapped
+                                if (mapResult.success && (mapResult.mappingStats?.elementsMapped || mapResult.mappingStats?.mapped) > 0) {
+                                    console.log(`✅ [Auto-Map] Mapped ${mapResult.mappingStats.elementsMapped || mapResult.mappingStats.mapped} elements`);
+                                    // Reload requirements with mapped data
+                                    const updatedReq = await apiClient.get(`/api/projects/${pid}/required-data-elements`);
+                                    if (updatedReq.document) {
+                                        setRequiredDataElements(updatedReq.document);
+                                        // Use the updated document for generating mappings
+                                        const schemaForMappings = mergedSchemaForMappings || currentSchema;
+                                        if (schemaForMappings && Object.keys(schemaForMappings).length > 0) {
+                                            await generateMappings(updatedReq.document, schemaForMappings);
+                                        }
+                                    }
+                                } else {
+                                    console.log('⚠️ [Auto-Map] No elements could be auto-mapped, user can map manually');
+                                    // Fall through to generate mappings from original doc
+                                    const primaryDataset = datasetList[0].dataset || datasetList[0];
+                                    const existingMetadata = primaryDataset.ingestionMetadata?.transformationMetadata;
+                                    if (!existingMetadata?.mappings || existingMetadata.mappings.length === 0) {
+                                        const schemaForMappings = mergedSchemaForMappings || currentSchema;
+                                        if (schemaForMappings && Object.keys(schemaForMappings).length > 0) {
+                                            await generateMappings(reqElements.document, schemaForMappings);
+                                        }
+                                    }
+                                }
+                            } catch (mapError) {
+                                console.warn('⚠️ Auto-mapping failed, user can map manually:', mapError);
+                                // Fall through to generate mappings from original doc
+                                const primaryDataset = datasetList[0].dataset || datasetList[0];
+                                const existingMetadata = primaryDataset.ingestionMetadata?.transformationMetadata;
+                                if (!existingMetadata?.mappings || existingMetadata.mappings.length === 0) {
+                                    const schemaForMappings = mergedSchemaForMappings || currentSchema;
+                                    if (schemaForMappings && Object.keys(schemaForMappings).length > 0) {
+                                        await generateMappings(reqElements.document, schemaForMappings);
+                                    }
+                                }
+                            }
+                        } else if (datasetList.length > 0) {
+                            // Has mapped elements already, just generate transformation mappings
                             const primaryDataset = datasetList[0].dataset || datasetList[0];
                             const existingMetadata = primaryDataset.ingestionMetadata?.transformationMetadata;
                             if (!existingMetadata?.mappings || existingMetadata.mappings.length === 0) {
@@ -915,10 +1213,10 @@ export default function DataTransformationStep({
 
         // Auto-generate source-to-target mappings with question linkage (Phase 2)
         const mappings: TransformationMapping[] = requirements.requiredDataElements.map((element: any) => {
-            // FIX: Use sourceColumn from verification step mappings (SSOT)
-            // If element was mapped in verification step, use that mapping
-            const mappedSourceColumn = element.sourceColumn || element.mappedColumn || element.source;
-            const isMapped = element.mappingStatus === 'mapped' || !!mappedSourceColumn;
+            // ✅ P0 FIX: Check all possible sources for existing mappings
+            // Priority: sourceField (auto-mapper) > sourceColumn (verification) > mappedColumn > source
+            const mappedSourceColumn = element.sourceField || element.sourceColumn || element.mappedColumn || element.source;
+            const isMapped = element.mappingStatus === 'mapped' || element.sourceAvailable === true || !!mappedSourceColumn;
             
             // Calculate confidence based on:
             // 1. Whether source is available (pre-mapped from data columns in verification step)
@@ -970,7 +1268,7 @@ export default function DataTransformationStep({
             return {
                 targetElement: element.elementName,
                 targetType: element.dataType,
-                // FIX: Use sourceColumn from verification step mappings (SSOT)
+                // ✅ P0 FIX: Use sourceField (auto-mapper) or sourceColumn (verification) as SSOT
                 sourceColumn: mappedSourceColumn || element.datasetMapping?.sourceColumn || null,
                 confidence: confidence / 100, // Normalize to 0-1 for display
                 transformationRequired: element.transformationRequired || false,
@@ -1142,17 +1440,17 @@ export default function DataTransformationStep({
     };
 
     // GAP B: Validation function to check if transformations can be executed
+    // ✅ P0 FIX: Use computedCompleteness which has fallback calculation
     const canExecuteTransformations = (): { allowed: boolean; reason: string } => {
-        // Check if completeness data is available
-        const completeness = requiredDataElements?.completeness;
-        if (!completeness) {
-            return { allowed: true, reason: '' }; // Allow if no completeness data
+        // Check if completeness data is available (using computed fallback)
+        if (computedCompleteness.totalElements === 0) {
+            return { allowed: true, reason: '' }; // Allow if no data elements defined
         }
 
         // Check readyForExecution flag
-        if (completeness.readyForExecution === false) {
-            const mapped = completeness.elementsMapped || 0;
-            const total = completeness.totalElements || 0;
+        if (computedCompleteness.readyForExecution === false) {
+            const mapped = computedCompleteness.elementsMapped || 0;
+            const total = computedCompleteness.totalElements || 0;
             return {
                 allowed: false,
                 reason: `Missing required data mappings (${mapped}/${total} elements mapped)`
@@ -1353,6 +1651,73 @@ export default function DataTransformationStep({
         ? analysisGroups.find(g => g.analysisId === selectedAnalysisId)
         : null;
 
+    // P1-3: Request BA/DS verification before transformation execution
+    const requestAgentVerification = async () => {
+        if (!pid) {
+            toast({
+                title: "Project Not Found",
+                description: "Cannot verify without a project ID",
+                variant: "destructive"
+            });
+            return;
+        }
+
+        setIsVerifying(true);
+        setAgentVerification(null);
+
+        try {
+            console.log('🔍 [P1-3 UI] Requesting BA/DS verification...');
+
+            const response = await apiClient.post(`/api/projects/${pid}/verify-transformation-plan`, {
+                mappings: transformationMappings.map(m => ({
+                    targetElement: m.targetElement,
+                    sourceColumn: m.sourceColumn,
+                    sourceColumns: m.sourceColumns,
+                    transformationRequired: m.transformationRequired,
+                    suggestedTransformation: m.suggestedTransformation,
+                    userDefinedLogic: transformationLogic[m.targetElement] || m.userDefinedLogic
+                })),
+                businessContext: {
+                    industry: requiredDataElements?.businessContext?.industry,
+                    goals: requiredDataElements?.businessContext?.goals || userQuestions,
+                    questions: userQuestions
+                },
+                analysisPath: requiredDataElements?.analysisPath?.map((a: any) => ({
+                    analysisId: a.analysisId || a.id,
+                    analysisType: a.analysisType || a.type,
+                    requiredElements: a.requiredElements || a.elements || []
+                })),
+                dataSchema: currentSchema
+            });
+
+            if (response.success) {
+                setAgentVerification({
+                    baApproval: response.baApproval,
+                    dsApproval: response.dsApproval,
+                    overallApproved: response.overallApproved,
+                    summary: response.summary
+                });
+
+                toast({
+                    title: response.overallApproved ? "Verification Approved" : "Review Recommended",
+                    description: response.summary,
+                    variant: response.overallApproved ? "default" : "destructive"
+                });
+            } else {
+                throw new Error(response.error || 'Verification failed');
+            }
+        } catch (error: any) {
+            console.error('❌ [P1-3 UI] Verification failed:', error);
+            toast({
+                title: "Verification Failed",
+                description: error.message || "Could not verify transformation plan",
+                variant: "destructive"
+            });
+        } finally {
+            setIsVerifying(false);
+        }
+    };
+
     const executeTransformations = async () => {
         // CRITICAL FIX: Show feedback instead of silent return
         if (!pid) {
@@ -1453,12 +1818,18 @@ export default function DataTransformationStep({
 
             // FIX Issue 6: Structure preview correctly for approval dialog
             // Dialog expects object with .data, .schema, .transformedCount - not a plain array
+            // P0-2 FIX: Use transformedSchema from backend which has renamed columns
+            const previewData = Array.isArray(result.preview) ? result.preview : result.preview?.data || [];
+            const previewSchema = result.transformedSchema || result.preview?.schema || currentSchema || {};
             const structuredPreview = {
-                data: Array.isArray(result.preview) ? result.preview : result.preview?.data || [],
-                schema: result.transformedSchema || result.preview?.schema || currentSchema || {},
-                transformedCount: result.rowCount || (Array.isArray(result.preview) ? result.preview.length : result.preview?.data?.length) || 0
+                data: previewData,
+                sampleData: previewData.slice(0, 10),  // P0-2 FIX: Add sampleData for table display
+                schema: previewSchema,
+                columns: Object.keys(previewSchema),  // P0-2 FIX: Extract column names from TRANSFORMED schema (renamed columns)
+                transformedCount: result.rowCount || previewData.length || 0
             };
-            console.log(`📋 [Preview] Structure: OBJECT, rows: ${structuredPreview.data?.length}, cols: ${Object.keys(structuredPreview.schema).length}`);
+            console.log(`📋 [Preview] Structure: OBJECT, rows: ${structuredPreview.data?.length}, cols: ${structuredPreview.columns.length}`);
+            console.log(`📋 [Preview] Columns (from transformedSchema):`, structuredPreview.columns.slice(0, 5), '...');
             setTransformedPreview(structuredPreview);
 
             // Create checkpoint for user approval (U2A2A2U pattern)
@@ -1624,12 +1995,17 @@ export default function DataTransformationStep({
             }
 
             // FIX Issue 6: Structure preview correctly for approval dialog
+            // P0-2 FIX: Include columns and sampleData for table display
+            const joinPreviewData = Array.isArray(result.preview) ? result.preview : result.preview?.data || [];
+            const joinPreviewSchema = result.transformedSchema || currentSchema || {};
             const structuredJoinPreview = {
-                data: Array.isArray(result.preview) ? result.preview : result.preview?.data || [],
-                schema: result.transformedSchema || currentSchema || {},
+                data: joinPreviewData,
+                sampleData: joinPreviewData.slice(0, 10),  // P0-2 FIX: Add sampleData for table display
+                schema: joinPreviewSchema,
+                columns: Object.keys(joinPreviewSchema),  // P0-2 FIX: Extract column names from transformed schema
                 transformedCount: resultRowCount
             };
-            console.log(`📋 [Join Preview] Structure: OBJECT, rows: ${structuredJoinPreview.data?.length}, cols: ${Object.keys(structuredJoinPreview.schema).length}`);
+            console.log(`📋 [Join Preview] Structure: OBJECT, rows: ${structuredJoinPreview.data?.length}, cols: ${structuredJoinPreview.columns.length}`);
             setTransformedPreview(structuredJoinPreview);
             setJoinApproved(true);
             setShowJoinApprovalDialog(false);
@@ -1815,6 +2191,17 @@ export default function DataTransformationStep({
             return;
         }
 
+        // Block navigation if required transformations exist but haven't been executed
+        const requiredTransformCount = transformationMappings.filter(m => m.transformationRequired).length;
+        if (requiredTransformCount > 0 && !transformedPreview) {
+            toast({
+                title: "Transformations Required",
+                description: `${requiredTransformCount} required transformation(s) must be executed before continuing. Click "Execute Transformations" to apply them.`,
+                variant: "destructive"
+            });
+            return;
+        }
+
         // Check if transformation has been executed and approved (U2A2A2U checkpoint)
         if (transformedPreview && !transformationApproved) {
             // Check if there's already a pending checkpoint
@@ -1931,15 +2318,36 @@ export default function DataTransformationStep({
 
     return (
         <div className="space-y-6">
-            {/* DE Agent Loading Indicator - Shows when AI is generating transformation plan */}
+            {/* P2-1: Enhanced DE Agent Loading Indicator with progress bar and ETA */}
             {isGeneratingTransformations && (
                 <Card className="mb-4 border-blue-200 bg-blue-50">
-                    <CardContent className="flex items-center gap-3 py-4">
-                        <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
-                        <div>
-                            <p className="font-medium text-blue-900">Generating Transformation Plan</p>
-                            <p className="text-sm text-blue-700">{deAgentProgress || 'AI Agent is analyzing your data...'}</p>
+                    <CardContent className="py-4">
+                        <div className="flex items-center gap-3 mb-3">
+                            <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
+                            <div className="flex-1">
+                                <p className="font-medium text-blue-900">Generating Transformation Plan</p>
+                                <p className="text-sm text-blue-700">
+                                    {deAgentProgress || 'AI agents are analyzing your data structure...'}
+                                </p>
+                            </div>
                         </div>
+                        {/* Progress bar */}
+                        <div className="space-y-2">
+                            <Progress value={(pollingAttempt / MAX_POLLING_ATTEMPTS) * 100} className="h-2" />
+                            <p className="text-xs text-blue-600">
+                                Estimated time remaining: ~{Math.max(0, (MAX_POLLING_ATTEMPTS - pollingAttempt) * 3)} seconds
+                            </p>
+                        </div>
+                        {/* Expandable details */}
+                        <details className="mt-3 text-xs text-blue-700">
+                            <summary className="cursor-pointer font-medium hover:text-blue-800">What's happening?</summary>
+                            <ul className="mt-2 space-y-1 list-disc list-inside pl-2">
+                                <li>Data Engineer Agent is analyzing column types and patterns</li>
+                                <li>Matching source columns to required data elements</li>
+                                <li>Generating transformation logic for derived fields</li>
+                                <li>Validating data quality and compatibility</li>
+                            </ul>
+                        </details>
                     </CardContent>
                 </Card>
             )}
@@ -2302,6 +2710,169 @@ export default function DataTransformationStep({
                 </CardContent>
             </Card>
 
+            {/* Analysis-Specific Data Preparation Requirements */}
+            {analysisPreparations && (
+                <Card className="border-indigo-200 bg-gradient-to-br from-indigo-50 to-purple-50">
+                    <CardHeader>
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <CardTitle className="flex items-center gap-2">
+                                    <Database className="w-5 h-5 text-indigo-600" />
+                                    Data Preparation per Analysis Type
+                                </CardTitle>
+                                <CardDescription>
+                                    The Data Engineer ensures data is prepared correctly for each analysis type
+                                </CardDescription>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <Badge
+                                    variant={analysisPreparations.overallReadiness.readinessPercentage === 100 ? 'default' : 'secondary'}
+                                    className={analysisPreparations.overallReadiness.readinessPercentage === 100 ? 'bg-green-600' : 'bg-amber-500'}
+                                >
+                                    {analysisPreparations.overallReadiness.readinessPercentage}% Ready
+                                </Badge>
+                            </div>
+                        </div>
+                    </CardHeader>
+                    <CardContent>
+                        {isLoadingAnalysisPrep ? (
+                            <div className="flex items-center justify-center p-4">
+                                <Loader2 className="w-5 h-5 animate-spin mr-2 text-indigo-600" />
+                                <span className="text-sm text-gray-600">Analyzing data requirements...</span>
+                            </div>
+                        ) : (
+                            <div className="space-y-4">
+                                {/* Merged Transformations Summary */}
+                                {analysisPreparations.mergedTransformations.length > 0 && (
+                                    <div className="p-3 bg-white rounded-lg border">
+                                        <h5 className="text-sm font-medium mb-2 flex items-center gap-2">
+                                            <Wand2 className="w-4 h-4 text-indigo-600" />
+                                            Required Transformations ({analysisPreparations.mergedTransformations.length})
+                                        </h5>
+                                        <div className="space-y-2">
+                                            {analysisPreparations.mergedTransformations.map((transform, idx) => (
+                                                <div
+                                                    key={idx}
+                                                    className={`p-2 rounded text-sm flex items-start gap-2 ${
+                                                        transform.priority === 'required'
+                                                            ? 'bg-red-50 border border-red-200'
+                                                            : transform.priority === 'recommended'
+                                                            ? 'bg-amber-50 border border-amber-200'
+                                                            : 'bg-gray-50 border border-gray-200'
+                                                    }`}
+                                                >
+                                                    {transform.priority === 'required' ? (
+                                                        <XCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                                                    ) : transform.priority === 'recommended' ? (
+                                                        <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                                                    ) : (
+                                                        <Info className="w-4 h-4 text-gray-400 shrink-0 mt-0.5" />
+                                                    )}
+                                                    <div className="flex-1">
+                                                        <div className="flex items-center justify-between">
+                                                            <span className="font-medium capitalize">
+                                                                {transform.name.replace(/_/g, ' ')}
+                                                            </span>
+                                                            <Badge variant="outline" className="text-xs">
+                                                                {transform.priority}
+                                                            </Badge>
+                                                        </div>
+                                                        <p className="text-xs text-gray-600 mt-0.5">{transform.reason}</p>
+                                                        <p className="text-xs text-indigo-600 mt-1">
+                                                            For: {transform.forAnalyses.join(', ')}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Per-Analysis Preparation Status */}
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    {analysisPreparations.analysisPreparations.map((prep, idx) => (
+                                        <div
+                                            key={idx}
+                                            className={`p-3 rounded-lg border ${
+                                                prep.isDataReady
+                                                    ? 'bg-green-50 border-green-200'
+                                                    : 'bg-amber-50 border-amber-200'
+                                            }`}
+                                        >
+                                            <div className="flex items-center justify-between mb-2">
+                                                <h6 className="font-medium text-sm">{prep.displayName}</h6>
+                                                {prep.isDataReady ? (
+                                                    <Badge variant="default" className="bg-green-600 text-xs">
+                                                        <CheckCircle className="w-3 h-3 mr-1" />
+                                                        Ready
+                                                    </Badge>
+                                                ) : (
+                                                    <Badge variant="secondary" className="bg-amber-500 text-white text-xs">
+                                                        <AlertCircle className="w-3 h-3 mr-1" />
+                                                        Needs Prep
+                                                    </Badge>
+                                                )}
+                                            </div>
+
+                                            {/* Validation Checks */}
+                                            {prep.validationResults.passedChecks.length > 0 && (
+                                                <div className="flex flex-wrap gap-1 mb-2">
+                                                    {prep.validationResults.passedChecks.slice(0, 3).map((check, checkIdx) => (
+                                                        <Badge key={checkIdx} variant="outline" className="text-xs bg-green-100 text-green-700">
+                                                            <CheckCircle className="w-2 h-2 mr-1" />
+                                                            {check.replace(/_/g, ' ')}
+                                                        </Badge>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            {/* Failed Checks */}
+                                            {prep.validationResults.failedChecks.length > 0 && (
+                                                <div className="space-y-1">
+                                                    {prep.validationResults.failedChecks.slice(0, 2).map((failed, failIdx) => (
+                                                        <div key={failIdx} className="text-xs text-red-600 flex items-start gap-1">
+                                                            <XCircle className="w-3 h-3 shrink-0 mt-0.5" />
+                                                            <span>{failed.reason}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            {/* Required Transformations Count */}
+                                            {prep.requiredTransformations.length > 0 && (
+                                                <div className="text-xs text-gray-600 mt-2">
+                                                    {prep.requiredTransformations.filter(t => t.priority === 'required').length} required,{' '}
+                                                    {prep.requiredTransformations.filter(t => t.priority === 'recommended').length} recommended transformations
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+
+                                {/* Overall Status */}
+                                <div className="flex items-center justify-between p-3 bg-white rounded-lg border">
+                                    <div className="text-sm">
+                                        <span className="font-medium">Ready for execution: </span>
+                                        <span className="text-green-600">
+                                            {analysisPreparations.overallReadiness.readyAnalyses.length} analyses
+                                        </span>
+                                        {analysisPreparations.overallReadiness.notReadyAnalyses.length > 0 && (
+                                            <span className="text-amber-600 ml-2">
+                                                ({analysisPreparations.overallReadiness.notReadyAnalyses.length} need preparation)
+                                            </span>
+                                        )}
+                                    </div>
+                                    <Progress
+                                        value={analysisPreparations.overallReadiness.readinessPercentage}
+                                        className="w-24 h-2"
+                                    />
+                                </div>
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+            )}
+
             {/* User Questions Display - Shows actual questions from prepare step */}
             {userQuestions.length > 0 && (
                 <Card className="border-blue-200 bg-gradient-to-br from-blue-50 to-sky-50">
@@ -2328,14 +2899,15 @@ export default function DataTransformationStep({
             )}
 
             {/* GAP B: Completeness Status & Gaps Display */}
-            {requiredDataElements?.completeness && (
-                <Card className={`border-2 ${requiredDataElements.completeness.readyForExecution
+            {/* ✅ P0 FIX: Use computedCompleteness which has fallback calculation */}
+            {computedCompleteness.totalElements > 0 && (
+                <Card className={`border-2 ${computedCompleteness.readyForExecution
                     ? 'border-green-200 bg-gradient-to-br from-green-50 to-emerald-50'
                     : 'border-amber-200 bg-gradient-to-br from-amber-50 to-orange-50'
                     }`}>
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2">
-                            {requiredDataElements.completeness.readyForExecution ? (
+                            {computedCompleteness.readyForExecution ? (
                                 <CheckCircle className="w-5 h-5 text-green-600" />
                             ) : (
                                 <AlertCircle className="w-5 h-5 text-amber-600" />
@@ -2343,7 +2915,7 @@ export default function DataTransformationStep({
                             Data Readiness Status
                         </CardTitle>
                         <CardDescription>
-                            {requiredDataElements.completeness.readyForExecution
+                            {computedCompleteness.readyForExecution
                                 ? 'All required data elements are mapped and ready for analysis'
                                 : 'Some data elements require attention before analysis can proceed'}
                         </CardDescription>
@@ -2354,17 +2926,17 @@ export default function DataTransformationStep({
                             <div className="flex justify-between text-sm">
                                 <span>Elements Mapped</span>
                                 <span className="font-medium">
-                                    {requiredDataElements.completeness.elementsMapped} / {requiredDataElements.completeness.totalElements}
+                                    {computedCompleteness.elementsMapped} / {computedCompleteness.totalElements}
                                 </span>
                             </div>
                             <Progress
-                                value={(requiredDataElements.completeness.elementsMapped / Math.max(requiredDataElements.completeness.totalElements, 1)) * 100}
+                                value={(computedCompleteness.elementsMapped / Math.max(computedCompleteness.totalElements, 1)) * 100}
                                 className="h-2"
                             />
                             <div className="flex justify-between text-xs text-gray-500">
-                                <span>{requiredDataElements.completeness.elementsWithTransformation} need transformation</span>
+                                <span>{computedCompleteness.elementsWithTransformation} need transformation</span>
                                 <span>
-                                    {Math.round((requiredDataElements.completeness.elementsMapped / Math.max(requiredDataElements.completeness.totalElements, 1)) * 100)}% complete
+                                    {Math.round((computedCompleteness.elementsMapped / Math.max(computedCompleteness.totalElements, 1)) * 100)}% complete
                                 </span>
                             </div>
                         </div>
@@ -2498,8 +3070,6 @@ export default function DataTransformationStep({
                                                             <PopoverContent
                                                                 className="w-80 p-0"
                                                                 align="start"
-                                                                onPointerDownOutside={(e) => e.preventDefault()}
-                                                                onInteractOutside={(e) => e.preventDefault()}
                                                             >
                                                                 {/* Search input */}
                                                                 <div className="p-2 border-b">
@@ -2611,16 +3181,26 @@ export default function DataTransformationStep({
                                                                     </div>
                                                                 </ScrollArea>
 
-                                                                <div className="p-2 border-t bg-gray-50">
+                                                                <div className="p-2 border-t bg-gray-50 flex gap-2">
                                                                     <Button
                                                                         variant="ghost"
                                                                         size="sm"
-                                                                        className="w-full text-xs text-gray-500 h-7"
+                                                                        className="flex-1 text-xs text-gray-500 h-7"
                                                                         onClick={() => updateMultiColumnMapping(mapping.targetElement, [], null)}
                                                                     >
                                                                         <X className="h-3 w-3 mr-1" />
-                                                                        Clear All Selections
+                                                                        Clear All
                                                                     </Button>
+                                                                    <PopoverClose asChild>
+                                                                        <Button
+                                                                            variant="default"
+                                                                            size="sm"
+                                                                            className="flex-1 text-xs h-7"
+                                                                        >
+                                                                            <CheckCircle className="h-3 w-3 mr-1" />
+                                                                            Done
+                                                                        </Button>
+                                                                    </PopoverClose>
                                                                 </div>
                                                             </PopoverContent>
                                                         </Popover>
@@ -2702,12 +3282,20 @@ export default function DataTransformationStep({
                                                 </TableCell>
                                                 <TableCell className="w-[400px]">
                                                     {mapping.transformationRequired ? (
-                                                        <Textarea
-                                                            placeholder="e.g., Convert date string to ISO format, trim whitespace, calculate total..."
-                                                            value={transformationLogic[mapping.targetElement] || ''}
-                                                            onChange={(e) => updateTransformationLogic(mapping.targetElement, e.target.value)}
-                                                            className="min-h-[80px] min-w-[350px] text-sm resize-y"
-                                                        />
+                                                        <div className="space-y-1">
+                                                            <Textarea
+                                                                placeholder="e.g., Convert date string to ISO format, trim whitespace, calculate total..."
+                                                                value={transformationLogic[mapping.targetElement] || mapping.suggestedTransformation || ''}
+                                                                onChange={(e) => updateTransformationLogic(mapping.targetElement, e.target.value)}
+                                                                className="min-h-[80px] min-w-[350px] text-sm resize-y"
+                                                            />
+                                                            {mapping.suggestedTransformation && transformationLogic[mapping.targetElement] === mapping.suggestedTransformation && (
+                                                                <div className="flex items-center gap-1 text-xs text-blue-600">
+                                                                    <Sparkles className="h-3 w-3" />
+                                                                    <span>AI suggestion (edit to customize)</span>
+                                                                </div>
+                                                            )}
+                                                        </div>
                                                     ) : (
                                                         <span className="text-sm text-gray-500 italic">Direct mapping (no transformation needed)</span>
                                                     )}
@@ -2792,6 +3380,114 @@ export default function DataTransformationStep({
                                 </Alert>
                             )}
                         </div>
+                    )}
+
+                    {/* P1-3: BA/DS Agent Verification Results */}
+                    {agentVerification && (
+                        <Card className="mb-4 border-2" style={{ borderColor: agentVerification.overallApproved ? '#22c55e' : '#f59e0b' }}>
+                            <CardHeader className="pb-2">
+                                <CardTitle className="flex items-center gap-2 text-lg">
+                                    {agentVerification.overallApproved ? (
+                                        <CheckCircle className="h-5 w-5 text-green-600" />
+                                    ) : (
+                                        <AlertCircle className="h-5 w-5 text-amber-600" />
+                                    )}
+                                    Agent Verification Results
+                                </CardTitle>
+                                <CardDescription>{agentVerification.summary}</CardDescription>
+                            </CardHeader>
+                            <CardContent className="space-y-4">
+                                {/* Business Agent Approval */}
+                                <div className={`p-3 rounded-lg ${agentVerification.baApproval?.approved ? 'bg-green-50' : 'bg-amber-50'}`}>
+                                    <div className="flex items-center gap-2 mb-2">
+                                        {agentVerification.baApproval?.approved ? (
+                                            <CheckCircle className="h-4 w-4 text-green-600" />
+                                        ) : (
+                                            <AlertCircle className="h-4 w-4 text-amber-600" />
+                                        )}
+                                        <span className="font-medium">Business Analyst</span>
+                                        <Badge variant={agentVerification.baApproval?.approved ? "default" : "secondary"}>
+                                            {((agentVerification.baApproval?.confidence || 0) * 100).toFixed(0)}% confident
+                                        </Badge>
+                                    </div>
+                                    <p className="text-sm text-gray-700">{agentVerification.baApproval?.feedback}</p>
+                                    {agentVerification.baApproval?.recommendations && agentVerification.baApproval.recommendations.length > 0 && (
+                                        <div className="mt-2 flex flex-wrap gap-1">
+                                            {agentVerification.baApproval.recommendations.map((rec, i) => (
+                                                <Badge key={i} variant="outline" className="text-xs">{rec}</Badge>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Data Scientist Approval */}
+                                <div className={`p-3 rounded-lg ${agentVerification.dsApproval?.approved ? 'bg-green-50' : 'bg-amber-50'}`}>
+                                    <div className="flex items-center gap-2 mb-2">
+                                        {agentVerification.dsApproval?.approved ? (
+                                            <CheckCircle className="h-4 w-4 text-green-600" />
+                                        ) : (
+                                            <AlertCircle className="h-4 w-4 text-amber-600" />
+                                        )}
+                                        <span className="font-medium">Data Scientist</span>
+                                        <Badge variant={agentVerification.dsApproval?.approved ? "default" : "secondary"}>
+                                            {((agentVerification.dsApproval?.confidence || 0) * 100).toFixed(0)}% confident
+                                        </Badge>
+                                    </div>
+                                    <p className="text-sm text-gray-700">{agentVerification.dsApproval?.feedback}</p>
+                                    {agentVerification.dsApproval?.analyticalConcerns && agentVerification.dsApproval.analyticalConcerns.length > 0 && (
+                                        <div className="mt-2">
+                                            <p className="text-xs font-medium text-gray-600 mb-1">Analytical Concerns:</p>
+                                            <ul className="text-xs text-gray-600 list-disc list-inside">
+                                                {agentVerification.dsApproval.analyticalConcerns.map((concern, i) => (
+                                                    <li key={i}>{concern}</li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+                                    {agentVerification.dsApproval?.dataTypeIssues && agentVerification.dsApproval.dataTypeIssues.length > 0 && (
+                                        <div className="mt-2">
+                                            <p className="text-xs font-medium text-gray-600 mb-1">Data Type Issues:</p>
+                                            <ul className="text-xs text-gray-600 list-disc list-inside">
+                                                {agentVerification.dsApproval.dataTypeIssues.map((issue, i) => (
+                                                    <li key={i}>{issue}</li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+                                </div>
+                            </CardContent>
+                        </Card>
+                    )}
+
+                    {/* P1-3: Verify with Agents Button */}
+                    {!agentVerification && transformationMappings.length > 0 && (
+                        <Alert className="bg-blue-50 border-blue-200 mb-4">
+                            <Info className="h-4 w-4 text-blue-600" />
+                            <AlertTitle className="text-blue-800">Verify with AI Agents</AlertTitle>
+                            <AlertDescription className="flex items-center justify-between">
+                                <span className="text-blue-700">
+                                    Before executing, you can have Business Analyst and Data Scientist agents verify your transformation plan.
+                                </span>
+                                <Button
+                                    onClick={requestAgentVerification}
+                                    disabled={isVerifying}
+                                    className="bg-blue-600 hover:bg-blue-700 text-white ml-4"
+                                    size="sm"
+                                >
+                                    {isVerifying ? (
+                                        <>
+                                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                            Verifying...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Wand2 className="w-4 h-4 mr-2" />
+                                            Verify with Agents
+                                        </>
+                                    )}
+                                </Button>
+                            </AlertDescription>
+                        </Alert>
                     )}
 
                     {/* PHASE 3 FIX: Inline Transformation Approval Banner */}

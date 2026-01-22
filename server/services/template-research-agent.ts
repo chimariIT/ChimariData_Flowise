@@ -894,6 +894,362 @@ export class TemplateResearchAgent {
 
         return 'intermediate';
     }
+
+    // ============================================================================
+    // SPRINT 2 FIX: ADDITIONAL REQUIRED METHODS
+    // ============================================================================
+
+    /**
+     * Research multiple templates based on a request and rank by relevance
+     * Combines internal knowledge base with optional online sources
+     */
+    async researchNewTemplates(request: TemplateResearchRequest): Promise<ResearchedTemplate[]> {
+        console.log(`🔍 [TemplateResearch] Researching templates for ${request.industry || 'general'}`);
+
+        // 1. Search internal knowledge base
+        const internalTemplates = await this.searchInternalKB(request);
+        console.log(`  📚 Found ${internalTemplates.length} templates from internal KB`);
+
+        // 2. Search online sources (if enabled)
+        let onlineTemplates: ResearchedTemplate[] = [];
+        if (process.env.ENABLE_ONLINE_RESEARCH === 'true') {
+            try {
+                const onlineResults = await this.researchFromWeb(
+                    request.useCase || request.keywords?.join(' ') || '',
+                    request.industry
+                );
+                onlineTemplates = onlineResults.map((r: any) => this.convertToResearchedTemplate(r));
+                console.log(`  🌐 Found ${onlineTemplates.length} templates from online sources`);
+            } catch (error) {
+                console.warn(`  ⚠️ Online research failed: ${error}`);
+            }
+        }
+
+        // 3. Combine and rank by relevance
+        const allTemplates = [...internalTemplates, ...onlineTemplates];
+        return this.sortByRelevance(allTemplates, request);
+    }
+
+    /**
+     * Search internal knowledge base for matching templates
+     */
+    private async searchInternalKB(request: TemplateResearchRequest): Promise<ResearchedTemplate[]> {
+        const results: ResearchedTemplate[] = [];
+
+        // Check industry-specific use cases
+        const industryUseCases = this.commonUseCases.get(request.industry || 'technology') || [];
+        const matchingUseCases = industryUseCases.filter(useCase => {
+            const useCaseLower = useCase.toLowerCase();
+            if (request.keywords) {
+                return request.keywords.some(kw => useCaseLower.includes(kw.toLowerCase()));
+            }
+            if (request.useCase) {
+                return useCaseLower.includes(request.useCase.toLowerCase()) ||
+                       request.useCase.toLowerCase().includes(useCaseLower);
+            }
+            return false;
+        });
+
+        // Generate templates for matching use cases
+        for (const useCase of matchingUseCases.slice(0, 5)) {
+            const template = await this.researchTemplate({
+                ...request,
+                useCase
+            });
+            results.push(template);
+        }
+
+        return results;
+    }
+
+    /**
+     * Sort templates by relevance to the request
+     */
+    private sortByRelevance(
+        templates: ResearchedTemplate[],
+        request: TemplateResearchRequest
+    ): ResearchedTemplate[] {
+        return templates.sort((a, b) => {
+            let scoreA = a.confidence;
+            let scoreB = b.confidence;
+
+            // Boost for matching industry (using domain property)
+            const aDomain = (a.template as any).domain;
+            const bDomain = (b.template as any).domain;
+            if (aDomain === request.industry) scoreA += 0.2;
+            if (bDomain === request.industry) scoreB += 0.2;
+
+            // Boost for matching keywords
+            const keywords = request.keywords || [];
+            const aKeywordMatches = keywords.filter(kw =>
+                a.template.description?.toLowerCase().includes(kw.toLowerCase())
+            ).length;
+            const bKeywordMatches = keywords.filter(kw =>
+                b.template.description?.toLowerCase().includes(kw.toLowerCase())
+            ).length;
+
+            scoreA += aKeywordMatches * 0.1;
+            scoreB += bKeywordMatches * 0.1;
+
+            // Boost for matching complexity (convert types)
+            const complexityMap: Record<string, string> = {
+                'low': 'beginner',
+                'medium': 'intermediate',
+                'high': 'advanced'
+            };
+            const aComplex = complexityMap[a.implementationComplexity];
+            const bComplex = complexityMap[b.implementationComplexity];
+            if (aComplex === request.complexityLevel) scoreA += 0.15;
+            if (bComplex === request.complexityLevel) scoreB += 0.15;
+
+            return scoreB - scoreA; // Descending order
+        });
+    }
+
+    /**
+     * Synthesize a new template from multiple source templates
+     * Combines best elements from each template
+     */
+    async synthesizeFromMultipleSources(templates: ResearchedTemplate[]): Promise<ResearchedTemplate> {
+        console.log(`🔄 [TemplateResearch] Synthesizing from ${templates.length} templates`);
+
+        if (templates.length === 0) {
+            throw new Error('Cannot synthesize from empty template list');
+        }
+
+        if (templates.length === 1) {
+            return templates[0];
+        }
+
+        // Combine workflow steps from all templates (deduplicate)
+        const allWorkflowSteps: TemplateWorkflowStep[] = [];
+        const seenSteps = new Set<string>();
+
+        for (const t of templates) {
+            const steps = (t.template as any).workflow || [];
+            for (const step of steps) {
+                const stepKey = step.name?.toLowerCase() || step.stepId;
+                if (!seenSteps.has(stepKey)) {
+                    seenSteps.add(stepKey);
+                    allWorkflowSteps.push(step);
+                }
+            }
+        }
+
+        // Combine data fields (deduplicate)
+        const allDataFields: TemplateDataField[] = [];
+        const seenFields = new Set<string>();
+
+        for (const t of templates) {
+            const fields = (t.template as any).requiredDataFields || [];
+            for (const field of fields) {
+                const fieldKey = field.fieldName?.toLowerCase();
+                if (fieldKey && !seenFields.has(fieldKey)) {
+                    seenFields.add(fieldKey);
+                    allDataFields.push(field);
+                }
+            }
+        }
+
+        // Pick the best sources and findings
+        const allSources = [...new Set(templates.flatMap(t => t.researchSources))];
+        const avgConfidence = templates.reduce((sum, t) => sum + t.confidence, 0) / templates.length;
+        const avgPopularity = templates.reduce((sum, t) => sum + t.estimatedPopularity, 0) / templates.length;
+
+        // Find the most common domain
+        const domainCounts = new Map<string, number>();
+        for (const t of templates) {
+            const dom = (t.template as any).domain || 'technology';
+            domainCounts.set(dom, (domainCounts.get(dom) || 0) + 1);
+        }
+        let bestDomain: BusinessDomain = 'technology';
+        let maxCount = 0;
+        for (const [dom, count] of domainCounts) {
+            if (count > maxCount) {
+                maxCount = count;
+                bestDomain = dom as BusinessDomain;
+            }
+        }
+
+        const synthesized: ResearchedTemplate = {
+            template: {
+                templateId: nanoid(),
+                name: `Synthesized ${bestDomain} Template`,
+                domain: bestDomain,
+                description: `Synthesized template combining ${templates.length} source templates for ${bestDomain} industry`,
+                goals: [],
+                workflow: allWorkflowSteps,
+                requiredDataFields: allDataFields,
+                visualizations: [],
+                deliverables: [],
+                complexity: 'intermediate',
+                popularity: avgPopularity,
+                tags: ['synthesized', bestDomain]
+            },
+            confidence: Math.min(avgConfidence + 0.1, 0.95),
+            researchSources: allSources,
+            marketDemand: this.determineOverallDemand(templates),
+            implementationComplexity: this.determineOverallComplexity(templates),
+            estimatedPopularity: avgPopularity
+        };
+
+        console.log(`  ✅ Synthesized template with ${allWorkflowSteps.length} steps and ${allDataFields.length} fields`);
+        return synthesized;
+    }
+
+    /**
+     * Determine overall market demand from multiple templates
+     */
+    private determineOverallDemand(templates: ResearchedTemplate[]): 'low' | 'medium' | 'high' {
+        const demands = templates.map(t => t.marketDemand);
+        if (demands.includes('high')) return 'high';
+        if (demands.includes('medium')) return 'medium';
+        return 'low';
+    }
+
+    /**
+     * Determine overall complexity from multiple templates
+     */
+    private determineOverallComplexity(templates: ResearchedTemplate[]): 'low' | 'medium' | 'high' {
+        const complexities = templates.map(t => t.implementationComplexity);
+        if (complexities.includes('high')) return 'high';
+        if (complexities.includes('medium')) return 'medium';
+        return 'low';
+    }
+
+    /**
+     * Validate a template for completeness and correctness
+     */
+    async validateNewTemplate(template: ResearchedTemplate): Promise<{
+        isValid: boolean;
+        issues: string[];
+        recommendations: string[];
+    }> {
+        console.log(`✅ [TemplateResearch] Validating template: ${template.template.name}`);
+
+        const issues: string[] = [];
+        const recommendations: string[] = [];
+
+        // Check required fields
+        const requiredFieldIssues = this.validateRequiredFields(template);
+        issues.push(...requiredFieldIssues);
+
+        // Check analysis steps
+        const stepIssues = this.validateAnalysisSteps(template);
+        issues.push(...stepIssues);
+
+        // Check data requirements
+        const dataIssues = this.validateDataRequirements(template);
+        issues.push(...dataIssues);
+
+        // Check output formats
+        const outputIssues = this.validateOutputFormats(template);
+        issues.push(...outputIssues);
+
+        // Generate recommendations
+        if (template.confidence < 0.7) {
+            recommendations.push('Consider adding more specific use case examples to improve confidence');
+        }
+        if (template.implementationComplexity === 'high') {
+            recommendations.push('Consider breaking down into smaller, modular sub-templates');
+        }
+        if (template.marketDemand === 'low') {
+            recommendations.push('Add industry-specific customizations to increase market appeal');
+        }
+
+        const isValid = issues.length === 0;
+        console.log(`  ${isValid ? '✅' : '❌'} Validation ${isValid ? 'passed' : 'failed'}: ${issues.length} issues`);
+
+        return { isValid, issues, recommendations };
+    }
+
+    /**
+     * Check required fields in template
+     */
+    private validateRequiredFields(template: ResearchedTemplate): string[] {
+        const issues: string[] = [];
+
+        if (!template.template.name) {
+            issues.push('Missing required field: name');
+        }
+        if (!(template.template as any).domain) {
+            issues.push('Missing required field: domain');
+        }
+        if (!template.template.description) {
+            issues.push('Missing required field: description');
+        }
+
+        return issues;
+    }
+
+    /**
+     * Check analysis steps for completeness
+     */
+    private validateAnalysisSteps(template: ResearchedTemplate): string[] {
+        const issues: string[] = [];
+        const steps = (template.template as any).workflow || [];
+
+        if (steps.length === 0) {
+            issues.push('Template has no workflow steps defined');
+        } else {
+            // Check for data preparation step
+            const hasDataPrep = steps.some((s: any) =>
+                s.component === 'data_ingestion' || s.name?.toLowerCase().includes('data')
+            );
+            if (!hasDataPrep) {
+                issues.push('Missing data preparation step in workflow');
+            }
+
+            // Check for analysis step
+            const hasAnalysis = steps.some((s: any) =>
+                s.component === 'statistical_analysis' || s.name?.toLowerCase().includes('analysis')
+            );
+            if (!hasAnalysis) {
+                issues.push('Missing analysis step in workflow');
+            }
+        }
+
+        return issues;
+    }
+
+    /**
+     * Check data requirements
+     */
+    private validateDataRequirements(template: ResearchedTemplate): string[] {
+        const issues: string[] = [];
+        const fields = (template.template as any).requiredDataFields || [];
+
+        if (fields.length === 0) {
+            issues.push('Template has no data fields defined');
+        } else {
+            // Check for identifier field
+            const hasId = fields.some((f: any) =>
+                f.fieldName?.toLowerCase().includes('id') || f.dataType === 'string'
+            );
+            if (!hasId) {
+                issues.push('Missing identifier field in data requirements');
+            }
+        }
+
+        return issues;
+    }
+
+    /**
+     * Check output formats
+     */
+    private validateOutputFormats(template: ResearchedTemplate): string[] {
+        const issues: string[] = [];
+        const deliverables = (template.template as any).deliverables || [];
+
+        // Not a hard requirement, just validate structure if present
+        for (const d of deliverables) {
+            if (!d.name || !d.type) {
+                issues.push('Deliverable missing name or type');
+            }
+        }
+
+        return issues;
+    }
 }
 
 export const templateResearchAgent = new TemplateResearchAgent();

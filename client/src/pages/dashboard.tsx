@@ -322,13 +322,22 @@ export default function Dashboard({ user, onLogout, onProjectSelect, onSettings,
                   </div>
                 ) : (
                   <div className="grid gap-4">
-                    {filteredProjects.slice(0, 4).map((project: any) => (
-                      <JourneyProgressCard
-                        key={project.id}
-                        project={project}
-                        onSelect={onProjectSelect}
-                      />
-                    ))}
+                    {/* P1 FIX: Sort projects by updatedAt/createdAt descending before display */}
+                    {filteredProjects
+                      .slice()
+                      .sort((a: any, b: any) => {
+                        const dateA = new Date(a.updatedAt || a.createdAt || 0).getTime();
+                        const dateB = new Date(b.updatedAt || b.createdAt || 0).getTime();
+                        return dateB - dateA;
+                      })
+                      .slice(0, 4)
+                      .map((project: any) => (
+                        <JourneyProgressCard
+                          key={project.id}
+                          project={project}
+                          onSelect={onProjectSelect}
+                        />
+                      ))}
                   </div>
                 )}
               </CardContent>

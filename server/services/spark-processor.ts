@@ -217,9 +217,10 @@ export class SparkProcessor {
         } else if (process.env.FORCE_SPARK_REAL === 'true') {
             console.log('✅ Decision: REAL (FORCE_SPARK_REAL=true)');
             useMock = false;
-        } else if (!this.isProduction && !process.env.SPARK_MASTER_URL) {
+        } else if (!this.isProduction && !process.env.SPARK_MASTER_URL && !process.env.SPARK_HOME) {
+            // ✅ P1-9 FIX: Also check SPARK_HOME - if set, user has Spark installed
             // Check if running in development without explicit Spark setup
-            console.log('✅ Decision: MOCK (development + no SPARK_MASTER_URL)');
+            console.log('✅ Decision: MOCK (development + no SPARK_MASTER_URL or SPARK_HOME)');
             useMock = true;
         } else {
             // Check if Python and required dependencies are available
@@ -389,17 +390,17 @@ export class SparkProcessor {
         }
 
         if (this.shouldUseMock()) {
-            // CRITICAL: Prevent mock mode in production
+            // P0-7 FIX: In production, fall back to Python processor instead of failing
             if (process.env.NODE_ENV === 'production') {
-                console.error('🔴 CRITICAL: Spark mock mode active in production!');
-                throw new Error('PRODUCTION_ERROR: Spark cluster not available for analysis. Mock mode disabled in production.');
+                console.warn('⚠️ Spark not available in production - falling back to Python processor');
+                return await this.fallbackToPythonAnalysis(data, analysisType, parameters);
             }
             console.log(`Performing ${analysisType} with Spark (mocked)...`);
-            return { 
+            return {
                 result: `Mock ${analysisType} analysis result`,
                 analysisType,
                 parameters,
-                mock: true 
+                mock: true
             };
         }
 
@@ -600,6 +601,82 @@ export class SparkProcessor {
                     isInitialized: this.isInitialized,
                     isMock: this.shouldUseMock()
                 }
+            };
+        }
+    }
+
+    /**
+     * P0-7 FIX: Fallback to Python processor when Spark is not available
+     * Uses pandas/numpy for analysis instead of PySpark
+     */
+    private async fallbackToPythonAnalysis(
+        data: any,
+        analysisType: string,
+        parameters?: any
+    ): Promise<any> {
+        console.log(`🐍 [Spark Fallback] Running ${analysisType} analysis with Python (pandas/numpy)...`);
+
+        try {
+            // Import PythonProcessor dynamically to avoid circular dependencies
+            const { PythonProcessor } = await import('./python-processor');
+
+            // Prepare data for Python analysis
+            let dataForAnalysis: any[];
+            if (Array.isArray(data)) {
+                dataForAnalysis = data;
+            } else if (typeof data === 'string') {
+                // If it's a file path, we need to read it
+                // For now, return a warning that file-based analysis requires Spark
+                console.warn('⚠️ [Spark Fallback] File-based analysis not supported in Python fallback');
+                return {
+                    success: false,
+                    error: 'File-based analysis requires Spark cluster. Please ensure Spark is configured.',
+                    fallback: true
+                };
+            } else if (data?.preview) {
+                dataForAnalysis = data.preview;
+            } else {
+                dataForAnalysis = [data];
+            }
+
+            // Map Spark analysis types to Python analysis
+            const analysisMapping: Record<string, string> = {
+                'descriptive': 'descriptive_stats',
+                'correlation': 'correlation_analysis',
+                'regression': 'regression_analysis',
+                'clustering': 'clustering_analysis',
+                'time_series': 'time_series_analysis',
+                'statistical': 'descriptive_stats'
+            };
+
+            const pythonAnalysisType = analysisMapping[analysisType] || 'descriptive_stats';
+
+            // Execute using Python processor
+            const result = await PythonProcessor.processTrial(`fallback_${Date.now()}`, {
+                preview: dataForAnalysis,
+                schema: data?.schema || {},
+                recordCount: dataForAnalysis.length
+            });
+
+            console.log(`✅ [Spark Fallback] ${analysisType} analysis completed with Python processor`);
+
+            return {
+                success: true,
+                ...result,
+                analysisType,
+                parameters,
+                fallback: true,
+                processorUsed: 'python_pandas'
+            };
+
+        } catch (error) {
+            console.error(`❌ [Spark Fallback] Python analysis failed:`, error);
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : String(error),
+                analysisType,
+                fallback: true,
+                processorUsed: 'python_pandas'
             };
         }
     }

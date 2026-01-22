@@ -762,6 +762,11 @@ export class MemStorage implements IStorage {
       onboardingCompleted: (userData as any).onboardingCompleted ?? false,
       isAdmin: (userData as any).isAdmin ?? false,
       role: (userData as any).role ?? null,
+      // P0-1 Fix: Add trial credits fields
+      trialCredits: (userData as any).trialCredits ?? 100,
+      trialCreditsUsed: (userData as any).trialCreditsUsed ?? 0,
+      trialCreditsRefreshedAt: (userData as any).trialCreditsRefreshedAt ?? new Date(),
+      trialCreditsExpireAt: (userData as any).trialCreditsExpireAt ?? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
       createdAt: (userData as any).createdAt ?? new Date(),
       updatedAt: (userData as any).updatedAt ?? new Date(),
     };

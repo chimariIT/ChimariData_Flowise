@@ -153,8 +153,21 @@ router.get("/history", async (req, res) => {
       return res.status(401).json({ error: "Authentication required" });
     }
 
-    // TODO: Implement detailed usage history tracking
-    // For now, return mock data
+    // P0-5 FIX: Return empty history instead of random mock data
+    // TODO: Implement detailed usage history tracking from database
+    const isProduction = process.env.NODE_ENV === 'production';
+
+    if (isProduction) {
+      // In production, return empty history until real tracking is implemented
+      console.warn('[Usage History] Detailed history tracking not yet implemented');
+      res.json({
+        history: [],
+        message: 'Detailed usage history is not yet available. Check your billing dashboard for current usage.'
+      });
+      return;
+    }
+
+    // In development only, return sample data with zeros
     const history = [];
     const today = new Date();
 
@@ -164,13 +177,13 @@ router.get("/history", async (req, res) => {
 
       history.push({
         date: date.toISOString().split('T')[0],
-        aiQueries: Math.floor(Math.random() * 5),
-        dataUploads: Math.floor(Math.random() * 3),
-        dataVolumeMB: Math.floor(Math.random() * 10)
+        aiQueries: 0,
+        dataUploads: 0,
+        dataVolumeMB: 0
       });
     }
 
-    res.json({ history });
+    res.json({ history, devMode: true });
   } catch (error) {
     console.error("Error fetching usage history:", error);
     res.status(500).json({ error: "Failed to fetch usage history" });
@@ -285,5 +298,124 @@ router.post("/code-generation",
     }
   }
 );
+
+// ==========================================
+// USAGE ALERTS ENDPOINTS (Sprint 3)
+// ==========================================
+
+/**
+ * GET /api/usage/alerts/status
+ * Get current usage status with alert levels for all metrics
+ */
+router.get("/alerts/status", async (req, res) => {
+  try {
+    const user = await getUserFromRequest(req);
+    const userId = user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const { usageAlertsService } = await import('../services/usage-alerts-service');
+    const status = await usageAlertsService.getUserUsageStatus(userId);
+
+    res.json({
+      success: true,
+      status,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error("Error fetching usage status:", error);
+    res.status(500).json({ error: "Failed to fetch usage status" });
+  }
+});
+
+/**
+ * GET /api/usage/alerts/check
+ * Check all usage metrics and trigger alerts if thresholds exceeded
+ */
+router.get("/alerts/check", async (req, res) => {
+  try {
+    const user = await getUserFromRequest(req);
+    const userId = user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const { usageAlertsService } = await import('../services/usage-alerts-service');
+    const alerts = await usageAlertsService.checkUserUsage(userId);
+
+    res.json({
+      success: true,
+      alertsTriggered: alerts.length,
+      alerts,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error("Error checking usage alerts:", error);
+    res.status(500).json({ error: "Failed to check usage alerts" });
+  }
+});
+
+/**
+ * GET /api/usage/alerts/history
+ * Get alert history for the current user
+ */
+router.get("/alerts/history", async (req, res) => {
+  try {
+    const user = await getUserFromRequest(req);
+    const userId = user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
+
+    const { usageAlertsService } = await import('../services/usage-alerts-service');
+    const history = usageAlertsService.getAlertHistory(userId, limit);
+
+    res.json({
+      success: true,
+      alerts: history,
+      total: history.length
+    });
+  } catch (error) {
+    console.error("Error fetching alert history:", error);
+    res.status(500).json({ error: "Failed to fetch alert history" });
+  }
+});
+
+/**
+ * POST /api/usage/alerts/:alertId/acknowledge
+ * Acknowledge an alert
+ */
+router.post("/alerts/:alertId/acknowledge", async (req, res) => {
+  try {
+    const user = await getUserFromRequest(req);
+    const userId = user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const { alertId } = req.params;
+
+    const { usageAlertsService } = await import('../services/usage-alerts-service');
+    const acknowledged = usageAlertsService.acknowledgeAlert(userId, alertId);
+
+    if (acknowledged) {
+      res.json({
+        success: true,
+        message: "Alert acknowledged"
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        error: "Alert not found"
+      });
+    }
+  } catch (error) {
+    console.error("Error acknowledging alert:", error);
+    res.status(500).json({ error: "Failed to acknowledge alert" });
+  }
+});
 
 export default router;

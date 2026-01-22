@@ -79,13 +79,18 @@ export function useProject(projectId?: string) {
         },
         enabled: Boolean(projectId),
         staleTime: 1000 * 30, // 30 seconds
+        refetchOnMount: 'always', // Always refetch on mount to ensure fresh data after navigation
     });
 
     // Mutation to update journeyProgress
+    // FIX: Accept projectId override to handle stale closure issues when projectId changes after hook mount
     const updateProgressMutation = useMutation({
-        mutationFn: async (progressUpdate: Partial<JourneyProgress>) => {
-            if (!projectId) throw new Error("Project ID is required for updates");
-            return apiClient.updateProjectProgress(projectId, progressUpdate);
+        mutationFn: async (params: Partial<JourneyProgress> & { _projectIdOverride?: string }) => {
+            // Use override if provided (for cases where projectId changed after hook mount)
+            const { _projectIdOverride, ...progressUpdate } = params;
+            const effectiveProjectId = _projectIdOverride || projectId;
+            if (!effectiveProjectId) throw new Error("Project ID is required for updates");
+            return apiClient.updateProjectProgress(effectiveProjectId, progressUpdate);
         },
         onSuccess: (data) => {
             // Optimistically update the cache or just invalidate

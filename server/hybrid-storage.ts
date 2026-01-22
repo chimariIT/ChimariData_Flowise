@@ -496,6 +496,11 @@ export class HybridStorage {
       usageResetAt: this.userCache.get(user.id)?.usageResetAt ?? new Date(),
       role: this.userCache.get(user.id)?.role ?? null,
       isAdmin: this.userCache.get(user.id)?.isAdmin ?? false,
+      // P0-1 Fix: Add trial credits fields
+      trialCredits: this.userCache.get(user.id)?.trialCredits ?? 100,
+      trialCreditsUsed: this.userCache.get(user.id)?.trialCreditsUsed ?? 0,
+      trialCreditsRefreshedAt: this.userCache.get(user.id)?.trialCreditsRefreshedAt ?? new Date(),
+      trialCreditsExpireAt: this.userCache.get(user.id)?.trialCreditsExpireAt ?? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
       createdAt: this.userCache.get(user.id)?.createdAt || now,
       updatedAt: now,
     };

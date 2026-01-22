@@ -551,6 +551,19 @@ router.post('/:id/run', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Scraping job not found' });
     }
 
+    // P0-4 FIX: Production guard for simulated scraping
+    const isProduction = process.env.NODE_ENV === 'production';
+    if (isProduction) {
+      return res.status(501).json({
+        success: false,
+        error: 'Web scraping requires integration with actual scraping service in production. Configure scraping provider.',
+        code: 'SCRAPING_NOT_IMPLEMENTED'
+      });
+    }
+
+    // Development only: Simulated scraping run
+    console.warn('⚠️ [Scraping] Using simulated scraping execution (dev mode only)');
+
     const startedAt = new Date();
     const run = await storage.createScrapingRun({
       jobId: job.id,

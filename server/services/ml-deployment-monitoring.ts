@@ -431,6 +431,14 @@ export class MLPredictionService {
             return model.type === 'classification' ? 'class_A' : 42.5;
         });
 
+        // P0-4 FIX: Production guard for mock confidence scores
+        const isProduction = process.env.NODE_ENV === 'production';
+        if (isProduction) {
+            throw new Error('ML prediction requires trained model integration in production. Deploy model artifacts first.');
+        }
+
+        // Development only: Mock confidence scores
+        console.warn('⚠️ [MLPrediction] Using mock confidence scores (dev mode only)');
         const confidence = data.map(() => Math.random() * 0.3 + 0.7); // 0.7-1.0
 
         return {

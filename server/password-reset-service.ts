@@ -11,8 +11,10 @@ const resetTokens = new Map<string, {
 
 export class PasswordResetService {
   // Generate a 6-digit verification code
+  // P0-5 FIX: Use cryptographically secure random instead of Math.random()
   static generateVerificationCode(): string {
-    return Math.floor(100000 + Math.random() * 900000).toString();
+    // crypto.randomInt is cryptographically secure
+    return crypto.randomInt(100000, 999999).toString();
   }
 
   // Generate a secure token

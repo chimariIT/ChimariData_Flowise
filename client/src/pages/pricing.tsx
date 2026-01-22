@@ -401,11 +401,37 @@ export default function PricingPage({ onGetStarted, onSubscribe, onBack, onPayPe
                         </Link>
                       </Button>
                     ) : (
-                      <Button 
-                        onClick={() => tier.price === 0 ? onGetStarted() : onSubscribe?.(tier.name)}
+                      <Button
+                        onClick={() => {
+                          if (tier.price === 0) {
+                            onGetStarted();
+                          } else {
+                            // ✅ P0 FIX: Save subscription checkout data to localStorage before redirect
+                            // This ensures checkout.tsx has the tier info needed to create a Stripe subscription
+                            const checkoutData = {
+                              type: 'subscription',
+                              tierName: tier.name,
+                              tierId: tier.id || tier.type || tier.name.toLowerCase(),
+                              priceId: tier.stripePriceId || tier.stripeMonthlyPriceId,
+                              amount: billingCycle === 'yearly' ? getYearlyPrice(tier.price) : tier.price,
+                              billingCycle,
+                              pricing: {
+                                total: billingCycle === 'yearly' ? getYearlyPrice(tier.price) : tier.price,
+                                billingCycle
+                              },
+                              analysisConfig: {
+                                analysisType: 'subscription',
+                                tier: tier.name
+                              }
+                            };
+                            localStorage.setItem('subscriptionCheckout', JSON.stringify(checkoutData));
+                            console.log('💳 [Pricing] Saved subscription checkout data:', checkoutData);
+                            onSubscribe?.(tier.name);
+                          }
+                        }}
                         className={`w-full ${
-                          tier.recommended 
-                            ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:shadow-lg' 
+                          tier.recommended
+                            ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:shadow-lg'
                             : tier.price === 0
                               ? 'bg-green-600 hover:bg-green-700'
                               : 'bg-slate-900 hover:bg-slate-800'

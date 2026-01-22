@@ -3785,7 +3785,13 @@ router.put("/:id/verify", ensureAuthenticated, async (req, res) => {
             // ✅ FIX 1.4: Accept PII decisions from frontend
             piiDecisions,
             dataQuality,
-            schemaValidation
+            schemaValidation,
+            // ✅ GAP 1 FIX: Accept element mappings from verification step
+            elementMappings,
+            // ✅ GAP 1 FIX: Accept requirements document updates
+            requirementsDocument,
+            // ✅ GAP 1 FIX: Accept data quality checkpoint ID
+            dataQualityCheckpointId
         } = req.body;
         const userId = (req.user as any)?.id;
 
@@ -3808,6 +3814,16 @@ router.put("/:id/verify", ensureAuthenticated, async (req, res) => {
 
         // Update journeyProgress with verification info
         const currentProgress = (project as any)?.journeyProgress || {};
+
+        // ✅ GAP 1 FIX: Merge element mappings into requirements document
+        let mergedRequirementsDocument = currentProgress.requirementsDocument || {};
+        if (requirementsDocument) {
+            mergedRequirementsDocument = {
+                ...mergedRequirementsDocument,
+                ...requirementsDocument
+            };
+        }
+
         const updatedProgress = {
             ...currentProgress,
             dataQualityApproved: verificationStatus === 'approved',
@@ -3818,6 +3834,13 @@ router.put("/:id/verify", ensureAuthenticated, async (req, res) => {
             piiDecisionTimestamp: piiDecisions ? new Date().toISOString() : currentProgress.piiDecisionTimestamp,
             dataQuality: dataQuality || currentProgress.dataQuality,
             schemaValidation: schemaValidation ?? currentProgress.schemaValidation,
+            // ✅ GAP 1 FIX: Save element mappings to dedicated field for easy access
+            elementMappings: elementMappings || currentProgress.elementMappings || {},
+            elementMappingTimestamp: elementMappings ? new Date().toISOString() : currentProgress.elementMappingTimestamp,
+            // ✅ GAP 1 FIX: Save updated requirements document
+            requirementsDocument: mergedRequirementsDocument,
+            // ✅ GAP 1 FIX: Save checkpoint ID for audit trail
+            dataQualityCheckpointId: dataQualityCheckpointId || currentProgress.dataQualityCheckpointId,
             verificationCompleted: true,
             currentStep: 'transformation', // Move to next step
             completedSteps: [...(currentProgress.completedSteps || []), 'verification'].filter((v: string, i: number, a: string[]) => a.indexOf(v) === i)
@@ -3825,10 +3848,10 @@ router.put("/:id/verify", ensureAuthenticated, async (req, res) => {
 
         console.log(`✅ [Verify] Project ${projectId} verification status: ${verificationStatus}`);
 
-        // Update project
+        // Update project - use 'ready' status (valid status value for verified state)
         const updatedProject = await storage.updateProject(projectId, {
             journeyProgress: updatedProgress,
-            status: 'verified'
+            status: 'ready' // 'verified' is not a valid status - use 'ready' instead
         } as any);
 
         // ✅ FIX 1.4: Also save PII decisions to each dataset's ingestionMetadata
@@ -3867,6 +3890,33 @@ router.put("/:id/verify", ensureAuthenticated, async (req, res) => {
                 console.log(`🔒 [FIX 1.4] PII decisions saved to both journeyProgress and ${datasets.length} dataset(s)`);
             } catch (piiSaveError) {
                 console.warn('⚠️ [FIX 1.4] Failed to save PII decisions to datasets:', piiSaveError);
+                // Continue anyway - journeyProgress is the SSOT
+            }
+        }
+
+        // ✅ GAP 1 FIX: Also save element mappings to each dataset's ingestionMetadata
+        if (elementMappings && Object.keys(elementMappings).length > 0) {
+            try {
+                const datasets = await storage.getProjectDatasets(projectId);
+
+                for (const ds of datasets) {
+                    const dataset = (ds as any).dataset || ds;
+
+                    await storage.updateDataset(dataset.id, {
+                        ingestionMetadata: {
+                            ...(dataset.ingestionMetadata || {}),
+                            columnMappings: elementMappings,
+                            elementMappings: elementMappings,
+                            elementMappingTimestamp: new Date().toISOString()
+                        }
+                    } as any);
+
+                    console.log(`✅ [GAP 1 FIX] Saved ${Object.keys(elementMappings).length} element mappings to dataset ${dataset.id}`);
+                }
+
+                console.log(`📋 [GAP 1 FIX] Element mappings saved to both journeyProgress and ${datasets.length} dataset(s)`);
+            } catch (mappingSaveError) {
+                console.warn('⚠️ [GAP 1 FIX] Failed to save element mappings to datasets:', mappingSaveError);
                 // Continue anyway - journeyProgress is the SSOT
             }
         }
@@ -4308,8 +4358,11 @@ router.post("/:id/upload", ensureAuthenticated, upload.single('file'), async (re
                 type: 'analysis',
                 status: 'completed',
                 inputRefs,
+                // ✅ FK Fix: Merged params with agent info for traceability
                 params: {
-                    analysis: 'data_quality_assessment'
+                    analysis: 'data_quality_assessment',
+                    generatedBy: 'data_engineer_agent',
+                    agentType: 'data_quality_analysis'
                 },
                 metrics: {
                     qualityScore,
@@ -4324,7 +4377,8 @@ router.post("/:id/upload", ensureAuthenticated, upload.single('file'), async (re
                     issues: qualityIssues,
                     recommendations: qualityRecommendations
                 },
-                createdBy: 'data_engineer_agent'
+                // ✅ FK Fix: Use actual userId instead of agent identifier
+                createdBy: userId || null
             });
             qualityArtifactId = qualityArtifact.id;
         } catch (artifactError) {
@@ -4466,8 +4520,11 @@ router.post("/:id/upload", ensureAuthenticated, upload.single('file'), async (re
                         type: 'analysis',
                         status: 'completed',
                         inputRefs: analysisInputRefs,
+                        // ✅ FK Fix: Merged params with agent info for traceability
                         params: {
-                            analysis: 'multi_agent_goal_analysis'
+                            analysis: 'multi_agent_goal_analysis',
+                            generatedBy: 'pm_agent',
+                            agentType: 'multi_agent_coordination'
                         },
                         metrics: {
                             confidence: coordinationResult.synthesis.confidence,
@@ -4479,7 +4536,8 @@ router.post("/:id/upload", ensureAuthenticated, upload.single('file'), async (re
                             actionableRecommendations: coordinationResult.synthesis.actionableRecommendations,
                             expertConsensus: coordinationResult.synthesis.expertConsensus
                         },
-                        createdBy: 'pm_agent'
+                        // ✅ FK Fix: Use actual userId instead of agent identifier
+                        createdBy: userId || null
                     });
                 } catch (artifactError) {
                     console.error('Failed to create multi-agent coordination artifact:', artifactError);
@@ -5001,9 +5059,24 @@ router.post("/:id/map-data-elements", ensureAuthenticated, requireOwnership('pro
 
             console.log(`✅ [Map Elements] Enhanced mapping complete for project ${projectId}:`, mappingStats);
 
-            // Update journeyProgress with mapped elements
+            // ✅ P0 FIX: Calculate completeness object for frontend display
+            const completeness = {
+                totalElements: mappingStats.totalElements,
+                elementsMapped: mappingStats.elementsMapped,
+                elementsUnmapped: mappingStats.elementsUnmapped,
+                elementsWithTransformation: mappingStats.elementsNeedingTransform,
+                readyForExecution: mappedElements.every((e: any) => e.sourceField || e.sourceAvailable || !e.required),
+                mappingPercentage: mappingStats.totalElements > 0
+                    ? Math.round((mappingStats.elementsMapped / mappingStats.totalElements) * 100)
+                    : 0
+            };
+
+            console.log(`📊 [Map Elements] Completeness calculated:`, completeness);
+
+            // Update journeyProgress with mapped elements AND completeness
             const updatedReqDoc = {
                 ...mappedDocument,
+                completeness,  // ✅ P0 FIX: Include completeness in the document
                 lastMappedAt: new Date().toISOString()
             };
 
@@ -5018,6 +5091,7 @@ router.post("/:id/map-data-elements", ensureAuthenticated, requireOwnership('pro
                 success: true,
                 document: updatedReqDoc,
                 mappingStats,
+                completeness,  // ✅ P0 FIX: Also return in response
                 availableColumns: Object.keys(mergedSchema),
                 enhancedMapping: true
             });
@@ -5119,10 +5193,25 @@ router.post("/:id/map-data-elements", ensureAuthenticated, requireOwnership('pro
 
             console.log(`✅ [Map Elements] Fallback mapping complete for project ${projectId}:`, mappingStats);
 
-            // Update journeyProgress with mapped elements
+            // ✅ P0 FIX: Calculate completeness object for frontend display (fallback path)
+            const completeness = {
+                totalElements: mappingStats.totalElements,
+                elementsMapped: mappingStats.elementsMapped,
+                elementsUnmapped: mappingStats.elementsUnmapped,
+                elementsWithTransformation: mappedElements.filter((e: any) => e.transformationRequired).length,
+                readyForExecution: mappedElements.every((e: any) => e.sourceField || e.sourceColumn || !e.required),
+                mappingPercentage: mappingStats.totalElements > 0
+                    ? Math.round((mappingStats.elementsMapped / mappingStats.totalElements) * 100)
+                    : 0
+            };
+
+            console.log(`📊 [Map Elements] Completeness calculated (fallback):`, completeness);
+
+            // Update journeyProgress with mapped elements AND completeness
             const updatedReqDoc = {
                 ...reqDoc,
                 requiredDataElements: mappedElements,
+                completeness,  // ✅ P0 FIX: Include completeness in the document
                 lastMappedAt: new Date().toISOString()
             };
 
@@ -5137,6 +5226,7 @@ router.post("/:id/map-data-elements", ensureAuthenticated, requireOwnership('pro
                 success: true,
                 document: updatedReqDoc,
                 mappingStats,
+                completeness,  // ✅ P0 FIX: Also return in response
                 availableColumns,
                 enhancedMapping: false,
                 fallbackReason: toolError.message
@@ -6857,6 +6947,220 @@ router.post("/:id/enhance-requirements-mappings", ensureAuthenticated, async (re
 });
 
 /**
+ * P1-3: Verify transformation plan with BA and DS agents before execution
+ * Frontend expects: POST /api/projects/:id/verify-transformation-plan
+ * Payload: { mappings, businessContext, analysisPath, dataSchema }
+ */
+router.post("/:id/verify-transformation-plan", ensureAuthenticated, async (req, res) => {
+    try {
+        const { id: projectId } = req.params;
+        const userId = (req.user as any)?.id;
+
+        if (!userId) {
+            return res.status(401).json({ success: false, error: "Authentication required" });
+        }
+
+        // Verify access
+        const accessCheck = await canAccessProject(userId, projectId, (req.user as any)?.isAdmin);
+        if (!accessCheck.allowed) {
+            return res.status(403).json({ success: false, error: accessCheck.reason });
+        }
+
+        const { mappings, businessContext, analysisPath, dataSchema } = req.body;
+
+        if (!mappings || !Array.isArray(mappings)) {
+            return res.status(400).json({ success: false, error: "Mappings array is required" });
+        }
+
+        console.log(`🔍 [P1-3 API] Verifying transformation plan for project ${projectId}`);
+        console.log(`   Mappings: ${mappings.length}, BusinessContext: ${businessContext ? 'yes' : 'no'}, AnalysisPath: ${analysisPath?.length || 0}`);
+
+        // Import orchestrator and verify
+        const { projectAgentOrchestrator } = await import("../services/project-agent-orchestrator");
+
+        const verification = await projectAgentOrchestrator.verifyTransformationPlan(projectId, {
+            mappings,
+            businessContext,
+            analysisPath,
+            dataSchema
+        });
+
+        console.log(`✅ [P1-3 API] Verification complete: ${verification.overallApproved ? 'APPROVED' : 'NEEDS REVIEW'}`);
+
+        return res.json({
+            success: true,
+            verification,
+            baApproval: verification.baApproval,
+            dsApproval: verification.dsApproval,
+            overallApproved: verification.overallApproved,
+            summary: verification.summary
+        });
+
+    } catch (error: any) {
+        console.error("❌ [P1-3 API] Verification failed:", error);
+        return res.status(500).json({
+            success: false,
+            error: "Failed to verify transformation plan",
+            details: error.message
+        });
+    }
+});
+
+/**
+ * Analysis-aware data preparation endpoint
+ * Uses Analysis Requirements Registry to determine what transformations are needed for each analysis type
+ * Frontend expects: POST /api/projects/:id/analysis-preparation
+ * Payload: { analysisTypes, columnTypes?, rowCount? }
+ */
+router.post("/:id/analysis-preparation", ensureAuthenticated, async (req, res) => {
+    try {
+        const { id: projectId } = req.params;
+        const userId = (req.user as any)?.id;
+
+        if (!userId) {
+            return res.status(401).json({ success: false, error: "Authentication required" });
+        }
+
+        // Verify access
+        const accessCheck = await canAccessProject(userId, projectId, (req.user as any)?.isAdmin);
+        if (!accessCheck.allowed) {
+            return res.status(403).json({ success: false, error: accessCheck.reason });
+        }
+
+        const { analysisTypes, elementMappings } = req.body;
+
+        if (!analysisTypes || !Array.isArray(analysisTypes) || analysisTypes.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: "analysisTypes array is required"
+            });
+        }
+
+        console.log(`📊 [Analysis Prep] Getting preparation requirements for project ${projectId}`);
+        console.log(`📊 [Analysis Prep] Analysis types:`, analysisTypes);
+
+        // Load datasets to get current data stats
+        const datasets = await storage.getProjectDatasets(projectId);
+        const project = accessCheck.project;
+
+        // Get schema and data stats from datasets or joined data
+        let availableColumns: string[] = [];
+        let columnTypes: Record<string, 'numeric' | 'categorical' | 'datetime' | 'text'> = {};
+        let rowCount = 0;
+        let nullPercents: Record<string, number> = {};
+
+        if (datasets && datasets.length > 0) {
+            // Collect schema from all datasets
+            for (const dsWrapper of datasets) {
+                const ds = dsWrapper.dataset;
+                const schema = ds.schema || (ds as any).metadata?.schema || {};
+                const preview = ds.preview || (ds as any).metadata?.preview || [];
+                rowCount = Math.max(rowCount, ds.recordCount || (preview as any[]).length || 0);
+
+                for (const [colName, colInfo] of Object.entries(schema)) {
+                    if (!availableColumns.includes(colName)) {
+                        availableColumns.push(colName);
+
+                        // Infer column type
+                        const info = colInfo as any;
+                        const rawType = info?.type || info?.dataType || 'unknown';
+                        let mappedType: 'numeric' | 'categorical' | 'datetime' | 'text' = 'categorical';
+
+                        if (['number', 'numeric', 'integer', 'float', 'double', 'decimal'].includes(rawType.toLowerCase())) {
+                            mappedType = 'numeric';
+                        } else if (['date', 'datetime', 'timestamp', 'time'].includes(rawType.toLowerCase())) {
+                            mappedType = 'datetime';
+                        } else if (['text', 'longtext', 'varchar', 'string'].includes(rawType.toLowerCase()) &&
+                                   (info?.averageLength > 100 || colName.toLowerCase().includes('description') || colName.toLowerCase().includes('comment'))) {
+                            mappedType = 'text';
+                        }
+
+                        columnTypes[colName] = mappedType;
+
+                        // Calculate null percentage
+                        const missingCount = info?.missingCount || 0;
+                        const totalRows = rowCount || 1;
+                        nullPercents[colName] = missingCount / totalRows;
+                    }
+                }
+            }
+        }
+
+        // Use joined schema if available
+        const journeyProgress = project?.journeyProgress as any;
+        if (journeyProgress?.joinedSchema) {
+            for (const [colName, colInfo] of Object.entries(journeyProgress.joinedSchema)) {
+                if (!availableColumns.includes(colName)) {
+                    availableColumns.push(colName);
+                    const info = colInfo as any;
+                    const rawType = info?.type || info?.dataType || 'unknown';
+                    let mappedType: 'numeric' | 'categorical' | 'datetime' | 'text' = 'categorical';
+
+                    if (['number', 'numeric', 'integer', 'float', 'double', 'decimal'].includes(rawType.toLowerCase())) {
+                        mappedType = 'numeric';
+                    } else if (['date', 'datetime', 'timestamp', 'time'].includes(rawType.toLowerCase())) {
+                        mappedType = 'datetime';
+                    }
+
+                    columnTypes[colName] = mappedType;
+                }
+            }
+        }
+
+        // Use req.body overrides if provided
+        if (req.body.columnTypes) {
+            columnTypes = { ...columnTypes, ...req.body.columnTypes };
+        }
+        if (req.body.rowCount) {
+            rowCount = req.body.rowCount;
+        }
+
+        // Import DE agent and get analysis-specific preparations
+        const { DataEngineerAgent } = await import("../services/data-engineer-agent");
+        const deAgent = new DataEngineerAgent();
+
+        const preparations = await deAgent.suggestTransformationsForAnalyses({
+            analysisTypes,
+            availableColumns,
+            columnTypes,
+            dataStats: {
+                rowCount,
+                nullPercents,
+                hasOutliers: undefined, // Would need outlier detection to determine
+                isNormalized: false,
+                isSortedByTime: false
+            },
+            // P1-5 FIX: Pass element mappings for combined readiness calculation
+            elementMappings: Array.isArray(elementMappings) ? elementMappings : undefined
+        });
+
+        console.log(`✅ [Analysis Prep] Generated preparation requirements for ${analysisTypes.length} analyses`);
+        console.log(`   Overall readiness: ${preparations.overallReadiness.readinessPercentage}%`);
+        console.log(`   Ready: ${preparations.overallReadiness.readyAnalyses.join(', ') || 'None'}`);
+        console.log(`   Not ready: ${preparations.overallReadiness.notReadyAnalyses.join(', ') || 'None'}`);
+
+        return res.json({
+            success: true,
+            preparations,
+            dataContext: {
+                availableColumns,
+                columnTypes,
+                rowCount,
+                datasetCount: datasets?.length || 0
+            }
+        });
+
+    } catch (error: any) {
+        console.error("❌ [Analysis Prep] Failed:", error);
+        return res.status(500).json({
+            success: false,
+            error: "Failed to generate analysis preparation requirements",
+            details: error.message
+        });
+    }
+});
+
+/**
  * D3 FIX: Execute transformations with multi-dataset join support
  * Frontend expects: POST /api/projects/:id/execute-transformations
  * Payload: { transformationSteps, mappings, questionAnswerMapping, joinConfig }
@@ -6961,11 +7265,64 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
             }
         }
 
+        // P0-1 FIX: Load business context from DS Agent's calculation definitions
+        // This ensures transformations use the semantic definitions from the Prepare step
+        const projectForContext = await storage.getProject(projectId);
+        const journeyProgress = (projectForContext as any)?.journeyProgress;
+        const reqDoc = journeyProgress?.requirementsDocument;
+        const businessContext: Record<string, any> = {};
+
+        if (reqDoc?.requiredDataElements && Array.isArray(reqDoc.requiredDataElements)) {
+            console.log(`📚 [P0-1 FIX] Loading business context from ${reqDoc.requiredDataElements.length} DS Agent elements`);
+            for (const element of reqDoc.requiredDataElements) {
+                const calcDef = element.calculationDefinition;
+                if (calcDef) {
+                    const elementName = element.elementName || element.name;
+                    businessContext[elementName] = {
+                        calculationType: calcDef.calculationType,
+                        formula: calcDef.formula,
+                        componentFields: calcDef.formula?.componentFields || [],
+                        aggregationMethod: calcDef.formula?.aggregationMethod,
+                        businessDescription: calcDef.formula?.businessDescription,
+                        dataType: element.dataType
+                    };
+                    console.log(`   📋 ${elementName}: ${calcDef.calculationType} - ${calcDef.formula?.businessDescription || 'no description'}`);
+                }
+            }
+            console.log(`📚 [P0-1 FIX] Loaded ${Object.keys(businessContext).length} business definitions`);
+        }
+
+        // Also check mappings for calculationDefinition (passed from frontend)
+        if (Array.isArray(mappings)) {
+            for (const m of mappings) {
+                if (m.calculationDefinition && m.targetElement && !businessContext[m.targetElement]) {
+                    businessContext[m.targetElement] = {
+                        calculationType: m.calculationDefinition.calculationType,
+                        formula: m.calculationDefinition.formula,
+                        componentFields: m.calculationDefinition.formula?.componentFields || [],
+                        aggregationMethod: m.calculationDefinition.formula?.aggregationMethod,
+                        businessDescription: m.calculationDefinition.formula?.businessDescription
+                    };
+                }
+            }
+        }
+
         // APPLY TRANSFORMATIONS in order
         for (const step of transformationSteps) {
             // MULTI-COLUMN FIX: Handle both new format (operation, sourceColumns) and legacy (type, config)
             const { type, config, operation, sourceColumns, aggregationFunction, targetElement } = step || {};
             const transformationType = type || operation;
+
+            // P0-1 FIX: Enhance step with business context if available
+            const context = targetElement ? businessContext[targetElement] : null;
+            if (context) {
+                console.log(`📊 [P0-1 FIX] Using business context for ${targetElement}:`, {
+                    type: context.calculationType,
+                    method: context.aggregationMethod,
+                    fields: context.componentFields?.slice(0, 3)
+                });
+            }
+
             console.log(`📊 [D3 FIX] Applying transformation: ${transformationType} (sourceColumns: ${sourceColumns?.length || 0})`);
 
             switch (transformationType) {
@@ -7015,11 +7372,27 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
                 case 'derive': {
                     // MULTI-COLUMN FIX: Handle both legacy config format and new direct format
                     const configSourceColumns = config?.sourceColumns;
-                    const cols = sourceColumns || configSourceColumns;
                     const newColumn = targetElement || config?.newColumn;
-                    const aggFn = aggregationFunction || config?.expression || config?.aggregationFunction || 'avg';
+
+                    // P0-1 FIX: Use business context to determine source columns and aggregation method
+                    // Priority: business context > explicit sourceColumns > config
+                    const bizContext = newColumn ? businessContext[newColumn] : null;
+                    const cols = bizContext?.componentFields?.length > 0
+                        ? bizContext.componentFields
+                        : (sourceColumns || configSourceColumns);
+                    const aggFn = bizContext?.aggregationMethod
+                        || aggregationFunction
+                        || config?.expression
+                        || config?.aggregationFunction
+                        || 'avg';
 
                     if (newColumn && cols?.length) {
+                        // P0-1 FIX: Log business context usage
+                        if (bizContext) {
+                            console.log(`📊 [DERIVE P0-1] Using DS Agent business definition for ${newColumn}:`);
+                            console.log(`   Type: ${bizContext.calculationType}, Method: ${bizContext.aggregationMethod}`);
+                            console.log(`   Description: ${bizContext.businessDescription || 'N/A'}`);
+                        }
                         console.log(`📊 [DERIVE] Creating ${newColumn} from columns [${cols.join(', ')}] using ${aggFn}`);
 
                         workingData = workingData.map((r) => {
@@ -7149,6 +7522,36 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
                 default:
                     console.log(`📊 [D3 FIX] Unknown transformation type: ${type}`);
                     break;
+            }
+        }
+
+        // ✅ P1 FIX: Apply column renaming based on mappings (source -> target element names)
+        // This makes the transformed data use semantic element names instead of raw column names
+        if (Array.isArray(mappings) && mappings.length > 0) {
+            // Build a rename map: sourceColumn -> targetElement
+            const renameMap: Record<string, string> = {};
+            for (const mapping of mappings) {
+                const source = mapping.sourceColumn;
+                const target = mapping.targetElement || mapping.elementName;
+                // Only rename if source column exists and is different from target
+                if (source && target && source !== target) {
+                    renameMap[source] = target;
+                }
+            }
+
+            if (Object.keys(renameMap).length > 0) {
+                console.log(`📊 [P1 FIX] Renaming ${Object.keys(renameMap).length} columns to target element names`);
+                console.log(`   Rename map:`, renameMap);
+
+                workingData = workingData.map(row => {
+                    const newRow: Record<string, any> = {};
+                    for (const [key, value] of Object.entries(row)) {
+                        // Use target element name if mapped, otherwise keep original
+                        const newKey = renameMap[key] || key;
+                        newRow[newKey] = value;
+                    }
+                    return newRow;
+                });
             }
         }
 
@@ -7896,24 +8299,16 @@ router.get("/:id/upload-sla", ensureAuthenticated, async (req, res) => {
 /**
  * GET /api/projects/:id/cost-estimate
  * Calculate analysis cost estimate for a project
- * ✅ FIX: Cost Estimate Endpoint (was returning 404 causing hardcoded $35 fallback)
+ * ✅ V-1 FIX: Now uses CostEstimationService with admin-configurable pricing
+ * ✅ P0 FIX: Added requireOwnership('project') middleware for consistent auth
  */
-router.get("/:id/cost-estimate", ensureAuthenticated, async (req, res) => {
+router.get("/:id/cost-estimate", ensureAuthenticated, requireOwnership('project'), async (req, res) => {
     try {
         const projectId = req.params.id;
-        const userId = (req.user as any)?.id;
-        const userIsAdmin = (req.user as any)?.isAdmin || false;
-
-        if (!userId) {
-            return res.status(401).json({ success: false, error: "Authentication required" });
+        const project = await storage.getProject(projectId);
+        if (!project) {
+            return res.status(404).json({ success: false, error: 'Project not found' });
         }
-
-        const access = await canAccessProject(userId, projectId, userIsAdmin);
-        if (!access.allowed) {
-            return res.status(403).json({ success: false, error: access.reason });
-        }
-
-        const project = access.project;
 
         // Check if cost already locked
         if ((project as any).lockedCostEstimate) {
@@ -7924,79 +8319,66 @@ router.get("/:id/cost-estimate", ensureAuthenticated, async (req, res) => {
                 estimatedCost: lockedCost,
                 totalCost: lockedCost,
                 breakdown: (project as any).costBreakdown || {},
-                isLocked: true
+                isLocked: true,
+                creditsRequired: Math.ceil(lockedCost * 100)
             });
         }
 
-        // Calculate cost based on data and analyses using hybrid PricingService
+        // Get project data size
         const projectDatasets = await storage.getProjectDatasets(projectId);
         const totalRows = projectDatasets.reduce((sum: number, pd: { dataset: any }) => sum + (pd.dataset?.recordCount || 0), 0);
+        const totalColumns = projectDatasets.reduce((sum: number, pd: { dataset: any }) => {
+            const schema = pd.dataset?.schema || {};
+            return sum + Object.keys(schema).length;
+        }, 0);
 
         const journeyProgress = (project as any).journeyProgress || {};
         const analysisPath = journeyProgress.requirementsDocument?.analysisPath || [];
 
-        // PHASE 6 FIX: Use PricingService.calculateAnalysisCost() for hybrid pricing
-        // This considers: analysis type factors, complexity multipliers, data size scaling
-        let totalCost = 0;
-        const perAnalysisCosts: Array<{ analysisType: string; cost: number; complexity: string }> = [];
+        // Extract analysis types from the analysis path
+        const analysisTypes = analysisPath.length > 0
+            ? analysisPath.map((a: any) => a.analysisType || 'statistical')
+            : ['statistical'];
 
-        if (analysisPath.length > 0) {
-            for (const analysis of analysisPath) {
-                // Determine complexity from analysis metadata or default to 'intermediate'
-                const complexity = (analysis.complexity as 'basic' | 'intermediate' | 'advanced') || 'intermediate';
-                const analysisType = analysis.analysisType || 'statistical';
+        // Determine complexity based on analysis path
+        const complexity = analysisPath.length > 0
+            ? (analysisPath[0].complexity || 'intermediate')
+            : 'basic';
 
-                const costResult = PricingService.calculateAnalysisCost(
-                    analysisType,
-                    totalRows,
-                    complexity
-                );
-
-                totalCost += costResult.totalCost;
-                perAnalysisCosts.push({
-                    analysisType,
-                    cost: costResult.totalCost,
-                    complexity
-                });
-            }
-        } else {
-            // Fallback for projects without analysis path - use default pricing
-            const defaultCost = PricingService.calculateAnalysisCost('statistical', totalRows, 'basic');
-            totalCost = defaultCost.totalCost;
-            perAnalysisCosts.push({
-                analysisType: 'statistical',
-                cost: defaultCost.totalCost,
-                complexity: 'basic'
-            });
+        // Determine artifacts to generate
+        const includeArtifacts = ['report'];
+        if (journeyProgress.generateVisualization !== false) {
+            includeArtifacts.push('dashboard');
         }
 
-        // Add platform base fee (uses admin-configurable value from PricingService)
-        const platformFee = PricingService.getPlatformFee();
-        totalCost += platformFee;
+        // Use CostEstimationService for admin-configurable pricing
+        const { CostEstimationService } = await import('../services/cost-estimation-service');
+        const estimate = await CostEstimationService.estimateAnalysisCost(
+            projectId,
+            analysisTypes,
+            { rows: totalRows, columns: totalColumns },
+            complexity as 'basic' | 'intermediate' | 'advanced' | 'expert',
+            includeArtifacts
+        );
 
-        console.log(`✅ [Cost Estimate] Calculated $${totalCost.toFixed(2)} for project ${projectId} using hybrid pricing`);
-        console.log(`   - ${totalRows} rows, ${analysisPath.length || 1} analyses`);
-        console.log(`   - Per-analysis breakdown:`, perAnalysisCosts);
+        console.log(`✅ [Cost Estimate] Calculated $${estimate.totalCost.toFixed(2)} for project ${projectId} using admin pricing config`);
+        console.log(`   - ${totalRows} rows, ${analysisTypes.length} analyses, ${complexity} complexity`);
+        console.log(`   - Credits required: ${estimate.creditsRequired}`);
 
         return res.json({
             success: true,
-            estimatedCost: parseFloat(totalCost.toFixed(2)),
-            totalCost: parseFloat(totalCost.toFixed(2)),
-            breakdown: {
-                platformFee,
-                rowsProcessed: totalRows,
-                analysisCount: analysisPath.length || 1,
-                perAnalysisCosts,
-                // Pricing factors used (for transparency)
-                pricingFactors: {
-                    statistical: 1.0,
-                    machine_learning: 2.5,
-                    visualization: 0.5,
-                    business_intelligence: 1.5,
-                    time_series: 2.0
-                }
-            },
-            isLocked: false
+            estimatedCost: estimate.totalCost,
+            totalCost: estimate.totalCost,
+            creditsRequired: estimate.creditsRequired,
+            estimatedDuration: estimate.estimatedDuration,
+            confidenceScore: estimate.confidenceScore,
+            breakdown: estimate.breakdown,
+            warnings: estimate.warnings,
+            currency: estimate.currency,
+            isLocked: false,
+            // Legacy format for backward compatibility
+            analysisCount: analysisTypes.length,
+            rowsProcessed: totalRows
         });
     } catch (error: any) {
         console.error('❌ [Cost Estimate] Error calculating cost estimate:', error);
@@ -8371,6 +8753,408 @@ router.get("/:id/can-proceed", ensureAuthenticated, async (req, res) => {
 
     } catch (error: any) {
         console.error('❌ [FIX 2.2] Error checking can-proceed:', error);
+        return res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ========================================
+// NATURAL LANGUAGE TRANSLATION ENDPOINTS
+// ========================================
+
+/**
+ * Translate content for target audience
+ * POST /api/projects/:id/translate
+ */
+router.post('/:id/translate', ensureAuthenticated, async (req, res) => {
+    try {
+        const projectId = req.params.id;
+        const userId = (req.user as any)?.id;
+        const isAdmin = (req.user as any)?.isAdmin || false;
+
+        // Verify ownership
+        const accessCheck = await canAccessProject(userId, projectId, isAdmin);
+        if (!accessCheck.allowed) {
+            return res.status(403).json({ success: false, error: accessCheck.reason });
+        }
+
+        const { type, content, audience, industry } = req.body;
+
+        if (!type || !content || !audience) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required fields: type, content, audience'
+            });
+        }
+
+        // Import translator
+        const { naturalLanguageTranslator } = await import('../services/natural-language-translator');
+
+        const context = {
+            audience: audience as any,
+            industry,
+            projectName: (accessCheck.project as any)?.name
+        };
+
+        let result;
+        switch (type) {
+            case 'schema':
+                result = await naturalLanguageTranslator.translateSchemaWithAI(content, context);
+                break;
+            case 'results':
+                result = await naturalLanguageTranslator.translateResultsWithAI(content, context);
+                break;
+            case 'quality':
+                result = await naturalLanguageTranslator.translateQualityWithAI(content, context);
+                break;
+            case 'error':
+                result = await naturalLanguageTranslator.translateErrorWithAI(content, context);
+                break;
+            default:
+                return res.status(400).json({
+                    success: false,
+                    error: `Unknown translation type: ${type}. Valid types: schema, results, quality, error`
+                });
+        }
+
+        console.log(`✅ [Translation] Translated ${type} for ${audience} audience (cached: ${result.cached})`);
+
+        return res.json({
+            success: result.success,
+            data: result.data,
+            cached: result.cached,
+            provider: result.provider,
+            error: result.error
+        });
+
+    } catch (error: any) {
+        console.error('❌ [Translation] Error:', error);
+        return res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * Clarify a technical term
+ * POST /api/projects/:id/clarify-term
+ */
+router.post('/:id/clarify-term', ensureAuthenticated, async (req, res) => {
+    try {
+        const projectId = req.params.id;
+        const userId = (req.user as any)?.id;
+        const isAdmin = (req.user as any)?.isAdmin || false;
+
+        // Verify ownership
+        const accessCheck = await canAccessProject(userId, projectId, isAdmin);
+        if (!accessCheck.allowed) {
+            return res.status(403).json({ success: false, error: accessCheck.reason });
+        }
+
+        const { term, context, audience } = req.body;
+
+        if (!term || !audience) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required fields: term, audience'
+            });
+        }
+
+        // Import translator
+        const { naturalLanguageTranslator } = await import('../services/natural-language-translator');
+
+        const result = await naturalLanguageTranslator.clarifyTermWithAI(
+            term,
+            context || 'data analysis',
+            audience as any
+        );
+
+        return res.json({
+            success: result.success,
+            data: result.data,
+            cached: result.cached,
+            error: result.error
+        });
+
+    } catch (error: any) {
+        console.error('❌ [Clarify Term] Error:', error);
+        return res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * Check and correct grammar
+ * POST /api/projects/:id/check-grammar
+ */
+router.post('/:id/check-grammar', ensureAuthenticated, async (req, res) => {
+    try {
+        const { text } = req.body;
+
+        if (!text) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required field: text'
+            });
+        }
+
+        // Import translator
+        const { naturalLanguageTranslator } = await import('../services/natural-language-translator');
+
+        const result = await naturalLanguageTranslator.checkGrammarWithAI(text);
+
+        return res.json({
+            success: result.success,
+            data: result.data,
+            cached: result.cached,
+            error: result.error
+        });
+
+    } catch (error: any) {
+        console.error('❌ [Grammar Check] Error:', error);
+        return res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ==========================================
+// CLARIFICATION ENDPOINTS
+// ==========================================
+
+/**
+ * Get pending clarification requests for a project
+ * GET /api/projects/:id/clarifications
+ */
+router.get('/:id/clarifications', ensureAuthenticated, async (req, res) => {
+    try {
+        const projectId = req.params.id;
+        const userId = (req.user as any)?.id;
+        const isAdmin = (req.user as any)?.isAdmin || false;
+
+        // Check access
+        const access = await canAccessProject(userId, projectId, isAdmin);
+        if (!access.allowed) {
+            return res.status(403).json({ success: false, error: access.reason });
+        }
+
+        // Import clarification service
+        const { clarificationService } = await import('../services/clarification-service');
+
+        const pending = await clarificationService.getPendingClarifications(projectId);
+        const history = await clarificationService.getClarificationHistory(projectId);
+
+        return res.json({
+            success: true,
+            data: {
+                pending,
+                history,
+                hasPending: pending !== null && pending.status === 'pending'
+            }
+        });
+
+    } catch (error: any) {
+        console.error('❌ [Clarifications] Error getting clarifications:', error);
+        return res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * Detect ambiguities in user input
+ * POST /api/projects/:id/clarifications/detect
+ */
+router.post('/:id/clarifications/detect', ensureAuthenticated, async (req, res) => {
+    try {
+        const projectId = req.params.id;
+        const userId = (req.user as any)?.id;
+        const isAdmin = (req.user as any)?.isAdmin || false;
+        const { input, inputType, context } = req.body;
+
+        if (!input) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required field: input'
+            });
+        }
+
+        // Check access
+        const access = await canAccessProject(userId, projectId, isAdmin);
+        if (!access.allowed) {
+            return res.status(403).json({ success: false, error: access.reason });
+        }
+
+        const project = access.project;
+
+        // Import clarification service
+        const { clarificationService } = await import('../services/clarification-service');
+
+        // Build detection context from project data
+        const detectionContext = {
+            industry: project.industry || context?.industry,
+            journeyType: (project as any).journeyType || 'data_analysis',
+            existingColumns: context?.existingColumns || [],
+            userRole: context?.userRole,
+            projectGoals: project.goals ? [project.goals] : []
+        };
+
+        const result = await clarificationService.detectAmbiguities(
+            input,
+            detectionContext,
+            inputType || 'goal'
+        );
+
+        // If ambiguities found, optionally create a clarification request
+        if (result.hasAmbiguities && req.body.createRequest !== false) {
+            await clarificationService.createClarificationRequest(
+                projectId,
+                result.questions,
+                input,
+                inputType || 'goal'
+            );
+        }
+
+        return res.json({
+            success: true,
+            data: result
+        });
+
+    } catch (error: any) {
+        console.error('❌ [Clarifications] Error detecting ambiguities:', error);
+        return res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * Submit answers to clarification questions
+ * POST /api/projects/:id/clarifications/submit
+ */
+router.post('/:id/clarifications/submit', ensureAuthenticated, async (req, res) => {
+    try {
+        const projectId = req.params.id;
+        const userId = (req.user as any)?.id;
+        const isAdmin = (req.user as any)?.isAdmin || false;
+        const { answers } = req.body;
+
+        if (!answers || !Array.isArray(answers)) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required field: answers (array)'
+            });
+        }
+
+        // Check access
+        const access = await canAccessProject(userId, projectId, isAdmin);
+        if (!access.allowed) {
+            return res.status(403).json({ success: false, error: access.reason });
+        }
+
+        // Import clarification service
+        const { clarificationService } = await import('../services/clarification-service');
+
+        // Format answers with timestamp
+        const formattedAnswers = answers.map((a: any) => ({
+            questionId: a.questionId,
+            answer: a.answer,
+            answeredAt: new Date().toISOString(),
+            modifiedOriginal: a.modifiedOriginal || false
+        }));
+
+        const result = await clarificationService.submitClarificationAnswers(
+            projectId,
+            formattedAnswers
+        );
+
+        return res.json({
+            success: result.success,
+            data: {
+                revisedInput: result.revisedInput,
+                remainingQuestions: result.remainingQuestions
+            }
+        });
+
+    } catch (error: any) {
+        console.error('❌ [Clarifications] Error submitting answers:', error);
+        return res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * Skip clarification (proceed without answering)
+ * POST /api/projects/:id/clarifications/skip
+ */
+router.post('/:id/clarifications/skip', ensureAuthenticated, async (req, res) => {
+    try {
+        const projectId = req.params.id;
+        const userId = (req.user as any)?.id;
+        const isAdmin = (req.user as any)?.isAdmin || false;
+
+        // Check access
+        const access = await canAccessProject(userId, projectId, isAdmin);
+        if (!access.allowed) {
+            return res.status(403).json({ success: false, error: access.reason });
+        }
+
+        // Import clarification service
+        const { clarificationService } = await import('../services/clarification-service');
+
+        const success = await clarificationService.skipClarification(projectId);
+
+        return res.json({
+            success,
+            message: success ? 'Clarification skipped' : 'No pending clarification to skip'
+        });
+
+    } catch (error: any) {
+        console.error('❌ [Clarifications] Error skipping clarification:', error);
+        return res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * Validate user input without creating a request
+ * POST /api/projects/:id/clarifications/validate
+ */
+router.post('/:id/clarifications/validate', ensureAuthenticated, async (req, res) => {
+    try {
+        const projectId = req.params.id;
+        const userId = (req.user as any)?.id;
+        const isAdmin = (req.user as any)?.isAdmin || false;
+        const { input, inputType, context } = req.body;
+
+        if (!input) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required field: input'
+            });
+        }
+
+        // Check access
+        const access = await canAccessProject(userId, projectId, isAdmin);
+        if (!access.allowed) {
+            return res.status(403).json({ success: false, error: access.reason });
+        }
+
+        const project = access.project;
+
+        // Import clarification service
+        const { clarificationService } = await import('../services/clarification-service');
+
+        // Build detection context
+        const detectionContext = {
+            industry: project.industry || context?.industry,
+            journeyType: (project as any).journeyType || 'data_analysis',
+            existingColumns: context?.existingColumns || [],
+            userRole: context?.userRole,
+            projectGoals: project.goals ? [project.goals] : []
+        };
+
+        const result = await clarificationService.validateInput(
+            input,
+            detectionContext,
+            inputType || 'goal'
+        );
+
+        return res.json({
+            success: true,
+            data: result
+        });
+
+    } catch (error: any) {
+        console.error('❌ [Clarifications] Error validating input:', error);
         return res.status(500).json({ success: false, error: error.message });
     }
 });

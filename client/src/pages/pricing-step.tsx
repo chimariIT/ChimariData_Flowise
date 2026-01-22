@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -144,6 +145,9 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
   const [currentTier, setCurrentTier] = useState<string>('');
   const [paymentProcessing, setPaymentProcessing] = useState<boolean>(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
+  // P0-3 FIX: Guards to prevent infinite payment verification loop
+  const [hasProcessedPayment, setHasProcessedPayment] = useState<boolean>(false);
+  const [paymentVerificationResult, setPaymentVerificationResult] = useState<'success' | 'pending' | 'failed' | 'cancelled' | null>(null);
 
   // ✅ PHASE 7 FIX: Backend cost estimate - single source of truth for pricing
   const [backendCostEstimate, setBackendCostEstimate] = useState<{
@@ -293,11 +297,11 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
     insightsFound: 0,
   };
 
-  const { summary: analysisResults, warning: validationWarning } = useMemo(() => {
+  const { summary: analysisResults, warning: validationWarning, isPreExecution } = useMemo(() => {
     let warning: string | null = null;
     let summary: AnalysisSummary = { ...defaultAnalysisSummary };
 
-    // 1. Priority: journeyProgress.executionSummary (SSOT)
+    // 1. Priority: journeyProgress.executionSummary (SSOT - post-execution)
     if (journeyProgress?.executionSummary) {
       const summaryData = journeyProgress.executionSummary;
       summary = {
@@ -313,23 +317,29 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
         warning = '⚠️ SECURITY: Execution results missing analysisResultsId. Results may be unvalidated.';
       }
 
-      return { summary, warning };
+      return { summary, warning, isPreExecution: false };
     }
 
     // 2. Fallback: Check if execution was completed but summary not saved
     if (journeyProgress?.executionCompletedAt && !journeyProgress?.executionSummary) {
       warning = '⚠️ Execution completed but summary not available. Please refresh the page.';
-      // Use defaults but indicate execution happened
       summary = {
         ...defaultAnalysisSummary,
-        totalAnalyses: 1, // Assume at least one analysis was run
+        totalAnalyses: 1,
       };
-      return { summary, warning };
+      return { summary, warning, isPreExecution: false };
     }
 
-    // 3. No execution yet
-    warning = '⚠️ No execution results found. Please run analysis before viewing pricing.';
-    return { summary, warning };
+    // 3. Pre-execution: Use requirementsDocument for planned analysis count
+    const analysisPath = journeyProgress?.requirementsDocument?.analysisPath;
+    const plannedAnalyses = Array.isArray(analysisPath) ? analysisPath.length : 0;
+    summary = {
+      ...defaultAnalysisSummary,
+      totalAnalyses: Math.max(1, plannedAnalyses),
+      complexity: 'intermediate',
+    };
+    // No warning when we have a backend cost estimate - this is a valid pre-execution estimate
+    return { summary, warning: null, isPreExecution: true };
   }, [journeyProgress]);
 
   // ✅ PHASE 3 FIX: Compute dataset size from actual datasets.recordCount first
@@ -364,28 +374,30 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
     return analysisResults.dataSize || 0;
   }, [datasets, analysisResults.dataSize]);
 
+  // Client-side fallback pricing aligned with CostEstimationService
+  // Only used when backend estimate is unavailable (Priority 4 in authoritativeCostCents)
   const calculatePricing = useMemo(() => {
-    let basePrice = journeyInfo.basePrice;
+    const basePlatformFee = 0.50;
+    const dataProcessingPer1K = 0.10;
+    const baseAnalysisCost = 1.00;
 
-    // Data size multiplier (per MB)
-    const dataSizeCost = Math.max(0, (analysisResults.dataSize - 1000) * 0.001); // $0.001 per MB over 1GB
-
-    // Complexity multiplier
+    // Complexity multiplier (matching CostEstimationService)
     let complexityMultiplier = 1.0;
-    if (analysisResults.complexity === 'moderate') complexityMultiplier = 1.2;
-    if (analysisResults.complexity === 'complex') complexityMultiplier = 1.5;
-    if (analysisResults.complexity === 'expert') complexityMultiplier = 2.0;
+    if (analysisResults.complexity === 'moderate' || analysisResults.complexity === 'intermediate') complexityMultiplier = 1.5;
+    if (analysisResults.complexity === 'complex' || analysisResults.complexity === 'advanced') complexityMultiplier = 2.5;
+    if (analysisResults.complexity === 'expert') complexityMultiplier = 4.0;
 
-    // Analysis count multiplier (per analysis)
-    let analysisMultiplier = 1.0;
-    if (analysisResults.totalAnalyses > 2) analysisMultiplier = 1.1;
-    if (analysisResults.totalAnalyses > 4) analysisMultiplier = 1.2;
+    // Data processing cost
+    const dataRows = totalDataRows || analysisResults.dataSize || 0;
+    const dataCost = (dataRows / 1000) * dataProcessingPer1K;
 
-    // Calculate per-analysis cost
-    const perAnalysisCost = Math.round((basePrice + dataSizeCost) * complexityMultiplier * analysisMultiplier);
+    // Analysis cost (default type factor = 1.0 per analysis)
+    const analysisCount = Math.max(1, analysisResults.totalAnalyses);
+    const analysisCost = baseAnalysisCost * analysisCount * complexityMultiplier;
 
-    return perAnalysisCost;
-  }, [journeyInfo.basePrice, analysisResults.dataSize, analysisResults.complexity, analysisResults.totalAnalyses]);
+    const totalCost = basePlatformFee + dataCost + analysisCost;
+    return parseFloat(totalCost.toFixed(2));
+  }, [analysisResults.dataSize, analysisResults.complexity, analysisResults.totalAnalyses, totalDataRows]);
 
   const finalPrice = calculatePricing;
 
@@ -453,16 +465,16 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
         locked: Boolean(backendCostEstimate?.isLocked || lockedCostCents),
         // ✅ PHASE 7 FIX: Use backend breakdown when available for accurate display
         pricingDetails: backendCostEstimate?.breakdown ? {
-          baseCost: backendCostEstimate.breakdown.basePlatformFee || 5,
+          baseCost: backendCostEstimate.breakdown.basePlatformFee || 0.50,
           dataSizeCost: backendCostEstimate.breakdown.dataProcessing || 0,
           analysisExecutionCost: backendCostEstimate.breakdown.analysisExecution || 0,
           rowsProcessed: backendCostEstimate.breakdown.rowsProcessed || 0,
           analysisCount: backendCostEstimate.breakdown.analysisTypes || 1
         } : {
-          baseCost: journeyInfo.basePrice,
-          dataSizeCost: Math.max(0, (analysisResults.dataSize - 1000) * 0.001),
-          complexityMultiplier: analysisResults.complexity === 'moderate' ? 1.2 : analysisResults.complexity === 'complex' ? 1.5 : analysisResults.complexity === 'expert' ? 2.0 : 1.0,
-          analysisCount: analysisResults.totalAnalyses
+          baseCost: 0.50, // CostEstimationService basePlatformFee
+          dataSizeCost: (totalDataRows / 1000) * 0.10,
+          complexityMultiplier: analysisResults.complexity === 'intermediate' ? 1.5 : analysisResults.complexity === 'advanced' ? 2.5 : analysisResults.complexity === 'expert' ? 4.0 : 1.0,
+          analysisCount: analysisResults.totalAnalyses || 1
         }
       },
       {
@@ -502,7 +514,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
         minVolume: '100+ analyses/month'
       }
     ];
-  }, [analysisResults, authoritativeCostCents, journeyInfo.basePrice, lockedCostCents, backendCostEstimate]);
+  }, [analysisResults, authoritativeCostCents, lockedCostCents, backendCostEstimate, totalDataRows]);
 
   // Load billing breakdown from server so subscription credits are applied
   useEffect(() => {
@@ -578,28 +590,30 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
   }, [projectId, journeyType, datasetSizeMB, finalPrice]);
 
   // Handle payment success/cancel URL parameters (after Stripe redirect)
+  // P0-3 FIX: Prevent infinite loop by using hasProcessedPayment guard and removing toast from deps
   useEffect(() => {
+    if (hasProcessedPayment) return; // Guard: prevent re-runs
+
     const urlParams = new URLSearchParams(window.location.search);
     const paymentStatus = urlParams.get('payment');
     const sessionId = urlParams.get('session_id');
 
-    if (!paymentStatus || !projectId) return;
+    if (!paymentStatus || !projectId || !sessionId) return;
 
     const handlePaymentCallback = async () => {
-      if (paymentStatus === 'success' && sessionId) {
+      if (paymentStatus === 'success') {
         // Verify payment with backend
         try {
           setPaymentProcessing(true);
+          setHasProcessedPayment(true); // Set guard BEFORE async call to prevent race conditions
+
           const response = await apiClient.post('/api/payment/verify-session', {
             sessionId,
             projectId
           });
 
           if (response.success && response.paymentStatus === 'paid') {
-            toast({
-              title: "Payment Successful!",
-              description: "Your payment has been verified. Redirecting to results...",
-            });
+            setPaymentVerificationResult('success');
 
             // Clear URL parameters
             window.history.replaceState({}, document.title, window.location.pathname);
@@ -611,34 +625,19 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
               }
             }, 1500);
           } else if (response.paymentStatus === 'pending') {
-            toast({
-              title: "Payment Processing",
-              description: "Your payment is still being processed. Please wait...",
-            });
+            setPaymentVerificationResult('pending');
           } else {
-            toast({
-              title: "Payment Issue",
-              description: response.message || "There was an issue with your payment. Please try again.",
-              variant: "destructive"
-            });
+            setPaymentVerificationResult('failed');
           }
         } catch (error: any) {
           console.error('Payment verification error:', error);
-          toast({
-            title: "Verification Failed",
-            description: "Could not verify payment. Please contact support if you were charged.",
-            variant: "destructive"
-          });
+          setPaymentVerificationResult('failed');
         } finally {
           setPaymentProcessing(false);
         }
       } else if (paymentStatus === 'cancelled') {
-        // Handle cancelled payment
-        toast({
-          title: "Payment Cancelled",
-          description: "You cancelled the payment. You can try again when ready.",
-          variant: "default"
-        });
+        setHasProcessedPayment(true);
+        setPaymentVerificationResult('cancelled');
 
         // Clear URL parameters
         window.history.replaceState({}, document.title, window.location.pathname);
@@ -653,7 +652,36 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
     };
 
     handlePaymentCallback();
-  }, [projectId, onNext, toast]);
+  }, [projectId, hasProcessedPayment, onNext]);
+
+  // P0-3 FIX: Separate effect for toast notifications based on verification result
+  useEffect(() => {
+    if (!paymentVerificationResult) return;
+
+    if (paymentVerificationResult === 'success') {
+      toast({
+        title: "Payment Successful!",
+        description: "Your payment has been verified. Redirecting to results...",
+      });
+    } else if (paymentVerificationResult === 'pending') {
+      toast({
+        title: "Payment Processing",
+        description: "Your payment is still being processed. Please wait...",
+      });
+    } else if (paymentVerificationResult === 'failed') {
+      toast({
+        title: "Payment Issue",
+        description: "There was an issue with your payment. Please try again.",
+        variant: "destructive"
+      });
+    } else if (paymentVerificationResult === 'cancelled') {
+      toast({
+        title: "Payment Cancelled",
+        description: "You cancelled the payment. You can try again when ready.",
+        variant: "default"
+      });
+    }
+  }, [paymentVerificationResult, toast]);
 
   const paymentMethods = [
     { id: 'card', name: 'Credit/Debit Card', icon: CreditCard, description: 'Visa, Mastercard, American Express' },
@@ -859,9 +887,14 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
                   <p className={`text-xs ${isEstimatedPricing ? 'text-yellow-700' : 'text-blue-700'}`}>
                     {isEstimatedPricing ? 'Estimated cost *' : 'Locked cost'}
                   </p>
-                  <p className={`text-lg font-semibold ${isEstimatedPricing ? 'text-yellow-900' : 'text-blue-900'}`} data-testid="pricing-locked-cost">
-                    {formatCurrency(lockedCostCents ?? authoritativeCostCents, true)}
-                  </p>
+                  {/* P0-2 FIX: Show skeleton while cost is loading */}
+                  {backendCostLoading ? (
+                    <Skeleton className="h-7 w-24 mt-1" />
+                  ) : (
+                    <p className={`text-lg font-semibold ${isEstimatedPricing ? 'text-yellow-900' : 'text-blue-900'}`} data-testid="pricing-locked-cost">
+                      {formatCurrency(lockedCostCents ?? authoritativeCostCents, true)}
+                    </p>
+                  )}
                   {isEstimatedPricing && (
                     <p className="text-xs text-yellow-600 mt-1">* Final cost calculated at checkout</p>
                   )}
@@ -1038,28 +1071,31 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
         <CardContent>
           <div className="space-y-4">
             <div className="flex justify-between items-center">
-              <span className="text-sm text-gray-600">Base Analysis Cost ({journeyType} journey)</span>
-              <span className="font-medium">${journeyInfo.basePrice}</span>
+              <span className="text-sm text-gray-600">Platform Fee</span>
+              <span className="font-medium">${backendCostEstimate?.breakdown?.basePlatformFee?.toFixed(2) || '0.50'}</span>
             </div>
             <div className="flex justify-between items-center">
-              <span className="text-sm text-gray-600">Data Processing ({analysisResults.dataSize.toLocaleString()} rows)</span>
-              <span className="font-medium">${Math.max(0, (analysisResults.dataSize - 1000) * 0.001).toFixed(2)}</span>
+              <span className="text-sm text-gray-600">Data Processing ({(totalDataRows || analysisResults.dataSize).toLocaleString()} rows)</span>
+              <span className="font-medium">${backendCostEstimate?.breakdown?.dataProcessing?.toFixed(2) || ((totalDataRows / 1000) * 0.10).toFixed(2)}</span>
             </div>
             <div className="flex justify-between items-center">
-              <span className="text-sm text-gray-600">Complexity Multiplier ({analysisResults.complexity})</span>
-              <span className="font-medium">×{analysisResults.complexity === 'moderate' ? '1.2' : analysisResults.complexity === 'complex' ? '1.5' : analysisResults.complexity === 'expert' ? '2.0' : '1.0'}</span>
+              <span className="text-sm text-gray-600">Analysis Execution ({analysisResults.totalAnalyses || 1} {analysisResults.totalAnalyses === 1 ? 'type' : 'types'})</span>
+              <span className="font-medium">${backendCostEstimate?.breakdown?.analysisExecution?.toFixed(2) || (1.0 * Math.max(1, analysisResults.totalAnalyses)).toFixed(2)}</span>
             </div>
             <div className="flex justify-between items-center">
-              <span className="text-sm text-gray-600">Analysis Count ({analysisResults.totalAnalyses} analyses)</span>
-              <span className="font-medium">×{analysisResults.totalAnalyses > 2 ? '1.1' : analysisResults.totalAnalyses > 4 ? '1.2' : '1.0'}</span>
+              <span className="text-sm text-gray-600">Analysis Count</span>
+              <span className="font-medium">{analysisResults.totalAnalyses || 1} {isPreExecution ? '(planned)' : ''}</span>
             </div>
             <Separator />
             <div className="flex justify-between items-center text-lg font-semibold">
-              <span>Total Per Analysis</span>
+              <span>{isPreExecution ? 'Estimated Total' : 'Final Total'}</span>
               <span className="text-blue-600">{formatCurrency(authoritativeCostCents, true)}</span>
             </div>
             <div className="text-xs text-gray-500 bg-gray-50 p-2 rounded">
-              💡 This is a one-time cost for this specific analysis. No monthly subscriptions required.
+              {isPreExecution
+                ? '💡 This is an estimated cost based on your planned analyses. Final cost is determined after execution.'
+                : '💡 This is a one-time cost for this specific analysis. No monthly subscriptions required.'
+              }
             </div>
           </div>
         </CardContent>

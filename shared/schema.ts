@@ -356,6 +356,12 @@ export const users = pgTable("users", {
   credits: decimal("credits").default("0"),
   isPaid: boolean("is_paid").default(false), // Added field
 
+  // Trial credits system - for new user onboarding
+  trialCredits: integer("trial_credits").default(100), // Starting credits for new users (100 = $1 worth of analysis)
+  trialCreditsUsed: integer("trial_credits_used").default(0), // Credits consumed by analysis execution
+  trialCreditsRefreshedAt: timestamp("trial_credits_refreshed_at"), // For potential credit refresh cycles
+  trialCreditsExpireAt: timestamp("trial_credits_expire_at"), // When unused credits expire
+
   // Usage tracking for tier limits
   monthlyUploads: integer("monthly_uploads").default(0),
   monthlyDataVolume: integer("monthly_data_volume").default(0), // in MB
@@ -409,6 +415,13 @@ export const users = pgTable("users", {
   ),
   monthlyAIInsightsCheck: check("monthly_ai_insights_check",
     sql`${table.monthlyAIInsights} >= 0`
+  ),
+  // Trial credits constraints
+  trialCreditsCheck: check("trial_credits_check",
+    sql`${table.trialCredits} >= 0`
+  ),
+  trialCreditsUsedCheck: check("trial_credits_used_check",
+    sql`${table.trialCreditsUsed} >= 0`
   ),
   // Indexes for performance
   userRoleStatusIdx: index("user_role_status_idx").on(table.userRole, table.subscriptionStatus),

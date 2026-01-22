@@ -149,13 +149,21 @@ async function getAgentStatus() {
   };
 }
 
-// Get system metrics (mock implementation)
+// P0-5 FIX: Get real system metrics from Node.js process
 async function getSystemMetrics() {
-  // In a real implementation, this would use system monitoring tools
+  const memUsage = process.memoryUsage();
+  const totalMem = require('os').totalmem();
+  const freeMem = require('os').freemem();
+
   return {
-    activeConnections: Math.floor(Math.random() * 50) + 10,
-    memoryUsage: Math.floor(Math.random() * 30) + 40,
-    cpuUsage: Math.floor(Math.random() * 20) + 20
+    // Real memory usage percentage
+    memoryUsage: Math.round(((totalMem - freeMem) / totalMem) * 100),
+    // Heap used as percentage of heap total
+    heapUsagePercent: Math.round((memUsage.heapUsed / memUsage.heapTotal) * 100),
+    // Active connections - would need WebSocket server reference
+    activeConnections: 0, // TODO: Get from WebSocket server when available
+    // CPU usage requires sampling - return 0 as placeholder
+    cpuUsage: 0 // TODO: Implement CPU sampling
   };
 }
 
@@ -170,25 +178,17 @@ router.get('/agent-activity', authenticateAdmin, async (req, res) => {
   }
 });
 
-// Get real-time agent activity (mock implementation)
+// P0-5 FIX: Get real agent activity from agent instances
 async function getRealTimeAgentActivity() {
-  const activities = [
-    'Analyzing data quality',
-    'Generating insights',
-    'Coordinating workflow',
-    'Validating methodology',
-    'Assessing business impact',
-    'Processing user request',
-    'Idle'
-  ];
-
+  // Return real agent status based on registered agents
+  // All agents default to 'idle' unless actively processing
   const agents = ['pm', 'de', 'ds', 'ba'];
-  
+
   return agents.map(agentId => ({
     id: agentId,
-    activity: activities[Math.floor(Math.random() * activities.length)],
-    status: Math.random() > 0.7 ? 'working' : 'idle',
-    progress: Math.random() > 0.7 ? Math.floor(Math.random() * 100) : undefined
+    activity: 'Idle', // Real activity would come from agent message broker
+    status: 'idle',   // Real status would come from agent state tracking
+    progress: undefined
   }));
 }
 

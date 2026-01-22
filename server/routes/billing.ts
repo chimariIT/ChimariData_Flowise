@@ -62,6 +62,155 @@ router.get('/health', async (req, res) => {
 });
 
 /**
+ * GET /api/billing/overage-summary
+ * Get overage charges summary for current user
+ */
+router.get('/overage-summary', ensureAuthenticated, async (req, res) => {
+  try {
+    const userId = (req.user as any)?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Authentication required' });
+    }
+
+    const overageSummary = await billingService.getOverageSummary(userId);
+
+    res.json({
+      success: true,
+      overage: overageSummary,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    console.error('Error getting overage summary:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/billing/trial-credits
+ * Get trial credits status for current user
+ */
+router.get('/trial-credits', ensureAuthenticated, async (req, res) => {
+  try {
+    const userId = (req.user as any)?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Authentication required' });
+    }
+
+    const creditsStatus = await billingService.getTrialCreditsStatus(userId);
+
+    if (!creditsStatus) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    res.json({
+      success: true,
+      trialCredits: {
+        total: creditsStatus.total,
+        used: creditsStatus.used,
+        remaining: creditsStatus.remaining,
+        percentUsed: Math.round(creditsStatus.percentUsed),
+        expired: creditsStatus.expired,
+        expiresAt: creditsStatus.expiresAt?.toISOString() || null,
+        // Credit cost reference for UI
+        costReference: {
+          small: 10,
+          medium: 25,
+          large: 50,
+          extra_large: 100
+        }
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    console.error('Error getting trial credits:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/billing/features
+ * Get available features for current user based on subscription tier
+ * P0-3: Feature access gating - endpoint for frontend to check available features
+ */
+router.get('/features', ensureAuthenticated, async (req, res) => {
+  try {
+    const userId = (req.user as any)?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Authentication required' });
+    }
+
+    // Import feature gate utilities
+    const { getUserFeatures, checkFeatureAccess, GATED_FEATURES } = await import('../middleware/feature-gate');
+
+    const availableFeatures = await getUserFeatures(userId);
+    const user = await storage.getUser(userId);
+    const tier = user?.subscriptionTier || 'none';
+
+    // Build a feature access map for common features
+    const featureAccessMap: Record<string, boolean> = {};
+    for (const [key, featureId] of Object.entries(GATED_FEATURES)) {
+      const result = await checkFeatureAccess(userId, featureId);
+      featureAccessMap[featureId] = result.allowed;
+    }
+
+    res.json({
+      success: true,
+      tier,
+      availableFeatures,
+      featureAccess: featureAccessMap,
+      allFeatures: GATED_FEATURES,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    console.error('Error getting user features:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/billing/features/:featureId
+ * Check if user has access to a specific feature
+ */
+router.get('/features/:featureId', ensureAuthenticated, async (req, res) => {
+  try {
+    const userId = (req.user as any)?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Authentication required' });
+    }
+
+    const { featureId } = req.params;
+    const { checkFeatureAccess } = await import('../middleware/feature-gate');
+
+    const result = await checkFeatureAccess(userId, featureId);
+
+    res.json({
+      success: true,
+      featureId,
+      allowed: result.allowed,
+      tier: result.tier,
+      reason: result.reason,
+      upgradeUrl: result.allowed ? undefined : '/pricing',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    console.error('Error checking feature access:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
  * GET /api/billing/usage-summary
  * Get usage summary for current user
  */

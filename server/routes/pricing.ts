@@ -6,10 +6,17 @@ import { resolveTierForStripeSync } from '../services/stripe-tier-sync-helper';
 import { ensureAuthenticated } from './auth';
 import { requirePermission } from '../middleware/rbac';
 import { db } from '../db';
-import { servicePricing, subscriptionTierPricing } from '@shared/schema';
+import { servicePricing, subscriptionTierPricing, users } from '@shared/schema';
 import { eq } from 'drizzle-orm';
 import fs from 'fs';
 import path from 'path';
+import Stripe from 'stripe';
+
+// P0-3 FIX: Initialize Stripe at module level (ES module compatible)
+// This replaces all inline require('stripe') calls
+const stripe = process.env.STRIPE_SECRET_KEY
+  ? new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-12-18.acacia' as any })
+  : null;
 
 const router = Router();
 
@@ -414,20 +421,27 @@ router.post(
  */
 router.post('/subscription', ensureAuthenticated, async (req: Request, res: Response) => {
   try {
-    const { planType } = req.body;
+    const { planType, billingCycle = 'monthly' } = req.body;
     const userId = (req.user as any)?.id;
 
+    // P1-2 FIX: Add detailed logging for subscription creation
+    console.log('📝 [Subscription] Creating subscription:', { planType, billingCycle, userId: userId?.substring(0, 8) + '...' });
+
     if (!userId) {
+      console.error('❌ [Subscription] No user ID in session');
       return res.status(401).json({
         success: false,
-        error: 'User authentication required'
+        error: 'User authentication required. Please log in again.'
       });
     }
 
+    // P1-2 FIX: Better validation with helpful message
+    const validTiers = Object.keys(UNIFIED_SUBSCRIPTION_TIERS);
     if (!planType || !UNIFIED_SUBSCRIPTION_TIERS[planType]) {
+      console.error('❌ [Subscription] Invalid plan type:', planType, '- Valid types:', validTiers);
       return res.status(400).json({
         success: false,
-        error: 'Invalid plan type'
+        error: `Invalid plan type: "${planType}". Valid types: ${validTiers.join(', ')}`
       });
     }
 
@@ -448,51 +462,71 @@ router.post('/subscription', ensureAuthenticated, async (req: Request, res: Resp
 
       // Return mock client secret for development/testing ONLY
       const mockClientSecret = `pi_mock_${Date.now()}_secret_${Math.random().toString(36).slice(2)}`;
-      console.warn('⚠️  Stripe not configured - returning mock payment intent (DEVELOPMENT ONLY)');
+      console.warn('⚠️  Stripe not configured - returning mock subscription (DEVELOPMENT ONLY)');
       return res.json({
         success: true,
         clientSecret: mockClientSecret,
-        message: 'Stripe not configured - using mock payment for development',
+        subscriptionId: `sub_mock_${Date.now()}`,
+        message: 'Stripe not configured - using mock subscription for development',
         development: true,
-        warning: 'This is a mock payment - will not process real charges'
+        warning: 'This is a mock subscription - will not process real charges'
       });
     }
 
-    // Ensure tier is synced with Stripe
+    // Resolve tier from DB for proper monthly/yearly Stripe price IDs
+    const { record: dbTierRecord } = await resolveTierForStripeSync(planType);
+
+    // Ensure tier is synced with Stripe - use DB price IDs when available
     const tierSyncPayload: Parameters<typeof stripeSyncService.syncTierWithStripe>[1] = {
       displayName: tier.displayName,
       description: tier.description,
       monthlyPriceUsd: Math.round(tier.monthlyPrice * 100),
       yearlyPriceUsd: Math.round(tier.yearlyPrice * 100),
-      stripeProductId: tier.stripeProductId ?? null,
-      stripeMonthlyPriceId: tier.stripePriceId ?? null,
-      stripeYearlyPriceId: tier.stripePriceId ?? null,
+      stripeProductId: dbTierRecord?.stripeProductId ?? tier.stripeProductId ?? null,
+      stripeMonthlyPriceId: dbTierRecord?.stripeMonthlyPriceId ?? tier.stripePriceId ?? null,
+      stripeYearlyPriceId: dbTierRecord?.stripeYearlyPriceId ?? null, // Never fall back to monthly ID
       limits: tier.limits,
-  features: tier.limits,
+      features: tier.limits,
     };
+
+    // P1-2 FIX: Log before Stripe sync
+    console.log('🔄 [Subscription] Syncing tier with Stripe:', { planType, monthlyPrice: tier.monthlyPrice, yearlyPrice: tier.yearlyPrice });
 
     const syncResult = await stripeSyncService.syncTierWithStripe(planType, tierSyncPayload);
 
-    const priceId = syncResult.stripeMonthlyPriceId ?? syncResult.stripeYearlyPriceId;
+    // P1-2 FIX: Log sync result
+    console.log('📦 [Subscription] Stripe sync result:', {
+      success: syncResult.success,
+      productId: syncResult.stripeProductId?.substring(0, 20) + '...',
+      monthlyPriceId: syncResult.stripeMonthlyPriceId?.substring(0, 20) + '...',
+      error: syncResult.error || 'none'
+    });
+
+    // Select price based on billing cycle
+    const priceId = billingCycle === 'yearly'
+      ? (syncResult.stripeYearlyPriceId ?? syncResult.stripeMonthlyPriceId)
+      : (syncResult.stripeMonthlyPriceId ?? syncResult.stripeYearlyPriceId);
 
     if (!syncResult.success || !priceId) {
+      console.error('❌ [Subscription] Stripe sync failed:', { syncSuccess: syncResult.success, priceId, error: syncResult.error });
       return res.status(500).json({
         success: false,
-        error: `Failed to sync subscription tier with Stripe: ${syncResult.error}`
+        error: `Failed to sync subscription tier with Stripe: ${syncResult.error || 'No price ID available'}`
       });
     }
 
-    // Import Stripe and create real PaymentIntent
-    const Stripe = require('stripe');
-    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-      apiVersion: '2025-08-27.basil',
-    });
+    // P0-3 FIX: Use module-level stripe instance (ES module compatible)
+    // Removed require('stripe') - now using import at top of file
+    if (!stripe) {
+      console.error('❌ [Subscription] Stripe not configured - missing STRIPE_SECRET_KEY');
+      return res.status(503).json({
+        success: false,
+        error: 'Payment service not configured. Please contact support.'
+      });
+    }
 
     // Create or get Stripe customer for this user
-    const { db } = require('../db');
-    const { users } = require('@shared/schema');
-    const { eq } = require('drizzle-orm');
-
+    // P0-3 FIX: Using imports from top of file (db, users, eq already imported)
     const [user] = await db.select().from(users).where(eq(users.id, userId));
 
     let stripeCustomerId = user.stripeCustomerId;
@@ -517,38 +551,115 @@ router.post('/subscription', ensureAuthenticated, async (req: Request, res: Resp
       console.log(`✅ Created Stripe customer: ${customer.id} for user: ${userId}`);
     }
 
-    // Create PaymentIntent for subscription payment
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: tier.monthlyPrice * 100, // Convert to cents
-      currency: 'usd',
-      customer: stripeCustomerId,
-      metadata: {
-        userId: userId,
-        tierId: planType,  // PHASE 11 FIX: Add explicit tierId for webhook to update user.subscriptionTier
-        planType: planType,
-        priceId,
-        productId: syncResult.stripeProductId || ''
-      },
-      setup_future_usage: 'off_session', // Save payment method for future charges
-      description: `Subscription: ${tier.displayName} - $${tier.monthlyPrice}/month`
+    // Cancel any existing active subscription for this customer
+    try {
+      const existingSubscriptions = await stripe.subscriptions.list({
+        customer: stripeCustomerId,
+        status: 'active',
+        limit: 1
+      });
+
+      if (existingSubscriptions.data.length > 0) {
+        console.log(`⚠️ Cancelling existing subscription: ${existingSubscriptions.data[0].id}`);
+        await stripe.subscriptions.cancel(existingSubscriptions.data[0].id);
+      }
+    } catch (cancelError: any) {
+      console.warn('Warning: Could not check/cancel existing subscriptions:', cancelError.message);
+    }
+
+    // CREATE ACTUAL STRIPE SUBSCRIPTION (not PaymentIntent!)
+    // This enables recurring billing automatically
+    // P1-2 FIX: Log before subscription creation
+    console.log('💳 [Subscription] Creating Stripe subscription:', {
+      customerId: stripeCustomerId.substring(0, 15) + '...',
+      priceId: priceId.substring(0, 20) + '...',
+      planType,
+      billingCycle
     });
 
-    console.log(`✅ Created PaymentIntent: ${paymentIntent.id} for ${tier.name} subscription`);
+    const subscription = await stripe.subscriptions.create({
+      customer: stripeCustomerId,
+      items: [{ price: priceId }],
+      payment_behavior: 'default_incomplete',  // Requires payment confirmation via Elements
+      payment_settings: {
+        save_default_payment_method: 'on_subscription',
+        payment_method_types: ['card']
+      },
+      expand: ['latest_invoice.payment_intent'],
+      metadata: {
+        userId: userId,
+        tierId: planType,
+        planType: planType,
+        billingCycle: billingCycle,
+        productId: syncResult.stripeProductId || ''
+      }
+    });
+
+    // Extract clientSecret from the subscription's invoice payment intent
+    const latestInvoice = subscription.latest_invoice as any;
+    const paymentIntent = latestInvoice?.payment_intent;
+    const clientSecret = paymentIntent?.client_secret;
+
+    if (!clientSecret) {
+      // If no client secret, the subscription might have been created but needs manual handling
+      console.error('⚠️ Subscription created but no client secret returned:', subscription.id);
+      return res.status(500).json({
+        success: false,
+        error: 'Subscription created but payment confirmation failed. Please try again.',
+        subscriptionId: subscription.id
+      });
+    }
+
+    console.log(`✅ Created Stripe Subscription: ${subscription.id} for ${tier.displayName} (${billingCycle})`);
+
+    // Update user with pending subscription status
+    await db.update(users)
+      .set({
+        subscriptionTier: planType,
+        subscriptionStatus: 'incomplete', // Will be updated to 'active' via webhook
+        stripeSubscriptionId: subscription.id,
+        updatedAt: new Date()
+      })
+      .where(eq(users.id, userId));
 
     res.json({
       success: true,
-      clientSecret: paymentIntent.client_secret,
-  priceId,
-      productId: syncResult.stripeProductId,
-      paymentIntentId: paymentIntent.id
+      clientSecret,
+      subscriptionId: subscription.id,
+      priceId,
+      billingCycle,
+      tier: planType,
+      productId: syncResult.stripeProductId
     });
 
   } catch (error: any) {
-    console.error('Error creating subscription:', error);
+    // P1-2 FIX: Enhanced error logging with Stripe error details
+    console.error('❌ [Subscription] Error creating subscription:', {
+      message: error.message,
+      type: error.type,
+      code: error.code,
+      statusCode: error.statusCode,
+      stripeError: error.raw?.message || error.decline_code || 'N/A',
+      stack: error.stack?.split('\n').slice(0, 3).join('\n')
+    });
+
+    // P1-2 FIX: Return more specific error message
+    let userFacingError = 'Failed to create subscription. Please try again.';
+    if (error.type === 'StripeCardError') {
+      userFacingError = error.message || 'Card was declined';
+    } else if (error.type === 'StripeInvalidRequestError') {
+      userFacingError = 'Invalid subscription configuration. Please contact support.';
+    } else if (error.code === 'resource_missing') {
+      userFacingError = 'Subscription plan not found. Please refresh and try again.';
+    } else if (error.message?.includes('No such customer')) {
+      userFacingError = 'Customer account issue. Please try logging out and back in.';
+    }
+
     res.status(500).json({
       success: false,
-      error: 'Failed to create subscription',
-      details: error.message
+      error: userFacingError,
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      code: error.code || 'SUBSCRIPTION_ERROR'
     });
   }
 });
@@ -574,11 +685,7 @@ router.post('/subscription/cancel', ensureAuthenticated, async (req: Request, re
     if (!stripeSyncService.isStripeConfigured()) {
       console.warn('⚠️  Stripe not configured - simulating cancellation');
 
-      // Update user subscription status in database
-      const { db } = require('../db');
-      const { users } = require('@shared/schema');
-      const { eq } = require('drizzle-orm');
-
+      // P0-3 FIX: Using imports from top of file (db, users, eq already imported)
       await db.update(users)
         .set({
           subscriptionTier: 'none',
@@ -596,10 +703,7 @@ router.post('/subscription/cancel', ensureAuthenticated, async (req: Request, re
     }
 
     // Get user's Stripe subscription
-    const { db } = require('../db');
-    const { users } = require('@shared/schema');
-    const { eq } = require('drizzle-orm');
-
+    // P0-3 FIX: Using imports from top of file
     const [user] = await db.select().from(users).where(eq(users.id, userId));
 
     if (!user.stripeCustomerId || !user.stripeSubscriptionId) {
@@ -609,11 +713,13 @@ router.post('/subscription/cancel', ensureAuthenticated, async (req: Request, re
       });
     }
 
-    // Import Stripe and cancel subscription
-    const Stripe = require('stripe');
-    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: '2025-08-27.basil',
-    });
+    // P0-3 FIX: Use module-level stripe instance
+    if (!stripe) {
+      return res.status(503).json({
+        success: false,
+        error: 'Payment service not configured'
+      });
+    }
 
     // Cancel the subscription at period end
     const subscription = await stripe.subscriptions.update(
@@ -625,11 +731,16 @@ router.post('/subscription/cancel', ensureAuthenticated, async (req: Request, re
 
     console.log(`✅ Scheduled subscription cancellation: ${subscription.id} for user: ${userId}`);
 
+    // Get current_period_end from subscription items (Stripe API v2024-12+)
+    // The current_period_end is on the subscription item, not the subscription itself
+    const subscriptionItem = subscription.items?.data?.[0];
+    const currentPeriodEnd = subscriptionItem?.current_period_end || subscription.cancel_at || Math.floor(Date.now() / 1000) + (30 * 24 * 60 * 60);
+
     // Update user subscription status
     await db.update(users)
       .set({
         subscriptionStatus: 'active', // Still active until period end
-        subscriptionExpiresAt: new Date(subscription.current_period_end * 1000),
+        subscriptionExpiresAt: new Date(currentPeriodEnd * 1000),
         updatedAt: new Date()
       })
       .where(eq(users.id, userId));
@@ -637,7 +748,7 @@ router.post('/subscription/cancel', ensureAuthenticated, async (req: Request, re
     res.json({
       success: true,
       message: 'Subscription will be cancelled at the end of the current billing period',
-      cancelAt: new Date(subscription.current_period_end * 1000),
+      cancelAt: new Date(currentPeriodEnd * 1000),
       subscriptionId: subscription.id
     });
 
@@ -668,11 +779,7 @@ router.post('/subscription/reactivate', ensureAuthenticated, async (req: Request
 
     const stripeSyncService = getStripeSyncService();
 
-    // Get user's Stripe subscription
-    const { db } = require('../db');
-    const { users } = require('@shared/schema');
-    const { eq } = require('drizzle-orm');
-
+    // P0-3 FIX: Using imports from top of file (db, users, eq already imported)
     const [user] = await db.select().from(users).where(eq(users.id, userId));
 
     if (!stripeSyncService.isStripeConfigured()) {
@@ -699,11 +806,13 @@ router.post('/subscription/reactivate', ensureAuthenticated, async (req: Request
       });
     }
 
-    // Import Stripe and reactivate subscription
-    const Stripe = require('stripe');
-    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: '2025-08-27.basil',
-    });
+    // P0-3 FIX: Use module-level stripe instance
+    if (!stripe) {
+      return res.status(503).json({
+        success: false,
+        error: 'Payment service not configured'
+      });
+    }
 
     // Remove cancellation
     const subscription = await stripe.subscriptions.update(

@@ -2473,9 +2473,236 @@ export function registerCoreTools(): void {
       complexity: 'medium'
     },
     // NOTE: scan_pii_columns and apply_pii_exclusions already registered earlier with full capability metadata
+
+    // ========================================
+    // NATURAL LANGUAGE TRANSLATION TOOLS
+    // ========================================
+    {
+      name: 'translate_schema',
+      description: 'Translate data schema fields to business-friendly descriptions for target audience',
+      service: 'NaturalLanguageTranslator',
+      permissions: ['translate_content', 'read_schema'],
+      category: 'ba_analysis',
+      agentAccess: ['business_agent', 'project_manager', 'customer_support'],
+      capabilities: ['translate.schema', 'nlp.explain', 'audience.adapt'],
+      inputSchema: {
+        schema: 'object (field definitions)',
+        audience: 'string (executive | business | technical | general)',
+        industry: 'string (optional)',
+        projectName: 'string (optional)'
+      },
+      outputSchema: {
+        translations: 'array of { originalField, businessName, description, dataType, businessContext }'
+      },
+      complexity: 'medium'
+    },
+    {
+      name: 'translate_results',
+      description: 'Translate analysis results to audience-appropriate language with actionable insights',
+      service: 'NaturalLanguageTranslator',
+      permissions: ['translate_content', 'read_analysis'],
+      category: 'ba_analysis',
+      agentAccess: ['business_agent', 'project_manager', 'data_scientist'],
+      capabilities: ['translate.results', 'nlp.summarize', 'audience.adapt'],
+      inputSchema: {
+        results: 'object (analysis results)',
+        audience: 'string (executive | business | technical | general)',
+        industry: 'string (optional)',
+        projectName: 'string (optional)'
+      },
+      outputSchema: {
+        executiveSummary: 'string',
+        keyFindings: 'array of { finding, impact, confidence, actionable }',
+        recommendations: 'array of { action, rationale, priority, expectedOutcome }',
+        nextSteps: 'array of strings',
+        caveats: 'array of strings (optional)'
+      },
+      complexity: 'medium'
+    },
+    {
+      name: 'translate_quality',
+      description: 'Translate data quality metrics to business impact assessment',
+      service: 'NaturalLanguageTranslator',
+      permissions: ['translate_content', 'read_quality'],
+      category: 'ba_analysis',
+      agentAccess: ['business_agent', 'project_manager', 'data_engineer'],
+      capabilities: ['translate.quality', 'nlp.assess', 'audience.adapt'],
+      inputSchema: {
+        qualityReport: 'object (quality metrics)',
+        audience: 'string (executive | business | technical | general)',
+        industry: 'string (optional)'
+      },
+      outputSchema: {
+        overallAssessment: 'string',
+        businessImpact: 'string',
+        trustLevel: 'string (high | medium | low)',
+        issues: 'array of { issue, businessRisk, recommendation }',
+        readyForAnalysis: 'boolean',
+        confidence: 'number (0-100)'
+      },
+      complexity: 'low'
+    },
+    {
+      name: 'translate_error',
+      description: 'Translate technical error messages to user-friendly explanations',
+      service: 'NaturalLanguageTranslator',
+      permissions: ['translate_content'],
+      category: 'cs_support',
+      agentAccess: ['customer_support', 'project_manager', 'business_agent'],
+      capabilities: ['translate.error', 'nlp.simplify', 'user.help'],
+      inputSchema: {
+        error: 'string (error message)',
+        audience: 'string (executive | business | technical | general)'
+      },
+      outputSchema: {
+        message: 'string (user-friendly explanation)',
+        suggestion: 'string (what user can do)',
+        technical: 'string (original error for technical audience)'
+      },
+      complexity: 'low'
+    },
+    {
+      name: 'clarify_term',
+      description: 'Explain a technical term in accessible language for the target audience',
+      service: 'NaturalLanguageTranslator',
+      permissions: ['translate_content'],
+      category: 'cs_knowledge',
+      agentAccess: ['customer_support', 'business_agent', 'project_manager'],
+      capabilities: ['nlp.clarify', 'term.explain', 'audience.adapt'],
+      inputSchema: {
+        term: 'string (technical term)',
+        context: 'string (usage context)',
+        audience: 'string (executive | business | technical | general)'
+      },
+      outputSchema: {
+        explanation: 'string',
+        example: 'string (optional real-world example)'
+      },
+      complexity: 'low'
+    },
+    {
+      name: 'check_grammar',
+      description: 'Check and correct grammar in generated text',
+      service: 'NaturalLanguageTranslator',
+      permissions: ['translate_content'],
+      category: 'utility',
+      agentAccess: ['business_agent', 'project_manager', 'customer_support'],
+      capabilities: ['nlp.grammar', 'text.correct', 'quality.improve'],
+      inputSchema: {
+        text: 'string (text to check)'
+      },
+      outputSchema: {
+        corrected: 'string',
+        changes: 'array of strings (list of corrections made)'
+      },
+      complexity: 'low'
+    },
+
+    // ========================================
+    // CLARIFICATION TOOLS
+    // ========================================
+    {
+      name: 'detect_ambiguities',
+      description: 'Analyze user input for ambiguities and generate clarifying questions',
+      service: 'ClarificationService',
+      permissions: ['analyze_input', 'generate_questions'],
+      category: 'pm_communication',
+      agentAccess: ['project_manager', 'business_agent', 'data_scientist'],
+      capabilities: ['input.analyze', 'ambiguity.detect', 'question.generate'],
+      inputSchema: {
+        userInput: 'string (user goal, question, or description)',
+        context: 'object { industry?, journeyType, existingColumns?, userRole?, projectGoals? }',
+        inputType: 'string (goal | question | description | data_element | analysis_type)'
+      },
+      outputSchema: {
+        hasAmbiguities: 'boolean',
+        questions: 'array of ClarificationQuestion objects',
+        confidenceScore: 'number (0-1)',
+        suggestedRevision: 'string (optional clearer version)'
+      },
+      complexity: 'medium'
+    },
+    {
+      name: 'create_clarification_request',
+      description: 'Create and store a clarification request for user response',
+      service: 'ClarificationService',
+      permissions: ['create_checkpoint', 'update_project'],
+      category: 'pm_coordination',
+      agentAccess: ['project_manager'],
+      capabilities: ['clarification.create', 'checkpoint.store', 'user.notify'],
+      inputSchema: {
+        projectId: 'string',
+        questions: 'array of ClarificationQuestion objects',
+        originalInput: 'string',
+        inputType: 'string (goal | question | description | data_element | analysis_type)'
+      },
+      outputSchema: {
+        projectId: 'string',
+        questions: 'array',
+        status: 'string (pending)',
+        expiresAt: 'string (ISO date)'
+      },
+      complexity: 'low'
+    },
+    {
+      name: 'get_pending_clarifications',
+      description: 'Get pending clarification questions for a project',
+      service: 'ClarificationService',
+      permissions: ['read_project'],
+      category: 'pm_coordination',
+      agentAccess: ['project_manager', 'business_agent'],
+      capabilities: ['clarification.read', 'status.check'],
+      inputSchema: {
+        projectId: 'string'
+      },
+      outputSchema: {
+        hasPending: 'boolean',
+        request: 'ClarificationRequest object or null'
+      },
+      complexity: 'low'
+    },
+    {
+      name: 'submit_clarification_answers',
+      description: 'Submit user answers to clarification questions and get revised input',
+      service: 'ClarificationService',
+      permissions: ['update_project'],
+      category: 'pm_coordination',
+      agentAccess: ['project_manager'],
+      capabilities: ['clarification.submit', 'input.revise'],
+      inputSchema: {
+        projectId: 'string',
+        answers: 'array of { questionId, answer }'
+      },
+      outputSchema: {
+        success: 'boolean',
+        revisedInput: 'string (optional)',
+        remainingQuestions: 'array (if required questions unanswered)'
+      },
+      complexity: 'low'
+    },
+    {
+      name: 'validate_user_input',
+      description: 'Quick validation of user input without creating a formal request',
+      service: 'ClarificationService',
+      permissions: ['analyze_input'],
+      category: 'utility',
+      agentAccess: ['project_manager', 'business_agent', 'data_scientist', 'customer_support'],
+      capabilities: ['input.validate', 'quality.check'],
+      inputSchema: {
+        input: 'string',
+        context: 'object { industry?, journeyType, existingColumns?, userRole? }',
+        inputType: 'string (goal | question | description)'
+      },
+      outputSchema: {
+        isValid: 'boolean',
+        issues: 'array of strings (blocking issues)',
+        suggestions: 'array of strings (optional improvements)'
+      },
+      complexity: 'low'
+    },
   ]);
 
-  console.log('✅ Core MCP tools registered (including advanced data ingestion & transformation tools)');
+  console.log('✅ Core MCP tools registered (including advanced data ingestion, transformation, translation & clarification tools)');
 }
 
 // ==========================================
@@ -3567,6 +3794,126 @@ export async function executeTool(
             result = createPlaceholderResult(executionContext, toolName);
         }
         break;
+
+      // ========================================
+      // NATURAL LANGUAGE TRANSLATION TOOLS
+      // ========================================
+      case 'translate_schema':
+      case 'translate_results':
+      case 'translate_quality':
+      case 'translate_error':
+      case 'clarify_term':
+      case 'check_grammar': {
+        const { naturalLanguageTranslator } = await import('./natural-language-translator');
+        const audience = input.audience || 'business';
+        const context = {
+          audience,
+          industry: input.industry,
+          projectName: input.projectName
+        };
+
+        let translationResult;
+        switch (toolName) {
+          case 'translate_schema':
+            translationResult = await naturalLanguageTranslator.translateSchemaWithAI(input.schema, context);
+            break;
+          case 'translate_results':
+            translationResult = await naturalLanguageTranslator.translateResultsWithAI(input.results, context);
+            break;
+          case 'translate_quality':
+            translationResult = await naturalLanguageTranslator.translateQualityWithAI(input.qualityReport, context);
+            break;
+          case 'translate_error':
+            translationResult = await naturalLanguageTranslator.translateErrorWithAI(input.error, context);
+            break;
+          case 'clarify_term':
+            translationResult = await naturalLanguageTranslator.clarifyTermWithAI(input.term, input.context, audience);
+            break;
+          case 'check_grammar':
+            translationResult = await naturalLanguageTranslator.checkGrammarWithAI(input.text);
+            break;
+        }
+
+        result = {
+          executionId: executionContext.executionId,
+          toolId: toolName,
+          status: translationResult?.success ? 'success' : 'error',
+          result: translationResult?.data || translationResult,
+          metrics: {
+            duration: 0,
+            resourcesUsed: { cpu: 0.1, memory: 50, storage: 0 },
+            cost: 0.001 // Minimal cost for LLM translation
+          }
+        };
+        break;
+      }
+
+      // ========================================
+      // CLARIFICATION TOOLS
+      // ========================================
+      case 'detect_ambiguities':
+      case 'create_clarification_request':
+      case 'get_pending_clarifications':
+      case 'submit_clarification_answers':
+      case 'validate_user_input': {
+        const { clarificationService } = await import('./clarification-service');
+
+        let clarificationResult;
+        switch (toolName) {
+          case 'detect_ambiguities':
+            clarificationResult = await clarificationService.detectAmbiguities(
+              input.userInput,
+              input.context || { journeyType: 'business' },
+              input.inputType || 'goal'
+            );
+            break;
+
+          case 'create_clarification_request':
+            clarificationResult = await clarificationService.createClarificationRequest(
+              input.projectId,
+              input.questions,
+              input.originalInput,
+              input.inputType || 'goal'
+            );
+            break;
+
+          case 'get_pending_clarifications':
+            const pending = await clarificationService.getPendingClarifications(input.projectId);
+            clarificationResult = {
+              hasPending: pending !== null,
+              request: pending
+            };
+            break;
+
+          case 'submit_clarification_answers':
+            clarificationResult = await clarificationService.submitClarificationAnswers(
+              input.projectId,
+              input.answers
+            );
+            break;
+
+          case 'validate_user_input':
+            clarificationResult = await clarificationService.validateInput(
+              input.input,
+              input.context || { journeyType: 'business' },
+              input.inputType || 'goal'
+            );
+            break;
+        }
+
+        result = {
+          executionId: executionContext.executionId,
+          toolId: toolName,
+          status: 'success',
+          result: clarificationResult,
+          metrics: {
+            duration: 0,
+            resourcesUsed: { cpu: 0.1, memory: 50, storage: 0 },
+            cost: 0.001
+          }
+        };
+        break;
+      }
 
       default:
         // For other tools that don't have real implementations yet

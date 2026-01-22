@@ -908,15 +908,24 @@ export default function PlanStep({
                 </div>
               )}
 
-              <div className="flex items-start gap-3 p-3 border rounded-lg">
+              {/* P1 FIX: Added visual feedback for checkbox requirement */}
+              <div
+                id="requirements-checkbox-container"
+                className={`flex items-start gap-3 p-3 border rounded-lg transition-all duration-300 ${
+                  !requirementsConfirmed ? 'border-amber-300 bg-amber-50' : 'border-green-300 bg-green-50'
+                }`}
+              >
                 <Checkbox
                   id="requirements-confirmed"
                   checked={requirementsConfirmed}
                   onCheckedChange={(checked) => setRequirementsConfirmed(!!checked)}
                 />
                 <div>
-                  <Label htmlFor="requirements-confirmed" className="font-medium">
+                  <Label htmlFor="requirements-confirmed" className="font-medium flex items-center gap-2">
                     Confirm data requirements
+                    {!requirementsConfirmed && (
+                      <span className="text-xs text-amber-600 bg-amber-100 px-2 py-0.5 rounded">Required</span>
+                    )}
                   </Label>
                   <p className="text-sm text-muted-foreground">
                     I reviewed these fields and confirm our datasets contain or will capture them for this analysis.
@@ -1441,17 +1450,26 @@ export default function PlanStep({
                     <ThumbsDown className="h-4 w-4 mr-2" />
                     Reject Plan
                   </Button>
-                  <Button
-                    onClick={handleApprovePlan}
-                    disabled={isSubmitting || !requirementsConfirmed}
-                  >
-                    {isSubmitting ? (
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    ) : (
-                      <ThumbsUp className="h-4 w-4 mr-2" />
+                  <div className="flex flex-col items-end">
+                    <Button
+                      onClick={handleApprovePlan}
+                      disabled={isSubmitting || !requirementsConfirmed}
+                      className={!requirementsConfirmed ? 'opacity-50' : ''}
+                    >
+                      {isSubmitting ? (
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      ) : (
+                        <ThumbsUp className="h-4 w-4 mr-2" />
+                      )}
+                      Approve & Continue
+                    </Button>
+                    {/* P1 FIX: Show helper text when button is disabled */}
+                    {!requirementsConfirmed && (
+                      <p className="text-xs text-amber-600 mt-1">
+                        Check the confirmation above to enable
+                      </p>
                     )}
-                    Approve & Continue
-                  </Button>
+                  </div>
                 </div>
               </div>
             ) : (
