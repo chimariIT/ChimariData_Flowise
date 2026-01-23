@@ -1761,7 +1761,14 @@ How can I help you with your data engineering needs today?`;
         params.dataStats
       );
 
-      const isReady = validationResult.isValid && transformations.filter(t => t.priority === 'required').length === 0;
+      const noRequiredTransformations = transformations.filter(t => t.priority === 'required').length === 0;
+      // When data stats are incomplete (rowCount=0), validation failures are due to
+      // missing stats, not actual data issues. Consider analysis "ready" if no
+      // required transformations and we simply lack stats to validate.
+      const dataStatsIncomplete = params.dataStats.rowCount === 0 && Object.keys(params.columnTypes).length === 0;
+      const isReady = dataStatsIncomplete
+        ? noRequiredTransformations  // Trust mapping readiness when no data stats
+        : (validationResult.isValid && noRequiredTransformations);
 
       if (isReady) {
         readyAnalyses.push(spec.displayName);
@@ -1796,7 +1803,17 @@ How can I help you with your data engineering needs today?`;
       console.log(`🔧 [DE Agent] Mapping readiness: ${Math.round(mappingReadiness * 100)}% (${mappedElements.length}/${requiredMappings.length} elements mapped)`);
     }
 
-    const combinedReadiness = (validationReadiness + mappingReadiness) / 2;
+    // When data stats are incomplete (rowCount=0, no columns), validation is unreliable.
+    // In that case, weight mapping readiness more heavily since it's the only meaningful signal.
+    const hasDataStats = params.dataStats.rowCount > 0 && Object.keys(params.columnTypes).length > 0;
+    let combinedReadiness: number;
+    if (!hasDataStats && params.elementMappings && params.elementMappings.length > 0) {
+      // No meaningful data stats - use mapping readiness as primary signal (80% weight)
+      combinedReadiness = mappingReadiness * 0.8 + validationReadiness * 0.2;
+      console.log(`🔧 [DE Agent] Data stats incomplete - using mapping-weighted readiness`);
+    } else {
+      combinedReadiness = (validationReadiness + mappingReadiness) / 2;
+    }
     const readinessPercentage = Math.round(combinedReadiness * 100);
 
     console.log(`🔧 [DE Agent] Overall readiness: ${readinessPercentage}% (validation: ${Math.round(validationReadiness * 100)}%, mapping: ${Math.round(mappingReadiness * 100)}%)`);

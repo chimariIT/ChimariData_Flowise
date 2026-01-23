@@ -652,37 +652,66 @@ export class ProjectManagerAgent {
         return 'statistical';
     }
 
-    private estimatePlanCost(
+    private async estimatePlanCost(
         steps: PlanAnalysisStep[],
         recordCount: number,
-        complexity: PlanBlueprint['complexity']
-    ): CostBreakdown {
-        const breakdown: Record<string, number> = {};
-        let total = 0;
+        complexity: PlanBlueprint['complexity'],
+        projectId?: string,
+        columnCount?: number
+    ): Promise<CostBreakdown> {
         const costComplexity = this.mapPlanComplexityToCost(complexity);
 
-        if (steps.length === 0) {
-            const baseCost = PricingService.calculateAnalysisCost('statistical', recordCount, costComplexity);
-            breakdown['Baseline analysis'] = parseFloat(baseCost.totalCost.toFixed(2));
-            total = baseCost.totalCost;
+        // Use CostEstimationService for consistent pricing with execution step
+        try {
+            const { CostEstimationService } = await import('./cost-estimation-service');
+            const analysisTypes = steps.length > 0
+                ? steps.map(s => this.mapStepToCostCategory(s.method))
+                : ['statistical'];
+
+            const estimate = await CostEstimationService.estimateAnalysisCost(
+                projectId || 'plan-estimate',
+                analysisTypes,
+                { rows: recordCount, columns: columnCount || 10 },
+                costComplexity as 'basic' | 'intermediate' | 'advanced' | 'expert',
+                ['report']
+            );
+
+            // Convert to CostBreakdown format
+            const breakdown: Record<string, number> = {};
+            for (const item of estimate.breakdown) {
+                breakdown[item.item] = item.cost;
+            }
+
+            console.log(`💰 [PM Agent] Cost estimate via CostEstimationService: $${estimate.totalCost.toFixed(2)}`);
+            return {
+                total: parseFloat(estimate.totalCost.toFixed(2)),
+                breakdown
+            };
+        } catch (error) {
+            // Fallback to PricingService if CostEstimationService fails
+            console.warn('⚠️ [PM Agent] CostEstimationService failed, using PricingService fallback:', error);
+            const breakdown: Record<string, number> = {};
+            let total = 0;
+
+            if (steps.length === 0) {
+                const baseCost = PricingService.calculateAnalysisCost('statistical', recordCount, costComplexity);
+                breakdown['Baseline analysis'] = parseFloat(baseCost.totalCost.toFixed(2));
+                total = baseCost.totalCost;
+            } else {
+                for (const step of steps) {
+                    const category = this.mapStepToCostCategory(step.method);
+                    const stepCost = PricingService.calculateAnalysisCost(category, recordCount, costComplexity);
+                    const key = step.name || category;
+                    breakdown[key] = parseFloat(stepCost.totalCost.toFixed(2));
+                    total += stepCost.totalCost;
+                }
+            }
+
             return {
                 total: parseFloat(total.toFixed(2)),
                 breakdown
             };
         }
-
-        for (const step of steps) {
-            const category = this.mapStepToCostCategory(step.method);
-            const stepCost = PricingService.calculateAnalysisCost(category, recordCount, costComplexity);
-            const key = step.name || category;
-            breakdown[key] = parseFloat(stepCost.totalCost.toFixed(2));
-            total += stepCost.totalCost;
-        }
-
-        return {
-            total: parseFloat(total.toFixed(2)),
-            breakdown
-        };
     }
 
     private buildFallbackDataAssessment(dataset?: DatasetSummary): DataAssessment {
@@ -1108,10 +1137,12 @@ export class ProjectManagerAgent {
             }
 
             const prepareData = session?.prepareData as Record<string, any> | undefined;
+            const journeyProgress = (freshProjectRecord as any)?.journeyProgress || {};
 
             const goals = this.normalizeStringCollection([
                 request.project?.objectives,
                 prepareData?.analysisGoal,
+                journeyProgress.analysisGoal,
                 prepareData?.goals,
                 latestPlan?.recommendations,
                 request.modifications,
@@ -1122,9 +1153,15 @@ export class ProjectManagerAgent {
                 goals.push('Generate actionable insights from uploaded data');
             }
 
+            // Include user questions from journeyProgress (SSOT) for richer context
+            const jpUserQuestions = Array.isArray(journeyProgress.userQuestions)
+                ? journeyProgress.userQuestions.map((q: any) => typeof q === 'string' ? q : q.text || '')
+                : [];
+
             const questions = this.normalizeStringCollection([
                 prepareData?.businessQuestions,
                 prepareData?.questions,
+                jpUserQuestions,
                 latestPlan?.risks
             ], { splitPattern: /[\r\n]+|[?•]+/, limit: 6 });
 
@@ -1336,10 +1373,12 @@ export class ProjectManagerAgent {
             const stepsForCost = analysisPathSteps.length > 0 ? analysisPathSteps : blueprint.analysisSteps;
             console.log(`💰 [PM Agent] Calculating cost from ${analysisPathSteps.length > 0 ? 'analysisPath' : 'blueprint.analysisSteps'} (${stepsForCost.length} steps)`);
 
-            const costBreakdown = this.estimatePlanCost(
+            const costBreakdown = await this.estimatePlanCost(
                 stepsForCost,
                 dataAssessment.recordCount,
-                blueprint.complexity
+                blueprint.complexity,
+                projectId,
+                dataAssessment.columnCount
             );
 
             const executiveSummary = this.buildExecutiveSummary({
@@ -2616,7 +2655,11 @@ export class ProjectManagerAgent {
 
         const { analysisPath, cost } = state.lastAgentOutput;
 
-        const checkoutSession = await (PricingService as any).createCheckoutSession?.(projectId, cost.totalCost, cost.currency) || { sessionId: 'mock_session_' + Date.now() };
+        const realSession = await (PricingService as any).createCheckoutSession?.(projectId, cost.totalCost, cost.currency);
+        if (!realSession && process.env.NODE_ENV === 'production') {
+            throw new Error('Payment session creation failed. Stripe checkout is required in production.');
+        }
+        const checkoutSession = realSession || { sessionId: `dev_session_${projectId}_${Date.now()}` };
         await storage.updateProject(projectId, { paymentIntentId: checkoutSession.sessionId });
 
         state.status = 'ready_for_execution';
@@ -3950,31 +3993,50 @@ export class ProjectManagerAgent {
             overallConfidence = 0.5;
         }
 
-        // Collect key findings from all agents (extract first recommendation from each)
+        // Collect key findings from all agents - prioritize data-specific insights
         const keyFindings: string[] = [];
 
-        if (dataEngineerOpinion?.recommendations && Array.isArray(dataEngineerOpinion.recommendations) && dataEngineerOpinion.recommendations.length > 0) {
-            keyFindings.push(dataEngineerOpinion.recommendations[0]);
+        // Data Engineer: Report data quality findings
+        if (dataEngineerOpinion?.overallScore) {
+            const score = typeof dataEngineerOpinion.overallScore === 'number'
+                ? dataEngineerOpinion.overallScore
+                : parseFloat(dataEngineerOpinion.overallScore) || 0;
+            const qualityLabel = score >= 0.8 ? 'excellent' : score >= 0.6 ? 'good' : score >= 0.4 ? 'fair' : 'needs improvement';
+            keyFindings.push(`Data quality: ${qualityLabel} (${(score * 100).toFixed(0)}% score)`);
+        }
+        if (dataEngineerOpinion?.issues && Array.isArray(dataEngineerOpinion.issues) && dataEngineerOpinion.issues.length > 0) {
+            const highIssues = dataEngineerOpinion.issues.filter((i: any) => i?.severity === 'high');
+            if (highIssues.length > 0) {
+                keyFindings.push(`${highIssues.length} high-priority data issue${highIssues.length > 1 ? 's' : ''} identified`);
+            }
         }
 
-        if (dataScientistOpinion?.recommendations && Array.isArray(dataScientistOpinion.recommendations) && dataScientistOpinion.recommendations.length > 0) {
-            keyFindings.push(dataScientistOpinion.recommendations[0]);
+        // Data Scientist: Report feasibility and required analyses
+        if (dataScientistOpinion?.requiredAnalyses && Array.isArray(dataScientistOpinion.requiredAnalyses) && dataScientistOpinion.requiredAnalyses.length > 0) {
+            const analysisNames = dataScientistOpinion.requiredAnalyses
+                .map((a: string) => a.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()))
+                .join(', ');
+            keyFindings.push(`Planned analyses: ${analysisNames}`);
+        }
+        if (dataScientistOpinion?.dataRequirements?.missing && dataScientistOpinion.dataRequirements.missing.length > 0) {
+            keyFindings.push(`${dataScientistOpinion.dataRequirements.missing.length} missing data requirement${dataScientistOpinion.dataRequirements.missing.length > 1 ? 's' : ''} detected`);
         }
 
-        if (businessAgentOpinion?.recommendations && Array.isArray(businessAgentOpinion.recommendations) && businessAgentOpinion.recommendations.length > 0) {
-            keyFindings.push(businessAgentOpinion.recommendations[0]);
+        // Business Agent: Report business context findings
+        if (businessAgentOpinion?.businessValue) {
+            keyFindings.push(`Business value assessment: ${businessAgentOpinion.businessValue}`);
         }
 
-        // Add fallback key findings if no recommendations available
+        // Fallback if no findings generated
         if (keyFindings.length === 0) {
-            if (dataEngineerOpinion?.overallScore) {
-                keyFindings.push(`Data quality score: ${dataEngineerOpinion.overallScore.toFixed(2)}`);
+            if (dataEngineerOpinion?.recommendations?.[0]) {
+                keyFindings.push(dataEngineerOpinion.recommendations[0]);
             }
-            if (dataScientistOpinion?.requiredAnalyses) {
-                keyFindings.push(`Required analyses: ${dataScientistOpinion.requiredAnalyses.join(', ')}`);
+            if (dataScientistOpinion?.recommendations?.[0]) {
+                keyFindings.push(dataScientistOpinion.recommendations[0]);
             }
-            if (businessAgentOpinion?.businessValue) {
-                keyFindings.push(`Business value: ${businessAgentOpinion.businessValue}`);
+            if (businessAgentOpinion?.recommendations?.[0]) {
+                keyFindings.push(businessAgentOpinion.recommendations[0]);
             }
         }
 
@@ -4015,23 +4077,40 @@ export class ProjectManagerAgent {
             });
         }
 
-        // Generate actionable recommendations
+        // Generate actionable recommendations - deduplicated and specific
         const actionableRecommendations: string[] = [];
+        const seenRecommendations = new Set<string>();
+
+        const addUniqueRecommendation = (rec: string) => {
+            const normalized = rec.toLowerCase().trim();
+            if (!seenRecommendations.has(normalized) && rec.length > 10) {
+                seenRecommendations.add(normalized);
+                actionableRecommendations.push(rec);
+            }
+        };
 
         if (dataQuality === 'poor') {
-            actionableRecommendations.push('Address data quality issues before proceeding with analysis');
+            addUniqueRecommendation('Address data quality issues before proceeding with analysis');
         }
 
-        if (dataEngineerOpinion?.recommendations) {
-            actionableRecommendations.push(...dataEngineerOpinion.recommendations.slice(0, 2));
+        if (dataEngineerOpinion?.recommendations && Array.isArray(dataEngineerOpinion.recommendations)) {
+            dataEngineerOpinion.recommendations.slice(0, 2).forEach((r: string) => addUniqueRecommendation(r));
         }
 
-        if (dataScientistOpinion?.recommendations) {
-            actionableRecommendations.push(...dataScientistOpinion.recommendations.slice(0, 2));
+        if (dataScientistOpinion?.recommendations && Array.isArray(dataScientistOpinion.recommendations)) {
+            dataScientistOpinion.recommendations.slice(0, 2).forEach((r: string) => addUniqueRecommendation(r));
         }
 
-        if (businessAgentOpinion?.recommendations) {
-            actionableRecommendations.push(...businessAgentOpinion.recommendations.slice(0, 2));
+        if (businessAgentOpinion?.recommendations && Array.isArray(businessAgentOpinion.recommendations)) {
+            businessAgentOpinion.recommendations.slice(0, 2).forEach((r: string) => addUniqueRecommendation(r));
+        }
+
+        // If no recommendations from agents, generate context-aware ones
+        if (actionableRecommendations.length === 0) {
+            if (dataScientistOpinion?.requiredAnalyses?.length > 0) {
+                addUniqueRecommendation(`Proceed with ${dataScientistOpinion.requiredAnalyses[0].replace(/_/g, ' ')} as primary analysis method`);
+            }
+            addUniqueRecommendation('Review data element mappings to ensure correct column assignments');
         }
 
         // Estimate timeline based on data size and complexity

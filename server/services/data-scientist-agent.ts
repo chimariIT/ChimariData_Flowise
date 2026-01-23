@@ -1075,8 +1075,35 @@ export class DataScientistAgent implements AgentHandler {
       (dataRequirements.missing.length === 0 ? 0.90 : 0.85) :
       0.50;
 
+    // Generate actionable recommendations based on analysis types and data
     if (feasible && requiredAnalyses.length > 0) {
-      recommendations.push(`Recommended analyses: ${requiredAnalyses.join(', ')}`);
+      // Add specific methodology recommendations per analysis type
+      for (const analysis of requiredAnalyses) {
+        switch (analysis) {
+          case 'regression':
+            recommendations.push('Identify target variable and validate linear relationships in data before fitting model');
+            break;
+          case 'correlation_analysis':
+            recommendations.push('Review numeric variables for outliers that may distort correlation coefficients');
+            break;
+          case 'clustering':
+          case 'segmentation':
+            recommendations.push('Normalize numeric features to prevent scale-dependent clustering bias');
+            break;
+          case 'time_series_analysis':
+            recommendations.push('Verify data has consistent time intervals and handle missing timestamps');
+            break;
+          case 'regression_analysis':
+            recommendations.push('Check for multicollinearity among predictor variables before regression');
+            break;
+        }
+      }
+      // Add data-size specific recommendation
+      if (dataSize > 50) {
+        recommendations.push('Consider dimensionality reduction given the high number of variables');
+      } else if (dataSize < 5) {
+        recommendations.push('Limited variables available - focus on direct relationships between key metrics');
+      }
     }
 
     return {

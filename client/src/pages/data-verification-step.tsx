@@ -92,8 +92,6 @@ export default function DataVerificationStep({
   }, [journeyProgress?.verificationStatus]);
   const queryClient = useQueryClient();
   const hasRefreshedOnMount = useRef(false);
-  // FIX Jan 20: Track when local mapping was done to prevent stale SSOT from overwriting
-  const localMappingTimestampRef = useRef<number>(0);
 
   // Local data state (some will be migrated to journeyProgress/project from hook)
   const [projectData, setProjectData] = useState<any>(null);
@@ -325,7 +323,9 @@ export default function DataVerificationStep({
       dataType: el.dataType || el.expectedType || el.type || 'string',
       purpose: el.purpose || el.derivation || '',
       required: el.required !== false, // Default to true
-      sourceField: el.sourceField || el.mappedColumn || el.source || undefined,
+      // CRITICAL FIX: Include sourceColumn as fallback for sourceField
+      // Backend map-data-elements sets sourceColumn, not sourceField
+      sourceField: el.sourceField || el.sourceColumn || el.mappedColumn || el.source || undefined,
       sourceAvailable: el.sourceAvailable ?? (!!el.sourceField || !!el.sourceColumn || !!el.mappedColumn),
       transformationRequired: el.transformationRequired ?? (!!el.transformationLogic || !!el.derivation || !!el.calculationDefinition),
       transformationLogic: el.transformationLogic,
@@ -336,7 +336,7 @@ export default function DataVerificationStep({
       // Also preserve any existing transformation code/description
       transformationCode: el.transformationCode,
       transformationDescription: el.transformationDescription,
-      sourceColumn: el.sourceColumn
+      sourceColumn: el.sourceColumn || el.sourceField || el.mappedColumn
     }));
 
     // Calculate mapping statistics for debugging
@@ -374,7 +374,9 @@ export default function DataVerificationStep({
   // Sync local state with journeyProgress (SSOT)
   // FIX: Always prioritize journeyProgress.requirementsDocument as the single source of truth
   // This ensures data elements from Prepare step flow correctly to Verification step
+  // CRITICAL FIX: Gate behind hasCompletedRefresh to prevent stale cache race condition
   useEffect(() => {
+    if (!hasCompletedRefresh) return; // Wait for fresh data before applying SSOT
     if (journeyProgress) {
       if (journeyProgress.piiDecision && !piiReviewCompleted) {
         setPiiReviewCompleted(true);
@@ -407,67 +409,47 @@ export default function DataVerificationStep({
           el.sourceField || el.sourceColumn || el.sourceAvailable
         ).length;
 
-        // FIX Jan 20: Check if SSOT data is newer than local mapping using ref (avoids stale closure issue)
-        // This prevents stale cached data from overwriting fresh mapping results
-        const serverLastMappedAt = reqDoc?.lastMappedAt ? new Date(reqDoc.lastMappedAt).getTime() : 0;
-        const localMappingTimestamp = localMappingTimestampRef.current;
-
-        // Only apply SSOT if:
-        // 1. No local mapping has been done (localMappingTimestamp is 0), OR
-        // 2. Server timestamp is newer than local mapping timestamp
-        const shouldApplySSOT =
-          localMappingTimestamp === 0 ||
-          serverLastMappedAt > localMappingTimestamp;
-
         console.log('✅ [SSOT] Loading requirementsDocument from journeyProgress:', {
           elementsCount: elements.length,
           serverMappedCount,
-          serverLastMappedAt: reqDoc?.lastMappedAt,
-          serverLastMappedAtMs: serverLastMappedAt,
-          localMappingTimestamp,
-          shouldApplySSOT,
+          lastMappedAt: reqDoc?.lastMappedAt,
           analysesCount: reqDoc?.analysisPath?.length || 0,
           isLocked,
           sampleElements,
           hasCompleteness: !!reqDoc?.completeness,
           source: 'journeyProgress.requirementsDocument',
-          action: shouldApplySSOT ? 'APPLYING_SSOT' : 'SKIPPING_STALE_SSOT'
+          action: 'APPLYING_SSOT'
         });
 
-        // Only apply if SSOT data is newer/better than local state
-        if (shouldApplySSOT) {
-          setRequiredDataElements(reqDoc);
-        } else {
-          console.log('⚠️ [SSOT] Skipping stale SSOT data - local state has newer/better mappings');
+        // FIX Jan 22: Always apply SSOT when hasCompletedRefresh is true
+        // The hasCompletedRefresh gate already ensures we have fresh server data
+        // Previous shouldApplySSOT check using localMappingTimestampRef caused race conditions
+        // where the SSOT data was skipped on navigation even though it was fresh
+        setRequiredDataElements(reqDoc);
+
+        // Restore element mappings from requirementsDocument
+        // This ensures mappings persist across page navigation/refresh
+        const restoredMappings: any[] = [];
+        elements.forEach((elem: any) => {
+          if (elem.sourceColumn || elem.sourceField) {
+            restoredMappings.push({
+              elementId: elem.elementId || elem.id,
+              mappedColumn: elem.sourceColumn || elem.sourceField,
+              transformationDescription: elem.transformationDescription,
+              transformationCode: elem.transformationCode
+            });
+          }
+        });
+        if (restoredMappings.length > 0) {
+          console.log('📋 [SSOT] Restoring', restoredMappings.length, 'element mappings from requirementsDocument');
+          setCurrentElementMappings(restoredMappings);
+          setHasMappedElements(true);
         }
 
-        // CRITICAL FIX: Restore element mappings from requirementsDocument
-        // This ensures mappings persist across page navigation/refresh
-        // FIX Jan 20: Only restore if we're applying SSOT (not skipping due to stale data)
-        if (shouldApplySSOT) {
-          const restoredMappings: any[] = [];
-          elements.forEach((elem: any) => {
-            if (elem.sourceColumn || elem.sourceField) {
-              restoredMappings.push({
-                elementId: elem.elementId || elem.id,
-                mappedColumn: elem.sourceColumn || elem.sourceField,
-                transformationDescription: elem.transformationDescription,
-                transformationCode: elem.transformationCode
-              });
-            }
-          });
-          if (restoredMappings.length > 0) {
-            console.log('📋 [SSOT] Restoring', restoredMappings.length, 'element mappings from requirementsDocument');
-            setCurrentElementMappings(restoredMappings);
-            // FIX: Mark as mapped to prevent unnecessary re-mapping
-            setHasMappedElements(true);
-          }
-
-          // FIX: Also check if elements have sourceAvailable set (from prior mapping)
-          if (serverMappedCount > 0) {
-            console.log(`📋 [SSOT] Found ${serverMappedCount}/${elements.length} elements already mapped`);
-            setHasMappedElements(true);
-          }
+        // Also check if elements have sourceAvailable set (from prior mapping)
+        if (serverMappedCount > 0) {
+          console.log(`📋 [SSOT] Found ${serverMappedCount}/${elements.length} elements already mapped`);
+          setHasMappedElements(true);
         }
 
         // Also log analysis recommendations and questions for debugging
@@ -497,7 +479,7 @@ export default function DataVerificationStep({
         });
       }
     }
-  }, [journeyProgress, currentProjectId, isLoading]);
+  }, [journeyProgress, currentProjectId, isLoading, hasCompletedRefresh]);
 
   // ✅ P0 FIX: Load mappings from DE Agent transformationPlan if no mappings yet
   // This ensures mappings show on first visit (not just on revisit)
@@ -682,20 +664,23 @@ export default function DataVerificationStep({
             setRequiredDataElements(reqDoc);
 
             // Also restore element mappings
+            // FIX Jan 22: Check sourceField in addition to sourceColumn (DE mapping sets sourceField)
             const elements = reqDoc?.requiredDataElements || [];
             const restoredMappings: any[] = [];
             elements.forEach((elem: any) => {
-              if (elem.sourceColumn) {
+              if (elem.sourceColumn || elem.sourceField) {
                 restoredMappings.push({
                   elementId: elem.elementId || elem.id,
-                  mappedColumn: elem.sourceColumn,
+                  mappedColumn: elem.sourceColumn || elem.sourceField,
                   transformationDescription: elem.transformationDescription,
                   transformationCode: elem.transformationCode
                 });
               }
             });
             if (restoredMappings.length > 0) {
+              console.log('📋 [Verification] Restoring', restoredMappings.length, 'mappings from force-refresh');
               setCurrentElementMappings(restoredMappings);
+              setHasMappedElements(true);
             }
           }
         } catch (err) {
@@ -784,14 +769,6 @@ export default function DataVerificationStep({
             confidence: e.confidence
           })));
 
-          // FIX Jan 20: Set the local mapping timestamp ref to prevent SSOT from overwriting
-          // Use the server's lastMappedAt timestamp or current time
-          const mappingTimestamp = response.document.lastMappedAt
-            ? new Date(response.document.lastMappedAt).getTime()
-            : Date.now();
-          localMappingTimestampRef.current = mappingTimestamp;
-          console.log(`📊 [Data Engineer] Set local mapping timestamp ref:`, mappingTimestamp);
-
           setRequiredDataElements(response.document);
           setHasMappedElements(true);
 
@@ -833,7 +810,8 @@ export default function DataVerificationStep({
     };
 
     triggerDataEngineerMapping();
-  }, [currentProjectId, requiredDataElements, journeyProgress?.requirementsDocument, isMappingElements, hasMappedElements, isLoading, queryClient, onPrevious, toast]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentProjectId, requiredDataElements, journeyProgress?.requirementsDocument, isMappingElements, hasMappedElements, isLoading]);
 
   const loadProjectData = async (projectId: string) => {
     try {

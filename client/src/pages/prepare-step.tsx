@@ -944,7 +944,7 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Lightbulb className="w-5 h-5" />
-            Initial Questions (Optional)
+            Initial Questions
           </CardTitle>
           <CardDescription>
             Do you have any specific questions in mind? You can refine these later.
@@ -953,7 +953,7 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
         <CardContent>
           <div className="space-y-4">
             <div>
-              <Label htmlFor="business-questions">Any initial questions? (You'll refine these in Step 4)</Label>
+              <Label htmlFor="business-questions">Any initial questions?</Label>
               <Textarea
                 id="business-questions"
                 placeholder="For example: 'Who are our most valuable customers?' or 'What factors drive sales?' or 'How can we reduce churn?'..."

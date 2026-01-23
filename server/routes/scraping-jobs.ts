@@ -575,7 +575,7 @@ router.post('/:id/run', async (req, res) => {
       createdAt: startedAt,
     } as any);
 
-    const simulatedRecordCount = Math.floor(Math.random() * 500);
+    const simulatedRecordCount = 0; // Dev mode: no actual scraping performed
 
     const finishedRun = await storage.updateScrapingRun(run.id, {
       status: 'completed',

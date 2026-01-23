@@ -126,321 +126,89 @@ const AgentManagement: React.FC = () => {
     timeout: 30000
   });
 
-  // Mock data - in real app, fetch from API
+  // Fetch real agent data from system-status API
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
       try {
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        
-        // Mock agents data
-        const mockAgents: AgentInfo[] = [
-          {
-            id: 'project_manager',
-            name: 'Project Manager Agent',
-            type: 'orchestration',
-            description: 'Coordinates project workflows and manages dependencies between different agents',
-            status: 'active',
-            version: '2.1.0',
-            capabilities: ['project_coordination', 'workflow_management', 'dependency_resolution', 'status_reporting'],
+        const response = await fetch('/api/system-status', {
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' }
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to fetch system status: ${response.status}`);
+        }
+
+        const systemStatus = await response.json();
+
+        // Map backend agent data to AgentInfo format
+        const agentDefinitions: Record<string, { type: string; description: string; capabilities: string[] }> = {
+          pm: { type: 'orchestration', description: 'Coordinates project workflows and manages dependencies between agents', capabilities: ['project_coordination', 'workflow_management', 'dependency_resolution', 'status_reporting'] },
+          de: { type: 'data_processing', description: 'Handles ETL operations, data pipeline management, and data quality assurance', capabilities: ['etl_processing', 'data_quality', 'pipeline_management', 'data_transformation'] },
+          ds: { type: 'analysis', description: 'Performs statistical analysis, ML modeling, and data science workflows', capabilities: ['statistical_analysis', 'ml_modeling', 'data_preprocessing', 'feature_engineering'] },
+          ba: { type: 'business', description: 'Provides business insights, industry knowledge, and compliance guidance', capabilities: ['business_analysis', 'compliance_check', 'industry_insights', 'report_generation'] },
+          customer_support: { type: 'support', description: 'Handles customer inquiries, ticket management, and user assistance', capabilities: ['ticket_management', 'customer_assistance', 'escalation_handling', 'knowledge_base'] },
+          template_research: { type: 'research', description: 'Researches and recommends analysis templates for industries', capabilities: ['template_search', 'industry_research', 'template_synthesis'] }
+        };
+
+        const agentStatusMap: Record<string, 'active' | 'inactive' | 'error' | 'maintenance'> = {
+          idle: 'active',
+          active: 'active',
+          busy: 'active',
+          error: 'error',
+          maintenance: 'maintenance'
+        };
+
+        const realAgents: AgentInfo[] = (systemStatus.agents || []).map((agent: any) => {
+          const def = agentDefinitions[agent.id] || { type: 'unknown', description: agent.name || 'Agent', capabilities: [] };
+          return {
+            id: agent.id,
+            name: agent.name || agent.id,
+            type: def.type,
+            description: def.description,
+            status: agentStatusMap[agent.status] || 'active',
+            version: '1.0.0',
+            capabilities: def.capabilities,
             healthStatus: {
               lastHealthCheck: new Date(),
-              responseTime: 145,
-              memoryUsage: 65,
-              cpuUsage: 23,
-              isHealthy: true,
+              responseTime: systemStatus.performance?.avgResponseTime || 0,
+              memoryUsage: systemStatus.performance?.memoryUsage || 0,
+              cpuUsage: systemStatus.performance?.cpuUsage || 0,
+              isHealthy: systemStatus.overall === 'healthy',
               errorCount: 0
             },
             performance: {
-              tasksCompleted: 1456,
-              successRate: 98.5,
-              averageResponseTime: 150,
-              uptime: 99.8
-            },
-            configuration: {
-              maxConcurrentTasks: 10,
-              priority: 5,
-              timeout: 30000,
-              retryAttempts: 3
-            },
-            metadata: {
-              createdAt: new Date('2024-01-01'),
-              lastUpdated: new Date(),
-              author: 'System',
-              tags: ['core', 'orchestration', 'project_management']
-            }
-          },
-          {
-            id: 'data_scientist',
-            name: 'Data Scientist Agent',
-            type: 'analysis',
-            description: 'Performs advanced statistical analysis, ML modeling, and data science workflows',
-            status: 'active',
-            version: '3.0.2',
-            capabilities: ['statistical_analysis', 'ml_modeling', 'data_preprocessing', 'feature_engineering'],
-            healthStatus: {
-              lastHealthCheck: new Date(Date.now() - 30000),
-              responseTime: 890,
-              memoryUsage: 78,
-              cpuUsage: 45,
-              isHealthy: true,
-              errorCount: 2
-            },
-            performance: {
-              tasksCompleted: 2341,
-              successRate: 96.2,
-              averageResponseTime: 850,
-              uptime: 97.5
+              tasksCompleted: 0,
+              successRate: 0,
+              averageResponseTime: systemStatus.performance?.avgResponseTime || 0,
+              uptime: 0
             },
             configuration: {
               maxConcurrentTasks: 5,
-              priority: 4,
-              timeout: 120000,
-              retryAttempts: 2
-            },
-            metadata: {
-              createdAt: new Date('2024-01-01'),
-              lastUpdated: new Date(Date.now() - 3600000),
-              author: 'Data Team',
-              tags: ['analysis', 'ml', 'statistics']
-            }
-          },
-          {
-            id: 'business_agent',
-            name: 'Business Intelligence Agent',
-            type: 'business',
-            description: 'Provides business insights, industry knowledge, and regulatory compliance guidance',
-            status: 'active',
-            version: '1.8.5',
-            capabilities: ['business_analysis', 'compliance_check', 'industry_insights', 'report_generation'],
-            healthStatus: {
-              lastHealthCheck: new Date(Date.now() - 60000),
-              responseTime: 234,
-              memoryUsage: 45,
-              cpuUsage: 18,
-              isHealthy: true,
-              errorCount: 1
-            },
-            performance: {
-              tasksCompleted: 987,
-              successRate: 99.1,
-              averageResponseTime: 280,
-              uptime: 99.2
-            },
-            configuration: {
-              maxConcurrentTasks: 8,
               priority: 3,
-              timeout: 45000,
-              retryAttempts: 3
-            },
-            metadata: {
-              createdAt: new Date('2024-01-01'),
-              lastUpdated: new Date(Date.now() - 7200000),
-              author: 'Business Team',
-              tags: ['business', 'compliance', 'insights']
-            }
-          },
-          {
-            id: 'data_engineer',
-            name: 'Data Engineer Agent',
-            type: 'data_processing',
-            description: 'Handles ETL operations, data pipeline management, and data quality assurance',
-            status: 'active',
-            version: '2.3.1',
-            capabilities: ['etl_processing', 'data_quality', 'pipeline_management', 'data_transformation'],
-            healthStatus: {
-              lastHealthCheck: new Date(Date.now() - 15000),
-              responseTime: 320,
-              memoryUsage: 82,
-              cpuUsage: 35,
-              isHealthy: true,
-              errorCount: 0
-            },
-            performance: {
-              tasksCompleted: 3456,
-              successRate: 97.8,
-              averageResponseTime: 450,
-              uptime: 98.9
-            },
-            configuration: {
-              maxConcurrentTasks: 15,
-              priority: 4,
-              timeout: 180000,
+              timeout: 60000,
               retryAttempts: 2
             },
             metadata: {
-              createdAt: new Date('2024-01-15'),
-              lastUpdated: new Date(Date.now() - 1800000),
-              author: 'Engineering Team',
-              tags: ['etl', 'data_processing', 'pipelines']
+              createdAt: new Date(),
+              lastUpdated: new Date(),
+              author: 'System',
+              tags: def.capabilities.slice(0, 2)
             }
-          },
-          {
-            id: 'customer_support',
-            name: 'Customer Support Agent',
-            type: 'support',
-            description: 'Handles customer inquiries, ticket management, and user assistance',
-            status: 'active',
-            version: '1.2.0',
-            capabilities: ['ticket_management', 'customer_assistance', 'escalation_handling', 'knowledge_base'],
-            healthStatus: {
-              lastHealthCheck: new Date(Date.now() - 45000),
-              responseTime: 156,
-              memoryUsage: 38,
-              cpuUsage: 12,
-              isHealthy: true,
-              errorCount: 0
-            },
-            performance: {
-              tasksCompleted: 567,
-              successRate: 99.6,
-              averageResponseTime: 180,
-              uptime: 99.9
-            },
-            configuration: {
-              maxConcurrentTasks: 20,
-              priority: 5,
-              timeout: 60000,
-              retryAttempts: 1
-            },
-            metadata: {
-              createdAt: new Date('2024-01-20'),
-              lastUpdated: new Date(Date.now() - 900000),
-              author: 'Support Team',
-              tags: ['support', 'customer_service', 'tickets']
-            }
-          },
-          {
-            id: 'data_quality_monitor',
-            name: 'Data Quality Monitor',
-            type: 'monitoring',
-            description: 'Monitors data quality, detects anomalies, and ensures data integrity',
-            status: 'maintenance',
-            version: '1.0.3',
-            capabilities: ['quality_monitoring', 'anomaly_detection', 'data_validation', 'alerting'],
-            healthStatus: {
-              lastHealthCheck: new Date(Date.now() - 300000),
-              responseTime: 0,
-              memoryUsage: 0,
-              cpuUsage: 0,
-              isHealthy: false,
-              errorCount: 5
-            },
-            performance: {
-              tasksCompleted: 234,
-              successRate: 94.2,
-              averageResponseTime: 500,
-              uptime: 89.5
-            },
-            configuration: {
-              maxConcurrentTasks: 3,
-              priority: 2,
-              timeout: 90000,
-              retryAttempts: 3
-            },
-            metadata: {
-              createdAt: new Date('2024-01-25'),
-              lastUpdated: new Date(Date.now() - 10800000),
-              author: 'Quality Team',
-              tags: ['monitoring', 'quality', 'validation']
-            }
-          }
-        ];
+          };
+        });
 
-        // Mock tasks data
-        const mockTasks: AgentTask[] = [
-          {
-            id: 'task_1',
-            agentId: 'data_scientist',
-            type: 'regression_analysis',
-            status: 'running',
-            priority: 4,
-            createdAt: new Date(Date.now() - 600000),
-            startedAt: new Date(Date.now() - 300000),
-            metadata: {
-              userId: 'user_123',
-              datasetId: 'dataset_456',
-              analysisType: 'linear_regression'
-            }
-          },
-          {
-            id: 'task_2',
-            agentId: 'data_engineer',
-            type: 'data_transformation',
-            status: 'completed',
-            priority: 3,
-            createdAt: new Date(Date.now() - 1800000),
-            startedAt: new Date(Date.now() - 1500000),
-            completedAt: new Date(Date.now() - 900000),
-            duration: 600000,
-            metadata: {
-              inputFormat: 'csv',
-              outputFormat: 'json',
-              recordsProcessed: 10000
-            }
-          },
-          {
-            id: 'task_3',
-            agentId: 'customer_support',
-            type: 'ticket_resolution',
-            status: 'pending',
-            priority: 5,
-            createdAt: new Date(Date.now() - 300000),
-            metadata: {
-              ticketId: 'ticket_789',
-              category: 'technical_issue',
-              urgency: 'high'
-            }
-          }
-        ];
-
-        // Mock communications data
-        const mockCommunications: CommunicationFlow[] = [
-          {
-            id: 'comm_1',
-            type: 'customer_to_agent',
-            sourceId: 'user_123',
-            targetId: 'customer_support',
-            message: 'Having trouble uploading large CSV files',
-            intent: 'technical_support',
-            priority: 4,
-            status: 'processing',
-            timestamp: new Date(Date.now() - 180000),
-            escalationLevel: 0
-          },
-          {
-            id: 'comm_2',
-            type: 'agent_to_agent',
-            sourceId: 'project_manager',
-            targetId: 'data_scientist',
-            message: 'Please prioritize regression analysis for Project Alpha',
-            intent: 'task_coordination',
-            priority: 3,
-            status: 'completed',
-            timestamp: new Date(Date.now() - 900000),
-            responseTime: 45000,
-            escalationLevel: 0
-          },
-          {
-            id: 'comm_3',
-            type: 'agent_to_agent',
-            sourceId: 'data_engineer',
-            targetId: 'data_scientist',
-            message: 'Data preprocessing completed for dataset_456',
-            intent: 'status_update',
-            priority: 2,
-            status: 'completed',
-            timestamp: new Date(Date.now() - 1200000),
-            responseTime: 15000,
-            escalationLevel: 0
-          }
-        ];
-
-        setAgents(mockAgents);
-        setTasks(mockTasks);
-        setCommunications(mockCommunications);
+        setAgents(realAgents);
+        // Tasks and communications require real-time tracking - show empty until implemented
+        setTasks([]);
+        setCommunications([]);
       } catch (error) {
         console.error('Error loading agent data:', error);
+        // Show empty state on error
+        setAgents([]);
+        setTasks([]);
+        setCommunications([]);
       } finally {
         setLoading(false);
       }
@@ -712,6 +480,9 @@ const AgentManagement: React.FC = () => {
                 </div>
                 <div className="p-6">
                   <div className="space-y-4">
+                    {agents.length === 0 && (
+                      <p className="text-sm text-gray-500 text-center py-4">No agents registered</p>
+                    )}
                     {agents.slice(0, 5).map(agent => (
                       <div key={agent.id} className="flex items-center justify-between">
                         <div className="flex items-center">
@@ -726,10 +497,10 @@ const AgentManagement: React.FC = () => {
                         <div className="flex items-center space-x-2">
                           <div className="text-right">
                             <p className="text-sm text-gray-600">
-                              {agent.performance.successRate.toFixed(1)}% success
+                              {agent.performance.successRate > 0 ? `${agent.performance.successRate.toFixed(1)}% success` : 'N/A'}
                             </p>
                             <p className="text-xs text-gray-500">
-                              {agent.performance.uptime.toFixed(1)}% uptime
+                              {agent.performance.uptime > 0 ? `${agent.performance.uptime.toFixed(1)}% uptime` : 'Available'}
                             </p>
                           </div>
                           {getStatusIcon(agent.status)}
@@ -746,6 +517,9 @@ const AgentManagement: React.FC = () => {
                 </div>
                 <div className="p-6">
                   <div className="space-y-4">
+                    {communications.length === 0 && (
+                      <p className="text-sm text-gray-500 text-center py-4">No recent communications</p>
+                    )}
                     {communications.slice(0, 5).map(comm => (
                       <div key={comm.id} className="border rounded-lg p-3">
                         <div className="flex items-center justify-between mb-2">
@@ -824,6 +598,13 @@ const AgentManagement: React.FC = () => {
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+                {filteredAgents.length === 0 && (
+                  <div className="col-span-full text-center py-12 text-gray-500">
+                    <Bot className="h-12 w-12 mx-auto mb-4 text-gray-300" />
+                    <p className="text-lg font-medium">No Agent Data Available</p>
+                    <p className="text-sm mt-1">Agent metrics will appear here when agents process tasks.</p>
+                  </div>
+                )}
                 {filteredAgents.map(agent => (
                   <div key={agent.id} className="border rounded-lg p-6 hover:shadow-md transition-shadow">
                     <div className="flex items-start justify-between mb-4">
@@ -963,6 +744,14 @@ const AgentManagement: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
+                      {tasks.length === 0 && (
+                        <tr>
+                          <td colSpan={7} className="px-6 py-8 text-center text-gray-500">
+                            <Clock className="h-8 w-8 mx-auto mb-2 text-gray-300" />
+                            <p>No tasks recorded yet. Task history will appear here as agents process work.</p>
+                          </td>
+                        </tr>
+                      )}
                       {tasks.map(task => {
                         const agent = agents.find(a => a.id === task.agentId);
                         const duration = task.completedAt && task.startedAt 
@@ -1029,6 +818,12 @@ const AgentManagement: React.FC = () => {
               </div>
               <div className="p-6">
                 <div className="space-y-4">
+                  {communications.length === 0 && (
+                    <div className="text-center py-8 text-gray-500">
+                      <MessageSquare className="h-8 w-8 mx-auto mb-2 text-gray-300" />
+                      <p>No communication flows recorded yet. Agent interactions will appear here.</p>
+                    </div>
+                  )}
                   {communications.map(comm => (
                     <div key={comm.id} className="border rounded-lg p-4">
                       <div className="flex items-start justify-between">

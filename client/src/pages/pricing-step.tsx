@@ -209,17 +209,8 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
     async function fetchCostEstimate() {
       setBackendCostLoading(true);
       try {
-        const response = await fetch(`/api/projects/${projectId}/cost-estimate`, {
-          method: 'GET',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' }
-        });
-
-        if (!response.ok) {
-          throw new Error(`Cost estimate failed: ${response.status}`);
-        }
-
-        const data = await response.json();
+        // Use apiClient instead of raw fetch to include auth headers
+        const data = await apiClient.get(`/api/projects/${projectId}/cost-estimate`);
         if (!cancelled && data.success) {
           console.log(`✅ [Pricing] Backend cost estimate: $${data.totalCost} (${data.isLocked ? 'LOCKED' : 'estimated'})`);
           setBackendCostEstimate({
@@ -230,7 +221,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
         }
       } catch (error) {
         console.warn('⚠️ [Pricing] Failed to fetch backend cost estimate:', error);
-        // Don't fail - fall back to frontend calculation
+        // Don't fail - fall back to billing service calculation
       } finally {
         if (!cancelled) setBackendCostLoading(false);
       }
@@ -246,7 +237,6 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
         return {
           title: "AI-Guided Analysis Pricing",
           description: "Simple pricing for AI-assisted analysis",
-          basePrice: 29,
           icon: DollarSign,
           color: "blue"
         };
@@ -254,7 +244,6 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
         return {
           title: "Business Analysis Pricing",
           description: "Pricing for business template-based analysis",
-          basePrice: 39,
           icon: DollarSign,
           color: "green"
         };
@@ -262,7 +251,6 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
         return {
           title: "Technical Analysis Pricing",
           description: "Pricing for advanced technical analysis",
-          basePrice: 49,
           icon: DollarSign,
           color: "purple"
         };
@@ -270,7 +258,6 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
         return {
           title: "Expert Consultation Pricing",
           description: "Pricing for expert consultation and analysis",
-          basePrice: 99,
           icon: DollarSign,
           color: "yellow"
         };
@@ -278,7 +265,6 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
         return {
           title: "Analysis Pricing",
           description: "Pricing for your data analysis",
-          basePrice: 39,
           icon: DollarSign,
           color: "blue"
         };
@@ -413,36 +399,33 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
   const remainingCostCents = useMemo(() => toCents(journeyState?.costs?.remaining), [journeyState]);
 
   // ✅ PHASE 7 FIX: Unified cost calculation with clear source hierarchy
-  // Priority: 1. Backend cost estimate (authoritative), 2. Server-locked cost, 3. Billing calculation, 4. Client fallback
+  // Priority: 1. Backend cost estimate (authoritative), 2. Billing calculation, 3. Client fallback
+  // NOTE: Removed "server-locked cost" from priority 2 as it often contains stale/incorrect values
   const authoritativeCostCents = useMemo(() => {
     // Priority 1: Backend cost estimate from /api/projects/:id/cost-estimate (AUTHORITATIVE)
     if (backendCostEstimate?.totalCost && backendCostEstimate.totalCost > 0) {
       const costCents = Math.round(backendCostEstimate.totalCost * 100);
-      console.log(`💰 [PHASE 7] Using backend cost estimate: $${backendCostEstimate.totalCost} (${backendCostEstimate.isLocked ? 'LOCKED' : 'calculated'})`);
+      console.log(`💰 [Pricing] Using backend cost estimate: $${backendCostEstimate.totalCost} (${backendCostEstimate.isLocked ? 'LOCKED' : 'calculated'})`);
       return costCents;
     }
-    // Priority 2: Server-locked cost from journey state
-    if (lockedCostCents !== null) {
-      console.log('💰 [Pricing] Using server-locked cost from plan:', lockedCostCents / 100);
-      return lockedCostCents;
-    }
-    // Priority 3: Billing service calculation
-    if (typeof billingBreakdown?.totalCost === 'number') {
+    // Priority 2: Billing service calculation (from /api/billing/journey-breakdown)
+    if (typeof billingBreakdown?.totalCost === 'number' && billingBreakdown.totalCost > 0) {
       console.log('💰 [Pricing] Using server billing calculation:', billingBreakdown.totalCost / 100);
       return billingBreakdown.totalCost;
     }
-    // Priority 4: Fallback to client-side calculation - warn about potential mismatch
+    // Priority 3: Fallback to client-side calculation
     console.warn('⚠️ [Pricing] Using client-side fallback pricing. Server cost not available.');
     return Math.round(finalPrice * 100);
-  }, [backendCostEstimate, lockedCostCents, billingBreakdown?.totalCost, finalPrice]);
+  }, [backendCostEstimate, billingBreakdown?.totalCost, finalPrice]);
 
   // Track if we're using estimated vs locked pricing
   const isEstimatedPricing = useMemo(() => {
-    // Not estimated if we have backend locked cost or backend estimate
+    // Not estimated if we have backend locked cost or backend estimate or billing calculation
     if (backendCostEstimate?.isLocked) return false;
     if (backendCostEstimate?.totalCost && backendCostEstimate.totalCost > 0) return false;
-    return lockedCostCents === null && typeof billingBreakdown?.totalCost !== 'number';
-  }, [backendCostEstimate, lockedCostCents, billingBreakdown?.totalCost]);
+    if (typeof billingBreakdown?.totalCost === 'number' && billingBreakdown.totalCost > 0) return false;
+    return true;
+  }, [backendCostEstimate, billingBreakdown?.totalCost]);
 
   const pricingPlans = useMemo(() => {
     const perAnalysisPriceDisplay = formatCurrency(authoritativeCostCents, true);
@@ -480,19 +463,18 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
       {
         id: 'volume-discount',
         name: 'Volume Discount',
-        description: 'Save 15% when you purchase 5+ analyses',
-        priceCents: authoritativeCostCents !== null ? Math.round(authoritativeCostCents * 0.85) : null,
-        priceDisplay:
-          authoritativeCostCents !== null ? formatCurrency(Math.round(authoritativeCostCents * 0.85), true) : 'Custom',
+        description: 'Contact us for volume pricing on 5+ analyses',
+        priceCents: null,
+        priceDisplay: 'Contact Us',
         features: [
           'Same features as per-analysis',
-          '15% volume discount',
+          'Custom volume pricing',
           'Bulk processing priority',
           'Extended result access (90 days)',
           'Batch report generation'
         ],
         popular: false,
-        locked: Boolean(lockedCostCents),
+        locked: false,
         minQuantity: 5
       },
       {
@@ -973,8 +955,8 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
         </Card>
       )}
 
-      {/* Results Teaser - Preview of what they'll get */}
-      <Card className="border-indigo-200 bg-gradient-to-r from-indigo-50 to-purple-50">
+      {/* Results Teaser - Preview of what they'll get (only shown after execution) */}
+      {!isPreExecution && <Card className="border-indigo-200 bg-gradient-to-r from-indigo-50 to-purple-50">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-indigo-900">
             <Zap className="w-5 h-5" />
@@ -999,7 +981,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
               <p className="text-sm text-indigo-600">Visualizations</p>
             </div>
             <div className="text-center p-3 bg-white rounded-lg border border-indigo-100">
-              <p className="text-2xl font-bold text-indigo-900">3+</p>
+              <p className="text-2xl font-bold text-indigo-900">{journeyType === 'non-tech' ? 3 : 4}</p>
               <p className="text-sm text-indigo-600">Export Formats</p>
             </div>
           </div>
@@ -1010,7 +992,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
             </p>
           </div>
         </CardContent>
-      </Card>
+      </Card>}
 
       {/* Analysis Summary */}
       <Card>
@@ -1020,17 +1002,17 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
             Analysis Summary
           </CardTitle>
           <CardDescription>
-            Review your completed analysis before payment
+            {isPreExecution ? 'Review your planned analysis scope' : 'Review your completed analysis before payment'}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
             <div className="text-center">
               <p className="text-2xl font-bold text-gray-900">{analysisResults.totalAnalyses}</p>
-              <p className="text-sm text-gray-600">Analyses Completed</p>
+              <p className="text-sm text-gray-600">{isPreExecution ? 'Planned Analyses' : 'Analyses Completed'}</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl font-bold text-gray-900">{analysisResults.dataSize.toLocaleString()}</p>
+              <p className="text-2xl font-bold text-gray-900">{(totalDataRows || analysisResults.dataSize).toLocaleString()}</p>
               <p className="text-sm text-gray-600">Data Rows</p>
             </div>
             <div className="text-center">
@@ -1048,7 +1030,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
               {analysisResults.totalAnalyses} analyses
             </Badge>
             <Badge variant="secondary" className="bg-blue-100 text-blue-800">
-              {analysisResults.dataSize.toLocaleString()} rows
+              {(totalDataRows || analysisResults.dataSize).toLocaleString()} rows
             </Badge>
             <Badge variant="secondary" className="bg-purple-100 text-purple-800">
               {analysisResults.complexity} complexity
@@ -1070,22 +1052,33 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-gray-600">Platform Fee</span>
-              <span className="font-medium">${backendCostEstimate?.breakdown?.basePlatformFee?.toFixed(2) || '0.50'}</span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-gray-600">Data Processing ({(totalDataRows || analysisResults.dataSize).toLocaleString()} rows)</span>
-              <span className="font-medium">${backendCostEstimate?.breakdown?.dataProcessing?.toFixed(2) || ((totalDataRows / 1000) * 0.10).toFixed(2)}</span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-gray-600">Analysis Execution ({analysisResults.totalAnalyses || 1} {analysisResults.totalAnalyses === 1 ? 'type' : 'types'})</span>
-              <span className="font-medium">${backendCostEstimate?.breakdown?.analysisExecution?.toFixed(2) || (1.0 * Math.max(1, analysisResults.totalAnalyses)).toFixed(2)}</span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-gray-600">Analysis Count</span>
-              <span className="font-medium">{analysisResults.totalAnalyses || 1} {isPreExecution ? '(planned)' : ''}</span>
-            </div>
+            {backendCostLoading ? (
+              <div className="space-y-3">
+                <Skeleton className="h-5 w-full" />
+                <Skeleton className="h-5 w-full" />
+                <Skeleton className="h-5 w-full" />
+                <Skeleton className="h-5 w-3/4" />
+              </div>
+            ) : (
+              <>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-gray-600">Platform Fee</span>
+                  <span className="font-medium">${backendCostEstimate?.breakdown?.basePlatformFee?.toFixed(2) ?? '0.50'}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-gray-600">Data Processing ({(totalDataRows || analysisResults.dataSize).toLocaleString()} rows)</span>
+                  <span className="font-medium">${backendCostEstimate?.breakdown?.dataProcessing?.toFixed(2) ?? ((totalDataRows / 1000) * 0.10).toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-gray-600">Analysis Execution ({analysisResults.totalAnalyses || 1} {analysisResults.totalAnalyses === 1 ? 'type' : 'types'})</span>
+                  <span className="font-medium">${backendCostEstimate?.breakdown?.analysisExecution?.toFixed(2) ?? (1.0 * Math.max(1, analysisResults.totalAnalyses)).toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-gray-600">Analysis Count</span>
+                  <span className="font-medium">{analysisResults.totalAnalyses || 1} {isPreExecution ? '(planned)' : ''}</span>
+                </div>
+              </>
+            )}
             <Separator />
             <div className="flex justify-between items-center text-lg font-semibold">
               <span>{isPreExecution ? 'Estimated Total' : 'Final Total'}</span>
@@ -1302,7 +1295,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-gray-700">Data Processing</span>
-                <span className="font-medium">{analysisResults.dataSize.toLocaleString()} rows</span>
+                <span className="font-medium">{(totalDataRows || analysisResults.dataSize).toLocaleString()} rows</span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-gray-700">Analyses Included</span>
@@ -1386,7 +1379,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-sm text-gray-600">Data Processed</span>
-                <span className="font-medium">{analysisResults.dataSize.toLocaleString()} rows</span>
+                <span className="font-medium">{(totalDataRows || analysisResults.dataSize).toLocaleString()} rows</span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-sm text-gray-600">Analyses Executed</span>

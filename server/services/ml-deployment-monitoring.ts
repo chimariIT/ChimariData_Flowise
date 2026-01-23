@@ -437,9 +437,9 @@ export class MLPredictionService {
             throw new Error('ML prediction requires trained model integration in production. Deploy model artifacts first.');
         }
 
-        // Development only: Mock confidence scores
-        console.warn('⚠️ [MLPrediction] Using mock confidence scores (dev mode only)');
-        const confidence = data.map(() => Math.random() * 0.3 + 0.7); // 0.7-1.0
+        // Development only: No real model available, return zero confidence
+        console.warn('⚠️ [MLPrediction] No trained model - returning zero confidence (dev mode only)');
+        const confidence = data.map(() => 0);
 
         return {
             values: predictions,
@@ -639,9 +639,9 @@ export class MLMonitoringService {
     }
 
     private calculateDriftScore(model: MLModel, currentData: any[]): number {
-        // Placeholder drift calculation
-        // Would implement statistical tests (KS test, Chi-square, etc.)
-        return Math.random() * 0.4; // 0-0.4 range for demo
+        // Placeholder drift calculation - no trained model baseline available
+        // Would implement statistical tests (KS test, Chi-square, etc.) with real model data
+        return 0; // No drift measurable without trained model baseline
     }
 
     private generateDriftRecommendations(driftScore: number): string[] {

@@ -32,6 +32,7 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
   const [activeTab, setActiveTab] = useState("overview");
   // showGuidedAnalysis state removed - analysis is now gated through user journey flow
   const hasAutoNavigatedRef = useRef(false);
+  const hasProcessedPaymentRef = useRef(false);
 
   const { data: project, isLoading, error } = useQuery({
     queryKey: ["/api/projects", projectId],
@@ -149,11 +150,15 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
   // Handle payment success/cancel URL parameters (fallback from Stripe redirect)
   // This catches users who land on project page after payment even though we redirect to pricing step
   useEffect(() => {
+    if (hasProcessedPaymentRef.current) return; // Prevent infinite loop
+
     const params = new URLSearchParams(currentSearch);
     const paymentStatus = params.get('payment');
     const sessionId = params.get('session_id');
 
     if (!paymentStatus || !projectId) return;
+
+    hasProcessedPaymentRef.current = true; // Set guard BEFORE async call
 
     const handlePaymentCallback = async () => {
       if (paymentStatus === 'success' && sessionId) {
@@ -169,10 +174,6 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
               title: "Payment Successful!",
               description: "Your payment has been verified. You can now view your analysis results.",
             });
-
-            // Clear URL parameters and redirect to results
-            const cleanPath = location.split('?')[0];
-            setLocation(cleanPath, { replace: true });
           } else {
             toast({
               title: "Payment Verification",
@@ -186,10 +187,11 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
             description: "If you completed payment, your results will be available shortly.",
             variant: "default"
           });
-          // Clear params anyway to avoid repeated attempts
-          const cleanPath = location.split('?')[0];
-          setLocation(cleanPath, { replace: true });
         }
+
+        // Clear URL parameters after processing
+        const cleanPath = location.split('?')[0];
+        setLocation(cleanPath, { replace: true });
       } else if (paymentStatus === 'cancelled') {
         toast({
           title: "Payment Cancelled",

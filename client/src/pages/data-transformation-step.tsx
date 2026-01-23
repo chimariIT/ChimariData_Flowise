@@ -415,10 +415,12 @@ export default function DataTransformationStep({
             return;
         }
 
-        // Extract analysis types from analysisPath
-        const analysisTypes = analysisPath.map((a: any) =>
-            a.analysisType || a.type || 'descriptive_statistics'
+        // Extract analysis types from analysisPath - check multiple field names and deduplicate
+        const rawAnalysisTypes = analysisPath.map((a: any) =>
+            a.analysisType || a.analysisName || a.type || a.name || 'descriptive_statistics'
         );
+        // Deduplicate analysis types to avoid showing identical cards
+        const analysisTypes = [...new Set(rawAnalysisTypes)];
 
         const fetchAnalysisPreparation = async () => {
             setIsLoadingAnalysisPrep(true);
@@ -572,8 +574,8 @@ export default function DataTransformationStep({
         if (transformationMappings.length > 0) {
             const initialLogic: Record<string, string> = {};
             transformationMappings.forEach(mapping => {
-                // Only set if transformation is required and there's a suggestion, and not already set by user
-                if (mapping.transformationRequired && mapping.suggestedTransformation && !transformationLogic[mapping.targetElement]) {
+                // Set for ALL mappings that have a suggestion and not already set by user
+                if (mapping.suggestedTransformation && !transformationLogic[mapping.targetElement]) {
                     initialLogic[mapping.targetElement] = mapping.suggestedTransformation;
                 }
             });
@@ -824,7 +826,7 @@ export default function DataTransformationStep({
                         const mappedColumn = el.sourceColumn || el.sourceField || null;
                         const calcDef = el.calculationDefinition;
 
-                        // FIX Issue 4: Generate suggestion from calculationDefinition if available
+                        // FIX Issue 4b: Generate suggestion from calculationDefinition, derivationType, or direct mapping
                         let suggestedTransformation = el.suggestedTransformation || el.transformation || '';
                         if (!suggestedTransformation && calcDef) {
                             if (calcDef.formula?.businessDescription) {
@@ -836,6 +838,25 @@ export default function DataTransformationStep({
                             }
                         }
 
+                        // Fallback: Generate from derivationType and source column
+                        if (!suggestedTransformation && mappedColumn) {
+                            const derivationType = el.derivationType || 'direct';
+                            if (derivationType === 'direct') {
+                                suggestedTransformation = `Map directly from "${mappedColumn}"`;
+                            } else if (derivationType === 'derived') {
+                                suggestedTransformation = `Calculate from "${mappedColumn}" with transformation`;
+                            } else if (derivationType === 'aggregated') {
+                                suggestedTransformation = `Aggregate values from "${mappedColumn}"`;
+                            }
+                        }
+
+                        // Final fallback: description for unmapped elements
+                        if (!suggestedTransformation && !mappedColumn) {
+                            suggestedTransformation = el.required !== false
+                                ? `Required: "${el.name || el.elementName}" - needs column mapping`
+                                : `Optional: "${el.name || el.elementName}" - map if available`;
+                        }
+
                         return {
                             targetElement: el.name || el.elementName || '',
                             targetType: el.type || el.dataType || 'string',
@@ -843,7 +864,7 @@ export default function DataTransformationStep({
                             sourceColumns: calcDef?.formula?.componentFields || undefined,  // Multi-column support
                             aggregationFunction: calcDef?.formula?.aggregationMethod as AggregationFunction || undefined,
                             confidence: el.confidence ?? (mappedColumn ? 0.9 : 0),
-                            transformationRequired: el.transformationRequired ?? !!suggestedTransformation,
+                            transformationRequired: el.transformationRequired ?? (!!suggestedTransformation || !!mappedColumn),
                             suggestedTransformation,
                             userDefinedLogic: el.userDefinedLogic || '',
                             relatedQuestions: el.relatedQuestions || [],
@@ -1235,17 +1256,34 @@ export default function DataTransformationStep({
             // Remove duplicates
             const uniqueQuestions = [...new Set(elementQuestions)].filter((q: string) => q.trim());
 
-            // If still no questions, try to match based on element purpose/name
+            // If still no questions, try to match based on element context (name, description, purpose, definition)
             if (uniqueQuestions.length === 0 && fallbackQuestions.length > 0) {
-                // Simple keyword matching for fallback
-                const elementWords = (element.elementName || '').toLowerCase().split(/[_\s]+/);
-                const purposeWords = (element.purpose || '').toLowerCase().split(/[_\s]+/);
-                const allWords = [...elementWords, ...purposeWords];
+                const elementContext = [
+                    element.elementName || '',
+                    element.description || '',
+                    element.purpose || '',
+                    element.businessDefinition || ''
+                ].join(' ').toLowerCase();
+
+                const contextWords = elementContext.split(/[\s_]+/).filter((w: string) => w.length > 3);
 
                 for (const q of fallbackQuestions) {
                     const qLower = q.toLowerCase();
-                    if (allWords.some((w: string) => w.length > 2 && qLower.includes(w))) {
+                    // Match if 2+ context words appear in the question (semantic matching)
+                    const matchCount = contextWords.filter((w: string) => qLower.includes(w)).length;
+                    if (matchCount >= 2) {
                         uniqueQuestions.push(q);
+                    }
+                }
+
+                // Fallback: simple single-word match if semantic matching found nothing
+                if (uniqueQuestions.length === 0) {
+                    const elementWords = (element.elementName || '').toLowerCase().split(/[_\s]+/);
+                    for (const q of fallbackQuestions) {
+                        const qLower = q.toLowerCase();
+                        if (elementWords.some((w: string) => w.length > 3 && qLower.includes(w))) {
+                            uniqueQuestions.push(q);
+                        }
                     }
                 }
             }
@@ -1265,17 +1303,55 @@ export default function DataTransformationStep({
                 confidence = element.confidence || 70;
             }
 
+            // Build suggestedTransformation with multiple fallbacks
+            let suggestedTransformation = element.transformationLogic?.description ||
+                element.suggestedTransformation || '';
+
+            // Fallback: Build from calculationDefinition if available
+            if (!suggestedTransformation && element.calculationDefinition) {
+                const calcDef = element.calculationDefinition;
+                if (calcDef.formula?.businessDescription) {
+                    suggestedTransformation = calcDef.formula.businessDescription;
+                } else if (calcDef.calculationType === 'aggregated' && calcDef.formula?.aggregationMethod) {
+                    suggestedTransformation = `${calcDef.formula.aggregationMethod} of ${(calcDef.formula.componentFields || []).join(', ')}`;
+                } else if (calcDef.calculationType === 'derived') {
+                    suggestedTransformation = `Derived calculation from source fields`;
+                }
+            }
+
+            // Fallback: Generate from element metadata and derivationType
+            if (!suggestedTransformation && mappedSourceColumn) {
+                const derivationType = element.derivationType || 'direct';
+                if (derivationType === 'direct') {
+                    suggestedTransformation = `Map directly from "${mappedSourceColumn}"`;
+                } else if (derivationType === 'derived') {
+                    suggestedTransformation = `Calculate from "${mappedSourceColumn}" with transformation`;
+                } else if (derivationType === 'aggregated') {
+                    suggestedTransformation = `Aggregate from multiple source columns`;
+                }
+            }
+
+            // Final fallback: Generate a description for unmapped elements
+            if (!suggestedTransformation && !mappedSourceColumn) {
+                suggestedTransformation = element.required !== false
+                    ? `Required: "${element.elementName}" - needs manual column mapping from your data`
+                    : `Optional: "${element.elementName}" - can be mapped if column exists in data`;
+            }
+
+            const resolvedSourceColumn = mappedSourceColumn || element.datasetMapping?.sourceColumn || null;
+
             return {
                 targetElement: element.elementName,
                 targetType: element.dataType,
                 // ✅ P0 FIX: Use sourceField (auto-mapper) or sourceColumn (verification) as SSOT
-                sourceColumn: mappedSourceColumn || element.datasetMapping?.sourceColumn || null,
+                sourceColumn: resolvedSourceColumn,
                 confidence: confidence / 100, // Normalize to 0-1 for display
-                transformationRequired: element.transformationRequired || false,
-                suggestedTransformation: element.transformationLogic?.description || '',
+                transformationRequired: element.transformationRequired || !!resolvedSourceColumn,
+                suggestedTransformation,
                 userDefinedLogic: '',
                 relatedQuestions: uniqueQuestions, // FIX: Use enhanced question linkage
-                elementId: element.elementId // Phase 2: Preserve element ID for traceability
+                elementId: element.elementId, // Phase 2: Preserve element ID for traceability
+                calculationDefinition: element.calculationDefinition // Preserve for UI display
             };
         });
 

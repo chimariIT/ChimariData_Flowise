@@ -761,11 +761,52 @@ router.get('/subscription-status', ensureAuthenticated, async (req, res) => {
     }
 
     const user = await storage.getUser(userId);
-    const userTier = (user as any)?.subscriptionTier || 'none';
-    const subscriptionStatus = (user as any)?.subscriptionStatus || 'inactive';
+    // Default to 'trial' not 'none' - all new users should get trial quotas
+    const userTier = (user as any)?.subscriptionTier || 'trial';
+    const subscriptionStatus = (user as any)?.subscriptionStatus || (userTier === 'trial' ? 'trialing' : 'inactive');
 
     // Get tier configuration
-    const tierConfig = billingService.getTierConfig(userTier);
+    let tierConfig = billingService.getTierConfig(userTier);
+
+    // Fallback: If tier config not in DB, construct from defaults
+    if (!tierConfig && (userTier === 'trial' || userTier === 'none')) {
+      tierConfig = {
+        tier: 'trial' as any,
+        displayName: 'Trial',
+        description: 'Free trial with limited analyses',
+        pricing: { monthly: 0, yearly: 0, currency: 'USD' },
+        stripeProductId: '',
+        stripePriceIds: { monthly: '', yearly: '' },
+        quotas: {
+          maxProjects: 3,
+          maxDatasetsPerProject: 2,
+          maxDataUploadsMB: 50,
+          maxAIQueries: 10,
+          maxAnalysisComponents: 3,
+          maxVisualizationsPerProject: 5,
+          maxComputeMinutes: 30,
+          maxStorageMB: 50,
+          maxDataProcessingMB: 50,
+          allowedJourneys: ['non-tech', 'business'],
+          featureQuotas: {
+            data_upload: { small: 5, medium: 0, large: 0, extra_large: 0 },
+            statistical_analysis: { small: 3, medium: 0, large: 0, extra_large: 0 },
+            visualization: { small: 5, medium: 0, large: 0, extra_large: 0 },
+            machine_learning: { small: 0, medium: 0, large: 0, extra_large: 0 },
+          }
+        },
+        overagePricing: {
+          dataPerMB: 0,
+          computePerMinute: 0,
+          storagePerMB: 0,
+          aiQueryCost: 0,
+          visualizationCost: 0,
+          featureOveragePricing: {}
+        },
+        features: ['basic_analysis', 'data_upload', 'visualizations'],
+        isActive: true
+      };
+    }
 
     res.json({
       success: true,

@@ -650,12 +650,28 @@ export class BusinessAgent {
         );
 
         const benchmarkCandidates = industryTemplate?.keyMetrics?.map(metric => `${metric} benchmark`) || [];
-        const fallbackBenchmarks = sanitizedGoals.length > 0
-            ? sanitizedGoals.map(goal => `Benchmark progress for ${goal}`).slice(0, 4)
-            : ['Benchmark critical KPIs against industry peers', 'Track period-over-period performance trends'];
+
+        // Generate goal-aware benchmarks that reference actual user objectives
+        const fallbackBenchmarks: string[] = [];
+        if (sanitizedGoals.length > 0) {
+            for (const goal of sanitizedGoals.slice(0, 3)) {
+                fallbackBenchmarks.push(`Benchmark: ${goal}`);
+            }
+        }
+        if (fallbackBenchmarks.length === 0) {
+            fallbackBenchmarks.push('Benchmark critical KPIs against industry peers');
+            fallbackBenchmarks.push('Track period-over-period performance trends');
+        }
+
+        // Add metric-based benchmarks from the suggestions we just computed
+        const metricBenchmarks = metricSuggestions.primaryMetrics.slice(0, 3).map((m: any) => {
+            const name = typeof m === 'string' ? m : m.name;
+            return `Industry benchmark: ${name}`;
+        });
 
         const industryBenchmarks = Array.from(new Set([
-            ...benchmarkCandidates.slice(0, 5),
+            ...benchmarkCandidates.slice(0, 3),
+            ...metricBenchmarks,
             ...fallbackBenchmarks
         ])).slice(0, 5);
 
@@ -714,6 +730,26 @@ export class BusinessAgent {
 
         if (sanitizedAnalysisTypes.some(type => /forecast|predict/i.test(type))) {
             recommendations.add('Align forecasting deliverables with planning and budgeting cycles.');
+        }
+
+        if (sanitizedAnalysisTypes.some(type => /correlation|regression/i.test(type))) {
+            recommendations.add('Validate identified relationships with domain experts before making operational changes.');
+        }
+
+        if (sanitizedAnalysisTypes.some(type => /cluster|segment/i.test(type))) {
+            recommendations.add('Review segment definitions with business stakeholders to ensure actionability.');
+        }
+
+        // Add goal-specific recommendations
+        for (const goal of sanitizedGoals.slice(0, 2)) {
+            const goalLower = goal.toLowerCase();
+            if (goalLower.includes('engag') || goalLower.includes('satisf')) {
+                recommendations.add(`Track engagement/satisfaction trends over time to measure intervention effectiveness.`);
+            } else if (goalLower.includes('perform') || goalLower.includes('productiv')) {
+                recommendations.add(`Establish performance baselines before implementing changes from analysis findings.`);
+            } else if (goalLower.includes('cost') || goalLower.includes('efficienc')) {
+                recommendations.add(`Quantify potential savings from recommended optimizations to build business case.`);
+            }
         }
 
         if (recommendations.size === 0) {
@@ -1744,13 +1780,20 @@ export class BusinessAgent {
                     // Build translation prompt
                     const translationPrompt = `${prompt}
 
+CRITICAL RULES:
+1. You MUST preserve ALL numeric values, percentages, correlation coefficients, and specific measurements from the original
+2. You MUST NOT invent or modify any statistical figures
+3. You MUST keep the same data relationships (e.g., if A correlates with B, don't say A correlates with C)
+4. Translate the FRAMING and LANGUAGE for ${audience} audience, not the DATA itself
+
 Original insight:
 Title: ${insight.title || `Insight ${index + 1}`}
 Description: ${insight.description || insight.summary || 'No description'}
 ${insight.value ? `Value: ${insight.value}` : ''}
 ${insight.impact ? `Impact: ${insight.impact}` : ''}
+${insight.details ? `Supporting data: ${JSON.stringify(insight.details).substring(0, 200)}` : ''}
 
-Translate this insight while preserving the core message. Return JSON with: { title, description }`;
+Translate this insight while preserving ALL numeric values and data points. Return JSON with: { title, description }`;
 
                     const response = await this.chimaridataAI.generateText({
                         prompt: translationPrompt,
@@ -1761,13 +1804,26 @@ Translate this insight while preserving the core message. Return JSON with: { ti
                     // Try to parse JSON response
                     let translation;
                     try {
-                        translation = JSON.parse(response.text);
+                        // Handle potential markdown code fences in response
+                        const cleanedText = response.text.replace(/```json\s*|\s*```/g, '').trim();
+                        translation = JSON.parse(cleanedText);
                     } catch {
                         // Fallback: use original if parsing fails
                         translation = {
                             title: insight.title || `Insight ${index + 1}`,
                             description: response.text || insight.description
                         };
+                    }
+
+                    // Post-translation validation: Ensure key numeric values are preserved
+                    const originalNumbers = (insight.description || '').match(/[\d]+\.?\d*%?/g) || [];
+                    if (originalNumbers.length > 0 && translation.description) {
+                        const translatedText = `${translation.title} ${translation.description}`;
+                        const missingNumbers = originalNumbers.filter((num: string) => !translatedText.includes(num));
+                        if (missingNumbers.length > 0) {
+                            console.warn(`⚠️ [BA Agent] Translation dropped ${missingNumbers.length} numeric values for insight "${insight.title}", falling back to original description`);
+                            translation.description = insight.description;
+                        }
                     }
 
                     return {

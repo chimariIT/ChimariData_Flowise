@@ -641,10 +641,14 @@ export default function PlanStep({
                 <div className="flex-1">
                   <div className="font-medium">Data Engineer</div>
                   <div className="text-sm text-muted-foreground">
-                    Assessing data quality and infrastructure needs
+                    {agentProgress.dataEngineer === 'completed' || agentProgress.dataEngineer === 'success'
+                      ? 'Data assessment complete'
+                      : agentProgress.dataEngineer === 'in_progress'
+                        ? 'Assessing data quality...'
+                        : 'Waiting to assess data quality and infrastructure'}
                   </div>
                 </div>
-                <Badge variant={agentProgress.dataEngineer === 'completed' ? 'default' : 'secondary'}>
+                <Badge variant={agentProgress.dataEngineer === 'completed' || agentProgress.dataEngineer === 'success' ? 'default' : 'secondary'}>
                   {agentProgress.dataEngineer || 'pending'}
                 </Badge>
               </div>
@@ -654,10 +658,14 @@ export default function PlanStep({
                 <div className="flex-1">
                   <div className="font-medium">Data Scientist</div>
                   <div className="text-sm text-muted-foreground">
-                    Designing analysis steps and ML models
+                    {agentProgress.dataScientist === 'completed' || agentProgress.dataScientist === 'success'
+                      ? 'Analysis design complete'
+                      : agentProgress.dataScientist === 'in_progress'
+                        ? 'Designing analysis steps...'
+                        : 'Waiting to design analysis steps and ML models'}
                   </div>
                 </div>
-                <Badge variant={agentProgress.dataScientist === 'completed' ? 'default' : 'secondary'}>
+                <Badge variant={agentProgress.dataScientist === 'completed' || agentProgress.dataScientist === 'success' ? 'default' : 'secondary'}>
                   {agentProgress.dataScientist || 'pending'}
                 </Badge>
               </div>
@@ -667,10 +675,14 @@ export default function PlanStep({
                 <div className="flex-1">
                   <div className="font-medium">Business Expert</div>
                   <div className="text-sm text-muted-foreground">
-                    Adding industry context and compliance insights
+                    {agentProgress.businessAgent === 'completed' || agentProgress.businessAgent === 'success'
+                      ? 'Industry insights added'
+                      : agentProgress.businessAgent === 'in_progress'
+                        ? 'Adding industry context...'
+                        : 'Waiting to add industry context and compliance insights'}
                   </div>
                 </div>
-                <Badge variant={agentProgress.businessAgent === 'completed' ? 'default' : 'secondary'}>
+                <Badge variant={agentProgress.businessAgent === 'completed' || agentProgress.businessAgent === 'success' ? 'default' : 'secondary'}>
                   {agentProgress.businessAgent || 'pending'}
                 </Badge>
               </div>

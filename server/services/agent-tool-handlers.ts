@@ -2120,9 +2120,9 @@ export class DataScientistToolHandlers {
     return {
       executionId: context.executionId,
       toolId: 'statistical_analysis',
-      status: 'success',
-      result: { message: 'Statistical analysis placeholder' },
-      metrics: { duration: 100, resourcesUsed: { cpu: 2, memory: 30, storage: 0 }, cost: 0.01 }
+      status: 'error',
+      result: { error: 'Statistical analysis tool not yet integrated. Use executeComprehensiveAnalysis() for analysis execution.' },
+      metrics: { duration: 0, resourcesUsed: { cpu: 0, memory: 0, storage: 0 }, cost: 0 }
     };
   }
 
@@ -2237,9 +2237,9 @@ export class SparkToolHandlers {
     return {
       executionId: context.executionId,
       toolId: 'spark_job',
-      status: 'success',
-      result: { message: 'Spark job placeholder' },
-      metrics: { duration: 500, resourcesUsed: { cpu: 4, memory: 100, storage: 10 }, cost: 0.05 }
+      status: 'error',
+      result: { error: 'Spark not configured. Set SPARK_ENABLED=true and configure Spark cluster to use this tool.' },
+      metrics: { duration: 0, resourcesUsed: { cpu: 0, memory: 0, storage: 0 }, cost: 0 }
     };
   }
 
@@ -2292,9 +2292,9 @@ export class TroubleshootingToolHandlers {
     return {
       executionId: context.executionId,
       toolId: 'diagnostics',
-      status: 'success',
-      result: { message: 'Diagnostics placeholder' },
-      metrics: { duration: 100, resourcesUsed: { cpu: 1, memory: 10, storage: 0 }, cost: 0.001 }
+      status: 'error',
+      result: { error: 'Diagnostics tool not yet implemented. Check server logs for troubleshooting.' },
+      metrics: { duration: 0, resourcesUsed: { cpu: 0, memory: 0, storage: 0 }, cost: 0 }
     };
   }
 
@@ -2322,9 +2322,9 @@ export class GovernanceToolHandlers {
     return {
       executionId: context.executionId,
       toolId: 'compliance_check',
-      status: 'success',
-      result: { message: 'Compliance check placeholder', compliant: true },
-      metrics: { duration: 100, resourcesUsed: { cpu: 1, memory: 10, storage: 0 }, cost: 0.001 }
+      status: 'error',
+      result: { error: 'Compliance check tool not yet implemented. Compliance verification requires manual review.' },
+      metrics: { duration: 0, resourcesUsed: { cpu: 0, memory: 0, storage: 0 }, cost: 0 }
     };
   }
 
@@ -2367,9 +2367,9 @@ export class HealthCheckToolHandlers {
     return {
       executionId: context.executionId,
       toolId: 'health_check',
-      status: 'success',
-      result: { message: 'Health check placeholder', healthy: true },
-      metrics: { duration: 50, resourcesUsed: { cpu: 1, memory: 5, storage: 0 }, cost: 0.001 }
+      status: 'error',
+      result: { error: 'Health check tool not yet implemented. Use /api/system-status endpoint for system health.' },
+      metrics: { duration: 0, resourcesUsed: { cpu: 0, memory: 0, storage: 0 }, cost: 0 }
     };
   }
 

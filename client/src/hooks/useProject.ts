@@ -78,7 +78,7 @@ export function useProject(projectId?: string) {
             return apiClient.getProject(projectId);
         },
         enabled: Boolean(projectId),
-        staleTime: 1000 * 30, // 30 seconds
+        staleTime: 0, // Always refetch on mount - critical for step navigation
         refetchOnMount: 'always', // Always refetch on mount to ensure fresh data after navigation
     });
 

@@ -328,9 +328,9 @@ export class DataPipelineBuilder {
         throw new Error('Pipeline execution requires actual data source integration in production. Configure source connection.');
       }
 
-      // Development/staging only: Simulate data extraction
-      console.warn('⚠️ [Pipeline] Using simulated data extraction (dev mode only)');
-      const recordsExtracted = Math.floor(Math.random() * 1000) + 100;
+      // Development/staging only: No actual data source configured
+      console.warn('⚠️ [Pipeline] No data source configured - returning 0 records (dev mode only)');
+      const recordsExtracted = 0;
       execution.recordsProcessed = recordsExtracted;
 
       // 3. Apply transformations

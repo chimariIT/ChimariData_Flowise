@@ -413,13 +413,15 @@ export class EnhancedVisualizationEngine {
     if (chartType === 'bar_chart' || chartType === 'bar') {
       const barWidth = (width - 2 * padding) / Math.min(data.length, 20);
       content = data.slice(0, 20).map((d, i) => {
-        const val = typeof Object.values(d)[0] === 'number' ? Object.values(d)[0] as number : Math.random() * 100;
+        const rawVal = Object.values(d)[0];
+        const val = typeof rawVal === 'number' ? rawVal : (typeof rawVal === 'string' ? parseFloat(rawVal) || 0 : 0);
         const h = (val / 100) * (height - 2 * padding);
         return `<rect x="${padding + i * barWidth}" y="${height - padding - h}" width="${barWidth - 5}" height="${h}" fill="#4f46e5" />`;
       }).join('');
     } else if (chartType === 'line_chart' || chartType === 'line') {
       const points = data.slice(0, 20).map((d, i) => {
-        const val = typeof Object.values(d)[0] === 'number' ? Object.values(d)[0] as number : Math.random() * 100;
+        const rawVal = Object.values(d)[0];
+        const val = typeof rawVal === 'number' ? rawVal : (typeof rawVal === 'string' ? parseFloat(rawVal) || 0 : 0);
         const x = padding + i * ((width - 2 * padding) / 20);
         const y = height - padding - ((val / 100) * (height - 2 * padding));
         return `${x},${y}`;

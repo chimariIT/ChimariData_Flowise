@@ -653,8 +653,9 @@ export function validateDataForAnalysis(
     }
   }
 
-  // Check null percentages
-  const maxNull = Math.max(...Object.values(dataStats.nullPercents));
+  // Check null percentages (handle empty nullPercents gracefully)
+  const nullValues = Object.values(dataStats.nullPercents);
+  const maxNull = nullValues.length > 0 ? Math.max(...nullValues) : 0;
   if (maxNull <= spec.qualityRequirements.maxNullPercent) {
     passedChecks.push('null_threshold_met');
   } else {

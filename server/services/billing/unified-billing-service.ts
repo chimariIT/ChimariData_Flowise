@@ -24,6 +24,7 @@ import { mlLLMUsageTracker } from '../ml-llm-usage-tracker';
 import { eq, sql, and, gte, lte } from 'drizzle-orm';
 import type { InferSelectModel } from 'drizzle-orm';
 import { eligibilityService } from '../../eligibility-service';
+import { UsageTrackingService } from '../usage-tracking';
 import { nanoid } from 'nanoid';
 import {
   SubscriptionTier,
@@ -1890,6 +1891,26 @@ export class UnifiedBillingService {
       // Get tier configuration
       const tierConfig = this.getTierConfig(user.subscriptionTier as SubscriptionTier);
       if (!tierConfig) {
+        // Check if user has trial credits before rejecting
+        const trialCredits = (user as any).trialCredits ?? 100;
+        const trialCreditsUsed = (user as any).trialCreditsUsed ?? 0;
+        const available = trialCredits - trialCreditsUsed;
+        const expireAt = (user as any).trialCreditsExpireAt;
+        const isExpired = expireAt && new Date(expireAt) < new Date();
+
+        if (available > 0 && !isExpired) {
+          // Trial credits available - allow access to non-tech and business journeys
+          const trialJourneys: JourneyType[] = ['non-tech', 'business'];
+          if (trialJourneys.includes(journeyType)) {
+            console.log(`✅ [Billing] User ${userId} granted journey access via trial credits (${available} remaining)`);
+            return {
+              allowed: true,
+              requiresUpgrade: false,
+              message: 'Access granted via trial credits'
+            };
+          }
+        }
+
         return {
           allowed: false,
           requiresUpgrade: true,
@@ -2104,21 +2125,37 @@ export class UnifiedBillingService {
       const [user] = await db.select().from(users).where(eq(users.id, userId));
       if (!user) return null;
 
-      const tierConfig = this.getTierConfig(user.subscriptionTier as SubscriptionTier);
-      if (!tierConfig) return null;
+      const userTier = (user.subscriptionTier || 'trial') as SubscriptionTier;
+      const tierConfig = this.getTierConfig(userTier);
 
-      const featureQuotas = tierConfig.quotas.featureQuotas[featureId];
-      if (!featureQuotas) return null;
+      // Get quota from tier config, or fallback to hardcoded defaults
+      let quota = 0;
+      if (tierConfig) {
+        const featureQuotas = tierConfig.quotas.featureQuotas[featureId];
+        quota = featureQuotas?.[complexity] || 0;
+      }
 
-      const quota = featureQuotas[complexity] || 0;
+      // Fallback: Use featureQuotaDefaults if tier config missing or quota is 0
+      if (quota === 0) {
+        const tierDefaults = this.featureQuotaDefaults[userTier] || this.featureQuotaDefaults.default;
+        const featureDefaults = tierDefaults?.[featureId];
+        if (featureDefaults) {
+          quota = featureDefaults[complexity] || 0;
+        }
+        // Final fallback for trial users: ensure at least small analyses available
+        if (quota === 0 && complexity === 'small' && (userTier === 'trial' || !tierConfig)) {
+          quota = this.featureQuotaDefaults.trial?.[featureId]?.small || 3;
+        }
+      }
+
       const subscriptionBalances = user.subscriptionBalances as any || {};
       const featureBalances = subscriptionBalances[featureId] || {};
       const complexityBalance = featureBalances[complexity] || { used: 0, remaining: quota, limit: quota };
 
       const used = complexityBalance.used || 0;
       const remaining = quota === -1 ? -1 : Math.max(0, quota - used);
-      const percentUsed = quota === -1 ? 0 : Math.min(100, (used / quota) * 100);
-      const isExceeded = quota !== -1 && used >= quota;
+      const percentUsed = quota === -1 ? 0 : (quota > 0 ? Math.min(100, (used / quota) * 100) : 0);
+      const isExceeded = quota !== -1 && quota > 0 && used >= quota;
 
       return {
         quota,
@@ -2810,13 +2847,17 @@ export class UnifiedBillingService {
    * Get user usage by ID
    */
   async getUserUsage(userId: string): Promise<any> {
-    // This would typically fetch from database
-    // For now, return mock usage
-    return {
-      dataUploadsMB: 0,
-      toolExecutions: 0,
-      aiQueries: 0
-    };
+    try {
+      const usage = await UsageTrackingService.getCurrentUsage(userId);
+      return {
+        dataUploadsMB: usage.dataVolumeMB || 0,
+        toolExecutions: usage.codeGenerations || 0,
+        aiQueries: usage.aiQueries || 0
+      };
+    } catch (error) {
+      console.error('Failed to fetch user usage:', error);
+      return { dataUploadsMB: 0, toolExecutions: 0, aiQueries: 0 };
+    }
   }
 
   /**
@@ -2831,13 +2872,17 @@ export class UnifiedBillingService {
    * Get usage metrics (simple version)
    */
   async getUsageMetricsSimple(userId: string): Promise<any> {
-    // This would typically fetch from database
-    // For now, return mock metrics
-    return {
-      totalDataUsageMB: 0,
-      totalToolExecutions: 0,
-      totalAIQueries: 0
-    };
+    try {
+      const usage = await UsageTrackingService.getCurrentUsage(userId);
+      return {
+        totalDataUsageMB: usage.dataVolumeMB || 0,
+        totalToolExecutions: usage.codeGenerations || 0,
+        totalAIQueries: usage.aiQueries || 0
+      };
+    } catch (error) {
+      console.error('Failed to fetch usage metrics:', error);
+      return { totalDataUsageMB: 0, totalToolExecutions: 0, totalAIQueries: 0 };
+    }
   }
 
   /**

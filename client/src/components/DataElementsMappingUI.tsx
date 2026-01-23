@@ -508,7 +508,7 @@ export function DataElementsMappingUI({
           </Alert>
         )}
 
-        {/* Summary */}
+        {/* Summary - uses both props AND internal mappings state for accurate counts */}
         <Alert className="bg-white">
           <AlertCircle className="h-4 w-4 text-blue-600" />
           <AlertDescription>
@@ -521,7 +521,7 @@ export function DataElementsMappingUI({
               </div>
               <div>
                 <div className={`text-lg font-bold ${isMapping ? 'text-gray-400' : 'text-green-600'}`}>
-                  {isMapping ? <Loader2 className="h-5 w-5 animate-spin inline" /> : requiredDataElements.filter(e => e.sourceAvailable || e.sourceField || e.sourceColumn).length}
+                  {isMapping ? <Loader2 className="h-5 w-5 animate-spin inline" /> : requiredDataElements.filter(e => e.sourceAvailable || e.sourceField || e.sourceColumn || mappings[e.elementId]?.sourceField).length}
                 </div>
                 <div className="text-xs text-gray-600">Auto-Mapped</div>
               </div>
@@ -533,31 +533,31 @@ export function DataElementsMappingUI({
               </div>
               <div>
                 <div className={`text-lg font-bold ${isMapping ? 'text-gray-400' : 'text-red-600'}`}>
-                  {isMapping ? '-' : requiredDataElements.filter(e => !e.sourceAvailable && !e.sourceField && !e.sourceColumn && e.required).length}
+                  {isMapping ? '-' : requiredDataElements.filter(e => !e.sourceAvailable && !e.sourceField && !e.sourceColumn && !mappings[e.elementId]?.sourceField && e.required).length}
                 </div>
                 <div className="text-xs text-gray-600">Missing</div>
               </div>
             </div>
 
             {/* Mapping Progress Bar */}
-            {!isMapping && requiredDataElements.length > 0 && (
+            {!isMapping && requiredDataElements.length > 0 && (() => {
+              const mappedCount = requiredDataElements.filter(e => e.sourceAvailable || e.sourceField || e.sourceColumn || mappings[e.elementId]?.sourceField).length;
+              const percentage = Math.round((mappedCount / requiredDataElements.length) * 100);
+              return (
               <div className="mt-4">
                 <div className="flex justify-between text-xs text-gray-600 mb-1">
                   <span>Mapping Progress</span>
-                  <span>
-                    {Math.round((requiredDataElements.filter(e => e.sourceAvailable || e.sourceField || e.sourceColumn).length / requiredDataElements.length) * 100)}%
-                  </span>
+                  <span>{percentage}%</span>
                 </div>
                 <div className="w-full bg-gray-200 rounded-full h-2">
                   <div
                     className="bg-green-600 h-2 rounded-full transition-all duration-500"
-                    style={{
-                      width: `${(requiredDataElements.filter(e => e.sourceAvailable || e.sourceField || e.sourceColumn).length / requiredDataElements.length) * 100}%`
-                    }}
+                    style={{ width: `${percentage}%` }}
                   />
                 </div>
               </div>
-            )}
+              );
+            })()}
           </AlertDescription>
         </Alert>
 

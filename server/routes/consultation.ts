@@ -319,12 +319,10 @@ router.post('/:id/approve', ensureAuthenticated, async (req, res) => {
         });
       }
     } else {
-      // Mock mode for development
-      console.warn('⚠️ Stripe not configured - using mock payment intent');
-      const mockId = `pi_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      const mockSecret = `${mockId}_secret_${Math.random().toString(36).slice(2, 24)}`;
-      paymentIntentId = mockId;
-      clientSecret = mockSecret;
+      // Mock mode for development only (production guard above blocks this path in prod)
+      console.warn('⚠️ Stripe not configured - using dev-only mock payment intent');
+      paymentIntentId = `pi_dev_${request.id}_${Date.now()}`;
+      clientSecret = `${paymentIntentId}_secret_dev`;
     }
 
     // Update consultation request

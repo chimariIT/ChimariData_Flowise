@@ -2427,6 +2427,13 @@ export class ProjectAgentOrchestrator {
     try {
       const checkpoints = this.checkpoints.get(projectId) || [];
 
+      // Load actual project data for real recommendations
+      const project = await db.query.projects.findFirst({
+        where: eq(projects.id, projectId)
+      });
+      const analysisResults = (project as any)?.analysisResults;
+      const journeyProgress = (project as any)?.journeyProgress || {};
+
       // Map checkpoints to expert opinions
       const expertOpinions = checkpoints
         .filter(cp => cp.status === 'completed' || cp.status === 'in_progress')
@@ -2441,23 +2448,59 @@ export class ProjectAgentOrchestrator {
       // Generate synthesis based on progress
       const completedSteps = checkpoints.filter(cp => cp.status === 'completed').length;
 
-      const synthesis = {
-        overallAssessment: completedSteps > 0 ? "proceed" : "proceed_with_caution",
-        confidence: 0.85,
-        keyFindings: checkpoints
-          .filter(cp => cp.status === 'completed' && cp.data?.keyFindings)
-          .flatMap(cp => cp.data.keyFindings)
-          .slice(0, 5), // Top 5 findings
-        actionableRecommendations: [
+      // Build keyFindings from actual analysis insights (not just checkpoints)
+      let derivedKeyFindings: string[] = checkpoints
+        .filter(cp => cp.status === 'completed' && cp.data?.keyFindings)
+        .flatMap(cp => cp.data.keyFindings)
+        .slice(0, 3);
+
+      // Add top insights from actual analysis results
+      if (analysisResults?.insights?.length > 0) {
+        const topInsights = analysisResults.insights
+          .filter((i: any) => i.impact === 'High' || i.confidence > 70)
+          .slice(0, 3)
+          .map((i: any) => i.title || (i.description?.substring(0, 80) + '...'));
+        derivedKeyFindings = [...derivedKeyFindings, ...topInsights].slice(0, 5);
+      }
+
+      // Build actionableRecommendations from actual BA/analysis results
+      let derivedRecommendations: string[] = [];
+
+      // Priority 1: BA-translated recommendations
+      const primaryTranslation = journeyProgress.translatedResults?.executive ||
+        journeyProgress.translatedResults?.mixed;
+      if (primaryTranslation?.recommendations?.length > 0) {
+        derivedRecommendations = primaryTranslation.recommendations
+          .slice(0, 3)
+          .map((r: any) => typeof r === 'string' ? r : (r.title || r.description?.substring(0, 80) || String(r)));
+      }
+
+      // Priority 2: Analysis recommendations from results
+      if (derivedRecommendations.length === 0 && analysisResults?.recommendations?.length > 0) {
+        derivedRecommendations = analysisResults.recommendations
+          .slice(0, 3)
+          .map((r: any) => r.title || r.description?.substring(0, 80));
+      }
+
+      // Priority 3: Generic fallback only if nothing else available
+      if (derivedRecommendations.length === 0) {
+        derivedRecommendations = [
           "Continue with the planned analysis steps",
           "Review intermediate results for accuracy"
-        ],
-        estimatedTimeline: "On track",
+        ];
+      }
+
+      const synthesis = {
+        overallAssessment: completedSteps > 0 ? "proceed" : "proceed_with_caution",
+        confidence: analysisResults ? 0.92 : 0.85,
+        keyFindings: derivedKeyFindings,
+        actionableRecommendations: derivedRecommendations,
+        estimatedTimeline: analysisResults ? "Analysis complete" : "On track",
         estimatedCost: "Within budget",
         expertConsensus: {
           dataQuality: "High",
           technicalFeasibility: "Feasible",
-          businessValue: "Significant"
+          businessValue: analysisResults ? "Confirmed" : "Significant"
         }
       };
 
