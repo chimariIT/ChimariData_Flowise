@@ -608,10 +608,12 @@ export default function DataTransformationStep({
         }
     }, [transformationMappings, autoExecuteTriggered, isExecuting, transformedPreview]);
 
-    // Force cache invalidation on mount to ensure fresh data after navigation from prepare step
+    // P1-2 FIX: Force cache invalidation on mount to ensure fresh schema after navigation
     useEffect(() => {
         if (pid) {
             queryClient.invalidateQueries({ queryKey: ["project", pid] });
+            queryClient.invalidateQueries({ queryKey: ['project-datasets', pid] });
+            queryClient.invalidateQueries({ queryKey: ['/api/projects'] });
         }
     }, [pid, queryClient]);
 
@@ -857,6 +859,31 @@ export default function DataTransformationStep({
                                 : `Optional: "${el.name || el.elementName}" - map if available`;
                         }
 
+                        // P0-7 FIX: Derive transformationRequired from DS agent's calculationType
+                        // If calculationType is 'derived', 'aggregated', 'grouped', or 'composite', transformation IS required
+                        // Direct mappings only don't require transformation
+                        const calculationType = calcDef?.calculationType || el.calculationDefinition?.calculationType;
+                        const needsTransformFromCalcType = calculationType && ['derived', 'aggregated', 'grouped', 'composite'].includes(calculationType);
+                        const hasMultipleSourceColumns = (calcDef?.formula?.componentFields?.length || 0) > 1;
+
+                        // FIX: Prioritize calculationType-based detection OVER stored transformationRequired
+                        // This ensures DS agent recommendations are honored even if backend had incorrect defaults
+                        // Priority: 1. DS calculationType (non-direct means transform needed)
+                        //           2. Multiple source columns (aggregation needed)
+                        //           3. Stored transformationRequired
+                        //           4. Has suggested transformation logic
+                        const transformationRequired = needsTransformFromCalcType
+                            || hasMultipleSourceColumns
+                            || el.transformationRequired === true
+                            || (suggestedTransformation && !suggestedTransformation.toLowerCase().includes('map directly'))
+                            || false;
+
+                        if (needsTransformFromCalcType) {
+                            console.log(`📊 [DS Recommendation] Element "${el.name || el.elementName}" requires transformation: calculationType=${calculationType}`);
+                        } else if (hasMultipleSourceColumns) {
+                            console.log(`📊 [Multi-Column] Element "${el.name || el.elementName}" requires transformation: ${calcDef?.formula?.componentFields?.length} source columns`);
+                        }
+
                         return {
                             targetElement: el.name || el.elementName || '',
                             targetType: el.type || el.dataType || 'string',
@@ -864,7 +891,7 @@ export default function DataTransformationStep({
                             sourceColumns: calcDef?.formula?.componentFields || undefined,  // Multi-column support
                             aggregationFunction: calcDef?.formula?.aggregationMethod as AggregationFunction || undefined,
                             confidence: el.confidence ?? (mappedColumn ? 0.9 : 0),
-                            transformationRequired: el.transformationRequired ?? (!!suggestedTransformation || !!mappedColumn),
+                            transformationRequired,
                             suggestedTransformation,
                             userDefinedLogic: el.userDefinedLogic || '',
                             relatedQuestions: el.relatedQuestions || [],
@@ -1340,13 +1367,26 @@ export default function DataTransformationStep({
 
             const resolvedSourceColumn = mappedSourceColumn || element.datasetMapping?.sourceColumn || null;
 
+            // P0-7 FIX: Derive transformationRequired from DS agent's calculationType
+            const calculationType = element.calculationDefinition?.calculationType || element.derivationType;
+            const needsTransformFromCalcType = calculationType && ['derived', 'aggregated', 'grouped', 'composite'].includes(calculationType);
+            const hasMultipleSourceColumns = (element.calculationDefinition?.formula?.componentFields?.length || 0) > 1;
+            const transformationRequired = element.transformationRequired
+                || needsTransformFromCalcType
+                || hasMultipleSourceColumns
+                || false; // Default false for pure direct mappings
+
+            if (needsTransformFromCalcType) {
+                console.log(`📊 [DS Recommendation] Element "${element.elementName}" requires transformation: calculationType=${calculationType}`);
+            }
+
             return {
                 targetElement: element.elementName,
                 targetType: element.dataType,
                 // ✅ P0 FIX: Use sourceField (auto-mapper) or sourceColumn (verification) as SSOT
                 sourceColumn: resolvedSourceColumn,
                 confidence: confidence / 100, // Normalize to 0-1 for display
-                transformationRequired: element.transformationRequired || !!resolvedSourceColumn,
+                transformationRequired,
                 suggestedTransformation,
                 userDefinedLogic: '',
                 relatedQuestions: uniqueQuestions, // FIX: Use enhanced question linkage
@@ -1940,6 +1980,8 @@ export default function DataTransformationStep({
             // CRITICAL FIX: Invalidate cache after backend updates transformed data
             // The backend may have updated journeyProgress or dataset data directly
             queryClient.invalidateQueries({ queryKey: ["project", pid] });
+            // P2-B FIX: Also invalidate plan cache so plan-step loads fresh data after transformations
+            queryClient.invalidateQueries({ queryKey: ["project-plan", pid] });
 
             // Update journeyProgress with transformation results (SSOT)
             // [DATA CONTINUITY FIX] Include transformation summary for downstream steps
@@ -2562,6 +2604,26 @@ export default function DataTransformationStep({
                                                 {group.techniques.length > 2 && (
                                                     <Badge variant="outline" className="text-xs py-0">
                                                         +{group.techniques.length - 2}
+                                                    </Badge>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        {/* P2-2 FIX: Show unmapped required elements */}
+                                        {group.status !== 'ready' && group.requiredElements.length > 0 && (
+                                            <div className="mt-2 flex flex-wrap gap-1">
+                                                {group.requiredElements
+                                                    .filter(el => !group.mappedElements.includes(el))
+                                                    .slice(0, 3)
+                                                    .map((el, idx) => (
+                                                        <Badge key={idx} variant="destructive" className="text-xs py-0 bg-red-100 text-red-700 border-red-200">
+                                                            {el.length > 15 ? el.substring(0, 15) + '...' : el}
+                                                        </Badge>
+                                                    ))
+                                                }
+                                                {group.requiredElements.filter(el => !group.mappedElements.includes(el)).length > 3 && (
+                                                    <Badge variant="outline" className="text-xs py-0 text-red-600">
+                                                        +{group.requiredElements.filter(el => !group.mappedElements.includes(el)).length - 3} more
                                                     </Badge>
                                                 )}
                                             </div>

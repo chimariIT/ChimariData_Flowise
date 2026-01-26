@@ -3963,8 +3963,20 @@ router.put("/:id/verify", ensureAuthenticated, async (req, res) => {
                 userQuestions
             ).then(async (result) => {
                 if (result.success) {
-                    console.log(`✅ [DE Agent] Transformation plan ready for project ${projectId}: ${result.transformationPlan?.transformations?.length || 0} transformations`);
-                    // Result is already saved to journeyProgress by the orchestrator
+                    const mappingsCount = result.transformationPlan?.mappings?.length || 0;
+                    console.log(`✅ [DE Agent] Transformation plan ready for project ${projectId}: ${mappingsCount} mappings`);
+                    console.log(`   - transformationPlan.mappings: ${mappingsCount}`);
+                    console.log(`   - Result saved to journeyProgress by orchestrator`);
+
+                    // Verify the save happened
+                    try {
+                        const verifyProject = await storage.getProject(projectId);
+                        const verifyProgress = (verifyProject as any)?.journeyProgress || {};
+                        console.log(`   - Verification: journeyProgress.transformationPlan exists = ${!!verifyProgress.transformationPlan}`);
+                        console.log(`   - Verification: mappings count = ${verifyProgress.transformationPlan?.mappings?.length || 0}`);
+                    } catch (e) {
+                        console.warn('   - Could not verify save:', e);
+                    }
                 } else {
                     console.warn(`⚠️ [DE Agent] Transformation plan failed for project ${projectId}: ${result.error}`);
                 }
@@ -7117,7 +7129,34 @@ router.post("/:id/analysis-preparation", ensureAuthenticated, async (req, res) =
 
         // Import DE agent and get analysis-specific preparations
         const { DataEngineerAgent } = await import("../services/data-engineer-agent");
+        type ElementDefinition = import("../services/data-engineer-agent").ElementDefinition;
         const deAgent = new DataEngineerAgent();
+
+        // =====================================================================
+        // ELEMENT DEFINITIONS FIX: Extract element definitions from requirementsDocument
+        // These contain calculationDefinition from Data Scientist for proper derivations
+        // =====================================================================
+        let elementDefinitions: ElementDefinition[] = [];
+        const requirementsDoc = journeyProgress?.requirementsDocument;
+        if (requirementsDoc?.requiredDataElements && Array.isArray(requirementsDoc.requiredDataElements)) {
+            elementDefinitions = requirementsDoc.requiredDataElements.map((el: any) => ({
+                elementId: el.elementId || el.id,
+                elementName: el.elementName || el.name,
+                dataType: el.dataType || 'text',
+                purpose: el.purpose,
+                analysisUsage: el.analysisUsage,
+                required: el.required !== false,
+                sourceColumn: el.sourceColumn || el.sourceField,
+                calculationDefinition: el.calculationDefinition
+            }));
+            console.log(`📐 [Analysis Prep] Found ${elementDefinitions.length} element definitions with calculation specs`);
+
+            // Log element types for debugging
+            const derivedCount = elementDefinitions.filter(e => e.calculationDefinition?.calculationType === 'derived').length;
+            const aggregatedCount = elementDefinitions.filter(e => e.calculationDefinition?.calculationType === 'aggregated').length;
+            const groupedCount = elementDefinitions.filter(e => e.calculationDefinition?.calculationType === 'grouped').length;
+            console.log(`   Derived: ${derivedCount}, Aggregated: ${aggregatedCount}, Grouped: ${groupedCount}, Direct: ${elementDefinitions.length - derivedCount - aggregatedCount - groupedCount}`);
+        }
 
         const preparations = await deAgent.suggestTransformationsForAnalyses({
             analysisTypes,
@@ -7131,7 +7170,9 @@ router.post("/:id/analysis-preparation", ensureAuthenticated, async (req, res) =
                 isSortedByTime: false
             },
             // P1-5 FIX: Pass element mappings for combined readiness calculation
-            elementMappings: Array.isArray(elementMappings) ? elementMappings : undefined
+            elementMappings: Array.isArray(elementMappings) ? elementMappings : undefined,
+            // NEW: Pass element definitions for definition-based derivations
+            elementDefinitions: elementDefinitions.length > 0 ? elementDefinitions : undefined
         });
 
         console.log(`✅ [Analysis Prep] Generated preparation requirements for ${analysisTypes.length} analyses`);
@@ -8310,19 +8351,28 @@ router.get("/:id/cost-estimate", ensureAuthenticated, requireOwnership('project'
             return res.status(404).json({ success: false, error: 'Project not found' });
         }
 
-        // Check if cost already locked
-        if ((project as any).lockedCostEstimate) {
-            const lockedCost = parseFloat((project as any).lockedCostEstimate);
-            console.log(`✅ [Cost Estimate] Using locked cost for project ${projectId}: $${lockedCost}`);
-            return res.json({
-                success: true,
-                estimatedCost: lockedCost,
-                totalCost: lockedCost,
-                breakdown: (project as any).costBreakdown || {},
-                isLocked: true,
-                creditsRequired: Math.ceil(lockedCost * 100)
-            });
-        }
+        // Check if cost already locked - journeyProgress.lockedCostEstimate is SSOT
+        const journeyProgressCheck = (project as any).journeyProgress || {};
+        const lockedFromProgress = journeyProgressCheck.lockedCostEstimate;
+        const lockedFromProject = (project as any).lockedCostEstimate;
+
+        // Priority: journeyProgress (SSOT) > project table
+        const lockedCostValue = lockedFromProgress ?? lockedFromProject;
+
+        // Track if cost is locked - but don't return early
+        // We need to calculate breakdown even for locked costs to show perAnalysisBreakdown
+        const isLocked = (() => {
+            if (lockedCostValue) {
+                const lockedCost = typeof lockedCostValue === 'number'
+                    ? lockedCostValue
+                    : parseFloat(lockedCostValue);
+                if (!isNaN(lockedCost) && lockedCost > 0) {
+                    console.log(`✅ [Cost Estimate] Found locked cost for project ${projectId}: $${lockedCost} (source: ${lockedFromProgress ? 'journeyProgress' : 'project'})`);
+                    return { locked: true, cost: lockedCost };
+                }
+            }
+            return { locked: false, cost: 0 };
+        })();
 
         // Get project data size
         const projectDatasets = await storage.getProjectDatasets(projectId);
@@ -8333,12 +8383,63 @@ router.get("/:id/cost-estimate", ensureAuthenticated, requireOwnership('project'
         }, 0);
 
         const journeyProgress = (project as any).journeyProgress || {};
-        const analysisPath = journeyProgress.requirementsDocument?.analysisPath || [];
+
+        // DEBUG: Log available sources for analysisPath
+        console.log(`🔍 [Cost Estimate] Searching for analysisPath in project ${projectId}:`);
+        console.log(`   - executionConfig?.analysisPath: ${JSON.stringify(journeyProgress.executionConfig?.analysisPath || 'undefined')}`);
+        console.log(`   - requirementsDocument?.analysisPath: ${journeyProgress.requirementsDocument?.analysisPath?.length || 0} items`);
+        console.log(`   - approvedPlanId: ${journeyProgress.approvedPlanId || 'none'}`);
+
+        // ✅ FIX: Look at multiple sources for analysis types
+        // Priority: 1. executionConfig (set by DS agent), 2. requirementsDocument, 3. approved plan
+        let analysisPath = journeyProgress.executionConfig?.analysisPath
+            || journeyProgress.requirementsDocument?.analysisPath
+            || [];
+
+        // If no analysisPath found, try to get from approved plan
+        if (analysisPath.length === 0) {
+            try {
+                const { analysisPlans } = await import('@shared/schema');
+
+                // Try to find a plan - either by approvedPlanId or any plan for this project
+                let planQuery;
+                if (journeyProgress.approvedPlanId) {
+                    planQuery = db.select().from(analysisPlans)
+                        .where(eq(analysisPlans.id, journeyProgress.approvedPlanId))
+                        .limit(1);
+                } else {
+                    // Fallback: Get latest plan for this project
+                    const { desc } = await import('drizzle-orm');
+                    planQuery = db.select().from(analysisPlans)
+                        .where(eq(analysisPlans.projectId, projectId))
+                        .orderBy(desc(analysisPlans.createdAt))
+                        .limit(1);
+                }
+
+                const [plan] = await planQuery;
+
+                if (plan?.analysisSteps && (plan.analysisSteps as any[]).length > 0) {
+                    analysisPath = (plan.analysisSteps as any[]).map((step: any) => ({
+                        analysisType: step.type || step.analysisType || 'statistical',
+                        complexity: step.complexity || 'intermediate'
+                    }));
+                    console.log(`📊 [Cost Estimate] Using ${analysisPath.length} analyses from plan ${plan.id} (approved: ${!!journeyProgress.approvedPlanId})`);
+                } else if (plan) {
+                    console.log(`⚠️ [Cost Estimate] Found plan ${plan.id} but no analysisSteps`);
+                } else {
+                    console.log(`⚠️ [Cost Estimate] No plan found for project ${projectId}`);
+                }
+            } catch (planError) {
+                console.warn(`⚠️ [Cost Estimate] Could not load plan: ${planError}`);
+            }
+        }
 
         // Extract analysis types from the analysis path
         const analysisTypes = analysisPath.length > 0
-            ? analysisPath.map((a: any) => a.analysisType || 'statistical')
+            ? analysisPath.map((a: any) => a.analysisType || a.type || 'statistical')
             : ['statistical'];
+
+        console.log(`📊 [Cost Estimate] Analysis types for pricing: [${analysisTypes.join(', ')}]`);
 
         // Determine complexity based on analysis path
         const complexity = analysisPath.length > 0
@@ -8365,17 +8466,61 @@ router.get("/:id/cost-estimate", ensureAuthenticated, requireOwnership('project'
         console.log(`   - ${totalRows} rows, ${analysisTypes.length} analyses, ${complexity} complexity`);
         console.log(`   - Credits required: ${estimate.creditsRequired}`);
 
+        // P0-8 FIX: Transform breakdown array to summary object for frontend compatibility
+        // Frontend expects: { basePlatformFee, dataProcessing, analysisExecution, perAnalysisBreakdown }
+        const breakdownSummary: {
+            basePlatformFee: number;
+            dataProcessing: number;
+            analysisExecution: number;
+            rowsProcessed: number;
+            analysisTypes: number;
+            perAnalysisBreakdown: Array<{ type: string; cost: number }>;
+        } = {
+            basePlatformFee: 0,
+            dataProcessing: 0,
+            analysisExecution: 0,
+            rowsProcessed: totalRows,
+            analysisTypes: analysisTypes.length,
+            perAnalysisBreakdown: []
+        };
+
+        // Parse breakdown array into summary object
+        for (const item of estimate.breakdown) {
+            if (item.item === 'Platform Fee') {
+                breakdownSummary.basePlatformFee = item.cost;
+            } else if (item.item === 'Data Processing') {
+                breakdownSummary.dataProcessing = item.cost;
+            } else if (item.item.includes('Analysis') && !item.item.includes('Generation')) {
+                // Individual analysis item - add to per-analysis breakdown
+                breakdownSummary.perAnalysisBreakdown.push({
+                    type: item.item.replace(' Analysis', ''),
+                    cost: item.cost
+                });
+                breakdownSummary.analysisExecution += item.cost;
+            } else if (item.item.includes('Generation')) {
+                // Artifact generation costs - add to total but track separately
+                breakdownSummary.analysisExecution += item.cost;
+            }
+        }
+
+        console.log(`   - Per-analysis breakdown: ${breakdownSummary.perAnalysisBreakdown.map(a => `${a.type}: $${a.cost.toFixed(2)}`).join(', ')}`);
+
+        // Use locked cost if available, otherwise use calculated cost
+        const finalCost = isLocked.locked ? isLocked.cost : estimate.totalCost;
+        console.log(`💰 [Cost Estimate] Final cost for ${projectId}: $${finalCost.toFixed(2)} (locked: ${isLocked.locked})`);
+
         return res.json({
             success: true,
-            estimatedCost: estimate.totalCost,
-            totalCost: estimate.totalCost,
-            creditsRequired: estimate.creditsRequired,
+            estimatedCost: finalCost,
+            totalCost: finalCost,
+            creditsRequired: isLocked.locked ? Math.ceil(isLocked.cost * 100) : estimate.creditsRequired,
             estimatedDuration: estimate.estimatedDuration,
             confidenceScore: estimate.confidenceScore,
-            breakdown: estimate.breakdown,
+            breakdown: breakdownSummary, // Summary object for frontend with perAnalysisBreakdown
+            rawBreakdown: estimate.breakdown, // Full array for detailed display
             warnings: estimate.warnings,
             currency: estimate.currency,
-            isLocked: false,
+            isLocked: isLocked.locked,
             // Legacy format for backward compatibility
             analysisCount: analysisTypes.length,
             rowsProcessed: totalRows
@@ -8417,11 +8562,21 @@ router.post("/:id/lock-cost", ensureAuthenticated, async (req, res) => {
 
         const costValue = parseFloat(lockedCostEstimate).toFixed(2);
 
+        // FIX: Save to BOTH project.lockedCostEstimate AND journeyProgress.lockedCostEstimate
+        // This ensures both payment routes and cost-estimate endpoint read the same locked value
+        const project = access.project;
+        const existingProgress = (project as any)?.journeyProgress || {};
+
         await storage.updateProject(projectId, {
-            lockedCostEstimate: costValue
+            lockedCostEstimate: costValue,
+            journeyProgress: {
+                ...existingProgress,
+                lockedCostEstimate: parseFloat(costValue), // Store as number in journeyProgress (SSOT)
+                costLockedAt: new Date().toISOString()
+            }
         } as any);
 
-        console.log(`✅ [Lock Cost] Saved lockedCostEstimate $${costValue} for project ${projectId}`);
+        console.log(`✅ [Lock Cost] Saved lockedCostEstimate $${costValue} to BOTH project AND journeyProgress for ${projectId}`);
 
         return res.json({
             success: true,

@@ -359,7 +359,7 @@ export class ProjectManagerAgent {
         }
 
         const stats = this.messageBroker.getStats();
-        if (!stats || stats.fallbackMode) {
+        if (!stats || !stats.redisEnabled) {
             return false;
         }
 
@@ -4012,11 +4012,24 @@ export class ProjectManagerAgent {
         }
 
         // Data Scientist: Report feasibility and required analyses
-        if (dataScientistOpinion?.requiredAnalyses && Array.isArray(dataScientistOpinion.requiredAnalyses) && dataScientistOpinion.requiredAnalyses.length > 0) {
-            const analysisNames = dataScientistOpinion.requiredAnalyses
+        // FIX: Include ALL analyses from project's analysisPath (from requirementsDocument) not just regex-matched ones
+        const analysisPathFromProject = uploadedData?.analysisPath || uploadedData?.requirementsDocument?.analysisPath || [];
+        const projectAnalyses = analysisPathFromProject.map((a: any) => {
+            const analysisName = a?.analysisName || a?.analysisType || a?.type || (typeof a === 'string' ? a : null);
+            return analysisName;
+        }).filter(Boolean);
+
+        // Combine project analysisPath with DS agent's requiredAnalyses (prefer project analysisPath as it's more comprehensive)
+        const allAnalyses = projectAnalyses.length > 0
+            ? projectAnalyses
+            : (dataScientistOpinion?.requiredAnalyses || []);
+
+        if (allAnalyses.length > 0) {
+            const analysisNames = allAnalyses
                 .map((a: string) => a.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()))
                 .join(', ');
             keyFindings.push(`Planned analyses: ${analysisNames}`);
+            console.log(`📊 [PM Synthesis] Key findings include ${allAnalyses.length} analyses from ${projectAnalyses.length > 0 ? 'analysisPath' : 'DS opinion'}`);
         }
         if (dataScientistOpinion?.dataRequirements?.missing && dataScientistOpinion.dataRequirements.missing.length > 0) {
             keyFindings.push(`${dataScientistOpinion.dataRequirements.missing.length} missing data requirement${dataScientistOpinion.dataRequirements.missing.length > 1 ? 's' : ''} detected`);
@@ -5537,6 +5550,9 @@ ${context.completedSteps?.length > 0 ? `**Completed**: ${context.completedSteps.
      * This is the recommended entry point for coordinated agent workflows
      * Part of Fix 3.1
      */
+    // P0-D FIX: Track active orchestrations to prevent concurrent execution
+    private activeOrchestrations: Map<string, { startedAt: Date }> = new Map();
+
     async orchestrateAnalysisWorkflow(
         projectId: string,
         uploadedData: any[],
@@ -5550,11 +5566,27 @@ ${context.completedSteps?.length > 0 ? `**Completed**: ${context.completedSteps.
         orchestrationComplete: boolean;
         timestamp: string;
     }> {
+        // P0-D FIX: Prevent concurrent orchestrations for the same project
+        if (this.activeOrchestrations.has(projectId)) {
+            const active = this.activeOrchestrations.get(projectId)!;
+            const elapsedMs = Date.now() - active.startedAt.getTime();
+            // Allow re-entry only if previous orchestration is stale (> 5 min)
+            if (elapsedMs < 300000) {
+                console.warn(`⚠️ [PM Orchestration] Concurrent orchestration blocked for project ${projectId} (started ${elapsedMs}ms ago)`);
+                throw new Error(`Orchestration already in progress for project ${projectId}. Please wait.`);
+            }
+            console.warn(`⚠️ [PM Orchestration] Stale orchestration detected for project ${projectId} (${elapsedMs}ms), allowing re-entry`);
+        }
+
+        this.activeOrchestrations.set(projectId, { startedAt: new Date() });
+
         const safeGoals = userGoals || ['General analysis'];
         // Use provided industry or default to 'general'
         const effectiveIndustry = industry || 'general';
 
         console.log(`🎯 [PM Orchestration] Starting full analysis workflow for project ${projectId}`);
+
+        try {
 
         // Phase 1: Data Engineer assesses data quality (no dependencies)
         console.log(`📊 [Phase 1] Data Engineer: Assessing data quality...`);
@@ -5625,6 +5657,8 @@ ${context.completedSteps?.length > 0 ? `**Completed**: ${context.completedSteps.
 
         console.log(`✅ [PM Orchestration] Full workflow complete for project ${projectId}`);
 
+        this.activeOrchestrations.delete(projectId);
+
         return {
             qualityReport: qualityReport.opinion,
             requirements: requirements.opinion,
@@ -5633,6 +5667,28 @@ ${context.completedSteps?.length > 0 ? `**Completed**: ${context.completedSteps.
             orchestrationComplete: true,
             timestamp: new Date().toISOString()
         };
+        } catch (error: any) {
+            // P0-D FIX: On failure, clear lock and persist error state to journeyProgress
+            this.activeOrchestrations.delete(projectId);
+            console.error(`❌ [PM Orchestration] Workflow failed for project ${projectId}:`, error.message);
+
+            try {
+                const project = await storage.getProject(projectId);
+                const existingProgress = (project as any)?.journeyProgress || {};
+                await storage.updateProject(projectId, {
+                    journeyProgress: {
+                        ...existingProgress,
+                        orchestrationStatus: 'error',
+                        orchestrationError: error.message,
+                        orchestrationFailedAt: new Date().toISOString()
+                    }
+                } as any);
+            } catch (persistError) {
+                console.error(`❌ [PM Orchestration] Failed to persist error state:`, persistError);
+            }
+
+            throw error;
+        }
     }
 
     /**

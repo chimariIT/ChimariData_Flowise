@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useParams } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,7 +31,8 @@ import {
   ArrowRight,
   RefreshCw,
   XCircle,
-  Info
+  Info,
+  MessageCircle
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/lib/api";
@@ -147,18 +148,42 @@ export default function PlanStep({
     }
   }, [projectId]);
 
-  // Poll for progress updates while plan is being created
-  useEffect(() => {
-    let interval: NodeJS.Timeout;
+  // P1-A FIX: Poll for progress with max poll count and ref-based interval to prevent overlaps
+  const pollCountRef = useRef(0);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [pollTimedOut, setPollTimedOut] = useState(false);
+  const MAX_PLAN_POLLS = 120; // 60 seconds at 500ms intervals
 
+  useEffect(() => {
     if (plan?.status === 'pending' || isCreatingPlan) {
-      interval = setInterval(async () => {
+      // Clear any existing interval before creating new one
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      pollCountRef.current = 0;
+      setPollTimedOut(false);
+
+      intervalRef.current = setInterval(async () => {
+        pollCountRef.current++;
+        if (pollCountRef.current >= MAX_PLAN_POLLS) {
+          if (intervalRef.current) clearInterval(intervalRef.current);
+          intervalRef.current = null;
+          setPollTimedOut(true);
+          console.warn(`⚠️ [Plan] Polling timed out after ${MAX_PLAN_POLLS} attempts`);
+          return;
+        }
         await checkPlanProgress();
-      }, 500); // Poll every 500ms for faster updates (reduced from 2s for SLA compliance)
+      }, 500);
+    } else {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
     }
 
     return () => {
-      if (interval) clearInterval(interval);
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
     };
   }, [plan?.status, isCreatingPlan]);
 
@@ -434,6 +459,30 @@ export default function PlanStep({
 
     return Array.from(new Set(mappedFields));
   }, [plan, journeyProgress]);
+
+  // P3-3: Question-to-Analysis Mapping
+  // Build lookup: analysisId/type → questions it addresses
+  const questionsByAnalysis = useMemo(() => {
+    const mapping = new Map<string, { questionText: string; confidence?: number }[]>();
+    const qaMapping = (journeyProgress as any)?.requirementsDocument?.questionAnswerMapping ||
+                      (journeyProgress as any)?.questionAnswerMapping || [];
+    if (qaMapping.length === 0) return mapping;
+
+    for (const qa of qaMapping) {
+      const analysisIds = qa.analysisIds || qa.recommendedAnalyses || [];
+      for (const analysisRef of analysisIds) {
+        const key = typeof analysisRef === 'string' ? analysisRef : analysisRef?.analysisId || '';
+        if (!key) continue;
+        if (!mapping.has(key)) mapping.set(key, []);
+        mapping.get(key)!.push({
+          questionText: qa.questionText || qa.question || '',
+          confidence: qa.confidence
+        });
+      }
+    }
+    return mapping;
+  }, [journeyProgress]);
+
   const missingDataSignals = plan?.dataAssessment?.missingData ?? [];
   const transformationRecommendations = plan?.dataAssessment?.recommendedTransformations ?? [];
   const businessContext = plan?.businessContext ?? null;
@@ -464,9 +513,38 @@ export default function PlanStep({
       return;
     }
 
+    // P1-3 FIX: Validate plan has at least one analysis step
+    const hasAnalyses = (plan.analyses && plan.analyses.length > 0) ||
+      (plan.analysisSteps && plan.analysisSteps.length > 0);
+    if (!hasAnalyses) {
+      toast({
+        title: "No Analyses in Plan",
+        description: "The plan must contain at least one analysis step before it can be approved. Please regenerate the plan or add analysis steps.",
+        variant: "destructive"
+      });
+      return;
+    }
+
     try {
       setIsSubmitting(true);
-      const response = await apiClient.post(`/api/projects/${projectId}/plan/${plan.id}/approve`);
+      // P2-3 FIX: Include per-analysis breakdown in approval to persist it
+      const analysisBreakdown = plan.analyses?.map((a: any) => ({
+        analysisId: a.analysisId || a.id,
+        analysisName: a.analysisName || a.name,
+        analysisType: a.analysisType || a.type,
+        estimatedCost: a.estimatedCost,
+        estimatedDuration: a.estimatedDuration,
+        requiredDataElements: a.requiredDataElements || []
+      })) || plan.analysisSteps?.map((s: any) => ({
+        analysisId: s.id || s.name,
+        analysisName: s.name,
+        analysisType: s.type || 'statistical',
+        estimatedDuration: s.estimatedDuration
+      })) || [];
+
+      const response = await apiClient.post(`/api/projects/${projectId}/plan/${plan.id}/approve`, {
+        analysisBreakdown
+      });
 
       if (response?.success) {
         toast({
@@ -522,7 +600,18 @@ export default function PlanStep({
   };
 
   const handleRejectPlan = async () => {
-    if (!plan || !rejectionReason.trim()) {
+    // FIX: Validate plan.id exists before making API call
+    if (!plan || !plan.id) {
+      toast({
+        title: "Plan Not Ready",
+        description: "The analysis plan is not ready yet. Please wait for it to load completely.",
+        variant: "destructive"
+      });
+      console.error('❌ [Plan Rejection] Cannot reject: plan or plan.id is missing', { plan: !!plan, planId: plan?.id });
+      return;
+    }
+
+    if (!rejectionReason.trim()) {
       toast({
         title: "Rejection Reason Required",
         description: "Please provide a reason for rejecting the plan.",
@@ -533,10 +622,16 @@ export default function PlanStep({
 
     try {
       setIsSubmitting(true);
+      console.log(`📋 [Plan Rejection] Submitting rejection for plan ${plan.id}...`);
+      console.log(`📋 [Plan Rejection] Reason: ${rejectionReason.substring(0, 100)}...`);
+      console.log(`📋 [Plan Rejection] API URL: /api/projects/${projectId}/plan/${plan.id}/reject`);
+
       const response = await apiClient.post(`/api/projects/${projectId}/plan/${plan.id}/reject`, {
         reason: rejectionReason,
         modifications: modificationsRequested || undefined
       });
+
+      console.log(`📋 [Plan Rejection] Response:`, response);
 
       if (response?.success) {
         // FIX Issue #8: Handle regenerated plan from backend
@@ -565,8 +660,22 @@ export default function PlanStep({
           setIsLoading(true);
           await loadPlan();
         }
+      } else {
+        // FIX: Handle non-success response (response received but success is false)
+        console.error('❌ [Plan Rejection] Response was not successful:', response);
+        toast({
+          title: "Rejection Failed",
+          description: response?.error || response?.message || "The server could not process the rejection. Please try again.",
+          variant: "destructive"
+        });
       }
     } catch (error: any) {
+      console.error('❌ [Plan Rejection] Error:', error);
+      console.error('❌ [Plan Rejection] Error details:', {
+        message: error.message,
+        status: error.status,
+        response: error.response?.data
+      });
       toast({
         title: "Error Rejecting Plan",
         description: error.response?.data?.error || error.message || "Failed to reject analysis plan",
@@ -770,8 +879,38 @@ export default function PlanStep({
     );
   }
 
+  // FIX: Show loading overlay when plan is pending (being generated)
+  const isPlanPending = plan.status === 'pending' || isCreatingPlan;
+
   return (
     <div className="container max-w-6xl mx-auto p-6 space-y-6">
+      {/* Plan Generation Loading Overlay */}
+      {isPlanPending && (
+        <Card className="border-blue-200 bg-blue-50">
+          <CardContent className="pt-6">
+            <div className="flex flex-col items-center justify-center py-8 space-y-4">
+              <Loader2 className="h-12 w-12 animate-spin text-blue-600" />
+              <div className="text-center space-y-2">
+                <h3 className="text-xl font-semibold text-blue-900">Generating Your Analysis Plan</h3>
+                <p className="text-blue-700 max-w-md">
+                  Our AI agents are analyzing your data requirements and creating a customized analysis plan.
+                  This typically takes 15-30 seconds.
+                </p>
+                {pollTimedOut && (
+                  <div className="mt-4">
+                    <p className="text-amber-700 mb-2">Taking longer than expected...</p>
+                    <Button onClick={() => loadPlan()} variant="outline" size="sm">
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                      Retry
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -788,15 +927,15 @@ export default function PlanStep({
             Version {plan.version}
           </Badge>
           <Badge
-            variant={plan.status === 'approved' ? 'default' : 'secondary'}
-            className="text-lg px-4 py-2"
+            variant={plan.status === 'approved' ? 'default' : isPlanPending ? 'outline' : 'secondary'}
+            className={`text-lg px-4 py-2 ${isPlanPending ? 'animate-pulse' : ''}`}
           >
-            {plan.status}
+            {isPlanPending ? 'Generating...' : plan.status}
           </Badge>
         </div>
       </div>
 
-      {/* Executive Summary */}
+      {/* Executive Summary - Hide placeholder when pending */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -1062,6 +1201,23 @@ export default function PlanStep({
                             {analysis.description}
                           </div>
                         )}
+                        {/* P3-3: Show which user questions this analysis addresses */}
+                        {(() => {
+                          const questions = questionsByAnalysis.get(analysis.analysisId) ||
+                                           questionsByAnalysis.get(analysis.analysisType) || [];
+                          if (questions.length === 0) return null;
+                          return (
+                            <div className="mt-2 flex items-start gap-1.5">
+                              <MessageCircle className="h-3 w-3 text-blue-500 mt-0.5 shrink-0" />
+                              <div className="text-xs text-blue-700">
+                                {questions.length === 1
+                                  ? <span>Answers: <em className="line-clamp-1">{questions[0].questionText}</em></span>
+                                  : <span>Answers {questions.length} questions: <em className="line-clamp-1">{questions.map(q => q.questionText).join('; ')}</em></span>
+                                }
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
                       <div className="text-right ml-4">
                         <Badge variant="secondary" className="flex items-center gap-1">

@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import crypto from 'crypto';
 import { storage } from '../services/storage';
+import { ensureAuthenticated } from './auth';
+import { PRICING_CONSTANTS, getRecordCountMultiplier, getAnalysisTypeFactor } from '../../shared/pricing-config';
 
 interface PricingBreakdown {
   basePrice: number;
@@ -8,6 +10,8 @@ interface PricingBreakdown {
   complexityCharge: number;
   questionsCharge: number;
   analysisTypeCharge: number;
+  // ✅ FIX: Add per-analysis breakdown for multiple analysis types
+  perAnalysisBreakdown?: Array<{ type: string; cost: number }>;
 }
 
 interface PricingResponse {
@@ -34,31 +38,31 @@ function sanitizeCurrency(value: number): number {
 }
 
 function buildPricing(input: PricingInput, overrideFinalPrice?: number, source: 'locked' | 'calculated' = 'calculated'): PricingResponse {
-  // Aligned with CostEstimationService DEFAULT_PRICING_CONFIG for consistent pricing
-  const basePlatformFee = 0.50;
-  const dataProcessingPer1K = 0.10;
-  const baseAnalysisCost = 1.00;
+  // P1-B FIX: Use shared pricing constants (single source of truth) - imported at top of file
+  const basePlatformFee = PRICING_CONSTANTS.basePlatformFee;
+  const dataProcessingPer1K = PRICING_CONSTANTS.dataProcessingPer1K;
+  const baseAnalysisCost = PRICING_CONSTANTS.baseAnalysisCost;
 
-  // Analysis type factors (matching CostEstimationService)
-  const analysisTypeFactors: Record<string, number> = {
-    descriptive: 1.0, diagnostic: 1.3, predictive: 2.0, prescriptive: 2.5,
-    statistical: 1.2, machine_learning: 3.0, visualization: 0.8,
-    time_series: 1.8, clustering: 1.5, regression: 1.6, correlation: 1.2,
-    business_intelligence: 2.2, sentiment: 1.8, advanced: 2.5, custom: 3.0, default: 1.0
-  };
-
-  // Complexity based on record count (matching CostEstimationService multipliers)
-  const complexityMultiplier = input.recordCount > 100_000 ? 2.5
-    : input.recordCount > 10_000 ? 1.5 : 1.0;
+  const complexityMultiplier = getRecordCountMultiplier(input.recordCount);
 
   // Data processing charge based on row count
   const dataRowsK = input.recordCount / 1000;
   const dataSizeCharge = sanitizeCurrency(dataRowsK * dataProcessingPer1K);
 
-  // Analysis type charge
-  const normalizedType = (input.analysisType || 'default').toLowerCase().replace(/[^a-z_]/g, '_');
-  const typeFactor = analysisTypeFactors[normalizedType] || analysisTypeFactors.default;
-  const analysisTypeCharge = sanitizeCurrency(baseAnalysisCost * typeFactor * complexityMultiplier);
+  // ✅ FIX: Support multiple analysis types
+  // If analysisTypes array is provided, calculate cost for each; otherwise use single analysisType
+  const analysisTypes = (input as any).analysisTypes || [input.analysisType || 'default'];
+  let totalAnalysisCharge = 0;
+  const perAnalysisBreakdown: Array<{ type: string; cost: number }> = [];
+
+  for (const analysisType of analysisTypes) {
+    const typeFactor = getAnalysisTypeFactor(analysisType);
+    const analysisCost = sanitizeCurrency(baseAnalysisCost * typeFactor * complexityMultiplier);
+    totalAnalysisCharge += analysisCost;
+    perAnalysisBreakdown.push({ type: analysisType, cost: analysisCost });
+  }
+
+  const analysisTypeCharge = sanitizeCurrency(totalAnalysisCharge);
 
   // Questions don't directly affect cost in CostEstimationService - keep minimal charge for extras
   const questionsCharge = sanitizeCurrency(Math.max(0, (input.questionsCount - 5) * 0.10));
@@ -66,15 +70,19 @@ function buildPricing(input: PricingInput, overrideFinalPrice?: number, source: 
   const calculatedFinal = basePlatformFee + dataSizeCharge + analysisTypeCharge + questionsCharge;
   const finalPrice = sanitizeCurrency(overrideFinalPrice ?? calculatedFinal);
 
+  console.log(`💰 [buildPricing] ${analysisTypes.length} analyses: [${analysisTypes.join(', ')}] = $${analysisTypeCharge.toFixed(2)} (total $${finalPrice.toFixed(2)})`);
+
   return {
     finalPrice,
     priceInCents: Math.round(finalPrice * 100),
     breakdown: {
       basePrice: sanitizeCurrency(basePlatformFee),
       dataSizeCharge,
-      complexityCharge: sanitizeCurrency(analysisTypeCharge - baseAnalysisCost * typeFactor), // complexity portion only
+      complexityCharge: sanitizeCurrency(totalAnalysisCharge - baseAnalysisCost * analysisTypes.length), // complexity portion only
       questionsCharge,
       analysisTypeCharge,
+      // ✅ NEW: Per-analysis breakdown for transparency
+      perAnalysisBreakdown: perAnalysisBreakdown.length > 1 ? perAnalysisBreakdown : undefined,
     },
     source,
   };
@@ -112,8 +120,13 @@ router.post('/calculate', async (req, res) => {
   }
 });
 
-router.post('/create-intent', async (req, res) => {
+router.post('/create-intent', ensureAuthenticated, async (req, res) => {
   try {
+    const userId = (req.user as any)?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Authentication required' });
+    }
+
     const {
       projectId,
       dataSizeMB,
@@ -140,20 +153,24 @@ router.post('/create-intent', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Project not found' });
     }
 
-    // ✅ P0 FIX: Read locked cost from journeyProgress SSOT (matching frontend logic)
-    // Previously: only read from project.lockedCostEstimate which was often NULL
-    // Now: check journeyProgress first (SSOT), then fall back to project column
+    // PHASE 5 SSOT FIX: Read locked cost from journeyProgress.lockedCostEstimate ONLY (no fallbacks)
     const journeyProgress = (project as any).journeyProgress || {};
-    const lockedCostFromProgress = journeyProgress.lockedCostEstimate;
-    const lockedCostFromProject = (project as any).lockedCostEstimate;
+    const lockedCostEstimate = journeyProgress.lockedCostEstimate;
 
-    // Priority: journeyProgress > project table (journeyProgress is SSOT for frontend)
-    const lockedCostRaw = lockedCostFromProgress ?? lockedCostFromProject ?? 0;
-    const lockedCost = typeof lockedCostRaw === 'string'
-      ? parseFloat(lockedCostRaw)
-      : (typeof lockedCostRaw === 'number' ? lockedCostRaw : 0);
+    if (!lockedCostEstimate || parseFloat(String(lockedCostEstimate)) <= 0) {
+      console.error(`❌ [Payment SSOT] No locked cost estimate in journeyProgress for project ${projectId}`);
+      return res.status(400).json({
+        success: false,
+        error: 'COST_NOT_LOCKED',
+        message: 'Cost must be locked before payment. Return to pricing step.'
+      });
+    }
 
-    console.log(`💰 [Payment] Locked cost sources: journeyProgress=${lockedCostFromProgress}, project=${lockedCostFromProject}, using=${lockedCost}`);
+    const lockedCost = typeof lockedCostEstimate === 'string'
+      ? parseFloat(lockedCostEstimate)
+      : (typeof lockedCostEstimate === 'number' ? lockedCostEstimate : 0);
+
+    console.log(`✅ [Payment SSOT] Using journeyProgress.lockedCostEstimate: $${lockedCost.toFixed(2)} for project ${projectId}`);
 
     const totalCostIncurred = Number((project as any).totalCostIncurred ?? 0);
     const lockedCostCents = Math.max(Math.round(Number.isFinite(lockedCost) ? lockedCost * 100 : 0), 0);
@@ -229,15 +246,22 @@ router.post('/create-intent', async (req, res) => {
         const Stripe = (await import('stripe')).default;
         const stripe = new Stripe(stripeSecretKey, { apiVersion: '2024-12-18.acacia' as any });
 
+        // P0-A FIX: Use idempotency key to prevent duplicate PaymentIntents
+        const idempotencyKey = `analysis-${projectId}-${userId}-${amountCents}`;
+
         const paymentIntent = await stripe.paymentIntents.create({
           amount: amountCents,
           currency: 'usd',
           metadata: {
             projectId,
+            userId,
             analysisType: analysisType || 'standard',
-            source: 'analysis_payment'
+            source: 'analysis_payment',
+            idempotencyKey
           },
           description: `Analysis for project ${project.name || projectId}`
+        }, {
+          idempotencyKey
         });
 
         clientSecret = paymentIntent.client_secret!;
@@ -252,12 +276,12 @@ router.post('/create-intent', async (req, res) => {
         });
       }
     } else {
-      // Development fallback (mock)
-      console.warn('⚠️  Stripe not configured - using mock payment intent for development');
-      const id = `pi_mock_${crypto.randomBytes(12).toString('hex')}`;
-      const secret = crypto.randomBytes(24).toString('hex');
-      clientSecret = `${id}_secret_${secret}`;
-      paymentIntentId = id;
+      console.error('🔴 Stripe not configured - cannot create payment intent!');
+      return res.status(503).json({
+        success: false,
+        error: 'Payment service unavailable. Stripe is not configured.',
+        code: 'STRIPE_NOT_CONFIGURED'
+      });
     }
 
     // AGENT ORCHESTRATION: Log billing decision via PM agent for audit trail

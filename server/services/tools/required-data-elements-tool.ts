@@ -1044,7 +1044,16 @@ export class RequiredDataElementsTool {
                     relatedQuestions: inferredEl.relatedQuestions || [],
                     questionIds: inferredEl.relatedQuestions?.map((q, idx) => `q-${idx}`),
                     sourceAvailable: false,
-                    transformationRequired: false,
+                    // FIX: Derive transformationRequired from DS agent's calculationType
+                    // If calculationType is NOT 'direct', transformation IS required
+                    transformationRequired: (() => {
+                        const calcType = inferredEl.calculationDefinition?.calculationType;
+                        const needsTransform = calcType && ['derived', 'aggregated', 'grouped', 'composite'].includes(calcType);
+                        if (needsTransform) {
+                            console.log(`📊 [Data Elements Tool] Element "${inferredEl.elementName}" requires transformation (calculationType: ${calcType})`);
+                        }
+                        return needsTransform || false;
+                    })(),
                     // NEW: Copy calculationDefinition from DS agent - tells DE how to derive this element
                     calculationDefinition: inferredEl.calculationDefinition || {
                         calculationType: 'direct' as const,
