@@ -7,6 +7,7 @@ import { EnhancedVisualizationEngine } from './enhanced-visualization-engine';
 import { intelligentLibrarySelector } from './intelligent-library-selector';
 import { sparkVisualizationHandler, sparkStatisticalHandler } from './spark-services';
 import type { ToolExecutionContext, ToolExecutionResult } from './agent-tool-handlers';
+import { artifactService } from './artifact-persistence-service';
 
 export type { ToolExecutionContext, ToolExecutionResult } from './agent-tool-handlers';
 
@@ -3641,10 +3642,126 @@ export async function executeTool(
 
           console.log(`📋 [generate_plan_blueprint] Generated ${steps.length} analysis steps (DS: ${steps.filter(s => s.source === 'ds_recommendation').length}, Patterns: ${steps.filter(s => s.source === 'pattern_registry').length}, Heuristics: ${steps.filter(s => s.source === 'heuristic').length})`);
 
+          // FIX: Generate context-aware visualizations based on analysis steps and data characteristics
+          const visualizations: Array<{ type: string; title: string; description: string; dataColumns?: string[]; analysisStep?: string }> = [];
+          const addedVizTypes = new Set<string>();
+
+          // Map analysis types to appropriate visualizations
+          for (const step of steps) {
+            const analysisType = (step.analysisType || step.name || '').toLowerCase();
+
+            if (/correlation/i.test(analysisType) && !addedVizTypes.has('heatmap')) {
+              visualizations.push({
+                type: 'heatmap',
+                title: 'Correlation Heatmap',
+                description: 'Visualize relationships between numeric variables',
+                dataColumns: numericColumns.slice(0, 8),
+                analysisStep: step.name
+              });
+              addedVizTypes.add('heatmap');
+            }
+
+            if (/regression|predict/i.test(analysisType) && !addedVizTypes.has('scatter')) {
+              visualizations.push({
+                type: 'scatter',
+                title: 'Regression Analysis Plot',
+                description: 'Scatter plot with trend line showing predicted vs actual values',
+                dataColumns: numericColumns.slice(0, 2),
+                analysisStep: step.name
+              });
+              addedVizTypes.add('scatter');
+            }
+
+            if (/cluster/i.test(analysisType) && !addedVizTypes.has('cluster_scatter')) {
+              visualizations.push({
+                type: 'scatter',
+                title: 'Cluster Visualization',
+                description: 'Data points colored by cluster assignment',
+                dataColumns: numericColumns.slice(0, 3),
+                analysisStep: step.name
+              });
+              addedVizTypes.add('cluster_scatter');
+            }
+
+            if (/time.?series|trend|forecast/i.test(analysisType) && !addedVizTypes.has('line')) {
+              visualizations.push({
+                type: 'line',
+                title: 'Time Series Trend',
+                description: 'Track values over time with trend indicators',
+                analysisStep: step.name
+              });
+              addedVizTypes.add('line');
+            }
+
+            if (/categor|distribution|frequency/i.test(analysisType) && !addedVizTypes.has('bar_category')) {
+              visualizations.push({
+                type: 'bar',
+                title: 'Category Distribution',
+                description: 'Distribution of records across categories',
+                dataColumns: categoricalColumns.slice(0, 3),
+                analysisStep: step.name
+              });
+              addedVizTypes.add('bar_category');
+            }
+
+            if (/descriptive|statistic|overview/i.test(analysisType) && !addedVizTypes.has('histogram')) {
+              visualizations.push({
+                type: 'histogram',
+                title: 'Data Distribution',
+                description: 'Histogram showing value distribution for key numeric columns',
+                dataColumns: numericColumns.slice(0, 3),
+                analysisStep: step.name
+              });
+              addedVizTypes.add('histogram');
+            }
+          }
+
+          // Add default visualizations if none were generated
+          if (visualizations.length === 0) {
+            if (numericColumns.length >= 2) {
+              visualizations.push({
+                type: 'bar',
+                title: 'Key Metrics Overview',
+                description: 'Primary metrics comparison across segments'
+              });
+            }
+            if (categoricalColumns.length > 0) {
+              visualizations.push({
+                type: 'pie',
+                title: 'Category Breakdown',
+                description: 'Distribution of records by category'
+              });
+            }
+            // Always add at least one visualization
+            if (visualizations.length === 0) {
+              visualizations.push({
+                type: 'bar',
+                title: 'Data Summary',
+                description: 'Overview of key data metrics'
+              });
+            }
+          }
+
+          console.log(`📊 [generate_plan_blueprint] Generated ${visualizations.length} visualizations for analysis`);
+
           const blueprint = {
             planId: `plan_${Date.now()}`,
             projectId: projectIdForPlan,
             steps,
+            // FIX: Map steps to analysisSteps format expected by PM Agent
+            analysisSteps: steps.map((s: any) => ({
+              method: s.analysisType || 'statistical',
+              name: s.name,
+              description: s.description,
+              confidence: s.confidence || 0.8,
+              stepNumber: steps.indexOf(s) + 1,
+              inputs: s.requiredColumns || [],
+              expectedOutputs: s.expectedOutputs || ['analysis_results'],
+              tools: s.tools || [],
+              estimatedDuration: s.estimatedDuration || '30 seconds'
+            })),
+            // FIX: Include generated visualizations
+            visualizations,
             totalSteps: steps.length,
             estimatedTotalDuration: `${steps.length * 45} seconds`,
             dataCharacteristics: {
@@ -3961,6 +4078,24 @@ export async function executeTool(
           error: 'Billing tracking failed',
           message: (billingError as Error).message
         };
+      }
+    }
+
+    // PHASE 1 FIX: Persist artifacts to database before returning
+    // This fixes the broken artifact chain where tools generate artifacts but they're lost in memory
+    if (context?.projectId && result.artifacts?.length) {
+      try {
+        const persistedIds = await artifactService.persistToolArtifacts(
+          context.projectId,
+          agentId,
+          result
+        );
+        // Attach persisted artifact IDs to result for traceability
+        (result as any).persistedArtifactIds = persistedIds;
+        console.log(`📦 [Artifact] Persisted ${persistedIds.length} artifacts from ${toolName}`);
+      } catch (persistError) {
+        console.error(`⚠️ [Artifact] Failed to persist artifacts (non-blocking):`, persistError);
+        // Non-blocking - tool execution succeeded, just persistence failed
       }
     }
 

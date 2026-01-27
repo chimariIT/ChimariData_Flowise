@@ -338,12 +338,11 @@ export class UnifiedBillingService {
       machine_learning: { small: 50, medium: 10, large: 2, extra_large: 0 },
     },
     enterprise: {
-      // Quotas aligned with unified-subscription-tiers.ts enterprise limits
-      // maxFiles: 10, maxAnalysisComponents: 100, maxVisualizations: 50, mlTrainingJobs: 5000
-      data_upload: { small: 10, medium: 10, large: 10, extra_large: 5 },
-      statistical_analysis: { small: 100, medium: 100, large: 50, extra_large: 25 },
-      visualization: { small: 50, medium: 50, large: 25, extra_large: 10 },
-      machine_learning: { small: 5000, medium: 500, large: 100, extra_large: 50 },
+      // Enterprise tier: unlimited quotas for all features (-1 = unlimited)
+      data_upload: { small: -1, medium: -1, large: -1, extra_large: -1 },
+      statistical_analysis: { small: -1, medium: -1, large: -1, extra_large: -1 },
+      visualization: { small: -1, medium: -1, large: -1, extra_large: -1 },
+      machine_learning: { small: -1, medium: -1, large: -1, extra_large: -1 },
     },
     none: {
       data_upload: { small: 0, medium: 0, large: 0, extra_large: 0 },
@@ -680,6 +679,47 @@ export class UnifiedBillingService {
   private setDefaultConfigurations(): void {
     // Default tier configurations based on canonical types
     const defaultTiers: AdminSubscriptionTierConfig[] = [
+      // P0-C FIX: Add 'none' tier for new users without explicit subscription
+      // This ensures users can use trial credits even with subscriptionTier='none' or null
+      {
+        tier: 'none' as any, // Not in SubscriptionTier type but needed for fallback
+        displayName: 'Free Trial',
+        description: 'New user with trial credits',
+        pricing: { monthly: 0, yearly: 0, currency: 'USD' },
+        stripeProductId: '',
+        stripePriceIds: { monthly: '', yearly: '' },
+        quotas: {
+          maxDataUploadsMB: 10,
+          maxStorageMB: 50,
+          maxDataProcessingMB: 20,
+          maxAIQueries: 10,
+          maxAnalysisComponents: 3,
+          maxVisualizationsPerProject: 3,
+          maxComputeMinutes: 30,
+          maxProjects: 1,
+          maxDatasetsPerProject: 1,
+          allowedJourneys: ['non-tech'],
+          featureQuotas: {
+            data_upload: { small: 5, medium: 0, large: 0, extra_large: 0 },
+            statistical_analysis: { small: 3, medium: 0, large: 0, extra_large: 0 },
+            visualization: { small: 5, medium: 0, large: 0, extra_large: 0 },
+          },
+        },
+        overagePricing: {
+          dataPerMB: 0.10,
+          computePerMinute: 0.50,
+          storagePerMB: 0.02,
+          aiQueryCost: 0.50,
+          visualizationCost: 1.00,
+          featureOveragePricing: {
+            data_upload: { small: 0.50, medium: 2.00, large: 5.00, extra_large: 20.00 },
+            statistical_analysis: { small: 1.00, medium: 5.00, large: 15.00, extra_large: 50.00 },
+          },
+        },
+        // Same features as trial - allows basic_analysis with trial credits
+        features: ['non_tech_journey', 'basic_analysis', 'advanced_analysis'],
+        isActive: true,
+      },
       {
         tier: 'trial',
         displayName: 'Trial',
@@ -1643,7 +1683,11 @@ export class UnifiedBillingService {
 
       console.log(`🔔 [Webhook] Processing: ${event.type} (ID: ${event.id})`);
 
+      // P0-A FIX: Mark as processing BEFORE transaction to prevent concurrent duplicates
+      this.processedWebhooks.add(event.id);
+
       // Process event within transaction
+      try {
       await db.transaction(async (tx: typeof db) => {
         switch (event.type) {
           case 'customer.subscription.created':
@@ -1680,11 +1724,11 @@ export class UnifiedBillingService {
             console.log(`ℹ️ [Webhook] Unhandled event type: ${event.type}`);
         }
       });
-
-      // ==========================================
-      // MARK AS PROCESSED
-      // ==========================================
-      this.processedWebhooks.add(event.id);
+      } catch (txError: any) {
+        // P0-A FIX: On transaction failure, remove from processed set so retry can succeed
+        this.processedWebhooks.delete(event.id);
+        throw txError;
+      }
 
       // Cleanup old entries to prevent memory growth
       if (this.processedWebhooks.size > this.MAX_PROCESSED_WEBHOOKS) {
@@ -1702,14 +1746,14 @@ export class UnifiedBillingService {
   }
 
   private async handleSubscriptionUpdated(subscription: Stripe.Subscription, tx: any): Promise<void> {
-    const userId = subscription.metadata.userId;
+    const userId = subscription.metadata?.userId;
     if (!userId) return;
 
     // PHASE 11 FIX: Extract subscription tier from metadata or Stripe product
     // The tier is stored in subscription.metadata.tierId when created via /api/pricing/subscription
-    const tierId = subscription.metadata.tierId ||
-                   subscription.metadata.tier ||
-                   subscription.metadata.planType;
+    const tierId = subscription.metadata?.tierId ||
+                   subscription.metadata?.tier ||
+                   subscription.metadata?.planType;
 
     const updateData: any = {
       subscriptionStatus: subscription.status as SubscriptionStatus,
@@ -1747,7 +1791,7 @@ export class UnifiedBillingService {
   }
 
   private async handleSubscriptionDeleted(subscription: Stripe.Subscription, tx: any): Promise<void> {
-    const userId = subscription.metadata.userId;
+    const userId = subscription.metadata?.userId;
     if (!userId) return;
 
     await tx.update(users)
@@ -2062,14 +2106,21 @@ export class UnifiedBillingService {
         } else {
           // Exceeded quota - calculate overage cost
           const overageQuantity = newUsed - quota;
-          const overagePricing = tierConfig.overagePricing.featureOveragePricing[featureId];
+          // FIX: Use mappedFeatureId (not featureId) to lookup overage pricing
+          // This ensures 'correlation', 'statistical', etc. map to 'statistical_analysis' pricing
+          const overagePricing = tierConfig.overagePricing.featureOveragePricing[mappedFeatureId]
+            || tierConfig.overagePricing.featureOveragePricing[featureId];
 
           if (!overagePricing) {
+            // FIX: Calculate overage cost from PRICING_CONSTANTS if no tier-specific pricing
+            // Instead of returning $0.00, use base pricing as fallback
+            const fallbackCost = 1.00 * overageQuantity; // $1.00 base overage per unit
+            console.log(`⚠️ [Billing] No overage pricing for ${mappedFeatureId}, using fallback: $${fallbackCost.toFixed(2)}`);
             return {
               allowed: false,
-              cost: 0,
+              cost: fallbackCost,
               remainingQuota: 0,
-              message: 'Quota exceeded and overage pricing not configured',
+              message: `Quota exceeded. Overage charge: $${fallbackCost.toFixed(2)}`,
             };
           }
 

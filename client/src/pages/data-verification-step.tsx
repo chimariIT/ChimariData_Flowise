@@ -1921,6 +1921,16 @@ return (
                   </div>
                 )}
 
+                {/* P2-1 FIX: Stacked vs Joined warning when no join was performed */}
+                {selectedDatasetIndex === -1 && (!joinInsights || joinInsights.joinStrategy !== 'join') && projectData.datasets.length > 1 && (
+                  <Alert className="mt-3 border-amber-300 bg-amber-50">
+                    <AlertTriangle className="w-4 h-4 text-amber-600" />
+                    <AlertDescription className="text-amber-800">
+                      <span className="font-medium">Datasets are stacked, not joined.</span> No common join keys were detected between your {projectData.datasets.length} datasets. Rows from each file are shown independently. If you need a joined view, ensure datasets share common identifier columns (e.g., employee_id, user_id).
+                    </AlertDescription>
+                  </Alert>
+                )}
+
                 {/* Individual dataset info (when a specific dataset is selected) */}
                 {selectedDatasetIndex >= 0 && projectData.datasets[selectedDatasetIndex] && (() => {
                   const ds = projectData.datasets[selectedDatasetIndex];
@@ -2323,14 +2333,23 @@ return (
                     // Then call Data Engineer agent to add transformation logic in natural language
                     console.log('📋 [P1-3] Saving data element mappings:', mappings);
 
-                    // CRITICAL FIX: Store mappings in state for use in handleApproveData
-                    setCurrentElementMappings(mappings as any[]);
+                    // CRITICAL FIX: Convert Record<string, any> to array format for currentElementMappings
+                    // The mappings parameter is an object keyed by elementId, not an array
+                    const mappingsRecord = mappings as Record<string, any>;
+                    const mappingsArray = Object.entries(mappingsRecord).map(([elementId, mapping]) => ({
+                      elementId,
+                      mappedColumn: mapping.sourceField || mapping.mappedColumn,
+                      sourceColumn: mapping.sourceField || mapping.mappedColumn,
+                      sourceField: mapping.sourceField || mapping.mappedColumn,
+                      transformationCode: mapping.transformationCode,
+                      transformationDescription: mapping.transformationDescription
+                    }));
+                    setCurrentElementMappings(mappingsArray);
+                    console.log('📋 [P1-3] Converted mappings to array format:', mappingsArray.length, 'items');
 
                     try {
                       // Build element mappings object for Data Engineer endpoint
-                      // FIX: mappings is a Record<string, any>, not an array
                       const elementMappings: Record<string, any> = {};
-                      const mappingsRecord = mappings as Record<string, any>;
                       Object.entries(mappingsRecord).forEach(([elementId, mapping]) => {
                         elementMappings[elementId] = {
                           sourceColumn: mapping.sourceField || mapping.mappedColumn,

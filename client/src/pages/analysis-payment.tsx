@@ -13,15 +13,20 @@ import { ResultsPreview } from '@/components/results-preview';
 import { useProject } from '@/hooks/useProject';
 import { useJourneyState } from '@/hooks/useJourneyState';
 
-// Load Stripe with development fallback
-const stripePublicKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY || 'pk_test_development_key';
-const stripePromise = stripePublicKey && stripePublicKey !== 'pk_test_your_stripe_public_key'
-  ? loadStripe(stripePublicKey)
-  : null;
+// Load Stripe only if a valid key is configured
+const stripePublicKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY || '';
 
-// Log warning if using development key
-if (stripePublicKey === 'pk_test_development_key') {
-  console.warn('⚠️  Using development Stripe key. Set VITE_STRIPE_PUBLIC_KEY for production.');
+// FIX: Check for ALL placeholder/development key patterns
+const isValidStripeKey = stripePublicKey &&
+  stripePublicKey !== 'pk_test_your_stripe_public_key' &&
+  stripePublicKey !== 'pk_test_development_key' &&
+  stripePublicKey.startsWith('pk_'); // Real Stripe keys start with 'pk_test_' or 'pk_live_'
+
+const stripePromise = isValidStripeKey ? loadStripe(stripePublicKey) : null;
+
+// Log warning if Stripe isn't properly configured
+if (!isValidStripeKey) {
+  console.warn('⚠️  Stripe not configured. Set VITE_STRIPE_PUBLIC_KEY to a valid Stripe publishable key.');
 }
 
 interface ProjectDataInput {
@@ -747,13 +752,26 @@ export default function AnalysisPaymentPage({ projectId, projectData: providedPr
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <Elements stripe={stripePromise} options={{ clientSecret }}>
-                    <AnalysisPaymentForm
-                      projectId={projectId}
-                      analysisType={analysisType}
-                      onSuccess={onSuccess}
-                    />
-                  </Elements>
+                  {stripePromise ? (
+                    <Elements stripe={stripePromise} options={{ clientSecret }}>
+                      <AnalysisPaymentForm
+                        projectId={projectId}
+                        analysisType={analysisType}
+                        onSuccess={onSuccess}
+                      />
+                    </Elements>
+                  ) : (
+                    <div className="text-center py-8">
+                      <ShieldCheck className="w-12 h-12 mx-auto mb-4 text-amber-500" />
+                      <h3 className="text-lg font-semibold mb-2">Payment Processing Unavailable</h3>
+                      <p className="text-muted-foreground mb-4">
+                        Payment processing is not configured. Please contact support or try again later.
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        Error: Stripe API key not configured (VITE_STRIPE_PUBLIC_KEY)
+                      </p>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             )}

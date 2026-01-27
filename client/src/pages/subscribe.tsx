@@ -8,15 +8,20 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { CheckCircle, ArrowLeft, Sparkles, TrendingUp, Users, Loader2 } from "lucide-react";
 
-// Load Stripe with development fallback
-const stripePublicKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY || 'pk_test_development_key';
-const stripePromise = stripePublicKey && stripePublicKey !== 'pk_test_your_stripe_public_key'
-  ? loadStripe(stripePublicKey)
-  : null;
+// Load Stripe only if a valid key is configured
+const stripePublicKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY || '';
 
-// Log warning if using development key
-if (stripePublicKey === 'pk_test_development_key') {
-  console.warn('⚠️  Using development Stripe key. Set VITE_STRIPE_PUBLIC_KEY for production.');
+// FIX: Check for ALL placeholder/development key patterns
+const isValidStripeKey = stripePublicKey &&
+  stripePublicKey !== 'pk_test_your_stripe_public_key' &&
+  stripePublicKey !== 'pk_test_development_key' &&
+  stripePublicKey.startsWith('pk_'); // Real Stripe keys start with 'pk_test_' or 'pk_live_'
+
+const stripePromise = isValidStripeKey ? loadStripe(stripePublicKey) : null;
+
+// Log warning if Stripe isn't properly configured
+if (!isValidStripeKey) {
+  console.warn('⚠️  Stripe not configured. Set VITE_STRIPE_PUBLIC_KEY to a valid Stripe publishable key.');
 }
 
 interface SubscribePageProps {

@@ -8,11 +8,21 @@ import { loadStripe } from '@stripe/stripe-js';
 import { useToast } from '@/hooks/use-toast';
 import { CreditCard, ShieldCheck, ArrowLeft, CheckCircle, AlertCircle } from 'lucide-react';
 
-// Load Stripe with error handling
-const stripePublicKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY;
-const stripePromise = stripePublicKey && stripePublicKey !== 'pk_test_your_stripe_public_key'
-  ? loadStripe(stripePublicKey)
-  : null;
+// Load Stripe only if a valid key is configured
+const stripePublicKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY || '';
+
+// FIX: Check for ALL placeholder/development key patterns
+const isValidStripeKey = stripePublicKey &&
+  stripePublicKey !== 'pk_test_your_stripe_public_key' &&
+  stripePublicKey !== 'pk_test_development_key' &&
+  stripePublicKey.startsWith('pk_'); // Real Stripe keys start with 'pk_test_' or 'pk_live_'
+
+const stripePromise = isValidStripeKey ? loadStripe(stripePublicKey) : null;
+
+// Log warning if Stripe isn't properly configured
+if (!isValidStripeKey) {
+  console.warn('⚠️  Stripe not configured. Set VITE_STRIPE_PUBLIC_KEY to a valid Stripe publishable key.');
+}
 
 interface CheckoutData {
   clientSecret: string;

@@ -40,6 +40,9 @@ import { eq, desc } from 'drizzle-orm';
 import { decisionAudits, projectQuestions, datasets, projectDatasets } from '@shared/schema';
 import { DatasetJoiner, JoinConfig } from '../dataset-joiner';
 import { semanticSearchService } from '../services/semantic-search-service';
+import { sourceColumnMapper, type ElementMappingResult, type DataElementDefinition } from '../services/source-column-mapper';
+import { columnEmbeddingGenerator } from '../services/column-embedding-generator';
+import { transformationCompiler, type CompiledTransformation } from '../services/transformation-compiler';
 
 const VALID_PROJECT_JOURNEYS: JourneyType[] = ["non-tech", "business", "technical", "consultation", "custom"];
 
@@ -7348,6 +7351,90 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
             }
         }
 
+        // ============================================================
+        // SOURCE COLUMN AUTO-MAPPING (NEW - bridges abstract to actual)
+        // ============================================================
+        // Get available columns from the working data
+        const availableColumns = workingData.length > 0 ? Object.keys(workingData[0]) : [];
+        const datasetSchema: Record<string, { type: string }> = {};
+        for (const col of availableColumns) {
+            const sample = workingData.slice(0, 10).map(r => r[col]).filter(v => v != null);
+            const isNumeric = sample.every(v => !isNaN(Number(v)));
+            datasetSchema[col] = { type: isNumeric ? 'number' : 'string' };
+        }
+
+        // Extract context from project for smarter column matching
+        const mappingContext = sourceColumnMapper.extractContextFromProject({
+            journeyProgress: journeyProgress,
+            metadata: (projectForContext as any)?.metadata,
+            name: (projectForContext as any)?.name,
+            description: (projectForContext as any)?.description
+        });
+
+        // Build element definitions from requirementsDocument with DS recommendations
+        const elementDefinitions: DataElementDefinition[] = (reqDoc?.requiredDataElements || [])
+            .filter((el: any) => el?.calculationDefinition?.formula?.componentFields || el?.description || el?.purpose)
+            .map((el: any) => ({
+                elementId: el.elementId || el.id || nanoid(),
+                elementName: el.elementName || el.name,
+                calculationDefinition: el.calculationDefinition,
+                dataType: el.dataType,
+                // Add context fields for smarter matching
+                purpose: el.purpose || el.calculationDefinition?.purpose,
+                context: mappingContext.dataContext,
+                description: el.description || el.calculationDefinition?.formula?.businessDescription,
+                dsRecommendation: el.dsRecommendation || el.calculationDefinition?.formula?.pseudoCode
+            }));
+
+        // Build user-provided mappings from frontend mappings
+        const userProvidedMappings = (mappings || [])
+            .filter((m: any) => m.sourceColumn && m.targetElement)
+            .flatMap((m: any) => {
+                // If mapping has componentFields, map each abstract field to the source column
+                const componentFields = businessContext[m.targetElement]?.componentFields || [];
+                if (componentFields.length > 0 && m.sourceColumns?.length > 0) {
+                    return componentFields.map((field: string, idx: number) => ({
+                        abstractField: field,
+                        actualColumn: m.sourceColumns[idx] || m.sourceColumn
+                    }));
+                }
+                return [{ abstractField: m.targetElement, actualColumn: m.sourceColumn }];
+            });
+
+        // Auto-map abstract column names to actual columns
+        let mappingResults: ElementMappingResult[] = [];
+        const columnLookup = new Map<string, string>();
+
+        if (elementDefinitions.length > 0) {
+            console.log(`🔗 [Transform] Auto-mapping source columns for ${elementDefinitions.length} elements...`);
+
+            mappingResults = await sourceColumnMapper.mapMultipleElements(
+                elementDefinitions,
+                availableColumns,
+                datasetSchema,
+                userProvidedMappings,
+                projectId,  // ✅ PHASE 6: Pass projectId for RAG-based matching
+                mappingContext  // ✅ Context-aware mapping: industry, data context, analysis type
+            );
+
+            // Build the column lookup from mapping results
+            for (const result of mappingResults) {
+                for (const mapping of result.mappings) {
+                    if (mapping.actualColumn) {
+                        columnLookup.set(mapping.abstractField, mapping.actualColumn);
+                        console.log(`   ✅ ${mapping.abstractField} → ${mapping.actualColumn} (${mapping.confidence}%, ${mapping.matchMethod})`);
+                    } else {
+                        console.log(`   ⚠️ ${mapping.abstractField} → NO MATCH (alternatives: ${mapping.alternatives.slice(0, 2).map(a => a.column).join(', ') || 'none'})`);
+                    }
+                }
+            }
+
+            // Log summary
+            const totalMapped = mappingResults.reduce((sum, r) => sum + r.mappings.filter(m => m.actualColumn).length, 0);
+            const totalFields = mappingResults.reduce((sum, r) => sum + r.mappings.length, 0);
+            console.log(`🔗 [Transform] Column mapping complete: ${totalMapped}/${totalFields} fields mapped`);
+        }
+
         // APPLY TRANSFORMATIONS in order
         for (const step of transformationSteps) {
             // MULTI-COLUMN FIX: Handle both new format (operation, sourceColumns) and legacy (type, config)
@@ -7418,7 +7505,7 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
                     // P0-1 FIX: Use business context to determine source columns and aggregation method
                     // Priority: business context > explicit sourceColumns > config
                     const bizContext = newColumn ? businessContext[newColumn] : null;
-                    const cols = bizContext?.componentFields?.length > 0
+                    const abstractCols = bizContext?.componentFields?.length > 0
                         ? bizContext.componentFields
                         : (sourceColumns || configSourceColumns);
                     const aggFn = bizContext?.aggregationMethod
@@ -7427,17 +7514,40 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
                         || config?.aggregationFunction
                         || 'avg';
 
-                    if (newColumn && cols?.length) {
+                    if (newColumn && abstractCols?.length) {
+                        // ============================================================
+                        // SOURCE COLUMN MAPPING FIX: Map abstract names to actual columns
+                        // ============================================================
+                        // Use columnLookup to resolve abstract names (e.g., "Q1_Score") to actual columns (e.g., "Q1 - Score")
+                        const cols = abstractCols.map((abstractCol: string) => {
+                            const actualCol = columnLookup.get(abstractCol);
+                            if (actualCol && actualCol !== abstractCol) {
+                                console.log(`   🔗 [DERIVE] Mapped: "${abstractCol}" → "${actualCol}"`);
+                                return actualCol;
+                            }
+                            // Fall back to original if no mapping found
+                            return abstractCol;
+                        });
+
+                        // Validate that mapped columns exist in the data
+                        const missingCols = cols.filter((c: string) => workingData.length > 0 && !(c in workingData[0]));
+                        if (missingCols.length > 0) {
+                            console.warn(`   ⚠️ [DERIVE] Warning: Columns not found in data: [${missingCols.join(', ')}]`);
+                            console.warn(`   ⚠️ [DERIVE] Available columns: [${Object.keys(workingData[0] || {}).slice(0, 10).join(', ')}...]`);
+                        }
+
                         // P0-1 FIX: Log business context usage
                         if (bizContext) {
-                            console.log(`📊 [DERIVE P0-1] Using DS Agent business definition for ${newColumn}:`);
+                            console.log(`📊 [DERIVE] Using DS Agent business definition for ${newColumn}:`);
                             console.log(`   Type: ${bizContext.calculationType}, Method: ${bizContext.aggregationMethod}`);
                             console.log(`   Description: ${bizContext.businessDescription || 'N/A'}`);
+                            console.log(`   Abstract fields: [${abstractCols.join(', ')}]`);
+                            console.log(`   Mapped to actual: [${cols.join(', ')}]`);
                         }
-                        console.log(`📊 [DERIVE] Creating ${newColumn} from columns [${cols.join(', ')}] using ${aggFn}`);
+                        console.log(`📊 [DERIVE] Creating "${newColumn}" from columns [${cols.join(', ')}] using ${aggFn}`);
 
                         workingData = workingData.map((r) => {
-                            // Extract numeric values from source columns
+                            // Extract numeric values from MAPPED source columns (not abstract names)
                             const values = cols.map((c: string) => r[c]);
                             const numericValues = values
                                 .map((v: any) => typeof v === 'number' ? v : parseFloat(v))
@@ -7707,13 +7817,61 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
             // Don't fail the request if audit logging fails
         }
 
+        // ✅ PHASE 6: Generate column embeddings asynchronously (non-blocking)
+        // This enables RAG-based column matching for future transformation requests
+        // Embeddings are generated ONCE on the final schema (after join + PII filtering)
+        const piiDecision = (project as any)?.journeyProgress?.piiDecision;
+        const excludedPiiColumns = piiDecision?.excludedColumns || [];
+        const usableColumns = Object.keys(transformedSchema).filter(col => !excludedPiiColumns.includes(col));
+
+        setImmediate(async () => {
+            try {
+                console.log(`🔢 [Embedding] Generating for ${usableColumns.length} columns (excluded ${excludedPiiColumns.length} PII)`);
+
+                const columnsWithMeta = usableColumns.map(name => {
+                    const sampleValues = workingData.slice(0, 5).map(row => row[name]).filter(v => v != null);
+                    const schemaInfo = transformedSchema[name];
+                    return {
+                        name,
+                        type: schemaInfo?.type || 'string',
+                        sampleValues
+                    };
+                });
+
+                await columnEmbeddingGenerator.generateEmbeddingsForDataset({
+                    datasetId: primaryDataset.id,
+                    projectId,
+                    columns: columnsWithMeta
+                });
+
+                console.log(`✅ [Embedding] Completed for project ${projectId}`);
+            } catch (embeddingError) {
+                console.error('❌ [Async Embedding] Failed:', embeddingError);
+                // Don't fail the request if embedding generation fails
+            }
+        });
+
+        // Include column mapping info in response
+        const mappingInfo = mappingResults.length > 0 ? {
+            totalElements: mappingResults.length,
+            fullyMapped: mappingResults.filter(r => r.allMapped).length,
+            partiallyMapped: mappingResults.filter(r => !r.allMapped && r.mappings.some(m => m.actualColumn)).length,
+            unmapped: mappingResults.filter(r => r.mappings.every(m => !m.actualColumn)).length,
+            averageConfidence: Math.round(
+                mappingResults.reduce((sum, r) => sum + r.overallConfidence, 0) / mappingResults.length
+            ),
+            mappingsUsed: Object.fromEntries(columnLookup)
+        } : null;
+
         res.json({
             success: true,
             preview: workingData.slice(0, 100),
             transformedSchema,
             rowCount: workingData.length,
             columnCount: Object.keys(transformedSchema).length,
-            message: `Transformed ${workingData.length} rows with ${Object.keys(transformedSchema).length} columns`
+            message: `Transformed ${workingData.length} rows with ${Object.keys(transformedSchema).length} columns`,
+            // NEW: Include column mapping info for transparency
+            columnMapping: mappingInfo
         });
 
     } catch (error: any) {
@@ -7722,6 +7880,58 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
             success: false,
             error: error.message || "Failed to execute transformations"
         });
+    }
+});
+
+/**
+ * PHASE 6: Get embedding status for a project
+ * Returns information about pre-computed column embeddings for RAG-based matching
+ */
+router.get("/:id/embedding-status", ensureAuthenticated, async (req, res) => {
+    try {
+        const projectId = req.params.id;
+        const userId = (req.user as any)?.id;
+
+        const access = await canAccessProject(userId, projectId, isAdmin(req));
+        if (!access.allowed) {
+            return res.status(403).json({ success: false, error: access.reason });
+        }
+
+        // Get datasets for this project
+        const datasets = await storage.getProjectDatasets(projectId);
+
+        // Get embedding status for project (single call to avoid multiple queries)
+        const embeddingStatus = await columnEmbeddingGenerator.getEmbeddingStatus(projectId);
+
+        // Get embedding counts per dataset
+        const datasetStatuses = datasets.map((ds: any) => {
+            const dataset = ds.dataset || ds;
+            const datasetEmbeddings = embeddingStatus.datasets.find((d: { datasetId: string }) => d.datasetId === dataset.id);
+
+            return {
+                datasetId: dataset.id,
+                datasetName: dataset.originalName || dataset.name,
+                embeddingsGenerated: (dataset.metadata as any)?.embeddingsGenerated || false,
+                embeddingCount: datasetEmbeddings?.embeddingCount || 0,
+                totalColumns: Object.keys(dataset.schema || {}).length,
+                generatedAt: (dataset.metadata as any)?.embeddingsGeneratedAt
+            };
+        });
+
+        const totalEmbeddings = datasetStatuses.reduce((sum: number, s: { embeddingCount: number }) => sum + s.embeddingCount, 0);
+        const allReady = datasetStatuses.every((s: { embeddingsGenerated: boolean }) => s.embeddingsGenerated);
+
+        return res.json({
+            success: true,
+            projectId,
+            datasets: datasetStatuses,
+            totalEmbeddings,
+            allReady,
+            ragEnabled: totalEmbeddings > 0
+        });
+    } catch (error: any) {
+        console.error('❌ [Embedding Status] Error:', error);
+        return res.status(500).json({ success: false, error: error.message });
     }
 });
 
@@ -8419,11 +8629,36 @@ router.get("/:id/cost-estimate", ensureAuthenticated, requireOwnership('project'
                 const [plan] = await planQuery;
 
                 if (plan?.analysisSteps && (plan.analysisSteps as any[]).length > 0) {
-                    analysisPath = (plan.analysisSteps as any[]).map((step: any) => ({
-                        analysisType: step.type || step.analysisType || 'statistical',
-                        complexity: step.complexity || 'intermediate'
-                    }));
-                    console.log(`📊 [Cost Estimate] Using ${analysisPath.length} analyses from plan ${plan.id} (approved: ${!!journeyProgress.approvedPlanId})`);
+                    // FIX: Extract analysis type from step's method/name fields (schema doesn't have type/analysisType)
+                    // analysisStepSchema has: stepNumber, name, description, method, inputs, expectedOutputs, tools, estimatedDuration, confidence
+                    analysisPath = (plan.analysisSteps as any[]).map((step: any) => {
+                        // Priority: method field, then derive from name, then fallback
+                        let analysisType = step.method || step.type || step.analysisType || 'statistical';
+
+                        // Normalize common method names to pricing config keys
+                        const methodLower = (step.method || step.name || '').toLowerCase();
+                        if (/correlat/i.test(methodLower)) analysisType = 'correlation';
+                        else if (/regress/i.test(methodLower)) analysisType = 'regression';
+                        else if (/cluster/i.test(methodLower)) analysisType = 'clustering';
+                        else if (/time.?series|forecast|trend/i.test(methodLower)) analysisType = 'time_series';
+                        else if (/machine.?learn|ml|model|predict/i.test(methodLower)) analysisType = 'machine_learning';
+                        else if (/visual|chart|graph|plot/i.test(methodLower)) analysisType = 'visualization';
+                        else if (/sentiment/i.test(methodLower)) analysisType = 'sentiment';
+                        else if (/business.?intel|bi|kpi/i.test(methodLower)) analysisType = 'business_intelligence';
+                        else if (/descriptive|eda|explor/i.test(methodLower)) analysisType = 'descriptive';
+                        else if (/diagnost/i.test(methodLower)) analysisType = 'diagnostic';
+                        else if (/prescri|recommend/i.test(methodLower)) analysisType = 'prescriptive';
+                        else if (/statist/i.test(methodLower)) analysisType = 'statistical';
+
+                        return {
+                            analysisType,
+                            name: step.name,
+                            method: step.method,
+                            complexity: step.complexity || 'intermediate'
+                        };
+                    });
+                    console.log(`📊 [Cost Estimate] Using ${analysisPath.length} analyses from plan ${plan.id}`);
+                    console.log(`   Analysis types extracted: [${analysisPath.map((a: any) => a.analysisType).join(', ')}]`);
                 } else if (plan) {
                     console.log(`⚠️ [Cost Estimate] Found plan ${plan.id} but no analysisSteps`);
                 } else {
@@ -8435,11 +8670,69 @@ router.get("/:id/cost-estimate", ensureAuthenticated, requireOwnership('project'
         }
 
         // Extract analysis types from the analysis path
-        const analysisTypes = analysisPath.length > 0
-            ? analysisPath.map((a: any) => a.analysisType || a.type || 'statistical')
-            : ['statistical'];
+        // FIX: Also extract from techniques array for requirementsDocument.analysisPath
+        // AnalysisPath interface has: analysisType (descriptive/diagnostic/predictive/prescriptive)
+        // AND techniques: string[] (e.g., ["regression", "time-series", "clustering"])
+        // Techniques map better to pricing config keys
+        const analysisTypes: string[] = [];
 
-        console.log(`📊 [Cost Estimate] Analysis types for pricing: [${analysisTypes.join(', ')}]`);
+        if (analysisPath.length > 0) {
+            for (const analysis of analysisPath) {
+                // Add the main analysis type
+                const mainType = analysis.analysisType || analysis.type || 'statistical';
+                if (!analysisTypes.includes(mainType)) {
+                    analysisTypes.push(mainType);
+                }
+
+                // Also add specific techniques (these map better to pricing)
+                // e.g., ["regression", "correlation_analysis", "clustering"]
+                if (analysis.techniques && Array.isArray(analysis.techniques)) {
+                    for (const technique of analysis.techniques) {
+                        // Normalize technique names to pricing config keys
+                        let normalizedTechnique = technique.toLowerCase().replace(/[^a-z_]/g, '_');
+
+                        // Map technique names to pricing keys
+                        if (/correlat/i.test(technique)) normalizedTechnique = 'correlation';
+                        else if (/regress/i.test(technique)) normalizedTechnique = 'regression';
+                        else if (/cluster/i.test(technique)) normalizedTechnique = 'clustering';
+                        else if (/time.?series|forecast|trend|seasonal/i.test(technique)) normalizedTechnique = 'time_series';
+                        else if (/machine.?learn|ml|predict/i.test(technique)) normalizedTechnique = 'machine_learning';
+                        else if (/segment/i.test(technique)) normalizedTechnique = 'clustering';
+                        else if (/classif/i.test(technique)) normalizedTechnique = 'machine_learning';
+                        else if (/statist|summary/i.test(technique)) normalizedTechnique = 'statistical';
+                        else if (/distribut|explorat/i.test(technique)) normalizedTechnique = 'descriptive';
+
+                        if (!analysisTypes.includes(normalizedTechnique)) {
+                            analysisTypes.push(normalizedTechnique);
+                        }
+                    }
+                }
+
+                // Also check analysisName if available
+                if (analysis.analysisName || analysis.name) {
+                    const name = (analysis.analysisName || analysis.name || '').toLowerCase();
+                    if (/correlat/i.test(name) && !analysisTypes.includes('correlation')) {
+                        analysisTypes.push('correlation');
+                    }
+                    if (/regress/i.test(name) && !analysisTypes.includes('regression')) {
+                        analysisTypes.push('regression');
+                    }
+                    if (/cluster|segment/i.test(name) && !analysisTypes.includes('clustering')) {
+                        analysisTypes.push('clustering');
+                    }
+                    if (/time.?series|forecast|trend/i.test(name) && !analysisTypes.includes('time_series')) {
+                        analysisTypes.push('time_series');
+                    }
+                }
+            }
+        }
+
+        // Fallback if no analysis types found
+        if (analysisTypes.length === 0) {
+            analysisTypes.push('statistical');
+        }
+
+        console.log(`📊 [Cost Estimate] Analysis types for pricing: [${analysisTypes.join(', ')}] (${analysisTypes.length} types)`);
 
         // Determine complexity based on analysis path
         const complexity = analysisPath.length > 0

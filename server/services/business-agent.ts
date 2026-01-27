@@ -448,49 +448,380 @@ export class BusinessAgent {
     }
 
     private async generateBusinessReport(project: any, previousResults: any, metadata: any): Promise<any> {
-        console.log('Generating business report...');
+        console.log('💼 [BA] Generating dynamic business report from project context...');
+
+        // Extract project context
+        const journeyProgress = project?.journeyProgress || {};
+        const userGoals = journeyProgress?.goals || journeyProgress?.userQuestions || [];
+        const analysisResults = project?.analysisResults || previousResults?.analysisResults || {};
+        const industry = journeyProgress?.industry || project?.metadata?.industry || 'general';
+        const projectName = project?.name || 'Data Analysis Project';
+
+        // Build AI prompt for dynamic key findings
+        const prompt = `You are a business analyst generating a report for "${projectName}".
+
+Context:
+- Industry: ${industry}
+- User Goals: ${JSON.stringify(userGoals).slice(0, 500)}
+- Analysis Results Summary: ${JSON.stringify(analysisResults).slice(0, 1000)}
+
+Generate a JSON response with:
+1. "summary": A 2-3 sentence executive summary of the analysis
+2. "keyFindings": Array of 3-5 specific, actionable findings based on the actual data and goals
+3. "recommendations": Array of 3-5 prioritized business recommendations
+
+Return ONLY valid JSON.`;
+
+        try {
+            const aiResult = await this.chimaridataAI.generateInsights({}, "business_report", prompt);
+            if (aiResult.success && aiResult.insights) {
+                const parsed = this.parseJSONFromAI(aiResult.insights);
+                if (parsed) {
+                    console.log('✅ [BA] Generated dynamic business report with', parsed.keyFindings?.length || 0, 'findings');
+                    return {
+                        reportType: 'business_summary',
+                        summary: parsed.summary || `Analysis completed for ${projectName} in the ${industry} sector.`,
+                        keyFindings: parsed.keyFindings || [],
+                        recommendations: parsed.recommendations || [],
+                        metadata: metadata
+                    };
+                }
+            }
+        } catch (error) {
+            console.warn('⚠️ [BA] AI generation failed, using context-derived report:', error);
+        }
+
+        // Fallback: Generate context-aware report from available data
+        const keyFindings = this.deriveKeyFindings(project, analysisResults, userGoals);
+        const recommendations = this.deriveRecommendations(project, analysisResults, industry);
 
         return {
             reportType: 'business_summary',
-            summary: 'Business analysis completed successfully',
-            keyFindings: ['Finding 1', 'Finding 2', 'Finding 3'],
-            recommendations: ['Recommendation 1', 'Recommendation 2'],
+            summary: `Analysis of ${projectName} identified ${keyFindings.length} key findings aligned with your ${industry} business objectives.`,
+            keyFindings,
+            recommendations,
             metadata: metadata
         };
     }
 
     private async performBusinessAnalysis(project: any, previousResults: any, metadata: any): Promise<any> {
-        console.log('Performing business analysis...');
+        console.log('💼 [BA] Performing dynamic business analysis...');
+
+        const journeyProgress = project?.journeyProgress || {};
+        const userGoals = journeyProgress?.goals || journeyProgress?.userQuestions || [];
+        const industry = journeyProgress?.industry || project?.metadata?.industry || 'general';
+        const analysisResults = project?.analysisResults || previousResults?.analysisResults || {};
+        const dataSchema = journeyProgress?.dataSchema || project?.metadata?.schema || {};
+
+        // Build AI prompt for business insights
+        const prompt = `You are a business intelligence expert analyzing data for a ${industry} organization.
+
+User Goals: ${JSON.stringify(userGoals).slice(0, 500)}
+Analysis Results: ${JSON.stringify(analysisResults).slice(0, 800)}
+Data Columns: ${Object.keys(dataSchema).join(', ').slice(0, 300)}
+
+Generate JSON with:
+1. "insights": Array of 3-5 specific business insights derived from the data
+2. "businessImpact": "High", "Medium", or "Low" based on potential value
+3. "impactReason": Brief explanation of the business impact assessment
+4. "opportunityAreas": Array of 2-3 areas for business improvement
+
+Return ONLY valid JSON.`;
+
+        try {
+            const aiResult = await this.chimaridataAI.generateInsights({}, "business_analysis", prompt);
+            if (aiResult.success && aiResult.insights) {
+                const parsed = this.parseJSONFromAI(aiResult.insights);
+                if (parsed) {
+                    console.log('✅ [BA] Generated', parsed.insights?.length || 0, 'dynamic business insights');
+                    return {
+                        analysisType: 'business_insights',
+                        insights: parsed.insights || [],
+                        businessImpact: parsed.businessImpact || 'Medium',
+                        impactReason: parsed.impactReason,
+                        opportunityAreas: parsed.opportunityAreas || [],
+                        metadata: metadata
+                    };
+                }
+            }
+        } catch (error) {
+            console.warn('⚠️ [BA] AI analysis failed, using derived insights:', error);
+        }
+
+        // Fallback: Derive insights from context
+        const insights = this.deriveBusinessInsights(project, analysisResults, userGoals, industry);
+        const impactLevel = this.assessBusinessImpactLevel(analysisResults, userGoals);
 
         return {
             analysisType: 'business_insights',
-            insights: ['Insight 1', 'Insight 2'],
-            businessImpact: 'High',
+            insights,
+            businessImpact: impactLevel,
+            impactReason: `Based on alignment with ${userGoals.length || 0} stated goals and ${industry} industry benchmarks.`,
             metadata: metadata
         };
     }
 
     private async generateRecommendations(project: any, previousResults: any, metadata: any): Promise<any> {
-        console.log('Generating business recommendations...');
+        console.log('💼 [BA] Generating dynamic business recommendations...');
+
+        const journeyProgress = project?.journeyProgress || {};
+        const userGoals = journeyProgress?.goals || journeyProgress?.userQuestions || [];
+        const industry = journeyProgress?.industry || project?.metadata?.industry || 'general';
+        const analysisResults = project?.analysisResults || previousResults?.analysisResults || {};
+        const analysisTypes = journeyProgress?.analysisPath?.map((a: any) => a.analysisType || a.type) || [];
+
+        // Build AI prompt
+        const prompt = `You are a strategic business consultant providing recommendations for a ${industry} organization.
+
+User Goals: ${JSON.stringify(userGoals).slice(0, 400)}
+Analysis Types Performed: ${analysisTypes.join(', ')}
+Key Results: ${JSON.stringify(analysisResults).slice(0, 600)}
+
+Generate JSON with "recommendations" array. Each recommendation should have:
+- "title": Actionable recommendation title
+- "priority": "high", "medium", or "low"
+- "impact": Primary impact area (e.g., "revenue", "efficiency", "risk", "engagement", "retention")
+- "rationale": 1-2 sentence explanation linked to the analysis findings
+- "nextSteps": Array of 2-3 specific action items
+
+Return ONLY valid JSON with 3-5 recommendations.`;
+
+        try {
+            const aiResult = await this.chimaridataAI.generateInsights({}, "recommendations", prompt);
+            if (aiResult.success && aiResult.insights) {
+                const parsed = this.parseJSONFromAI(aiResult.insights);
+                if (parsed?.recommendations) {
+                    console.log('✅ [BA] Generated', parsed.recommendations.length, 'dynamic recommendations');
+                    return {
+                        recommendations: parsed.recommendations,
+                        metadata: metadata
+                    };
+                }
+            }
+        } catch (error) {
+            console.warn('⚠️ [BA] AI recommendations failed, using derived recommendations:', error);
+        }
+
+        // Fallback: Generate context-aware recommendations
+        const recommendations = this.deriveContextRecommendations(userGoals, analysisTypes, industry);
 
         return {
-            recommendations: [
-                { title: 'Recommendation 1', priority: 'high', impact: 'revenue' },
-                { title: 'Recommendation 2', priority: 'medium', impact: 'efficiency' }
-            ],
+            recommendations,
             metadata: metadata
         };
     }
 
     private async performComplianceCheck(project: any, metadata: any): Promise<any> {
-        console.log('Performing compliance check...');
+        console.log('💼 [BA] Performing dynamic compliance check...');
+
+        const journeyProgress = project?.journeyProgress || {};
+        const industry = journeyProgress?.industry || project?.metadata?.industry || 'general';
+        const piiDecision = journeyProgress?.piiDecision || {};
+        const dataSchema = journeyProgress?.dataSchema || project?.metadata?.schema || {};
+
+        // Get applicable regulations from knowledge graph
+        const regulations = await this.getApplicableRegulations(industry);
+        const checkedFrameworks = regulations.map(r => r.name);
+
+        // Derive compliance issues based on context
+        const issues: string[] = [];
+
+        // Check PII handling
+        if (piiDecision?.hasPII && (!piiDecision?.excludedColumns || piiDecision.excludedColumns.length === 0)) {
+            issues.push('PII detected but no columns excluded - review data handling compliance');
+        }
+
+        // Check for sensitive data patterns in schema
+        const schemaColumns = Object.keys(dataSchema).map(c => c.toLowerCase());
+        const sensitivePatterns = ['ssn', 'social_security', 'credit_card', 'password', 'salary', 'health', 'medical'];
+        const sensitiveFound = schemaColumns.filter(col =>
+            sensitivePatterns.some(pattern => col.includes(pattern))
+        );
+        if (sensitiveFound.length > 0) {
+            issues.push(`Potentially sensitive columns detected: ${sensitiveFound.join(', ')} - verify handling requirements`);
+        }
+
+        // Industry-specific checks
+        if (industry.toLowerCase().includes('health') || industry.toLowerCase().includes('medical')) {
+            if (!checkedFrameworks.includes('HIPAA')) {
+                checkedFrameworks.push('HIPAA');
+            }
+            issues.push('Healthcare data requires HIPAA compliance verification');
+        }
+
+        if (industry.toLowerCase().includes('financ') || industry.toLowerCase().includes('bank')) {
+            if (!checkedFrameworks.includes('SOX')) {
+                checkedFrameworks.push('SOX');
+            }
+        }
+
+        const complianceStatus = issues.length === 0 ? 'compliant' :
+                                  issues.length <= 2 ? 'review_recommended' : 'action_required';
+
+        console.log(`✅ [BA] Compliance check: ${complianceStatus}, ${checkedFrameworks.length} frameworks, ${issues.length} issues`);
 
         return {
-            complianceStatus: 'compliant',
-            checkedFrameworks: ['GDPR', 'SOX'],
-            issues: [],
+            complianceStatus,
+            checkedFrameworks: checkedFrameworks.length > 0 ? checkedFrameworks : ['General Data Protection'],
+            issues,
+            recommendations: issues.length > 0 ? [
+                'Review identified compliance issues with your data governance team',
+                'Document data handling procedures for audit purposes'
+            ] : ['Continue monitoring for regulatory changes'],
             metadata: metadata
         };
+    }
+
+    // Helper: Parse JSON from AI response
+    private parseJSONFromAI(response: string): any {
+        try {
+            const jsonMatch = response.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+                return JSON.parse(jsonMatch[0]);
+            }
+        } catch (e) {
+            console.warn('Failed to parse AI JSON response');
+        }
+        return null;
+    }
+
+    // Helper: Derive key findings from project context
+    private deriveKeyFindings(project: any, analysisResults: any, userGoals: any[]): string[] {
+        const findings: string[] = [];
+        const goals = Array.isArray(userGoals) ? userGoals : [];
+
+        // Add goal-based findings
+        for (const goal of goals.slice(0, 3)) {
+            const goalText = typeof goal === 'string' ? goal : goal?.question || goal?.goal || '';
+            if (goalText) {
+                findings.push(`Analysis addressed: ${goalText.slice(0, 100)}`);
+            }
+        }
+
+        // Add analysis-based findings
+        if (analysisResults?.insights?.length > 0) {
+            findings.push(`Identified ${analysisResults.insights.length} actionable insights from your data`);
+        }
+
+        if (analysisResults?.visualizations?.length > 0) {
+            findings.push(`Generated ${analysisResults.visualizations.length} visualizations to support decision-making`);
+        }
+
+        // Ensure at least one finding
+        if (findings.length === 0) {
+            findings.push('Data analysis completed successfully with results ready for review');
+        }
+
+        return findings;
+    }
+
+    // Helper: Derive recommendations from context
+    private deriveRecommendations(project: any, analysisResults: any, industry: string): string[] {
+        const recommendations: string[] = [];
+
+        if (analysisResults?.recommendations) {
+            recommendations.push(...analysisResults.recommendations.slice(0, 3));
+        }
+
+        // Industry-specific recommendations
+        const industryLower = industry.toLowerCase();
+        if (industryLower.includes('hr') || industryLower.includes('human resource')) {
+            recommendations.push('Track employee engagement trends quarterly to measure improvement');
+        } else if (industryLower.includes('retail') || industryLower.includes('sales')) {
+            recommendations.push('Segment customers based on analysis findings for targeted campaigns');
+        } else if (industryLower.includes('health')) {
+            recommendations.push('Ensure all findings are reviewed for HIPAA compliance before distribution');
+        }
+
+        if (recommendations.length === 0) {
+            recommendations.push('Review analysis outputs with stakeholders to prioritize action items');
+        }
+
+        return recommendations;
+    }
+
+    // Helper: Derive business insights from context
+    private deriveBusinessInsights(project: any, analysisResults: any, userGoals: any[], industry: string): string[] {
+        const insights: string[] = [];
+
+        // From analysis results
+        if (analysisResults?.insights) {
+            insights.push(...analysisResults.insights.slice(0, 2).map((i: any) =>
+                typeof i === 'string' ? i : i.text || i.description || JSON.stringify(i)
+            ));
+        }
+
+        // From goals
+        const goals = Array.isArray(userGoals) ? userGoals : [];
+        if (goals.length > 0) {
+            insights.push(`Analysis aligned with ${goals.length} stated business objectives`);
+        }
+
+        // Industry context
+        if (industry && industry !== 'general') {
+            insights.push(`Findings contextualized for ${industry} industry best practices`);
+        }
+
+        if (insights.length === 0) {
+            insights.push('Business analysis completed - review detailed results for actionable insights');
+        }
+
+        return insights;
+    }
+
+    // Helper: Assess business impact level
+    private assessBusinessImpactLevel(analysisResults: any, userGoals: any[]): string {
+        const goals = Array.isArray(userGoals) ? userGoals : [];
+        const insightCount = analysisResults?.insights?.length || 0;
+        const vizCount = analysisResults?.visualizations?.length || 0;
+
+        if (goals.length >= 3 && insightCount >= 5) return 'High';
+        if (goals.length >= 1 && insightCount >= 2) return 'Medium';
+        return 'Low';
+    }
+
+    // Helper: Generate context-aware recommendations
+    private deriveContextRecommendations(userGoals: any[], analysisTypes: string[], industry: string): any[] {
+        const recommendations: any[] = [];
+        const goals = Array.isArray(userGoals) ? userGoals : [];
+
+        // Goal-based recommendations
+        for (const goal of goals.slice(0, 2)) {
+            const goalText = typeof goal === 'string' ? goal : goal?.question || goal?.goal || '';
+            if (goalText) {
+                recommendations.push({
+                    title: `Address: ${goalText.slice(0, 50)}...`,
+                    priority: 'high',
+                    impact: 'business_alignment',
+                    rationale: 'Directly addresses stated business objective',
+                    nextSteps: ['Review relevant analysis outputs', 'Identify key metrics to track']
+                });
+            }
+        }
+
+        // Analysis type recommendations
+        if (analysisTypes.includes('correlation') || analysisTypes.includes('regression')) {
+            recommendations.push({
+                title: 'Validate statistical relationships with domain experts',
+                priority: 'medium',
+                impact: 'accuracy',
+                rationale: 'Statistical correlations require business context validation',
+                nextSteps: ['Share findings with subject matter experts', 'Document validation results']
+            });
+        }
+
+        // Default recommendation
+        if (recommendations.length === 0) {
+            recommendations.push({
+                title: 'Review analysis findings with stakeholders',
+                priority: 'high',
+                impact: 'decision_making',
+                rationale: 'Stakeholder alignment ensures actionable outcomes',
+                nextSteps: ['Schedule review meeting', 'Prepare summary presentation']
+            });
+        }
+
+        return recommendations;
     }
 
 

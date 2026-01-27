@@ -9,7 +9,20 @@ import { useToast } from "@/hooks/use-toast";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 
-const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLIC_KEY);
+// Load Stripe only if a valid key is configured
+const stripePublicKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY || '';
+
+// FIX: Check for ALL placeholder/development key patterns
+const isValidStripeKey = stripePublicKey &&
+  stripePublicKey !== 'pk_test_your_stripe_public_key' &&
+  stripePublicKey !== 'pk_test_development_key' &&
+  stripePublicKey.startsWith('pk_');
+
+const stripePromise = isValidStripeKey ? loadStripe(stripePublicKey) : null;
+
+if (!isValidStripeKey) {
+  console.warn('⚠️  Stripe not configured in upgrade-modal. Set VITE_STRIPE_PUBLIC_KEY to a valid Stripe publishable key.');
+}
 
 interface UpgradeModalProps {
   isOpen: boolean;

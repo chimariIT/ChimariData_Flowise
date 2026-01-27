@@ -677,12 +677,19 @@ export class ProjectManagerAgent {
             );
 
             // Convert to CostBreakdown format
+            // FIX: ACCUMULATE costs for duplicate keys (e.g., multiple "Statistical Analysis" steps)
+            // instead of overwriting, so breakdown total matches the totalCost
             const breakdown: Record<string, number> = {};
             for (const item of estimate.breakdown) {
-                breakdown[item.item] = item.cost;
+                breakdown[item.item] = (breakdown[item.item] || 0) + item.cost;
             }
 
+            // Log detailed breakdown for debugging
+            const breakdownSum = Object.values(breakdown).reduce((sum, val) => sum + val, 0);
             console.log(`💰 [PM Agent] Cost estimate via CostEstimationService: $${estimate.totalCost.toFixed(2)}`);
+            console.log(`   📋 Breakdown items: ${Object.entries(breakdown).map(([k, v]) => `${k}=$${v.toFixed(2)}`).join(', ')}`);
+            console.log(`   ✅ Breakdown sum: $${breakdownSum.toFixed(2)} (should match total)`);
+
             return {
                 total: parseFloat(estimate.totalCost.toFixed(2)),
                 breakdown
@@ -702,7 +709,8 @@ export class ProjectManagerAgent {
                     const category = this.mapStepToCostCategory(step.method);
                     const stepCost = PricingService.calculateAnalysisCost(category, recordCount, costComplexity);
                     const key = step.name || category;
-                    breakdown[key] = parseFloat(stepCost.totalCost.toFixed(2));
+                    // FIX: Accumulate costs for duplicate keys (consistency with primary path)
+                    breakdown[key] = (breakdown[key] || 0) + parseFloat(stepCost.totalCost.toFixed(2));
                     total += stepCost.totalCost;
                 }
             }
@@ -1267,6 +1275,7 @@ export class ProjectManagerAgent {
             };
 
             // ✅ FIX: Define fallback blueprint for timeout/error scenarios
+            // FIX: Include meaningful visualizations based on data characteristics
             const fallbackBlueprint: PlanBlueprint = {
                 analysisSteps: [{
                     method: 'exploratory_data_analysis',
@@ -1279,7 +1288,12 @@ export class ProjectManagerAgent {
                     tools: ['pandas', 'matplotlib'],
                     estimatedDuration: '30 minutes'
                 }],
-                visualizations: [],
+                // FIX: Generate context-aware fallback visualizations instead of empty array
+                visualizations: [
+                    { type: 'bar', title: 'Key Metrics Overview', description: 'Primary metrics comparison across segments' },
+                    { type: 'histogram', title: 'Data Distribution', description: 'Distribution of numeric values' },
+                    { type: 'pie', title: 'Category Breakdown', description: 'Distribution of records by category' }
+                ],
                 mlModels: [],
                 complexity: 'low',
                 estimatedDuration: '1 hour',
@@ -1403,11 +1417,36 @@ export class ProjectManagerAgent {
                 risks.push('Monitor data quality checks before execution.');
             }
 
-            const visualizations = (blueprint.visualizations?.length ?? 0) > 0
-                ? blueprint.visualizations
-                : [
-                    { type: 'bar', title: 'KPI overview', description: 'Visualise primary KPI performance by segment.' }
-                ];
+            // FIX: Generate context-aware visualizations based on analysis steps and data characteristics
+            let visualizations = blueprint.visualizations || [];
+            if (visualizations.length === 0) {
+                console.log('📊 [PM Agent] Generating fallback visualizations from analysis context...');
+                const analysisTypes = finalAnalysisSteps?.map(s => s.method?.toLowerCase() || s.name?.toLowerCase() || '') || [];
+
+                // Generate based on what analyses are planned
+                if (analysisTypes.some(t => /correlation/i.test(t))) {
+                    visualizations.push({ type: 'heatmap', title: 'Correlation Matrix', description: 'Visualize relationships between key variables' });
+                }
+                if (analysisTypes.some(t => /regression|predict/i.test(t))) {
+                    visualizations.push({ type: 'scatter', title: 'Regression Analysis', description: 'Predicted vs actual values with trend line' });
+                }
+                if (analysisTypes.some(t => /cluster/i.test(t))) {
+                    visualizations.push({ type: 'scatter', title: 'Cluster Visualization', description: 'Data points grouped by cluster assignment' });
+                }
+                if (analysisTypes.some(t => /time.?series|trend|forecast/i.test(t))) {
+                    visualizations.push({ type: 'line', title: 'Time Series Trend', description: 'Track values over time with trend indicators' });
+                }
+
+                // Always add base visualizations if none were added
+                if (visualizations.length === 0) {
+                    visualizations = [
+                        { type: 'bar', title: 'Key Metrics Overview', description: 'Primary KPI performance comparison by segment' },
+                        { type: 'histogram', title: 'Data Distribution', description: 'Distribution of key numeric variables' },
+                        { type: 'pie', title: 'Category Breakdown', description: 'Distribution of records across categories' }
+                    ];
+                }
+                console.log(`📊 [PM Agent] Generated ${visualizations.length} fallback visualizations`);
+            }
 
             const mlModels = blueprint.mlModels ?? [];
             const estimatedDuration = blueprint.estimatedDuration || '2-3 hours';

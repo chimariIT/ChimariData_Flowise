@@ -25,8 +25,19 @@ import {
   Shield
 } from "lucide-react";
 
-// Initialize Stripe
-const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLIC_KEY!);
+// Initialize Stripe only if valid key is configured
+const stripePublicKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY || '';
+
+const isValidStripeKey = stripePublicKey &&
+  stripePublicKey !== 'pk_test_your_stripe_public_key' &&
+  stripePublicKey !== 'pk_test_development_key' &&
+  stripePublicKey.startsWith('pk_');
+
+const stripePromise = isValidStripeKey ? loadStripe(stripePublicKey) : null;
+
+if (!isValidStripeKey) {
+  console.warn('⚠️  Stripe not configured in stripe-test. Set VITE_STRIPE_PUBLIC_KEY to a valid Stripe publishable key.');
+}
 
 // Test card data for MCP testing
 const TEST_CARDS = [
