@@ -1,5 +1,7 @@
 // client/src/pages/admin/subscription-management.tsx
 import React, { useState, useEffect } from 'react';
+import { apiClient } from '@/lib/api';
+import { useToast } from '@/hooks/use-toast';
 import {
   Activity,
   AlertTriangle,
@@ -173,16 +175,14 @@ const AnalyticsDashboard: React.FC = () => {
         startDate.setDate(endDate.getDate() - (dateRange === '7d' ? 7 : dateRange === '30d' ? 30 : 90));
 
         // Fetch revenue analytics
-        const revenueRes = await fetch(
+        const revenueJson = await apiClient.get(
           `/api/admin/billing/analytics/revenue?startDate=${startDate.toISOString()}&endDate=${endDate.toISOString()}`
         );
-        const revenueJson = await revenueRes.json();
 
         // Fetch usage analytics
-        const usageRes = await fetch(
+        const usageJson = await apiClient.get(
           `/api/admin/billing/analytics/usage?startDate=${startDate.toISOString()}&endDate=${endDate.toISOString()}`
         );
-        const usageJson = await usageRes.json();
 
         if (revenueJson.success) {
           setRevenueData(revenueJson.analytics);
@@ -347,6 +347,8 @@ const AnalyticsDashboard: React.FC = () => {
 };
 
 const SubscriptionManagement: React.FC = () => {
+  // LOW PRIORITY FIX: Add toast hook for proper notifications
+  const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'tiers' | 'alerts' | 'analytics' | 'settings'>('overview');
   const [loading, setLoading] = useState(true);
   const [userMetrics, setUserMetrics] = useState<UsageMetrics[]>([]);
@@ -516,30 +518,28 @@ const SubscriptionManagement: React.FC = () => {
       const periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
 
       try {
-        const [tiersRes, customersRes, alertsRes, eventsRes] = await Promise.all([
-          fetch('/api/pricing/tiers', { credentials: 'include' }),
-          fetch('/api/admin/customers?limit=10', { credentials: 'include' }),
-          fetch('/api/admin/quota-alerts?level=all', { credentials: 'include' }),
-          fetch('/api/admin/billing-events?limit=100', { credentials: 'include' })
+        const [tiersJson, customersJson, alertsJson, eventsJson] = await Promise.all([
+          apiClient.get('/api/pricing/tiers').catch(() => ({})),
+          apiClient.get('/api/admin/customers?limit=10').catch(() => ({})),
+          apiClient.get('/api/admin/quota-alerts?level=all').catch(() => ({})),
+          apiClient.get('/api/admin/billing-events?limit=100').catch(() => ({}))
         ]);
 
-        const tiersJson = await tiersRes.json().catch(() => ({}));
         if (tiersJson.success && Array.isArray(tiersJson.tiers)) {
           setSubscriptionTiersSafe(tiersJson.tiers.map(mapTierResponse));
         } else {
           setSubscriptionTiersSafe([]);
-          if (!tiersRes.ok) {
-            console.error('Failed to load subscription tiers:', tiersJson?.error || tiersRes.statusText);
+          if (tiersJson?.error) {
+            console.error('Failed to load subscription tiers:', tiersJson.error);
           }
         }
 
-        const customersJson = await customersRes.json().catch(() => ({}));
         const customers: Array<{ id: string }> = customersJson.success && Array.isArray(customersJson.customers)
           ? customersJson.customers
           : [];
 
-        if (!customersRes.ok) {
-          console.error('Failed to load customers:', (customersJson as any)?.error || customersRes.statusText);
+        if (customersJson?.error) {
+          console.error('Failed to load customers:', customersJson.error);
         }
 
         if (customers.length === 0) {
@@ -548,17 +548,10 @@ const SubscriptionManagement: React.FC = () => {
           const metricsResults = await Promise.all(
             customers.map(async (customer) => {
               try {
-                const metricsRes = await fetch(
-                  `/api/admin/users/${customer.id}/metrics?startDate=${encodeURIComponent(periodStart.toISOString())}&endDate=${encodeURIComponent(periodEnd.toISOString())}`,
-                  { credentials: 'include' }
+                const metricsJson = await apiClient.get(
+                  `/api/admin/users/${customer.id}/metrics?startDate=${encodeURIComponent(periodStart.toISOString())}&endDate=${encodeURIComponent(periodEnd.toISOString())}`
                 );
 
-                if (!metricsRes.ok) {
-                  console.warn(`Failed to load metrics for ${customer.id}: ${metricsRes.status}`);
-                  return null;
-                }
-
-                const metricsJson = await metricsRes.json();
                 if (metricsJson.success && metricsJson.metrics) {
                   return mapMetricsFromResponse(metricsJson.metrics);
                 }
@@ -574,9 +567,8 @@ const SubscriptionManagement: React.FC = () => {
           setUserMetricsSafe(metricsResults.filter(Boolean) as UsageMetrics[]);
         }
 
-        const alertsJson = await alertsRes.json().catch(() => ({}));
-        if (!alertsRes.ok) {
-          console.error('Failed to load quota alerts:', (alertsJson as any)?.error || alertsRes.statusText);
+        if (alertsJson?.error) {
+          console.error('Failed to load quota alerts:', alertsJson.error);
         }
         if (alertsJson.success && Array.isArray(alertsJson.alerts)) {
           const mappedAlerts: QuotaAlert[] = alertsJson.alerts.map((alert: any) => ({
@@ -598,9 +590,8 @@ const SubscriptionManagement: React.FC = () => {
           setQuotaAlertsSafe([]);
         }
 
-        const eventsJson = await eventsRes.json().catch(() => ({}));
-        if (!eventsRes.ok) {
-          console.error('Failed to load billing events:', (eventsJson as any)?.error || eventsRes.statusText);
+        if (eventsJson?.error) {
+          console.error('Failed to load billing events:', eventsJson.error);
         }
         if (eventsJson.success && Array.isArray(eventsJson.events)) {
           const mappedEvents: BillingEvent[] = eventsJson.events.map((event: any) => ({
@@ -701,24 +692,46 @@ const SubscriptionManagement: React.FC = () => {
   const handleTierSave = async () => {
     if (editingTier && editedTierData) {
       const tierId = editingTier;
+
+      // MEDIUM PRIORITY FIX: Add form validation before saving
+      const validationErrors: string[] = [];
+
+      // Validate monthly price
+      if (editedTierData.monthlyPrice !== undefined && editedTierData.monthlyPrice < 0) {
+        validationErrors.push('Monthly price cannot be negative');
+      }
+
+      // Validate limits (-1 means unlimited, otherwise must be positive)
+      if (editedTierData.limits) {
+        const limits = editedTierData.limits as any;
+        const { maxDataProcessingMB, maxStorageMB, maxProjects } = limits;
+
+        if (maxDataProcessingMB !== undefined && maxDataProcessingMB !== -1 && maxDataProcessingMB < 0) {
+          validationErrors.push('Max Data Processing must be -1 (unlimited) or a positive number');
+        }
+        if (maxStorageMB !== undefined && maxStorageMB !== -1 && maxStorageMB < 0) {
+          validationErrors.push('Max Storage must be -1 (unlimited) or a positive number');
+        }
+        if (maxProjects !== undefined && maxProjects !== -1 && maxProjects < 0) {
+          validationErrors.push('Max Projects must be -1 (unlimited) or a positive number');
+        }
+      }
+
+      if (validationErrors.length > 0) {
+        alert(`Validation errors:\n\n${validationErrors.join('\n')}`);
+        return;
+      }
+
       try {
         // Send update to backend API
-        const response = await fetch(`/api/pricing/tiers/${editingTier}`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            price: editedTierData.monthlyPrice,
-            description: editedTierData.description,
-            features: editedTierData.features,
-            limits: editedTierData.limits,
-            overagePricing: editedTierData.overagePricing,
-            discounts: editedTierData.discounts
-          })
+        const result = await apiClient.put(`/api/pricing/tiers/${editingTier}`, {
+          price: editedTierData.monthlyPrice,
+          description: editedTierData.description,
+          features: editedTierData.features,
+          limits: editedTierData.limits,
+          overagePricing: editedTierData.overagePricing,
+          discounts: editedTierData.discounts
         });
-
-        const result = await response.json();
 
         if (result.success) {
           // Update local state with saved data
@@ -749,15 +762,31 @@ const SubscriptionManagement: React.FC = () => {
           console.log('Subscription tier updated successfully');
           console.log(stripeSyncStatus);
 
-          // TODO: Add toast notification with Stripe sync status
-          alert(`Tier updated successfully!\n\n${stripeSyncStatus}`);
+          // LOW PRIORITY FIX: Replaced alert with proper toast notification
+          toast({
+            title: "Tier Updated Successfully",
+            description: result.stripeSync?.synced
+              ? `Synced with Stripe (Product: ${result.stripeSync.productId})`
+              : result.stripeSync?.error
+                ? `Stripe sync failed: ${result.stripeSync.error}`
+                : 'Stripe not configured - changes saved locally only',
+            variant: result.stripeSync?.synced ? 'default' : 'destructive'
+          });
         } else {
           console.error('Failed to update tier:', result.error);
-          alert(`Failed to update tier: ${result.error}`);
+          toast({
+            title: "Failed to Update Tier",
+            description: result.error || 'An unknown error occurred',
+            variant: 'destructive'
+          });
         }
       } catch (error) {
         console.error('Error updating subscription tier:', error);
-        alert(`Error updating subscription tier: ${error}`);
+        toast({
+          title: "Error",
+          description: `Error updating subscription tier: ${error instanceof Error ? error.message : String(error)}`,
+          variant: 'destructive'
+        });
       }
     }
   };
@@ -777,16 +806,8 @@ const SubscriptionManagement: React.FC = () => {
     }));
 
     try {
-      const response = await fetch(`/api/pricing/tiers/${tierId}/sync-stripe`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        credentials: 'include'
-      });
-
-      const result = await response.json();
-      if (!response.ok || !result.success) {
+      const result = await apiClient.post(`/api/pricing/tiers/${tierId}/sync-stripe`);
+      if (!result.success) {
         throw new Error(result.error || 'Failed to sync tier with Stripe');
       }
 
@@ -1204,6 +1225,8 @@ const SubscriptionManagement: React.FC = () => {
                             </label>
                             <input
                               type="number"
+                              min="0"
+                              step="0.01"
                               value={editedTierData.monthlyPrice || 0}
                               onChange={(e) => setEditedTierData(prev => ({
                                 ...prev,
@@ -1211,6 +1234,7 @@ const SubscriptionManagement: React.FC = () => {
                               }))}
                               className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
                             />
+                            <p className="text-xs text-gray-500 mt-1">Enter 0 for free tier</p>
                           </div>
 
                           <div>
@@ -1219,6 +1243,7 @@ const SubscriptionManagement: React.FC = () => {
                             </label>
                             <input
                               type="number"
+                              min="-1"
                               value={editedTierData.limits?.maxDataProcessingMB || 0}
                               onChange={(e) => setEditedTierData(prev => ({
                                 ...prev,
@@ -1229,6 +1254,7 @@ const SubscriptionManagement: React.FC = () => {
                               }))}
                               className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
                             />
+                            <p className="text-xs text-gray-500 mt-1">Enter -1 for unlimited</p>
                           </div>
 
                           <div>
@@ -1237,6 +1263,7 @@ const SubscriptionManagement: React.FC = () => {
                             </label>
                             <input
                               type="number"
+                              min="-1"
                               value={editedTierData.limits?.maxStorageMB || 0}
                               onChange={(e) => setEditedTierData(prev => ({
                                 ...prev,
@@ -1247,6 +1274,7 @@ const SubscriptionManagement: React.FC = () => {
                               }))}
                               className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
                             />
+                            <p className="text-xs text-gray-500 mt-1">Enter -1 for unlimited</p>
                           </div>
 
                           <div className="flex items-center space-x-2">

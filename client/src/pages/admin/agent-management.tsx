@@ -126,21 +126,23 @@ const AgentManagement: React.FC = () => {
     timeout: 30000
   });
 
-  // Fetch real agent data from system-status API
+  // FIX: Use correct admin endpoint /api/admin/agents/status instead of /api/system-status
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
       try {
-        const response = await fetch('/api/system-status', {
+        const response = await fetch('/api/admin/agents/status', {
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' }
         });
 
         if (!response.ok) {
-          throw new Error(`Failed to fetch system status: ${response.status}`);
+          throw new Error(`Failed to fetch agent status: ${response.status}`);
         }
 
-        const systemStatus = await response.json();
+        const result = await response.json();
+        // Handle the response format: { success: true, data: { agents: [...], summary } }
+        const systemStatus = result.success ? { agents: result.data?.agents || [] } : { agents: [] };
 
         // Map backend agent data to AgentInfo format
         const agentDefinitions: Record<string, { type: string; description: string; capabilities: string[] }> = {
@@ -160,41 +162,42 @@ const AgentManagement: React.FC = () => {
           maintenance: 'maintenance'
         };
 
+        // FIX: Map from the new /api/admin/agents/status response format
         const realAgents: AgentInfo[] = (systemStatus.agents || []).map((agent: any) => {
-          const def = agentDefinitions[agent.id] || { type: 'unknown', description: agent.name || 'Agent', capabilities: [] };
+          const def = agentDefinitions[agent.id] || { type: agent.type || 'unknown', description: agent.name || 'Agent', capabilities: agent.capabilities || [] };
           return {
             id: agent.id,
             name: agent.name || agent.id,
-            type: def.type,
+            type: agent.type || def.type,
             description: def.description,
             status: agentStatusMap[agent.status] || 'active',
             version: '1.0.0',
-            capabilities: def.capabilities,
+            capabilities: agent.capabilities || def.capabilities,
             healthStatus: {
-              lastHealthCheck: new Date(),
-              responseTime: systemStatus.performance?.avgResponseTime || 0,
-              memoryUsage: systemStatus.performance?.memoryUsage || 0,
-              cpuUsage: systemStatus.performance?.cpuUsage || 0,
-              isHealthy: systemStatus.overall === 'healthy',
-              errorCount: 0
+              lastHealthCheck: agent.metrics?.lastActivity ? new Date(agent.metrics.lastActivity) : new Date(),
+              responseTime: agent.metrics?.averageResponseTime || 0,
+              memoryUsage: 0, // Not available in new endpoint
+              cpuUsage: 0, // Not available in new endpoint
+              isHealthy: agent.health === 'healthy' || agent.status === 'active',
+              errorCount: agent.metrics?.failedTasks || 0
             },
             performance: {
-              tasksCompleted: 0,
-              successRate: 0,
-              averageResponseTime: systemStatus.performance?.avgResponseTime || 0,
+              tasksCompleted: agent.metrics?.totalTasks || 0,
+              successRate: agent.metrics?.successRate || 100,
+              averageResponseTime: agent.metrics?.averageResponseTime || 0,
               uptime: 0
             },
             configuration: {
-              maxConcurrentTasks: 5,
+              maxConcurrentTasks: agent.maxConcurrentTasks || 5,
               priority: 3,
               timeout: 60000,
               retryAttempts: 2
             },
             metadata: {
               createdAt: new Date(),
-              lastUpdated: new Date(),
+              lastUpdated: agent.metrics?.lastActivity ? new Date(agent.metrics.lastActivity) : new Date(),
               author: 'System',
-              tags: def.capabilities.slice(0, 2)
+              tags: (agent.capabilities || def.capabilities).slice(0, 2)
             }
           };
         });
@@ -290,54 +293,87 @@ const AgentManagement: React.FC = () => {
     return matchesSearch && matchesStatus && matchesType;
   });
 
-  const handleCreateAgent = () => {
-    const newAgent: AgentInfo = {
-      id: `agent_${Date.now()}`,
-      name: newAgentData.name,
-      type: newAgentData.type,
-      description: newAgentData.description,
-      status: 'inactive',
-      version: '1.0.0',
-      capabilities: newAgentData.capabilities.split(',').map(c => c.trim()),
-      healthStatus: {
-        lastHealthCheck: new Date(),
-        responseTime: 0,
-        memoryUsage: 0,
-        cpuUsage: 0,
-        isHealthy: false,
-        errorCount: 0
-      },
-      performance: {
-        tasksCompleted: 0,
-        successRate: 0,
-        averageResponseTime: 0,
-        uptime: 0
-      },
-      configuration: {
-        maxConcurrentTasks: newAgentData.maxConcurrentTasks,
-        priority: newAgentData.priority,
-        timeout: newAgentData.timeout,
-        retryAttempts: 3
-      },
-      metadata: {
-        createdAt: new Date(),
-        lastUpdated: new Date(),
-        author: 'Admin',
-        tags: []
-      }
-    };
+  const handleCreateAgent = async () => {
+    if (!newAgentData.name || !newAgentData.type) return;
 
-    setAgents(prev => [...prev, newAgent]);
-    setShowAgentForm(false);
-    setNewAgentData({
-      name: '',
-      type: '',
-      description: '',
-      capabilities: '',
-      maxConcurrentTasks: 5,
-      priority: 1,
-      timeout: 30000
-    });
+    const agentId = `agent_${Date.now()}`;
+    const capabilities = newAgentData.capabilities.split(',').map(c => c.trim()).filter(Boolean);
+
+    try {
+      const response = await fetch('/api/admin/agents', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: agentId,
+          name: newAgentData.name,
+          type: newAgentData.type,
+          description: newAgentData.description,
+          capabilities,
+          configuration: {
+            maxConcurrentTasks: newAgentData.maxConcurrentTasks,
+            priority: newAgentData.priority,
+            timeout: newAgentData.timeout
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Failed to create agent: ${response.status}`);
+      }
+
+      const newAgent: AgentInfo = {
+        id: agentId,
+        name: newAgentData.name,
+        type: newAgentData.type,
+        description: newAgentData.description,
+        status: 'inactive',
+        version: '1.0.0',
+        capabilities,
+        healthStatus: {
+          lastHealthCheck: new Date(),
+          responseTime: 0,
+          memoryUsage: 0,
+          cpuUsage: 0,
+          isHealthy: false,
+          errorCount: 0
+        },
+        performance: {
+          tasksCompleted: 0,
+          successRate: 0,
+          averageResponseTime: 0,
+          uptime: 0
+        },
+        configuration: {
+          maxConcurrentTasks: newAgentData.maxConcurrentTasks,
+          priority: newAgentData.priority,
+          timeout: newAgentData.timeout,
+          retryAttempts: 3
+        },
+        metadata: {
+          createdAt: new Date(),
+          lastUpdated: new Date(),
+          author: 'Admin',
+          tags: []
+        }
+      };
+
+      setAgents(prev => [...prev, newAgent]);
+      setShowAgentForm(false);
+      setNewAgentData({
+        name: '',
+        type: '',
+        description: '',
+        capabilities: '',
+        maxConcurrentTasks: 5,
+        priority: 1,
+        timeout: 30000
+      });
+    } catch (error) {
+      console.error('Failed to create agent:', error);
+      alert(error instanceof Error ? error.message : 'Failed to create agent');
+    }
   };
 
   if (loading) {

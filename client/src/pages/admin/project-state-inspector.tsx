@@ -92,56 +92,26 @@ export default function ProjectStateInspector() {
 
     // Fetch decision trail for selected project
     const { data: decisionTrailData, isLoading: decisionsLoading, refetch: refetchDecisions } = useQuery({
-        queryKey: ['/api/admin/projects/decision-trail', selectedProjectId],
+        queryKey: ['admin', 'decision-trail', selectedProjectId],
         queryFn: async () => {
             if (!selectedProjectId) return { decisions: [] };
-            const token = localStorage.getItem('auth_token');
-            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-            if (token) headers['Authorization'] = `Bearer ${token}`;
-
-            const response = await fetch(`/api/admin/projects/${selectedProjectId}/decision-trail`, {
-                headers,
-                credentials: 'include'
-            });
-            if (!response.ok) throw new Error('Failed to fetch decision trail');
-            return response.json();
+            return apiClient.get(`/api/admin/projects/${selectedProjectId}/decision-trail`);
         },
         enabled: !!selectedProjectId && activeTab === 'audit-log'
     });
 
     // Fetch active agents
     const { data: activeAgentsData, isLoading: agentsLoading, refetch: refetchAgents } = useQuery({
-        queryKey: ['/api/admin/agents/active'],
-        queryFn: async () => {
-            const token = localStorage.getItem('auth_token');
-            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-            if (token) headers['Authorization'] = `Bearer ${token}`;
-
-            const response = await fetch('/api/admin/agents/active', {
-                headers,
-                credentials: 'include'
-            });
-            if (!response.ok) throw new Error('Failed to fetch active agents');
-            return response.json();
-        },
+        queryKey: ['admin', 'agents', 'active'],
+        queryFn: () => apiClient.get('/api/admin/agents/active'),
         enabled: activeTab === 'active-agents',
-        refetchInterval: activeTab === 'active-agents' ? 5000 : false // Auto-refresh every 5 seconds when visible
+        refetchInterval: activeTab === 'active-agents' ? 5000 : false
     });
 
     // Force sync mutation
     const forceSyncMutation = useMutation({
         mutationFn: async (projectId: string) => {
-            const token = localStorage.getItem('auth_token');
-            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-            if (token) headers['Authorization'] = `Bearer ${token}`;
-
-            const response = await fetch(`/api/admin/projects/${projectId}/force-sync`, {
-                method: 'POST',
-                headers,
-                credentials: 'include'
-            });
-            if (!response.ok) throw new Error('Force sync failed');
-            return response.json();
+            return apiClient.post(`/api/admin/projects/${projectId}/force-sync`);
         },
         onSuccess: () => {
             refetchProject();
@@ -152,18 +122,7 @@ export default function ProjectStateInspector() {
     // Reset phase mutation
     const resetPhaseMutation = useMutation({
         mutationFn: async ({ projectId, targetPhase, clearData }: { projectId: string; targetPhase: string; clearData: boolean }) => {
-            const token = localStorage.getItem('auth_token');
-            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-            if (token) headers['Authorization'] = `Bearer ${token}`;
-
-            const response = await fetch(`/api/admin/projects/${projectId}/reset-phase`, {
-                method: 'POST',
-                headers,
-                credentials: 'include',
-                body: JSON.stringify({ targetPhase, clearData })
-            });
-            if (!response.ok) throw new Error('Reset phase failed');
-            return response.json();
+            return apiClient.post(`/api/admin/projects/${projectId}/reset-phase`, { targetPhase, clearData });
         },
         onSuccess: () => {
             refetchProject();

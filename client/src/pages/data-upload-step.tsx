@@ -1044,6 +1044,9 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
 
       if (latestProjectId) {
         setCurrentProjectId(latestProjectId);
+        // FIX: Invalidate cache after upload to ensure fresh data in subsequent steps
+        queryClient.invalidateQueries({ queryKey: ["project", latestProjectId] });
+        queryClient.invalidateQueries({ queryKey: ["datasets", latestProjectId] });
         await refreshProjectPreview();
       }
 
@@ -1644,9 +1647,9 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
             onClick={handleContinue}
             className="bg-blue-600 hover:bg-blue-700"
             size="lg"
-            disabled={isUpdating}
+            disabled={isUpdating || piiQueue.length > 0 || (!piiReviewCompleted && !journeyProgress?.piiDecision && !(journeyProgress?.piiDecisionsByFile && Object.keys(journeyProgress.piiDecisionsByFile).length > 0))}
           >
-            {isUpdating ? 'Saving...' : 'Continue to Analysis Preparation'}
+            {isUpdating ? 'Saving...' : piiQueue.length > 0 ? 'PII Review In Progress...' : 'Continue to Analysis Preparation'}
             <ArrowRight className="w-4 h-4 ml-2" />
           </Button>
         </div>
