@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { apiClient } from '@/lib/api';
 
 interface ProjectContextType {
   currentProject: any | null;
@@ -45,40 +46,23 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 
   const fetchProject = async (projectId: string) => {
     try {
-      const authToken = localStorage.getItem('auth_token');
-      if (!authToken) {
-        console.warn('Skipping project fetch: missing auth token');
-        return;
+      const project = await apiClient.get(`/api/projects/${projectId}`);
+      setCurrentProjectState(project);
+
+      // Update URL if needed
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get('project') !== projectId) {
+        urlParams.set('project', projectId);
+        window.history.replaceState({}, '', `${window.location.pathname}?${urlParams}`);
       }
-
-      const response = await fetch(`/api/projects/${projectId}`, {
-        headers: {
-          'Authorization': `Bearer ${authToken}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (response.ok) {
-        const project = await response.json();
-        setCurrentProjectState(project);
-
-        // Update URL if needed
-        const urlParams = new URLSearchParams(window.location.search);
-        if (urlParams.get('project') !== projectId) {
-          urlParams.set('project', projectId);
-          window.history.replaceState({}, '', `${window.location.pathname}?${urlParams}`);
-        }
-      } else if (response.status === 401) {
-        // Handle authentication failure
+    } catch (error: any) {
+      if (error?.status === 401) {
         console.warn('Authentication failed, clearing stored auth token');
         localStorage.removeItem('auth_token');
         setCurrentProjectState(null);
-        // Could redirect to login page here
       } else {
-        console.error('Failed to fetch project:', response.status, response.statusText);
+        console.error('Failed to fetch project:', error);
       }
-    } catch (error) {
-      console.error('Failed to fetch project:', error);
     }
   };
 

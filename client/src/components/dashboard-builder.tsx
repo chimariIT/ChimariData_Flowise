@@ -3,6 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Plus, Save, LayoutDashboard, Move, Trash2, GripVertical } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { apiClient } from "@/lib/api";
 import VisualizationWorkshop from "./visualization-workshop";
 import { Dialog, DialogContent, DialogTrigger, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -184,29 +185,17 @@ export default function DashboardBuilder({ project, onSave }: DashboardBuilderPr
                 createdAt: new Date().toISOString()
             };
 
-            // Save to backend
-            const response = await fetch(`/api/projects/${project.id}/artifacts`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-                },
-                body: JSON.stringify({
-                    type: 'dashboard',
-                    name: dashboardTitle,
-                    content: dashboardConfig
-                })
+            await apiClient.post(`/api/projects/${project.id}/artifacts`, {
+                type: 'dashboard',
+                name: dashboardTitle,
+                content: dashboardConfig
             });
 
-            if (response.ok) {
-                toast({
-                    title: "Dashboard Saved",
-                    description: "Your dashboard has been saved successfully."
-                });
-                if (onSave) onSave(dashboardConfig);
-            } else {
-                throw new Error("Failed to save dashboard");
-            }
+            toast({
+                title: "Dashboard Saved",
+                description: "Your dashboard has been saved successfully."
+            });
+            if (onSave) onSave(dashboardConfig);
         } catch (error) {
             console.error("Error saving dashboard:", error);
             toast({

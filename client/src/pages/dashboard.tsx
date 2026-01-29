@@ -286,7 +286,14 @@ export default function Dashboard({ user, onLogout, onProjectSelect, onSettings,
                       });
                       return;
                     }
-                    setSelectedProjectForAnalysis(filteredProjects[0]);
+                    const mostRecent = filteredProjects
+                      .slice()
+                      .sort((a: any, b: any) => {
+                        const dateA = new Date(a.updatedAt || a.createdAt || 0).getTime();
+                        const dateB = new Date(b.updatedAt || b.createdAt || 0).getTime();
+                        return dateB - dateA;
+                      })[0];
+                    setSelectedProjectForAnalysis(mostRecent);
                     setIsAdvancedAnalysisOpen(true);
                   }}
                 >

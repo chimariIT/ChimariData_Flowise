@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useProject } from '@/hooks/useProject';
+import { apiClient } from '@/lib/api';
 
 interface DataTransformationUIProps {
   projectId: string;
@@ -168,21 +169,12 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
 
   const loadAvailableProjects = async () => {
     try {
-      const response = await fetch('/api/projects', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        }
-      });
-
-      if (response.ok) {
-        const payload = await response.json();
-        const projects = Array.isArray(payload) ? payload : Array.isArray(payload?.projects) ? payload.projects : [];
-        // Filter out current project and only show projects with data
-        const availableProjects = projects.filter((p: any) =>
-          p.id !== projectId && p.data && p.data.length > 0
-        );
-        setAvailableProjects(availableProjects);
-      }
+      const payload = await apiClient.get('/api/projects');
+      const projects = Array.isArray(payload) ? payload : Array.isArray(payload?.projects) ? payload.projects : [];
+      const available = projects.filter((p: any) =>
+        p.id !== projectId && p.data && p.data.length > 0
+      );
+      setAvailableProjects(available);
     } catch (error) {
       console.error('Failed to load available projects:', error);
     }
@@ -193,43 +185,34 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
   const fetchTransformationRecommendations = async () => {
     setIsLoadingRecs(true);
     try {
-      const response = await fetch(`/api/projects/${projectId}/transformation-recommendations`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        }
-      });
+      const data = await apiClient.get(`/api/projects/${projectId}/transformation-recommendations`);
+      setTransformationRecs(data);
 
-      if (response.ok) {
-        const data = await response.json();
-        setTransformationRecs(data);
+      // Auto-generate transformation steps if available and not already set
+      if (data.transformationSteps && data.transformationSteps.length > 0 && transformationSteps.length === 0) {
+        setTransformationSteps(data.transformationSteps);
+      } else if (data.recommendations && transformationSteps.length === 0) {
+        const generatedSteps = data.recommendations
+          .filter((rec: any) => rec.transformation.code)
+          .map((rec: any) => ({
+            id: `step_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            type: 'convert',
+            name: rec.elementName,
+            description: rec.transformation.description,
+            config: {
+              field: rec.sourceField,
+              code: rec.transformation.code,
+              targetType: 'string'
+            },
+            status: 'pending',
+            aiGenerated: true,
+            relatedGoals: rec.relatedGoals,
+            relatedQuestions: rec.relatedQuestions,
+            confidence: rec.confidence
+          }));
 
-        // Auto-generate transformation steps if available and not already set
-        if (data.transformationSteps && data.transformationSteps.length > 0 && transformationSteps.length === 0) {
-          setTransformationSteps(data.transformationSteps);
-        } else if (data.recommendations && transformationSteps.length === 0) {
-          // Generate steps from recommendations if code is available
-          const generatedSteps = data.recommendations
-            .filter((rec: any) => rec.transformation.code)
-            .map((rec: any) => ({
-              id: `step_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-              type: 'convert', // Default, should infer from operation
-              name: rec.elementName,
-              description: rec.transformation.description,
-              config: {
-                field: rec.sourceField,
-                code: rec.transformation.code,
-                targetType: 'string' // Default
-              },
-              status: 'pending',
-              aiGenerated: true,
-              relatedGoals: rec.relatedGoals,
-              relatedQuestions: rec.relatedQuestions,
-              confidence: rec.confidence
-            }));
-
-          if (generatedSteps.length > 0) {
-            setTransformationSteps(generatedSteps);
-          }
+        if (generatedSteps.length > 0) {
+          setTransformationSteps(generatedSteps);
         }
       }
     } catch (error) {
@@ -345,66 +328,49 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
 
     setIsProcessing(true);
     try {
-      const response = await fetch(`/api/analysis/${projectId}/transform`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        },
-        body: JSON.stringify({
-          transformations: transformationSteps.map(step => ({
-            type: step.type,
-            config: step.config
-          }))
-        })
+      const result = await apiClient.post(`/api/analysis/${projectId}/transform`, {
+        transformations: transformationSteps.map(step => ({
+          type: step.type,
+          config: step.config
+        }))
       });
 
-      if (response.ok) {
-        const result = await response.json();
+      const resultColumns = Array.isArray(result.columns)
+        ? result.columns.filter((column: any) => typeof column === 'string')
+        : [];
 
-        const resultColumns = Array.isArray(result.columns)
-          ? result.columns.filter((column: any) => typeof column === 'string')
-          : [];
+      const previewRows = Array.isArray(result.preview) ? result.preview : [];
+      const sampleColumns = previewRows.length > 0 ? Object.keys(previewRows[0]) : [];
+      const fallbackColumns = Object.keys(schema);
+      const columns = resultColumns.length > 0
+        ? resultColumns
+        : (sampleColumns.length > 0 ? sampleColumns : fallbackColumns);
 
-        const previewRows = Array.isArray(result.preview) ? result.preview : [];
-        const sampleColumns = previewRows.length > 0 ? Object.keys(previewRows[0]) : [];
-        const fallbackColumns = Object.keys(schema);
-        const columns = resultColumns.length > 0
-          ? resultColumns
-          : (sampleColumns.length > 0 ? sampleColumns : fallbackColumns);
+      setPreview({
+        originalCount: typeof result.originalRowCount === 'number'
+          ? result.originalRowCount
+          : (project?.data?.length || 0),
+        transformedCount: typeof result.rowCount === 'number'
+          ? result.rowCount
+          : previewRows.length,
+        columns,
+        sampleData: previewRows,
+        warnings: Array.isArray(result.warnings) ? result.warnings : [],
+        summary: result.summary,
+      });
 
-        setPreview({
-          originalCount: typeof result.originalRowCount === 'number'
-            ? result.originalRowCount
-            : (project?.data?.length || 0),
-          transformedCount: typeof result.rowCount === 'number'
-            ? result.rowCount
-            : previewRows.length,
-          columns,
-          sampleData: previewRows,
-          warnings: Array.isArray(result.warnings) ? result.warnings : [],
-          summary: result.summary,
-        });
+      setShowPreview(true);
 
-        setShowPreview(true);
+      toast({
+        title: "Transformations applied",
+        description: `Successfully processed ${result.rowCount} rows`,
+      });
 
-        toast({
-          title: "Transformations applied",
-          description: `Successfully processed ${result.rowCount} rows`,
-        });
-
-        // Update journeyProgress with transformation results
-        await updateProgress({
-          transformationApprovedAt: new Date().toISOString(),
-          transformedDatasetId: result.datasetId || projectId, // Logic should provide new ID if created
-          // Store schema for next steps
-          transformedSchema: result.schema || {}
-        });
-
-      } else {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to apply transformations');
-      }
+      await updateProgress({
+        transformationApprovedAt: new Date().toISOString(),
+        transformedDatasetId: result.datasetId || projectId,
+        transformedSchema: result.schema || {}
+      });
     } catch (error: any) {
       console.error('Transformation error:', error);
       toast({
@@ -421,35 +387,23 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
     if (!preview) return;
 
     try {
-      const response = await fetch(`/api/projects/${projectId}/save-transformed-data`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        },
-        body: JSON.stringify({
-          transformations: transformationSteps,
-          preview: preview
-        })
+      await apiClient.post(`/api/projects/${projectId}/save-transformed-data`, {
+        transformations: transformationSteps,
+        preview: preview
       });
 
-      if (response.ok) {
-        toast({
-          title: "Data saved",
-          description: "Transformed data has been saved to your project",
-        });
+      toast({
+        title: "Data saved",
+        description: "Transformed data has been saved to your project",
+      });
 
-        // Update journeyProgress
-        await updateProgress({
-          transformationApprovedAt: new Date().toISOString(),
-          transformedDatasetId: projectId, // Placeholder if same project
-        });
+      await updateProgress({
+        transformationApprovedAt: new Date().toISOString(),
+        transformedDatasetId: projectId,
+      });
 
-        if (onNext) {
-          onNext();
-        }
-      } else {
-        throw new Error('Failed to save transformed data');
+      if (onNext) {
+        onNext();
       }
     } catch (error: any) {
       toast({
