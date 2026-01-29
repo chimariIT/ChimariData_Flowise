@@ -42,7 +42,7 @@ interface AnalysisRequest {
   analysisTypes: string[]; // ['descriptive', 'correlation', 'regression', etc.]
   datasetIds?: string[];
   userContext?: UserContext;
-  // GAP D: DS-recommended analyses from requirements document
+  // GAP D + GAP A: DS-recommended analyses from requirements document with priority ordering
   analysisPath?: Array<{
     analysisId: string;
     analysisName: string;
@@ -51,7 +51,8 @@ interface AnalysisRequest {
     techniques?: string[];
     requiredDataElements?: string[];
     estimatedDuration?: string;
-    dependencies?: string[];
+    dependencies?: string[]; // GAP A: Other analysis IDs that must complete first
+    priority?: number;       // GAP A: Lower number = higher priority (earlier execution)
   }>;
   // GAP D: Question-to-analysis mapping for traceability
   questionAnswerMapping?: Array<{
@@ -61,6 +62,8 @@ interface AnalysisRequest {
     requiredDataElements?: string[];
     transformationsNeeded?: string[];
   }>;
+  // P0-1 FIX: PII columns to exclude from analysis
+  columnsToExclude?: string[];
 }
 
 interface UserContext {
@@ -455,15 +458,17 @@ export class AnalysisExecutionService {
       throw new Error('Access denied. You do not have permission to run analysis on this project.');
     }
 
-    // PII FIX: Read from journeyProgress (SSOT) first, then fall back to project.metadata
+    // PHASE 5 SSOT FIX: Read PII decisions from journeyProgress.piiDecisions ONLY (no fallbacks)
     const journeyProgress = (project as any).journeyProgress || {};
-    const projectMetadata = (project as any).metadata || {};
-    const piiDecisionFromProgress = journeyProgress.piiDecision || journeyProgress.piiDecisions;
-    const piiDecisionFromMetadata = projectMetadata.piiDecision;
-    const piiDecision = piiDecisionFromProgress || piiDecisionFromMetadata;
-    // Normalize field names: frontend saves as excludedColumns, some paths save as selectedColumns
-    const excludedColumns: string[] = piiDecision?.excludedColumns || projectMetadata.excludedColumns || [];
-    const piiColumnsToRemove: string[] = piiDecision?.selectedColumns || piiDecision?.piiColumnsRemoved || [];
+    const piiDecisions = journeyProgress.piiDecisions;
+
+    if (!piiDecisions) {
+      console.log(`⚠️ [PII SSOT] No PII decisions found in journeyProgress - user may not have completed verification step`);
+    }
+
+    // Normalize field names for backwards compatibility within SSOT
+    const excludedColumns: string[] = piiDecisions?.excludedColumns || [];
+    const piiColumnsToRemove: string[] = piiDecisions?.selectedColumns || piiDecisions?.piiColumnsRemoved || [];
     const columnsToExclude = new Set([...excludedColumns, ...piiColumnsToRemove]);
 
     if (columnsToExclude.size > 0) {
@@ -517,31 +522,70 @@ export class AnalysisExecutionService {
     let executionMarked = false;
     const executionStartTimestamp = new Date();
 
-    // GAP D: Log and use DS-recommended analyses for prioritization
+    // GAP A FIX: Use DS-recommended analyses for priority-based ordering
     if (request.analysisPath && request.analysisPath.length > 0) {
-      console.log(`📊 [GAP D] Using ${request.analysisPath.length} DS-recommended analyses for prioritization`);
+      console.log(`📊 [GAP A] Using ${request.analysisPath.length} DS-recommended analyses for priority ordering`);
 
-      // Prioritize requested analysisTypes based on DS recommendations
-      const recommendedTypes = request.analysisPath
-        .map(a => a.analysisType?.toLowerCase() || a.analysisName.toLowerCase().replace(/\s+/g, '-'))
-        .filter(t => t);
+      // Build priority map from analysisPath (lower priority number = higher precedence)
+      // Also check dependencies to ensure correct execution order
+      const priorityMap = new Map<string, number>();
+      const dependencyMap = new Map<string, string[]>();
 
-      // Sort analysisTypes so recommended ones come first
+      request.analysisPath.forEach((a, index) => {
+        const typeKey = a.analysisType?.toLowerCase() || a.analysisName.toLowerCase().replace(/\s+/g, '-');
+        // Use explicit priority if provided, otherwise use index order (earlier = higher priority)
+        const priority = typeof a.priority === 'number' ? a.priority : index;
+        priorityMap.set(typeKey, priority);
+
+        // Track dependencies if provided
+        if (a.dependencies && a.dependencies.length > 0) {
+          dependencyMap.set(typeKey, a.dependencies);
+        }
+
+        console.log(`📊 [GAP A]   ${typeKey}: priority=${priority}${a.dependencies?.length ? `, deps=[${a.dependencies.join(', ')}]` : ''}`);
+      });
+
+      // Sort analysisTypes by:
+      // 1. DS-recommended analyses first (those in priorityMap)
+      // 2. Within recommended, sort by priority value (lower = earlier)
+      // 3. Non-recommended analyses last, in original order
       const sortedAnalysisTypes = [...request.analysisTypes].sort((a, b) => {
-        const aIsRecommended = recommendedTypes.includes(a.toLowerCase());
-        const bIsRecommended = recommendedTypes.includes(b.toLowerCase());
+        const aKey = a.toLowerCase();
+        const bKey = b.toLowerCase();
+        const aPriority = priorityMap.get(aKey);
+        const bPriority = priorityMap.get(bKey);
+
+        const aIsRecommended = aPriority !== undefined;
+        const bIsRecommended = bPriority !== undefined;
+
+        // Non-recommended goes to the end
         if (aIsRecommended && !bIsRecommended) return -1;
         if (!aIsRecommended && bIsRecommended) return 1;
+
+        // Both recommended: sort by priority (lower = earlier)
+        if (aIsRecommended && bIsRecommended) {
+          // Check if b depends on a (a must come first)
+          const bDeps = dependencyMap.get(bKey) || [];
+          if (bDeps.some(dep => dep.toLowerCase().includes(aKey))) return -1;
+
+          // Check if a depends on b (b must come first)
+          const aDeps = dependencyMap.get(aKey) || [];
+          if (aDeps.some(dep => dep.toLowerCase().includes(bKey))) return 1;
+
+          // Otherwise, sort by priority value
+          return (aPriority ?? 999) - (bPriority ?? 999);
+        }
+
         return 0;
       });
 
       if (JSON.stringify(sortedAnalysisTypes) !== JSON.stringify(request.analysisTypes)) {
-        console.log(`📊 [GAP D] Prioritized analysis order: ${sortedAnalysisTypes.join(', ')}`);
+        console.log(`📊 [GAP A] Prioritized analysis order: ${sortedAnalysisTypes.join(' → ')}`);
         request.analysisTypes = sortedAnalysisTypes;
       }
     }
 
-    // GAP D + GAP E: Store questionAnswerMapping in project for results traceability
+    // GAP D + GAP E: Store questionAnswerMapping for results traceability
     if (request.questionAnswerMapping && request.questionAnswerMapping.length > 0) {
       console.log(`📊 [GAP D] Storing ${request.questionAnswerMapping.length} question-answer mappings for results traceability`);
       try {
@@ -553,8 +597,21 @@ export class AnalysisExecutionService {
           } as any)
           .where(eq(projects.id, request.projectId));
       } catch (err) {
-        console.warn(`⚠️ [GAP D] Could not store questionAnswerMapping (column may not exist):`, err);
-        // Non-fatal: continue with execution
+        // P2-A FIX: Fallback to journeyProgress SSOT when column doesn't exist
+        console.warn(`⚠️ [P2-A] Column questionAnswerMapping may not exist, storing in journeyProgress instead`);
+        try {
+          const project = await storage.getProject(request.projectId);
+          const existingProgress = (project as any)?.journeyProgress || {};
+          await storage.updateProject(request.projectId, {
+            journeyProgress: {
+              ...existingProgress,
+              questionAnswerMapping: request.questionAnswerMapping
+            }
+          } as any);
+          console.log(`✅ [P2-A] Stored questionAnswerMapping in journeyProgress (SSOT fallback)`);
+        } catch (fallbackErr) {
+          console.warn(`⚠️ [P2-A] Failed to store questionAnswerMapping in journeyProgress:`, fallbackErr);
+        }
       }
     }
 
@@ -700,15 +757,37 @@ export class AnalysisExecutionService {
         }));
         console.log(`📋 [GAP 5 FIX] Using ${questionAnswerMapping.length} question mappings from request (highest priority)`);
       }
-      // Priority 2 - Load from transformation metadata
+      // Priority 2 - Load from transformation metadata (P2-A FIX: merge from ALL datasets, not just first)
       else if (projectDatasetList.length > 0) {
-        const primaryDataset = projectDatasetList[0];
-        const ingestionMetadata = (primaryDataset as any).ingestionMetadata || {};
-        const transformationMetadata = ingestionMetadata.transformationMetadata || {};
-        questionAnswerMapping = transformationMetadata.questionAnswerMapping || [];
+        const allMappings: QuestionAnalysisMapping[] = [];
+        const seenQuestionIds = new Set<string>();
 
+        for (const dataset of projectDatasetList) {
+          const ingestionMetadata = (dataset as any).ingestionMetadata || {};
+          const transformationMetadata = ingestionMetadata.transformationMetadata || {};
+          const datasetMappings = transformationMetadata.questionAnswerMapping || [];
+
+          for (const mapping of datasetMappings) {
+            if (!seenQuestionIds.has(mapping.questionId)) {
+              seenQuestionIds.add(mapping.questionId);
+              allMappings.push(mapping);
+            }
+          }
+        }
+
+        questionAnswerMapping = allMappings;
         if (questionAnswerMapping.length > 0) {
-          console.log(`📋 [Phase 3] Loaded ${questionAnswerMapping.length} question-to-analysis mappings from transformation metadata`);
+          console.log(`📋 [P2-A] Loaded ${questionAnswerMapping.length} question-to-analysis mappings from ${projectDatasetList.length} dataset(s)`);
+        }
+
+        // Also check journeyProgress as SSOT fallback
+        if (questionAnswerMapping.length === 0) {
+          const project = await storage.getProject(request.projectId);
+          const jpMappings = (project as any)?.journeyProgress?.questionAnswerMapping;
+          if (jpMappings && jpMappings.length > 0) {
+            questionAnswerMapping = jpMappings;
+            console.log(`📋 [P2-A] Loaded ${questionAnswerMapping.length} mappings from journeyProgress SSOT fallback`);
+          }
         }
       }
 
@@ -785,18 +864,35 @@ export class AnalysisExecutionService {
 
           if (questionAnswerMapping.length > 0) {
             questionAnswerMapping.forEach(qaMap => {
-              // Match insight to question based on keywords or analysis type
+              // P2-5 FIX: Improved matching - analysis type alignment first, keywords as tiebreaker
               const insightText = `${insight.title} ${insight.description}`.toLowerCase();
+              const insightCategory = (insight.category || '').toLowerCase();
+              const insightDataSource = (insight.dataSource || '').toLowerCase();
+
+              // Priority 1: Match by recommended analysis type alignment
+              const analysisTypeMatch = qaMap.recommendedAnalyses?.some(analysisType => {
+                const at = analysisType.toLowerCase();
+                return insightCategory.includes(at) ||
+                       insightDataSource.includes(at) ||
+                       insightText.includes(at);
+              });
+
+              if (analysisTypeMatch) {
+                relatedQuestionIds.push(qaMap.questionId);
+                return; // Skip keyword matching if analysis type matched
+              }
+
+              // Priority 2: Keyword matching with stricter threshold (2+ keywords required)
               const questionText = qaMap.questionText.toLowerCase();
+              const questionKeywords = questionText
+                .split(/\s+/)
+                .filter(w => w.length > 4) // Require 5+ chars for meaningful keywords
+                .filter(w => !['about', 'which', 'there', 'their', 'would', 'could', 'should', 'these', 'those'].includes(w));
+              const matchCount = questionKeywords.filter(keyword => insightText.includes(keyword)).length;
 
-              // Check if insight relates to this question
-              const questionKeywords = questionText.split(' ').filter(w => w.length > 3);
-              const hasMatch = questionKeywords.some(keyword => insightText.includes(keyword));
-
-              if (hasMatch || qaMap.recommendedAnalyses.some(aId =>
-                insight.category?.toLowerCase().includes(aId.toLowerCase()) ||
-                insight.dataSource?.toLowerCase().includes(aId.toLowerCase())
-              )) {
+              // Require at least 2 keyword matches or 30% of keywords matching
+              const matchThreshold = Math.max(2, Math.ceil(questionKeywords.length * 0.3));
+              if (matchCount >= matchThreshold) {
                 relatedQuestionIds.push(qaMap.questionId);
               }
             });
@@ -1113,17 +1209,33 @@ export class AnalysisExecutionService {
           baTranslatedAt: new Date().toISOString()
         };
 
-        // Save both analysisResults and updated journeyProgress with all translations
-        await db
-          .update(projects)
-          .set({
-            analysisResults: results as any,
-            journeyProgress: updatedJourneyProgress as any,
-            updatedAt: new Date()
-          })
-          .where(eq(projects.id, request.projectId));
+        // P1-4 FIX: Save with retry logic for reliability
+        let saveAttempts = 0;
+        const maxRetries = 3;
+        while (saveAttempts < maxRetries) {
+          try {
+            await db
+              .update(projects)
+              .set({
+                analysisResults: results as any,
+                journeyProgress: updatedJourneyProgress as any,
+                updatedAt: new Date()
+              })
+              .where(eq(projects.id, request.projectId));
+            break; // Success
+          } catch (dbError: any) {
+            saveAttempts++;
+            console.error(`❌ [BA Translation] DB save attempt ${saveAttempts}/${maxRetries} failed:`, dbError.message);
+            if (saveAttempts >= maxRetries) {
+              console.error(`🔴 [P1-4] CRITICAL: All ${maxRetries} save attempts failed for BA translations on project ${request.projectId}`);
+              throw dbError; // Will be caught by outer catch
+            }
+            // Wait before retry (exponential backoff: 500ms, 1000ms, 2000ms)
+            await new Promise(resolve => setTimeout(resolve, 500 * Math.pow(2, saveAttempts - 1)));
+          }
+        }
 
-        console.log(`💾 [BA Translation] All translations saved to database`);
+        console.log(`💾 [BA Translation] All translations saved to database (attempt ${saveAttempts + 1})`);
         console.log(`   - Executive: ${allTranslations['executive'] ? '✅' : '❌'}`);
         console.log(`   - Technical: ${allTranslations['technical'] ? '✅' : '❌'}`);
         console.log(`   - Analyst: ${allTranslations['analyst'] ? '✅' : '❌'}`);
@@ -1261,6 +1373,15 @@ export class AnalysisExecutionService {
           csvUrl: artifactResult.csv?.url,
           dashboardUrl: artifactResult.dashboard?.url
         });
+
+        // P2-C FIX: Persist artifact status to journeyProgress for frontend polling
+        try {
+          const proj = await storage.getProject(request.projectId);
+          const progress = (proj as any)?.journeyProgress || {};
+          await storage.updateProject(request.projectId, {
+            journeyProgress: { ...progress, artifactStatus: 'ready', artifactGeneratedAt: new Date().toISOString() }
+          } as any);
+        } catch { /* non-fatal */ }
       } catch (artifactError) {
         console.error(`❌ Failed to generate artifacts for project ${request.projectId}:`, artifactError);
         if (artifactError instanceof Error) {
@@ -1294,6 +1415,20 @@ export class AnalysisExecutionService {
         } catch (fallbackError) {
           console.error(`❌ Failed to create fallback artifact record:`, fallbackError);
         }
+
+        // P2-C FIX: Persist artifact failure status to journeyProgress
+        try {
+          const proj = await storage.getProject(request.projectId);
+          const progress = (proj as any)?.journeyProgress || {};
+          await storage.updateProject(request.projectId, {
+            journeyProgress: {
+              ...progress,
+              artifactStatus: 'failed',
+              artifactError: artifactError instanceof Error ? artifactError.message : 'Unknown error',
+              artifactFailedAt: new Date().toISOString()
+            }
+          } as any);
+        } catch { /* non-fatal */ }
       }
 
       const totalElapsedSec = ((Date.now() - startTime) / 1000).toFixed(2);
@@ -2195,6 +2330,20 @@ export class AnalysisExecutionService {
 
         console.log(`  🚀 Launching parallel: ${analysis.analysisName} (${analysisType})`);
 
+        // P2-4 FIX: Emit per-analysis progress event
+        try {
+          const { getMessageBroker } = await import('./agents/message-broker');
+          const broker = getMessageBroker();
+          broker.emit('analysis:progress', {
+            projectId: request.projectId,
+            analysisId,
+            analysisName: analysis.analysisName,
+            analysisType,
+            status: 'running',
+            startedAt: new Date().toISOString()
+          });
+        } catch (emitErr) { /* non-blocking */ }
+
         try {
           // VI-1 FIX: Execute single analysis with optimal compute engine
           const singleResult = await dataScienceOrchestrator.executeWorkflow({
@@ -2204,6 +2353,7 @@ export class AnalysisExecutionService {
             userGoals,
             userQuestions,
             datasetIds: request.datasetIds,
+            columnsToExclude: request.columnsToExclude,
             computeEngine: selectedEngine.engine,
             computeEngineConfig: ComputeEngineSelector.getEngineConfig(selectedEngine.engine, {
               recordCount: totalRecordCount,
@@ -2213,6 +2363,19 @@ export class AnalysisExecutionService {
 
           const executionTimeMs = Date.now() - startTime;
           console.log(`  ✅ Completed: ${analysis.analysisName} (${executionTimeMs}ms)`);
+
+          // P2-4 FIX: Emit per-analysis completion
+          try {
+            const { getMessageBroker } = await import('./agents/message-broker');
+            getMessageBroker().emit('analysis:progress', {
+              projectId: request.projectId,
+              analysisId,
+              analysisName: analysis.analysisName,
+              analysisType,
+              status: 'completed',
+              executionTimeMs
+            });
+          } catch (emitErr) { /* non-blocking */ }
 
           return {
             analysisId,
@@ -2225,6 +2388,20 @@ export class AnalysisExecutionService {
         } catch (error: any) {
           const executionTimeMs = Date.now() - startTime;
           console.error(`  ❌ Failed: ${analysis.analysisName} - ${error.message}`);
+
+          // P2-4 FIX: Emit per-analysis failure
+          try {
+            const { getMessageBroker } = await import('./agents/message-broker');
+            getMessageBroker().emit('analysis:progress', {
+              projectId: request.projectId,
+              analysisId,
+              analysisName: analysis.analysisName,
+              analysisType,
+              status: 'failed',
+              error: error.message,
+              executionTimeMs
+            });
+          } catch (emitErr) { /* non-blocking */ }
 
           return {
             analysisId,
@@ -2377,7 +2554,8 @@ export class AnalysisExecutionService {
         analysisTypes: request.analysisTypes,
         userGoals,
         userQuestions,
-        datasetIds: request.datasetIds
+        datasetIds: request.datasetIds,
+        columnsToExclude: request.columnsToExclude
       });
     }
 

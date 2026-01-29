@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -150,6 +150,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
   const [paymentVerificationResult, setPaymentVerificationResult] = useState<'success' | 'pending' | 'failed' | 'cancelled' | null>(null);
 
   // ✅ PHASE 7 FIX: Backend cost estimate - single source of truth for pricing
+  // P1 FIX: Added perAnalysisBreakdown to type definition (was missing, causing fallback to display)
   const [backendCostEstimate, setBackendCostEstimate] = useState<{
     totalCost: number;
     breakdown: {
@@ -158,6 +159,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
       analysisExecution?: number;
       rowsProcessed?: number;
       analysisTypes?: number;
+      perAnalysisBreakdown?: Array<{ type: string; cost: number }>;
     };
     isLocked: boolean;
   } | null>(null);
@@ -167,6 +169,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
   const [showCostConfirmation, setShowCostConfirmation] = useState<boolean>(false);
   const [costConfirmed, setCostConfirmed] = useState<boolean>(false);
   const { toast } = useToast();
+  const queryClient = useQueryClient();
 
   // 🔒 SSOT: Use useProject hook instead of useProjectSession
   const {
@@ -212,7 +215,23 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
         // Use apiClient instead of raw fetch to include auth headers
         const data = await apiClient.get(`/api/projects/${projectId}/cost-estimate`);
         if (!cancelled && data.success) {
+          // P1 FIX: Enhanced logging to verify breakdown is received from backend
           console.log(`✅ [Pricing] Backend cost estimate: $${data.totalCost} (${data.isLocked ? 'LOCKED' : 'estimated'})`);
+          console.log(`📊 [Pricing] Breakdown received:`, {
+            basePlatformFee: data.breakdown?.basePlatformFee,
+            dataProcessing: data.breakdown?.dataProcessing,
+            analysisExecution: data.breakdown?.analysisExecution,
+            perAnalysisBreakdownCount: data.breakdown?.perAnalysisBreakdown?.length || 0,
+            perAnalysisTypes: data.breakdown?.perAnalysisBreakdown?.map((a: any) => a.type) || [],
+            hasRawBreakdown: !!data.rawBreakdown,
+            rawBreakdownCount: data.rawBreakdown?.length || 0
+          });
+
+          // Warn if breakdown is missing key fields
+          if (!data.breakdown?.perAnalysisBreakdown?.length) {
+            console.warn(`⚠️ [Pricing] No perAnalysisBreakdown received - check if analysisPath was saved in journeyProgress`);
+          }
+
           setBackendCostEstimate({
             totalCost: data.totalCost,
             breakdown: data.breakdown || {},
@@ -597,15 +616,78 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
           if (response.success && response.paymentStatus === 'paid') {
             setPaymentVerificationResult('success');
 
+            // P0-3 FIX: Invalidate project caches so results unlock immediately
+            queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+            queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
+            queryClient.invalidateQueries({ queryKey: ['project-datasets', projectId] });
+
             // Clear URL parameters
             window.history.replaceState({}, document.title, window.location.pathname);
 
-            // Navigate to dashboard after short delay
-            setTimeout(() => {
-              if (onNext) {
-                onNext();
+            // =====================================================
+            // FIX: Trigger analysis execution after successful payment
+            // The user pays FIRST, then analysis runs, then results are shown
+            // =====================================================
+            console.log('💳 [Payment] Payment verified, triggering analysis execution...');
+
+            try {
+              // ✅ FIX: Get actual analysis types from the approved plan/requirements document
+              const analysisPath = journeyProgress?.requirementsDocument?.analysisPath ||
+                                   journeyProgress?.executionConfig?.analysisPath || [];
+              const analysisTypesFromPlan = analysisPath.length > 0
+                ? analysisPath.map((a: any) => a.analysisType || a.type || 'statistical_analysis')
+                : ['statistical_analysis', 'exploratory_data_analysis']; // Fallback only if no plan
+
+              console.log(`📊 [Payment] Using ${analysisTypesFromPlan.length} analysis types from plan: [${analysisTypesFromPlan.join(', ')}]`);
+
+              // Execute analysis now that payment is confirmed
+              const analysisResponse = await fetch('/api/analysis-execution/execute', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
+                },
+                body: JSON.stringify({
+                  projectId,
+                  analysisTypes: analysisTypesFromPlan,
+                  analysisPath // Pass full analysis path for evidence chain
+                })
+              });
+
+              const analysisData = await analysisResponse.json();
+
+              if (analysisData.success) {
+                console.log('✅ [Payment] Analysis execution completed successfully');
+                console.log(`   Insights: ${analysisData.results?.insights?.length || 0}`);
+                console.log(`   Recommendations: ${analysisData.results?.recommendations?.length || 0}`);
+
+                // Invalidate again to get fresh results
+                queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+
+                // Navigate to dashboard
+                setTimeout(() => {
+                  if (onNext) {
+                    onNext();
+                  }
+                }, 500);
+              } else {
+                console.error('❌ [Payment] Analysis execution failed:', analysisData.error);
+                // Still navigate to dashboard - they paid, so show what we have
+                setTimeout(() => {
+                  if (onNext) {
+                    onNext();
+                  }
+                }, 1500);
               }
-            }, 1500);
+            } catch (analysisError) {
+              console.error('❌ [Payment] Analysis execution error:', analysisError);
+              // Still navigate to dashboard - they paid, so show what we have
+              setTimeout(() => {
+                if (onNext) {
+                  onNext();
+                }
+              }, 1500);
+            }
           } else if (response.paymentStatus === 'pending') {
             setPaymentVerificationResult('pending');
           } else {
@@ -1069,13 +1151,34 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
                   <span className="text-sm text-gray-600">Data Processing ({(totalDataRows || analysisResults.dataSize).toLocaleString()} rows)</span>
                   <span className="font-medium">${backendCostEstimate?.breakdown?.dataProcessing?.toFixed(2) ?? ((totalDataRows / 1000) * 0.10).toFixed(2)}</span>
                 </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-gray-600">Analysis Execution ({analysisResults.totalAnalyses || 1} {analysisResults.totalAnalyses === 1 ? 'type' : 'types'})</span>
-                  <span className="font-medium">${backendCostEstimate?.breakdown?.analysisExecution?.toFixed(2) ?? (1.0 * Math.max(1, analysisResults.totalAnalyses)).toFixed(2)}</span>
-                </div>
+
+                {/* P0-8 FIX: Show per-analysis breakdown if available */}
+                {backendCostEstimate?.breakdown?.perAnalysisBreakdown && backendCostEstimate.breakdown.perAnalysisBreakdown.length > 0 ? (
+                  <>
+                    <div className="text-sm text-gray-600 font-medium mt-2">Analysis Breakdown ({backendCostEstimate.breakdown.perAnalysisBreakdown.length} types):</div>
+                    <div className="pl-4 space-y-1 border-l-2 border-blue-100 ml-2">
+                      {backendCostEstimate.breakdown.perAnalysisBreakdown.map((analysis: { type: string; cost: number }, idx: number) => (
+                        <div key={idx} className="flex justify-between items-center text-sm">
+                          <span className="text-gray-500">{analysis.type}</span>
+                          <span className="font-medium text-gray-700">${analysis.cost.toFixed(2)}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex justify-between items-center border-t pt-2">
+                      <span className="text-sm text-gray-600">Analysis Subtotal</span>
+                      <span className="font-medium">${backendCostEstimate?.breakdown?.analysisExecution?.toFixed(2) ?? '0.00'}</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-gray-600">Analysis Execution ({analysisResults.totalAnalyses || 1} {analysisResults.totalAnalyses === 1 ? 'type' : 'types'})</span>
+                    <span className="font-medium">${backendCostEstimate?.breakdown?.analysisExecution?.toFixed(2) ?? (1.0 * Math.max(1, analysisResults.totalAnalyses)).toFixed(2)}</span>
+                  </div>
+                )}
+
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-gray-600">Analysis Count</span>
-                  <span className="font-medium">{analysisResults.totalAnalyses || 1} {isPreExecution ? '(planned)' : ''}</span>
+                  <span className="font-medium">{analysisResults.totalAnalyses || backendCostEstimate?.breakdown?.perAnalysisBreakdown?.length || 1} {isPreExecution ? '(planned)' : ''}</span>
                 </div>
               </>
             )}
@@ -1186,6 +1289,13 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
                     </span>
                     {plan.id !== 'enterprise' && (
                       <span className="text-sm text-gray-600 ml-1">/analysis</span>
+                    )}
+                    {/* P1-1 FIX: Show locked badge when cost is confirmed */}
+                    {plan.locked && plan.id === 'per-analysis' && (
+                      <Badge className="ml-2 bg-green-100 text-green-800 text-xs">
+                        <Shield className="w-3 h-3 mr-1" />
+                        Price Locked
+                      </Badge>
                     )}
                   </div>
                 </div>

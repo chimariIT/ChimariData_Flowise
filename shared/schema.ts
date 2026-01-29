@@ -116,6 +116,24 @@ export const dataProjectSchema = z.object({
   recordCount: z.number().optional(),
   data: z.array(z.record(z.any())).optional(), // Store actual data rows
   processed: z.boolean().default(false),
+  // Database lifecycle fields (from projects table) - all optional for insert compatibility
+  status: z.string().optional(), // "draft", "uploading", "processing", "ready", "completed", "error"
+  createdAt: z.union([z.date(), z.string()]).optional(), // When project was created
+  updatedAt: z.union([z.date(), z.string()]).optional(), // When project was last updated
+  lastModified: z.union([z.date(), z.string()]).optional(), // Alias for updatedAt for compatibility
+  // Journey lifecycle fields (from projects table)
+  lastArtifactId: z.string().optional(), // Quick reference to latest artifact
+  consultationProposalId: z.string().optional(), // Legacy column
+  approvedPlanId: z.string().optional(), // Approved analysis plan
+  analysisExecutedAt: z.union([z.date(), z.string()]).optional(), // When analysis was executed
+  analysisBilledAt: z.union([z.date(), z.string()]).optional(), // When analysis was billed
+  lockedCostEstimate: z.union([z.number(), z.string()]).optional(), // Locked cost at checkout
+  // Journey state tracking fields
+  stepCompletionStatus: z.record(z.boolean()).optional(), // { "prepare": true, "data": true, ... }
+  lastAccessedStep: z.string().optional(), // Last step user visited
+  journeyStartedAt: z.union([z.date(), z.string()]).optional(), // When journey started
+  journeyCompletedAt: z.union([z.date(), z.string()]).optional(), // When journey completed
+  journeyProgress: z.lazy(() => journeyProgressSchema).optional(), // Full journey progress state (JSONB) - uses lazy to avoid circular reference
   // Advanced upload capabilities
   piiAnalysis: z.object({
     detectedPII: z.array(z.string()).optional(),
@@ -259,6 +277,406 @@ export const insertDataProjectSchema = dataProjectSchema.omit({
 
 export type InsertDataProject = z.infer<typeof insertDataProjectSchema>;
 
+// ============================================================================
+// INGESTION METADATA SCHEMA - Comprehensive JSONB validation for datasets
+// ============================================================================
+// This schema validates the ingestionMetadata JSONB field in the datasets table.
+// It contains all metadata generated during file processing, transformation,
+// and analysis preparation.
+
+// Sub-schemas for nested objects
+export const datasetSummarySchema = z.object({
+  overview: z.string().optional(),
+  dataTypes: z.record(z.string()).optional(),
+  columnCount: z.number().optional(),
+  numericColumns: z.array(z.string()).optional(),
+  categoricalColumns: z.array(z.string()).optional(),
+  dateColumns: z.array(z.string()).optional(),
+  textColumns: z.array(z.string()).optional(),
+}).passthrough(); // Allow additional fields
+
+export const descriptiveStatsSchema = z.object({
+  columns: z.record(z.object({
+    count: z.number().optional(),
+    mean: z.number().nullable().optional(),
+    std: z.number().nullable().optional(),
+    min: z.union([z.number(), z.string()]).nullable().optional(),
+    max: z.union([z.number(), z.string()]).nullable().optional(),
+    median: z.number().nullable().optional(),
+    mode: z.union([z.number(), z.string(), z.array(z.any())]).nullable().optional(),
+    uniqueCount: z.number().optional(),
+    nullCount: z.number().optional(),
+    nullPercentage: z.number().optional(),
+  }).passthrough()).optional(),
+}).passthrough();
+
+export const qualityMetricsSchema = z.object({
+  totalRows: z.number().optional(),
+  totalColumns: z.number().optional(),
+  completeness: z.number().optional(), // 0-1 or 0-100
+  duplicateRows: z.number().optional(),
+  duplicatePercentage: z.number().optional(),
+  potentialPIIFields: z.array(z.string()).optional(),
+  dataQualityScore: z.number().optional(), // 0-100
+  qualityScore: z.number().optional(), // Alias
+  overallScore: z.number().optional(), // Alias
+  issues: z.array(z.object({
+    type: z.string(),
+    severity: z.enum(["low", "medium", "high", "critical"]).optional(),
+    description: z.string().optional(),
+    affectedColumns: z.array(z.string()).optional(),
+  }).passthrough()).optional(),
+  recommendations: z.array(z.string()).optional(),
+  columnQuality: z.record(z.object({
+    completeness: z.number().optional(),
+    uniqueness: z.number().optional(),
+    validity: z.number().optional(),
+  }).passthrough()).optional(),
+}).passthrough();
+
+export const joinConfigSchema = z.object({
+  foreignKeys: z.array(z.object({
+    sourceTable: z.string().optional(),
+    sourceColumn: z.string(),
+    targetTable: z.string().optional(),
+    targetColumn: z.string(),
+    joinType: z.enum(["inner", "left", "right", "outer", "cross"]).optional(),
+    confidence: z.number().optional(),
+  }).passthrough()).optional(),
+  tables: z.array(z.string()).optional(),
+  joinType: z.enum(["inner", "left", "right", "outer", "cross"]).optional(),
+  autoDetected: z.boolean().optional(),
+}).passthrough();
+
+export const columnMappingSchema = z.object({
+  sourceColumn: z.string().optional(),
+  sourceColumns: z.array(z.string()).optional(), // For aggregation
+  targetElement: z.string().optional(),
+  transformationType: z.string().optional(),
+  transformationRequired: z.boolean().optional(),
+  suggestedTransformation: z.string().optional(),
+  userDefinedLogic: z.string().optional(),
+  aggregationFunction: z.string().optional(),
+  confidence: z.number().optional(),
+  derivationPath: z.string().optional(),
+}).passthrough();
+
+export const relationshipSchema = z.object({
+  sourceColumn: z.string(),
+  targetColumn: z.string(),
+  relationship: z.string().optional(), // "1:1", "1:N", "N:N", etc.
+  confidence: z.number().optional(),
+  joinable: z.boolean().optional(),
+}).passthrough();
+
+export const piiAnalysisResultSchema = z.object({
+  hasPII: z.boolean().optional(),
+  confidence: z.number().optional(),
+  detectedFields: z.array(z.object({
+    column: z.string(),
+    piiType: z.string(), // "email", "phone", "ssn", "name", etc.
+    confidence: z.number().optional(),
+    sampleValue: z.string().optional(),
+    action: z.enum(["remove", "mask", "anonymize", "keep"]).optional(),
+  }).passthrough()).optional(),
+  recommendations: z.array(z.string()).optional(),
+}).passthrough();
+
+export const dataRequirementsDocumentSchema = z.object({
+  projectId: z.string().optional(),
+  userQuestions: z.array(z.any()).optional(),
+  requiredDataElements: z.array(z.object({
+    name: z.string(),
+    description: z.string().optional(),
+    dataType: z.string().optional(),
+    required: z.boolean().optional(),
+    sourceColumn: z.string().optional(),
+    derivationPath: z.string().optional(),
+    calculationDefinition: z.any().optional(),
+  }).passthrough()).optional(),
+  analysisPath: z.array(z.any()).optional(),
+  questionAnswerMapping: z.array(z.any()).optional(),
+  transformationPlan: z.any().optional(),
+  semanticReferences: z.any().optional(),
+  generatedAt: z.string().optional(),
+  generatedBy: z.string().optional(),
+}).passthrough();
+
+// Main ingestionMetadata schema
+export const ingestionMetadataSchema = z.object({
+  // === Core file metadata ===
+  recordCount: z.number().optional(),
+  transformedRowCount: z.number().optional(),
+  fileSize: z.number().optional(),
+  fileType: z.string().optional(),
+  fileName: z.string().optional(),
+  checksum: z.string().optional(),
+  dataType: z.string().optional(), // "tabular", "document", "timeseries"
+  mode: z.string().optional(), // "static", "stream", "refreshable"
+  retentionDays: z.number().optional(),
+  generatedAt: z.string().optional(), // ISO date string
+
+  // === Data description ===
+  dataDescription: z.string().optional(),
+  datasetSummary: datasetSummarySchema.optional(),
+
+  // === Statistics and quality ===
+  descriptiveStats: descriptiveStatsSchema.optional(),
+  qualityMetrics: qualityMetricsSchema.optional(),
+  joinedQualityMetrics: qualityMetricsSchema.optional(), // After multi-dataset join
+
+  // === Relationships and schema ===
+  relationships: z.array(relationshipSchema).optional(),
+  preview: z.array(z.record(z.any())).optional(), // Sample rows
+  schema: z.record(z.object({
+    type: z.string(),
+    nullable: z.boolean().optional(),
+    sampleValues: z.array(z.string()).optional(),
+    description: z.string().optional(),
+    isPII: z.boolean().optional(),
+    isUniqueIdentifier: z.boolean().optional(),
+  }).passthrough()).optional(),
+  transformedSchema: z.record(z.object({
+    type: z.string(),
+    nullable: z.boolean().optional(),
+  }).passthrough()).optional(),
+  transformedData: z.array(z.record(z.any())).optional(),
+
+  // === Transformation configuration ===
+  joinConfig: joinConfigSchema.optional(),
+  columnMappings: z.union([
+    z.record(columnMappingSchema), // Object form
+    z.array(columnMappingSchema),  // Array form
+  ]).optional(),
+  mappings: z.array(columnMappingSchema).optional(),
+  transformationRules: z.array(z.object({
+    targetElement: z.string(),
+    rule: z.string(),
+    sourceColumns: z.array(z.string()).optional(),
+    aggregationFunction: z.string().optional(),
+  }).passthrough()).optional(),
+  transformationMappings: z.record(columnMappingSchema).optional(),
+  transformedAt: z.string().optional(), // ISO date string
+
+  // === PII handling ===
+  piiAnalysis: piiAnalysisResultSchema.optional(),
+  piiMaskingChoices: z.record(z.object({
+    action: z.enum(["remove", "mask", "anonymize", "keep"]),
+    maskPattern: z.string().optional(),
+  }).passthrough()).optional(),
+  piiColumnsRemoved: z.array(z.string()).optional(),
+  excludedColumns: z.array(z.string()).optional(),
+
+  // === Agent outputs ===
+  dataRequirementsDocument: dataRequirementsDocumentSchema.optional(),
+  deAgentRecommendations: z.object({
+    joinRecommendations: z.array(z.any()).optional(),
+    qualityImprovements: z.array(z.any()).optional(),
+    transformationSuggestions: z.array(z.any()).optional(),
+    dataEnrichment: z.array(z.any()).optional(),
+    generatedAt: z.string().optional(),
+  }).passthrough().optional(),
+
+}).passthrough(); // Allow additional fields for forward compatibility
+
+export type IngestionMetadata = z.infer<typeof ingestionMetadataSchema>;
+export type DatasetSummary = z.infer<typeof datasetSummarySchema>;
+export type DescriptiveStats = z.infer<typeof descriptiveStatsSchema>;
+export type QualityMetrics = z.infer<typeof qualityMetricsSchema>;
+export type JoinConfig = z.infer<typeof joinConfigSchema>;
+export type ColumnMapping = z.infer<typeof columnMappingSchema>;
+export type Relationship = z.infer<typeof relationshipSchema>;
+export type PIIAnalysisResult = z.infer<typeof piiAnalysisResultSchema>;
+export type DataRequirementsDocument = z.infer<typeof dataRequirementsDocumentSchema>;
+
+// ============================================================================
+// JOURNEY PROGRESS SCHEMA - Comprehensive JSONB validation for project state
+// ============================================================================
+// This schema validates the journeyProgress JSONB field in the projects table.
+// It contains all state for the user's analysis journey, from data upload to results.
+
+// PII Decisions schema (SSOT for PII handling)
+export const piiDecisionsSchema = z.object({
+  hasPII: z.boolean().optional(),
+  userDecision: z.enum(["exclude", "mask", "anonymize", "keep", "remove"]).optional(),
+  selectedColumns: z.array(z.string()).optional(), // Columns user chose to exclude/mask
+  excludedColumns: z.array(z.string()).optional(), // Alias for selectedColumns
+  piiColumnsRemoved: z.array(z.string()).optional(), // Final list of removed columns
+  maskingStrategy: z.string().optional(),
+  anonymizationApplied: z.boolean().optional(),
+  userConfirmedAt: z.string().optional(), // ISO date
+  detectedFields: z.array(z.object({
+    column: z.string(),
+    piiType: z.string(),
+    confidence: z.number().optional(),
+    action: z.string().optional(),
+  }).passthrough()).optional(),
+}).passthrough();
+
+// Joined data schema (for multi-dataset joins)
+export const joinedDataSchema = z.object({
+  schema: z.record(z.object({
+    type: z.string(),
+    nullable: z.boolean().optional(),
+  }).passthrough()).optional(),
+  preview: z.array(z.record(z.any())).optional(),
+  rowCount: z.number().optional(),
+  joinConfig: joinConfigSchema.optional(),
+  joinedAt: z.string().optional(),
+}).passthrough();
+
+// Execution config schema
+export const executionConfigSchema = z.object({
+  analysisPath: z.array(z.object({
+    type: z.string(),
+    name: z.string().optional(),
+    priority: z.number().optional(),
+    requiredElements: z.array(z.string()).optional(),
+    config: z.any().optional(),
+  }).passthrough()).optional(),
+  targetAudience: z.string().optional(),
+  outputFormat: z.string().optional(),
+  generateVisualization: z.boolean().optional(),
+  generateReport: z.boolean().optional(),
+  questionAnswerMapping: z.array(z.any()).optional(),
+}).passthrough();
+
+// Researcher recommendation schema
+export const researcherRecommendationSchema = z.object({
+  template: z.any().optional(),
+  confidence: z.number().optional(),
+  marketDemand: z.string().optional(),
+  implementationComplexity: z.string().optional(),
+  alternativeTemplates: z.array(z.any()).optional(),
+  recommendedAt: z.string().optional(),
+  searchMethod: z.string().optional(),
+}).passthrough();
+
+// Business Agent translation results
+export const translatedResultsSchema = z.object({
+  executive: z.object({
+    summary: z.string().optional(),
+    keyFindings: z.array(z.string()).optional(),
+    recommendations: z.array(z.string()).optional(),
+    impact: z.string().optional(),
+  }).passthrough().optional(),
+  technical: z.object({
+    methodology: z.string().optional(),
+    technicalDetails: z.any().optional(),
+    limitations: z.array(z.string()).optional(),
+  }).passthrough().optional(),
+  analyst: z.object({
+    detailedAnalysis: z.any().optional(),
+    dataQuality: z.any().optional(),
+    furtherAnalysis: z.array(z.string()).optional(),
+  }).passthrough().optional(),
+  translatedAt: z.string().optional(),
+}).passthrough();
+
+// Main journeyProgress schema
+export const journeyProgressSchema = z.object({
+  // === Step tracking ===
+  currentStep: z.string().optional(), // "prepare", "data", "verification", "transformation", "plan", "pricing", "execute", "results"
+  completedSteps: z.array(z.string()).optional(),
+  stepTimestamps: z.record(z.string()).optional(), // { "prepare": "2024-01-01T...", ... }
+  lastAccessedStep: z.string().optional(),
+
+  // === User input ===
+  userQuestions: z.array(z.object({
+    id: z.string().optional(),
+    question: z.string(),
+    category: z.string().optional(),
+    priority: z.number().optional(),
+    createdAt: z.string().optional(),
+  }).passthrough()).optional(),
+  businessQuestions: z.array(z.any()).optional(), // Alias for userQuestions
+  goals: z.array(z.string()).optional(),
+  analysisGoal: z.string().optional(),
+  industry: z.string().optional(),
+
+  // === Requirements (SSOT for analysis requirements) ===
+  requirementsDocument: dataRequirementsDocumentSchema.optional(),
+  requirementsLocked: z.boolean().optional(),
+
+  // === PII handling (SSOT for PII decisions) ===
+  piiDecisions: piiDecisionsSchema.optional(), // Preferred SSOT location
+  piiDecision: piiDecisionsSchema.optional(), // Alias for backwards compatibility
+
+  // === Data transformation ===
+  joinedData: joinedDataSchema.optional(),
+  transformedSchema: z.record(z.object({
+    type: z.string(),
+    nullable: z.boolean().optional(),
+  }).passthrough()).optional(),
+  joinedSchema: z.record(z.any()).optional(), // Alias
+  dataTransformation: z.object({
+    transformedSchema: z.any().optional(),
+    transformedData: z.array(z.any()).optional(),
+    transformedAt: z.string().optional(),
+    transformationRules: z.array(z.any()).optional(),
+  }).passthrough().optional(),
+  transformationPlan: z.any().optional(),
+  schema: z.record(z.any()).optional(), // Original schema
+
+  // === Cost estimation (SSOT for pricing) ===
+  lockedCostEstimate: z.number().optional(), // Final locked price
+  costBreakdown: z.object({
+    base: z.number().optional(),
+    perRow: z.number().optional(),
+    typeMultiplier: z.number().optional(),
+    total: z.number().optional(),
+    analysisTypes: z.array(z.string()).optional(),
+    rowCount: z.number().optional(),
+  }).passthrough().optional(),
+  costLockedAt: z.string().optional(),
+
+  // === Execution ===
+  executionConfig: executionConfigSchema.optional(),
+  lastCreditDeductionId: z.string().optional(),
+  executedAt: z.string().optional(),
+  executionStatus: z.enum(["pending", "running", "completed", "failed"]).optional(),
+  generateVisualization: z.boolean().optional(),
+
+  // === Artifacts ===
+  artifactStatus: z.enum(["pending", "generating", "ready", "failed"]).optional(),
+  artifactGeneratedAt: z.string().optional(),
+  lastArtifactId: z.string().optional(),
+
+  // === Research and templates ===
+  researcherRecommendation: researcherRecommendationSchema.optional(),
+
+  // === Plan approval ===
+  approvedPlanId: z.string().optional(),
+  planApprovedAt: z.string().optional(),
+
+  // === Business Agent results ===
+  translatedResults: translatedResultsSchema.optional(),
+  businessImpact: z.object({
+    roi: z.string().optional(),
+    costSavings: z.string().optional(),
+    recommendations: z.array(z.string()).optional(),
+    risks: z.array(z.string()).optional(),
+  }).passthrough().optional(),
+  industryInsights: z.array(z.object({
+    insight: z.string(),
+    relevance: z.number().optional(),
+    source: z.string().optional(),
+  }).passthrough()).optional(),
+
+  // === Verification and quality ===
+  dataQualityApproved: z.boolean().optional(),
+  dataQualityScore: z.number().optional(),
+  verificationStatus: z.enum(["pending", "approved", "rejected"]).optional(),
+
+}).passthrough(); // Allow additional fields for forward compatibility
+
+export type JourneyProgress = z.infer<typeof journeyProgressSchema>;
+export type PIIDecisions = z.infer<typeof piiDecisionsSchema>;
+export type JoinedData = z.infer<typeof joinedDataSchema>;
+export type ExecutionConfig = z.infer<typeof executionConfigSchema>;
+export type ResearcherRecommendation = z.infer<typeof researcherRecommendationSchema>;
+export type TranslatedResults = z.infer<typeof translatedResultsSchema>;
+
 // Pricing tiers
 export const pricingTierSchema = z.object({
   transformation: z.number().default(15),
@@ -349,7 +767,7 @@ export const users = pgTable("users", {
 
   // Subscription and payment tiers
   subscriptionTier: varchar("subscription_tier").notNull().default("none").$type<"none" | "trial" | "starter" | "professional" | "enterprise">(), // Admin-configured tiers tied to Stripe
-  subscriptionStatus: varchar("subscription_status").default("inactive").$type<"active" | "inactive" | "cancelled" | "past_due" | "expired">(), // Stripe subscription status
+  subscriptionStatus: varchar("subscription_status").default("inactive").$type<"active" | "inactive" | "cancelled" | "past_due" | "expired" | "incomplete" | "trialing">(), // Stripe subscription status
   stripeCustomerId: varchar("stripe_customer_id"),
   stripeSubscriptionId: varchar("stripe_subscription_id"),
   subscriptionExpiresAt: timestamp("subscription_expires_at"),
@@ -395,7 +813,7 @@ export const users = pgTable("users", {
     sql`${table.subscriptionTier} IN ('none', 'trial', 'starter', 'professional', 'enterprise')`
   ),
   subscriptionStatusCheck: check("subscription_status_check",
-    sql`${table.subscriptionStatus} IN ('active', 'inactive', 'cancelled', 'past_due', 'expired')`
+    sql`${table.subscriptionStatus} IN ('active', 'inactive', 'cancelled', 'past_due', 'expired', 'incomplete', 'trialing')`
   ),
   userRoleCheck: check("user_role_check",
     sql`${table.userRole} IN ('non-tech', 'business', 'technical', 'consultation', 'custom')`
@@ -604,6 +1022,35 @@ export const projectArtifacts = pgTable("project_artifacts", {
   parentArtifactIdx: index("parent_artifact_idx").on(table.parentArtifactId),
   typeStatusIdx: index("project_artifacts_type_status_idx").on(table.type, table.status),
   createdAtIdx: index("project_artifacts_created_at_idx").on(table.createdAt),
+}));
+
+// Semantic links - Question -> Data Element -> Transformation -> Analysis linkage
+// Enables full traceability: "How did we answer this question?"
+export const semanticLinks = pgTable("semantic_links", {
+  id: varchar("id").primaryKey().$defaultFn(() => nanoid()),
+  projectId: varchar("project_id").notNull(),
+  linkType: varchar("link_type", { length: 50 }).notNull(), // 'question_element', 'element_transformation', 'transformation_analysis'
+  sourceId: varchar("source_id").notNull(),
+  sourceType: varchar("source_type", { length: 50 }), // 'question', 'element', 'transformation', 'analysis'
+  targetId: varchar("target_id").notNull(),
+  targetType: varchar("target_type", { length: 50 }), // 'element', 'transformation', 'analysis', 'insight'
+  confidence: decimal("confidence", { precision: 5, scale: 4 }), // 0.0000 - 1.0000
+  metadata: jsonb("metadata"), // Additional context about the link
+  createdAt: timestamp("created_at").defaultNow(),
+  createdBy: varchar("created_by", { length: 50 }), // 'ds_agent', 'de_agent', 'pm_agent', 'user', etc.
+}, (table) => ({
+  projectIdFk: foreignKey({
+    columns: [table.projectId],
+    foreignColumns: [projects.id],
+    name: "semantic_links_project_id_fk"
+  }).onDelete("cascade"),
+  linkTypeCheck: check("semantic_links_type_check",
+    sql`${table.linkType} IN ('question_element', 'element_transformation', 'transformation_analysis', 'analysis_insight', 'question_answer')`
+  ),
+  projectLinkTypeIdx: index("semantic_links_project_type_idx").on(table.projectId, table.linkType),
+  sourceIdx: index("semantic_links_source_idx").on(table.sourceId, table.sourceType),
+  targetIdx: index("semantic_links_target_idx").on(table.targetId, table.targetType),
+  createdAtIdx: index("semantic_links_created_at_idx").on(table.createdAt),
 }));
 
 // Analysis plans generated during the plan step workflow
@@ -836,6 +1283,29 @@ export const dePiiDetections = pgTable("de_pii_detections", {
   projectIdIdx: index("de_pii_detections_project_id_idx").on(table.projectId),
   columnNameIdx: index("de_pii_detections_column_name_idx").on(table.columnName),
   actionIdx: index("de_pii_detections_action_idx").on(table.action),
+}));
+
+// Column Embeddings - pre-computed embeddings for RAG-based column matching
+// Generated asynchronously after data upload/join/PII processing
+// Enables fast semantic matching between abstract DS Agent field names and actual dataset columns
+export const columnEmbeddings = pgTable("column_embeddings", {
+  id: serial("id").primaryKey(),
+  datasetId: text("dataset_id").notNull(), // Reference to datasets table
+  projectId: text("project_id").notNull(), // Reference to projects table
+  columnName: text("column_name").notNull(), // Original column name from dataset
+  normalizedName: text("normalized_name").notNull(), // Lowercase, no special chars for quick lookup
+  embedding: text("embedding").notNull(), // JSON array of embedding vector (1536 dimensions)
+  embeddingModel: text("embedding_model").default("text-embedding-3-small"), // Model used to generate
+  columnType: text("column_type"), // 'string', 'number', 'date', 'boolean', etc.
+  sampleValues: jsonb("sample_values"), // First 5 unique values for context
+  metadata: jsonb("metadata"), // Additional context (context string, semantic hints)
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  datasetIdIdx: index("column_embeddings_dataset_id_idx").on(table.datasetId),
+  projectIdIdx: index("column_embeddings_project_id_idx").on(table.projectId),
+  columnNameIdx: index("column_embeddings_column_name_idx").on(table.columnName),
+  normalizedNameIdx: index("column_embeddings_normalized_name_idx").on(table.normalizedName),
 }));
 
 // Enterprise inquiries table
@@ -1509,11 +1979,55 @@ export const templateFeedback = pgTable("template_feedback", {
 }));
 
 // New insert schemas for new tables
+// Dataset insert schema with proper ingestionMetadata typing
 export const insertDatasetSchema = createInsertSchema(datasets).omit({
   id: true,
   createdAt: true,
   updatedAt: true,
+}).extend({
+  // Override the generic jsonb with our typed schema
+  ingestionMetadata: ingestionMetadataSchema.optional(),
+  piiAnalysis: piiAnalysisResultSchema.optional(),
 });
+
+export type InsertDataset = z.infer<typeof insertDatasetSchema>;
+
+// Full dataset response schema (for API responses)
+export const datasetResponseSchema = z.object({
+  id: z.string(),
+  userId: z.string(),
+  sourceType: z.string().default("upload"),
+  originalFileName: z.string(),
+  mimeType: z.string(),
+  fileSize: z.number(),
+  checksum: z.string().nullable().optional(),
+  storageUri: z.string(),
+  dataType: z.string().default("tabular"),
+  schema: z.record(z.object({
+    type: z.string(),
+    nullable: z.boolean().optional(),
+    sampleValues: z.array(z.string()).optional(),
+    description: z.string().optional(),
+    isPII: z.boolean().optional(),
+    isUniqueIdentifier: z.boolean().optional(),
+  }).passthrough()).nullable().optional(),
+  recordCount: z.number().nullable().optional(),
+  preview: z.array(z.record(z.any())).nullable().optional(),
+  piiAnalysis: piiAnalysisResultSchema.nullable().optional(),
+  ingestionMetadata: ingestionMetadataSchema.nullable().optional(),
+  status: z.string().default("ready"),
+  data: z.array(z.record(z.any())).nullable().optional(),
+  mode: z.string().default("static"),
+  retentionDays: z.number().nullable().optional(),
+  createdAt: z.union([z.date(), z.string()]).optional(),
+  updatedAt: z.union([z.date(), z.string()]).optional(),
+  // Virtual fields computed for UI
+  transformedSchema: z.record(z.any()).optional(),
+  transformedPreview: z.array(z.record(z.any())).optional(),
+  hasTransformations: z.boolean().optional(),
+});
+
+export type DatasetResponse = z.infer<typeof datasetResponseSchema>;
 
 export const insertProjectDatasetSchema = createInsertSchema(projectDatasets).omit({
   id: true,
@@ -1524,6 +2038,11 @@ export const insertProjectArtifactSchema = createInsertSchema(projectArtifacts).
   id: true,
   createdAt: true,
   updatedAt: true,
+});
+
+export const insertSemanticLinkSchema = createInsertSchema(semanticLinks).omit({
+  id: true,
+  createdAt: true,
 });
 
 export const insertAudienceProfileSchema = createInsertSchema(audienceProfiles).omit({
@@ -1671,6 +2190,879 @@ export const insertAnalysisPlanSchemaDb = createInsertSchema(analysisPlans).omit
   createdAt: true,
   updatedAt: true,
 });
+
+// ============================================================================
+// PRIORITY 2: Critical Table Schemas
+// ============================================================================
+
+// === Project Questions Schema ===
+// Stores user questions for analysis with semantic embeddings for cross-project learning
+
+export const questionEvidenceSchema = z.object({
+  sourceData: z.any().optional(),
+  sourceColumns: z.array(z.string()).optional(),
+  statisticalSupport: z.object({
+    correlation: z.number().optional(),
+    pValue: z.number().optional(),
+    confidence: z.number().optional(),
+    sampleSize: z.number().optional(),
+  }).passthrough().optional(),
+  visualizationRef: z.string().optional(),
+  analysisRef: z.string().optional(),
+}).passthrough();
+
+export const insertProjectQuestionSchema = createInsertSchema(projectQuestions).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  answeredAt: true,
+}).extend({
+  evidence: questionEvidenceSchema.optional(),
+});
+
+export const projectQuestionResponseSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  questionText: z.string(),
+  questionOrder: z.number().optional(),
+  status: z.enum(["pending", "answered", "skipped", "in_progress"]).optional(),
+  answer: z.string().nullable().optional(),
+  evidence: questionEvidenceSchema.nullable().optional(),
+  confidenceScore: z.number().nullable().optional(),
+  answeredAt: z.union([z.date(), z.string()]).nullable().optional(),
+  embedding: z.array(z.number()).nullable().optional(),
+  createdAt: z.union([z.date(), z.string()]).optional(),
+  updatedAt: z.union([z.date(), z.string()]).optional(),
+});
+
+export type InsertProjectQuestion = z.infer<typeof insertProjectQuestionSchema>;
+export type ProjectQuestionResponse = z.infer<typeof projectQuestionResponseSchema>;
+export type QuestionEvidence = z.infer<typeof questionEvidenceSchema>;
+
+// === DS Analysis Results Schema ===
+// Stores structured analysis outputs from Data Scientist agent
+
+export const analysisResultDataSchema = z.object({
+  // Common analysis fields
+  summary: z.string().optional(),
+  findings: z.array(z.string()).optional(),
+  recommendations: z.array(z.string()).optional(),
+  // Correlation analysis
+  correlationMatrix: z.record(z.record(z.number())).optional(),
+  significantCorrelations: z.array(z.object({
+    variable1: z.string(),
+    variable2: z.string(),
+    correlation: z.number(),
+    pValue: z.number().optional(),
+  }).passthrough()).optional(),
+  // Regression analysis
+  regressionCoefficients: z.record(z.number()).optional(),
+  rSquared: z.number().optional(),
+  adjustedRSquared: z.number().optional(),
+  residuals: z.array(z.number()).optional(),
+  // Clustering analysis
+  clusters: z.array(z.object({
+    id: z.number(),
+    centroid: z.record(z.number()).optional(),
+    size: z.number(),
+    members: z.array(z.number()).optional(),
+  }).passthrough()).optional(),
+  optimalK: z.number().optional(),
+  silhouetteScore: z.number().optional(),
+  // Time series
+  trend: z.string().optional(),
+  seasonality: z.any().optional(),
+  forecast: z.array(z.object({
+    date: z.string(),
+    value: z.number(),
+    lowerBound: z.number().optional(),
+    upperBound: z.number().optional(),
+  }).passthrough()).optional(),
+  // Descriptive stats
+  descriptiveStats: z.record(z.any()).optional(),
+}).passthrough();
+
+export const analysisStatisticsSchema = z.object({
+  sampleSize: z.number().optional(),
+  meanValues: z.record(z.number()).optional(),
+  standardDeviations: z.record(z.number()).optional(),
+  pValues: z.record(z.number()).optional(),
+  confidenceIntervals: z.record(z.object({
+    lower: z.number(),
+    upper: z.number(),
+    level: z.number().optional(),
+  }).passthrough()).optional(),
+  testStatistics: z.record(z.number()).optional(),
+  effectSizes: z.record(z.number()).optional(),
+}).passthrough();
+
+export const visualizationConfigSchema = z.object({
+  chartType: z.enum(["line", "bar", "scatter", "pie", "heatmap", "boxplot", "histogram", "area"]).optional(),
+  title: z.string().optional(),
+  xAxis: z.object({
+    field: z.string(),
+    label: z.string().optional(),
+  }).optional(),
+  yAxis: z.object({
+    field: z.string(),
+    label: z.string().optional(),
+  }).optional(),
+  series: z.array(z.object({
+    field: z.string(),
+    name: z.string().optional(),
+    color: z.string().optional(),
+  }).passthrough()).optional(),
+  legend: z.boolean().optional(),
+  annotations: z.array(z.any()).optional(),
+}).passthrough();
+
+export const insertDsAnalysisResultSchema = createInsertSchema(dsAnalysisResults).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  resultData: analysisResultDataSchema.optional(),
+  statistics: analysisStatisticsSchema.optional(),
+  visualizationConfig: visualizationConfigSchema.optional(),
+});
+
+export const dsAnalysisResultResponseSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  executionId: z.string().nullable().optional(),
+  analysisType: z.string(),
+  resultData: analysisResultDataSchema.nullable().optional(),
+  statistics: analysisStatisticsSchema.nullable().optional(),
+  visualizationConfig: visualizationConfigSchema.nullable().optional(),
+  confidenceScore: z.number().nullable().optional(),
+  status: z.string().optional(),
+  createdAt: z.union([z.date(), z.string()]).optional(),
+  updatedAt: z.union([z.date(), z.string()]).optional(),
+});
+
+export type InsertDsAnalysisResult = z.infer<typeof insertDsAnalysisResultSchema>;
+export type DsAnalysisResultResponse = z.infer<typeof dsAnalysisResultResponseSchema>;
+export type AnalysisResultData = z.infer<typeof analysisResultDataSchema>;
+export type AnalysisStatistics = z.infer<typeof analysisStatisticsSchema>;
+export type VisualizationConfig = z.infer<typeof visualizationConfigSchema>;
+
+// === Insights Schema ===
+// AI-generated business insights from analysis
+
+export const insightEvidenceSchema = z.object({
+  dataPoints: z.array(z.record(z.any())).optional(),
+  sourceAnalysis: z.string().optional(),
+  sourceAnalysisId: z.string().optional(),
+  statisticalBasis: z.object({
+    metric: z.string().optional(),
+    value: z.number().optional(),
+    comparison: z.string().optional(),
+    significance: z.number().optional(),
+  }).passthrough().optional(),
+  supportingVisualizations: z.array(z.string()).optional(),
+  relatedQuestions: z.array(z.string()).optional(),
+}).passthrough();
+
+export const insertInsightSchema = createInsertSchema(insights).omit({
+  id: true,
+  createdAt: true,
+}).extend({
+  evidence: insightEvidenceSchema.optional(),
+  tags: z.array(z.string()).optional(),
+});
+
+export const insightResponseSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  executionId: z.string().nullable().optional(),
+  questionId: z.string().nullable().optional(),
+  insightType: z.enum(["key_finding", "recommendation", "warning", "opportunity", "trend", "anomaly"]),
+  title: z.string(),
+  description: z.string(),
+  evidence: insightEvidenceSchema.nullable().optional(),
+  confidence: z.number().nullable().optional(),
+  priority: z.number().optional(),
+  tags: z.array(z.string()).nullable().optional(),
+  createdAt: z.union([z.date(), z.string()]).optional(),
+});
+
+export type InsertInsight = z.infer<typeof insertInsightSchema>;
+export type InsightResponse = z.infer<typeof insightResponseSchema>;
+export type InsightEvidence = z.infer<typeof insightEvidenceSchema>;
+
+// === DE PII Detections Schema ===
+// Data Engineer PII detection and anonymization tracking
+
+export const insertDePiiDetectionSchema = createInsertSchema(dePiiDetections).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  decisionTimestamp: true,
+}).extend({
+  sampleValues: z.array(z.string()).optional(),
+});
+
+export const dePiiDetectionResponseSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  datasetId: z.string().nullable().optional(),
+  columnName: z.string(),
+  piiType: z.enum(["email", "phone", "ssn", "name", "address", "credit_card", "ip_address", "date_of_birth", "passport", "driver_license", "medical", "financial", "other"]),
+  confidence: z.number().nullable().optional(),
+  sampleValues: z.array(z.string()).nullable().optional(),
+  action: z.enum(["pending", "exclude", "anonymize", "mask", "keep"]).optional(),
+  anonymizationMethod: z.enum(["hash", "mask", "redact", "generalize", "pseudonymize"]).nullable().optional(),
+  userDecision: z.string().nullable().optional(),
+  decisionTimestamp: z.union([z.date(), z.string()]).nullable().optional(),
+  createdAt: z.union([z.date(), z.string()]).optional(),
+  updatedAt: z.union([z.date(), z.string()]).optional(),
+});
+
+export type InsertDePiiDetection = z.infer<typeof insertDePiiDetectionSchema>;
+export type DePiiDetectionResponse = z.infer<typeof dePiiDetectionResponseSchema>;
+
+// === Subscription Tier Pricing Schema ===
+// Admin-managed subscription tier configuration
+
+export const tierLimitsSchema = z.object({
+  maxProjects: z.number().optional(),
+  maxDatasetsPerProject: z.number().optional(),
+  maxRowsPerDataset: z.number().optional(),
+  maxFileSizeMB: z.number().optional(),
+  maxStorageGB: z.number().optional(),
+  maxAiQueriesPerMonth: z.number().optional(),
+  maxAnalysesPerMonth: z.number().optional(),
+  maxVisualizationsPerProject: z.number().optional(),
+  maxConcurrentJobs: z.number().optional(),
+  dataRetentionDays: z.number().optional(),
+}).passthrough();
+
+export const tierFeaturesSchema = z.object({
+  advancedAnalytics: z.boolean().optional(),
+  customBranding: z.boolean().optional(),
+  apiAccess: z.boolean().optional(),
+  prioritySupport: z.boolean().optional(),
+  ssoIntegration: z.boolean().optional(),
+  auditLogs: z.boolean().optional(),
+  customReports: z.boolean().optional(),
+  teamCollaboration: z.boolean().optional(),
+  whiteLabel: z.boolean().optional(),
+  dedicatedSupport: z.boolean().optional(),
+}).passthrough();
+
+export const journeyPricingSchema = z.object({
+  nonTech: z.number().optional(),
+  business: z.number().optional(),
+  technical: z.number().optional(),
+  consultation: z.number().optional(),
+  custom: z.number().optional(),
+}).passthrough();
+
+export const overagePricingSchema = z.object({
+  perExtraProject: z.number().optional(),
+  perExtraGB: z.number().optional(),
+  perExtraAnalysis: z.number().optional(),
+  perExtraAiQuery: z.number().optional(),
+}).passthrough();
+
+export const tierDiscountsSchema = z.object({
+  yearlyDiscount: z.number().optional(), // Percentage
+  volumeDiscount: z.record(z.number()).optional(), // { "5+": 10, "10+": 20 }
+  referralDiscount: z.number().optional(),
+}).passthrough();
+
+export const tierComplianceSchema = z.object({
+  hipaaCompliant: z.boolean().optional(),
+  gdprCompliant: z.boolean().optional(),
+  soc2Compliant: z.boolean().optional(),
+  dataResidency: z.array(z.string()).optional(), // ['us', 'eu', 'apac']
+}).passthrough();
+
+export const insertSubscriptionTierPricingSchema = createInsertSchema(subscriptionTierPricing).omit({
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  limits: tierLimitsSchema,
+  features: tierFeaturesSchema,
+  journeyPricing: journeyPricingSchema.optional(),
+  overagePricing: overagePricingSchema.optional(),
+  discounts: tierDiscountsSchema.optional(),
+  compliance: tierComplianceSchema.optional(),
+});
+
+export const subscriptionTierPricingResponseSchema = z.object({
+  id: z.string(), // 'trial', 'starter', 'professional', 'enterprise'
+  name: z.string(),
+  displayName: z.string(),
+  description: z.string().nullable().optional(),
+  monthlyPriceUsd: z.number(), // In cents
+  yearlyPriceUsd: z.number(), // In cents
+  stripeProductId: z.string().nullable().optional(),
+  stripeMonthlyPriceId: z.string().nullable().optional(),
+  stripeYearlyPriceId: z.string().nullable().optional(),
+  limits: tierLimitsSchema,
+  features: tierFeaturesSchema,
+  journeyPricing: journeyPricingSchema.optional(),
+  overagePricing: overagePricingSchema.optional(),
+  discounts: tierDiscountsSchema.optional(),
+  compliance: tierComplianceSchema.optional(),
+  isActive: z.boolean().optional(),
+  createdAt: z.union([z.date(), z.string()]).optional(),
+  updatedAt: z.union([z.date(), z.string()]).optional(),
+});
+
+export type InsertSubscriptionTierPricing = z.infer<typeof insertSubscriptionTierPricingSchema>;
+export type SubscriptionTierPricingResponse = z.infer<typeof subscriptionTierPricingResponseSchema>;
+export type TierLimits = z.infer<typeof tierLimitsSchema>;
+export type TierFeatures = z.infer<typeof tierFeaturesSchema>;
+export type JourneyPricing = z.infer<typeof journeyPricingSchema>;
+export type OveragePricing = z.infer<typeof overagePricingSchema>;
+export type TierDiscounts = z.infer<typeof tierDiscountsSchema>;
+export type TierCompliance = z.infer<typeof tierComplianceSchema>;
+
+// ============================================================================
+// PRIORITY 3: Response Schemas for Critical Tables
+// ============================================================================
+
+// === User Response Schema ===
+// Comprehensive user data for profile display and admin management
+
+export const subscriptionBalancesSchema = z.object({
+  credits: z.number().optional(),
+  usedCredits: z.number().optional(),
+  bonusCredits: z.number().optional(),
+  rolloverCredits: z.number().optional(),
+}).passthrough();
+
+export const journeyCompletionsSchema = z.record(z.object({
+  completedAt: z.string().optional(),
+  projectId: z.string().optional(),
+  satisfaction: z.number().optional(),
+}).passthrough());
+
+export const userResponseSchema = z.object({
+  id: z.string(),
+  email: z.string().email(),
+  username: z.string().nullable().optional(),
+  firstName: z.string().nullable().optional(),
+  lastName: z.string().nullable().optional(),
+  profileImageUrl: z.string().nullable().optional(),
+
+  // Authentication
+  provider: z.string().nullable().optional(),
+  providerId: z.string().nullable().optional(),
+
+  // Subscription info
+  subscriptionTier: z.enum(["none", "trial", "starter", "professional", "enterprise"]).optional(),
+  subscriptionStatus: z.enum(["active", "inactive", "cancelled", "past_due", "expired", "incomplete", "trialing"]).optional(),
+  subscriptionId: z.string().nullable().optional(),
+  subscriptionStartDate: z.union([z.date(), z.string()]).nullable().optional(),
+  subscriptionEndDate: z.union([z.date(), z.string()]).nullable().optional(),
+
+  // Trial info
+  trialCredits: z.number().optional(),
+  trialCreditsUsed: z.number().optional(),
+  trialCreditsRefreshedAt: z.union([z.date(), z.string()]).nullable().optional(),
+  trialCreditsExpireAt: z.union([z.date(), z.string()]).nullable().optional(),
+
+  // Usage tracking
+  monthlyUploads: z.number().optional(),
+  monthlyDataVolume: z.number().optional(),
+  monthlyAIInsights: z.number().optional(),
+  monthlyAnalysisComponents: z.number().optional(),
+  monthlyVisualizations: z.number().optional(),
+  currentStorageGb: z.union([z.number(), z.string()]).nullable().optional(),
+  monthlyDataProcessedGb: z.union([z.number(), z.string()]).nullable().optional(),
+  usageResetAt: z.union([z.date(), z.string()]).nullable().optional(),
+  subscriptionBalances: subscriptionBalancesSchema.optional(),
+
+  // User role and journey preferences
+  userRole: z.enum(["non-tech", "business", "technical", "consultation", "custom"]).optional(),
+  technicalLevel: z.enum(["beginner", "intermediate", "advanced", "expert"]).optional(),
+  industry: z.string().nullable().optional(),
+  preferredJourney: z.string().nullable().optional(),
+  journeyCompletions: journeyCompletionsSchema.nullable().optional(),
+  onboardingCompleted: z.boolean().optional(),
+
+  // Legacy/admin fields
+  isAdmin: z.boolean().optional(),
+  role: z.string().nullable().optional(),
+
+  // Timestamps
+  createdAt: z.union([z.date(), z.string()]).optional(),
+  updatedAt: z.union([z.date(), z.string()]).optional(),
+});
+
+export type UserResponse = z.infer<typeof userResponseSchema>;
+export type SubscriptionBalances = z.infer<typeof subscriptionBalancesSchema>;
+export type JourneyCompletions = z.infer<typeof journeyCompletionsSchema>;
+
+// === Project Artifacts Response Schema ===
+// Tracks workflow artifacts from ingestion to results
+
+export const artifactInputRefsSchema = z.array(z.object({
+  type: z.enum(["dataset", "artifact", "analysis"]).optional(),
+  id: z.string(),
+  name: z.string().optional(),
+}).passthrough());
+
+export const artifactParamsSchema = z.object({
+  analysisType: z.string().optional(),
+  configuration: z.record(z.any()).optional(),
+  options: z.record(z.any()).optional(),
+}).passthrough();
+
+export const artifactMetricsSchema = z.object({
+  processingTimeMs: z.number().optional(),
+  rowsProcessed: z.number().optional(),
+  memoryUsedMb: z.number().optional(),
+  cpuUsagePercent: z.number().optional(),
+  errorCount: z.number().optional(),
+}).passthrough();
+
+export const artifactFileRefsSchema = z.array(z.object({
+  type: z.enum(["pdf", "csv", "xlsx", "png", "json", "html", "pptx"]).optional(),
+  uri: z.string(),
+  name: z.string().optional(),
+  size: z.number().optional(),
+  mimeType: z.string().optional(),
+}).passthrough());
+
+export const projectArtifactResponseSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  type: z.enum(["ingestion", "transformation", "analysis", "visualization", "report", "export", "quality_check", "pii_scan"]),
+  status: z.enum(["pending", "processing", "completed", "error", "cancelled"]).optional(),
+  inputRefs: artifactInputRefsSchema.nullable().optional(),
+  params: artifactParamsSchema.nullable().optional(),
+  metrics: artifactMetricsSchema.nullable().optional(),
+  output: z.any().nullable().optional(), // Flexible output structure
+  fileRefs: artifactFileRefsSchema.nullable().optional(),
+  parentArtifactId: z.string().nullable().optional(),
+  createdBy: z.string().nullable().optional(),
+  createdAt: z.union([z.date(), z.string()]).optional(),
+  updatedAt: z.union([z.date(), z.string()]).optional(),
+});
+
+export type ProjectArtifactResponse = z.infer<typeof projectArtifactResponseSchema>;
+export type ArtifactInputRefs = z.infer<typeof artifactInputRefsSchema>;
+export type ArtifactParams = z.infer<typeof artifactParamsSchema>;
+export type ArtifactMetrics = z.infer<typeof artifactMetricsSchema>;
+export type ArtifactFileRefs = z.infer<typeof artifactFileRefsSchema>;
+
+// === Agent Checkpoints Response Schema ===
+// Workflow state for agent coordination and user approvals
+
+export const checkpointDataSchema = z.object({
+  // Analysis plan related
+  planId: z.string().optional(),
+  planVersion: z.number().optional(),
+  analysisSteps: z.array(z.any()).optional(),
+  estimatedCost: z.number().optional(),
+
+  // Data quality related
+  qualityScore: z.number().optional(),
+  issues: z.array(z.object({
+    type: z.string(),
+    severity: z.string().optional(),
+    description: z.string().optional(),
+  }).passthrough()).optional(),
+  recommendations: z.array(z.string()).optional(),
+
+  // Transformation related
+  transformationPlan: z.any().optional(),
+  mappings: z.array(z.any()).optional(),
+
+  // Execution related
+  executionId: z.string().optional(),
+  progress: z.number().optional(), // 0-100
+  currentStep: z.string().optional(),
+}).passthrough();
+
+export const agentCheckpointResponseSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  agentType: z.enum(["project_manager", "data_scientist", "business_agent", "data_engineer", "technical_ai", "template_research"]),
+  stepName: z.string(),
+  status: z.enum(["pending", "in_progress", "waiting_approval", "approved", "completed", "rejected", "skipped"]),
+  message: z.string(),
+  data: checkpointDataSchema.nullable().optional(),
+  userFeedback: z.string().nullable().optional(),
+  requiresUserInput: z.boolean().optional(),
+  timestamp: z.union([z.date(), z.string()]).optional(),
+  createdAt: z.union([z.date(), z.string()]).optional(),
+});
+
+export type AgentCheckpointResponse = z.infer<typeof agentCheckpointResponseSchema>;
+export type CheckpointData = z.infer<typeof checkpointDataSchema>;
+
+// === Audience Profiles Response Schema ===
+// BA translation target profiles for customized artifact generation
+
+export const visualizationPreferencesSchema = z.object({
+  preferredChartTypes: z.array(z.string()).optional(),
+  colorScheme: z.string().optional(),
+  interactivityLevel: z.enum(["static", "basic", "interactive", "advanced"]).optional(),
+  maxChartsPerPage: z.number().optional(),
+  annotationsEnabled: z.boolean().optional(),
+}).passthrough();
+
+export const audienceProfileResponseSchema = z.object({
+  id: z.string(),
+  userId: z.string(),
+  name: z.string(),
+  description: z.string().nullable().optional(),
+  journeyType: z.enum(["non-tech", "business", "technical", "consultation", "custom"]),
+
+  // Core decision-making fields
+  role: z.enum(["executive", "analyst", "manager", "specialist", "sme", "consultant", "developer"]),
+  industry: z.string().nullable().optional(),
+  seniority: z.enum(["junior", "senior", "director", "vp", "c_suite"]),
+  analyticalMaturity: z.enum(["basic", "intermediate", "advanced", "expert"]),
+
+  // Artifact preferences
+  preferredArtifacts: z.array(z.enum([
+    "executive_summary", "dashboard", "detailed_report",
+    "data_export", "presentation_deck", "action_plan", "technical_documentation"
+  ])).optional(),
+
+  // Communication preferences
+  communicationStyle: z.enum(["formal", "casual", "technical", "simplified"]).optional(),
+  detailLevel: z.enum(["high", "medium", "low"]).optional(),
+  technicalProficiency: z.enum(["beginner", "intermediate", "advanced", "expert"]).optional(),
+
+  // Visualization and reporting
+  visualizationPreferences: visualizationPreferencesSchema.nullable().optional(),
+  reportingFrequency: z.enum(["daily", "weekly", "monthly", "quarterly", "on-demand"]).optional(),
+
+  // Business context
+  businessContext: z.string().nullable().optional(),
+  decisionMakingAuthority: z.enum(["individual", "team_lead", "department_head", "executive"]).nullable().optional(),
+  primaryUseCases: z.array(z.enum([
+    "strategic_planning", "operational_monitoring", "compliance_reporting",
+    "performance_analysis", "market_research", "risk_assessment"
+  ])).optional(),
+
+  // Settings
+  isDefault: z.boolean().optional(),
+  isActive: z.boolean().optional(),
+
+  // Timestamps
+  createdAt: z.union([z.date(), z.string()]).optional(),
+  updatedAt: z.union([z.date(), z.string()]).optional(),
+});
+
+export type AudienceProfileResponse = z.infer<typeof audienceProfileResponseSchema>;
+export type VisualizationPreferences = z.infer<typeof visualizationPreferencesSchema>;
+
+// === Semantic Links Response Schema ===
+// Question -> Data Element -> Transformation -> Analysis traceability
+
+export const semanticLinkMetadataSchema = z.object({
+  reason: z.string().optional(),
+  derivationPath: z.string().optional(),
+  transformationType: z.string().optional(),
+  analysisContribution: z.string().optional(),
+  evidenceStrength: z.number().optional(), // 0-1
+}).passthrough();
+
+export const semanticLinkResponseSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  linkType: z.enum([
+    "question_element", "element_transformation",
+    "transformation_analysis", "analysis_insight", "question_insight"
+  ]),
+  sourceId: z.string(),
+  sourceType: z.enum(["question", "element", "transformation", "analysis", "dataset"]).nullable().optional(),
+  targetId: z.string(),
+  targetType: z.enum(["element", "transformation", "analysis", "insight", "visualization"]).nullable().optional(),
+  confidence: z.union([z.number(), z.string()]).nullable().optional(),
+  metadata: semanticLinkMetadataSchema.nullable().optional(),
+  createdAt: z.union([z.date(), z.string()]).optional(),
+});
+
+export type SemanticLinkResponse = z.infer<typeof semanticLinkResponseSchema>;
+export type SemanticLinkMetadata = z.infer<typeof semanticLinkMetadataSchema>;
+
+// === Decision Audit Response Schema ===
+// Audit trail for important system decisions
+
+export const decisionContextSchema = z.object({
+  userId: z.string().optional(),
+  projectId: z.string().optional(),
+  sessionId: z.string().optional(),
+  triggerEvent: z.string().optional(),
+  previousState: z.any().optional(),
+  newState: z.any().optional(),
+}).passthrough();
+
+export const decisionAuditResponseSchema = z.object({
+  id: z.string(),
+  decisionType: z.string(),
+  decisionMaker: z.enum(["user", "system", "agent", "admin"]),
+  decision: z.string(),
+  rationale: z.string().nullable().optional(),
+  context: decisionContextSchema.nullable().optional(),
+  impact: z.enum(["low", "medium", "high", "critical"]).nullable().optional(),
+  reversible: z.boolean().optional(),
+  timestamp: z.union([z.date(), z.string()]).optional(),
+});
+
+export type DecisionAuditResponse = z.infer<typeof decisionAuditResponseSchema>;
+export type DecisionContext = z.infer<typeof decisionContextSchema>;
+
+// ============================================================================
+// PRIORITY 4: Replace z.any() with Proper Schemas for Critical Fields
+// ============================================================================
+
+// === Analysis Results Schema ===
+// Comprehensive schema for project.analysisResults field
+// This replaces the z.any() in dataProjectSchema for type-safe analysis results
+
+export const analysisInsightSchema = z.object({
+  id: z.union([z.number(), z.string()]).optional(),
+  title: z.string(),
+  description: z.string(),
+  impact: z.enum(["High", "Medium", "Low", "high", "medium", "low"]).optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  category: z.string().optional(),
+  dataSource: z.string().optional(),
+  details: z.any().optional(), // Flexible for different insight types
+  answersQuestions: z.array(z.string()).optional(), // Question IDs this insight helps answer
+  type: z.string().optional(),
+  evidence: z.array(z.any()).optional(),
+});
+
+export const analysisRecommendationSchema = z.object({
+  id: z.union([z.number(), z.string()]).optional(),
+  title: z.string(),
+  description: z.string(),
+  priority: z.enum(["High", "Medium", "Low", "high", "medium", "low"]).optional(),
+  effort: z.enum(["High", "Medium", "Low", "high", "medium", "low"]).optional(),
+  expectedImpact: z.string().optional(),
+  impact: z.string().optional(),
+  category: z.string().optional(),
+  actionItems: z.array(z.string()).optional(),
+  timeframe: z.string().optional(),
+});
+
+export const analysisVisualizationSchema = z.object({
+  id: z.union([z.number(), z.string()]).optional(),
+  type: z.enum([
+    "bar", "line", "scatter", "pie", "heatmap", "boxplot",
+    "histogram", "area", "radar", "treemap", "sankey", "funnel"
+  ]).optional(),
+  title: z.string().optional(),
+  description: z.string().optional(),
+  data: z.any().optional(), // Flexible for different chart libraries
+  config: z.object({
+    xAxis: z.string().optional(),
+    yAxis: z.string().optional(),
+    series: z.array(z.string()).optional(),
+    colors: z.array(z.string()).optional(),
+    legend: z.boolean().optional(),
+  }).passthrough().optional(),
+  imageUrl: z.string().optional(),
+  svgContent: z.string().optional(),
+});
+
+export const questionAnswerSchema = z.object({
+  question: z.string(),
+  questionId: z.string().optional(),
+  answer: z.string(),
+  confidence: z.number().min(0).max(1).optional(),
+  sources: z.array(z.string()).optional(),
+  relatedInsights: z.array(z.string()).optional(),
+  status: z.enum(["answered", "partial", "pending", "failed"]).optional(),
+  generatedAt: z.union([z.date(), z.string()]).optional(),
+  evidence: z.array(z.object({
+    type: z.string().optional(),
+    content: z.string().optional(),
+    source: z.string().optional(),
+  }).passthrough()).optional(),
+});
+
+export const analysisSummarySchema = z.object({
+  totalAnalyses: z.number().optional(),
+  dataRowsProcessed: z.number().optional(),
+  columnsAnalyzed: z.number().optional(),
+  executionTime: z.string().optional(),
+  executionTimeMs: z.number().optional(),
+  qualityScore: z.number().optional(),
+  status: z.enum(["completed", "partial", "failed"]).optional(),
+});
+
+export const analysisMetadataSchema = z.object({
+  executedAt: z.union([z.date(), z.string()]).optional(),
+  datasetNames: z.array(z.string()).optional(),
+  techniques: z.array(z.string()).optional(),
+  totalRows: z.number().optional(),
+  totalColumns: z.number().optional(),
+  analysisTypes: z.array(z.string()).optional(),
+  executionTimeMs: z.number().optional(),
+  pythonScriptsUsed: z.array(z.string()).optional(),
+  agentContributions: z.record(z.string()).optional(),
+}).passthrough();
+
+export const analysisResultsSchema = z.object({
+  projectId: z.string().optional(),
+  analysisTypes: z.array(z.string()).optional(),
+  insights: z.array(analysisInsightSchema).optional(),
+  recommendations: z.array(analysisRecommendationSchema).optional(),
+  visualizations: z.array(analysisVisualizationSchema).optional(),
+  summary: analysisSummarySchema.optional(),
+  metadata: analysisMetadataSchema.optional(),
+  questionAnswers: z.object({
+    projectId: z.string().optional(),
+    answers: z.array(questionAnswerSchema).optional(),
+    generatedBy: z.string().optional(),
+    generatedAt: z.union([z.date(), z.string()]).optional(),
+  }).passthrough().optional(),
+  // Raw results from different analysis types
+  correlationResults: z.any().optional(),
+  regressionResults: z.any().optional(),
+  clusteringResults: z.any().optional(),
+  timeSeriesResults: z.any().optional(),
+  descriptiveStats: z.any().optional(),
+  // Business Agent translations
+  translatedResults: z.any().optional(),
+  businessImpact: z.any().optional(),
+}).passthrough();
+
+export type AnalysisResults = z.infer<typeof analysisResultsSchema>;
+export type AnalysisInsight = z.infer<typeof analysisInsightSchema>;
+export type AnalysisRecommendation = z.infer<typeof analysisRecommendationSchema>;
+export type AnalysisVisualization = z.infer<typeof analysisVisualizationSchema>;
+export type QuestionAnswer = z.infer<typeof questionAnswerSchema>;
+export type AnalysisSummary = z.infer<typeof analysisSummarySchema>;
+export type AnalysisMetadata = z.infer<typeof analysisMetadataSchema>;
+
+// === Cost Breakdown Schema ===
+// Comprehensive schema for pricing and cost tracking
+
+export const costBreakdownDetailSchema = z.object({
+  base: z.number().optional(),
+  perRow: z.number().optional(),
+  perAnalysis: z.number().optional(),
+  typeMultiplier: z.number().optional(),
+  total: z.number(),
+  analysisTypes: z.array(z.string()).optional(),
+  rowCount: z.number().optional(),
+  // Itemized costs
+  items: z.array(z.object({
+    name: z.string(),
+    description: z.string().optional(),
+    quantity: z.number().optional(),
+    unitPrice: z.number().optional(),
+    total: z.number(),
+  }).passthrough()).optional(),
+  // Discounts
+  discounts: z.array(z.object({
+    type: z.string(),
+    description: z.string().optional(),
+    amount: z.number(),
+    percentage: z.number().optional(),
+  }).passthrough()).optional(),
+  // Tax and final
+  subtotal: z.number().optional(),
+  tax: z.number().optional(),
+  taxRate: z.number().optional(),
+  grandTotal: z.number().optional(),
+  currency: z.string().default("USD"),
+}).passthrough();
+
+export type CostBreakdownDetail = z.infer<typeof costBreakdownDetailSchema>;
+
+// === Interactive Session Schema ===
+// For agentic workflow state tracking
+
+export const interactiveSessionSchema = z.object({
+  sessionId: z.string().optional(),
+  userId: z.string().optional(),
+  projectId: z.string().optional(),
+  status: z.enum(["active", "paused", "completed", "abandoned"]).optional(),
+  currentStep: z.string().optional(),
+  history: z.array(z.object({
+    timestamp: z.union([z.date(), z.string()]),
+    action: z.string(),
+    agentType: z.string().optional(),
+    input: z.any().optional(),
+    output: z.any().optional(),
+  }).passthrough()).optional(),
+  context: z.record(z.any()).optional(),
+  startedAt: z.union([z.date(), z.string()]).optional(),
+  lastActivityAt: z.union([z.date(), z.string()]).optional(),
+}).passthrough();
+
+export type InteractiveSession = z.infer<typeof interactiveSessionSchema>;
+
+// === Cost Estimation Schema ===
+// For pricing preview before payment
+
+export const costEstimationSchema = z.object({
+  projectId: z.string().optional(),
+  estimatedAt: z.union([z.date(), z.string()]).optional(),
+  rowCount: z.number().optional(),
+  analysisTypes: z.array(z.string()).optional(),
+  basePrice: z.number().optional(),
+  perRowCost: z.number().optional(),
+  typeMultipliers: z.record(z.number()).optional(),
+  breakdown: costBreakdownDetailSchema.optional(),
+  totalEstimate: z.number(),
+  currency: z.string().default("USD"),
+  validUntil: z.union([z.date(), z.string()]).optional(),
+  locked: z.boolean().optional(),
+}).passthrough();
+
+export type CostEstimation = z.infer<typeof costEstimationSchema>;
+
+// === AI Insights Schema ===
+// For aiInsights field in projects
+
+export const aiInsightsSchema = z.object({
+  generatedAt: z.union([z.date(), z.string()]).optional(),
+  generatedBy: z.string().optional(), // AI model or agent
+  summary: z.string().optional(),
+  keyFindings: z.array(z.string()).optional(),
+  anomalies: z.array(z.object({
+    column: z.string(),
+    type: z.string(),
+    description: z.string(),
+    severity: z.enum(["low", "medium", "high"]).optional(),
+  }).passthrough()).optional(),
+  patterns: z.array(z.object({
+    name: z.string(),
+    description: z.string(),
+    confidence: z.number().optional(),
+    affectedColumns: z.array(z.string()).optional(),
+  }).passthrough()).optional(),
+  suggestions: z.array(z.string()).optional(),
+  confidence: z.number().optional(),
+}).passthrough();
+
+export type AIInsights = z.infer<typeof aiInsightsSchema>;
+
+// ============================================================================
+// SCHEMA DOCUMENTATION: Analysis Plan Schema Sets
+// ============================================================================
+// There are TWO sets of analysis plan schemas serving different purposes:
+//
+// 1. DATABASE-LEVEL (Drizzle) - For direct database operations:
+//    - analysisPlans (pgTable) - Table definition at line ~1057
+//    - insertAnalysisPlanSchemaDb - createInsertSchema from Drizzle
+//    - AnalysisPlanRow - Drizzle infer type for SELECT
+//    - InsertAnalysisPlanRow - Drizzle infer type for INSERT
+//
+// 2. API-LEVEL (Zod) - For comprehensive validation with nested structures:
+//    - analysisPlanSchema - Full Zod schema with detailed step validation
+//    - insertAnalysisPlanSchema - Omits auto-generated fields
+//    - AnalysisPlan - Validated type for API responses
+//    - InsertAnalysisPlan - Validated type for API requests
+//
+// Use DATABASE-LEVEL schemas for direct Drizzle queries.
+// Use API-LEVEL schemas for request/response validation with nested objects.
+// ============================================================================
 
 // In-memory storage class (Singleton Pattern)
 // (Note) In-memory storage lives in server/storage.ts. Any accidental duplicates here were removed to avoid type conflicts.

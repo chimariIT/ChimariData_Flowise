@@ -61,7 +61,6 @@ export interface EnvironmentConfig {
   STRICT_TRANSPORT_SECURITY?: boolean;
 
   // Feature Flags
-  ENABLE_MOCK_MODE: boolean;
   ENABLE_DEBUG_LOGGING: boolean;
   ENABLE_RATE_LIMITING: boolean;
   ENABLE_WEBHOOK_SIGNATURE_VERIFICATION: boolean;
@@ -163,7 +162,6 @@ export function loadEnvironmentConfig(): EnvironmentConfig {
     STRICT_TRANSPORT_SECURITY: process.env.STRICT_TRANSPORT_SECURITY === 'true',
 
     // Feature Flags
-    ENABLE_MOCK_MODE: process.env.ENABLE_MOCK_MODE === 'true',
     ENABLE_DEBUG_LOGGING: process.env.ENABLE_DEBUG_LOGGING === 'true',
     ENABLE_RATE_LIMITING: process.env.ENABLE_RATE_LIMITING === 'true' || nodeEnv === 'production',
     ENABLE_WEBHOOK_SIGNATURE_VERIFICATION: process.env.ENABLE_WEBHOOK_SIGNATURE_VERIFICATION === 'true' || nodeEnv === 'production',
@@ -240,10 +238,6 @@ function validateProductionConfig(config: EnvironmentConfig): void {
 
   if (!config.ENABLE_WEBHOOK_SIGNATURE_VERIFICATION) {
     errors.push('ENABLE_WEBHOOK_SIGNATURE_VERIFICATION must be true in production');
-  }
-
-  if (config.ENABLE_MOCK_MODE) {
-    errors.push('ENABLE_MOCK_MODE must be false in production');
   }
 
   if (config.ENABLE_DEBUG_LOGGING) {

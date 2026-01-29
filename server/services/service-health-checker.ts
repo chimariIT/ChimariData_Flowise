@@ -151,9 +151,7 @@ export class ServiceHealthChecker {
    * Get service uptime percentage
    */
   async getUptime(serviceName: string, timeRange?: { start: Date; end: Date }): Promise<number> {
-    // TODO: Implement real uptime tracking from database
-    // For now, return mock data
-    return 99.9;
+    throw new Error('Uptime tracking not implemented. Integrate with monitoring database.');
   }
 
   // ==========================================

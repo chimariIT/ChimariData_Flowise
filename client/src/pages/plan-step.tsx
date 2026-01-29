@@ -430,9 +430,17 @@ export default function PlanStep({
     const rawIds = [...stepInputs, ...vizFields, ...mlFields].filter(Boolean);
 
     // ✅ PHASE 11 FIX: Build element ID to name mapping from journeyProgress.requirementsDocument
+    // TASK 3 FIX: Use plan.metadata as fallback if journeyProgress.requirementsDocument is missing
     const requirementsDoc = (journeyProgress as any)?.requirementsDocument;
     const elementMap = new Map<string, string>();
-    const requirementsElements = requirementsDoc?.requiredDataElements || [];
+    const requirementsElements = requirementsDoc?.requiredDataElements
+      || (plan as any)?.metadata?.requiredDataElements // TASK 3 FIX: Fallback to plan.metadata
+      || [];
+
+    if (!requirementsDoc?.requiredDataElements && (plan as any)?.metadata?.requiredDataElements?.length > 0) {
+      console.log(`📋 [TASK 3 FIX] Using ${(plan as any).metadata.requiredDataElements.length} elements from plan.metadata fallback`);
+    }
+
     requirementsElements.forEach((el: any) => {
       if (el.elementId) {
         elementMap.set(el.elementId, el.elementName || el.name || el.elementId);
@@ -464,8 +472,11 @@ export default function PlanStep({
   // Build lookup: analysisId/type → questions it addresses
   const questionsByAnalysis = useMemo(() => {
     const mapping = new Map<string, { questionText: string; confidence?: number }[]>();
+    // TASK 3 FIX: Use plan.metadata as fallback for questionAnswerMapping
     const qaMapping = (journeyProgress as any)?.requirementsDocument?.questionAnswerMapping ||
-                      (journeyProgress as any)?.questionAnswerMapping || [];
+                      (journeyProgress as any)?.questionAnswerMapping ||
+                      (plan as any)?.metadata?.questionAnswerMapping || // TASK 3 FIX: Fallback to plan.metadata
+                      [];
     if (qaMapping.length === 0) return mapping;
 
     for (const qa of qaMapping) {
@@ -1513,44 +1524,57 @@ export default function PlanStep({
 
         {/* Agent Contributions Tab */}
         <TabsContent value="agents" className="space-y-4">
-          {Object.entries(plan.agentContributions).map(([agentId, contribution]) => (
-            <Card key={agentId}>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  {agentId === 'data_engineer' && <Database className="h-5 w-5 text-blue-500" />}
-                  {agentId === 'data_scientist' && <Brain className="h-5 w-5 text-purple-500" />}
-                  {agentId === 'business_agent' && <Users className="h-5 w-5 text-green-500" />}
-                  {agentId}
-                  <Badge
-                    variant="outline"
-                    className={`ml-auto bg-${getStatusColor(contribution.status)}-100`}
-                  >
-                    {contribution.status}
-                  </Badge>
-                </CardTitle>
-                <CardDescription>
-                  Completed at {new Date(contribution.completedAt).toLocaleString()}
-                  {contribution.duration && ` • Duration: ${(contribution.duration / 1000).toFixed(1)}s`}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div>
-                  <div className="text-sm font-medium mb-2">Contribution</div>
-                  <p className="text-sm">{contribution.contribution}</p>
-                </div>
-
-                {contribution.error && (
-                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-                    <div className="flex items-center gap-2 text-red-700">
-                      <AlertCircle className="h-5 w-5" />
-                      <span className="font-medium">Error:</span>
-                      <span>{contribution.error}</span>
-                    </div>
+          {plan.agentContributions && Object.keys(plan.agentContributions).length > 0 ? (
+            Object.entries(plan.agentContributions).map(([agentId, contribution]) => (
+              <Card key={agentId}>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    {agentId === 'data_engineer' && <Database className="h-5 w-5 text-blue-500" />}
+                    {agentId === 'data_scientist' && <Brain className="h-5 w-5 text-purple-500" />}
+                    {agentId === 'business_agent' && <Users className="h-5 w-5 text-green-500" />}
+                    {agentId === 'project_manager' && <Users className="h-5 w-5 text-orange-500" />}
+                    {agentId.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                    <Badge
+                      variant="outline"
+                      className={`ml-auto bg-${getStatusColor(contribution.status)}-100`}
+                    >
+                      {contribution.status}
+                    </Badge>
+                  </CardTitle>
+                  <CardDescription>
+                    Completed at {new Date(contribution.completedAt).toLocaleString()}
+                    {contribution.duration && ` • Duration: ${(contribution.duration / 1000).toFixed(1)}s`}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div>
+                    <div className="text-sm font-medium mb-2">Contribution</div>
+                    <p className="text-sm">{contribution.contribution}</p>
                   </div>
-                )}
+
+                  {contribution.error && (
+                    <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                      <div className="flex items-center gap-2 text-red-700">
+                        <AlertCircle className="h-5 w-5" />
+                        <span className="font-medium">Error:</span>
+                        <span>{contribution.error}</span>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            ))
+          ) : (
+            <Card>
+              <CardContent className="py-12 text-center">
+                <Users className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+                <p className="text-muted-foreground">Agent contributions are being collected...</p>
+                <p className="text-sm text-muted-foreground mt-2">
+                  This will update automatically when the plan is fully generated.
+                </p>
               </CardContent>
             </Card>
-          ))}
+          )}
         </TabsContent>
       </Tabs>
 

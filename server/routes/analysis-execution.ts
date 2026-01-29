@@ -115,7 +115,10 @@ function getRecommendedTier(currentTier: string): string {
  * 3. Check/track quota → trackFeatureUsage()
  * 4. Preview mode → Limited execution without consuming quota
  */
-router.post('/execute', ensureAuthenticated, requireAnyFeature([GATED_FEATURES.BASIC_ANALYSIS, GATED_FEATURES.ADVANCED_ANALYSIS]), async (req, res) => {
+// P0-5 FIX: Removed requireAnyFeature middleware - payment/subscription checks done in handler
+// The handler already checks: isPaid, subscription tier, journey access, and trial credits
+// Having the middleware block BEFORE we can check isPaid prevented paid projects from executing
+router.post('/execute', ensureAuthenticated, async (req, res) => {
   // Declare variables outside try block so they're accessible in catch block
   const userId = (req.user as any)?.id;
   let projectId: string = '';
@@ -139,13 +142,14 @@ router.post('/execute', ensureAuthenticated, requireAnyFeature([GATED_FEATURES.B
       analysisTypes: z.array(z.string()).min(1),
       datasetIds: z.array(z.string()).optional(),
       previewOnly: z.boolean().optional(),
-      // GAP 5: DS agent recommended analyses with required data elements
+      // GAP 5 + GAP A: DS agent recommended analyses with required data elements and priority ordering
       analysisPath: z.array(z.object({
         analysisId: z.string(),
         analysisName: z.string(),
         analysisType: z.string().optional(),
         requiredDataElements: z.array(z.string()).optional(),
-        priority: z.number().optional()
+        priority: z.number().optional(),
+        dependencies: z.array(z.string()).optional() // GAP A: Other analysis IDs that must complete first
       })).optional(),
       // GAP 5: Question-to-analysis mapping for evidence chain
       questionAnswerMapping: z.array(z.object({
@@ -187,12 +191,23 @@ router.post('/execute', ensureAuthenticated, requireAnyFeature([GATED_FEATURES.B
     // PAYMENT GATE: Subscription-First Model (Aligned with Billing)
     // ============================================================
 
+    // P0-B FIX: Validate locked cost exists before execution (unless paid or subscribed)
+    const journeyProgress = (project as any).journeyProgress || {};
+    const hasLockedCost = journeyProgress.lockedCostEstimate != null || (project as any).lockedCostEstimate != null;
+
     // Step 1: Check if project already paid (one-off payment)
     const isPaid = (project as any).isPaid === true;
     if (isPaid) {
       console.log(`✅ [Billing] Project ${projectId} already paid - executing with full access`);
       // Continue to execution (no quota consumption for paid projects)
     } else {
+      // P1-C FIX: If payment session exists but isPaid=false, payment hasn't completed
+      const paymentSessionId = (project as any).paymentSessionId;
+      if (paymentSessionId && !isPaid) {
+        console.warn(`⚠️ [Billing] Project ${projectId} has payment session ${paymentSessionId} but isPaid=false`);
+        // Allow execution only if user has subscription or trial credits (checked below)
+      }
+
       // Step 2: Check subscription tier and journey access
       const journeyType = ((project as any).journeyType || 'non-tech') as JourneyType;
       const journeyAccess = await billingService.canAccessJourney(userId, journeyType);
@@ -232,17 +247,39 @@ router.post('/execute', ensureAuthenticated, requireAnyFeature([GATED_FEATURES.B
           const creditCheck = await billingService.checkTrialCredits(userId, creditsRequired);
 
           if (creditCheck.hasCredits) {
-            // User has trial credits - deduct and allow execution
-            console.log(`💳 [Trial Credits] Using ${creditsRequired} trial credits for ${analysisType} (${complexity})`);
-            const deductResult = await billingService.deductTrialCredits(userId, creditsRequired);
+            // P0-B FIX: Add execution idempotency - check if credits already deducted for this project
+            const lastExecutionId = journeyProgress.lastCreditDeductionId;
+            const currentExecutionId = `${projectId}-${analysisType}-${Date.now().toString(36)}`;
 
-            if (deductResult.success) {
-              console.log(`✅ [Trial Credits] Deducted ${creditsRequired} credits. Remaining: ${deductResult.newBalance}`);
-              quotaTracked = true; // Mark as tracked via credits
-              // Continue to execution - fall through to analysis
+            if (lastExecutionId && lastExecutionId.startsWith(`${projectId}-${analysisType}`)) {
+              // Credits already deducted for this project+type - allow execution without re-deducting
+              console.log(`✅ [Trial Credits] Idempotency: Credits already deducted (${lastExecutionId}), allowing execution`);
+              quotaTracked = true;
             } else {
-              console.error(`❌ [Trial Credits] Failed to deduct credits: ${deductResult.message}`);
-              // Fall through to quota exceeded response
+              // User has trial credits - deduct and allow execution
+              console.log(`💳 [Trial Credits] Using ${creditsRequired} trial credits for ${analysisType} (${complexity})`);
+              const deductResult = await billingService.deductTrialCredits(userId, creditsRequired);
+
+              if (deductResult.success) {
+                console.log(`✅ [Trial Credits] Deducted ${creditsRequired} credits. Remaining: ${deductResult.newBalance}`);
+                quotaTracked = true;
+                // Store deduction ID for idempotency
+                try {
+                  await storage.updateProject(projectId, {
+                    journeyProgress: { ...journeyProgress, lastCreditDeductionId: currentExecutionId }
+                  } as any);
+                } catch (e) { /* non-fatal */ }
+              } else {
+                // P0-B FIX: Return specific error instead of falling through to generic "quota exceeded"
+                console.error(`❌ [Trial Credits] Failed to deduct credits: ${deductResult.message}`);
+                return res.status(500).json({
+                  success: false,
+                  error: 'Credit deduction failed',
+                  message: 'Failed to deduct trial credits. Please retry your request.',
+                  code: 'CREDIT_DEDUCTION_FAILED',
+                  retryable: true
+                });
+              }
             }
           }
 
@@ -309,6 +346,22 @@ router.post('/execute', ensureAuthenticated, requireAnyFeature([GATED_FEATURES.B
       console.log(`❓ [GAP 5] Received ${questionAnswerMapping.length} question-answer mappings for evidence chain`);
     }
 
+    // PHASE 5 SSOT FIX: Extract PII columns from journeyProgress.piiDecisions ONLY (no fallbacks)
+    // Note: Using existing journeyProgress variable from line 192
+    const piiDecisions = journeyProgress.piiDecisions;
+
+    if (!piiDecisions) {
+      console.log(`⚠️ [PII SSOT] No PII decisions found in journeyProgress - user may not have completed verification step`);
+    }
+
+    const excludedColumns: string[] = piiDecisions?.excludedColumns || [];
+    const piiColumnsToRemove: string[] = piiDecisions?.selectedColumns || piiDecisions?.piiColumnsRemoved || [];
+    const columnsToExclude = [...new Set([...excludedColumns, ...piiColumnsToRemove])];
+
+    if (columnsToExclude.length > 0) {
+      console.log(`🔒 [P0-1 FIX] PII columns to exclude from analysis: [${columnsToExclude.join(', ')}]`);
+    }
+
     // Execute analysis
     // ✅ FIX: Use executeComprehensiveAnalysis which uses DataScienceOrchestrator
     // with type-specific Python scripts (correlation_analysis.py, regression_analysis.py, etc.)
@@ -319,7 +372,8 @@ router.post('/execute', ensureAuthenticated, requireAnyFeature([GATED_FEATURES.B
       analysisTypes,
       datasetIds,
       analysisPath,
-      questionAnswerMapping
+      questionAnswerMapping,
+      columnsToExclude: columnsToExclude.length > 0 ? columnsToExclude : undefined
     });
 
     // Track execution cost
@@ -336,13 +390,13 @@ router.post('/execute', ensureAuthenticated, requireAnyFeature([GATED_FEATURES.B
     if (project) {
       console.log(`📦 Queueing artifact generation for project ${projectId} (async)`);
 
-      // ✅ GAP 7 FIX: Load PII decision from journeyProgress (SSOT)
-      const journeyProgress = (project as any)?.journeyProgress || {};
-      const piiDecision = journeyProgress.piiDecision;
-      const piiConfig = piiDecision ? {
-        excludedColumns: piiDecision.excludedColumns || [],
-        anonymizationApplied: piiDecision.anonymizationApplied || false,
-        piiColumnsRemoved: piiDecision.piiColumnsRemoved || []
+      // ✅ PHASE 5 SSOT FIX: Load PII decision from journeyProgress.piiDecisions ONLY
+      const journeyProgressForArtifacts = (project as any)?.journeyProgress || {};
+      const piiDecisionsForArtifacts = journeyProgressForArtifacts.piiDecisions;
+      const piiConfig = piiDecisionsForArtifacts ? {
+        excludedColumns: piiDecisionsForArtifacts.excludedColumns || [],
+        anonymizationApplied: piiDecisionsForArtifacts.anonymizationApplied || false,
+        piiColumnsRemoved: piiDecisionsForArtifacts.piiColumnsRemoved || []
       } : undefined;
 
       if (piiConfig && piiConfig.excludedColumns.length > 0) {
@@ -531,8 +585,17 @@ router.get('/results/:projectId', ensureAuthenticated, async (req, res) => {
     const userTier = (user as any)?.subscriptionTier || 'none';
     const subscriptionStatus = (user as any)?.subscriptionStatus || 'inactive';
 
-    // Determine if user has full access
-    const hasActiveSubscription = ['active', 'trialing'].includes(subscriptionStatus) && userTier !== 'none';
+    // P1-C FIX: Check trial credits for trialing users - exhausted credits = no full access
+    let hasActiveSubscription = ['active', 'trialing'].includes(subscriptionStatus) && userTier !== 'none';
+    if (subscriptionStatus === 'trialing' && hasActiveSubscription) {
+      try {
+        const trialCreditsStatus = await billingService.getTrialCreditsStatus(userId);
+        if (trialCreditsStatus && (trialCreditsStatus.remaining <= 0 || trialCreditsStatus.expired)) {
+          console.log(`⚠️ [Billing] Trial credits exhausted for user ${userId} - restricting to preview`);
+          hasActiveSubscription = false;
+        }
+      } catch { /* Non-critical: default to allowing access */ }
+    }
     const hasFullAccess = isPaid || hasActiveSubscription || isAdminUser;
 
     if (!hasFullAccess) {

@@ -23,6 +23,9 @@ export interface LLMCost {
     currency: string;
 }
 
+// Import shared pricing constants for consistency
+import { PRICING_CONSTANTS } from '../../shared/pricing-config';
+
 // PHASE 6: Admin-configurable analysis pricing
 export interface AnalysisPricingConfig {
     baseCost: number;                        // Base cost for any analysis ($)
@@ -47,27 +50,29 @@ export interface AnalysisPricingConfig {
     };
 }
 
-// Default pricing configuration
+// Default pricing configuration - uses shared PRICING_CONSTANTS for consistency
+// FIX: Previously had inflated values ($5 platform fee, $10 base cost)
+// Now aligned with PRICING_CONSTANTS ($0.50 platform fee, $1.00 base cost)
 const DEFAULT_PRICING_CONFIG: AnalysisPricingConfig = {
-    baseCost: 10.00,
-    dataSizeCostPer1K: 0.05,
-    platformFee: 5.00,
+    baseCost: PRICING_CONSTANTS.baseAnalysisCost,               // $1.00 (was $10.00)
+    dataSizeCostPer1K: PRICING_CONSTANTS.dataProcessingPer1K,   // $0.10 (was $0.05)
+    platformFee: PRICING_CONSTANTS.basePlatformFee,             // $0.50 (was $5.00)
     complexityMultipliers: {
-        basic: 1.0,
-        intermediate: 1.5,
-        advanced: 2.5
+        basic: PRICING_CONSTANTS.complexityMultipliers.basic,           // 1.0
+        intermediate: PRICING_CONSTANTS.complexityMultipliers.intermediate, // 1.5
+        advanced: PRICING_CONSTANTS.complexityMultipliers.advanced       // 2.5
     },
     analysisTypeFactors: {
-        statistical: 1.0,
-        machine_learning: 2.5,
-        visualization: 0.5,
-        business_intelligence: 1.5,
-        time_series: 2.0,
-        correlation: 1.2,
-        regression: 1.5,
-        clustering: 2.0,
-        sentiment: 1.8,
-        default: 1.0
+        statistical: PRICING_CONSTANTS.analysisTypeFactors.statistical || 1.2,
+        machine_learning: PRICING_CONSTANTS.analysisTypeFactors.machine_learning || 3.0,
+        visualization: PRICING_CONSTANTS.analysisTypeFactors.visualization || 0.8,
+        business_intelligence: PRICING_CONSTANTS.analysisTypeFactors.business_intelligence || 2.2,
+        time_series: PRICING_CONSTANTS.analysisTypeFactors.time_series || 1.8,
+        correlation: PRICING_CONSTANTS.analysisTypeFactors.correlation || 1.2,
+        regression: PRICING_CONSTANTS.analysisTypeFactors.regression || 1.6,
+        clustering: PRICING_CONSTANTS.analysisTypeFactors.clustering || 1.5,
+        sentiment: PRICING_CONSTANTS.analysisTypeFactors.sentiment || 1.8,
+        default: PRICING_CONSTANTS.analysisTypeFactors.default || 1.0
     }
 };
 

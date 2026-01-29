@@ -450,26 +450,11 @@ router.post('/subscription', ensureAuthenticated, async (req: Request, res: Resp
 
     // Check if Stripe is configured
     if (!stripeSyncService.isStripeConfigured()) {
-      // CRITICAL: Block mock payment in production
-      if (process.env.NODE_ENV === 'production') {
-        console.error('🔴 CRITICAL: Stripe not configured in production!');
-        return res.status(503).json({
-          success: false,
-          error: 'Payment service unavailable. Please contact support.',
-          code: 'STRIPE_NOT_CONFIGURED'
-        });
-      }
-
-      // Return mock client secret for development/testing ONLY
-      const mockClientSecret = `pi_mock_${Date.now()}_secret_${Math.random().toString(36).slice(2)}`;
-      console.warn('⚠️  Stripe not configured - returning mock subscription (DEVELOPMENT ONLY)');
-      return res.json({
-        success: true,
-        clientSecret: mockClientSecret,
-        subscriptionId: `sub_mock_${Date.now()}`,
-        message: 'Stripe not configured - using mock subscription for development',
-        development: true,
-        warning: 'This is a mock subscription - will not process real charges'
+      console.error('🔴 Stripe not configured - cannot process subscription!');
+      return res.status(503).json({
+        success: false,
+        error: 'Payment service unavailable. Stripe is not configured.',
+        code: 'STRIPE_NOT_CONFIGURED'
       });
     }
 
@@ -502,10 +487,27 @@ router.post('/subscription', ensureAuthenticated, async (req: Request, res: Resp
       error: syncResult.error || 'none'
     });
 
-    // Select price based on billing cycle
+    // P1-5 FIX: Select price based on billing cycle with validation
+    const monthlyPriceId = syncResult.stripeMonthlyPriceId;
+    const yearlyPriceId = syncResult.stripeYearlyPriceId;
+
+    // Validate that monthly and yearly price IDs are distinct when both exist
+    if (monthlyPriceId && yearlyPriceId && monthlyPriceId === yearlyPriceId) {
+      console.error(`🔴 [P1-5] CRITICAL: Monthly and Yearly Stripe price IDs are identical (${monthlyPriceId}). This will cause incorrect billing.`);
+      return res.status(500).json({
+        success: false,
+        error: 'Billing configuration error: Monthly and yearly prices are not properly configured. Please contact support.'
+      });
+    }
+
     const priceId = billingCycle === 'yearly'
-      ? (syncResult.stripeYearlyPriceId ?? syncResult.stripeMonthlyPriceId)
-      : (syncResult.stripeMonthlyPriceId ?? syncResult.stripeYearlyPriceId);
+      ? (yearlyPriceId ?? monthlyPriceId)
+      : (monthlyPriceId ?? yearlyPriceId);
+
+    // Warn if yearly was requested but falling back to monthly
+    if (billingCycle === 'yearly' && !yearlyPriceId && monthlyPriceId) {
+      console.warn(`⚠️ [P1-5] Yearly billing requested but no yearly price ID configured for ${planType}. Falling back to monthly.`);
+    }
 
     if (!syncResult.success || !priceId) {
       console.error('❌ [Subscription] Stripe sync failed:', { syncSuccess: syncResult.success, priceId, error: syncResult.error });
@@ -986,6 +988,55 @@ router.get('/subscription-tiers', async (req: Request, res: Response) => {
       success: false,
       error: 'Failed to get subscription tiers',
       details: error.message
+    });
+  }
+});
+
+/**
+ * HIGH PRIORITY FIX: Get journey pricing for the journeys hub page
+ * Returns base pricing for each journey type from CostEstimationService constants
+ */
+router.get('/journeys', async (req: Request, res: Response) => {
+  try {
+    // Import cost estimation service constants for consistent pricing
+    const { CostEstimationService } = await import('../services/cost-estimation-service');
+
+    // Get base pricing from CostEstimationService or use defaults
+    const baseCost = 0.50; // BASE_COST from CostEstimationService
+    const platformFee = 0.25;
+
+    // Journey type multipliers (aligned with CostEstimationService)
+    const journeyMultipliers: Record<string, number> = {
+      'non-tech': 1.0,      // Standard guided analysis
+      'business': 0.8,      // Template-based (slightly cheaper)
+      'technical': 1.5,     // Advanced features
+      'consultation': 0     // Custom pricing (contact sales)
+    };
+
+    // Calculate base prices for each journey type
+    const journeyPricing: Record<string, number | string> = {};
+    for (const [journeyId, multiplier] of Object.entries(journeyMultipliers)) {
+      if (multiplier === 0) {
+        journeyPricing[journeyId] = 'Custom Pricing';
+      } else {
+        // Base price calculation: (baseCost * multiplier + platformFee) rounded to nearest dollar for display
+        const basePrice = Math.ceil((baseCost * multiplier + platformFee) * 100) / 100;
+        // Show a "From $X" minimum that's reasonable for marketing
+        const displayPrice = Math.max(basePrice * 10, journeyId === 'business' ? 19 : journeyId === 'technical' ? 49 : 29);
+        journeyPricing[journeyId] = displayPrice;
+      }
+    }
+
+    res.json({
+      success: true,
+      journeyPricing,
+      lastUpdated: new Date().toISOString()
+    });
+  } catch (error: any) {
+    console.error('Error getting journey pricing:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get journey pricing'
     });
   }
 });

@@ -54,7 +54,16 @@
       "Bash(wc:*)",
       "Bash(python:*)",
       "Bash(pip install:*)",
-      "Bash(pricing \")"
+      "Bash(pricing \")",
+      "Bash(npx vitest:*)",
+      "Bash(npx dotenvx run:*)",
+      "Bash(npx cross-env:*)",
+      "Bash(del vitest.backend.global-setup.ts)",
+      "Bash(redis-cli ping:*)",
+      "Bash(docker ps:*)",
+      "Bash(Get-Content \"C:\\\\Users\\\\scmak\\\\Documents\\\\Work\\\\Projects\\\\Chimari\\\\chimariapp2\\\\ChimariData_Flowise-chimaridataApp2\\\\server.log\" -Tail 100)",
+      "Bash(npx:*)",
+      "Bash(git status:*)"
     ],
     "deny": [],
     "ask": []

@@ -69,33 +69,6 @@ export async function validateProductionReadiness(): Promise<ValidationResult> {
         failures.push('Database not available - critical failure');
     }
 
-    // Check for forced mock modes
-    if (process.env.FORCE_SPARK_MOCK === 'true') {
-        if (isProduction) {
-            failures.push('FORCE_SPARK_MOCK is enabled - mock data will be returned to users');
-        } else {
-            warnings.push('FORCE_SPARK_MOCK enabled - using mock Spark data');
-        }
-    }
-
-    // Check for ENABLE_MOCK_MODE flag
-    if (process.env.ENABLE_MOCK_MODE === 'true') {
-        if (isProduction) {
-            failures.push('ENABLE_MOCK_MODE is enabled - mock data will be returned to users');
-        } else {
-            warnings.push('ENABLE_MOCK_MODE enabled - using mock data');
-        }
-    }
-
-    // Check for client-side mock data (Vite environment variable)
-    // Note: This can't be checked at runtime, but we document it
-    if (isProduction) {
-        // Verify production build doesn't have VITE_ENABLE_MOCK set
-        const viteMockMode = process.env.VITE_ENABLE_MOCK_MODE;
-        if (viteMockMode === 'true') {
-            warnings.push('VITE_ENABLE_MOCK_MODE is set - verify client-side mock data is disabled in production build');
-        }
-    }
 
     // Check for missing required environment variables
     const envCheck = checkRequiredEnvironmentVariables();
@@ -331,14 +304,15 @@ function checkRequiredEnvironmentVariables(): { missing: string[], optional: str
         'GOOGLE_AI_API_KEY'
     ];
 
+    // P3-B FIX: Stripe key is required in production (payment flow depends on it)
     const productionRequired = [
         'REDIS_URL',
         'SPARK_MASTER_URL',
-        'PYTHON_PATH'
+        'PYTHON_PATH',
+        'STRIPE_SECRET_KEY'
     ];
 
     const optional = [
-        'STRIPE_SECRET_KEY',
         'SENDGRID_API_KEY',
         'AWS_ACCESS_KEY_ID',
         'GOOGLE_CLIENT_ID'
@@ -382,7 +356,6 @@ export async function getServiceHealth(): Promise<{
     pythonAvailable: boolean;
     redisAvailable: boolean;
     databaseAvailable: boolean;
-    usingMockData: boolean;
     details: any;
 }> {
     const validation = await validateProductionReadiness();
@@ -392,11 +365,7 @@ export async function getServiceHealth(): Promise<{
     const redisAvailable = validation.services.redis.available;
     const databaseAvailable = validation.services.database.available;
 
-    // Check if any service is using mock data
-    const usingMockData = !sparkAvailable || !pythonAvailable ||
-        process.env.FORCE_SPARK_MOCK === 'true';
-
-    const allServicesOperational = validation.ready && !usingMockData;
+    const allServicesOperational = validation.ready && sparkAvailable && pythonAvailable;
 
     return {
         allServicesOperational,
@@ -404,7 +373,6 @@ export async function getServiceHealth(): Promise<{
         pythonAvailable,
         redisAvailable,
         databaseAvailable,
-        usingMockData,
         details: {
             failures: validation.failures,
             warnings: validation.warnings,

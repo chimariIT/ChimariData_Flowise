@@ -140,6 +140,8 @@ export interface DataScienceRequest {
   }>;
   // P0-4: PII decisions for filtering sensitive columns
   piiDecisions?: Record<string, { action: 'include' | 'exclude' | 'mask'; }>;
+  // P0-1 FIX: Explicit list of columns to exclude (from PII decisions)
+  columnsToExclude?: string[];
   // VI-1 FIX: Compute engine selection for optimal performance
   computeEngine?: 'local' | 'polars' | 'spark';
   computeEngineConfig?: {
@@ -397,6 +399,41 @@ export class DataScienceOrchestrator {
 
     // Load datasets
     const datasetData = await this.loadProjectDatasets(request.projectId, request.datasetIds);
+
+    // P0-1 FIX: Filter PII-excluded columns BEFORE any analysis phase
+    if (request.columnsToExclude && request.columnsToExclude.length > 0) {
+      const excludeSet = new Set(request.columnsToExclude.map(c => c.toLowerCase()));
+      const originalColumnCount = datasetData.totalColumns;
+
+      // Filter columns from all row objects
+      datasetData.rows = datasetData.rows.map(row => {
+        const filteredRow: any = {};
+        for (const key of Object.keys(row)) {
+          if (!excludeSet.has(key.toLowerCase())) {
+            filteredRow[key] = row[key];
+          }
+        }
+        return filteredRow;
+      });
+
+      // Update schema to remove excluded columns
+      if (datasetData.schema && typeof datasetData.schema === 'object') {
+        for (const key of Object.keys(datasetData.schema)) {
+          if (excludeSet.has(key.toLowerCase())) {
+            delete datasetData.schema[key];
+          }
+        }
+      }
+
+      // Update column count
+      const newColumnCount = datasetData.rows.length > 0
+        ? Object.keys(datasetData.rows[0]).length
+        : originalColumnCount - request.columnsToExclude.length;
+      datasetData.totalColumns = newColumnCount;
+
+      console.log(`🔒 [PII] Filtered ${request.columnsToExclude.length} PII columns before analysis: [${request.columnsToExclude.join(', ')}]`);
+      console.log(`🔒 [PII] Columns reduced: ${originalColumnCount} → ${newColumnCount}`);
+    }
 
     // Phase 1: Data Quality Assessment
     console.log(`📋 Phase 1: Data Quality Assessment`);

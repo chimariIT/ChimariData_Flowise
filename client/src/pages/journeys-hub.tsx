@@ -1,20 +1,37 @@
 import { Link, useLocation } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { 
-  Target, 
-  TrendingUp, 
-  Brain, 
-  MessageCircle, 
+import {
+  Target,
+  TrendingUp,
+  Brain,
+  MessageCircle,
   ArrowRight,
   CheckCircle,
   Zap,
   BarChart3,
-  Users
+  Users,
+  Lock
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useUserRole } from "@/hooks/useUserRole";
+import { apiClient } from "@/lib/api";
+// MEDIUM PRIORITY FIX: Use custom hook instead of DOM manipulation for SEO
+import { useDocumentHead } from "@/hooks/useDocumentHead";
+// MEDIUM PRIORITY FIX: Use canonical journey types from shared/
+import { JourneyType } from "@shared/canonical-types";
+
+interface JourneyConfig {
+  id: JourneyType;
+  title: string;
+  description: string;
+  icon: typeof Target;
+  features: string[];
+  badge: string;
+  badgeColor: string;
+}
 
 interface JourneysHubProps {
   user?: any;
@@ -24,21 +41,45 @@ export default function JourneysHub({ user }: JourneysHubProps) {
   const [, setLocation] = useLocation();
   const { userRoleData, canAccessJourney } = useUserRole();
 
-  // SEO: Set page title and meta description
-  useEffect(() => {
-    document.title = "Choose Your Data Analysis Journey | ChimariData";
-    
-    // Update meta description
-    const metaDescription = document.querySelector('meta[name="description"]');
-    if (metaDescription) {
-      metaDescription.setAttribute('content', 'Get insights from your data with guided analysis journeys. Choose from non-technical guided analysis, business templates, or technical pro options. Start your data journey today.');
-    } else {
-      const meta = document.createElement('meta');
-      meta.name = 'description';
-      meta.content = 'Get insights from your data with guided analysis journeys. Choose from non-technical guided analysis, business templates, or technical pro options. Start your data journey today.';
-      document.head.appendChild(meta);
+  // HIGH PRIORITY FIX: Fetch dynamic pricing from backend
+  const { data: pricingData } = useQuery({
+    queryKey: ['/api/pricing/journeys'],
+    queryFn: async () => {
+      try {
+        const response = await apiClient.get('/api/pricing/journeys');
+        return response?.data || response;
+      } catch {
+        return null; // Use fallback pricing on error
+      }
+    },
+    staleTime: 60000, // Cache for 1 minute
+    retry: 1
+  });
+
+  // Get dynamic pricing or fallback to static pricing
+  const getJourneyPricing = (journeyId: string): string => {
+    if (pricingData?.journeyPricing?.[journeyId]) {
+      const price = pricingData.journeyPricing[journeyId];
+      if (typeof price === 'number') {
+        return `From $${price.toFixed(2)}/analysis`;
+      }
+      return price;
     }
-  }, []);
+    // Fallback pricing
+    const fallbackPricing: Record<string, string> = {
+      'non-tech': 'From $29/analysis',
+      'business': 'From $19/template',
+      'technical': 'From $49/analysis',
+      'consultation': 'Custom Pricing'
+    };
+    return fallbackPricing[journeyId] || 'Contact for pricing';
+  };
+
+  // MEDIUM PRIORITY FIX: Use declarative hook instead of DOM manipulation for SEO
+  useDocumentHead({
+    title: "Choose Your Data Analysis Journey | ChimariData",
+    description: "Get insights from your data with guided analysis journeys. Choose from non-technical guided analysis, business templates, or technical pro options. Start your data journey today."
+  });
 
   const handleJourneyStart = (journeyType: string) => {
     if (!user) {
@@ -49,11 +90,27 @@ export default function JourneysHub({ user }: JourneysHubProps) {
       setLocation('/auth/register');
       return;
     }
+
+    // HIGH PRIORITY FIX: Check if user can access this journey type
+    if (!canAccessJourney(journeyType)) {
+      // User doesn't have access - redirect to upgrade page
+      setLocation(`/pricing?upgrade=true&journey=${journeyType}`);
+      return;
+    }
+
     // Navigate to Data Upload & Setup step (step 1) using SPA navigation (with ?new=true to clear prefilled data)
     setLocation(`/journeys/${journeyType}/data?new=true`);
   };
 
-  const journeys = [
+  // Check if journey is locked for current user
+  const isJourneyLocked = (journeyType: JourneyType): boolean => {
+    if (!user) return false; // Not locked for unauthenticated - they'll be redirected to register
+    return !canAccessJourney(journeyType);
+  };
+
+  // HIGH PRIORITY FIX: Use dynamic pricing from backend
+  // MEDIUM PRIORITY FIX: Use canonical JourneyType for type safety
+  const journeys: JourneyConfig[] = [
     {
       id: 'non-tech',
       title: 'Non-Technical Guided',
@@ -61,13 +118,12 @@ export default function JourneysHub({ user }: JourneysHubProps) {
       icon: Target,
       features: [
         'AI-powered goal extraction',
-        'Guided data upload & preparation', 
+        'Guided data upload & preparation',
         'Automated analysis suggestions',
         'Business-friendly reporting'
       ],
       badge: 'Most Popular',
-      badgeColor: 'bg-gray-700',
-      pricing: 'From $29/analysis'
+      badgeColor: 'bg-gray-700'
     },
     {
       id: 'business',
@@ -81,8 +137,7 @@ export default function JourneysHub({ user }: JourneysHubProps) {
         'Executive dashboards'
       ],
       badge: 'Templates',
-      badgeColor: 'bg-gray-600',
-      pricing: 'From $19/template'
+      badgeColor: 'bg-gray-600'
     },
     {
       id: 'technical',
@@ -96,8 +151,7 @@ export default function JourneysHub({ user }: JourneysHubProps) {
         'API access & automation'
       ],
       badge: 'Advanced',
-      badgeColor: 'bg-gray-800',
-      pricing: 'From $49/analysis'
+      badgeColor: 'bg-gray-800'
     },
     {
       id: 'consultation',
@@ -111,8 +165,7 @@ export default function JourneysHub({ user }: JourneysHubProps) {
         'Implementation guidance'
       ],
       badge: 'Expert Support',
-      badgeColor: 'bg-gray-500',
-      pricing: 'Custom Pricing'
+      badgeColor: 'bg-gray-500'
     }
   ];
 
@@ -170,20 +223,34 @@ export default function JourneysHub({ user }: JourneysHubProps) {
                   <div className="pt-4 border-t">
                     <div className="flex items-center justify-between mb-4">
                       <span className="text-lg font-semibold text-gray-700 dark:text-gray-400">
-                        {journey.pricing}
+                        {getJourneyPricing(journey.id)}
                       </span>
+                      {isJourneyLocked(journey.id) && (
+                        <Lock className="h-4 w-4 text-amber-500" />
+                      )}
                     </div>
-                    
-                    <Button 
+
+                    <Button
                       onClick={() => handleJourneyStart(journey.id)}
-                      className="w-full bg-gray-800 hover:bg-gray-900 text-white"
+                      className={`w-full ${isJourneyLocked(journey.id)
+                        ? 'bg-amber-600 hover:bg-amber-700'
+                        : 'bg-gray-800 hover:bg-gray-900'} text-white`}
                       data-testid={`button-start-${journey.id}`}
                     >
-                      {journey.id === 'non-tech' ? 'Non-Tech User' : 
-                       journey.id === 'business' ? 'Business User' :
-                       journey.id === 'technical' ? 'Technical User' : 
-                       'Start Journey'}
-                      <ArrowRight className="ml-2 h-4 w-4" />
+                      {isJourneyLocked(journey.id) ? (
+                        <>
+                          Upgrade to Access
+                          <Lock className="ml-2 h-4 w-4" />
+                        </>
+                      ) : (
+                        <>
+                          {journey.id === 'non-tech' ? 'Non-Tech User' :
+                           journey.id === 'business' ? 'Business User' :
+                           journey.id === 'technical' ? 'Technical User' :
+                           'Start Journey'}
+                          <ArrowRight className="ml-2 h-4 w-4" />
+                        </>
+                      )}
                     </Button>
                   </div>
                 </CardContent>

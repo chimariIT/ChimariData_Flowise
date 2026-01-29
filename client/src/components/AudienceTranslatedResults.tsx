@@ -25,7 +25,10 @@ import {
   Loader2,
   RefreshCw,
   Eye,
-  Lock
+  Lock,
+  Activity,
+  Building2,
+  DollarSign
 } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 import { toast } from '@/hooks/use-toast';
@@ -404,6 +407,140 @@ export default function AudienceTranslatedResults({ project, journeyType = 'busi
               )}
             </CardContent>
           </Card>
+
+          {/* GAP FIX: Business Impact Section - Display journeyProgress.businessImpact */}
+          {!isPreview && project?.journeyProgress?.businessImpact && (
+            <Card className="border-emerald-200 bg-gradient-to-br from-emerald-50 to-teal-50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <DollarSign className="w-5 h-5 text-emerald-600" />
+                  Business Impact Assessment
+                </CardTitle>
+                <CardDescription>
+                  Strategic value analysis by Business Agent
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  {/* ROI Estimate */}
+                  {project.journeyProgress.businessImpact.roiEstimate && (
+                    <div className="flex items-center justify-between p-3 bg-white rounded-lg border border-emerald-100">
+                      <span className="text-gray-700 font-medium">Estimated ROI</span>
+                      <Badge className="bg-emerald-600 text-white">{project.journeyProgress.businessImpact.roiEstimate}</Badge>
+                    </div>
+                  )}
+                  {/* Value Drivers */}
+                  {project.journeyProgress.businessImpact.valueDrivers && project.journeyProgress.businessImpact.valueDrivers.length > 0 && (
+                    <div>
+                      <h4 className="font-semibold text-gray-900 mb-2">Key Value Drivers</h4>
+                      <ul className="space-y-2">
+                        {project.journeyProgress.businessImpact.valueDrivers.map((driver: any, idx: number) => (
+                          <li key={idx} className="flex items-start gap-2 text-gray-700">
+                            <Activity className="w-4 h-4 text-emerald-500 mt-0.5 flex-shrink-0" />
+                            <span>{typeof driver === 'string' ? driver : driver.description || driver.name}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {/* Risk Factors */}
+                  {project.journeyProgress.businessImpact.risks && project.journeyProgress.businessImpact.risks.length > 0 && (
+                    <div>
+                      <h4 className="font-semibold text-gray-900 mb-2">Risk Considerations</h4>
+                      <ul className="space-y-2">
+                        {project.journeyProgress.businessImpact.risks.map((risk: any, idx: number) => (
+                          <li key={idx} className="flex items-start gap-2 text-gray-700">
+                            <span className="text-amber-500">⚠️</span>
+                            <span>{typeof risk === 'string' ? risk : risk.description || risk.name}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {/* Summary */}
+                  {project.journeyProgress.businessImpact.summary && (
+                    <p className="text-gray-800 pt-2 border-t border-emerald-100">{project.journeyProgress.businessImpact.summary}</p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* GAP FIX: Industry Insights Section - Display journeyProgress.industryInsights */}
+          {!isPreview && project?.journeyProgress?.industryInsights && (
+            <Card className="border-purple-200 bg-gradient-to-br from-purple-50 to-pink-50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Building2 className="w-5 h-5 text-purple-600" />
+                  Industry Insights
+                </CardTitle>
+                <CardDescription>
+                  Industry-specific analysis by Business Agent for {project.journeyProgress.industry || 'your sector'}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  {/* Best Practices */}
+                  {project.journeyProgress.industryInsights.bestPractices && project.journeyProgress.industryInsights.bestPractices.length > 0 && (
+                    <div>
+                      <h4 className="font-semibold text-gray-900 mb-2">Industry Best Practices</h4>
+                      <ul className="space-y-2">
+                        {project.journeyProgress.industryInsights.bestPractices.map((practice: any, idx: number) => (
+                          <li key={idx} className="flex items-start gap-2 text-gray-700">
+                            <span className="text-purple-500">✓</span>
+                            <span>{typeof practice === 'string' ? practice : practice.description || practice.name}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {/* Benchmarks */}
+                  {project.journeyProgress.industryInsights.benchmarks && project.journeyProgress.industryInsights.benchmarks.length > 0 && (
+                    <div>
+                      <h4 className="font-semibold text-gray-900 mb-2">Industry Benchmarks</h4>
+                      <div className="grid grid-cols-2 gap-2">
+                        {project.journeyProgress.industryInsights.benchmarks.map((benchmark: any, idx: number) => (
+                          <div key={idx} className="p-2 bg-white rounded-lg border border-purple-100">
+                            <div className="text-sm text-gray-600">{benchmark.metric || benchmark.name}</div>
+                            <div className="font-semibold text-purple-900">{benchmark.value || benchmark.target}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {/* Recommendations */}
+                  {project.journeyProgress.industryInsights.recommendations && project.journeyProgress.industryInsights.recommendations.length > 0 && (
+                    <div>
+                      <h4 className="font-semibold text-gray-900 mb-2">Industry-Specific Recommendations</h4>
+                      <ul className="space-y-2">
+                        {project.journeyProgress.industryInsights.recommendations.map((rec: any, idx: number) => (
+                          <li key={idx} className="flex items-start gap-2 text-gray-700">
+                            <Target className="w-4 h-4 text-purple-500 mt-0.5 flex-shrink-0" />
+                            <span>{typeof rec === 'string' ? rec : rec.description || rec.title}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Preview mode placeholder for business impact */}
+          {isPreview && (project?.journeyProgress?.businessImpact || project?.journeyProgress?.industryInsights) && (
+            <Card className="border-gray-200 bg-gray-50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-gray-500">
+                  <Lock className="w-5 h-5" />
+                  Business Impact & Industry Insights
+                </CardTitle>
+                <CardDescription className="text-gray-500">
+                  Detailed business value analysis and industry benchmarks available - unlock to view
+                </CardDescription>
+              </CardHeader>
+            </Card>
+          )}
 
           {/* Key Findings - Limited in preview mode */}
           <Card>

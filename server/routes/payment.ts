@@ -67,48 +67,21 @@ router.post('/create-checkout-session', ensureAuthenticated, async (req, res) =>
             return res.status(404).json({ error: 'Project not found' });
         }
 
-        // ✅ PHASE 6 FIX: Use locked cost estimate with better fallback chain
-        // Priority: 1. Request amount (from frontend), 2. lockedCostEstimate, 3. costEstimation, 4. costBreakdown, 5. fallback
+        // PHASE 5 SSOT FIX: Use ONLY journeyProgress.lockedCostEstimate (no fallbacks)
         const projectAny = project as any;
-        const requestAmount = req.body.amount;  // PHASE 6: Frontend can pass exact amount
-        const lockedCost = projectAny.lockedCostEstimate;
-        const costEstimation = (project as any).costEstimation;
+        const journeyProgress = projectAny.journeyProgress || {};
+        const lockedCostEstimate = journeyProgress.lockedCostEstimate;
 
-        let amount: number;
+        if (!lockedCostEstimate || parseFloat(lockedCostEstimate) <= 0) {
+            console.error(`❌ [Payment SSOT] No locked cost estimate found in journeyProgress for project ${projectId}`);
+            return res.status(400).json({
+                error: 'COST_NOT_LOCKED',
+                message: 'Cost must be locked before payment. Please return to the pricing step to lock your cost estimate.'
+            });
+        }
 
-        // Priority 1: Use amount from request (frontend calculated, most accurate)
-        if (requestAmount && parseFloat(requestAmount) > 0) {
-            amount = parseFloat(requestAmount);
-            console.log(`✅ [Payment] Using frontend-provided amount: $${amount.toFixed(2)} for project ${projectId}`);
-
-            // Also save to project for record keeping
-            try {
-                await storage.updateProject(projectId, { lockedCostEstimate: amount.toString() } as any);
-                console.log(`✅ [Payment] Saved lockedCostEstimate: $${amount.toFixed(2)}`);
-            } catch (saveError) {
-                console.warn(`⚠️ [Payment] Could not save lockedCostEstimate:`, saveError);
-            }
-        }
-        // Priority 2: Use lockedCostEstimate from database
-        else if (lockedCost && parseFloat(lockedCost) > 0) {
-            amount = parseFloat(lockedCost);
-            console.log(`✅ [Payment] Using lockedCostEstimate: $${amount.toFixed(2)} for project ${projectId}`);
-        }
-        // Priority 3: Use costEstimation
-        else if (costEstimation && parseFloat(costEstimation) > 0) {
-            amount = parseFloat(costEstimation);
-            console.log(`✅ [Payment] Using costEstimation: $${amount.toFixed(2)} for project ${projectId}`);
-        }
-        // Priority 4: Use costBreakdown.total
-        else if (projectAny.costBreakdown?.total && parseFloat(projectAny.costBreakdown.total) > 0) {
-            amount = parseFloat(projectAny.costBreakdown.total);
-            console.log(`✅ [Payment] Using costBreakdown.total: $${amount.toFixed(2)} for project ${projectId}`);
-        }
-        // Priority 5: Last resort fallback
-        else {
-            amount = 35;
-            console.warn(`⚠️ [Payment] No cost found for project ${projectId}, using fallback: $${amount}`);
-        }
+        const amount = parseFloat(lockedCostEstimate);
+        console.log(`✅ [Payment SSOT] Using journeyProgress.lockedCostEstimate: $${amount.toFixed(2)} for project ${projectId}`);
 
         const currency = 'USD';
 
@@ -119,9 +92,21 @@ router.post('/create-checkout-session', ensureAuthenticated, async (req, res) =>
         const unifiedBillingService = getBillingService();
 
         const session = await unifiedBillingService.createCheckoutSession(projectId, userId, amount, currency);
-        res.json(session);
+
+        // P1 FIX: Return both 'id' and 'sessionId' for frontend compatibility
+        // Frontend checks for 'response.url' first, then 'response.id' as fallback
+        res.json({
+            ...session,
+            id: session.sessionId,  // Frontend compatibility - checks 'id' not 'sessionId'
+            success: true
+        });
     } catch (error: any) {
-        res.status(500).json({ error: error.message });
+        console.error('❌ [Payment] Checkout session creation failed:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            errorType: 'checkout_creation_failed'
+        });
     }
 });
 
@@ -206,10 +191,11 @@ router.post('/verify-session', ensureAuthenticated, async (req, res) => {
             console.log(`✅ [Payment] Session ${sessionId} verified for project ${projectId} - marked as paid`);
         }
 
+        // P0-A FIX: Normalize paymentStatus to only 'paid' or 'failed' - never expose internal status strings
         res.json({
             success: verification.success,
             status: verification.status,
-            paymentStatus: verification.success ? 'paid' : verification.status,
+            paymentStatus: verification.success ? 'paid' : 'failed',
             projectId,
             message: verification.success ? 'Payment verified successfully' : 'Payment verification failed'
         });

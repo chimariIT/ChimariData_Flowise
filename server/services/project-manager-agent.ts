@@ -1418,10 +1418,11 @@ export class ProjectManagerAgent {
             }
 
             // FIX: Generate context-aware visualizations based on analysis steps and data characteristics
+            // Use stepsForCost which is already computed above (same logic as finalAnalysisSteps)
             let visualizations = blueprint.visualizations || [];
             if (visualizations.length === 0) {
                 console.log('📊 [PM Agent] Generating fallback visualizations from analysis context...');
-                const analysisTypes = finalAnalysisSteps?.map(s => s.method?.toLowerCase() || s.name?.toLowerCase() || '') || [];
+                const analysisTypes = stepsForCost?.map(s => s.method?.toLowerCase() || s.name?.toLowerCase() || '') || [];
 
                 // Generate based on what analyses are planned
                 if (analysisTypes.some(t => /correlation/i.test(t))) {
@@ -1528,6 +1529,13 @@ export class ProjectManagerAgent {
                 firstAnalysis: planMetadata.analysisPath?.[0]?.analysisName || 'none',
                 questionMappingCount: planMetadata.questionAnswerMapping?.length || 0
             });
+
+            // ✅ P1-4 FIX: Log what's being saved for debugging plan tabs issue
+            console.log(`📊 [PM Agent] Saving plan ${planId} with:`);
+            console.log(`   - visualizations: ${visualizations?.length || 0} items (types: ${visualizations?.map((v: any) => v.type).join(', ') || 'none'})`);
+            console.log(`   - agentContributions: ${Object.keys(agentContributions).length} agents (${Object.keys(agentContributions).join(', ')})`);
+            console.log(`   - analysisSteps: ${finalAnalysisSteps?.length || 0} steps`);
+            console.log(`   - mlModels: ${mlModels?.length || 0} models`);
 
             await db
                 .update(analysisPlans)

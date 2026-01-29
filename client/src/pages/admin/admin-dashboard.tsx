@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { CustomerSelectionModal } from "@/components/CustomerSelectionModal";
 import { useConsultant } from "@/contexts/ConsultantContext";
+import { apiClient } from "@/lib/api";
 import {
   Users,
   Settings,
@@ -17,7 +19,9 @@ import {
   Shield,
   Eye,
   UserCog,
-  UserCheck
+  UserCheck,
+  RefreshCw,
+  Loader2
 } from "lucide-react";
 
 interface AdminDashboardProps {
@@ -28,6 +32,17 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
   const [, setLocation] = useLocation();
   const { isConsultantMode, selectedCustomer, setConsultantMode, clearConsultantMode } = useConsultant();
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
+
+  // HIGH PRIORITY FIX: Fetch real stats from backend instead of hardcoded values
+  const { data: dashboardData, isLoading: statsLoading, error: statsError, refetch: refetchStats } = useQuery({
+    queryKey: ['/api/admin/dashboard'],
+    queryFn: async () => {
+      const response = await apiClient.get('/api/admin/dashboard');
+      return response?.data || response;
+    },
+    refetchInterval: 30000, // Auto-refresh every 30 seconds
+    staleTime: 10000 // Consider data stale after 10 seconds
+  });
 
   const adminSections = [
     {
@@ -74,24 +89,31 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
     }
   ];
 
+  // Build stats from real API data
   const stats = [
     {
       title: "Total Users",
-      value: "—",
+      value: statsLoading ? "..." : (dashboardData?.totalUsers?.toLocaleString() || "0"),
       icon: Users,
       color: "text-blue-600"
     },
     {
-      title: "Active Subscriptions",
-      value: "—",
+      title: "Total Projects",
+      value: statsLoading ? "..." : (dashboardData?.totalProjects?.toLocaleString() || "0"),
       icon: TrendingUp,
       color: "text-green-600"
     },
     {
-      title: "System Health",
-      value: "Operational",
+      title: "Active Agents",
+      value: statsLoading ? "..." : `${dashboardData?.activeAgents || 0}/${dashboardData?.totalAgents || 0}`,
+      icon: Bot,
+      color: "text-purple-600"
+    },
+    {
+      title: "System Status",
+      value: statsLoading ? "..." : (dashboardData?.systemStatus === 'healthy' ? "Operational" : dashboardData?.systemStatus || "Unknown"),
       icon: Activity,
-      color: "text-emerald-600"
+      color: dashboardData?.systemStatus === 'healthy' ? "text-emerald-600" : dashboardData?.systemStatus === 'degraded' ? "text-amber-600" : "text-red-600"
     }
   ];
 
@@ -114,7 +136,7 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
             <div className="flex gap-2">
               <Button
                 variant="outline"
-                onClick={() => setLocation('/dashboard')}
+                onClick={() => setIsCustomerModalOpen(true)}
                 className="flex items-center gap-2"
               >
                 <UserCog className="h-4 w-4" />
@@ -125,20 +147,43 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
         </div>
 
         {/* Stats Overview */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          {stats.map((stat, index) => (
-            <Card key={index}>
-              <CardContent className="pt-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-gray-600">{stat.title}</p>
-                    <p className="text-2xl font-bold text-gray-900 mt-1">{stat.value}</p>
+        <div className="mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-gray-900">System Overview</h2>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => refetchStats()}
+              disabled={statsLoading}
+            >
+              {statsLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              <span className="ml-2">Refresh</span>
+            </Button>
+          </div>
+          {statsError && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+              Failed to load dashboard stats. Please try refreshing.
+            </div>
+          )}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {stats.map((stat, index) => (
+              <Card key={index}>
+                <CardContent className="pt-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-gray-600">{stat.title}</p>
+                      <p className="text-2xl font-bold text-gray-900 mt-1">{stat.value}</p>
+                    </div>
+                    <stat.icon className={`h-8 w-8 ${stat.color}`} />
                   </div>
-                  <stat.icon className={`h-8 w-8 ${stat.color}`} />
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
         </div>
 
         {/* Admin Sections */}

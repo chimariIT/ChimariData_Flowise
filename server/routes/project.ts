@@ -3992,6 +3992,15 @@ router.put("/:id/verify", ensureAuthenticated, async (req, res) => {
             // Continue anyway - user can manually configure in transformation step
         }
 
+        // P2-A FIX: Update agent coordination data after verification step
+        // This refreshes multiAgentCoordination with latest data quality info
+        try {
+            await projectAgentOrchestrator.updateProjectCoordinationData(projectId);
+            console.log(`✅ [P2-A FIX] Updated multiAgentCoordination after verification for project ${projectId}`);
+        } catch (coordError) {
+            console.warn(`⚠️ [P2-A FIX] Failed to update multiAgentCoordination:`, coordError);
+        }
+
         res.json({
             success: true,
             project: updatedProject,
@@ -4451,6 +4460,41 @@ router.post("/:id/upload", ensureAuthenticated, upload.single('file'), async (re
             },
             timestamp: new Date(),
             requiresUserInput: true
+        });
+
+        // ==========================================
+        // TASK 1 FIX: EMBEDDING GENERATION (NON-BLOCKING)
+        // ==========================================
+        // Generate column embeddings EARLY (during upload) so they're available for element mapping
+        // in the verification step. Previously, embeddings were only generated during transformation
+        // which was too late for semantic column matching.
+        setImmediate(async () => {
+            try {
+                console.log(`🔢 [TASK 1 FIX] Generating column embeddings for project ${projectId}...`);
+                const columnsWithMeta = Object.entries(processedData.schema).map(([name, schemaInfo]: [string, any]) => {
+                    const sampleValues = (processedData.data || processedData.preview || [])
+                        .slice(0, 5)
+                        .map((row: any) => row[name])
+                        .filter((v: any) => v != null);
+                    return {
+                        name,
+                        type: schemaInfo?.type || 'string',
+                        sampleValues
+                    };
+                });
+
+                if (columnsWithMeta.length > 0) {
+                    await columnEmbeddingGenerator.generateEmbeddingsForDataset({
+                        datasetId: newDataset.id,
+                        projectId,
+                        columns: columnsWithMeta
+                    });
+                    console.log(`✅ [TASK 1 FIX] Generated embeddings for ${columnsWithMeta.length} columns`);
+                }
+            } catch (embeddingError) {
+                console.error('❌ [TASK 1 FIX] Column embedding generation failed:', embeddingError);
+                // Don't fail upload if embedding generation fails
+            }
         });
 
         // ==========================================
@@ -4920,6 +4964,16 @@ router.post("/:id/generate-data-requirements", ensureAuthenticated, requireOwner
         console.log(`✅ [GAP 9 FIX] Persisted requirements document to journeyProgress for project ${projectId}`);
         console.log(`   - Analysis path items: ${document.analysisPath?.length || 0}`);
         console.log(`   - Required data elements: ${document.requiredDataElements?.length || 0}`);
+
+        // P2-A FIX: Trigger agent coordination data update so AI Agent Activity modal shows project-specific findings
+        // This populates multiAgentCoordination with data from requirementsDocument, user goals, and analysis path
+        try {
+            await projectAgentOrchestrator.updateProjectCoordinationData(projectId);
+            console.log(`✅ [P2-A FIX] Updated multiAgentCoordination for project ${projectId}`);
+        } catch (coordError) {
+            // Non-critical - log but don't fail the request
+            console.warn(`⚠️ [P2-A FIX] Failed to update multiAgentCoordination:`, coordError);
+        }
 
         res.json({
             success: true,
@@ -5529,15 +5583,62 @@ router.post("/:id/enrich-data-elements", ensureAuthenticated, requireOwnership('
                     enrichmentStats.inferred++;
                     console.log(`    🔬 Inferred: ${inferredDef.displayName || inferredDef.conceptName}`);
                 } else {
+                    // FALLBACK: Generate basic definition from element properties
+                    // DS agent provides calculationType, aggregationMethod, etc.
+                    const calcType = element.calculationType || element.type || 'direct';
+                    const calcDef = element.calculationDefinition || element.definition;
+                    const aggMethod = element.aggregationMethod;
+
+                    if (calcType || calcDef) {
+                        enrichedElement = {
+                            ...element,
+                            businessDefinition: {
+                                conceptName: conceptName.toLowerCase().replace(/\s+/g, '_'),
+                                displayName: conceptName,
+                                businessDescription: calcDef || `${conceptName} - ${calcType} metric${aggMethod ? ` using ${aggMethod}` : ''}`,
+                                calculationType: calcType,
+                                aggregationMethod: aggMethod,
+                                confidence: 0.5,
+                                source: 'auto_derived',
+                                industry: projectIndustry
+                            },
+                            hasBusinessDefinition: true,
+                            definitionConfidence: 0.5
+                        };
+                        enrichmentStats.inferred++;
+                        console.log(`    🔧 Auto-derived definition from element properties: ${conceptName} (${calcType})`);
+                    } else {
+                        enrichedElement.hasBusinessDefinition = false;
+                        enrichedElement.definitionConfidence = 0;
+                        enrichmentStats.notFound++;
+                        console.log(`    ❌ No definition found or inferred`);
+                    }
+                }
+            } else {
+                // FALLBACK even when includeInferred is false
+                const calcType = element.calculationType || element.type || 'direct';
+                const calcDef = element.calculationDefinition || element.definition;
+                if (calcType || calcDef) {
+                    enrichedElement = {
+                        ...element,
+                        businessDefinition: {
+                            conceptName: conceptName.toLowerCase().replace(/\s+/g, '_'),
+                            displayName: conceptName,
+                            businessDescription: calcDef || `${conceptName} metric`,
+                            calculationType: calcType,
+                            confidence: 0.4,
+                            source: 'element_derived',
+                            industry: projectIndustry
+                        },
+                        hasBusinessDefinition: true,
+                        definitionConfidence: 0.4
+                    };
+                    enrichmentStats.inferred++;
+                } else {
                     enrichedElement.hasBusinessDefinition = false;
                     enrichedElement.definitionConfidence = 0;
                     enrichmentStats.notFound++;
-                    console.log(`    ❌ No definition found or inferred`);
                 }
-            } else {
-                enrichedElement.hasBusinessDefinition = false;
-                enrichedElement.definitionConfidence = 0;
-                enrichmentStats.notFound++;
             }
 
             // Add alternatives if available
@@ -6071,6 +6172,8 @@ function deepMergeProgress(target: any, source: any): any {
 
 // Update project journey progress
 // This is the primary endpoint for journey state updates across all steps
+// P0 FIX (Jan 27, 2026): Uses atomic merge with row-level locking to prevent race conditions
+// Previous implementation had read-merge-write pattern that caused data loss with concurrent requests
 router.put("/:id/progress", ensureAuthenticated, async (req, res) => {
     try {
         const { id: projectId } = req.params;
@@ -6087,49 +6190,35 @@ router.put("/:id/progress", ensureAuthenticated, async (req, res) => {
             return res.status(status).json({ error: accessCheck.reason });
         }
 
-        const project = accessCheck.project;
-
-        // P0-3 FIX: Deep merge new progress with existing to preserve nested objects
-        const currentProgress = (project as any)?.journeyProgress || {};
-        const updatedProgress = deepMergeProgress(currentProgress, {
-            ...progressUpdate,
-            updatedAt: new Date().toISOString()
-        });
-
-        // P0-3 FIX: Ensure requirementsDocument is preserved if not explicitly provided
-        // This prevents accidental loss during shallow updates
-        if (!progressUpdate.requirementsDocument && currentProgress.requirementsDocument) {
-            updatedProgress.requirementsDocument = currentProgress.requirementsDocument;
-            console.log(`📋 [P0-3] Preserved existing requirementsDocument during progress update`);
-        }
-
-        // DEBUG: Log what we're receiving and saving
-        console.log(`📊 [Progress] Updating journey progress for project ${projectId}:`, {
+        // DEBUG: Log what we're receiving
+        console.log(`📊 [Progress] Atomic merge for project ${projectId}:`, {
             keysReceived: Object.keys(progressUpdate),
             hasRequirementsDocInUpdate: !!progressUpdate.requirementsDocument,
-            hasRequirementsDocInCurrent: !!currentProgress.requirementsDocument,
-            hasRequirementsDocInMerged: !!updatedProgress.requirementsDocument,
             requirementsLockedInUpdate: progressUpdate.requirementsLocked,
-            elementsCountInUpdate: progressUpdate.requirementsDocument?.requiredDataElements?.length || 0,
-            elementsCountPreserved: updatedProgress.requirementsDocument?.requiredDataElements?.length || 0
+            elementsCountInUpdate: progressUpdate.requirementsDocument?.requiredDataElements?.length || 0
         });
 
-        // Update project with merged progress
-        const updatedProject = await storage.updateProject(projectId, {
-            journeyProgress: updatedProgress
-        } as any);
+        // P0 FIX: Use atomic merge with row-level locking to prevent race conditions
+        // This ensures concurrent updates don't overwrite each other's changes
+        const mergedProgress = await storage.atomicMergeJourneyProgress(projectId, progressUpdate);
 
-        // DEBUG: Log what we're returning to verify journeyProgress is present
-        console.log(`📊 [Progress] Response includes journeyProgress:`, {
-            hasUpdatedProject: !!updatedProject,
-            hasJourneyProgressInProject: !!(updatedProject as any)?.journeyProgress,
-            hasRequirementsDocInProject: !!(updatedProject as any)?.journeyProgress?.requirementsDocument,
-            elementsCountInProject: (updatedProject as any)?.journeyProgress?.requirementsDocument?.requiredDataElements?.length || 0
+        if (!mergedProgress) {
+            return res.status(404).json({ success: false, error: 'Project not found' });
+        }
+
+        // DEBUG: Log what was merged
+        console.log(`✅ [Progress] Atomic merge completed for project ${projectId}:`, {
+            hasRequirementsDocInMerged: !!mergedProgress.requirementsDocument,
+            elementsCountPreserved: mergedProgress.requirementsDocument?.requiredDataElements?.length || 0,
+            analysisPathCount: mergedProgress.requirementsDocument?.analysisPath?.length || 0
         });
+
+        // Get updated project for response
+        const updatedProject = await storage.getProject(projectId);
 
         res.json({
             success: true,
-            journeyProgress: updatedProgress,
+            journeyProgress: mergedProgress,
             project: updatedProject
         });
     } catch (error: any) {
@@ -8600,6 +8689,12 @@ router.get("/:id/cost-estimate", ensureAuthenticated, requireOwnership('project'
         console.log(`   - requirementsDocument?.analysisPath: ${journeyProgress.requirementsDocument?.analysisPath?.length || 0} items`);
         console.log(`   - approvedPlanId: ${journeyProgress.approvedPlanId || 'none'}`);
 
+        // ✅ P1-C FIX: Enhanced logging to diagnose empty analysisPath
+        if (journeyProgress.requirementsDocument?.analysisPath?.length > 0) {
+            const firstPath = journeyProgress.requirementsDocument.analysisPath[0];
+            console.log(`   - First analysisPath item structure: analysisType=${firstPath.analysisType}, techniques=${JSON.stringify(firstPath.techniques || [])}, name=${firstPath.analysisName || firstPath.name}`);
+        }
+
         // ✅ FIX: Look at multiple sources for analysis types
         // Priority: 1. executionConfig (set by DS agent), 2. requirementsDocument, 3. approved plan
         let analysisPath = journeyProgress.executionConfig?.analysisPath
@@ -8727,9 +8822,79 @@ router.get("/:id/cost-estimate", ensureAuthenticated, requireOwnership('project'
             }
         }
 
-        // Fallback if no analysis types found
+        // ✅ P1-C FIX: Additional fallback - extract from requiredDataElements.analysisUsage
+        if (analysisTypes.length === 0 && journeyProgress.requirementsDocument?.requiredDataElements?.length > 0) {
+            console.log(`🔍 [Cost Estimate] Trying to extract from ${journeyProgress.requirementsDocument.requiredDataElements.length} requiredDataElements`);
+            for (const element of journeyProgress.requirementsDocument.requiredDataElements) {
+                if (element.analysisUsage && Array.isArray(element.analysisUsage)) {
+                    for (const usage of element.analysisUsage) {
+                        const usageLower = usage.toLowerCase();
+                        if (/correlat/i.test(usageLower) && !analysisTypes.includes('correlation')) {
+                            analysisTypes.push('correlation');
+                        } else if (/regress/i.test(usageLower) && !analysisTypes.includes('regression')) {
+                            analysisTypes.push('regression');
+                        } else if (/cluster|segment/i.test(usageLower) && !analysisTypes.includes('clustering')) {
+                            analysisTypes.push('clustering');
+                        } else if (/time.?series|forecast|trend/i.test(usageLower) && !analysisTypes.includes('time_series')) {
+                            analysisTypes.push('time_series');
+                        } else if (/visual|chart|graph|plot/i.test(usageLower) && !analysisTypes.includes('visualization')) {
+                            analysisTypes.push('visualization');
+                        } else if (/machine.?learn|ml|predict/i.test(usageLower) && !analysisTypes.includes('machine_learning')) {
+                            analysisTypes.push('machine_learning');
+                        } else if (/sentiment/i.test(usageLower) && !analysisTypes.includes('sentiment')) {
+                            analysisTypes.push('sentiment');
+                        } else if (/descriptive|eda|summary|distribution/i.test(usageLower) && !analysisTypes.includes('descriptive')) {
+                            analysisTypes.push('descriptive');
+                        }
+                    }
+                }
+            }
+            if (analysisTypes.length > 0) {
+                console.log(`   - Extracted from requiredDataElements: [${analysisTypes.join(', ')}]`);
+            }
+        }
+
+        // ✅ P1-C FIX: Extract from user questions if still no types found
         if (analysisTypes.length === 0) {
+            const questions = journeyProgress.requirementsDocument?.userQuestions
+                || journeyProgress.userQuestions
+                || (project as any).userQuestions
+                || [];
+
+            if (questions.length > 0) {
+                console.log(`🔍 [Cost Estimate] Trying to extract from ${questions.length} user questions`);
+                for (const question of questions) {
+                    const qText = (typeof question === 'string' ? question : question?.text || question?.question || '').toLowerCase();
+                    if (/correlat|relationship|associat/i.test(qText) && !analysisTypes.includes('correlation')) {
+                        analysisTypes.push('correlation');
+                    }
+                    if (/predict|forecast|future/i.test(qText) && !analysisTypes.includes('machine_learning')) {
+                        analysisTypes.push('machine_learning');
+                    }
+                    if (/trend|over time|time.?series/i.test(qText) && !analysisTypes.includes('time_series')) {
+                        analysisTypes.push('time_series');
+                    }
+                    if (/segment|cluster|group|categorize/i.test(qText) && !analysisTypes.includes('clustering')) {
+                        analysisTypes.push('clustering');
+                    }
+                    if (/factor|driver|impact|affect|influence/i.test(qText) && !analysisTypes.includes('regression')) {
+                        analysisTypes.push('regression');
+                    }
+                    if (/distribution|frequency|summary|descriptive/i.test(qText) && !analysisTypes.includes('descriptive')) {
+                        analysisTypes.push('descriptive');
+                    }
+                }
+                if (analysisTypes.length > 0) {
+                    console.log(`   - Inferred from user questions: [${analysisTypes.join(', ')}]`);
+                }
+            }
+        }
+
+        // Fallback if no analysis types found (add basic statistical + descriptive for minimal analysis)
+        if (analysisTypes.length === 0) {
+            console.log(`⚠️ [Cost Estimate] No analysis types detected, using default [statistical, descriptive]`);
             analysisTypes.push('statistical');
+            analysisTypes.push('descriptive');
         }
 
         console.log(`📊 [Cost Estimate] Analysis types for pricing: [${analysisTypes.join(', ')}] (${analysisTypes.length} types)`);

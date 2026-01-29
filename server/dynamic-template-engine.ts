@@ -924,16 +924,7 @@ class WebFetch {
     content?: any;
     error?: string;
   }> {
-    // This would integrate with actual web search and fetch services
-    // For now, return a mock successful result
-    return {
-      success: true,
-      content: {
-        searchQuery: query,
-        analysisPrompt,
-        mockData: `Research results for ${query}`
-      }
-    };
+    throw new Error('Web search integration not configured. Set up external search API.');
   }
 }
 

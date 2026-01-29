@@ -27,8 +27,14 @@ describe.skipIf(skipTests)('Schema Constraints - Users Table', () => {
     testUserId = randomUUID();
   });
 
+  beforeAll(async () => {
+    // Pre-cleanup: Remove any leftover test users from previous runs
+    await db.execute(sql`DELETE FROM users WHERE email LIKE 'test-%@example.com'`);
+  });
+
   afterAll(async () => {
-    // Cleanup: Delete all test users
+    // Cleanup: Delete all test users matching our patterns
+    await db.execute(sql`DELETE FROM users WHERE email LIKE 'test-%@example.com'`);
     await db.delete(users).where(eq(users.email, 'test@example.com'));
   });
 

@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
     }
 }));
 
-vi.mock('../../../server/services/storage', () => ({
+vi.mock('../../../server/storage', () => ({
     storage: mocks.storage
 }));
 

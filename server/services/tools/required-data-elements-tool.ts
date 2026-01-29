@@ -502,6 +502,16 @@ export class RequiredDataElementsTool {
                 (element as any).confidence = (mapping.confidence || 0) / 100;
                 mappedCount++;
 
+                // FIX: Store sourceColumns for composite/derived elements with multiple source fields
+                if (mapping.sourceColumns && mapping.sourceColumns.length > 0) {
+                    (element as any).sourceColumns = mapping.sourceColumns;
+                    (element as any).isComposite = mapping.isComposite || false;
+
+                    // Log composite element mapping details
+                    const matchedCount = mapping.sourceColumns.filter((sc: any) => sc.matched).length;
+                    console.log(`🔗 [Composite Mapping] "${element.elementName}": ${matchedCount}/${mapping.sourceColumns.length} component fields mapped`);
+                }
+
                 if (mapping.transformationNeeded) {
                     element.transformationRequired = true;
 
@@ -608,6 +618,31 @@ export class RequiredDataElementsTool {
                                 definitionConfidence: aiMapping.confidence,
                                 notes: `AI-derived: ${aiMapping.reasoning}`
                             };
+
+                            // FIX: Rebuild sourceColumns from AI-provided componentFields
+                            // This is CRITICAL for composite elements - the initial mapping used placeholder names
+                            // but now we have actual column names from AI, so rebuild the sourceColumns array
+                            if (aiMapping.componentFields && aiMapping.componentFields.length > 0) {
+                                const rebuiltSourceColumns = await this.matchComponentFields(
+                                    aiMapping.componentFields,
+                                    availableFields,
+                                    dataset.schema
+                                );
+
+                                const matchedCount = rebuiltSourceColumns.filter(sc => sc.matched).length;
+                                if (matchedCount > 0) {
+                                    (element as any).sourceColumns = rebuiltSourceColumns;
+                                    (element as any).isComposite = aiMapping.componentFields.length > 1;
+
+                                    // Update transformation logic with rebuilt source columns
+                                    element.transformationLogic = this.buildCompositeTransformationLogic(element, rebuiltSourceColumns);
+
+                                    console.log(`   🔗 [Composite Fix] "${element.elementName}": rebuilt sourceColumns with ${matchedCount}/${aiMapping.componentFields.length} matched`);
+                                    rebuiltSourceColumns.forEach(sc => {
+                                        console.log(`      - ${sc.componentField}: ${sc.matched ? `→ ${sc.matchedColumn} (${sc.matchConfidence}%)` : '❌ No match'}`);
+                                    });
+                                }
+                            }
                         }
 
                         if (wasUnmapped) {
@@ -1119,6 +1154,7 @@ export class RequiredDataElementsTool {
     /**
      * Find best matching field in dataset for a required element
      * ENHANCED: Uses question context, semantic matching, and calculationDefinition from DS agent
+     * For composite/derived elements, matches ALL componentFields to dataset columns
      */
     private async findBestMatch(
         element: RequiredDataElement,
@@ -1134,8 +1170,56 @@ export class RequiredDataElementsTool {
         transformationLogic?: any;
         alternatives: string[];
         confidence?: number; // NEW: Confidence score for the match
+        // NEW: For composite/derived elements - multiple source columns
+        sourceColumns?: Array<{
+            componentField: string;      // Expected field name from DS definition
+            matchedColumn?: string;       // Actual column in dataset
+            matchConfidence: number;      // 0-100
+            matched: boolean;
+        }>;
+        isComposite?: boolean;  // True if element requires multiple source columns
     }> {
-        // Try exact name match first
+        // FIX: Check if this is a composite/derived element that needs multiple source columns
+        const calcDef = element.calculationDefinition;
+        const componentFields = calcDef?.formula?.componentFields || [];
+        const isCompositeElement = componentFields.length > 0 &&
+            ['derived', 'aggregated', 'composite'].includes(calcDef?.calculationType || '');
+
+        // For composite elements, match ALL componentFields to dataset columns
+        if (isCompositeElement) {
+            console.log(`🔗 [DE Mapping] Composite element "${element.elementName}" has ${componentFields.length} component fields: ${componentFields.join(', ')}`);
+
+            const sourceColumns = await this.matchComponentFields(componentFields, availableFields, schema);
+            const matchedCount = sourceColumns.filter(sc => sc.matched).length;
+            const avgConfidence = sourceColumns.length > 0
+                ? sourceColumns.reduce((sum, sc) => sum + sc.matchConfidence, 0) / sourceColumns.length
+                : 0;
+
+            // Element is "found" if at least one component field is matched
+            const found = matchedCount > 0;
+
+            // Primary source field is the first matched column (for backward compatibility)
+            const primaryMatch = sourceColumns.find(sc => sc.matched);
+
+            console.log(`   ✅ Matched ${matchedCount}/${componentFields.length} component fields (avg confidence: ${Math.round(avgConfidence)}%)`);
+            sourceColumns.forEach(sc => {
+                console.log(`      - ${sc.componentField}: ${sc.matched ? `→ ${sc.matchedColumn} (${sc.matchConfidence}%)` : '❌ No match'}`);
+            });
+
+            return {
+                found,
+                sourceField: primaryMatch?.matchedColumn,
+                sourceDataType: primaryMatch?.matchedColumn ? schema[primaryMatch.matchedColumn]?.type : undefined,
+                transformationNeeded: true, // Composite elements always need transformation
+                confidence: avgConfidence,
+                transformationLogic: this.buildCompositeTransformationLogic(element, sourceColumns),
+                alternatives: [],
+                sourceColumns,
+                isComposite: true
+            };
+        }
+
+        // Try exact name match first (for direct mapping elements)
         const exactMatch = availableFields.find(f =>
             f.toLowerCase() === element.elementName.toLowerCase()
         );
@@ -1190,6 +1274,199 @@ export class RequiredDataElementsTool {
             transformationNeeded: false,
             alternatives: candidates.map(c => c.field),
             confidence: candidates.length > 0 ? candidates[0].score : 0
+        };
+    }
+
+    /**
+     * Match componentFields from DS definition to actual dataset columns
+     * Uses fuzzy matching to find best column for each expected component field
+     */
+    private async matchComponentFields(
+        componentFields: string[],
+        availableFields: string[],
+        schema: Record<string, any>
+    ): Promise<Array<{
+        componentField: string;
+        matchedColumn?: string;
+        matchConfidence: number;
+        matched: boolean;
+    }>> {
+        const results: Array<{
+            componentField: string;
+            matchedColumn?: string;
+            matchConfidence: number;
+            matched: boolean;
+        }> = [];
+
+        for (const componentField of componentFields) {
+            const normalizedComponent = componentField.toLowerCase().replace(/[_\s-]+/g, '');
+
+            // Try exact match first
+            let bestMatch: { column: string; score: number } | null = null;
+
+            for (const availableField of availableFields) {
+                const normalizedAvailable = availableField.toLowerCase().replace(/[_\s-]+/g, '');
+
+                // Exact match
+                if (normalizedComponent === normalizedAvailable) {
+                    bestMatch = { column: availableField, score: 100 };
+                    break;
+                }
+
+                // Contains match
+                if (normalizedAvailable.includes(normalizedComponent) || normalizedComponent.includes(normalizedAvailable)) {
+                    const score = Math.max(
+                        (normalizedComponent.length / normalizedAvailable.length) * 80,
+                        (normalizedAvailable.length / normalizedComponent.length) * 80
+                    );
+                    if (!bestMatch || score > bestMatch.score) {
+                        bestMatch = { column: availableField, score: Math.min(score, 90) };
+                    }
+                }
+
+                // Word overlap match (e.g., "engagement_score" matches "EngagementScore")
+                const componentWords = componentField.toLowerCase().split(/[_\s-]+/);
+                const availableWords = availableField.toLowerCase().split(/[_\s-]+/);
+                const overlap = componentWords.filter(w => availableWords.some(aw => aw.includes(w) || w.includes(aw)));
+
+                if (overlap.length > 0) {
+                    const overlapScore = (overlap.length / Math.max(componentWords.length, availableWords.length)) * 70;
+                    if (!bestMatch || overlapScore > bestMatch.score) {
+                        bestMatch = { column: availableField, score: overlapScore };
+                    }
+                }
+
+                // Abbreviation match (e.g., "Q1" matches "Question1" or "q1_score")
+                if (componentField.length <= 3) {
+                    const abbrevPattern = new RegExp(componentField.split('').join('.*'), 'i');
+                    if (abbrevPattern.test(availableField)) {
+                        const abbrevScore = 60;
+                        if (!bestMatch || abbrevScore > bestMatch.score) {
+                            bestMatch = { column: availableField, score: abbrevScore };
+                        }
+                    }
+                }
+
+                // FIX: Semantic pattern matching for placeholder names like "survey_scores", "engagement_questions"
+                // These are conceptual placeholders that should match based on column patterns/types
+                const semanticPatterns: Record<string, RegExp[]> = {
+                    'survey_scores': [/q\d+|score|rating|response|likert|survey/i],
+                    'survey_responses': [/q\d+|response|answer|feedback|survey/i],
+                    'engagement_questions': [/engagement|satisfaction|q\d+.*score|motivation|commitment/i],
+                    'engagement_score': [/engagement|satisfaction|motivation|morale|commitment/i],
+                    'satisfaction_score': [/satisfaction|happy|content|pleased|rate/i],
+                    'numeric_columns': [/score|rating|count|amount|total|number|value|avg|sum/i],
+                    'date_columns': [/date|time|timestamp|day|month|year|created|updated/i],
+                    'id_columns': [/id|key|code|identifier|number$/i],
+                    'category_columns': [/department|team|group|type|category|status|level/i],
+                };
+
+                const normalizedComponentLower = componentField.toLowerCase().replace(/[_\s-]+/g, '_');
+                const patterns = semanticPatterns[normalizedComponentLower] || semanticPatterns[componentField.toLowerCase()];
+
+                if (patterns) {
+                    for (const pattern of patterns) {
+                        if (pattern.test(availableField)) {
+                            // Check if this column is numeric (for score-based patterns)
+                            const colType = schema[availableField]?.type?.toLowerCase() || '';
+                            const isNumericCol = /int|float|numeric|number|decimal/i.test(colType);
+                            const isScorePattern = /score|rating|numeric/i.test(normalizedComponentLower);
+
+                            // Higher confidence for type match
+                            let semanticScore = 55;
+                            if (isScorePattern && isNumericCol) {
+                                semanticScore = 70;
+                            }
+
+                            if (!bestMatch || semanticScore > bestMatch.score) {
+                                bestMatch = { column: availableField, score: semanticScore };
+                            }
+                        }
+                    }
+                }
+            }
+
+            results.push({
+                componentField,
+                matchedColumn: bestMatch?.column,
+                matchConfidence: bestMatch?.score || 0,
+                matched: bestMatch !== null && bestMatch.score >= 50
+            });
+        }
+
+        return results;
+    }
+
+    /**
+     * Build transformation logic for composite elements with multiple source columns
+     */
+    private buildCompositeTransformationLogic(
+        element: RequiredDataElement,
+        sourceColumns: Array<{
+            componentField: string;
+            matchedColumn?: string;
+            matchConfidence: number;
+            matched: boolean;
+        }>
+    ): { operation: string; description: string; code: string; dependencies?: string[]; sourceColumns?: any[]; validationRules?: string[] } {
+        const calcDef = element.calculationDefinition;
+        const matchedColumns = sourceColumns.filter(sc => sc.matched).map(sc => sc.matchedColumn!);
+        const unmatchedFields = sourceColumns.filter(sc => !sc.matched).map(sc => sc.componentField);
+
+        // Build description showing the mapping
+        let description = calcDef?.formula?.businessDescription || `Composite calculation for ${element.elementName}`;
+        if (unmatchedFields.length > 0) {
+            description += `\n⚠️ UNMAPPED FIELDS: ${unmatchedFields.join(', ')} - Please map these manually`;
+        }
+
+        // Build code using matched columns
+        let code = '';
+        const aggMethod = calcDef?.formula?.aggregationMethod;
+
+        if (calcDef?.formula?.pseudoCode) {
+            // Use provided pseudoCode, substituting matched columns
+            code = calcDef.formula.pseudoCode;
+            sourceColumns.forEach(sc => {
+                if (sc.matched && sc.matchedColumn) {
+                    // Replace component field references with actual column names
+                    const patterns = [
+                        new RegExp(`\\b${sc.componentField}\\b`, 'gi'),
+                        new RegExp(`'${sc.componentField}'`, 'gi'),
+                        new RegExp(`"${sc.componentField}"`, 'gi')
+                    ];
+                    patterns.forEach(pattern => {
+                        code = code.replace(pattern, `df['${sc.matchedColumn}']`);
+                    });
+                }
+            });
+        } else if (aggMethod && matchedColumns.length > 0) {
+            // Generate aggregation code
+            switch (aggMethod) {
+                case 'average':
+                    code = `(${matchedColumns.map(c => `df['${c}']`).join(' + ')}) / ${matchedColumns.length}`;
+                    break;
+                case 'sum':
+                    code = matchedColumns.map(c => `df['${c}']`).join(' + ');
+                    break;
+                case 'weighted_average':
+                    code = `# Weighted average - adjust weights as needed\n(${matchedColumns.map((c, i) => `df['${c}'] * weight_${i}`).join(' + ')}) / sum(weights)`;
+                    break;
+                default:
+                    code = `# ${aggMethod}: ${matchedColumns.map(c => `df['${c}']`).join(', ')}`;
+            }
+        } else {
+            code = `# Composite: ${element.elementName}\n# Source columns: ${matchedColumns.join(', ')}\n# TODO: Define transformation logic`;
+        }
+
+        return {
+            operation: 'composite_calculation',
+            description,
+            code,
+            dependencies: matchedColumns,
+            sourceColumns: sourceColumns,
+            validationRules: unmatchedFields.length > 0
+                ? [`⚠️ ${unmatchedFields.length} component field(s) not mapped: ${unmatchedFields.join(', ')}`]
+                : [`All ${matchedColumns.length} component fields mapped successfully`]
         };
     }
 

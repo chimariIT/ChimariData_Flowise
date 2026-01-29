@@ -18,22 +18,25 @@ import { nanoid } from 'nanoid';
 import {
   projectQuestions,
   datasets,
+  semanticLinks,
 } from '../../shared/schema';
+import { storage } from '../storage';
 
-// NOTE: These tables were designed for semantic search but never created in schema.
-// The service is currently orphaned (not imported anywhere).
-// Stubbing types to prevent compilation errors until tables are created.
+// NOTE: The semantic_links table has been created to provide Question → Element → Transformation → Analysis traceability.
+// This service can now store semantic links using the unified table.
+
+// Legacy table stubs (these tables were originally designed but now use unified semantic_links)
 const dataElements: any = null;
 const transformationDefinitions: any = null;
 const questionElementLinks: any = null;
 const elementTransformationLinks: any = null;
 
-// Type stubs
+// Type stubs for legacy code
 type DataElement = any;
 type TransformationDefinition = any;
 
-// Feature flag to skip DB operations until tables exist
-const SEMANTIC_TABLES_EXIST = false;
+// Feature flag - NOW ENABLED since semantic_links table exists
+const SEMANTIC_TABLES_EXIST = true;
 
 // ============================================
 // INTERFACES
@@ -97,6 +100,213 @@ export interface EvidenceChainResult {
 // ============================================
 
 export class SemanticDataPipelineService {
+
+  // ============================================
+  // SEMANTIC LINK CREATION METHODS (Phase 2 Fix)
+  // ============================================
+
+  /**
+   * Link a user question to a data element
+   * This creates the first part of the traceability chain
+   */
+  async linkQuestionToElement(
+    projectId: string,
+    questionId: string,
+    elementId: string,
+    confidence: number,
+    createdBy: string = 'ds_agent'
+  ): Promise<void> {
+    try {
+      await storage.createSemanticLink({
+        projectId,
+        linkType: 'question_element',
+        sourceId: questionId,
+        sourceType: 'question',
+        targetId: elementId,
+        targetType: 'element',
+        confidence: String(confidence),
+        createdBy,
+        metadata: { linkedAt: new Date().toISOString() }
+      });
+      console.log(`🔗 [Semantic] Created question→element link: ${questionId} → ${elementId}`);
+    } catch (error) {
+      console.error(`❌ [Semantic] Failed to create question→element link:`, error);
+    }
+  }
+
+  /**
+   * Link a data element to a transformation
+   * This tracks which transformations were applied to which data
+   */
+  async linkElementToTransformation(
+    projectId: string,
+    elementId: string,
+    transformationId: string,
+    createdBy: string = 'de_agent'
+  ): Promise<void> {
+    try {
+      await storage.createSemanticLink({
+        projectId,
+        linkType: 'element_transformation',
+        sourceId: elementId,
+        sourceType: 'element',
+        targetId: transformationId,
+        targetType: 'transformation',
+        confidence: '1.0',  // Transformations are explicit, not inferred
+        createdBy,
+        metadata: { linkedAt: new Date().toISOString() }
+      });
+      console.log(`🔗 [Semantic] Created element→transformation link: ${elementId} → ${transformationId}`);
+    } catch (error) {
+      console.error(`❌ [Semantic] Failed to create element→transformation link:`, error);
+    }
+  }
+
+  /**
+   * Link a transformation to an analysis result
+   * This tracks which analyses used which transformed data
+   */
+  async linkTransformationToAnalysis(
+    projectId: string,
+    transformationId: string,
+    analysisId: string,
+    createdBy: string = 'ds_agent'
+  ): Promise<void> {
+    try {
+      await storage.createSemanticLink({
+        projectId,
+        linkType: 'transformation_analysis',
+        sourceId: transformationId,
+        sourceType: 'transformation',
+        targetId: analysisId,
+        targetType: 'analysis',
+        confidence: '1.0',
+        createdBy,
+        metadata: { linkedAt: new Date().toISOString() }
+      });
+      console.log(`🔗 [Semantic] Created transformation→analysis link: ${transformationId} → ${analysisId}`);
+    } catch (error) {
+      console.error(`❌ [Semantic] Failed to create transformation→analysis link:`, error);
+    }
+  }
+
+  /**
+   * Link a question directly to an answer/insight
+   * This is the final step in the evidence chain
+   */
+  async linkQuestionToAnswer(
+    projectId: string,
+    questionId: string,
+    answerId: string,
+    confidence: number,
+    createdBy: string = 'pm_agent'
+  ): Promise<void> {
+    try {
+      await storage.createSemanticLink({
+        projectId,
+        linkType: 'question_answer',
+        sourceId: questionId,
+        sourceType: 'question',
+        targetId: answerId,
+        targetType: 'insight',
+        confidence: String(confidence),
+        createdBy,
+        metadata: { linkedAt: new Date().toISOString() }
+      });
+      console.log(`🔗 [Semantic] Created question→answer link: ${questionId} → ${answerId}`);
+    } catch (error) {
+      console.error(`❌ [Semantic] Failed to create question→answer link:`, error);
+    }
+  }
+
+  /**
+   * Get the full evidence chain for a question
+   * Returns: Question → Elements → Transformations → Analyses → Insights
+   */
+  async getEvidenceChain(projectId: string, questionId: string): Promise<{
+    question: string;
+    dataElements: string[];
+    transformations: string[];
+    analyses: string[];
+    insights: string[];
+  }> {
+    const dataElements: string[] = [];
+    const transformations: string[] = [];
+    const analyses: string[] = [];
+    const insights: string[] = [];
+
+    try {
+      // Get question → element links
+      const elementLinks = await storage.getSemanticLinks(projectId, 'question_element', questionId);
+      for (const link of elementLinks) {
+        dataElements.push(link.targetId);
+
+        // Get element → transformation links
+        const transformLinks = await storage.getSemanticLinks(projectId, 'element_transformation', link.targetId);
+        for (const tLink of transformLinks) {
+          if (!transformations.includes(tLink.targetId)) {
+            transformations.push(tLink.targetId);
+          }
+
+          // Get transformation → analysis links
+          const analysisLinks = await storage.getSemanticLinks(projectId, 'transformation_analysis', tLink.targetId);
+          for (const aLink of analysisLinks) {
+            if (!analyses.includes(aLink.targetId)) {
+              analyses.push(aLink.targetId);
+            }
+          }
+        }
+      }
+
+      // Get direct question → answer links
+      const answerLinks = await storage.getSemanticLinks(projectId, 'question_answer', questionId);
+      for (const link of answerLinks) {
+        insights.push(link.targetId);
+      }
+
+      console.log(`📊 [Semantic] Evidence chain for ${questionId}: ${dataElements.length} elements, ${transformations.length} transforms, ${analyses.length} analyses`);
+
+      return {
+        question: questionId,
+        dataElements,
+        transformations,
+        analyses,
+        insights
+      };
+    } catch (error) {
+      console.error(`❌ [Semantic] Failed to get evidence chain:`, error);
+      return { question: questionId, dataElements, transformations, analyses, insights };
+    }
+  }
+
+  /**
+   * Bulk create question-element links from DS Agent's requirementsDocument
+   */
+  async createLinksFromRequirements(
+    projectId: string,
+    questionAnswerMapping: Array<{
+      questionId: string;
+      requiredDataElements?: string[];
+    }>
+  ): Promise<number> {
+    let linksCreated = 0;
+
+    for (const mapping of questionAnswerMapping) {
+      if (!mapping.requiredDataElements) continue;
+
+      for (const elementId of mapping.requiredDataElements) {
+        await this.linkQuestionToElement(projectId, mapping.questionId, elementId, 0.9);
+        linksCreated++;
+      }
+    }
+
+    console.log(`🔗 [Semantic] Created ${linksCreated} question-element links from requirements`);
+    return linksCreated;
+  }
+
+  // ============================================
+  // ORIGINAL METHODS (Phase 1 - Data Extraction)
+  // ============================================
 
   /**
    * Phase 1: Extract semantic data elements from datasets

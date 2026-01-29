@@ -17,6 +17,8 @@ import { eq } from 'drizzle-orm';
 import { PricingService } from './pricing';
 import { FeatureComplexity } from '@shared/canonical-types';
 import { storage } from '../storage';
+// P1-B FIX: Import shared pricing constants
+import { PRICING_CONSTANTS } from '../../shared/pricing-config';
 
 // ==========================================
 // TYPES AND INTERFACES
@@ -80,39 +82,16 @@ export interface DataSize {
   sizeBytes?: number;
 }
 
-// Default pricing configuration (used if database config not available)
+// P1-B FIX: Use shared pricing constants (single source of truth)
+// Note: PRICING_CONSTANTS uses Record<string, number> for flexibility,
+// but AnalysisPricingConfig expects specific keys - cast to satisfy TypeScript
 const DEFAULT_PRICING_CONFIG: AnalysisPricingConfig = {
-  basePlatformFee: 0.50,
-  dataProcessingPer1K: 0.10,
-  baseAnalysisCost: 1.00,
-  complexityMultipliers: {
-    basic: 1.0,
-    intermediate: 1.5,
-    advanced: 2.5,
-    expert: 4.0
-  },
-  analysisTypeFactors: {
-    descriptive: 1.0,
-    diagnostic: 1.3,
-    predictive: 2.0,
-    prescriptive: 2.5,
-    statistical: 1.2,
-    machine_learning: 3.0,
-    visualization: 0.8,
-    time_series: 1.8,
-    clustering: 1.5,
-    regression: 1.6,
-    correlation: 1.2,
-    business_intelligence: 2.2,
-    sentiment: 1.8,
-    default: 1.0
-  },
-  artifactCosts: {
-    report: 0.25,
-    dashboard: 0.50,
-    presentation: 0.35,
-    exportData: 0.10
-  }
+  basePlatformFee: PRICING_CONSTANTS.basePlatformFee,
+  dataProcessingPer1K: PRICING_CONSTANTS.dataProcessingPer1K,
+  baseAnalysisCost: PRICING_CONSTANTS.baseAnalysisCost,
+  complexityMultipliers: PRICING_CONSTANTS.complexityMultipliers as AnalysisPricingConfig['complexityMultipliers'],
+  analysisTypeFactors: PRICING_CONSTANTS.analysisTypeFactors as AnalysisPricingConfig['analysisTypeFactors'],
+  artifactCosts: PRICING_CONSTANTS.artifactCosts as AnalysisPricingConfig['artifactCosts']
 };
 
 // Cache for pricing configuration

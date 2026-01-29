@@ -122,6 +122,7 @@ async function hasAvailableTrialCredits(userId: string): Promise<{ hasCredits: b
       .limit(1);
 
     if (!user) {
+      console.log(`🔍 [Feature Gate] User ${userId} not found in database`);
       return { hasCredits: false, available: 0 };
     }
 
@@ -131,9 +132,11 @@ async function hasAvailableTrialCredits(userId: string): Promise<{ hasCredits: b
 
     // Check if credits have expired
     if (user.trialCreditsExpireAt && new Date(user.trialCreditsExpireAt) < new Date()) {
+      console.log(`🔍 [Feature Gate] User ${userId} trial credits expired at ${user.trialCreditsExpireAt}`);
       return { hasCredits: false, available: 0 };
     }
 
+    console.log(`🔍 [Feature Gate] User ${userId} trial credits: total=${credits}, used=${used}, available=${available}`);
     return { hasCredits: available > 0, available };
   } catch (error) {
     console.error('[Feature Gate] Error checking trial credits:', error);
@@ -484,8 +487,10 @@ export function requireAnyFeature(featureIds: string[]) {
       if (!hasAnyFeature) {
         // P0-4 FIX: Check if user has trial credits for any of these features
         const trialCheck = await hasAvailableTrialCredits(userId);
-        const hasTrialFeature = trialCheck.hasCredits &&
-          featureIds.some(f => TRIAL_CREDIT_FEATURES.includes(f as any));
+        const requestedInTrialFeatures = featureIds.filter(f => TRIAL_CREDIT_FEATURES.includes(f as any));
+        const hasTrialFeature = trialCheck.hasCredits && requestedInTrialFeatures.length > 0;
+
+        console.log(`🔍 [Feature Gate] Trial check: user=${userId}, tier=${tier}, hasCredits=${trialCheck.hasCredits}, available=${trialCheck.available}, requestedFeatures=[${featureIds.join(',')}], trialableFeatures=[${requestedInTrialFeatures.join(',')}]`);
 
         if (hasTrialFeature) {
           console.log(`✅ [Feature Gate] User ${userId} granted access via trial credits (${trialCheck.available} remaining)`);

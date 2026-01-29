@@ -43,7 +43,16 @@ export const PythonProcessor = {
             reject(new Error(`Failed to parse Python output: ${error}`));
           }
         } else {
-          reject(new Error(`Python script failed with code ${code}: ${stderr}`));
+          // P3-A FIX: Include detailed stderr in error for better debugging
+          const isProduction = process.env.NODE_ENV === 'production';
+          const stderrTruncated = stderr.length > 500 ? stderr.slice(-500) : stderr;
+          const errorMessage = isProduction
+            ? `Python script failed with code ${code}`
+            : `Python script failed with code ${code}: ${stderrTruncated}`;
+          const error = new Error(errorMessage);
+          (error as any).stderr = stderr;
+          (error as any).exitCode = code;
+          reject(error);
         }
       });
 
@@ -91,24 +100,168 @@ export const PythonProcessor = {
 
         return pythonResult;
       } else {
-        console.warn(`⚠️ Python analysis failed, using enhanced JavaScript fallback: ${pythonResult.error}`);
-        return this.performEnhancedAnalysis(preview, schema, recordCount);
+        throw new Error(`Python analysis failed: ${pythonResult.error}`);
       }
     } catch (error) {
       console.error('Python processor error:', error);
-      // Fallback using whatever data we have
-      return this.performEnhancedAnalysis(data?.preview || [], data?.schema || {}, data?.recordCount || 0);
+      throw error;
     }
   },
 
+  /**
+   * PHASE 3 FIX: Route to type-specific Python scripts based on analysisTypes
+   * Instead of always running generic profiling, we now execute the appropriate
+   * Python scripts from /python/ directory based on requested analysis types.
+   */
   async processData(params: { projectId: string; operation: string; data: any; config: any }): Promise<any> {
-    console.log(`🐍 Processing data for project ${params.projectId} operation ${params.operation}...`);
-    const { data } = params;
-    // Map to processTrial format
-    return this.processTrial(params.projectId, {
-      preview: data.dataset?.data || [],
-      schema: data.dataset?.schema || {},
-      recordCount: (data.dataset?.data || []).length
+    const { projectId, data, config } = params;
+    const analysisTypes = config?.analysisTypes || ['descriptive'];
+    const rowCount = data.dataset?.data?.length || 0;
+
+    console.log(`🐍 [Phase 3 Fix] Processing data for project ${projectId}`);
+    console.log(`   📊 Analysis types requested: ${analysisTypes.join(', ')}`);
+    console.log(`   📈 Row count: ${rowCount}`);
+
+    // Determine processing engine
+    const usePolars = rowCount < 1_000_000 && !config?.useSpark;
+    console.log(`   🔧 Using ${usePolars ? 'Polars' : 'Pandas'} for processing`);
+
+    const results: Record<string, any> = {};
+    const errors: string[] = [];
+
+    for (const analysisType of analysisTypes) {
+      const scriptPath = this.getAnalysisScriptPath(analysisType, usePolars);
+
+      if (!scriptPath) {
+        console.warn(`⚠️ [Python] No script mapped for analysis type: ${analysisType}, using generic`);
+        // Fallback to generic analysis for unmapped types
+        continue;
+      }
+
+      console.log(`📊 [Python] Running ${scriptPath} for ${analysisType}`);
+
+      try {
+        const result = await this.executeTypeSpecificScript(scriptPath, {
+          data: data.dataset?.data || [],
+          schema: data.dataset?.schema || {},
+          config: {
+            analysisType,
+            usePolars,
+            ...config
+          }
+        });
+
+        results[analysisType] = result;
+        console.log(`   ✅ ${analysisType} completed successfully`);
+      } catch (error: any) {
+        console.error(`   ❌ ${analysisType} failed:`, error.message);
+        errors.push(`${analysisType}: ${error.message}`);
+        results[analysisType] = { error: error.message, status: 'failed' };
+      }
+    }
+
+    // If no type-specific scripts ran successfully, fall back to generic analysis
+    const successfulResults = Object.values(results).filter(r => !r.error);
+    if (successfulResults.length === 0) {
+      console.log(`⚠️ [Python] No type-specific analyses succeeded, falling back to generic`);
+      return this.processTrial(projectId, {
+        preview: data.dataset?.data || [],
+        schema: data.dataset?.schema || {},
+        recordCount: rowCount
+      });
+    }
+
+    return {
+      success: true,
+      analysisTypes,
+      results,
+      errors: errors.length > 0 ? errors : undefined,
+      timestamp: new Date().toISOString()
+    };
+  },
+
+  /**
+   * Map analysis type to the appropriate Python script
+   */
+  getAnalysisScriptPath(analysisType: string, usePolars: boolean): string | null {
+    const baseDir = usePolars ? 'python/polars' : 'python';
+
+    const scriptMap: Record<string, string> = {
+      'descriptive': `${baseDir}/descriptive_stats.py`,
+      'descriptive_stats': `${baseDir}/descriptive_stats.py`,
+      'correlation': `${baseDir}/correlation_analysis.py`,
+      'regression': `${baseDir}/regression_analysis.py`,
+      'clustering': `${baseDir}/clustering_analysis.py`,
+      'classification': `${baseDir}/classification_analysis.py`,
+      'time_series': `${baseDir}/time_series_analysis.py`,
+      'statistical': `${baseDir}/statistical_tests.py`,
+      'ml': `${baseDir}/enhanced_ml_pipeline.py`,
+      'sentiment': `${baseDir}/sentiment_analysis.py`,
+      'anomaly': `${baseDir}/anomaly_detection.py`,
+      'forecasting': `${baseDir}/forecasting.py`
+    };
+
+    return scriptMap[analysisType.toLowerCase()] || null;
+  },
+
+  /**
+   * Execute a type-specific Python script from the /python/ directory
+   */
+  async executeTypeSpecificScript(scriptPath: string, input: any): Promise<any> {
+    const path = await import('path');
+    const fs = await import('fs');
+
+    const fullPath = path.join(process.cwd(), scriptPath);
+
+    // Check if script exists
+    if (!fs.existsSync(fullPath)) {
+      throw new Error(`Python script not found: ${fullPath}`);
+    }
+
+    return new Promise((resolve, reject) => {
+      const pythonProcess = spawn('python', [fullPath], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        cwd: process.cwd()
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      // Write input data to stdin
+      pythonProcess.stdin.write(JSON.stringify(input));
+      pythonProcess.stdin.end();
+
+      pythonProcess.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+
+      pythonProcess.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      const timeout = setTimeout(() => {
+        pythonProcess.kill();
+        reject(new Error(`Python script timed out after 60000ms`));
+      }, 60000);
+
+      pythonProcess.on('close', (code) => {
+        clearTimeout(timeout);
+        if (code === 0) {
+          try {
+            const result = JSON.parse(stdout);
+            resolve(result);
+          } catch (parseError) {
+            reject(new Error(`Invalid JSON output from ${scriptPath}: ${stdout.slice(0, 500)}`));
+          }
+        } else {
+          reject(new Error(`Python script ${scriptPath} failed (code ${code}): ${stderr.slice(-500)}`));
+        }
+      });
+
+      pythonProcess.on('error', (error) => {
+        clearTimeout(timeout);
+        reject(new Error(`Failed to start Python process: ${error.message}`));
+      });
     });
   },
 
@@ -274,53 +427,4 @@ except Exception as e:
     });
   },
 
-  performEnhancedAnalysis(preview: any[], schema: any, recordCount: number): any {
-    console.log('🔄 Using enhanced JavaScript fallback analysis...');
-
-    const columns = Object.keys(schema || {});
-    const numericColumns = columns.filter(col =>
-      schema[col]?.type === 'number' || schema[col]?.type === 'integer'
-    );
-    const stringColumns = columns.filter(col =>
-      schema[col]?.type === 'string' || schema[col]?.type === 'text'
-    );
-
-    return {
-      success: true,
-      data: {
-        summary: `Analyzed ${recordCount} records with ${columns.length} columns (Enhanced JavaScript fallback)`,
-        statisticalSummary: {
-          totalRecords: recordCount,
-          totalColumns: columns.length,
-          numericColumns: numericColumns,
-          stringColumns: stringColumns
-        },
-        columnAnalysis: columns.map(col => ({
-          name: col,
-          type: schema[col]?.type || 'unknown',
-          sampleValues: preview.slice(0, 3).map(row => row[col])
-        })),
-        dataQuality: {
-          score: 85,
-          completeness: 'Good',
-          issues: []
-        },
-        recommendations: [
-          'Python libraries detected but not accessible',
-          'Consider checking Python environment configuration',
-          'Advanced analysis available with Pandas, NumPy, Scikit-learn'
-        ]
-      },
-      visualizations: [
-        {
-          type: 'bar',
-          title: 'Column Types Distribution',
-          data: {
-            labels: ['Numeric', 'String'],
-            values: [numericColumns.length, stringColumns.length]
-          }
-        }
-      ]
-    };
-  }
 };

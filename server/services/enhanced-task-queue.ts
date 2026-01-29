@@ -364,35 +364,10 @@ export class EnhancedTaskQueue extends EventEmitter {
   }
 
   private async executeTaskOnAgent(task: QueuedTask, agentId: string): Promise<any> {
-    // P0-4 FIX: Production guard for simulated task execution
-    const isProduction = process.env.NODE_ENV === 'production';
-
-    if (isProduction) {
-      // In production, this task queue requires integration with actual agent execution
-      // Tasks should be routed through the ProjectAgentOrchestrator directly
-      // rather than through this simulated queue
-      throw new Error(
-        `Enhanced task queue requires production configuration. ` +
-        `Task "${task.type}" for agent "${agentId}" must be routed through ProjectAgentOrchestrator. ` +
-        `Use projectAgentOrchestrator.executeJourney() or agent-specific methods directly.`
-      );
-    }
-
-    // Development only: Simulate task execution with variability
-    console.warn('⚠️ [TaskQueue] Using simulated task execution (dev mode only)');
-    const executionTime = Math.random() * 2000 + 500; // 500ms to 2.5s
-    await new Promise(resolve => setTimeout(resolve, executionTime));
-
-    // Simulate occasional failures for testing
-    if (Math.random() < 0.05) { // 5% failure rate
-      throw new Error('Simulated task execution failure');
-    }
-
-    return {
-      message: `Task ${task.id} completed by agent ${agentId}`,
-      executionTime,
-      result: `Processed ${task.type} task`
-    };
+    throw new Error(
+      `Task "${task.type}" for agent "${agentId}" must be routed through ProjectAgentOrchestrator. ` +
+      `Use projectAgentOrchestrator.executeJourney() or agent-specific methods directly.`
+    );
   }
 
   private async handleTaskCompletion(taskId: string, agentId: string, result: any): Promise<void> {

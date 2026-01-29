@@ -41,6 +41,12 @@ interface RequiredDataElement {
     code?: string;
     validationError?: string;
     warnings?: string[];
+    sourceColumns?: Array<{
+      componentField: string;
+      matchedColumn?: string;
+      matchConfidence: number;
+      matched: boolean;
+    }>;
   };
   alternatives?: Array<{
     sourceField: string;
@@ -48,6 +54,14 @@ interface RequiredDataElement {
     confidence: number;
   }>;
   confidence?: number; // Confidence score (0-1)
+  // NEW: For composite/derived elements - multiple source columns
+  sourceColumns?: Array<{
+    componentField: string;
+    matchedColumn?: string;
+    matchConfidence: number;
+    matched: boolean;
+  }>;
+  isComposite?: boolean;
   // Business Definition fields (from BA Agent enrichment)
   businessDefinition?: {
     conceptName: string;
@@ -508,54 +522,106 @@ export function DataElementsMappingUI({
           </Alert>
         )}
 
-        {/* Summary - uses both props AND internal mappings state for accurate counts */}
+        {/* Summary - P1 FIX: Mutually exclusive categories based on calculationType */}
+        {/* Categories: Direct Mapping (has source, no transform needed), Need Transform (has source, requires derivation), Missing (no source) */}
         <Alert className="bg-white">
           <AlertCircle className="h-4 w-4 text-blue-600" />
           <AlertDescription>
-            <div className="grid grid-cols-4 gap-4 text-center">
-              <div>
-                <div className="text-lg font-bold text-gray-900">
-                  {requiredDataElements.length}
-                </div>
-                <div className="text-xs text-gray-600">Total Elements</div>
-              </div>
-              <div>
-                <div className={`text-lg font-bold ${isMapping ? 'text-gray-400' : 'text-green-600'}`}>
-                  {isMapping ? <Loader2 className="h-5 w-5 animate-spin inline" /> : requiredDataElements.filter(e => e.sourceAvailable || e.sourceField || e.sourceColumn || mappings[e.elementId]?.sourceField).length}
-                </div>
-                <div className="text-xs text-gray-600">Auto-Mapped</div>
-              </div>
-              <div>
-                <div className={`text-lg font-bold ${isMapping ? 'text-gray-400' : 'text-yellow-600'}`}>
-                  {isMapping ? '-' : requiredDataElements.filter(e => e.transformationRequired).length}
-                </div>
-                <div className="text-xs text-gray-600">Need Transform</div>
-              </div>
-              <div>
-                <div className={`text-lg font-bold ${isMapping ? 'text-gray-400' : 'text-red-600'}`}>
-                  {isMapping ? '-' : requiredDataElements.filter(e => !e.sourceAvailable && !e.sourceField && !e.sourceColumn && !mappings[e.elementId]?.sourceField && e.required).length}
-                </div>
-                <div className="text-xs text-gray-600">Missing</div>
-              </div>
-            </div>
+            {(() => {
+              // P1 FIX: Compute mutually exclusive categories
+              const categories = requiredDataElements.reduce((acc, el) => {
+                // Check if element has a source mapping (normalize across field names)
+                const mapping = mappings[el.elementId];
+                const hasSource = !!(
+                  el.sourceAvailable ||
+                  el.sourceField ||
+                  el.sourceColumn ||
+                  mapping?.sourceField ||
+                  (el.sourceColumns && el.sourceColumns.length > 0 && el.sourceColumns.some(sc => sc.matched))
+                );
 
-            {/* Mapping Progress Bar */}
-            {!isMapping && requiredDataElements.length > 0 && (() => {
-              const mappedCount = requiredDataElements.filter(e => e.sourceAvailable || e.sourceField || e.sourceColumn || mappings[e.elementId]?.sourceField).length;
-              const percentage = Math.round((mappedCount / requiredDataElements.length) * 100);
+                // Check if transformation is required based on calculationType and derivation info
+                // calculationType is nested under businessDefinition
+                const calculationType = el.businessDefinition?.calculationType || 'direct';
+                const requiresTransformation =
+                  calculationType !== 'direct' ||
+                  !!el.businessDefinition?.formula ||
+                  !!el.transformationLogic ||
+                  el.isComposite === true ||
+                  el.transformationRequired === true;
+
+                if (!hasSource && el.required !== false) {
+                  acc.missing.push(el.elementId);
+                } else if (hasSource && requiresTransformation) {
+                  acc.needsTransform.push(el.elementId);
+                } else if (hasSource) {
+                  acc.directMapped.push(el.elementId);
+                }
+                // Non-required elements without source are ignored in counts
+
+                return acc;
+              }, { directMapped: [] as string[], needsTransform: [] as string[], missing: [] as string[] });
+
+              const totalMapped = categories.directMapped.length + categories.needsTransform.length;
+              const percentage = requiredDataElements.length > 0
+                ? Math.round((totalMapped / requiredDataElements.length) * 100)
+                : 0;
+
+              // Debug logging for verification
+              console.log('📊 [P1 FIX] Element categories:', {
+                total: requiredDataElements.length,
+                directMapped: categories.directMapped.length,
+                needsTransform: categories.needsTransform.length,
+                missing: categories.missing.length,
+                // Sample elements in each category
+                sampleNeedsTransform: categories.needsTransform.slice(0, 3)
+              });
+
               return (
-              <div className="mt-4">
-                <div className="flex justify-between text-xs text-gray-600 mb-1">
-                  <span>Mapping Progress</span>
-                  <span>{percentage}%</span>
-                </div>
-                <div className="w-full bg-gray-200 rounded-full h-2">
-                  <div
-                    className="bg-green-600 h-2 rounded-full transition-all duration-500"
-                    style={{ width: `${percentage}%` }}
-                  />
-                </div>
-              </div>
+                <>
+                  <div className="grid grid-cols-4 gap-4 text-center">
+                    <div>
+                      <div className="text-lg font-bold text-gray-900">
+                        {requiredDataElements.length}
+                      </div>
+                      <div className="text-xs text-gray-600">Total Elements</div>
+                    </div>
+                    <div>
+                      <div className={`text-lg font-bold ${isMapping ? 'text-gray-400' : 'text-green-600'}`}>
+                        {isMapping ? <Loader2 className="h-5 w-5 animate-spin inline" /> : categories.directMapped.length}
+                      </div>
+                      <div className="text-xs text-gray-600">Direct Mapping</div>
+                    </div>
+                    <div>
+                      <div className={`text-lg font-bold ${isMapping ? 'text-gray-400' : 'text-yellow-600'}`}>
+                        {isMapping ? '-' : categories.needsTransform.length}
+                      </div>
+                      <div className="text-xs text-gray-600">Need Transform</div>
+                    </div>
+                    <div>
+                      <div className={`text-lg font-bold ${isMapping ? 'text-gray-400' : 'text-red-600'}`}>
+                        {isMapping ? '-' : categories.missing.length}
+                      </div>
+                      <div className="text-xs text-gray-600">Missing</div>
+                    </div>
+                  </div>
+
+                  {/* Mapping Progress Bar */}
+                  {!isMapping && requiredDataElements.length > 0 && (
+                    <div className="mt-4">
+                      <div className="flex justify-between text-xs text-gray-600 mb-1">
+                        <span>Mapping Progress</span>
+                        <span>{percentage}%</span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2">
+                        <div
+                          className="bg-green-600 h-2 rounded-full transition-all duration-500"
+                          style={{ width: `${percentage}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </>
               );
             })()}
           </AlertDescription>
@@ -696,25 +762,34 @@ export function DataElementsMappingUI({
                               Data Scientist Recommendation
                             </span>
                             <Badge variant="outline" className="text-xs bg-blue-100 text-blue-800 border-blue-300">
-                              {(element as any).calculationDefinition.calculationType}
+                              {/* FIX: Safely render calculationType - ensure it's a string */}
+                              {typeof (element as any).calculationDefinition.calculationType === 'string'
+                                ? (element as any).calculationDefinition.calculationType
+                                : 'derived'}
                             </Badge>
                           </div>
-                          {(element as any).calculationDefinition.formula?.businessDescription && (
+                          {/* FIX: Safely render formula properties - check they're strings before rendering */}
+                          {(element as any).calculationDefinition.formula?.businessDescription &&
+                           typeof (element as any).calculationDefinition.formula.businessDescription === 'string' && (
                             <p className="text-sm text-blue-800 mb-2">
                               <strong>How to calculate:</strong> {(element as any).calculationDefinition.formula.businessDescription}
                             </p>
                           )}
-                          {(element as any).calculationDefinition.formula?.pseudoCode && (
+                          {(element as any).calculationDefinition.formula?.pseudoCode &&
+                           typeof (element as any).calculationDefinition.formula.pseudoCode === 'string' && (
                             <p className="text-xs font-mono bg-white p-2 rounded border border-blue-200 text-blue-700">
                               {(element as any).calculationDefinition.formula.pseudoCode}
                             </p>
                           )}
-                          {(element as any).calculationDefinition.comparisonGroups && (
+                          {(element as any).calculationDefinition.comparisonGroups &&
+                           typeof (element as any).calculationDefinition.comparisonGroups === 'object' && (
                             <p className="text-xs text-blue-700 mt-2">
-                              <strong>For comparison:</strong> Group by {(element as any).calculationDefinition.comparisonGroups.groupingField || 'selected field'} ({(element as any).calculationDefinition.comparisonGroups.comparisonType})
+                              <strong>For comparison:</strong> Group by {String((element as any).calculationDefinition.comparisonGroups.groupingField || 'selected field')} ({String((element as any).calculationDefinition.comparisonGroups.comparisonType || 'comparison')})
                             </p>
                           )}
-                          {(element as any).calculationDefinition.notes && (
+                          {/* FIX: Safely render notes - ensure it's a string, not an object */}
+                          {(element as any).calculationDefinition.notes &&
+                           typeof (element as any).calculationDefinition.notes === 'string' && (
                             <p className="text-xs text-blue-600 mt-2 italic">
                               {(element as any).calculationDefinition.notes}
                             </p>
@@ -722,33 +797,94 @@ export function DataElementsMappingUI({
                         </div>
                       )}
 
-                      {/* Source Field Mapping */}
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="text-gray-600 w-32">Source Column:</span>
-                        {isEditing ? (
-                          <select
-                            className="flex-1 border rounded px-2 py-1 text-sm"
-                            value={mapping.sourceField || element.sourceField || ''}
-                            onChange={(e) => handleMappingChange(element.elementId, 'sourceField', e.target.value)}
-                          >
-                            <option value="">Select column...</option>
-                            {availableColumns.map((col) => (
-                              <option key={col} value={col}>
-                                {col}
-                              </option>
+                      {/* Source Field Mapping - Enhanced for composite elements */}
+                      {element.isComposite && element.sourceColumns && element.sourceColumns.length > 0 ? (
+                        // Composite element: Show multiple source columns
+                        <div className="bg-indigo-50 rounded-lg p-3 border border-indigo-200">
+                          <div className="flex items-center gap-2 mb-2">
+                            <Database className="w-4 h-4 text-indigo-600" />
+                            <span className="text-sm font-medium text-indigo-900">
+                              Source Columns ({element.sourceColumns.filter(sc => sc.matched).length}/{element.sourceColumns.length} mapped)
+                            </span>
+                            <Badge variant="outline" className="text-xs bg-indigo-100 text-indigo-800 border-indigo-300">
+                              Composite Element
+                            </Badge>
+                          </div>
+                          <div className="space-y-2">
+                            {element.sourceColumns.map((sc, idx) => (
+                              <div key={idx} className="flex items-center gap-2 text-sm">
+                                <span className="text-indigo-600 font-medium min-w-[120px]">
+                                  {sc.componentField}:
+                                </span>
+                                <ArrowRight className="w-3 h-3 text-gray-400" />
+                                {sc.matched ? (
+                                  <span className="flex items-center gap-2">
+                                    <Badge className="bg-green-100 text-green-800 border-green-300">
+                                      {sc.matchedColumn}
+                                    </Badge>
+                                    <span className="text-xs text-gray-500">
+                                      ({Math.round(sc.matchConfidence)}% match)
+                                    </span>
+                                  </span>
+                                ) : (
+                                  <span className="flex items-center gap-1 text-amber-600">
+                                    <AlertCircle className="w-3 h-3" />
+                                    <span className="text-xs">Not mapped - select column</span>
+                                    {isEditing && (
+                                      <select
+                                        className="ml-2 border rounded px-2 py-1 text-xs"
+                                        onChange={(e) => {
+                                          // Update this component field mapping
+                                          console.log(`Map ${sc.componentField} to ${e.target.value}`);
+                                        }}
+                                      >
+                                        <option value="">Select...</option>
+                                        {availableColumns.map((col) => (
+                                          <option key={col} value={col}>{col}</option>
+                                        ))}
+                                      </select>
+                                    )}
+                                  </span>
+                                )}
+                              </div>
                             ))}
-                          </select>
-                        ) : (
-                          <span className="font-medium text-gray-900">
-                            {mapping.sourceField || element.sourceField || (
-                              <span className="text-red-600 flex items-center gap-1">
-                                <AlertCircle className="w-3 h-3" />
-                                Not mapped
-                              </span>
-                            )}
-                          </span>
-                        )}
-                      </div>
+                          </div>
+                          {/* Show aggregation method if applicable */}
+                          {(element as any).calculationDefinition?.formula?.aggregationMethod && (
+                            <div className="mt-2 pt-2 border-t border-indigo-200 text-xs text-indigo-700">
+                              <strong>Aggregation:</strong> {(element as any).calculationDefinition.formula.aggregationMethod}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        // Simple element: Single source column
+                        <div className="flex items-center gap-2 text-sm">
+                          <span className="text-gray-600 w-32">Source Column:</span>
+                          {isEditing ? (
+                            <select
+                              className="flex-1 border rounded px-2 py-1 text-sm"
+                              value={mapping.sourceField || element.sourceField || ''}
+                              onChange={(e) => handleMappingChange(element.elementId, 'sourceField', e.target.value)}
+                            >
+                              <option value="">Select column...</option>
+                              {availableColumns.map((col) => (
+                                <option key={col} value={col}>
+                                  {col}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <span className="font-medium text-gray-900">
+                              {mapping.sourceField || element.sourceField || (
+                                <span className="text-red-600 flex items-center gap-1">
+                                  <AlertCircle className="w-3 h-3" />
+                                  Not mapped
+                                </span>
+                              )}
+                            </span>
+                          )}
+                        </div>
+                      )}
 
                       {/* Business Definition Validation Results */}
                       {definitionValidations[element.elementId] && (

@@ -423,30 +423,7 @@ export class MLPredictionService {
         confidence?: number[];
         explanations?: any[];
     }> {
-        // This would integrate with Python/Spark for actual predictions
-        // For now, return placeholder structure
-
-        const predictions = data.map((record, idx) => {
-            // Placeholder prediction logic
-            return model.type === 'classification' ? 'class_A' : 42.5;
-        });
-
-        // P0-4 FIX: Production guard for mock confidence scores
-        const isProduction = process.env.NODE_ENV === 'production';
-        if (isProduction) {
-            throw new Error('ML prediction requires trained model integration in production. Deploy model artifacts first.');
-        }
-
-        // Development only: No real model available, return zero confidence
-        console.warn('⚠️ [MLPrediction] No trained model - returning zero confidence (dev mode only)');
-        const confidence = data.map(() => 0);
-
-        return {
-            values: predictions,
-            confidence,
-            explanations: options?.explainPredictions ?
-                data.map(() => ({ featureImportance: {} })) : undefined
-        };
+        throw new Error('ML prediction requires trained model integration. Deploy model artifacts first.');
     }
 
     /**

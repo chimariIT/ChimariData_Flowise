@@ -497,6 +497,32 @@ let server: Server;
     };
 
     server.listen({ port, host, ipv6Only: false }, onListen);
+
+    // P2-B FIX: Graceful shutdown handler - clean up intervals and connections
+    const gracefulShutdown = async (signal: string) => {
+      console.log(`\n🛑 [Shutdown] Received ${signal}, shutting down gracefully...`);
+      try {
+        const { taskQueue } = await import('./services/enhanced-task-queue');
+        if (taskQueue && typeof taskQueue.shutdown === 'function') {
+          taskQueue.shutdown();
+          console.log('✅ [Shutdown] Task queue stopped');
+        }
+      } catch { /* ignore if not available */ }
+
+      server.close(() => {
+        console.log('✅ [Shutdown] HTTP server closed');
+        process.exit(0);
+      });
+
+      // Force exit after 30 seconds
+      setTimeout(() => {
+        console.error('❌ [Shutdown] Forced exit after timeout');
+        process.exit(1);
+      }, 30000);
+    };
+
+    process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+    process.on('SIGINT', () => gracefulShutdown('SIGINT'));
   }
 })();
 

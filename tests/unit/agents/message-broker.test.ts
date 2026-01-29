@@ -9,26 +9,44 @@ import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'events';
 
 // Mock Redis
+// Shared pub/sub bus to simulate Redis cross-instance communication
+const sharedBus = new EventEmitter();
+
 vi.mock('ioredis', () => {
   return {
     Redis: class MockRedis extends EventEmitter {
+      private subscribedChannels: Set<string> = new Set();
+
+      constructor() {
+        super();
+        // Listen for published messages on shared bus and forward to subscribers
+        sharedBus.on('publish', (channel: string, message: string) => {
+          if (this.subscribedChannels.has(channel)) {
+            setImmediate(() => this.emit('message', channel, message));
+          }
+        });
+      }
+
+      async connect(): Promise<void> {
+        setImmediate(() => this.emit('connect'));
+      }
+
       async subscribe(...channels: string[]): Promise<void> {
         for (const channel of channels) {
+          this.subscribedChannels.add(channel);
           this.emit('subscribe', channel, 1);
         }
       }
 
       async unsubscribe(...channels: string[]): Promise<void> {
         for (const channel of channels) {
+          this.subscribedChannels.delete(channel);
           this.emit('unsubscribe', channel, 0);
         }
       }
 
       async publish(channel: string, message: string): Promise<number> {
-        // Simulate message delivery
-        setImmediate(() => {
-          this.emit('message', channel, message);
-        });
+        sharedBus.emit('publish', channel, message);
         return 1;
       }
 
@@ -49,8 +67,10 @@ import { AgentMessageBroker, AgentMessage, AgentCheckpoint } from '../../../serv
 describe('AgentMessageBroker', () => {
   let broker: AgentMessageBroker;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     broker = new AgentMessageBroker();
+    // Wait for async Redis mock connection to establish
+    await new Promise(resolve => setTimeout(resolve, 10));
   });
 
   afterEach(async () => {

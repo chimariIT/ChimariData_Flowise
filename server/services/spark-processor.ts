@@ -138,132 +138,33 @@ export class SparkProcessor {
     private isProduction: boolean;
     private pythonPath: string;
 
-    // Cache Spark detection result to avoid repeated environment checks
-    private static sparkDetectionComplete: boolean = false;
-    private static useMockMode: boolean = false;
+    private sparkUnavailable: boolean = false;
 
     constructor() {
         this.isProduction = process.env.NODE_ENV === 'production';
         this.config = getSimpleSparkConfig();
         // Check PYSPARK_PYTHON first, then PYTHON_PATH, then defaults
         this.pythonPath = process.env.PYSPARK_PYTHON || process.env.PYTHON_PATH || 'python3';
-        
+
         this.connectionPool = {
             sessions: new Map(),
             maxSessions: parseInt(process.env.SPARK_MAX_SESSIONS || '5'),
             currentSessions: 0
         };
 
-        // Simple validation for production
-        if (this.isProduction && !process.env.SPARK_MASTER_URL) {
-            console.warn('SPARK_MASTER_URL not set in production - using mock mode');
-        }
-
-        // Only initialize in production or if explicitly enabled
-        if (this.isProduction || process.env.SPARK_ENABLED === 'true') {
-            this.initialize();
-        } else {
-            console.log('ℹ️  Spark processor running in mock mode (development)');
-        }
+        this.initialize();
     }
 
     private async initialize(): Promise<void> {
         try {
-            if (this.shouldUseMock()) {
-                console.log("SparkProcessor initialized (mocked) - Spark cluster not available or in development mode.");
-                this.isInitialized = true;
-                return;
-            }
-
-            // In production or when Spark is properly configured, use real implementation
             await this.initializeSparkCluster();
             console.log(`SparkProcessor initialized with real Spark cluster: ${this.config.master}`);
             this.isInitialized = true;
-
         } catch (error) {
-            console.error('Failed to initialize Spark cluster, falling back to mock mode:', error);
+            console.error('Failed to initialize Spark cluster:', error);
+            this.sparkUnavailable = true;
             this.isInitialized = true;
         }
-    }
-
-    private shouldUseMock(): boolean {
-        // Return cached result if already detected
-        if (SparkProcessor.sparkDetectionComplete) {
-            return SparkProcessor.useMockMode;
-        }
-
-        console.log('\n🔍 ===== SPARK DETECTION (ONE-TIME) =====');
-        console.log('Environment checks:');
-        console.log(`  NODE_ENV: ${process.env.NODE_ENV}`);
-        console.log(`  isProduction: ${this.isProduction}`);
-        console.log(`  SPARK_ENABLED: ${process.env.SPARK_ENABLED}`);
-        console.log(`  FORCE_SPARK_MOCK: ${process.env.FORCE_SPARK_MOCK}`);
-        console.log(`  FORCE_SPARK_REAL: ${process.env.FORCE_SPARK_REAL}`);
-        console.log(`  SPARK_MASTER_URL: ${process.env.SPARK_MASTER_URL}`);
-        console.log(`  SPARK_HOME: ${process.env.SPARK_HOME}`);
-        console.log(`  PYSPARK_PYTHON: ${process.env.PYSPARK_PYTHON}`);
-        console.log(`  pythonPath: ${this.pythonPath}`);
-
-        // Use mock if:
-        // 1. In development mode and no explicit Spark configuration
-        // 2. Spark binaries not available
-        // 3. Configuration errors in non-production environment
-
-        let useMock = false;
-
-        if (process.env.FORCE_SPARK_MOCK === 'true') {
-            console.log('✅ Decision: MOCK (FORCE_SPARK_MOCK=true)');
-            useMock = true;
-        } else if (process.env.FORCE_SPARK_REAL === 'true') {
-            console.log('✅ Decision: REAL (FORCE_SPARK_REAL=true)');
-            useMock = false;
-        } else if (!this.isProduction && !process.env.SPARK_MASTER_URL && !process.env.SPARK_HOME) {
-            // ✅ P1-9 FIX: Also check SPARK_HOME - if set, user has Spark installed
-            // Check if running in development without explicit Spark setup
-            console.log('✅ Decision: MOCK (development + no SPARK_MASTER_URL or SPARK_HOME)');
-            useMock = true;
-        } else {
-            // Check if Python and required dependencies are available
-            try {
-                console.log('🔧 Checking Python and PySpark availability...');
-                const pythonCheck = spawn(this.pythonPath, ['-c', 'import pyspark'], { stdio: 'pipe' });
-                
-                pythonCheck.on('close', (code) => {
-                    if (code === 0) {
-                        console.log('✅ Decision: REAL (Python and PySpark available)');
-                        SparkProcessor.useMockMode = false;
-                    } else {
-                        console.log('❌ PySpark import failed');
-                        console.log('✅ Decision: MOCK (Python/PySpark not available)');
-                        SparkProcessor.useMockMode = true;
-                    }
-                    SparkProcessor.sparkDetectionComplete = true;
-                });
-                
-                pythonCheck.on('error', (error) => {
-                    console.log(`❌ Python/PySpark check failed: ${error}`);
-                    console.log('✅ Decision: MOCK (Python/PySpark not available)');
-                    SparkProcessor.useMockMode = true;
-                    SparkProcessor.sparkDetectionComplete = true;
-                });
-                
-                // For now, assume real mode since we know PySpark is installed
-                console.log('✅ Decision: REAL (Python and PySpark available)');
-                useMock = false;
-            } catch (error) {
-                console.log(`❌ Python/PySpark check failed: ${error}`);
-                console.log('✅ Decision: MOCK (Python/PySpark not available)');
-                useMock = true;
-            }
-        }
-
-        // Cache the result to avoid repeated checks
-        SparkProcessor.sparkDetectionComplete = true;
-        SparkProcessor.useMockMode = useMock;
-        console.log(`🎯 Spark mode cached: ${useMock ? 'MOCK' : 'REAL'}`);
-        console.log('===================================\n');
-
-        return useMock;
     }
 
     private async initializeSparkCluster(): Promise<void> {
@@ -334,47 +235,25 @@ export class SparkProcessor {
             await this.initialize();
         }
 
-        if (this.shouldUseMock()) {
-            // CRITICAL: Prevent mock mode in production
-            if (process.env.NODE_ENV === 'production') {
-                console.error('🔴 CRITICAL: Spark mock mode active in production!');
-                throw new Error('PRODUCTION_ERROR: Spark cluster not available. Mock mode disabled in production.');
-            }
-            console.log("Applying transformations with Spark (mocked)...");
-            // Mock implementation for development
-            return Array.isArray(data) ? data : [{ transformed: true, mock: true }];
+        // Handle data input - if it's an array, save it temporarily
+        let dataPath: string;
+        if (Array.isArray(data)) {
+            dataPath = await this.saveTemporaryData(data);
+        } else {
+            dataPath = data as string;
         }
 
-        try {
-            // Handle data input - if it's an array, save it temporarily
-            let dataPath: string;
-            if (Array.isArray(data)) {
-                dataPath = await this.saveTemporaryData(data);
-            } else {
-                dataPath = data as string;
-            }
+        const result = await this.executeSparkOperation('apply_transformations', {
+            data_path: dataPath,
+            transformations: transformations
+        });
 
-            const result = await this.executeSparkOperation('apply_transformations', {
-                data_path: dataPath,
-                transformations: transformations
-            });
-
-            if (!result.success) {
-                throw new Error(result.error);
-            }
-
-            // Load transformed data
-            return await this.loadTransformedData(result.output_path);
-
-        } catch (error) {
-            console.error('Error in applyTransformations:', error);
-            // Fallback to mock behavior
-            return Array.isArray(data) ? data : [{ 
-                error: 'transformation_failed', 
-                message: error instanceof Error ? error.message : String(error),
-                mock: true 
-            }];
+        if (!result.success) {
+            throw new Error(result.error);
         }
+
+        // Load transformed data
+        return await this.loadTransformedData(result.output_path);
     }
 
     /**
@@ -389,19 +268,9 @@ export class SparkProcessor {
             await this.initialize();
         }
 
-        if (this.shouldUseMock()) {
-            // P0-7 FIX: In production, fall back to Python processor instead of failing
-            if (process.env.NODE_ENV === 'production') {
-                console.warn('⚠️ Spark not available in production - falling back to Python processor');
-                return await this.fallbackToPythonAnalysis(data, analysisType, parameters);
-            }
-            console.log(`Performing ${analysisType} with Spark (mocked)...`);
-            return {
-                result: `Mock ${analysisType} analysis result`,
-                analysisType,
-                parameters,
-                mock: true
-            };
+        if (this.sparkUnavailable) {
+            console.warn(`⚠️ Spark unavailable - falling back to Python processor for ${analysisType}`);
+            return await this.fallbackToPythonAnalysis(data, analysisType, parameters);
         }
 
         try {
@@ -427,17 +296,9 @@ export class SparkProcessor {
 
         } catch (error) {
             console.error(`Error in performAnalysis (${analysisType}):`, error);
-            // CRITICAL: Never return mock data in production
-            if (process.env.NODE_ENV === 'production') {
-                console.error('🔴 CRITICAL: Spark analysis failed in production!');
-                throw new Error(`PRODUCTION_ERROR: Spark analysis failed for ${analysisType}. Error: ${error instanceof Error ? error.message : String(error)}`);
-            }
-            // Only allow mock fallback in development
-            return { 
-                result: `Fallback ${analysisType} analysis result`,
-                error: error instanceof Error ? error.message : String(error),
-                mock: true 
-            };
+            // Fallback to Python processor (real analysis, not mock)
+            console.warn(`⚠️ Spark failed for ${analysisType}, falling back to Python processor`);
+            return await this.fallbackToPythonAnalysis(data, analysisType, parameters);
         }
     }
 
@@ -452,22 +313,10 @@ export class SparkProcessor {
             await this.initialize();
         }
 
-        if (this.shouldUseMock()) {
-            console.log(`Processing file of type ${fileType} with Spark (mocked)...`);
-            const mockData = [{ col1: 'a', col2: 1 }, { col1: 'b', col2: 2 }];
-            const mockSchema = { 
-                columns: [
-                    { name: 'col1', type: 'string' }, 
-                    { name: 'col2', type: 'integer' }
-                ]
-            };
-            return { data: mockData, schema: mockSchema, recordCount: mockData.length };
-        }
+        // Save buffer to temporary file
+        const tempFilePath = await this.saveBufferToTempFile(buffer, fileType);
 
         try {
-            // Save buffer to temporary file
-            const tempFilePath = await this.saveBufferToTempFile(buffer, fileType);
-
             const result = await this.executeSparkOperation('process_file', {
                 file_path: tempFilePath,
                 file_type: fileType,
@@ -491,14 +340,8 @@ export class SparkProcessor {
             };
 
         } catch (error) {
-            console.error('Error in processFile:', error);
-            // Fallback to mock behavior
-            const mockData = [{ error: 'processing_failed', fileType, mock: true }];
-            return { 
-                data: mockData, 
-                schema: { columns: [{ name: 'error', type: 'string' }] }, 
-                recordCount: 1 
-            };
+            await this.cleanupTempFile(tempFilePath);
+            throw error;
         }
     }
 
@@ -553,12 +396,12 @@ export class SparkProcessor {
      * Get Spark cluster status and metrics
      */
     async getClusterStatus(): Promise<any> {
-        if (this.shouldUseMock()) {
+        if (this.sparkUnavailable) {
             return {
-                status: 'mock',
-                cluster: 'local[*]',
-                available: true,
-                sessions: 1,
+                status: 'unavailable',
+                cluster: this.config.master,
+                available: false,
+                sessions: 0,
                 maxSessions: this.connectionPool.maxSessions
             };
         }
@@ -586,7 +429,7 @@ export class SparkProcessor {
                 details: {
                     ...status,
                     isInitialized: this.isInitialized,
-                    isMock: this.shouldUseMock(),
+                    sparkUnavailable: this.sparkUnavailable,
                     config: {
                         master: this.config.master,
                         appName: this.config.appName
@@ -599,7 +442,7 @@ export class SparkProcessor {
                 details: {
                     error: error instanceof Error ? error.message : String(error),
                     isInitialized: this.isInitialized,
-                    isMock: this.shouldUseMock()
+                    sparkUnavailable: this.sparkUnavailable
                 }
             };
         }
@@ -685,7 +528,7 @@ export class SparkProcessor {
      * Stop Spark session and cleanup resources
      */
     async stop(): Promise<void> {
-        if (this.spark && !this.shouldUseMock()) {
+        if (this.spark) {
             await this.spark.stop?.();
         }
         

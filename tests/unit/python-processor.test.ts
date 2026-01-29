@@ -13,7 +13,7 @@ describe('PythonProcessor', () => {
     expect(result.error).toMatch(/No data provided/i);
   });
 
-  it('falls back to enhanced analysis when the Python script fails', async () => {
+  it('throws error when Python analysis fails', async () => {
     const preview = [
       { score: 88, label: 'A' },
       { score: 73, label: 'B' },
@@ -28,17 +28,15 @@ describe('PythonProcessor', () => {
       .spyOn(PythonProcessor as any, 'executeRealPythonAnalysis')
       .mockResolvedValue({ success: false, error: 'Python not available' });
 
-    const result = await PythonProcessor.processTrial('trial-fallback', {
-      preview,
-      schema,
-      recordCount: preview.length,
-    });
+    await expect(
+      PythonProcessor.processTrial('trial-fallback', {
+        preview,
+        schema,
+        recordCount: preview.length,
+      })
+    ).rejects.toThrow('Python analysis failed');
 
     expect(spy).toHaveBeenCalled();
-    expect(result.success).toBe(true);
-    expect(result.data.summary).toContain('Enhanced JavaScript fallback');
-    expect(result.data.recommendations).toBeDefined();
-
     spy.mockRestore();
   });
 });

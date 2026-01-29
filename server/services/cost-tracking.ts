@@ -123,14 +123,26 @@ export class CostTrackingService {
         }
 
         // Dual-write: Update old project fields (backward compatibility)
+        // CRITICAL FIX: Also save to journeyProgress.lockedCostEstimate (SSOT)
+        const existingProgress = (project as any).journeyProgress || {};
+        const updatedProgress = {
+            ...existingProgress,
+            lockedCostEstimate: estimatedCost.total,
+            costBreakdown: estimatedCost,
+            costLockedAt: new Date().toISOString()
+        };
+
         await db
             .update(projects)
             .set({
                 lockedCostEstimate: estimatedCost.total.toString(),
                 costBreakdown: estimatedCost,
+                journeyProgress: updatedProgress,
                 updatedAt: new Date()
-            })
+            } as any)
             .where(eq(projects.id, projectId));
+
+        console.log(`💰 [Cost Tracking] Saved locked cost to both project.lockedCostEstimate AND journeyProgress.lockedCostEstimate: $${estimatedCost.total}`);
 
         // NEW: Create projectCostTracking record
         const now = new Date();
@@ -277,6 +289,9 @@ export class CostTrackingService {
 
     /**
      * Calculate and track execution cost based on actual results
+     *
+     * ✅ FIX: Use locked cost estimate if available (user already paid)
+     * Only recalculate for logging/auditing, don't override the paid amount
      */
     async trackExecutionCost(projectId: string, results: any): Promise<void> {
         const [project] = await db
@@ -285,6 +300,27 @@ export class CostTrackingService {
             .where(eq(projects.id, projectId));
 
         if (!project) return;
+
+        // ✅ FIX: Check for locked cost estimate first (SSOT: journeyProgress.lockedCostEstimate)
+        const journeyProgress = (project as any).journeyProgress || {};
+        const lockedCost = journeyProgress.lockedCostEstimate
+            || parseFloat((project as any).lockedCostEstimate || '0');
+
+        if (lockedCost > 0) {
+            // User already paid the locked amount - don't recalculate
+            // Just update the totalCostIncurred to match the locked amount
+            console.log(`✅ [Cost Tracking] Using locked cost for project ${projectId}: $${lockedCost.toFixed(2)}`);
+
+            await db
+                .update(projects)
+                .set({
+                    totalCostIncurred: lockedCost.toString(),
+                    updatedAt: new Date()
+                })
+                .where(eq(projects.id, projectId));
+
+            return;
+        }
 
         const [user] = await db
             .select()
@@ -296,7 +332,8 @@ export class CostTrackingService {
         const pricingService = getPricingDataService();
         const tierId = user.subscriptionTier || 'trial';
 
-        // Calculate actual costs based on results
+        // Calculate actual costs based on results (only if no locked cost)
+        console.log(`⚠️ [Cost Tracking] No locked cost found, calculating from execution results`);
         const costs: Array<{ category: string; amount: number; description: string }> = [];
 
         // 1. Data Processing Cost

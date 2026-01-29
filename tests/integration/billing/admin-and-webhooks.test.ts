@@ -24,7 +24,7 @@ describe('Billing Admin APIs & Stripe Webhook Diagnostics', () => {
   };
 
   const adminUser = {
-    email: `billing-admin-${Date.now()}@example.com`,
+    email: `billing-admin-${Date.now()}@chimaridata.com`,
     password: 'BillingAdmin123!',
     firstName: 'Billing',
     lastName: 'Admin'
@@ -124,7 +124,7 @@ describe('Billing Admin APIs & Stripe Webhook Diagnostics', () => {
       .set(authHeader(userToken));
 
     expect(response.status).toBe(403);
-    expect(response.body.error).toContain('Admin access required');
+    expect(response.body.error).toContain('Admin privileges required');
   });
 
   it('allows admin users to view tier definitions from the database', async () => {

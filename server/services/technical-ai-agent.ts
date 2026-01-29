@@ -117,12 +117,6 @@ export class TechnicalAIAgent {
             console.log("Delegating to SparkProcessor based on intelligent selection.");
             const sparkResult = await this.sparkProcessor.performAnalysis(query.context?.data ?? [], query.type, query.parameters);
 
-            // CRITICAL: Validate no mock data in production
-            if (process.env.NODE_ENV === 'production' && sparkResult.mock === true) {
-                console.error('🔴 CRITICAL: Mock data detected in production environment!');
-                throw new Error('PRODUCTION_ERROR: Mock data detected. Real analysis unavailable. Please check Spark cluster configuration.');
-            }
-
             return {
                 success: true,
                 result: sparkResult,
@@ -293,14 +287,6 @@ export class TechnicalAIAgent {
                     projectId: query.context?.projectId
                 }
             );
-
-            // CRITICAL: Validate no mock data in production
-            if (process.env.NODE_ENV === 'production') {
-                if (toolResult.result?.mock === true || toolResult.result?.simulated === true) {
-                    console.error('🔴 CRITICAL: Mock data detected in tool result in production!');
-                    throw new Error('PRODUCTION_ERROR: Mock data detected in analysis. Real analysis unavailable. Please check Python/tool configuration.');
-                }
-            }
 
             // Enhanced billing integration with ML/LLM usage tracking
             const finalCost = toolResult.metrics?.cost || cost.totalCost;

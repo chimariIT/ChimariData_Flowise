@@ -56,8 +56,7 @@ router.get('/status', async (req, res) => {
             timestamp: new Date().toISOString(),
             environment: process.env.NODE_ENV || 'development',
             overall: {
-                healthy: health.allServicesOperational,
-                usingMockData: health.usingMockData
+                healthy: health.allServicesOperational
             },
             services: {
                 python: health.details.services.python,

@@ -798,32 +798,7 @@ Frame recommendations from a senior consultant perspective.`,
     userPrompt: string,
     options: any
   ): Promise<any> {
-    // P0-5 FIX: In production, this should call real AI providers
-    const isProduction = process.env.NODE_ENV === 'production';
-
-    if (isProduction) {
-      // In production, this method should not be called directly
-      // Real AI calls go through the AI service providers
-      throw new Error(`[RoleBasedAI] Direct AI execution not supported in production. Use configured AI providers.`);
-    }
-
-    // Development mode: Return deterministic mock for testing
-    console.warn(`[RoleBasedAI] Mock AI execution in development - providerId: ${providerId}`);
-
-    // Simulate a brief delay (fixed, not random)
-    await new Promise(resolve => setTimeout(resolve, 500));
-
-    // Return deterministic mock response for development testing
-    return {
-      content: `[DEV MOCK] AI response from ${providerId}/${modelName}: ${userPrompt.substring(0, 100)}...`,
-      tokens: 250, // Fixed value instead of random
-      confidence: 0.85, // Fixed value instead of random
-      providerId,
-      modelName,
-      systemPrompt: systemPrompt.substring(0, 50) + '...',
-      timestamp: new Date().toISOString(),
-      isMock: true
-    };
+    throw new Error(`[RoleBasedAI] Direct AI execution not supported. Use configured AI providers (providerId: ${providerId}).`);
   }
 
   /**

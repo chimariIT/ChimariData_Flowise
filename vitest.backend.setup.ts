@@ -21,8 +21,9 @@ if (!process.env.AGENT_RESPONSE_TIMEOUT_MS) {
   process.env.AGENT_RESPONSE_TIMEOUT_MS = '500';
 }
 
-// In CI we rarely have a Spark cluster, so force mock mode to avoid long
-// initialization delays when DataScientistAgent spins up the SparkProcessor.
-if (!process.env.FORCE_SPARK_MOCK && process.env.NODE_ENV === 'test') {
-  process.env.FORCE_SPARK_MOCK = 'true';
-}
+// Initialize database connection now that .env is loaded.
+// server/db.ts defers initialization in test mode so that DATABASE_URL
+// is available from dotenv before the pool is created.
+import { initializeDb } from './server/db';
+initializeDb();
+

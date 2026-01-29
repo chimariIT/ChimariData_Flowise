@@ -1,11 +1,14 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { MessageCircle, CheckCircle2, AlertCircle, Loader2, ChevronDown, ChevronUp, Database, BarChart3, FileText, Shuffle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { MessageCircle, CheckCircle2, AlertCircle, Loader2, ChevronDown, ChevronUp, Database, BarChart3, FileText, Shuffle, Lock } from "lucide-react";
 import { useState } from "react";
 
 interface UserQuestionAnswersProps {
     project: any;
     className?: string;
+    isPaid?: boolean;
+    onUnlock?: () => void;
 }
 
 interface QuestionAnswer {
@@ -34,7 +37,7 @@ interface QuestionAnswer {
  * PRIORITY DISPLAY: Shows user's original questions and AI-generated answers prominently
  * Uses AI-powered answers from QuestionAnswerService when available, falls back to keyword matching
  */
-export default function UserQuestionAnswers({ project, className = "" }: UserQuestionAnswersProps) {
+export default function UserQuestionAnswers({ project, className = "", isPaid = true, onUnlock }: UserQuestionAnswersProps) {
     // Extract AI-generated Q&A from analysis results (if available)
     const analysisResults = project?.analysisResults;
     const aiGeneratedQA = analysisResults?.questionAnswers;
@@ -196,8 +199,22 @@ export default function UserQuestionAnswers({ project, className = "" }: UserQue
             </CardHeader>
             <CardContent className="pt-6">
                 <div className="space-y-6">
-                    {questionAnswers.map((qa, index) => (
-                        <div key={index} className="p-5 border-2 border-gray-200 rounded-lg hover:border-blue-300 transition-colors">
+                    {questionAnswers.map((qa, index) => {
+                        // P3-1 FIX: Blur Q&A pairs after index 1 for unpaid users
+                        const isBlurred = !isPaid && index >= 2;
+                        return (
+                        <div key={index} className={`p-5 border-2 border-gray-200 rounded-lg hover:border-blue-300 transition-colors relative ${isBlurred ? 'overflow-hidden' : ''}`}>
+                            {isBlurred && (
+                                <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-10 flex flex-col items-center justify-center">
+                                    <Lock className="w-6 h-6 text-gray-400 mb-2" />
+                                    <p className="text-sm text-gray-600 font-medium">Unlock full results</p>
+                                    {onUnlock && (
+                                        <Button size="sm" variant="outline" className="mt-2" onClick={onUnlock}>
+                                            Unlock All Answers
+                                        </Button>
+                                    )}
+                                </div>
+                            )}
                             <div className="flex items-start gap-3 mb-4">
                                 {getStatusIcon(qa.status)}
                                 <div className="flex-1">
@@ -216,15 +233,16 @@ export default function UserQuestionAnswers({ project, className = "" }: UserQue
                                         )}
                                     </div>
                                     {/* Phase 4: Evidence Section */}
-                                    {((qa.evidenceInsights && qa.evidenceInsights.length > 0) || 
-                                      (qa.dataElementsUsed && qa.dataElementsUsed.length > 0) || 
+                                    {((qa.evidenceInsights && qa.evidenceInsights.length > 0) ||
+                                      (qa.dataElementsUsed && qa.dataElementsUsed.length > 0) ||
                                       (qa.analysisTypes && qa.analysisTypes.length > 0)) && (
                                         <EvidenceSection qa={qa} insights={insights} />
                                     )}
                                 </div>
                             </div>
                         </div>
-                    ))}
+                        );
+                    })}
                 </div>
                 <div className="mt-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
                     <p className="text-sm text-gray-600">

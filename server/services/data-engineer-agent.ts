@@ -18,6 +18,57 @@ import {
 } from './analysis-requirements-registry';
 
 // ==========================================
+// ELEMENT DEFINITION INTERFACES (For Data Scientist → Data Engineer handoff)
+// ==========================================
+
+/**
+ * Data element definition with calculation specification
+ * Used by DE agent to generate proper transformations based on DS requirements
+ */
+export interface ElementDefinition {
+  elementId: string;
+  elementName: string;
+  dataType: 'numeric' | 'categorical' | 'datetime' | 'text' | 'boolean';
+  purpose?: string;
+  analysisUsage?: string[];
+  required?: boolean;
+  sourceColumn?: string;  // Mapped source column (if direct mapping)
+
+  // Calculation definition from Data Scientist
+  calculationDefinition?: {
+    calculationType: 'direct' | 'derived' | 'aggregated' | 'grouped' | 'composite';
+
+    // For derived metrics (e.g., "Engagement Score = avg(Q1, Q2, Q3)")
+    formula?: {
+      businessDescription: string;
+      componentFields?: string[];  // e.g., ["Q1_Score", "Q2_Score", "Q3_Score"]
+      aggregationMethod?: 'average' | 'sum' | 'count' | 'min' | 'max' | 'median' | 'weighted_average' | 'custom';
+      weightField?: string;
+      pseudoCode?: string;
+    };
+
+    // For categorical groupings
+    categorization?: {
+      categoryDescription: string;
+      categories?: Array<{
+        name: string;
+        rule: string;  // e.g., "score >= 80" or "tenure < 2"
+      }>;
+    };
+
+    // For comparison groups
+    comparisonGroups?: {
+      groupingField?: string;
+      groupValues?: string[];
+      comparisonType: 'between_groups' | 'within_group' | 'time_series';
+    };
+
+    definitionConfidence?: number;
+    notes?: string;
+  };
+}
+
+// ==========================================
 // CONSULTATION INTERFACES (Multi-Agent Coordination)
 // ==========================================
 
@@ -377,7 +428,9 @@ export class DataEngineerAgent implements AgentHandler {
             analysisTypes: task.payload.analysisTypes || [],
             availableColumns: task.payload.availableColumns || [],
             columnTypes: task.payload.columnTypes || {},
-            dataStats: task.payload.dataStats || { rowCount: 0, nullPercents: {} }
+            dataStats: task.payload.dataStats || { rowCount: 0, nullPercents: {} },
+            // NEW: Pass element definitions for definition-based derivations
+            elementDefinitions: task.payload.elementDefinitions || undefined
           });
           return {
             taskId: task.id,
@@ -1687,6 +1740,8 @@ How can I help you with your data engineering needs today?`;
       sourceColumn?: string;
       isRequired?: boolean;
     }>;
+    // NEW: Full element definitions with calculationDefinition for proper derivations
+    elementDefinitions?: ElementDefinition[];
   }): Promise<{
     analysisPreparations: Array<{
       analysisType: string;
@@ -1715,6 +1770,43 @@ How can I help you with your data engineering needs today?`;
   }> {
     console.log(`🔧 [DE Agent] Preparing data for ${params.analysisTypes.length} analysis types:`, params.analysisTypes);
 
+    // =====================================================================
+    // STEP 1: Generate element-based transformations from calculationDefinition
+    // These are business-level derivations defined by the Data Scientist
+    // =====================================================================
+    const elementBasedTransformations: Array<{
+      name: string;
+      reason: string;
+      priority: 'required' | 'recommended' | 'optional';
+      targetColumns?: string[];
+      transformationCode?: string;
+      elementId?: string;
+      derivationType?: string;
+    }> = [];
+
+    if (params.elementDefinitions && params.elementDefinitions.length > 0) {
+      console.log(`🔧 [DE Agent] Processing ${params.elementDefinitions.length} element definitions for derivations`);
+
+      for (const element of params.elementDefinitions) {
+        const calcDef = element.calculationDefinition;
+        if (!calcDef) continue;
+
+        // Generate transformation based on calculationType
+        const transformation = this.generateElementBasedTransformation(
+          element,
+          params.availableColumns,
+          params.columnTypes
+        );
+
+        if (transformation) {
+          elementBasedTransformations.push(transformation);
+          console.log(`  📐 [Element] ${element.elementName}: ${calcDef.calculationType} → ${transformation.name}`);
+        }
+      }
+
+      console.log(`🔧 [DE Agent] Generated ${elementBasedTransformations.length} element-based transformations`);
+    }
+
     const analysisPreparations: Array<{
       analysisType: string;
       displayName: string;
@@ -1732,7 +1824,9 @@ How can I help you with your data engineering needs today?`;
     const readyAnalyses: string[] = [];
     const notReadyAnalyses: string[] = [];
 
-    // Analyze each requested analysis type
+    // =====================================================================
+    // STEP 2: Generate analysis-specific transformations (generic data cleaning)
+    // =====================================================================
     for (const analysisType of params.analysisTypes) {
       const spec = getAnalysisRequirements(analysisType);
       if (!spec) {
@@ -1788,7 +1882,24 @@ How can I help you with your data engineering needs today?`;
     }
 
     // Merge transformations across all analyses to avoid duplicates
-    const mergedTransformations = this.mergeTransformationsAcrossAnalyses(analysisPreparations);
+    let mergedTransformations = this.mergeTransformationsAcrossAnalyses(analysisPreparations);
+
+    // =====================================================================
+    // STEP 3: Prepend element-based transformations (higher priority)
+    // Element derivations should run BEFORE generic data cleaning
+    // =====================================================================
+    if (elementBasedTransformations.length > 0) {
+      const elementMerged = elementBasedTransformations.map(t => ({
+        name: t.name,
+        reason: t.reason,
+        priority: t.priority,
+        forAnalyses: ['All (Element Derivation)'] as string[]
+      }));
+
+      // Prepend element transformations - they should be applied first
+      mergedTransformations = [...elementMerged, ...mergedTransformations];
+      console.log(`🔧 [DE Agent] Prepended ${elementBasedTransformations.length} element-based transformations to pipeline`);
+    }
 
     // P1-5 FIX: Combine validation readiness with mapping readiness for accurate percentage
     const validationReadiness = params.analysisTypes.length > 0
@@ -1992,6 +2103,261 @@ How can I help you with your data engineering needs today?`;
     }
 
     return transformations;
+  }
+
+  /**
+   * Generate transformation from a data element's calculationDefinition
+   * This translates Data Scientist's business-level definitions into executable code
+   */
+  private generateElementBasedTransformation(
+    element: ElementDefinition,
+    availableColumns: string[],
+    columnTypes: Record<string, 'numeric' | 'categorical' | 'datetime' | 'text'>
+  ): {
+    name: string;
+    reason: string;
+    priority: 'required' | 'recommended' | 'optional';
+    targetColumns?: string[];
+    transformationCode?: string;
+    elementId?: string;
+    derivationType?: string;
+  } | null {
+    const calcDef = element.calculationDefinition;
+    if (!calcDef) return null;
+
+    const elementName = element.elementName;
+    const elementId = element.elementId;
+    const targetColumnName = this.sanitizeColumnName(elementName);
+
+    switch (calcDef.calculationType) {
+      case 'direct': {
+        // Direct mapping - just rename/alias the source column
+        if (element.sourceColumn && availableColumns.includes(element.sourceColumn)) {
+          return {
+            name: `map_${targetColumnName}`,
+            reason: `Direct mapping: "${element.sourceColumn}" → "${elementName}" (${element.purpose || 'required for analysis'})`,
+            priority: element.required ? 'required' : 'recommended',
+            targetColumns: [element.sourceColumn],
+            transformationCode: `df['${targetColumnName}'] = df['${element.sourceColumn}'].copy()`,
+            elementId,
+            derivationType: 'direct'
+          };
+        }
+        return null;
+      }
+
+      case 'derived': {
+        // Derived metric - calculate from component fields using formula
+        const formula = calcDef.formula;
+        if (!formula || !formula.componentFields || formula.componentFields.length === 0) {
+          return {
+            name: `derive_${targetColumnName}`,
+            reason: `Derived element "${elementName}" needs formula definition. ${formula?.businessDescription || ''}`,
+            priority: element.required ? 'required' : 'recommended',
+            elementId,
+            derivationType: 'derived'
+          };
+        }
+
+        // Check if component fields are available
+        const missingFields = formula.componentFields.filter(f => !availableColumns.includes(f));
+        if (missingFields.length > 0) {
+          return {
+            name: `derive_${targetColumnName}`,
+            reason: `Derived element "${elementName}" requires missing columns: ${missingFields.join(', ')}. Definition: ${formula.businessDescription}`,
+            priority: element.required ? 'required' : 'recommended',
+            targetColumns: formula.componentFields,
+            elementId,
+            derivationType: 'derived'
+          };
+        }
+
+        // Generate derivation code based on aggregation method
+        const code = this.generateDerivationCode(
+          targetColumnName,
+          formula.componentFields,
+          formula.aggregationMethod || 'average',
+          formula.weightField,
+          formula.pseudoCode
+        );
+
+        return {
+          name: `derive_${targetColumnName}`,
+          reason: `Derived element: "${elementName}" = ${formula.businessDescription}`,
+          priority: element.required ? 'required' : 'recommended',
+          targetColumns: formula.componentFields,
+          transformationCode: code,
+          elementId,
+          derivationType: 'derived'
+        };
+      }
+
+      case 'aggregated': {
+        // Aggregated metric - group and aggregate
+        const formula = calcDef.formula;
+        const groups = calcDef.comparisonGroups;
+
+        if (groups?.groupingField && formula?.componentFields?.[0]) {
+          const code = `df['${targetColumnName}'] = df.groupby('${groups.groupingField}')['${formula.componentFields[0]}'].transform('${formula.aggregationMethod || 'mean'}')`;
+
+          return {
+            name: `aggregate_${targetColumnName}`,
+            reason: `Aggregated element: "${elementName}" = ${formula.aggregationMethod || 'mean'} of "${formula.componentFields[0]}" grouped by "${groups.groupingField}"`,
+            priority: element.required ? 'required' : 'recommended',
+            targetColumns: [groups.groupingField, formula.componentFields[0]],
+            transformationCode: code,
+            elementId,
+            derivationType: 'aggregated'
+          };
+        }
+
+        return {
+          name: `aggregate_${targetColumnName}`,
+          reason: `Aggregated element "${elementName}" needs grouping field and component field definition`,
+          priority: element.required ? 'required' : 'recommended',
+          elementId,
+          derivationType: 'aggregated'
+        };
+      }
+
+      case 'grouped': {
+        // Grouped comparison - create group-level metrics
+        const groups = calcDef.comparisonGroups;
+
+        if (groups?.groupingField) {
+          const code = `# Create group-level analysis for "${elementName}"\ngroup_stats = df.groupby('${groups.groupingField}').agg(['mean', 'std', 'count'])\ndf = df.merge(group_stats.add_suffix('_${targetColumnName}'), on='${groups.groupingField}', how='left')`;
+
+          return {
+            name: `group_${targetColumnName}`,
+            reason: `Grouped element: "${elementName}" creates group-level metrics by "${groups.groupingField}"${groups.groupValues ? ` for groups: ${groups.groupValues.join(', ')}` : ''}`,
+            priority: element.required ? 'required' : 'recommended',
+            targetColumns: [groups.groupingField],
+            transformationCode: code,
+            elementId,
+            derivationType: 'grouped'
+          };
+        }
+
+        return {
+          name: `group_${targetColumnName}`,
+          reason: `Grouped element "${elementName}" needs grouping field definition`,
+          priority: element.required ? 'required' : 'recommended',
+          elementId,
+          derivationType: 'grouped'
+        };
+      }
+
+      case 'composite': {
+        // Composite metric - combine multiple derived metrics
+        const formula = calcDef.formula;
+
+        if (formula?.pseudoCode) {
+          return {
+            name: `composite_${targetColumnName}`,
+            reason: `Composite element: "${elementName}" = ${formula.businessDescription}`,
+            priority: element.required ? 'required' : 'recommended',
+            targetColumns: formula.componentFields,
+            transformationCode: `# Composite metric: ${formula.businessDescription}\n${formula.pseudoCode}`,
+            elementId,
+            derivationType: 'composite'
+          };
+        }
+
+        // Generate from categorization rules if available
+        if (calcDef.categorization?.categories) {
+          const categories = calcDef.categorization.categories;
+          let code = `# Categorize: ${calcDef.categorization.categoryDescription}\n`;
+          code += `def categorize_${targetColumnName}(row):\n`;
+
+          for (const cat of categories) {
+            code += `    if ${cat.rule}: return '${cat.name}'\n`;
+          }
+          code += `    return 'Other'\n`;
+          code += `df['${targetColumnName}'] = df.apply(categorize_${targetColumnName}, axis=1)`;
+
+          return {
+            name: `categorize_${targetColumnName}`,
+            reason: `Categorized element: "${elementName}" = ${calcDef.categorization.categoryDescription}`,
+            priority: element.required ? 'required' : 'recommended',
+            transformationCode: code,
+            elementId,
+            derivationType: 'composite'
+          };
+        }
+
+        return {
+          name: `composite_${targetColumnName}`,
+          reason: `Composite element "${elementName}" needs pseudoCode or categorization rules`,
+          priority: element.required ? 'required' : 'recommended',
+          elementId,
+          derivationType: 'composite'
+        };
+      }
+
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Generate Python code for derived metrics based on aggregation method
+   */
+  private generateDerivationCode(
+    targetColumn: string,
+    componentFields: string[],
+    method: string,
+    weightField?: string,
+    pseudoCode?: string
+  ): string {
+    // If custom pseudoCode is provided, use it
+    if (pseudoCode) {
+      return `# Custom derivation for ${targetColumn}\n${pseudoCode}`;
+    }
+
+    const fieldsArray = componentFields.map(f => `'${f}'`).join(', ');
+
+    switch (method) {
+      case 'average':
+        return `# Derive ${targetColumn}: Average of component fields\ndf['${targetColumn}'] = df[[${fieldsArray}]].mean(axis=1)`;
+
+      case 'sum':
+        return `# Derive ${targetColumn}: Sum of component fields\ndf['${targetColumn}'] = df[[${fieldsArray}]].sum(axis=1)`;
+
+      case 'min':
+        return `# Derive ${targetColumn}: Minimum of component fields\ndf['${targetColumn}'] = df[[${fieldsArray}]].min(axis=1)`;
+
+      case 'max':
+        return `# Derive ${targetColumn}: Maximum of component fields\ndf['${targetColumn}'] = df[[${fieldsArray}]].max(axis=1)`;
+
+      case 'median':
+        return `# Derive ${targetColumn}: Median of component fields\ndf['${targetColumn}'] = df[[${fieldsArray}]].median(axis=1)`;
+
+      case 'count':
+        return `# Derive ${targetColumn}: Count non-null values\ndf['${targetColumn}'] = df[[${fieldsArray}]].notna().sum(axis=1)`;
+
+      case 'weighted_average':
+        if (weightField) {
+          return `# Derive ${targetColumn}: Weighted average\nweights = df['${weightField}']\ndf['${targetColumn}'] = (df[[${fieldsArray}]].multiply(weights, axis=0).sum(axis=1)) / weights.sum()`;
+        }
+        return `# Derive ${targetColumn}: Weighted average (weight field not specified, using simple average)\ndf['${targetColumn}'] = df[[${fieldsArray}]].mean(axis=1)`;
+
+      case 'custom':
+        return `# Derive ${targetColumn}: Custom calculation\n# TODO: Implement custom formula for [${fieldsArray}]\ndf['${targetColumn}'] = df[[${fieldsArray}]].mean(axis=1)  # Placeholder`;
+
+      default:
+        return `# Derive ${targetColumn}: Default to average\ndf['${targetColumn}'] = df[[${fieldsArray}]].mean(axis=1)`;
+    }
+  }
+
+  /**
+   * Sanitize element name to valid column name
+   */
+  private sanitizeColumnName(name: string): string {
+    return name
+      .toLowerCase()
+      .replace(/[^a-z0-9_]/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '');
   }
 
   /**

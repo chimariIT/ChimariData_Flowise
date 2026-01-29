@@ -33,10 +33,52 @@ import {
 import UserQuestionAnswers from "@/components/UserQuestionAnswers";
 import AudienceTranslatedResults from "@/components/AudienceTranslatedResults";
 import { EvidenceChainUI } from "@/components/EvidenceChainUI";
+// MEDIUM PRIORITY FIX: Use canonical journey types from shared/
+import { JourneyType } from "@shared/canonical-types";
 
+// Journey type display configuration - uses canonical types
+const JOURNEY_TYPE_INFO: Record<JourneyType, { title: string; description: string; icon: typeof Brain; color: string }> = {
+  'non-tech': {
+    title: "AI-Generated Results",
+    description: "Your analysis results with AI-generated insights",
+    icon: Brain,
+    color: "blue"
+  },
+  'business': {
+    title: "Business Analysis Results",
+    description: "Business-focused insights and recommendations",
+    icon: BarChart3,
+    color: "green"
+  },
+  'technical': {
+    title: "Technical Analysis Results",
+    description: "Detailed technical analysis and statistical results",
+    icon: TrendingUp,
+    color: "purple"
+  },
+  'consultation': {
+    title: "Expert Consultation Results",
+    description: "Results from expert-guided analysis and consultation",
+    icon: Star,
+    color: "yellow"
+  },
+  'custom': {
+    title: "Custom Analysis Results",
+    description: "Results from your custom analysis workflow",
+    icon: Receipt,
+    color: "indigo"
+  }
+};
+
+const DEFAULT_JOURNEY_INFO = {
+  title: "Analysis Results",
+  description: "Your completed analysis results and insights",
+  icon: Receipt,
+  color: "blue"
+};
 
 interface DashboardStepProps {
-  journeyType: string;
+  journeyType: JourneyType | string;
   onNext?: () => void;
   onPrevious?: () => void;
 }
@@ -61,6 +103,11 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
   // FIX Phase 3: Track artifact polling state for exponential backoff
   const [artifactRetryCount, setArtifactRetryCount] = useState(0);
   const artifactPollingRef = useRef<NodeJS.Timeout | null>(null);
+  // FIX: Auto-poll for results when analysis might still be processing
+  const [resultsRetryCount, setResultsRetryCount] = useState(0);
+  const resultsPollingRef = useRef<NodeJS.Timeout | null>(null);
+  const MAX_RESULTS_RETRIES = 10;
+  const RESULTS_RETRY_DELAY_MS = 5000; // 5 seconds between checks
 
   // FIX Issue #11: Consolidated data loading with clear source precedence
   // Priority: 1. Fresh API data, 2. JourneyProgress cache, 3. Empty state
@@ -88,6 +135,44 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
       setArtifactsLoading(false);
     }
   }, [projectId, journeyProgress, projectLoading]);
+
+  // FIX: Auto-poll for results when analysis might still be processing
+  // This handles the case where user arrives from payment before analysis completes
+  useEffect(() => {
+    // Don't poll if we already have results
+    if (!projectId || analysisResults) return;
+
+    // FIX: Clearer condition for when to poll
+    // Poll if:
+    // 1. Project has journeyProgress with execution in progress, OR
+    // 2. Project is paid but results haven't loaded yet (recently completed payment)
+    const executionStatus = (journeyProgress as any)?.executionStatus;
+    const isPaidProject = (project as any)?.isPaid === true;
+    const isExecuting = executionStatus === 'executing' || executionStatus === 'in_progress';
+    const recentlyPaid = isPaidProject && !(project as any)?.analysisExecutedAt;
+
+    // Only poll if there's reason to believe results are coming
+    const shouldPoll = isExecuting || recentlyPaid;
+
+    if (shouldPoll && resultsRetryCount < MAX_RESULTS_RETRIES) {
+      const reason = isExecuting ? 'execution in progress' : 'recently paid, waiting for results';
+      console.log(`🔄 [Dashboard] Polling for results (${reason}), retry ${resultsRetryCount + 1}/${MAX_RESULTS_RETRIES}`);
+
+      resultsPollingRef.current = setTimeout(() => {
+        setResultsRetryCount(prev => prev + 1);
+        loadResults(projectId);
+      }, RESULTS_RETRY_DELAY_MS);
+    } else if (!shouldPoll && !isLoading) {
+      // If we shouldn't poll and not loading, show appropriate message
+      console.log('📋 [Dashboard] No results available and no active execution');
+    }
+
+    return () => {
+      if (resultsPollingRef.current) {
+        clearTimeout(resultsPollingRef.current);
+      }
+    };
+  }, [projectId, analysisResults, project, journeyProgress, resultsRetryCount, isLoading]);
 
   // FIX: Critical Fix #4 - Listen for artifact completion WebSocket events
   useEffect(() => {
@@ -249,52 +334,21 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
       if (artifactPollingRef.current) {
         clearTimeout(artifactPollingRef.current);
       }
+      if (resultsPollingRef.current) {
+        clearTimeout(resultsPollingRef.current);
+      }
     };
   }, []);
 
+  // MEDIUM PRIORITY FIX: Use canonical journey types mapping instead of switch
   const getJourneyTypeInfo = () => {
-    switch (journeyType) {
-      case 'non-tech':
-        return {
-          title: "AI-Generated Results",
-          description: "Your analysis results with AI-generated insights",
-          icon: Brain,
-          color: "blue"
-        };
-      case 'business':
-        return {
-          title: "Business Analysis Results",
-          description: "Business-focused insights and recommendations",
-          icon: BarChart3,
-          color: "green"
-        };
-      case 'technical':
-        return {
-          title: "Technical Analysis Results",
-          description: "Detailed technical analysis and statistical results",
-          icon: TrendingUp,
-          color: "purple"
-        };
-      case 'consultation':
-        return {
-          title: "Expert Consultation Results",
-          description: "Results from expert-guided analysis and consultation",
-          icon: Star,
-          color: "yellow"
-        };
-      default:
-        return {
-          title: "Analysis Results",
-          description: "Your completed analysis results and insights",
-          icon: Receipt,
-          color: "blue"
-        };
-    }
+    return JOURNEY_TYPE_INFO[journeyType as JourneyType] || DEFAULT_JOURNEY_INFO;
   };
 
   const journeyInfo = getJourneyTypeInfo();
   const Icon = journeyInfo.icon;
 
+  // MEDIUM PRIORITY FIX: Improved fallback chain clarity with explicit priority order
   const analysisSummary = useMemo(() => {
     if (!analysisResults) {
       return {
@@ -306,14 +360,44 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
         dataRowsProcessed: 0,
       };
     }
+
     const summary = analysisResults.summary || {};
+    const metadata = analysisResults.metadata || {};
+    const analysisTypes = analysisResults.analysisTypes || [];
+
+    // Explicit priority order for each field (most reliable source first)
+    // Priority 1: summary.* (normalized backend response)
+    // Priority 2: analysisResults.* (direct backend fields)
+    // Priority 3: derived values (computed from other fields)
+    // Priority 4: fallback defaults
+
+    const totalAnalyses =
+      summary.totalAnalyses !== undefined ? summary.totalAnalyses :
+      analysisTypes.length > 0 ? analysisTypes.length :
+      insights.length > 0 ? insights.length :
+      0;
+
+    const executionTime =
+      summary.executionTime !== undefined ? summary.executionTime :
+      summary.executionTimeSeconds !== undefined ? `${summary.executionTimeSeconds}s` :
+      '—';
+
+    const datasetCount =
+      summary.datasetCount !== undefined ? summary.datasetCount :
+      metadata.datasetCount !== undefined ? metadata.datasetCount :
+      0;
+
+    const confidence =
+      summary.confidence !== undefined ? summary.confidence :
+      summary.averageConfidence !== undefined ? summary.averageConfidence :
+      null;
+
     return {
-      totalAnalyses: summary.totalAnalyses ?? analysisResults.analysisTypes?.length ?? insights.length ?? 0,
-      executionTime: summary.executionTime
-        ?? (summary.executionTimeSeconds ? `${summary.executionTimeSeconds}s` : '—'),
+      totalAnalyses,
+      executionTime,
       qualityScore: summary.qualityScore ?? 0,
-      datasetCount: summary.datasetCount ?? analysisResults.metadata?.datasetCount ?? 0,
-      confidence: summary.confidence ?? summary.averageConfidence ?? null,
+      datasetCount,
+      confidence,
       dataRowsProcessed: summary.dataRowsProcessed ?? 0,
     };
   }, [analysisResults, insights.length]);
@@ -337,12 +421,46 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
     }
   };
 
+  // LOW PRIORITY FIX: Use robust artifact type mapping instead of fragile string matching
+  const ARTIFACT_TYPE_ICONS: Record<string, typeof FileText> = {
+    // Document types
+    'PDF': FileText,
+    'REPORT': FileText,
+    'DOC': FileText,
+    'DOCX': FileText,
+    // Image types
+    'PNG': Image,
+    'JPG': Image,
+    'JPEG': Image,
+    'GIF': Image,
+    'SVG': Image,
+    'HTML': Image,
+    'CHART': Image,
+    'VISUALIZATION': Image,
+    // Data types
+    'CSV': BarChart3,
+    'EXCEL': BarChart3,
+    'XLS': BarChart3,
+    'XLSX': BarChart3,
+    'JSON': BarChart3,
+    'DATA': BarChart3,
+    // Dashboard types
+    'DASHBOARD': Eye,
+    'INTERACTIVE': Eye,
+  };
+
   const getArtifactIcon = (type: string) => {
     const normalized = type?.toUpperCase() || '';
-    if (normalized.includes('PDF')) return FileText;
-    if (normalized.includes('PNG') || normalized.includes('JPG') || normalized.includes('HTML')) return Image;
-    if (normalized.includes('CSV') || normalized.includes('EXCEL') || normalized.includes('XLS')) return BarChart3;
-    if (normalized.includes('DASHBOARD')) return Eye;
+    // First try exact match
+    if (ARTIFACT_TYPE_ICONS[normalized]) {
+      return ARTIFACT_TYPE_ICONS[normalized];
+    }
+    // Then try partial match for compound types like "PDF_REPORT"
+    for (const [key, icon] of Object.entries(ARTIFACT_TYPE_ICONS)) {
+      if (normalized.includes(key)) {
+        return icon;
+      }
+    }
     return Download;
   };
 
@@ -429,34 +547,92 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
     );
   }
 
-  // Show message if no results yet
+  // Show message if no results yet - with auto-retry polling
   if (!analysisResults) {
+    // Check if analysis might still be running (recently paid project)
+    const isPaidProject = (project as any)?.isPaid === true;
+    const analysisExecutedAt = (project as any)?.analysisExecutedAt;
+    const mightBeProcessing = isPaidProject && !analysisExecutedAt;
+
     return (
       <div className="space-y-6">
-        <Card className="border-yellow-200 bg-yellow-50">
+        <Card className={mightBeProcessing ? "border-blue-200 bg-blue-50" : "border-yellow-200 bg-yellow-50"}>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-yellow-900">
-              <AlertCircle className="w-5 h-5" />
-              No Analysis Results Yet
+            <CardTitle className={`flex items-center gap-2 ${mightBeProcessing ? 'text-blue-900' : 'text-yellow-900'}`}>
+              {mightBeProcessing ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                <AlertCircle className="w-5 h-5" />
+              )}
+              {mightBeProcessing ? 'Analysis In Progress...' : 'No Analysis Results Yet'}
             </CardTitle>
-            <CardDescription className="text-yellow-800">
-              Your analysis hasn't been run yet or is still processing.
+            <CardDescription className={mightBeProcessing ? 'text-blue-800' : 'text-yellow-800'}>
+              {mightBeProcessing
+                ? 'Your analysis is running. Results will appear here shortly.'
+                : "Your analysis hasn't been run yet or is still processing."}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <p className="text-gray-700 mb-4">
-              To see results here, please go back and run the analysis on your data.
+              {mightBeProcessing
+                ? 'Please wait while we analyze your data. This typically takes 1-2 minutes.'
+                : 'To see results here, please go back and run the analysis on your data.'}
             </p>
             <div className="flex gap-3">
-              <Button onClick={onPrevious} variant="outline">
-                Go Back to Analysis
+              <Button onClick={handleRetryLoad} variant={mightBeProcessing ? "default" : "outline"}>
+                <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
+                {mightBeProcessing ? 'Check for Results' : 'Retry Loading'}
               </Button>
-              <Button onClick={onNext}>
-                Continue to Artifacts
-              </Button>
+              {!mightBeProcessing && (
+                <Button onClick={onPrevious} variant="outline">
+                  Go Back to Analysis
+                </Button>
+              )}
             </div>
           </CardContent>
         </Card>
+
+        {/* Show artifacts section even if results aren't ready yet */}
+        {artifacts.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Download className="w-5 h-5" />
+                Available Artifacts
+              </CardTitle>
+              <CardDescription>
+                These artifacts have been generated and are ready for download.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {artifacts.map((artifact) => {
+                  const ArtifactIcon = getArtifactIcon(artifact.type);
+                  return (
+                    <Card
+                      key={artifact.id}
+                      className="border-gray-200 hover:border-blue-300 transition-colors cursor-pointer"
+                      onClick={() => handleArtifactDownload(artifact)}
+                    >
+                      <CardContent className="pt-4">
+                        <div className="flex items-start gap-3">
+                          <div className="p-2 bg-blue-100 rounded-lg">
+                            <ArtifactIcon className="w-5 h-5 text-blue-600" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium truncate">{artifact.name}</p>
+                            <p className="text-sm text-gray-500">{artifact.type} • {artifact.size}</p>
+                          </div>
+                          <Download className="w-4 h-4 text-gray-400" />
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )}
       </div>
     );
   }

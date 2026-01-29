@@ -48,6 +48,13 @@ interface TransformationMapping {
         componentFields?: string[];
         aggregationMethod?: string;
     };
+    // FIX: Rich sourceColumns detail from backend with matched/confidence info
+    _sourceColumnsDetail?: Array<{
+        componentField: string;
+        matchedColumn?: string;
+        matchConfidence: number;
+        matched: boolean;
+    }>;
 }
 
 interface JoinConfig {
@@ -119,6 +126,8 @@ export default function DataTransformationStep({
     // DE Agent async transformation generation polling state
     const [isGeneratingTransformations, setIsGeneratingTransformations] = useState(false);
     const [deAgentProgress, setDeAgentProgress] = useState<string | null>(null);
+    // HIGH PRIORITY FIX: Track DE Agent timeout for retry functionality
+    const [deAgentTimedOut, setDeAgentTimedOut] = useState(false);
 
     // P2-1: Enhanced loading state with progress tracking
     const [pollingAttempt, setPollingAttempt] = useState(0);
@@ -504,16 +513,17 @@ export default function DataTransformationStep({
             }
         }, 3000); // Poll every 3 seconds
 
-        // Timeout after 90 seconds - let user proceed manually
+        // Timeout after 90 seconds - let user proceed manually or retry
         const timeout = setTimeout(() => {
             clearInterval(pollInterval);
             setIsGeneratingTransformations(false);
             setDeAgentProgress(null);
             setPollingAttempt(0); // P2-1: Reset counter
-            console.warn('⚠️ [DE Agent Polling] Timeout - user can configure manually');
+            setDeAgentTimedOut(true); // HIGH PRIORITY FIX: Mark timeout for retry UI
+            console.warn('⚠️ [DE Agent Polling] Timeout - user can configure manually or retry');
             toast({
-                title: "AI Analysis Complete",
-                description: "You can now configure transformations manually or wait for AI suggestions.",
+                title: "AI Analysis Taking Longer Than Expected",
+                description: "Click 'Retry AI Analysis' to try again, or configure transformations manually.",
                 variant: "default"
             });
         }, 90000);
@@ -884,11 +894,28 @@ export default function DataTransformationStep({
                             console.log(`📊 [Multi-Column] Element "${el.name || el.elementName}" requires transformation: ${calcDef?.formula?.componentFields?.length} source columns`);
                         }
 
+                        // FIX: Use richer sourceColumns format from backend when available
+                        // Backend provides {componentField, matchedColumn, matchConfidence, matched}[]
+                        // Fallback to componentFields string array from calculationDefinition
+                        let resolvedSourceColumns: string[] | undefined;
+                        if (el.sourceColumns && Array.isArray(el.sourceColumns) && el.sourceColumns.length > 0) {
+                            // Backend provides richer format - extract matched column names
+                            const mappedColumns = el.sourceColumns
+                                .filter((sc: any) => sc.matched && sc.matchedColumn)
+                                .map((sc: any) => sc.matchedColumn);
+                            resolvedSourceColumns = mappedColumns;
+
+                            console.log(`🔗 [Composite Element] "${el.name || el.elementName}": ${mappedColumns.length}/${el.sourceColumns.length} columns mapped from backend`);
+                        } else if (calcDef?.formula?.componentFields) {
+                            // Fallback to componentFields from calculationDefinition
+                            resolvedSourceColumns = calcDef.formula.componentFields;
+                        }
+
                         return {
                             targetElement: el.name || el.elementName || '',
                             targetType: el.type || el.dataType || 'string',
                             sourceColumn: mappedColumn,
-                            sourceColumns: calcDef?.formula?.componentFields || undefined,  // Multi-column support
+                            sourceColumns: resolvedSourceColumns,  // Multi-column support (resolved from backend or formula)
                             aggregationFunction: calcDef?.formula?.aggregationMethod as AggregationFunction || undefined,
                             confidence: el.confidence ?? (mappedColumn ? 0.9 : 0),
                             transformationRequired,
@@ -900,7 +927,9 @@ export default function DataTransformationStep({
                                 formula: calcDef.formula?.businessDescription,
                                 componentFields: calcDef.formula?.componentFields,
                                 aggregationMethod: calcDef.formula?.aggregationMethod
-                            } : undefined
+                            } : undefined,
+                            // FIX: Pass through the full sourceColumns detail for display
+                            _sourceColumnsDetail: el.sourceColumns  // Rich format with matched/confidence info
                         };
                     });
                     const mappingsWithDefs = existingMappings.filter(m => m.calculationDefinition).length;
@@ -1679,8 +1708,30 @@ export default function DataTransformationStep({
             console.log(`📊 [Transform] Using analysisPath from analysisPlans.metadata (${analysisPath.length} analyses)`);
         }
 
+        // TASK 2 FIX: Fallback 3: Check journeyProgress.analysisPath directly (may be saved at top level)
+        if ((!analysisPath || analysisPath.length === 0) && (journeyProgress as any)?.analysisPath) {
+            analysisPath = (journeyProgress as any).analysisPath;
+            dataElements = (journeyProgress as any).requiredDataElements || dataElements;
+            sourceUsed = 'journeyProgress.analysisPath (top-level)';
+            console.log(`📊 [Transform] Using analysisPath from journeyProgress root (${analysisPath.length} analyses)`);
+        }
+
+        // TASK 2 FIX: Fallback 4: Try to extract from project data if available
+        if ((!analysisPath || analysisPath.length === 0) && (project as any)?.analysisPath) {
+            analysisPath = (project as any).analysisPath;
+            sourceUsed = 'project.analysisPath';
+            console.log(`📊 [Transform] Using analysisPath from project (${analysisPath.length} analyses)`);
+        }
+
         if (!analysisPath || analysisPath.length === 0) {
             console.warn(`⚠️ [Transform] No analysisPath found in any source - showing empty analysis cards`);
+            console.log(`📊 [Transform] Debug sources checked:`, {
+                requiredDataElementsAnalysisPath: requiredDataElements?.analysisPath?.length || 0,
+                journeyProgressReqDoc: journeyProgress?.requirementsDocument?.analysisPath?.length || 0,
+                journeyProgressPlans: (journeyProgress as any)?.analysisPlans?.metadata?.analysisPath?.length || 0,
+                journeyProgressTop: (journeyProgress as any)?.analysisPath?.length || 0,
+                projectTop: (project as any)?.analysisPath?.length || 0
+            });
             return [];
         }
 
@@ -2466,6 +2517,38 @@ export default function DataTransformationStep({
                                 <li>Validating data quality and compatibility</li>
                             </ul>
                         </details>
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* HIGH PRIORITY FIX: DE Agent Timeout Retry Banner */}
+            {deAgentTimedOut && !isGeneratingTransformations && transformationMappings.length === 0 && (
+                <Card className="mb-4 border-amber-200 bg-amber-50">
+                    <CardContent className="py-4">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                                <AlertCircle className="h-5 w-5 text-amber-600" />
+                                <div>
+                                    <p className="font-medium text-amber-900">AI Analysis Took Longer Than Expected</p>
+                                    <p className="text-sm text-amber-700">
+                                        The Data Engineer Agent couldn't complete in time. You can retry or configure transformations manually.
+                                    </p>
+                                </div>
+                            </div>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                    setDeAgentTimedOut(false);
+                                    // Trigger re-poll by invalidating cache and clearing state
+                                    queryClient.invalidateQueries({ queryKey: ["project", pid] });
+                                }}
+                                className="ml-4"
+                            >
+                                <RefreshCw className="h-4 w-4 mr-2" />
+                                Retry AI Analysis
+                            </Button>
+                        </div>
                     </CardContent>
                 </Card>
             )}

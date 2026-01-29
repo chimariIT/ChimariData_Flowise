@@ -112,7 +112,6 @@ export class AgentMessageBroker extends EventEmitter {
   private eventTelemetry: Map<string | symbol, BrokerEventTelemetry> = new Map();
   private telemetrySubscribers: Array<(payload: BrokerEventTelemetry) => void> = [];
   private redisEnabled: boolean = false;
-  private fallbackMode: boolean = false;
   private readonly uiChannelName = 'agent:user_interface';
   private uiChannelSubscribed = false;
 
@@ -121,64 +120,51 @@ export class AgentMessageBroker extends EventEmitter {
 
     const connectionString = redisUrl || process.env.REDIS_URL || 'redis://localhost:6379';
 
-    // Only connect to Redis if explicitly enabled or in production
-    const shouldConnectRedis = process.env.NODE_ENV === 'production' || process.env.REDIS_ENABLED === 'true';
+    try {
+      this.publisher = new Redis(connectionString, {
+        retryStrategy: (times) => {
+          if (times > 3) {
+            console.error('Redis connection failed after 3 retries');
+            return null;
+          }
+          const delay = Math.min(times * 50, 2000);
+          return delay;
+        },
+        lazyConnect: true,
+        maxRetriesPerRequest: 3,
+      });
 
-    if (shouldConnectRedis) {
-      try {
-        this.publisher = new Redis(connectionString, {
-          retryStrategy: (times) => {
-            if (times > 3) {
-              console.warn('Redis connection failed after 3 retries, switching to fallback mode');
-              this.fallbackMode = true;
-              return null; // Stop retrying
-            }
-            const delay = Math.min(times * 50, 2000);
-            return delay;
-          },
-          lazyConnect: true, // Don't connect immediately
-          maxRetriesPerRequest: 3,
-        });
+      this.subscriber = new Redis(connectionString, {
+        retryStrategy: (times) => {
+          if (times > 3) {
+            return null;
+          }
+          const delay = Math.min(times * 50, 2000);
+          return delay;
+        },
+        lazyConnect: true,
+        maxRetriesPerRequest: 3,
+      });
 
-        this.subscriber = new Redis(connectionString, {
-          retryStrategy: (times) => {
-            if (times > 3) {
-              this.fallbackMode = true;
-              return null;
-            }
-            const delay = Math.min(times * 50, 2000);
-            return delay;
-          },
-          lazyConnect: true,
-          maxRetriesPerRequest: 3,
-        });
+      this.setupEventHandlers();
+      this.subscriber.on('message', this.handleMessage.bind(this));
+      this.subscriber.on('pmessage', this.handlePatternMessage.bind(this));
 
-        this.setupEventHandlers();
-        this.subscriber.on('message', this.handleMessage.bind(this));
-        this.subscriber.on('pmessage', this.handlePatternMessage.bind(this));
-
-        // Try to connect
-        Promise.all([this.publisher.connect(), this.subscriber.connect()])
-          .then(() => {
-            this.redisEnabled = true;
-            console.log('✅ Agent Message Broker initialized with Redis');
-            this.subscribeToUiChannel().catch((error) => {
-              console.warn('Failed to subscribe UI channel:', error);
-            });
-          })
-          .catch((error) => {
-            console.warn('⚠️  Redis not available, Agent Message Broker running in fallback mode (in-memory only)');
-            this.fallbackMode = true;
-            this.redisEnabled = false;
+      // Connect to Redis
+      Promise.all([this.publisher.connect(), this.subscriber.connect()])
+        .then(() => {
+          this.redisEnabled = true;
+          console.log('✅ Agent Message Broker initialized with Redis');
+          this.subscribeToUiChannel().catch((error) => {
+            console.warn('Failed to subscribe UI channel:', error);
           });
-      } catch (error) {
-        console.warn('⚠️  Failed to initialize Redis, using fallback mode:', error);
-        this.fallbackMode = true;
-        this.redisEnabled = false;
-      }
-    } else {
-      console.log('⚠️  Agent Message Broker running in fallback mode (Redis disabled in development)');
-      this.fallbackMode = true;
+        })
+        .catch((error) => {
+          console.error('❌ Redis connection failed. Agent messaging will not work:', error.message || error);
+          this.redisEnabled = false;
+        });
+    } catch (error) {
+      console.error('❌ Failed to initialize Redis for Agent Message Broker:', (error as Error).message);
       this.redisEnabled = false;
     }
   }
@@ -254,27 +240,21 @@ export class AgentMessageBroker extends EventEmitter {
     if (!this.publisher || !this.subscriber) return;
 
     this.publisher.on('error', (error) => {
-      console.warn('Redis publisher error (non-fatal):', error.message);
-      this.fallbackMode = true;
-      // Don't re-emit to avoid crashing server
+      console.error('Redis publisher error:', error.message);
     });
 
     this.subscriber.on('error', (error) => {
-      console.warn('Redis subscriber error (non-fatal):', error.message);
-      this.fallbackMode = true;
-      // Don't re-emit to avoid crashing server
+      console.error('Redis subscriber error:', error.message);
     });
 
     this.publisher.on('connect', () => {
       console.log('✅ Redis publisher connected');
       this.redisEnabled = true;
-      this.fallbackMode = false;
     });
 
     this.subscriber.on('connect', () => {
       console.log('✅ Redis subscriber connected');
       this.redisEnabled = true;
-      this.fallbackMode = false;
       this.subscribeToUiChannel().catch((error) => {
         console.warn('Failed to subscribe UI channel after reconnect:', error);
       });
@@ -311,8 +291,8 @@ export class AgentMessageBroker extends EventEmitter {
         await this.subscriber.subscribe(channel);
         await this.subscriber.subscribe('agent:broadcast');
       } catch (error) {
-        console.warn(`Failed to subscribe agent ${agentId} to Redis channels, using fallback mode`);
-        this.fallbackMode = true;
+        console.error(`Failed to subscribe agent ${agentId} to Redis channels:`, error);
+        throw error;
       }
     }
 
@@ -325,7 +305,7 @@ export class AgentMessageBroker extends EventEmitter {
       activeConnections: 1,
     });
 
-    console.log(`Agent ${agentId} registered${this.fallbackMode ? ' (fallback mode)' : ''} on channel ${channel}`);
+    console.log(`Agent ${agentId} registered on channel ${channel}`);
     this.emit('agent_registered', { agentId, channel });
   }
 
@@ -365,6 +345,8 @@ export class AgentMessageBroker extends EventEmitter {
   /**
    * Send a message to a specific agent or broadcast
    */
+  private localFallbackWarned = false;
+
   async sendMessage(message: Omit<AgentMessage, 'id' | 'timestamp'>): Promise<void> {
     const fullMessage: AgentMessage = {
       ...message,
@@ -372,22 +354,24 @@ export class AgentMessageBroker extends EventEmitter {
       timestamp: new Date(),
     };
 
-    // In fallback mode, just emit the message locally
-    if (this.fallbackMode || !this.publisher || !this.redisEnabled) {
-      this.emit('message', fullMessage);
-      this.emit(`message:${fullMessage.type}`, fullMessage);
-      if (fullMessage.to !== 'broadcast') {
-        this.emit(`message:${fullMessage.to}`, fullMessage);
+    // P0-C FIX: Fall back to local EventEmitter when Redis is unavailable (development mode)
+    if (!this.publisher || !this.redisEnabled) {
+      if (!this.localFallbackWarned) {
+        console.warn('⚠️ [MessageBroker] Redis not available - using local EventEmitter fallback for agent messages');
+        this.localFallbackWarned = true;
       }
-      if (fullMessage.correlationId && fullMessage.type !== 'task') {
-        this.emit(`response:${fullMessage.correlationId}`, fullMessage.payload);
-      }
-      this.updateAgentActivity(message.from);
+
+      const channel = message.to === 'broadcast'
+        ? 'agent:broadcast'
+        : `agent:${message.to}`;
+
+      // Emit locally so subscribers on this process still receive messages
+      this.emit(channel, fullMessage);
       this.emit('message_sent', fullMessage);
+      this.updateAgentActivity(message.from);
       return;
     }
 
-    // Use Redis if available
     try {
       const channel = message.to === 'broadcast'
         ? 'agent:broadcast'
@@ -400,9 +384,8 @@ export class AgentMessageBroker extends EventEmitter {
 
       this.emit('message_sent', fullMessage);
     } catch (error) {
-      console.warn('Failed to publish message via Redis, falling back to local emit');
-      this.emit('message', fullMessage);
-      this.updateAgentActivity(message.from);
+      console.error('Failed to publish message via Redis:', error);
+      throw error;
     }
   }
 
@@ -795,10 +778,6 @@ export class AgentMessageBroker extends EventEmitter {
    * Check if broker is healthy
    */
   async isHealthy(): Promise<boolean> {
-    if (this.fallbackMode) {
-      return true; // Fallback mode is always "healthy"
-    }
-
     if (!this.publisher) {
       return false;
     }
@@ -820,7 +799,6 @@ export class AgentMessageBroker extends EventEmitter {
     channels: number;
     uptime: number;
     redisEnabled: boolean;
-    fallbackMode: boolean;
     pendingCheckpoints: number;
   } {
     return {
@@ -829,7 +807,6 @@ export class AgentMessageBroker extends EventEmitter {
       channels: this.agentChannels.size + 1, // +1 for broadcast
       uptime: process.uptime(),
       redisEnabled: this.redisEnabled,
-      fallbackMode: this.fallbackMode,
       pendingCheckpoints: this.pendingCheckpointResponses.size,
     };
   }

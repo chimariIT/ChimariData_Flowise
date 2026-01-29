@@ -240,7 +240,7 @@ router.post('/agents/configure', requirePermission('agents', 'manage'), async (r
     const { agentType, config } = req.body;
 
     // Validate agent type
-    if (!['project_manager', 'technical_ai', 'business'].includes(agentType)) {
+    if (!['project_manager', 'technical_ai', 'business', 'data_engineer', 'data_scientist'].includes(agentType)) {
       return res.status(400).json({
         success: false,
         error: 'Invalid agent type'
@@ -584,5 +584,539 @@ function calculateOverallSuccessRate(agents: any[]): number {
   const successfulTasks = agents.reduce((sum, a) => sum + a.metrics.successfulTasks, 0);
   return totalTasks > 0 ? Math.round((successfulTasks / totalTasks) * 100) : 100;
 }
+
+/**
+ * Customer List - Get all customers with subscription info
+ * Required by: subscription-management.tsx
+ */
+router.get('/customers', requirePermission('billing', 'read'), async (req: Request, res: Response) => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 50;
+
+    // Get users with subscription data
+    const allUsers = await storage.getAllUsers();
+    const customers = allUsers.slice(0, limit).map((user: any) => ({
+      id: user.id,
+      email: user.email,
+      name: user.displayName || user.email?.split('@')[0] || 'Unknown',
+      subscriptionTier: user.subscriptionTier || 'free',
+      subscriptionStatus: user.subscriptionStatus || 'inactive',
+      stripeCustomerId: user.stripeCustomerId,
+      createdAt: user.createdAt,
+      lastActivity: user.lastLoginAt || user.createdAt
+    }));
+
+    // FIX: Return customers at top level to match frontend expectations
+    // Frontend expects: { success: true, customers: [...] }
+    res.json({
+      success: true,
+      customers,
+      total: allUsers.length
+    });
+  } catch (error: any) {
+    console.error('Customers fetch error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch customers'
+    });
+  }
+});
+
+/**
+ * Quota Alerts - Get quota utilization alerts
+ * Required by: subscription-management.tsx
+ */
+router.get('/quota-alerts', requirePermission('billing', 'read'), async (req: Request, res: Response) => {
+  try {
+    const level = req.query.level as string || 'warning'; // 'warning', 'critical', 'exceeded', 'all'
+
+    // Get users with quota data
+    const allUsers = await storage.getAllUsers();
+    const alerts: any[] = [];
+
+    // Generate quota alerts based on user usage
+    for (const user of allUsers) {
+      const quotaData = (user as any).quotaUtilization;
+      if (!quotaData) continue;
+
+      // Check data quota
+      if (quotaData.dataQuotaUsed && quotaData.dataQuotaLimit) {
+        const utilization = (quotaData.dataQuotaUsed / quotaData.dataQuotaLimit) * 100;
+        if (utilization >= 80) {
+          alerts.push({
+            id: `${user.id}-data`,
+            userId: user.id,
+            quotaType: 'data',
+            currentUsage: quotaData.dataQuotaUsed,
+            quotaLimit: quotaData.dataQuotaLimit,
+            utilizationPercent: utilization,
+            alertLevel: utilization >= 100 ? 'exceeded' : utilization >= 90 ? 'critical' : 'warning',
+            message: `Data usage at ${utilization.toFixed(1)}%`,
+            actionRequired: utilization >= 90,
+            suggestedActions: ['Upgrade subscription tier', 'Delete unused datasets', 'Archive old projects'],
+            timestamp: new Date(),
+            acknowledged: false
+          });
+        }
+      }
+    }
+
+    // Filter by level if not 'all'
+    const filteredAlerts = level === 'all'
+      ? alerts
+      : alerts.filter(a => a.alertLevel === level);
+
+    res.json({
+      success: true,
+      data: {
+        alerts: filteredAlerts,
+        total: filteredAlerts.length,
+        summary: {
+          warning: alerts.filter(a => a.alertLevel === 'warning').length,
+          critical: alerts.filter(a => a.alertLevel === 'critical').length,
+          exceeded: alerts.filter(a => a.alertLevel === 'exceeded').length
+        }
+      }
+    });
+  } catch (error: any) {
+    console.error('Quota alerts fetch error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch quota alerts'
+    });
+  }
+});
+
+/**
+ * Billing Events - Get recent billing activity
+ * Required by: subscription-management.tsx
+ */
+router.get('/billing-events', requirePermission('billing', 'read'), async (req: Request, res: Response) => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 100;
+
+    // Get projects with payment info as billing events
+    const allProjects = await storage.getAllProjects();
+    const events: any[] = [];
+
+    for (const project of allProjects.slice(0, limit)) {
+      // Add project creation as billing event
+      // Now using properly typed fields from DataProject schema
+      events.push({
+        id: `project-${project.id}`,
+        userId: project.userId,
+        type: 'usage',
+        category: 'data',
+        description: `Project created: ${project.name}`,
+        quantity: 1,
+        unit: 'project',
+        metadata: { projectId: project.id, status: project.status },
+        timestamp: project.createdAt,
+        processed: true
+      });
+
+      // Add payment event if project was paid
+      if (project.isPaid) {
+        events.push({
+          id: `payment-${project.id}`,
+          userId: project.userId,
+          type: 'payment',
+          category: 'compute',
+          description: `Analysis payment for: ${project.name}`,
+          amount: (project as any).lockedCostEstimate || 0,
+          quantity: 1,
+          unit: 'analysis',
+          metadata: { projectId: project.id },
+          timestamp: (project as any).paidAt || project.lastModified,
+          processed: true
+        });
+      }
+    }
+
+    // Sort by timestamp descending
+    events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+    res.json({
+      success: true,
+      data: {
+        events: events.slice(0, limit),
+        total: events.length
+      }
+    });
+  } catch (error: any) {
+    console.error('Billing events fetch error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch billing events'
+    });
+  }
+});
+
+/**
+ * User Metrics - Get usage metrics for a specific user
+ * Required by: subscription-management.tsx
+ */
+router.get('/users/:customerId/metrics', requirePermission('billing', 'read'), async (req: Request, res: Response) => {
+  try {
+    const { customerId } = req.params;
+    const startDate = req.query.startDate ? new Date(req.query.startDate as string) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const endDate = req.query.endDate ? new Date(req.query.endDate as string) : new Date();
+
+    // Get user data
+    const user = await storage.getUser(customerId);
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    // Get user's projects
+    const userProjects = await storage.getProjectsByOwner(customerId);
+
+    // Calculate usage metrics
+    const analysisCount = userProjects.filter((p: any) => p.analysisExecutedAt).length;
+    const totalCost = userProjects.reduce((sum: number, p: any) => sum + (p.lockedCostEstimate || 0), 0);
+
+    const metrics = {
+      userId: customerId,
+      subscriptionTier: (user as any).subscriptionTier || 'free',
+      billingPeriod: {
+        start: startDate,
+        end: endDate,
+        status: (user as any).subscriptionStatus || 'active'
+      },
+      dataUsage: {
+        totalFilesUploaded: userProjects.length,
+        totalFileSizeMB: 0, // Would need dataset aggregation
+        totalDataProcessedMB: 0,
+        storageUsedMB: 0,
+        maxFileSize: 0,
+        fileFormats: {},
+        dataTransformations: 0,
+        dataExports: 0
+      },
+      computeUsage: {
+        analysisCount,
+        aiQueryCount: 0,
+        mlModelExecutions: 0,
+        visualizationCount: 0,
+        totalComputeMinutes: analysisCount * 2, // Estimate 2 min per analysis
+        agentInteractions: 0,
+        toolExecutions: 0
+      },
+      storageMetrics: {
+        projectCount: userProjects.length,
+        datasetCount: 0,
+        artifactCount: 0,
+        totalStorageMB: 0,
+        archiveStorageMB: 0,
+        temporaryStorageMB: 0,
+        retentionDays: 90
+      },
+      costBreakdown: {
+        baseSubscription: 0,
+        dataOverage: 0,
+        computeOverage: 0,
+        storageOverage: 0,
+        premiumFeatures: 0,
+        agentUsage: 0,
+        toolUsage: 0,
+        totalCost
+      },
+      quotaUtilization: {
+        dataQuotaUsed: 0,
+        dataQuotaLimit: 1000,
+        computeQuotaUsed: analysisCount * 2,
+        computeQuotaLimit: 100,
+        storageQuotaUsed: 0,
+        storageQuotaLimit: 5000,
+        quotaResetDate: new Date(endDate.getTime() + 30 * 24 * 60 * 60 * 1000)
+      }
+    };
+
+    res.json({
+      success: true,
+      data: metrics
+    });
+  } catch (error: any) {
+    console.error('User metrics fetch error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch user metrics'
+    });
+  }
+});
+
+/**
+ * Revenue Analytics - Get revenue data for date range
+ * Required by: subscription-management.tsx
+ */
+router.get('/billing/analytics/revenue', requirePermission('billing', 'read'), async (req: Request, res: Response) => {
+  try {
+    const startDate = req.query.startDate ? new Date(req.query.startDate as string) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const endDate = req.query.endDate ? new Date(req.query.endDate as string) : new Date();
+
+    // Get all projects with payment data
+    const allProjects = await storage.getAllProjects();
+    const paidProjects = allProjects.filter((p: any) => {
+      const paidAt = p.paidAt || p.lastModified;
+      return p.isPaid && new Date(paidAt) >= startDate && new Date(paidAt) <= endDate;
+    });
+
+    // Calculate revenue by tier
+    const revenueByTier: Record<string, number> = {};
+    const revenueByFeature: Record<string, number> = {};
+    let totalRevenue = 0;
+
+    for (const project of paidProjects) {
+      const cost = (project as any).lockedCostEstimate || 0;
+      totalRevenue += cost;
+
+      const tier = (project as any).subscriptionTier || 'pay_per_use';
+      revenueByTier[tier] = (revenueByTier[tier] || 0) + cost;
+
+      const journeyType = project.journeyType || 'general';
+      revenueByFeature[journeyType] = (revenueByFeature[journeyType] || 0) + cost;
+    }
+
+    // Get subscription statistics
+    const subscriptionStats = await db.select({
+      tier: users.subscriptionTier,
+      status: users.subscriptionStatus,
+      count: count()
+    })
+      .from(users)
+      .groupBy(users.subscriptionTier, users.subscriptionStatus);
+
+    const analytics = {
+      totalRevenue,
+      revenueByTier,
+      revenueByFeature,
+      subscriptionStats: subscriptionStats.map((s: any) => ({
+        tier: s.tier || 'free',
+        status: s.status || 'inactive',
+        count: Number(s.count)
+      })),
+      paymentCount: paidProjects.length,
+      averagePayment: paidProjects.length > 0 ? totalRevenue / paidProjects.length : 0,
+      dateRange: { startDate, endDate }
+    };
+
+    res.json({
+      success: true,
+      analytics
+    });
+  } catch (error: any) {
+    console.error('Revenue analytics error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch revenue analytics'
+    });
+  }
+});
+
+/**
+ * Usage Analytics - Get usage data for date range
+ * Required by: subscription-management.tsx
+ */
+router.get('/billing/analytics/usage', requirePermission('billing', 'read'), async (req: Request, res: Response) => {
+  try {
+    const startDate = req.query.startDate ? new Date(req.query.startDate as string) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const endDate = req.query.endDate ? new Date(req.query.endDate as string) : new Date();
+
+    // Get projects in date range
+    // Now using properly typed createdAt field from DataProject schema
+    const allProjects = await storage.getAllProjects();
+    const rangeProjects = allProjects.filter(p => {
+      if (!p.createdAt) return false;
+      const created = new Date(p.createdAt);
+      return created >= startDate && created <= endDate;
+    });
+
+    // Calculate usage metrics
+    const projectsCreated = rangeProjects.length;
+    const analysesRun = rangeProjects.filter((p: any) => p.analysisExecutedAt).length;
+
+    // Usage by journey type
+    const usageByJourneyType: Record<string, number> = {};
+    for (const project of rangeProjects) {
+      const type = project.journeyType || 'general';
+      usageByJourneyType[type] = (usageByJourneyType[type] || 0) + 1;
+    }
+
+    // Agent metrics from registry
+    const registeredAgents = agentRegistry.getAgents();
+    const totalAgentTasks = registeredAgents.reduce((sum, a) => sum + a.metrics.totalTasks, 0);
+
+    const analytics = {
+      totalUsage: projectsCreated * 10, // Approximate MB
+      projectsCreated,
+      analysesRun,
+      usageByJourneyType,
+      agentInteractions: totalAgentTasks,
+      dataProcessedMB: projectsCreated * 5, // Approximate
+      computeMinutes: analysesRun * 2, // Estimate 2 min per analysis
+      dateRange: { startDate, endDate }
+    };
+
+    res.json({
+      success: true,
+      analytics
+    });
+  } catch (error: any) {
+    console.error('Usage analytics error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch usage analytics'
+    });
+  }
+});
+
+// Default analysis pricing configuration
+const DEFAULT_ANALYSIS_PRICING: any = {
+  baseCost: 0.50,
+  dataSizeCostPer1K: 0.10,
+  platformFee: 0.25,
+  complexityMultipliers: {
+    basic: 1.0,
+    intermediate: 1.5,
+    advanced: 2.5
+  },
+  analysisTypeFactors: {
+    statistical: 1.0,
+    machine_learning: 2.5,
+    visualization: 0.5,
+    business_intelligence: 1.5,
+    time_series: 2.0,
+    correlation: 1.2,
+    regression: 1.5,
+    clustering: 2.0,
+    sentiment: 1.8,
+    default: 1.0
+  }
+};
+
+// In-memory storage for analysis pricing config (would be in DB in production)
+let analysisPricingConfig = { ...DEFAULT_ANALYSIS_PRICING };
+
+/**
+ * Get Analysis Pricing Configuration
+ * Required by: analysis-pricing.tsx
+ */
+router.get('/billing/analysis-pricing', requirePermission('billing', 'read'), async (req: Request, res: Response) => {
+  try {
+    res.json({
+      success: true,
+      config: analysisPricingConfig
+    });
+  } catch (error: any) {
+    console.error('Analysis pricing fetch error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch analysis pricing'
+    });
+  }
+});
+
+/**
+ * Preview Analysis Cost
+ * Required by: analysis-pricing.tsx
+ */
+router.post('/billing/analysis-pricing/preview', requirePermission('billing', 'read'), async (req: Request, res: Response) => {
+  try {
+    const { analysisType, recordCount, complexity, proposedConfig } = req.body;
+    const config = proposedConfig || analysisPricingConfig;
+
+    // Calculate cost breakdown
+    const typeFactor = config.analysisTypeFactors[analysisType] || config.analysisTypeFactors.default || 1.0;
+    const complexityMultiplier = config.complexityMultipliers[complexity] || 1.0;
+
+    const baseCost = config.baseCost * typeFactor;
+    const dataSizeCost = (recordCount / 1000) * config.dataSizeCostPer1K;
+    const complexityCost = baseCost * (complexityMultiplier - 1); // Additional cost from complexity
+    const totalAnalysisCost = baseCost + dataSizeCost + complexityCost;
+
+    const preview = {
+      analysisType,
+      recordCount,
+      complexity,
+      analysisCost: {
+        baseCost,
+        dataSizeCost,
+        complexityCost,
+        totalCost: totalAnalysisCost
+      },
+      platformFee: config.platformFee,
+      totalProjectCost: totalAnalysisCost + config.platformFee
+    };
+
+    res.json({
+      success: true,
+      preview
+    });
+  } catch (error: any) {
+    console.error('Analysis pricing preview error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to preview analysis pricing'
+    });
+  }
+});
+
+/**
+ * Update Analysis Pricing Configuration
+ * Required by: analysis-pricing.tsx
+ */
+router.put('/billing/analysis-pricing', requirePermission('billing', 'manage'), async (req: Request, res: Response) => {
+  try {
+    const updates = req.body;
+
+    // Merge updates with current config
+    analysisPricingConfig = {
+      ...analysisPricingConfig,
+      ...updates,
+      complexityMultipliers: {
+        ...analysisPricingConfig.complexityMultipliers,
+        ...(updates.complexityMultipliers || {})
+      },
+      analysisTypeFactors: {
+        ...analysisPricingConfig.analysisTypeFactors,
+        ...(updates.analysisTypeFactors || {})
+      }
+    };
+
+    res.json({
+      success: true,
+      config: analysisPricingConfig,
+      message: 'Analysis pricing updated successfully'
+    });
+  } catch (error: any) {
+    console.error('Analysis pricing update error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to update analysis pricing'
+    });
+  }
+});
+
+/**
+ * Reset Analysis Pricing to Defaults
+ * Required by: analysis-pricing.tsx
+ */
+router.post('/billing/analysis-pricing/reset', requirePermission('billing', 'manage'), async (req: Request, res: Response) => {
+  try {
+    analysisPricingConfig = { ...DEFAULT_ANALYSIS_PRICING };
+
+    res.json({
+      success: true,
+      config: analysisPricingConfig,
+      message: 'Analysis pricing reset to defaults'
+    });
+  } catch (error: any) {
+    console.error('Analysis pricing reset error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to reset analysis pricing'
+    });
+  }
+});
 
 export default router;
