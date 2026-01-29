@@ -402,7 +402,25 @@ router.get('/:projectId/plan', ensureAuthenticated, async (req, res) => {
     // ==========================================
     const journeyProgress = (project as any)?.journeyProgress || {};
     const requirementsDoc = journeyProgress?.requirementsDocument || {};
-    const analysisPath = requirementsDoc?.analysisPath || [];
+    let analysisPath = requirementsDoc?.analysisPath || [];
+
+    // DEBUG: Log analysisPath sources
+    console.log(`📊 [Plan Progress] Checking analysisPath for project ${projectId}:`);
+    console.log(`   - requirementsDocument.analysisPath: ${analysisPath.length} items`);
+    console.log(`   - plan.analysisSteps: ${(plan.analysisSteps as any[])?.length || 0} items`);
+
+    // Fallback to plan.analysisSteps if requirementsDocument.analysisPath is empty
+    if (analysisPath.length === 0 && plan.analysisSteps && (plan.analysisSteps as any[]).length > 0) {
+        console.log(`📊 [Plan Progress] Using plan.analysisSteps as fallback for analysisPath`);
+        analysisPath = (plan.analysisSteps as any[]).map((step: any) => ({
+            analysisId: step.id || step.analysisId,
+            analysisName: step.name || step.analysisName || step.type,
+            analysisType: step.type || step.analysisType || 'descriptive',
+            techniques: step.techniques || [],
+            dependencies: step.dependencies || [],
+            description: step.description || ''
+        }));
+    }
 
     // Get dataset size for duration calculation
     let datasetSize = 0;
@@ -445,6 +463,26 @@ router.get('/:projectId/plan', ensureAuthenticated, async (req, res) => {
     console.log(`📋 Retrieved plan ${plan.id} for project ${projectId} (status: ${plan.status})`);
     console.log(`📊 [Phase 4] Per-analysis breakdown: ${analysesBreakdown.length} analyses, total: ${totalEstimatedDuration}`);
 
+    // ✅ P1-4 FIX: Ensure visualizations and agentContributions always have valid defaults
+    // Database JSONB columns may return null if not set, causing frontend errors
+    const safeVisualizations = Array.isArray(plan.visualizations) ? plan.visualizations : [];
+    const safeAgentContributions = (plan.agentContributions && typeof plan.agentContributions === 'object')
+      ? plan.agentContributions
+      : {};
+
+    // Log for debugging
+    console.log(`📊 [Plan GET] Returning visualizations: ${safeVisualizations.length} items`);
+    console.log(`📊 [Plan GET] Returning agentContributions: ${Object.keys(safeAgentContributions).length} agents`);
+
+    // TASK 3 FIX: Include requirementsDocument metadata in plan response
+    // This allows frontend to access data elements even if journeyProgress wasn't loaded
+    const metadata = {
+      requiredDataElements: requirementsDoc?.requiredDataElements || [],
+      analysisPath: analysisPath,
+      questionAnswerMapping: requirementsDoc?.questionAnswerMapping || [],
+      completeness: requirementsDoc?.completeness || null
+    };
+
     return res.json({
       success: true,
       plan: {
@@ -455,15 +493,15 @@ router.get('/:projectId/plan', ensureAuthenticated, async (req, res) => {
         executiveSummary: plan.executiveSummary,
         dataAssessment: plan.dataAssessment,
         analysisSteps: plan.analysisSteps,
-        visualizations: plan.visualizations,
+        visualizations: safeVisualizations,
         businessContext: plan.businessContext,
-        mlModels: plan.mlModels,
+        mlModels: plan.mlModels || [],
         estimatedCost: plan.estimatedCost,
         estimatedDuration: plan.estimatedDuration,
         complexity: plan.complexity,
-        risks: plan.risks,
-        recommendations: plan.recommendations,
-        agentContributions: plan.agentContributions,
+        risks: plan.risks || [],
+        recommendations: plan.recommendations || [],
+        agentContributions: safeAgentContributions,
         createdAt: plan.createdAt,
         updatedAt: plan.updatedAt,
         approvedAt: plan.approvedAt,
@@ -476,6 +514,8 @@ router.get('/:projectId/plan', ensureAuthenticated, async (req, res) => {
         analyses: analysesBreakdown,
         totalEstimatedDuration,
         datasetSize,
+        // TASK 3 FIX: Include requirementsDocument metadata for frontend fallback
+        metadata
       }
     });
 
@@ -541,6 +581,8 @@ router.post('/:projectId/plan/:planId/approve', ensureAuthenticated, async (req,
     }
 
     const now = new Date();
+    // P2-3 FIX: Extract per-analysis breakdown from request body
+    const { analysisBreakdown } = req.body || {};
 
     // Use CostTrackingService to lock the estimated cost
     if (plan.estimatedCost) {
@@ -549,12 +591,19 @@ router.post('/:projectId/plan/:planId/approve', ensureAuthenticated, async (req,
     }
 
     await db.transaction(async (tx: any) => {
+      // P2-3 FIX: Persist analysisBreakdown to plan metadata
+      const existingMetadata = (plan as any).metadata || {};
+      const updatedMetadata = analysisBreakdown
+        ? { ...existingMetadata, analysisBreakdown }
+        : existingMetadata;
+
       await tx.update(analysisPlans)
         .set({
           status: 'approved',
           approvedAt: now,
           approvedBy: userId,
           updatedAt: now,
+          metadata: updatedMetadata as any
         })
         .where(eq(analysisPlans.id, planId));
 
@@ -569,6 +618,41 @@ router.post('/:projectId/plan/:planId/approve', ensureAuthenticated, async (req,
         })
         .where(eq(projects.id, projectId));
     });
+
+    // Sync analysisPath to journeyProgress so execute step can read it
+    try {
+      const { storage } = await import('../services/storage');
+      const currentProject = await storage.getProject(projectId);
+      const currentProgress = (currentProject as any)?.journeyProgress || {};
+      const currentReqDoc = currentProgress.requirementsDocument || {};
+
+      // Build analysisPath from plan's analysisSteps
+      const planAnalysisSteps = plan.analysisSteps as any[] || [];
+      const analysisPath = planAnalysisSteps.map((step: any, index: number) => ({
+        analysisId: step.id || `analysis_${index}`,
+        analysisName: step.name || step.title || step.analysisType,
+        analysisType: step.type || step.analysisType || 'descriptive',
+        priority: step.priority || index + 1,
+        requiredDataElements: step.requiredDataElements || step.dataElements || []
+      }));
+
+      await storage.updateProject(projectId, {
+        journeyProgress: {
+          ...currentProgress,
+          requirementsDocument: {
+            ...currentReqDoc,
+            analysisPath,
+            approvedPlanId: planId
+          },
+          approvedPlanAnalyses: analysisPath
+        }
+      } as any);
+
+      console.log(`✅ [Plan Approval] Synced ${analysisPath.length} analyses to journeyProgress.requirementsDocument.analysisPath`);
+    } catch (syncError) {
+      console.error('⚠️ [Plan Approval] Failed to sync analysisPath:', syncError);
+      // Don't fail the approval - this is a best-effort sync
+    }
 
     // Publish approval event
     await messageBroker.publish('plan:approved', {

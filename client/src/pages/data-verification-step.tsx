@@ -162,7 +162,11 @@ export default function DataVerificationStep({
       }
     } catch (error: any) {
       console.error('❌ [Business Definitions] Enrichment error:', error);
-      // Don't block the flow - enrichment is an enhancement, not a requirement
+      toast({
+        title: "Business Definitions Unavailable",
+        description: "Could not load business definitions for your data elements. You can continue without them or try refreshing the page.",
+        variant: "default"
+      });
     } finally {
       setIsEnrichingDefinitions(false);
     }
@@ -336,7 +340,14 @@ export default function DataVerificationStep({
       // Also preserve any existing transformation code/description
       transformationCode: el.transformationCode,
       transformationDescription: el.transformationDescription,
-      sourceColumn: el.sourceColumn || el.sourceField || el.mappedColumn
+      sourceColumn: el.sourceColumn || el.sourceField || el.mappedColumn,
+      // FIX Issue 2: Include sourceColumns array for composite/derived elements
+      // This contains the mapping from DS abstract fields to actual dataset columns
+      sourceColumns: el.sourceColumns || [],
+      isComposite: el.isComposite || (el.sourceColumns?.length > 1) || false,
+      // FIX: Include businessDefinition from BA Agent enrichment
+      businessDefinition: el.businessDefinition,
+      hasBusinessDefinition: !!el.businessDefinition
     }));
 
     // Calculate mapping statistics for debugging
@@ -766,8 +777,27 @@ export default function DataVerificationStep({
             sourceField: e.sourceField,
             sourceColumn: e.sourceColumn,
             sourceAvailable: e.sourceAvailable,
-            confidence: e.confidence
+            confidence: e.confidence,
+            // FIX Issue 2: Log sourceColumns for composite/derived elements
+            sourceColumns: e.sourceColumns?.map((sc: any) => ({
+              field: sc.componentField,
+              mapped: sc.matchedColumn,
+              confidence: sc.matchConfidence,
+              matched: sc.matched
+            })) || [],
+            isComposite: e.isComposite,
+            calculationType: e.calculationDefinition?.calculationType
           })));
+
+          // Log composite elements specifically
+          const compositeElements = mappedElems.filter((e: any) => e.sourceColumns?.length > 0 || e.isComposite);
+          if (compositeElements.length > 0) {
+            console.log(`🔗 [Composite Elements] ${compositeElements.length} elements have sourceColumns mapping:`);
+            compositeElements.forEach((e: any) => {
+              const matchedCount = (e.sourceColumns || []).filter((sc: any) => sc.matched).length;
+              console.log(`   - ${e.elementName}: ${matchedCount}/${e.sourceColumns?.length || 0} fields mapped`);
+            });
+          }
 
           setRequiredDataElements(response.document);
           setHasMappedElements(true);
@@ -1480,8 +1510,24 @@ const handleFinalApproval = async () => {
     }
 
     // ✅ GAP 1 FIX: Build updated requirements document with mappings embedded
+    // TASK 2 FIX: Preserve analysisPath even if requirementsDocument was lost due to errors
     const existingReqDoc = (journeyProgress as any)?.requirementsDocument || {};
-    let updatedRequirementsDocument = existingReqDoc;
+
+    // TASK 2 FIX: Get analysisPath from multiple fallback sources
+    const preservedAnalysisPath = existingReqDoc.analysisPath
+      || requiredDataElements?.analysisPath
+      || (journeyProgress as any)?.analysisPath
+      || [];
+
+    if (preservedAnalysisPath.length > 0 && !existingReqDoc.analysisPath) {
+      console.log(`🔄 [TASK 2 FIX] Preserving analysisPath from fallback source (${preservedAnalysisPath.length} analyses)`);
+    }
+
+    let updatedRequirementsDocument = {
+      ...existingReqDoc,
+      analysisPath: preservedAnalysisPath // Ensure analysisPath is always preserved
+    };
+
     if (currentElementMappings.length > 0) {
       const updatedElements = (existingReqDoc.requiredDataElements || requiredDataElements?.requiredDataElements || []).map((elem: any) => {
         const elemId = elem.id || elem.elementId;
@@ -1500,7 +1546,7 @@ const handleFinalApproval = async () => {
       });
 
       updatedRequirementsDocument = {
-        ...existingReqDoc,
+        ...updatedRequirementsDocument,
         requiredDataElements: updatedElements
       };
     }
@@ -2673,29 +2719,43 @@ return (
           console.log(`📊 [Schema Dialog] Created schema from column names with ${Object.keys(schemaSource).length} columns`);
         }
 
-        // PHASE 5 FIX: Additional fallback - build schema from dataset ingestionMetadata
-        // This handles cases where join was executed but journeyProgress hasn't refreshed
-        if (Object.keys(schemaSource).length === 0 || (!isJoinedSchema && hasMultipleDatasets)) {
-          const datasets = projectData?.datasets || [];
-          if (datasets.length > 0) {
-            const mergedSchema: Record<string, any> = {};
-            datasets.forEach((ds: any, idx: number) => {
-              const dsSchema = ds.ingestionMetadata?.transformedSchema ||
-                              ds.metadata?.transformedSchema ||
-                              ds.schema;
-              if (dsSchema && typeof dsSchema === 'object') {
-                for (const [col, type] of Object.entries(dsSchema)) {
-                  if (!mergedSchema[col]) {
-                    mergedSchema[col] = type;
-                  }
+        // PHASE 5 FIX: For multi-dataset scenarios, ALWAYS build merged schema from datasets
+        // This ensures we show the complete joined schema, not just one dataset's schema
+        const datasets = projectData?.datasets || [];
+        console.log(`📊 [Schema Dialog] Multi-dataset check: hasMultiple=${hasMultipleDatasets}, datasetCount=${datasets.length}, currentSchemaIsJoined=${isJoinedSchema}`);
+
+        if (hasMultipleDatasets && datasets.length > 1) {
+          // Force build merged schema for multi-dataset scenarios
+          const mergedSchema: Record<string, any> = {};
+          datasets.forEach((ds: any, idx: number) => {
+            const dsSchema = ds.ingestionMetadata?.transformedSchema ||
+                            ds.metadata?.transformedSchema ||
+                            ds.ingestionMetadata?.schema ||
+                            ds.metadata?.schema ||
+                            ds.schema;
+            console.log(`📊 [Schema Dialog] Dataset ${idx} schema source:`, dsSchema ? Object.keys(dsSchema).length + ' columns' : 'none');
+            if (dsSchema && typeof dsSchema === 'object') {
+              for (const [col, type] of Object.entries(dsSchema)) {
+                if (!mergedSchema[col]) {
+                  mergedSchema[col] = type;
                 }
               }
-            });
-            if (Object.keys(mergedSchema).length > 0) {
-              schemaSource = mergedSchema;
-              isJoinedSchema = datasets.length > 1;
-              console.log(`📊 [Schema Dialog] Built merged schema from ${datasets.length} dataset(s) with ${Object.keys(mergedSchema).length} columns`);
             }
+          });
+          if (Object.keys(mergedSchema).length > 0) {
+            schemaSource = mergedSchema;
+            isJoinedSchema = true;
+            console.log(`📊 [Schema Dialog] Built MERGED schema from ${datasets.length} datasets with ${Object.keys(mergedSchema).length} columns`);
+          } else {
+            console.warn(`⚠️ [Schema Dialog] Could not build merged schema from datasets - no valid schemas found`);
+          }
+        } else if (Object.keys(schemaSource).length === 0 && datasets.length === 1) {
+          // Single dataset fallback
+          const ds = datasets[0];
+          const dsSchema = ds?.ingestionMetadata?.schema || ds?.metadata?.schema || ds?.schema;
+          if (dsSchema && typeof dsSchema === 'object') {
+            schemaSource = dsSchema;
+            console.log(`📊 [Schema Dialog] Using single dataset schema with ${Object.keys(schemaSource).length} columns`);
           }
         }
 

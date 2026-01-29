@@ -1,4 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -47,6 +49,8 @@ interface ExecuteStepProps {
 
 export default function ExecuteStep({ journeyType, onNext, onPrevious }: ExecuteStepProps) {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [, setLocation] = useLocation();
   // FIX Phase 3: Use updateProgressAsync for proper async handling
   const { projectId, project, journeyProgress, updateProgress, updateProgressAsync, isUpdating, isLoading: projectLoading } = useProject(localStorage.getItem('currentProjectId') || undefined);
 
@@ -83,7 +87,41 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
   const [artifactStatus, setArtifactStatus] = useState<'idle' | 'generating' | 'ready' | 'error'>('idle');
   const [artifacts, setArtifacts] = useState<any[]>([]);
   const [artifactPollCount, setArtifactPollCount] = useState(0);
-  const MAX_ARTIFACT_POLLS = 30; // Max 30 polls = 60 seconds (2s interval)
+  // HIGH PRIORITY FIX: Increased from 30 to 90 polls to allow 3+ minutes for slow artifact generation
+  // Using exponential backoff: 2s, 4s, 8s, etc. up to max 10s to reduce server load
+  const MAX_ARTIFACT_POLLS = 90; // Max 90 polls with backoff = ~3-5 minutes total
+
+  // P2-4 FIX: Per-analysis progress tracking
+  const [perAnalysisProgress, setPerAnalysisProgress] = useState<Record<string, {
+    analysisName: string;
+    analysisType: string;
+    status: 'running' | 'completed' | 'failed';
+    executionTimeMs?: number;
+    error?: string;
+  }>>({});
+
+  // P3-2 FIX: Trial credits expiration warning
+  const [trialWarning, setTrialWarning] = useState<{ daysRemaining: number; expiresAt: string } | null>(null);
+
+  useEffect(() => {
+    // Check trial credits status on mount
+    const checkTrialStatus = async () => {
+      try {
+        const response = await apiClient.get('/api/billing/usage-summary');
+        if (response?.trialCredits?.expiresAt) {
+          const expiresAt = new Date(response.trialCredits.expiresAt);
+          const now = new Date();
+          const daysRemaining = Math.ceil((expiresAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+          if (daysRemaining > 0 && daysRemaining <= 7) {
+            setTrialWarning({ daysRemaining, expiresAt: response.trialCredits.expiresAt });
+          }
+        }
+      } catch {
+        // Non-critical - silently ignore
+      }
+    };
+    checkTrialStatus();
+  }, []);
 
   const [selectedScenario, setSelectedScenario] = useState<string[]>([]);
   const [scenarioQuestion, setScenarioQuestion] = useState<string>("");
@@ -326,10 +364,32 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       { persistent: true }
     );
 
+    // P2-4 FIX: Subscribe to per-analysis progress events
+    const unsubscribePerAnalysis = realtimeClient.subscribe(
+      'analysis:progress',
+      (event: any) => {
+        const data = event?.data || event;
+        if (data?.projectId === resolvedProjectId && data?.analysisId) {
+          setPerAnalysisProgress(prev => ({
+            ...prev,
+            [data.analysisId]: {
+              analysisName: data.analysisName || data.analysisId,
+              analysisType: data.analysisType || 'unknown',
+              status: data.status || 'running',
+              executionTimeMs: data.executionTimeMs,
+              error: data.error
+            }
+          }));
+        }
+      },
+      { persistent: true }
+    );
+
     return () => {
       unsubscribe();
       unsubscribeProgress();
       unsubscribeAnalysis();
+      unsubscribePerAnalysis();
     };
   }, [resolvedProjectId, executionStatus]);
 
@@ -647,24 +707,19 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
 
     const fetchTemplateConfig = async () => {
       try {
-        const response = await fetch(`/api/templates/${primaryBusinessTemplate}/config`, {
-          credentials: 'include'
-        });
+        const data = await apiClient.get(`/api/templates/${primaryBusinessTemplate}/config`);
 
-        if (response.ok) {
-          const data = await response.json();
-          if (data.success && data.config) {
-            console.log('Template config loaded:', data.config);
+        if (data?.success && data.config) {
+          console.log('Template config loaded:', data.config);
 
-            // Auto-fill recommended analyses (but don't override agent recommendations or locked selections)
-            // [GAP D FIX] Don't override if we just loaded from requirementsDocument
-            if (!agentRecommendations &&
-              !journeyProgress?.requirementsDocument?.analysisPath?.length &&
-              data.config.recommendedAnalyses &&
-              data.config.recommendedAnalyses.length > 0) {
-              setSelectedAnalyses(data.config.recommendedAnalyses);
-              console.log('Auto-selected analyses from template:', data.config.recommendedAnalyses);
-            }
+          // Auto-fill recommended analyses (but don't override agent recommendations or locked selections)
+          // [GAP D FIX] Don't override if we just loaded from requirementsDocument
+          if (!agentRecommendations &&
+            !journeyProgress?.requirementsDocument?.analysisPath?.length &&
+            data.config.recommendedAnalyses &&
+            data.config.recommendedAnalyses.length > 0) {
+            setSelectedAnalyses(data.config.recommendedAnalyses);
+            console.log('Auto-selected analyses from template:', data.config.recommendedAnalyses);
           }
         }
       } catch (error) {
@@ -1055,14 +1110,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       }));
 
 
-      // Get authentication token
-      const token = localStorage.getItem('auth_token');
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
+      // apiClient handles authentication headers automatically
 
       // =====================================================
       // U2A2A2U AGENTIC WORKFLOW INTEGRATION
@@ -1088,8 +1136,6 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         console.warn('⏱️ U2A2A2U workflow timed out after 5 minutes');
       }, EXECUTION_TIMEOUT_MS);
 
-      let response: Response;
-
       // PHASE 9 FIX: Use direct analysis execution route instead of agent-workflow
       // This route has better data extraction (extractDatasetRows) that properly handles
       // transformed data from joinedData in journeyProgress
@@ -1113,43 +1159,27 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
           requiredDataElements: []
         }));
 
+      let data: any;
       try {
-        response = await fetch('/api/analysis-execution/execute', {
-          method: 'POST',
-          headers,
-          credentials: 'include',
-          signal: controller.signal,
-          body: JSON.stringify({
-            projectId: projectId,
-            // Selected analysis types (required)
-            analysisTypes: selectedAnalyses,
-            // CRITICAL: Pass DS-recommended analyses with priority and details
-            analysisPath: analysisPathForExecution,
-            // CRITICAL: Pass question-to-analysis mapping for evidence chain
-            questionAnswerMapping: questionMappingForExecution,
-            // Preview mode flag
-            previewOnly: false
-          })
-        });
+        data = await apiClient.post('/api/analysis-execution/execute', {
+          projectId: projectId,
+          analysisTypes: selectedAnalyses,
+          analysisPath: analysisPathForExecution,
+          questionAnswerMapping: questionMappingForExecution,
+          previewOnly: false
+        }, { signal: controller.signal });
       } catch (fetchError: any) {
         clearTimeout(timeoutId);
+
         if (fetchError.name === 'AbortError') {
           throw new Error('Agentic workflow timed out after 5 minutes. Your analysis may be processing in the background - please check back in a few minutes.');
         }
-        throw fetchError;
-      }
-      clearTimeout(timeoutId);
 
-      console.log('🔄 [PHASE 9] Analysis execution request sent');
-      console.log('📈 [PHASE 9] Analysis types:', selectedAnalyses.length);
-      console.log('📋 [PHASE 9] Analysis path items:', analysisPathForExecution.length);
-      console.log('❓ [PHASE 9] Question mappings:', questionMappingForExecution.length);
+        // Handle billing-specific error codes from apiClient thrown errors
+        const errorStatus = fetchError.status;
+        const errorData = fetchError.details;
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => null);
-
-        // Handle billing-specific error codes
-        if (response.status === 402 || response.status === 403) {
+        if (errorStatus === 402 || errorStatus === 403) {
           const errorCode = errorData?.code;
 
           if (errorCode === 'TIER_UPGRADE_REQUIRED') {
@@ -1163,7 +1193,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
               }
             });
             setExecutionState(prev => ({ ...prev, status: 'idle', overallProgress: 0 }));
-            return; // Don't throw, let the UI show the billing error
+            return;
           }
 
           if (errorCode === 'QUOTA_EXCEEDED') {
@@ -1175,7 +1205,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
               options: errorData?.options
             });
             setExecutionState(prev => ({ ...prev, status: 'idle', overallProgress: 0 }));
-            return; // Don't throw, let the UI show the billing error
+            return;
           }
 
           if (errorCode === 'PAYMENT_REQUIRED') {
@@ -1188,15 +1218,18 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
               }
             });
             setExecutionState(prev => ({ ...prev, status: 'idle', overallProgress: 0 }));
-            return; // Don't throw, let the UI show the billing error
+            return;
           }
         }
 
-        const errorMessage = errorData?.error
-          || errorData?.message
-          || `Analysis execution failed (HTTP ${response.status}). Please check your data and try again.`;
-        throw new Error(errorMessage);
+        throw fetchError;
       }
+      clearTimeout(timeoutId);
+
+      console.log('🔄 [PHASE 9] Analysis execution request sent');
+      console.log('📈 [PHASE 9] Analysis types:', selectedAnalyses.length);
+      console.log('📋 [PHASE 9] Analysis path items:', analysisPathForExecution.length);
+      console.log('❓ [PHASE 9] Question mappings:', questionMappingForExecution.length);
 
       setExecutionState(prev => ({
         ...prev,
@@ -1204,21 +1237,64 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         currentStep: { id: 'processing', name: 'Processing Results', status: 'running', description: 'Analyzing returned data...' }
       }));
 
-
-      const data = await response.json();
-
       if (!data.success) {
         throw new Error(data.error || 'Analysis execution failed');
       }
 
       // =====================================================
-      // U2A2A2U WORKFLOW RESPONSE HANDLING
+      // ANALYSIS EXECUTION RESPONSE HANDLING
       // =====================================================
-      // The workflow returns phases, status, and optional checkpointId
+      // Backend returns { success, results } - handle both formats for compatibility
+      const results = data.results;
       const workflow = data.workflow;
 
+      // Support both response formats:
+      // 1. Direct results from /api/analysis-execution/execute (new format)
+      // 2. Workflow response from /api/agent-workflow (legacy format)
+      if (results && !workflow) {
+        // =====================================================
+        // DIRECT RESULTS FORMAT (from analysis-execution.ts)
+        // =====================================================
+        console.log('✅ [Analysis] Direct results received');
+        console.log(`✅ [Analysis] Insights: ${results.insights?.length || 0}, Recommendations: ${results.recommendations?.length || 0}`);
+        console.log(`✅ [Analysis] Analysis types: ${results.analysisTypes?.join(', ') || 'unknown'}`);
+
+        // Mark execution as completed
+        setExecutionState(prev => ({
+          ...prev,
+          status: 'completed',
+          overallProgress: 100,
+          currentStep: {
+            id: 'complete',
+            name: 'Analysis Complete',
+            status: 'completed',
+            description: `Generated ${results.insights?.length || 0} insights and ${results.recommendations?.length || 0} recommendations`
+          }
+        }));
+
+        // Invalidate project query to refresh with new results
+        queryClient.invalidateQueries({ queryKey: [`/api/projects/${projectId}`] });
+
+        toast({
+          title: "Analysis Complete",
+          description: `Generated ${results.insights?.length || 0} insights. View your results!`,
+        });
+
+        // Navigate to results after short delay
+        setTimeout(() => {
+          setLocation(`/journeys/${journeyType}/results?projectId=${projectId}`);
+        }, 1500);
+
+        return;
+      }
+
+      // =====================================================
+      // WORKFLOW FORMAT (legacy agent-workflow response)
+      // =====================================================
       if (!workflow) {
-        throw new Error('Workflow response missing from API');
+        // Neither results nor workflow - unexpected format
+        console.error('❌ [Analysis] Unexpected response format:', data);
+        throw new Error('Invalid response format from analysis API');
       }
 
       console.log('🔄 [U2A2A2U] Workflow response received');
@@ -1241,16 +1317,10 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         const synthesisPhase = workflow.phases?.find((p: any) => p.phase === 'synthesis');
         if (synthesisPhase?.resultId) {
           try {
-            const latestRes = await fetch(`/api/agent-workflow/${projectId}/results/latest`, {
-              headers,
-              credentials: 'include'
-            });
-            if (latestRes.ok) {
-              const latestData = await latestRes.json();
-              const pmResult = latestData.results?.project_manager;
-              if (pmResult?.output?.result) {
-                setWorkflowSynthesis(pmResult.output.result);
-              }
+            const latestData = await apiClient.get(`/api/agent-workflow/${projectId}/results/latest`);
+            const pmResult = latestData?.results?.project_manager;
+            if (pmResult?.output?.result) {
+              setWorkflowSynthesis(pmResult.output.result);
             }
           } catch (e) {
             console.warn('Failed to fetch synthesis details:', e);
@@ -1284,7 +1354,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       // HANDLE COMPLETED STATUS
       // =====================================================
       if (workflow.status === 'completed') {
-        await handleWorkflowCompleted(workflow, headers);
+        await handleWorkflowCompleted(workflow);
       } else if (workflow.status === 'failed') {
         const failedPhase = workflow.phases?.find((p: any) => p.status === 'failed');
         throw new Error(failedPhase?.summary || 'Workflow failed');
@@ -1315,7 +1385,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
   /**
    * Handle workflow completion - extract results and update state
    */
-  const handleWorkflowCompleted = async (workflow: any, headers: Record<string, string>) => {
+  const handleWorkflowCompleted = async (workflow: any, _headers?: Record<string, string>) => {
     console.log('✅ [U2A2A2U] Workflow completed successfully');
 
     // Fetch latest results from all agents
@@ -1323,13 +1393,9 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     let payload: any = null;
 
     try {
-      const resultsRes = await fetch(`/api/agent-workflow/${projectId}/results/latest`, {
-        headers,
-        credentials: 'include'
-      });
+      const resultsData = await apiClient.get(`/api/agent-workflow/${projectId}/results/latest`);
 
-      if (resultsRes.ok) {
-        const resultsData = await resultsRes.json();
+      if (resultsData) {
 
         // Extract synthesis from PM agent
         const pmResult = resultsData.results?.project_manager;
@@ -1497,15 +1563,15 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
           }
         }
 
-        // Check if we've exceeded max polls
+        // P1-A FIX: On max polls, show retry button instead of permanent failure
         if (artifactPollCount >= MAX_ARTIFACT_POLLS) {
-          console.log('⚠️ [P1-3] Max polling attempts reached, stopping poll...');
+          console.log('⚠️ [P1-A] Max polling attempts reached, stopping poll...');
           setArtifactPolling(false);
           if (artifacts.length === 0) {
             setArtifactStatus('error');
             toast({
-              title: "Artifact Generation Timeout",
-              description: "Artifacts are taking longer than expected. You can check back later on the Results page.",
+              title: "Artifacts Taking Longer Than Expected",
+              description: "Click 'Retry Artifacts' to check again, or view them later on the Results page.",
               variant: "default"
             });
           }
@@ -1518,12 +1584,26 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       setArtifactPollCount(prev => prev + 1);
     };
 
-    const pollInterval = setInterval(pollArtifacts, 2000); // Poll every 2 seconds
+    // HIGH PRIORITY FIX: Use exponential backoff to reduce server load
+    // Start with 2s, double each time up to max 10s
+    const getPollingInterval = (pollCount: number) => {
+      const baseInterval = 2000;
+      const maxInterval = 10000;
+      const exponentialInterval = baseInterval * Math.pow(1.5, Math.min(pollCount, 5));
+      return Math.min(exponentialInterval, maxInterval);
+    };
 
-    // Initial poll
-    pollArtifacts();
+    const currentInterval = getPollingInterval(artifactPollCount);
+    console.log(`📦 [Polling] Using ${currentInterval}ms interval (poll ${artifactPollCount + 1})`);
 
-    return () => clearInterval(pollInterval);
+    const pollTimeout = setTimeout(pollArtifacts, currentInterval);
+
+    // Initial poll immediately
+    if (artifactPollCount === 0) {
+      pollArtifacts();
+    }
+
+    return () => clearTimeout(pollTimeout);
   }, [artifactPolling, resolvedProjectId, artifactPollCount, artifacts.length, updateProgress, toast]);
 
   /**
@@ -1582,32 +1662,12 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     }));
 
     try {
-      const token = localStorage.getItem('auth_token');
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-
       // Call continue endpoint
-      const response = await fetch('/api/agent-workflow/continue', {
-        method: 'POST',
-        headers,
-        credentials: 'include',
-        body: JSON.stringify({
-          projectId,
-          checkpointId,
-          feedback: feedback || 'approved'
-        })
+      const data = await apiClient.post('/api/agent-workflow/continue', {
+        projectId,
+        checkpointId,
+        feedback: feedback || 'approved'
       });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => null);
-        throw new Error(errorData?.error || 'Failed to continue workflow');
-      }
-
-      const data = await response.json();
 
       if (!data.success || !data.workflow) {
         throw new Error(data.error || 'Invalid response from workflow continuation');
@@ -1619,7 +1679,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       setWorkflowPhases(prev => [...prev, ...(data.workflow.phases || [])]);
 
       // Handle completed workflow
-      await handleWorkflowCompleted(data.workflow, headers);
+      await handleWorkflowCompleted(data.workflow);
 
       toast({
         title: "Analysis Complete",
@@ -2680,6 +2740,23 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
 
             {executionStatus === 'idle' && !billingError && (
               <div className="text-center py-8">
+                {/* P2-6 FIX: Prominent quota display before execution */}
+                <div className="mb-4 flex justify-center">
+                  <QuotaStatusIndicator
+                    featureId="statistical_analysis"
+                    complexity={selectedAnalyses.length > 3 ? 'medium' : 'small'}
+                    className="flex"
+                  />
+                </div>
+                {/* P3-2 FIX: Trial credits expiration warning */}
+                {trialWarning && (
+                  <div className="mb-4 mx-auto max-w-md">
+                    <Badge variant="outline" className="bg-amber-50 text-amber-800 border-amber-300 text-sm px-3 py-1">
+                      <Clock className="w-3.5 h-3.5 mr-1.5" />
+                      Trial expires in {trialWarning.daysRemaining} day{trialWarning.daysRemaining !== 1 ? 's' : ''}
+                    </Badge>
+                  </div>
+                )}
                 <p className="text-gray-600 mb-4">
                   Select analyses above to begin execution
                 </p>
@@ -2718,6 +2795,31 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
                 projectId={resolvedProjectId || undefined}
                 onStateChange={setExecutionState}
               />
+            )}
+
+            {/* P2-4 FIX: Per-analysis progress display */}
+            {executionStatus === 'running' && Object.keys(perAnalysisProgress).length > 0 && (
+              <Card className="border-blue-200 bg-blue-50/30">
+                <CardContent className="pt-4">
+                  <h4 className="text-sm font-medium text-gray-700 mb-2">Per-Analysis Status</h4>
+                  <div className="space-y-2">
+                    {Object.entries(perAnalysisProgress).map(([id, item]) => (
+                      <div key={id} className="flex items-center justify-between text-sm">
+                        <div className="flex items-center gap-2">
+                          {item.status === 'running' && <Loader2 className="w-3 h-3 animate-spin text-blue-600" />}
+                          {item.status === 'completed' && <CheckCircle className="w-3 h-3 text-green-600" />}
+                          {item.status === 'failed' && <AlertCircle className="w-3 h-3 text-red-600" />}
+                          <span className="text-gray-700">{item.analysisName}</span>
+                          <Badge variant="outline" className="text-xs">{item.analysisType}</Badge>
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {item.executionTimeMs ? `${(item.executionTimeMs / 1000).toFixed(1)}s` : '...'}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
             )}
 
             {/* FIX Phase 3: Add proper error recovery UI for failed execution */}
@@ -2930,8 +3032,18 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
                   <>
                     <AlertCircle className="h-4 w-4 text-amber-600" />
                     <span className="text-sm text-amber-800 font-medium">
-                      Artifact generation timed out. Check Results page later.
+                      Artifacts taking longer than expected.
                     </span>
+                    <button
+                      onClick={() => {
+                        setArtifactPollCount(0);
+                        setArtifactStatus('generating');
+                        setArtifactPolling(true);
+                      }}
+                      className="ml-2 text-sm text-blue-600 hover:text-blue-800 underline font-medium"
+                    >
+                      Retry
+                    </button>
                   </>
                 )}
                 {artifactStatus === 'idle' && artifacts.length === 0 && (

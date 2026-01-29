@@ -18,6 +18,7 @@ import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { JourneyExecutionMachine } from './journey-execution-machine';
 import { executeTool } from './mcp-tool-registry';
+import { semanticDataPipeline } from './semantic-data-pipeline';
 
 interface ProjectAgentContext {
   projectId: string;
@@ -42,7 +43,7 @@ interface AgentExecutionContext {
 export interface AgentCheckpoint {
   id: string;
   projectId: string;
-  agentType: 'project_manager' | 'technical_ai' | 'business' | 'data_engineer';
+  agentType: 'project_manager' | 'technical_ai' | 'business' | 'data_engineer' | 'data_scientist';
   stepName: string;
   status: 'pending' | 'in_progress' | 'waiting_approval' | 'approved' | 'completed' | 'rejected';
   message: string;
@@ -73,6 +74,204 @@ export class ProjectAgentOrchestrator {
     this.dataEngineerAgent = new DataEngineerAgent();
     this.agentInitService = new AgentInitializationService();
     this.executionMachine = new JourneyExecutionMachine();
+  }
+
+  /**
+   * PHASE 6 FIX: Persist agent results to journeyProgress.agentResults
+   * This ensures agent results survive server restarts
+   */
+  private async persistAgentResult(projectId: string, agentName: string, result: any): Promise<void> {
+    try {
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        console.warn(`⚠️ [Orchestrator] Cannot persist agent result - project not found: ${projectId}`);
+        return;
+      }
+
+      const journeyProgress = (project as any).journeyProgress || {};
+      const existingAgentResults = journeyProgress.agentResults || {};
+
+      await storage.updateProject(projectId, {
+        journeyProgress: {
+          ...journeyProgress,
+          agentResults: {
+            ...existingAgentResults,
+            [agentName]: {
+              result,
+              completedAt: new Date().toISOString()
+            }
+          }
+        }
+      } as any);
+
+      console.log(`✅ [Orchestrator PHASE 6] Persisted ${agentName} results to journeyProgress.agentResults`);
+    } catch (error) {
+      console.error(`❌ [Orchestrator PHASE 6] Failed to persist ${agentName} result:`, error);
+      // Non-blocking - don't fail the execution if persistence fails
+    }
+  }
+
+  /**
+   * PHASE 6 FIX: Load previously persisted agent results
+   * Called when resuming a journey or initializing execution context
+   */
+  private async loadAgentResults(projectId: string): Promise<Record<string, any>> {
+    try {
+      const project = await storage.getProject(projectId);
+      const journeyProgress = (project as any)?.journeyProgress || {};
+      const agentResults = journeyProgress.agentResults || {};
+
+      const resultsMap: Record<string, any> = {};
+      for (const [agentName, data] of Object.entries(agentResults)) {
+        resultsMap[agentName] = (data as any)?.result;
+      }
+
+      if (Object.keys(resultsMap).length > 0) {
+        console.log(`✅ [Orchestrator PHASE 6] Loaded ${Object.keys(resultsMap).length} persisted agent results`);
+      }
+
+      return resultsMap;
+    } catch (error) {
+      console.error(`❌ [Orchestrator PHASE 6] Failed to load agent results:`, error);
+      return {};
+    }
+  }
+
+  /**
+   * Coordinate transformation validation and column mapping before analysis execution.
+   * Ensures DS Agent's abstract column names are mapped to actual dataset columns.
+   *
+   * @param projectId - The project ID
+   * @param analysisType - The type of analysis being run
+   * @returns Result with success status and any errors
+   */
+  async coordinateTransformationBeforeAnalysis(
+    projectId: string,
+    analysisType: string
+  ): Promise<{ success: boolean; transformedDatasetId?: string; errors?: string[] }> {
+    console.log(`🤖 [Orchestrator] Coordinating transformation for ${analysisType}`);
+
+    try {
+      const project = await storage.getProject(projectId);
+      const datasets = await storage.getProjectDatasets(projectId);
+      const dataset = datasets?.[0];
+
+      if (!project || !dataset) {
+        return { success: false, errors: ['Project or dataset not found'] };
+      }
+
+      const dsDataset = (dataset as any).dataset || dataset;
+
+      // 1. Get DS Agent requirements for this analysis
+      const journeyProgress = (project as any)?.journeyProgress || {};
+      const dsRequirements = journeyProgress?.requirementsDocument;
+      const elementsForAnalysis = (dsRequirements?.requiredDataElements || []).filter((el: any) =>
+        el.neededForAnalyses?.includes(analysisType) ||
+        el.neededForAnalyses?.includes('all') ||
+        !el.neededForAnalyses // Include elements without specific analysis association
+      );
+
+      if (elementsForAnalysis.length === 0) {
+        console.log(`ℹ️ [Orchestrator] No specific transformations needed for ${analysisType}`);
+        return { success: true };
+      }
+
+      console.log(`📊 [Orchestrator] Found ${elementsForAnalysis.length} elements for ${analysisType}`);
+
+      // 2. Get available columns from dataset
+      const datasetSchema = dsDataset.schema || dsDataset.ingestionMetadata?.schema || {};
+      const availableColumns = Object.keys(datasetSchema);
+
+      // 3. Import and use source column mapper with context-aware matching
+      const { sourceColumnMapper } = await import('./source-column-mapper');
+
+      // Extract context from project for smarter matching
+      const mappingContext = sourceColumnMapper.extractContextFromProject({
+        journeyProgress: journeyProgress,
+        metadata: (project as any)?.metadata,
+        name: (project as any)?.name,
+        description: (project as any)?.description
+      });
+
+      const mappingResults = await sourceColumnMapper.mapMultipleElements(
+        elementsForAnalysis.map((el: any) => ({
+          elementId: el.elementId || el.id,
+          elementName: el.elementName || el.name,
+          calculationDefinition: el.calculationDefinition,
+          dataType: el.dataType,
+          // Add context fields for smarter matching
+          purpose: el.purpose || el.calculationDefinition?.purpose,
+          description: el.description || el.calculationDefinition?.formula?.businessDescription,
+          dsRecommendation: el.dsRecommendation || el.calculationDefinition?.formula?.pseudoCode
+        })),
+        availableColumns,
+        datasetSchema,
+        undefined,  // userProvidedMappings
+        projectId,  // projectId for RAG
+        mappingContext  // Context-aware matching
+      );
+
+      // 4. Check for unmapped columns
+      const unmapped = mappingResults.filter(m => !m.allMapped);
+      if (unmapped.length > 0) {
+        const unmappedFields = unmapped.flatMap(m => m.missingFields);
+        console.warn(`⚠️ [Orchestrator] ${unmapped.length} elements have unmapped columns: ${unmappedFields.join(', ')}`);
+
+        // Create checkpoint for user review if needed
+        await this.addCheckpoint(projectId, {
+          id: `checkpoint_${Date.now()}_mapping_review`,
+          projectId,
+          agentType: 'data_engineer',
+          stepName: 'column_mapping_review',
+          status: 'waiting_approval',
+          message: `Some columns need mapping: ${unmappedFields.slice(0, 5).join(', ')}${unmappedFields.length > 5 ? '...' : ''}`,
+          data: {
+            unmappedElements: unmapped.map(m => ({
+              element: m.elementName,
+              missing: m.missingFields,
+              suggestions: m.mappings.flatMap(mapping => mapping.alternatives)
+            }))
+          },
+          timestamp: new Date(),
+          requiresUserInput: true
+        });
+
+        // Don't fail - let the transformation step handle missing columns
+        console.log(`📋 [Orchestrator] Created checkpoint for column mapping review`);
+      }
+
+      // 5. Build column mapping lookup
+      const columnLookup = sourceColumnMapper.buildColumnLookup(mappingResults);
+      console.log(`🔗 [Orchestrator] Built column mapping with ${columnLookup.size} mappings`);
+
+      // 6. Store mapping in journeyProgress for use by execute-transformations
+      await storage.updateProject(projectId, {
+        journeyProgress: {
+          ...journeyProgress,
+          columnMappingResults: mappingResults.map(r => ({
+            elementId: r.elementId,
+            elementName: r.elementName,
+            allMapped: r.allMapped,
+            overallConfidence: r.overallConfidence,
+            mappings: r.mappings.map(m => ({
+              abstractField: m.abstractField,
+              actualColumn: m.actualColumn,
+              confidence: m.confidence,
+              matchMethod: m.matchMethod
+            }))
+          })),
+          columnMappingLookup: Object.fromEntries(columnLookup),
+          mappingCreatedAt: new Date().toISOString()
+        }
+      } as any);
+
+      console.log(`✅ [Orchestrator] Transformation coordination complete for ${analysisType}`);
+      return { success: true, transformedDatasetId: dsDataset.id };
+
+    } catch (error: any) {
+      console.error(`❌ [Orchestrator] Transformation coordination failed:`, error);
+      return { success: false, errors: [error.message] };
+    }
   }
 
   /**
@@ -264,6 +463,12 @@ export class ProjectAgentOrchestrator {
       dsAgentResult: undefined
     };
 
+    // ✅ PHASE 6 FIX: Load previously persisted agent results (survives server restart)
+    const persistedResults = await this.loadAgentResults(projectId);
+    for (const [agentName, result] of Object.entries(persistedResults)) {
+      executionContext.previousResults.set(agentName, result);
+    }
+
     // Load any existing project data
     try {
       const project = await storage.getProject(projectId);
@@ -296,6 +501,8 @@ export class ProjectAgentOrchestrator {
       // ✅ PHASE 2 FIX: Store researcher result in execution context
       executionContext.researcherResult = researchResult;
       executionContext.previousResults.set('template_research_agent', researchResult);
+      // ✅ PHASE 6 FIX: Persist to journeyProgress.agentResults
+      await this.persistAgentResult(projectId, 'template_research_agent', researchResult);
       console.log(`  ✅ Researcher Agent: Templates found, definitions seeded`, researchResult?.template?.name || 'general');
     } catch (researchError) {
       console.warn(`  ⚠️ Researcher Agent step failed (non-blocking):`, researchError);
@@ -324,9 +531,25 @@ export class ProjectAgentOrchestrator {
       // ✅ PHASE 2 FIX: Store DS result in execution context
       executionContext.dsAgentResult = dsResult;
       executionContext.previousResults.set('data_scientist', dsResult);
+      // ✅ PHASE 6 FIX: Persist to journeyProgress.agentResults
+      await this.persistAgentResult(projectId, 'data_scientist', dsResult);
       if (dsResult?.requirementsDocument) {
         executionContext.requirementsDocument = dsResult.requirementsDocument;
         executionContext.analysisPath = dsResult.requirementsDocument?.analysisPath;
+
+        // PHASE 2 FIX: Create semantic links from questionAnswerMapping
+        const questionMapping = dsResult.requirementsDocument?.questionAnswerMapping;
+        if (questionMapping && Array.isArray(questionMapping)) {
+          try {
+            const linksCreated = await semanticDataPipeline.createLinksFromRequirements(
+              projectId,
+              questionMapping
+            );
+            console.log(`🔗 [Semantic] Created ${linksCreated} question-element links from DS requirements`);
+          } catch (linkError) {
+            console.warn(`⚠️ [Semantic] Failed to create semantic links (non-blocking):`, linkError);
+          }
+        }
       }
       console.log(`  ✅ DS Agent: Analysis recommendations generated`, dsResult?.recommendations?.recommendedAnalyses?.slice(0, 3) || []);
     } catch (dsError) {
@@ -594,21 +817,47 @@ export class ProjectAgentOrchestrator {
 
     // Check for step-specific message
     const stepName = checkpoint.stepName?.toLowerCase() || '';
+    let baseMessage = '';
     for (const [key, message] of Object.entries(stepMessages)) {
       if (stepName.includes(key.replace('_', ''))) {
-        return message;
+        baseMessage = message;
+        break;
       }
     }
 
-    // Default simplified message
-    return checkpoint.message
-      .replace(/schema/gi, 'data structure')
-      .replace(/transformation/gi, 'data preparation')
-      .replace(/artifact/gi, 'report')
-      .replace(/execution/gi, 'analysis')
-      .replace(/pipeline/gi, 'process')
-      .replace(/checkpoint/gi, 'review point')
-      .replace(/orchestrat/gi, 'coordinat');
+    // If no step match, apply text simplification
+    if (!baseMessage) {
+      baseMessage = checkpoint.message
+        .replace(/schema/gi, 'data structure')
+        .replace(/transformation/gi, 'data preparation')
+        .replace(/artifact/gi, 'report')
+        .replace(/execution/gi, 'analysis')
+        .replace(/pipeline/gi, 'process')
+        .replace(/checkpoint/gi, 'review point')
+        .replace(/orchestrat/gi, 'coordinat');
+    }
+
+    // Enhance with actual checkpoint data when available
+    const data = checkpoint.data as any;
+    if (data) {
+      if (data.qualityScore !== undefined) {
+        baseMessage += ` Data quality score: ${Math.round(Number(data.qualityScore) * 100)}%.`;
+      }
+      if (data.recommendedAnalyses?.length) {
+        baseMessage += ` Recommended: ${data.recommendedAnalyses.slice(0, 3).join(', ')}.`;
+      }
+      if (data.issuesFound !== undefined) {
+        baseMessage += ` ${data.issuesFound} issue(s) found.`;
+      }
+      if (data.piiColumnsFound !== undefined) {
+        baseMessage += ` ${data.piiColumnsFound} column(s) with personal information detected.`;
+      }
+      if (data.transformationCount !== undefined) {
+        baseMessage += ` ${data.transformationCount} transformation(s) applied.`;
+      }
+    }
+
+    return baseMessage;
   }
 
   /**
@@ -624,13 +873,33 @@ export class ProjectAgentOrchestrator {
     };
 
     const stepName = checkpoint.stepName?.toLowerCase() || '';
+    let baseMessage = '';
     for (const [key, message] of Object.entries(stepMessages)) {
       if (stepName.includes(key.replace('_', ''))) {
-        return message;
+        baseMessage = message;
+        break;
       }
     }
 
-    return checkpoint.message;
+    if (!baseMessage) {
+      baseMessage = checkpoint.message;
+    }
+
+    // Enhance with actual checkpoint data when available
+    const data = checkpoint.data as any;
+    if (data) {
+      if (data.kpis?.length) {
+        baseMessage += ` ${data.kpis.length} KPIs identified.`;
+      }
+      if (data.recommendedAnalyses?.length) {
+        baseMessage += ` Recommended: ${data.recommendedAnalyses.slice(0, 3).join(', ')}.`;
+      }
+      if (data.businessImpact) {
+        baseMessage += ` Business impact: ${typeof data.businessImpact === 'string' ? data.businessImpact.substring(0, 80) : 'assessed'}.`;
+      }
+    }
+
+    return baseMessage;
   }
 
   /**
@@ -898,6 +1167,11 @@ export class ProjectAgentOrchestrator {
         const executionTime = Date.now() - startTime;
         console.log(`✅ Step ${step.id} completed in ${executionTime}ms (target: ${stepTimeout}ms)`);
 
+        // ✅ PHASE 6 FIX: Persist agent result to journeyProgress.agentResults
+        if (step.agent && result) {
+          await this.persistAgentResult(projectId, step.agent, result);
+        }
+
         // Mark step as completed in journey state
         await journeyStateManager.completeStep(projectId, step.id);
 
@@ -1063,16 +1337,29 @@ export class ProjectAgentOrchestrator {
                   decisionContext: journeyProgress.audience?.decisionContext || 'Business decision support'
                 });
 
-                // Store translated results
+                // GAP FIX: Merge with existing multi-audience translations instead of overwriting
+                // translatedResults should be stored under the audience key, not at top level
+                const existingTranslations = journeyProgress.translatedResults || {};
+                const mergedTranslations = {
+                  ...existingTranslations,
+                  [audience]: {
+                    insights: translatedResults?.insights || analysisResults.insights || [],
+                    recommendations: translatedResults?.recommendations || analysisResults.recommendations || [],
+                    executiveSummary: translatedResults?.executiveSummary,
+                    translatedAt: new Date().toISOString()
+                  }
+                };
+
+                // Store merged translated results - preserves all audience translations
                 await storage.updateProject(projectId, {
                   journeyProgress: {
                     ...journeyProgress,
-                    translatedResults,
+                    translatedResults: mergedTranslations,
                     baTranslatedAt: new Date().toISOString()
                   }
                 } as any);
 
-                console.log(`✅ [BA Agent] Results translated for ${audience} audience`);
+                console.log(`✅ [BA Agent] Results translated for ${audience} audience (merged with ${Object.keys(existingTranslations).length} existing translations)`);
                 return {
                   message: 'Business Agent translation completed',
                   agent: 'business_agent',
@@ -1166,7 +1453,12 @@ export class ProjectAgentOrchestrator {
             };
           } catch (error) {
             console.error(`❌ [BA Agent] Error:`, error);
-            return { message: 'Business Agent step completed with fallback', agent: 'business_agent', status: 'completed' };
+            return {
+              message: `Business Agent encountered an issue: ${(error as Error).message?.substring(0, 100) || 'Unknown error'}`,
+              agent: 'business_agent',
+              status: 'partial',
+              error: true
+            };
           }
 
         // GAP R6 FIX: Add Data Scientist agent case
@@ -1183,27 +1475,34 @@ export class ProjectAgentOrchestrator {
               const questions = journeyProgress.businessQuestions || [];
               const goals = journeyProgress.goals || journeyProgress.analysisGoal || '';
 
-              // Generate analysis recommendations based on data characteristics
-              const recommendations = {
-                recommendedAnalyses: ['descriptive', 'correlation'],
-                confidence: 0.8,
-                reasoning: 'Based on available data structure and user questions'
-              };
+              // Use the real DataScientistAgent to generate AI-backed recommendations
+              const { DataScientistAgent } = await import('./data-scientist-agent');
+              const dsAgent = new DataScientistAgent();
 
-              // Add common analyses based on question keywords
-              const questionText = Array.isArray(questions) ? questions.join(' ').toLowerCase() : '';
-              if (questionText.includes('trend') || questionText.includes('time') || questionText.includes('change')) {
-                recommendations.recommendedAnalyses.push('time_series', 'trend_analysis');
-              }
-              if (questionText.includes('predict') || questionText.includes('forecast')) {
-                recommendations.recommendedAnalyses.push('predictive', 'regression');
-              }
-              if (questionText.includes('segment') || questionText.includes('group') || questionText.includes('cluster')) {
-                recommendations.recommendedAnalyses.push('segmentation', 'clustering');
-              }
-              if (questionText.includes('compare') || questionText.includes('difference')) {
-                recommendations.recommendedAnalyses.push('comparative_analysis');
-              }
+              // Get datasets for schema info
+              const dataset = await storage.getDatasetForProject(projectId);
+              const schema = dataset?.schema || project?.schema || {};
+              const recordCount = (dataset?.ingestionMetadata as any)?.recordCount ||
+                                  (Array.isArray(dataset?.data) ? dataset!.data.length : 1000);
+
+              console.log(`🔬 [DS Agent] Running AI-backed analysis recommendation for ${questions.length} questions, ${recordCount} records`);
+
+              const dsResult = await dsAgent.recommendAnalysisConfig({
+                userQuestions: Array.isArray(questions) ? questions : [],
+                analysisGoal: typeof goals === 'string' ? goals : '',
+                datasetMetadata: { schema },
+                recordCount,
+                dataAnalysis: { characteristics: {} }
+              });
+
+              const recommendations = {
+                recommendedAnalyses: dsResult.recommendedAnalyses || dsResult.analyses || ['descriptive'],
+                confidence: dsResult.confidence || 0.7,
+                reasoning: dsResult.rationale || 'Based on AI analysis of data characteristics and user questions',
+                complexity: dsResult.complexity,
+                estimatedCost: dsResult.estimatedCost,
+                estimatedTime: dsResult.estimatedTime
+              };
 
               // Store DS recommendations in project
               await storage.updateProject(projectId, {
@@ -1223,7 +1522,12 @@ export class ProjectAgentOrchestrator {
               };
             } catch (error) {
               console.error(`❌ [DS Agent] Error:`, error);
-              return { message: 'Data Scientist step completed with fallback', agent: 'data_scientist', status: 'completed' };
+              return {
+              message: `Data Scientist encountered an issue: ${(error as Error).message?.substring(0, 100) || 'Unknown error'}`,
+              agent: 'data_scientist',
+              status: 'partial',
+              error: true
+            };
             }
           }
           return { message: 'Data Scientist step completed', agent: 'data_scientist', status: 'completed' };
@@ -1513,8 +1817,9 @@ export class ProjectAgentOrchestrator {
 
   /**
    * Map journey template agent type to checkpoint agent type
+   * FIX: Added data_scientist mapping for proper agent identification
    */
-  private mapAgentType(agentType: string): 'project_manager' | 'technical_ai' | 'business' | 'data_engineer' {
+  private mapAgentType(agentType: string): 'project_manager' | 'technical_ai' | 'business' | 'data_engineer' | 'data_scientist' {
     switch (agentType) {
       case 'project_manager':
         return 'project_manager';
@@ -1524,6 +1829,10 @@ export class ProjectAgentOrchestrator {
         return 'business';
       case 'data_engineer':
         return 'data_engineer';
+      case 'data_scientist':
+      case 'data_scientist_agent':
+      case 'ds_agent':
+        return 'data_scientist';
       default:
         return 'project_manager';
     }
@@ -1615,7 +1924,7 @@ export class ProjectAgentOrchestrator {
       const dsCheckpoint: AgentCheckpoint = {
         id: `checkpoint_${Date.now()}_ds_requirements`,
         projectId,
-        agentType: 'technical_ai', // DS maps to technical_ai
+        agentType: 'data_scientist', // FIX: Use data_scientist instead of technical_ai
         stepName: 'ds_identify_requirements',
         status: 'in_progress',
         message: 'Data Scientist is analyzing goals and questions to identify required data elements...',
@@ -2001,17 +2310,34 @@ export class ProjectAgentOrchestrator {
         checkpoint: completionCheckpoint
       });
 
+      // Fetch latest journeyProgress to merge with
+      const latestProject = await storage.getProject(projectId);
+      const latestJourneyProgress = (latestProject as any)?.journeyProgress || {};
+
+      const updatedProgress = {
+        ...latestJourneyProgress,
+        requirementsDocument,
+        businessDefinitions,
+        transformationPlan,
+        pmValidations,
+        dataMappingCompletedAt: new Date().toISOString()
+      };
+
+      console.log(`📝 [PM-SUPERVISED FLOW] Saving transformationPlan to journeyProgress:`);
+      console.log(`   - transformationPlan.mappings.length: ${transformationPlan?.mappings?.length || 0}`);
+      console.log(`   - transformationPlan.readinessScore: ${transformationPlan?.readinessScore || 0}`);
+
       // Store results in project journey progress
       await storage.updateProject(projectId, {
-        journeyProgress: {
-          ...journeyProgress,
-          requirementsDocument,
-          businessDefinitions,
-          transformationPlan,
-          pmValidations,
-          dataMappingCompletedAt: new Date().toISOString()
-        }
+        journeyProgress: updatedProgress
       } as any);
+
+      // Verify the save
+      const verifyProject = await storage.getProject(projectId);
+      const verifyProgress = (verifyProject as any)?.journeyProgress || {};
+      console.log(`✅ [PM-SUPERVISED FLOW] Verified save:`);
+      console.log(`   - journeyProgress.transformationPlan exists: ${!!verifyProgress.transformationPlan}`);
+      console.log(`   - mappings count in DB: ${verifyProgress.transformationPlan?.mappings?.length || 0}`);
 
       console.log(`\n✅ [PM-SUPERVISED FLOW] Data element mapping completed successfully!`);
       console.log(`   📊 Definitions: ${businessDefinitions.length}`);
@@ -2422,10 +2748,40 @@ export class ProjectAgentOrchestrator {
   /**
    * Update the multi-agent coordination data in the project record
    * This ensures the frontend has the latest agent activity data
+   * P2-A FIX: Made public so it can be called from outside the orchestrator (e.g., after prepare step)
+   * TASK 4 FIX: Load checkpoints from database if in-memory is empty (handles server restart)
    */
-  private async updateProjectCoordinationData(projectId: string): Promise<void> {
+  async updateProjectCoordinationData(projectId: string): Promise<void> {
     try {
-      const checkpoints = this.checkpoints.get(projectId) || [];
+      // First try in-memory checkpoints
+      let checkpoints = this.checkpoints.get(projectId) || [];
+
+      // TASK 4 FIX: If in-memory is empty, load from database (handles server restart)
+      if (checkpoints.length === 0) {
+        try {
+          const dbCheckpoints = await storage.getProjectCheckpoints(projectId);
+          if (dbCheckpoints.length > 0) {
+            console.log(`📋 [Coordination] Loaded ${dbCheckpoints.length} checkpoints from DB for project ${projectId}`);
+            // Map DB format to internal AgentCheckpoint interface
+            checkpoints = dbCheckpoints.map(cp => ({
+              id: cp.id,
+              projectId: cp.projectId,
+              agentType: cp.agentType as 'project_manager' | 'technical_ai' | 'business' | 'data_engineer' | 'data_scientist',
+              stepName: cp.stepName,
+              status: cp.status as 'pending' | 'in_progress' | 'waiting_approval' | 'approved' | 'completed' | 'rejected',
+              message: cp.message || '',
+              data: (cp.data || {}) as any,
+              userFeedback: cp.userFeedback || undefined,
+              timestamp: cp.timestamp || new Date(),
+              requiresUserInput: cp.requiresUserInput || false
+            }));
+            // Sync back to in-memory for future access
+            this.checkpoints.set(projectId, checkpoints);
+          }
+        } catch (dbErr) {
+          console.warn(`⚠️ [Coordination] Could not load checkpoints from DB:`, dbErr);
+        }
+      }
 
       // Load actual project data for real recommendations
       const project = await db.query.projects.findFirst({
@@ -2434,16 +2790,98 @@ export class ProjectAgentOrchestrator {
       const analysisResults = (project as any)?.analysisResults;
       const journeyProgress = (project as any)?.journeyProgress || {};
 
-      // Map checkpoints to expert opinions
-      const expertOpinions = checkpoints
+      // Map checkpoints to expert opinions with REAL confidence from agent data
+      // P0-6 FIX: Use actual agent confidence instead of hardcoded 0.9
+      let expertOpinions = checkpoints
         .filter(cp => cp.status === 'completed' || cp.status === 'in_progress')
-        .map(cp => ({
-          agentId: cp.agentType,
-          agentName: this.getAgentName(cp.agentType),
-          opinion: cp.data || { message: cp.message },
-          confidence: 0.9, // Placeholder
-          timestamp: cp.timestamp.toISOString()
-        }));
+        .map(cp => {
+          // Extract confidence from agent's data if available
+          // Agents may report: cp.data.confidence, cp.data.assessmentConfidence, cp.data.validationScore
+          const reportedConfidence = cp.data?.confidence
+            || cp.data?.assessmentConfidence
+            || cp.data?.validationScore
+            || (cp.data?.isValid !== undefined ? (cp.data.isValid ? 0.85 : 0.5) : null);
+
+          // Calculate confidence based on checkpoint status and data completeness
+          let derivedConfidence = 0.7; // Base confidence for incomplete work
+          if (cp.status === 'completed') {
+            derivedConfidence = reportedConfidence ?? 0.85; // Completed work has higher base
+          } else if (cp.status === 'in_progress') {
+            derivedConfidence = reportedConfidence ?? 0.6; // In-progress is less certain
+          }
+
+          return {
+            agentId: cp.agentType,
+            agentName: this.getAgentName(cp.agentType),
+            opinion: cp.data || { message: cp.message },
+            confidence: Math.min(1, Math.max(0, derivedConfidence)), // Clamp to 0-1
+            timestamp: cp.timestamp.toISOString()
+          };
+        });
+
+      // TASK 4 FIX: Generate synthetic expert opinions from journeyProgress when no checkpoints exist
+      if (expertOpinions.length === 0 && Object.keys(journeyProgress).length > 0) {
+        console.log(`📋 [Coordination] No checkpoints found, generating expert opinions from journey progress`);
+        const now = new Date().toISOString();
+
+        // Generate Data Engineer opinion based on data quality
+        if (journeyProgress.dataQualityScore !== undefined || journeyProgress.qualityMetrics) {
+          const qualityScore = journeyProgress.dataQualityScore ?? journeyProgress.qualityMetrics?.overallScore ?? 75;
+          expertOpinions.push({
+            agentId: 'data_engineer',
+            agentName: 'Data Engineer',
+            opinion: {
+              overallScore: qualityScore / 100,
+              qualityScore: qualityScore,
+              assessment: qualityScore >= 70 ? 'Data quality meets requirements' : 'Data quality needs improvement',
+              recommendations: journeyProgress.qualityMetrics?.issues || []
+            },
+            confidence: 0.85,
+            timestamp: now
+          });
+        }
+
+        // Generate Data Scientist opinion based on requirements document
+        if (journeyProgress.requirementsDocument) {
+          const reqDoc = journeyProgress.requirementsDocument;
+          const analysisPath = reqDoc.analysisPath || [];
+          const feasible = analysisPath.length > 0;
+          expertOpinions.push({
+            agentId: 'data_scientist',
+            agentName: 'Data Scientist',
+            opinion: {
+              feasible,
+              requiredAnalyses: analysisPath.slice(0, 3).map((a: any) => a.analysisName || a.name),
+              dataElementsReady: reqDoc.completeness?.elementsMapped || 0,
+              totalElementsNeeded: reqDoc.completeness?.totalElements || reqDoc.requiredDataElements?.length || 0,
+              recommendations: analysisPath.length === 0 ? ['Define analysis requirements'] : []
+            },
+            confidence: feasible ? 0.8 : 0.6,
+            timestamp: now
+          });
+        }
+
+        // Generate Business Analyst opinion based on business impact or user goals
+        if (journeyProgress.businessImpact || journeyProgress.userGoals || (project as any)?.goals) {
+          const goals = journeyProgress.userGoals || (project as any)?.goals || [];
+          const impact = journeyProgress.businessImpact;
+          expertOpinions.push({
+            agentId: 'business',
+            agentName: 'Business Analyst',
+            opinion: {
+              businessValue: impact?.overallImpact || (goals.length > 0 ? 'Aligned with goals' : 'Pending assessment'),
+              alignment: {
+                goals: goals.length > 0 ? 0.8 : 0,
+                goalsText: goals.slice(0, 2).map((g: any) => typeof g === 'string' ? g : (g.text || g.goal || String(g)))
+              },
+              recommendations: impact?.recommendations || []
+            },
+            confidence: impact ? 0.85 : 0.7,
+            timestamp: now
+          });
+        }
+        console.log(`✅ [Coordination] Generated ${expertOpinions.length} synthetic expert opinions from journey data`);
+      }
 
       // Generate synthesis based on progress
       const completedSteps = checkpoints.filter(cp => cp.status === 'completed').length;
@@ -2461,6 +2899,86 @@ export class ProjectAgentOrchestrator {
           .slice(0, 3)
           .map((i: any) => i.title || (i.description?.substring(0, 80) + '...'));
         derivedKeyFindings = [...derivedKeyFindings, ...topInsights].slice(0, 5);
+      }
+
+      // ✅ P1-D FIX: Add more fallback sources for key findings to avoid hardcoded data
+      // Priority 2: Extract from industry insights (BA agent output)
+      if (derivedKeyFindings.length < 3 && journeyProgress.industryInsights?.insights?.length > 0) {
+        const industryFindings = journeyProgress.industryInsights.insights
+          .slice(0, 3 - derivedKeyFindings.length)
+          .map((insight: any) => typeof insight === 'string' ? insight : (insight.title || insight.description?.substring(0, 80)));
+        derivedKeyFindings = [...derivedKeyFindings, ...industryFindings].filter(Boolean).slice(0, 5);
+      }
+
+      // Priority 3: Extract from business impact assessment
+      if (derivedKeyFindings.length < 3 && journeyProgress.businessImpact) {
+        const impact = journeyProgress.businessImpact;
+        if (impact.keyFinding) {
+          derivedKeyFindings.push(impact.keyFinding);
+        } else if (impact.overallImpact && impact.roi) {
+          derivedKeyFindings.push(`Business impact: ${impact.overallImpact} (ROI: ${impact.roi})`);
+        }
+      }
+
+      // Priority 4: Generate context-aware findings from user questions and data characteristics
+      if (derivedKeyFindings.length < 2 && journeyProgress.requirementsDocument) {
+        const reqDoc = journeyProgress.requirementsDocument;
+        // Extract what analyses are planned
+        if (reqDoc.analysisPath?.length > 0) {
+          const analysisNames = reqDoc.analysisPath.slice(0, 2).map((a: any) => a.analysisName || a.name).filter(Boolean);
+          if (analysisNames.length > 0) {
+            derivedKeyFindings.push(`Planned analyses: ${analysisNames.join(', ')}`);
+          }
+        }
+        // Extract data element readiness
+        if (reqDoc.completeness?.elementsMapped && reqDoc.completeness?.totalElements) {
+          const mappedRatio = reqDoc.completeness.elementsMapped / reqDoc.completeness.totalElements;
+          if (mappedRatio > 0.8) {
+            derivedKeyFindings.push(`Data readiness: ${Math.round(mappedRatio * 100)}% of required elements mapped`);
+          } else if (mappedRatio > 0.5) {
+            derivedKeyFindings.push(`Data mapping progress: ${reqDoc.completeness.elementsMapped}/${reqDoc.completeness.totalElements} elements ready`);
+          }
+        }
+      }
+
+      // Priority 5: Extract from data quality assessment
+      if (derivedKeyFindings.length < 2 && journeyProgress.dataQualityScore !== undefined) {
+        const score = journeyProgress.dataQualityScore;
+        if (score >= 80) {
+          derivedKeyFindings.push(`Data quality is excellent (${score}% score)`);
+        } else if (score >= 60) {
+          derivedKeyFindings.push(`Data quality is good (${score}% score) - suitable for analysis`);
+        } else if (score >= 40) {
+          derivedKeyFindings.push(`Data quality requires attention (${score}% score) - transformations recommended`);
+        }
+      }
+
+      // Priority 6: Derive from user goals/questions (make them specific to the project)
+      if (derivedKeyFindings.length === 0) {
+        const goals = journeyProgress.userGoals
+          || journeyProgress.requirementsDocument?.userGoals
+          || (project as any)?.goals
+          || [];
+        const questions = journeyProgress.userQuestions
+          || journeyProgress.requirementsDocument?.userQuestions
+          || (project as any)?.userQuestions
+          || [];
+
+        if (goals.length > 0) {
+          derivedKeyFindings.push(`Primary goal: ${typeof goals[0] === 'string' ? goals[0] : (goals[0]?.text || goals[0]?.goal || String(goals[0]))}`.substring(0, 100));
+        }
+        if (questions.length > 0) {
+          derivedKeyFindings.push(`Key question being addressed: ${typeof questions[0] === 'string' ? questions[0] : (questions[0]?.text || questions[0]?.question || String(questions[0]))}`.substring(0, 100));
+        }
+      }
+
+      // Absolute last resort - only use generic messages if ALL sources failed
+      if (derivedKeyFindings.length === 0) {
+        console.warn(`⚠️ [Coordination] No key findings available for project ${projectId} - check data flow`);
+        derivedKeyFindings = [
+          "Analysis in progress - findings will be generated",
+          "Data processing and preparation underway"
+        ];
       }
 
       // Build actionableRecommendations from actual BA/analysis results
@@ -2482,25 +3000,106 @@ export class ProjectAgentOrchestrator {
           .map((r: any) => r.title || r.description?.substring(0, 80));
       }
 
-      // Priority 3: Generic fallback only if nothing else available
+      // ✅ P1-D FIX: Add more fallback sources for recommendations
+      // Priority 3: From analysis plan steps
+      if (derivedRecommendations.length === 0 && journeyProgress.requirementsDocument?.analysisPath?.length > 0) {
+        const nextAnalyses = journeyProgress.requirementsDocument.analysisPath
+          .slice(0, 2)
+          .map((a: any) => `Complete ${a.analysisName || a.name}: ${a.description || ''}`
+            .substring(0, 80));
+        derivedRecommendations = nextAnalyses;
+      }
+
+      // Priority 4: From gaps in requirements document
+      if (derivedRecommendations.length === 0 && journeyProgress.requirementsDocument?.gaps?.length > 0) {
+        derivedRecommendations = journeyProgress.requirementsDocument.gaps
+          .filter((gap: any) => gap.severity === 'high' || gap.severity === 'medium')
+          .slice(0, 2)
+          .map((gap: any) => gap.recommendation || `Address: ${gap.description}`);
+      }
+
+      // Priority 5: Context-aware suggestions based on journey state
       if (derivedRecommendations.length === 0) {
+        const stepStatus = journeyProgress.stepCompletionStatus || {};
+        if (!stepStatus.verify) {
+          derivedRecommendations.push("Complete data verification to ensure quality");
+        } else if (!stepStatus.transform) {
+          derivedRecommendations.push("Execute data transformations to prepare for analysis");
+        } else if (!stepStatus.analyze) {
+          derivedRecommendations.push("Run the analysis to generate insights");
+        } else {
+          derivedRecommendations.push("Review and export your analysis results");
+        }
+      }
+
+      // Absolute last resort
+      if (derivedRecommendations.length === 0) {
+        console.warn(`⚠️ [Coordination] No recommendations available for project ${projectId} - check data flow`);
         derivedRecommendations = [
-          "Continue with the planned analysis steps",
-          "Review intermediate results for accuracy"
+          "Continue with the next step in your analysis journey"
         ];
       }
 
+      // P0-6 FIX: Derive expertConsensus from actual project data instead of hardcoded values
+      // Get actual data quality score from project/datasets
+      const dataQualityScore = journeyProgress.dataQualityScore
+        ?? (project as any)?.datasets?.[0]?.qualityMetrics?.overallScore
+        ?? (project as any)?.qualityScore
+        ?? null;
+
+      // Map numeric quality score (0-100) to descriptive string
+      let dataQualityLabel = "Unknown";
+      if (dataQualityScore !== null) {
+        if (dataQualityScore >= 90) dataQualityLabel = "Excellent";
+        else if (dataQualityScore >= 75) dataQualityLabel = "High";
+        else if (dataQualityScore >= 60) dataQualityLabel = "Good";
+        else if (dataQualityScore >= 40) dataQualityLabel = "Moderate";
+        else dataQualityLabel = "Low";
+      } else if (completedSteps > 0) {
+        // If no explicit score but work completed, infer from completion
+        dataQualityLabel = completedSteps > 2 ? "Good" : "Moderate";
+      }
+
+      // Get technical feasibility from DE agent assessment
+      const deCheckpoint = checkpoints.find(cp => cp.agentType === 'data_engineer' && cp.status === 'completed');
+      const technicalAssessment = deCheckpoint?.data?.feasibility
+        ?? deCheckpoint?.data?.technicalFeasibility
+        ?? (deCheckpoint?.status === 'completed' ? "Feasible" : null);
+      const technicalFeasibilityLabel = technicalAssessment ?? (completedSteps > 1 ? "Feasible" : "Pending Assessment");
+
+      // Get business value from BA agent assessment
+      const baCheckpoint = checkpoints.find(cp => cp.agentType === 'business' && cp.status === 'completed');
+      const businessAssessment = baCheckpoint?.data?.businessValue
+        ?? baCheckpoint?.data?.impact
+        ?? journeyProgress.businessImpact?.overallImpact
+        ?? null;
+      let businessValueLabel = "Pending Assessment";
+      if (analysisResults) {
+        businessValueLabel = businessAssessment ?? "Confirmed";
+      } else if (baCheckpoint?.status === 'completed') {
+        businessValueLabel = businessAssessment ?? "Significant";
+      }
+
+      // Calculate overall confidence from expert opinions
+      const avgExpertConfidence = expertOpinions.length > 0
+        ? expertOpinions.reduce((sum, op) => sum + op.confidence, 0) / expertOpinions.length
+        : 0.7;
+      const overallConfidence = analysisResults
+        ? Math.min(0.95, avgExpertConfidence + 0.1) // Boost confidence if analysis completed
+        : avgExpertConfidence;
+
       const synthesis = {
         overallAssessment: completedSteps > 0 ? "proceed" : "proceed_with_caution",
-        confidence: analysisResults ? 0.92 : 0.85,
+        confidence: parseFloat(overallConfidence.toFixed(2)),
         keyFindings: derivedKeyFindings,
         actionableRecommendations: derivedRecommendations,
         estimatedTimeline: analysisResults ? "Analysis complete" : "On track",
         estimatedCost: "Within budget",
         expertConsensus: {
-          dataQuality: "High",
-          technicalFeasibility: "Feasible",
-          businessValue: analysisResults ? "Confirmed" : "Significant"
+          dataQuality: dataQualityLabel,
+          dataQualityScore: dataQualityScore, // Include numeric score for UI if needed
+          technicalFeasibility: technicalFeasibilityLabel,
+          businessValue: businessValueLabel
         }
       };
 
@@ -2535,7 +3134,8 @@ export class ProjectAgentOrchestrator {
       'project_manager': 'Project Manager',
       'technical_ai': 'Technical Architect',
       'business': 'Business Analyst',
-      'data_engineer': 'Data Engineer'
+      'data_engineer': 'Data Engineer',
+      'data_scientist': 'Data Scientist'  // FIX: Added data_scientist for proper identification
     };
     return names[type] || 'AI Agent';
   }
@@ -2844,6 +3444,11 @@ class ProjectAgentOrchestratorSingleton {
     error?: string;
   }> {
     return this.instance.executePMSupervisedDataMappingFlow(projectId, datasetMetadata, userGoals, userQuestions);
+  }
+
+  // P2-A FIX: Expose updateProjectCoordinationData to routes for triggering after prepare step
+  async updateProjectCoordinationData(projectId: string): Promise<void> {
+    return this.instance.updateProjectCoordinationData(projectId);
   }
 
   // P1-3: Verify transformation plan with BA/DS agents

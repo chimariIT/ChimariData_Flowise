@@ -345,7 +345,7 @@ export class AgentCoordinationService {
         totalPhases: TOTAL_PHASES,
         status: deResult.status === 'failed' ? 'failed' : 'completed',
         percentComplete: 20,
-        message: `Data Engineer: ${deResult.status === 'failed' ? 'Failed' : 'Quality assessment complete'}`,
+        message: `Data Engineer: ${deResult.status === 'failed' ? 'Failed' : `Quality assessment complete${(deResult as any).qualityScore !== undefined ? ` (score: ${Math.round(Number((deResult as any).qualityScore) * 100)}%)` : ''}${(deResult as any).issues?.length ? ` - ${(deResult as any).issues.length} issue(s) found` : ''}`}`,
         slaCompliant: deMetrics.withinSLA,
         durationMs: deMetrics.durationMs,
         timestamp: new Date().toISOString()
@@ -393,7 +393,7 @@ export class AgentCoordinationService {
         totalPhases: TOTAL_PHASES,
         status: dsResult.status === 'failed' ? 'failed' : 'completed',
         percentComplete: 50,
-        message: `Data Scientist: ${dsResult.status === 'failed' ? 'Failed' : 'Analysis planning complete'}`,
+        message: `Data Scientist: ${dsResult.status === 'failed' ? 'Failed' : `Analysis planning complete${(dsResult as any).recommendedAnalyses?.length ? ` - Recommended: ${(dsResult as any).recommendedAnalyses.slice(0, 3).join(', ')}` : ''}`}`,
         slaCompliant: dsMetrics.withinSLA,
         durationMs: dsMetrics.durationMs,
         timestamp: new Date().toISOString()
@@ -441,7 +441,7 @@ export class AgentCoordinationService {
         totalPhases: TOTAL_PHASES,
         status: 'completed',
         percentComplete: 70,
-        message: 'Business Agent: Business validation complete',
+        message: `Business Agent: ${(baResult as any).status === 'failed' ? 'Validation failed' : `Business validation complete${(baResult as any).kpis?.length ? ` - ${(baResult as any).kpis.length} KPIs identified` : ''}`}`,
         slaCompliant: baMetrics.withinSLA,
         durationMs: baMetrics.durationMs,
         timestamp: new Date().toISOString()
