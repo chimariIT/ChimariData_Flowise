@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -59,12 +60,17 @@ interface ActiveAgent {
     averageResponseTime: number;
 }
 
+// FIX: Check if running in production to warn users about dangerous operations
+const isProduction = import.meta.env.MODE === 'production' || import.meta.env.PROD;
+
 export default function ProjectStateInspector() {
     const [searchTerm, setSearchTerm] = useState("");
     const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState("json-viewer");
     const [targetPhase, setTargetPhase] = useState("prepare");
     const [clearData, setClearData] = useState(false);
+    // FIX: Add confirmation dialog state for dangerous operations
+    // showMergeTestConfirm removed - atomic merge test disabled for production safety
     const queryClient = useQueryClient();
 
     // Fetch all projects for selection
@@ -165,26 +171,7 @@ export default function ProjectStateInspector() {
         }
     });
 
-    // Atomic merge test mutation
-    const atomicMergeTestMutation = useMutation({
-        mutationFn: async (projectId: string) => {
-            const token = localStorage.getItem('auth_token');
-            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-            if (token) headers['Authorization'] = `Bearer ${token}`;
-
-            const response = await fetch(`/api/admin/projects/${projectId}/atomic-merge-test`, {
-                method: 'POST',
-                headers,
-                credentials: 'include',
-                body: JSON.stringify({ testPayload: { _adminTest: true, timestamp: new Date().toISOString() } })
-            });
-            if (!response.ok) throw new Error('Atomic merge test failed');
-            return response.json();
-        },
-        onSuccess: (data) => {
-            refetchProject();
-        }
-    });
+    // Atomic merge test mutation removed - endpoint disabled for production safety
 
     const filteredProjects = projectsData?.filter((p: any) =>
         p.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -662,44 +649,17 @@ export default function ProjectStateInspector() {
                                             </CardContent>
                                         </Card>
 
-                                        {/* Atomic Merge Test */}
-                                        <Card className="p-4">
+                                        {/* Atomic Merge Test - Disabled (backend endpoint removed for safety) */}
+                                        <Card className="p-4 opacity-50">
                                             <CardHeader className="p-0 pb-3">
                                                 <CardTitle className="text-sm flex items-center gap-2">
-                                                    <Beaker className="w-4 h-4 text-purple-600" />
-                                                    Atomic Merge Test (DEC-004)
+                                                    <Beaker className="w-4 h-4 text-gray-400" />
+                                                    Atomic Merge Test (Disabled)
                                                 </CardTitle>
                                                 <CardDescription>
-                                                    Verify JSONB deep merge is working correctly by injecting a test marker
+                                                    This test has been disabled to prevent accidental data modification in production.
                                                 </CardDescription>
                                             </CardHeader>
-                                            <CardContent className="p-0 pt-2">
-                                                <Button
-                                                    variant="outline"
-                                                    onClick={() => atomicMergeTestMutation.mutate(selectedProjectId!)}
-                                                    disabled={atomicMergeTestMutation.isPending}
-                                                >
-                                                    {atomicMergeTestMutation.isPending ? (
-                                                        <>
-                                                            <Beaker className="w-4 h-4 mr-2 animate-bounce" />
-                                                            Running Test...
-                                                        </>
-                                                    ) : (
-                                                        <>
-                                                            <Beaker className="w-4 h-4 mr-2" />
-                                                            Run Atomic Merge Test
-                                                        </>
-                                                    )}
-                                                </Button>
-                                                {atomicMergeTestMutation.isSuccess && (
-                                                    <Alert className="mt-2">
-                                                        <CheckCircle2 className="w-4 h-4" />
-                                                        <AlertDescription>
-                                                            Merge test complete: {atomicMergeTestMutation.data?.testResult?.mergeSuccessful ? 'PASSED' : 'FAILED'}
-                                                        </AlertDescription>
-                                                    </Alert>
-                                                )}
-                                            </CardContent>
                                         </Card>
                                     </div>
                                 </ScrollArea>

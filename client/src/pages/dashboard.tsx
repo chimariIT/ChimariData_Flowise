@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api";
-import { ChartLine, Folder, FileText, Lightbulb, Plus, Search, Calendar, Database, Bell, LogOut, Settings, BarChart3, Target, Brain } from "lucide-react";
+import { ChartLine, Folder, FileText, Lightbulb, Plus, Search, Calendar, Database, Bell, LogOut, Settings, BarChart3, Target, Brain, AlertCircle, RefreshCw } from "lucide-react";
 import UploadModal from "@/components/upload-modal";
 import { AdvancedAnalysisModalLazy } from "@/components/LazyComponents";
 import UpgradeDialog from "@/components/upgrade-dialog";
@@ -50,28 +50,38 @@ export default function Dashboard({ user, onLogout, onProjectSelect, onSettings,
     };
   }, []);
 
-  const { data: projectsData, isLoading, refetch } = useQuery({
+  const { data: projectsData, isLoading, error: projectsError, refetch } = useQuery({
     queryKey: ["/api/projects"],
     queryFn: async () => {
       const result = await apiClient.getProjects();
       return result;
     },
+    refetchOnMount: 'always',
+    staleTime: 0,
+    retry: 2,
   });
 
   const filteredProjects = projectsData?.projects?.filter((project: any) =>
     project.name.toLowerCase().includes(searchQuery.toLowerCase())
   ) || [];
 
-  const stats = {
-    totalProjects: projectsData?.projects?.length || 0,
-  insights: projectsData?.projects?.reduce((acc: number, p: any) => acc + Object.keys(p.insights || {}).length, 0) || 0,
-  files: projectsData?.projects?.length || 0,
-  thisMonth: projectsData?.projects?.filter((p: any) => {
-      const created = new Date(p.createdAt);
-      const now = new Date();
-      return created.getMonth() === now.getMonth() && created.getFullYear() === now.getFullYear();
-    }).length || 0
-  };
+  // MEDIUM PRIORITY FIX: Memoize stats to avoid recalculation on every render
+  const stats = useMemo(() => {
+    const projects = projectsData?.projects || [];
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+
+    return {
+      totalProjects: projects.length,
+      insights: projects.reduce((acc: number, p: any) => acc + Object.keys(p.insights || {}).length, 0),
+      files: projects.length,
+      thisMonth: projects.filter((p: any) => {
+        const created = new Date(p.createdAt);
+        return created.getMonth() === currentMonth && created.getFullYear() === currentYear;
+      }).length
+    };
+  }, [projectsData?.projects]);
 
   const handleLogout = async () => {
     try {
@@ -307,18 +317,44 @@ export default function Dashboard({ user, onLogout, onProjectSelect, onSettings,
                 </div>
               </CardHeader>
               <CardContent>
-                {isLoading ? (
+                {projectsError ? (
+                  <div className="text-center py-8">
+                    <AlertCircle className="w-12 h-12 text-red-400 mx-auto mb-4" />
+                    <p className="text-slate-600 mb-2">Failed to load projects</p>
+                    <p className="text-slate-500 text-sm mb-4">
+                      {projectsError instanceof Error ? projectsError.message : 'An unexpected error occurred'}
+                    </p>
+                    <Button variant="outline" onClick={() => refetch()}>
+                      <RefreshCw className="w-4 h-4 mr-2" />
+                      Try Again
+                    </Button>
+                  </div>
+                ) : isLoading ? (
                   <div className="text-center py-8">
                     <p className="text-slate-600">Loading projects...</p>
                   </div>
                 ) : filteredProjects.length === 0 ? (
                   <div className="text-center py-8">
                     <FileText className="w-12 h-12 text-slate-400 mx-auto mb-4" />
-                    <p className="text-slate-600 mb-2">No projects found</p>
-                    <Button onClick={() => setIsUploadModalOpen(true)}>
-                      <Plus className="w-4 h-4 mr-2" />
-                      Create your first project
-                    </Button>
+                    {/* LOW PRIORITY FIX: Distinguish between no projects vs no search results */}
+                    {projectsData?.projects?.length > 0 ? (
+                      <>
+                        <p className="text-slate-600 mb-2">No projects match "{searchQuery}"</p>
+                        <Button variant="outline" onClick={() => setSearchQuery("")}>
+                          <Search className="w-4 h-4 mr-2" />
+                          Clear search
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-slate-600 mb-2">No projects yet</p>
+                        <p className="text-slate-500 text-sm mb-4">Upload your first dataset to get started</p>
+                        <Button onClick={() => setIsUploadModalOpen(true)}>
+                          <Plus className="w-4 h-4 mr-2" />
+                          Create your first project
+                        </Button>
+                      </>
+                    )}
                   </div>
                 ) : (
                   <div className="grid gap-4">

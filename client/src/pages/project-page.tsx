@@ -27,6 +27,18 @@ interface ProjectPageProps {
   projectId: string;
 }
 
+// MEDIUM PRIORITY FIX: Extract tab configuration to reduce duplication
+const PROJECT_TABS = [
+  { value: 'overview', label: 'Overview', icon: 'Database', testId: 'workflow-tab', requiresJourneyComplete: false },
+  { value: 'agents', label: 'AI Agents', icon: 'Bot', testId: 'agents-tab', requiresJourneyComplete: false },
+  { value: 'datasets', label: 'Data', icon: 'Layers', testId: null, requiresJourneyComplete: false },
+  { value: 'timeline', label: 'Timeline', icon: 'FileText', testId: 'decisions-tab', requiresJourneyComplete: false },
+  { value: 'analysis', label: 'Visualizations', icon: 'BarChart3', testId: null, requiresJourneyComplete: true },
+  { value: 'insights', label: 'Insights', icon: 'Brain', testId: null, requiresJourneyComplete: true },
+] as const;
+
+type TabValue = typeof PROJECT_TABS[number]['value'];
+
 export default function ProjectPage({ projectId }: ProjectPageProps) {
   const [location, setLocation] = useLocation();
   const [activeTab, setActiveTab] = useState("overview");
@@ -41,7 +53,8 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
     },
   });
 
-  const enableSlaMetrics = (import.meta.env.VITE_FEATURE_SLA_METRICS ?? 'true') === 'true';
+  // Feature flag defaults to false for safety - only enable when explicitly set
+  const enableSlaMetrics = import.meta.env.VITE_FEATURE_SLA_METRICS === 'true';
 
   const { data: uploadMetricsSummary, isLoading: isUploadMetricsLoading } = useQuery({
     queryKey: ['performance-metrics', projectId],
@@ -144,6 +157,12 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
       })
       .catch((error) => {
         console.error('Failed to compute resume route:', error);
+        // MEDIUM PRIORITY FIX: Show user feedback when resume fails
+        toast({
+          title: "Resume Failed",
+          description: "Unable to resume your journey. Please try again or select a step manually.",
+          variant: "destructive",
+        });
       });
   }, [journeyState, projectId, location, currentSearch, setLocation]);
 
@@ -158,7 +177,8 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
 
     if (!paymentStatus || !projectId) return;
 
-    hasProcessedPaymentRef.current = true; // Set guard BEFORE async call
+    // Set guard to prevent re-entry while async call is in progress
+    hasProcessedPaymentRef.current = true;
 
     const handlePaymentCallback = async () => {
       if (paymentStatus === 'success' && sessionId) {
@@ -182,14 +202,17 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
           }
         } catch (error: any) {
           console.error('Payment verification error:', error);
+          // Reset guard on failure so user can retry
+          hasProcessedPaymentRef.current = false;
           toast({
             title: "Payment Status",
             description: "If you completed payment, your results will be available shortly.",
             variant: "default"
           });
+          return; // Don't clear URL params on failure so retry is possible
         }
 
-        // Clear URL parameters after processing
+        // Clear URL parameters after successful processing
         const cleanPath = location.split('?')[0];
         setLocation(cleanPath, { replace: true });
       } else if (paymentStatus === 'cancelled') {
@@ -349,8 +372,12 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
                   variant="default"
                   size="sm"
                   className="bg-green-600 hover:bg-green-700"
-                  onClick={() => {
-                    getResumeRoute(projectId, journeyState).then(route => setLocation(route));
+                  onClick={async () => {
+                    // FIX: Use async/await and check route validity (consistent with card button)
+                    const route = await getResumeRoute(projectId, journeyState);
+                    if (route) {
+                      setLocation(route);
+                    }
                   }}
                 >
                   <PlayCircle className="w-4 h-4 mr-2" />
@@ -452,47 +479,27 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
         <Tabs value={activeTab} onValueChange={handleTabChange} className="flex-1 flex flex-col">
           {/* Show journey-relevant tabs only - gate analysis tabs when journey incomplete */}
           {/* CRITICAL: Analysis tabs are gated to ensure users complete the journey flow */}
+          {/* MEDIUM FIX: Tabs now driven by PROJECT_TABS constant for maintainability */}
           <TabsList className="grid w-full mb-3 grid-cols-6">
-            <TabsTrigger value="overview" className="flex items-center gap-1 text-xs" data-testid="workflow-tab">
-              <Database className="w-3 h-3" />
-              Overview
-            </TabsTrigger>
-            <TabsTrigger value="agents" className="flex items-center gap-1 text-xs" data-testid="agents-tab">
-              <Bot className="w-3 h-3" />
-              AI Agents
-            </TabsTrigger>
-            <TabsTrigger value="datasets" className="flex items-center gap-1 text-xs">
-              <Layers className="w-3 h-3" />
-              Data
-            </TabsTrigger>
-            <TabsTrigger value="timeline" className="flex items-center gap-1 text-xs" data-testid="decisions-tab">
-              <FileText className="w-3 h-3" />
-              Timeline
-            </TabsTrigger>
-            {/* Visualizations tab - only enabled when journey is complete */}
-            <TabsTrigger
-              value="analysis"
-              className={`flex items-center gap-1 text-xs ${(!journeyState || journeyState.percentComplete < 100) ? 'opacity-50' : ''}`}
-              disabled={!journeyState || journeyState.percentComplete < 100}
-            >
-              <BarChart3 className="w-3 h-3" />
-              Visualizations
-              {(!journeyState || journeyState.percentComplete < 100) && (
-                <span className="ml-1 text-[10px]">🔒</span>
-              )}
-            </TabsTrigger>
-            {/* Insights tab - only enabled when journey is complete */}
-            <TabsTrigger
-              value="insights"
-              className={`flex items-center gap-1 text-xs ${(!journeyState || journeyState.percentComplete < 100) ? 'opacity-50' : ''}`}
-              disabled={!journeyState || journeyState.percentComplete < 100}
-            >
-              <Brain className="w-3 h-3" />
-              Insights
-              {(!journeyState || journeyState.percentComplete < 100) && (
-                <span className="ml-1 text-[10px]">🔒</span>
-              )}
-            </TabsTrigger>
+            {PROJECT_TABS.map((tab) => {
+              const isJourneyIncomplete = !journeyState || journeyState.percentComplete < 100;
+              const isDisabled = tab.requiresJourneyComplete && isJourneyIncomplete;
+              const IconComponent = { Database, Bot, Layers, FileText, BarChart3, Brain }[tab.icon];
+
+              return (
+                <TabsTrigger
+                  key={tab.value}
+                  value={tab.value}
+                  className={`flex items-center gap-1 text-xs ${isDisabled ? 'opacity-50' : ''}`}
+                  disabled={isDisabled}
+                  data-testid={tab.testId || undefined}
+                >
+                  {IconComponent && <IconComponent className="w-3 h-3" />}
+                  {tab.label}
+                  {isDisabled && <span className="ml-1 text-[10px]">🔒</span>}
+                </TabsTrigger>
+              );
+            })}
           </TabsList>
 
           <TabsContent value="overview" className="mt-6">
