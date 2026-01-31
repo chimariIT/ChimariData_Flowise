@@ -122,6 +122,66 @@ export default function DataVerificationStep({
   // FIX #30: Multi-dataset tab selection - allows viewing each dataset individually
   const [selectedDatasetIndex, setSelectedDatasetIndex] = useState<number>(-1); // -1 = joined view
 
+  // PERMANENT FIX: Single canonical schema resolution used by ALL consumers
+  // (Schema Dialog, Schema Analysis Tab, availableColumns, DataElementsMappingUI, auto-approve)
+  const resolvedSchema = useMemo(() => {
+    const datasets = projectData?.datasets || [];
+    const hasMultiple = datasets.length > 1 ||
+      !!(journeyProgress as any)?.joinedData?.joinConfig;
+
+    // Priority 1: SSOT - journeyProgress.joinedData.schema
+    const jpSchema = (journeyProgress as any)?.joinedData?.schema;
+    if (jpSchema && typeof jpSchema === 'object' && Object.keys(jpSchema).length > 0) {
+      return { schema: jpSchema, isJoined: true, source: 'journeyProgress' as const };
+    }
+
+    // Priority 2: projectData.schema (derivedSchema - built from joined data or merged datasets)
+    if (projectData?.schema && typeof projectData.schema === 'object' &&
+        Object.keys(projectData.schema).length > 0) {
+      return { schema: projectData.schema, isJoined: hasMultiple, source: 'projectData' as const };
+    }
+
+    // Priority 3: schemaAnalysis from API
+    if (schemaAnalysis?.schema && typeof schemaAnalysis.schema === 'object' &&
+        Object.keys(schemaAnalysis.schema).length > 0) {
+      return {
+        schema: schemaAnalysis.schema,
+        isJoined: schemaAnalysis.isJoinedSchema || false,
+        source: 'schemaAnalysis' as const
+      };
+    }
+
+    // Priority 4: Build merged from individual dataset objects (with proper unwrapping)
+    if (hasMultiple && datasets.length > 1) {
+      const merged: Record<string, any> = {};
+      for (const ds of datasets) {
+        const dsData = ds?.dataset || ds || {};
+        const dsSchema = dsData.ingestionMetadata?.transformedSchema ||
+                         dsData.ingestionMetadata?.schema ||
+                         dsData.metadata?.schema || dsData.schema;
+        if (dsSchema && typeof dsSchema === 'object') {
+          for (const [col, type] of Object.entries(dsSchema)) {
+            if (!merged[col]) merged[col] = type;
+          }
+        }
+      }
+      if (Object.keys(merged).length > 0) {
+        return { schema: merged, isJoined: true, source: 'merged-datasets' as const };
+      }
+    }
+
+    // Priority 5: Single dataset fallback
+    if (datasets.length > 0) {
+      const dsData = datasets[0]?.dataset || datasets[0] || {};
+      const dsSchema = dsData.ingestionMetadata?.schema || dsData.metadata?.schema || dsData.schema;
+      if (dsSchema && typeof dsSchema === 'object' && Object.keys(dsSchema).length > 0) {
+        return { schema: dsSchema, isJoined: false, source: 'single-dataset' as const };
+      }
+    }
+
+    return { schema: {} as Record<string, any>, isJoined: false, source: 'empty' as const };
+  }, [journeyProgress, projectData, schemaAnalysis]);
+
   // CRITICAL: Track when force refresh completes to prevent fallback race condition
   const [hasCompletedRefresh, setHasCompletedRefresh] = useState(false);
 
@@ -245,35 +305,26 @@ export default function DataVerificationStep({
     })
     : [];
 
-  // FIX: Use joined schema from journeyProgress for availableColumns (SSOT)
+  // Uses centralized resolvedSchema (SSOT) for available columns
   const availableColumns = useMemo(() => {
-    // Priority 1: Use joined schema from journeyProgress (SSOT)
-    const joinedSchema = journeyProgress?.joinedData?.schema;
-    if (joinedSchema && typeof joinedSchema === 'object') {
-      const columns = Array.isArray(joinedSchema) 
-        ? joinedSchema.map((col: any) => col.name || col.column || col)
-        : Object.keys(joinedSchema);
+    const schema = resolvedSchema.schema;
+    if (schema && typeof schema === 'object') {
+      const columns = Array.isArray(schema)
+        ? schema.map((col: any) => col.name || col.column || col)
+        : Object.keys(schema);
       if (columns.length > 0) {
-        console.log(`📊 [SSOT] Using ${columns.length} columns from joined schema for mapping`);
+        console.log(`📊 [resolvedSchema] Using ${columns.length} columns from ${resolvedSchema.source} for mapping`);
         return columns;
       }
     }
-    
-    // Priority 2: Use projectData schema (which should be joined schema)
-    if (projectData?.schema && typeof projectData.schema === 'object') {
-      const columns = Array.isArray(projectData.schema)
-        ? projectData.schema.map((col: any) => col.name || col.column || col)
-        : Object.keys(projectData.schema);
-      if (columns.length > 0) return columns;
-    }
-    
-    // Priority 3: Infer from preview data
+
+    // Final fallback: Infer from preview data
     if (Array.isArray(projectData?.preview) && projectData.preview.length > 0) {
       return Object.keys(projectData.preview[0] ?? {});
     }
-    
+
     return [];
-  }, [projectData, journeyProgress?.joinedData?.schema]);
+  }, [resolvedSchema, projectData?.preview]);
 
   const requiredElements = useMemo(() => {
     if (!requiredDataElements) {
@@ -1077,9 +1128,9 @@ useEffect(() => {
     updateVerificationStatus('dataQuality', true);
   }
 
-  // Auto-approve schema validation if schema exists and has columns
-  if (schemaAnalysis && projectData?.schema && Object.keys(projectData.schema).length > 0 && !verificationStatus.schemaValidation) {
-    console.log('✅ Auto-approving schema validation');
+  // Auto-approve schema validation if resolved schema has columns
+  if (Object.keys(resolvedSchema.schema).length > 0 && !verificationStatus.schemaValidation) {
+    console.log('✅ Auto-approving schema validation (source:', resolvedSchema.source, ')');
     updateVerificationStatus('schemaValidation', true);
   }
 
@@ -1089,7 +1140,7 @@ useEffect(() => {
     setPiiReviewCompleted(true);
     updateVerificationStatus('piiReview', true);
   }
-}, [isLoading, dataQuality, qualityScore, schemaAnalysis, projectData, piiResults, verificationStatus]);
+}, [isLoading, dataQuality, qualityScore, resolvedSchema, projectData, piiResults, verificationStatus]);
 
 const handlePIIReview = () => {
   if (piiResults && piiResults.detectedPII?.length > 0) {
@@ -2188,33 +2239,23 @@ return (
             </CardHeader>
             <CardContent>
               {(() => {
-                // FIX: Use joined schema from journeyProgress (SSOT) instead of individual dataset schema
-                const joinedSchema = journeyProgress?.joinedData?.schema || projectData?.schema;
-                const schemaToDisplay = joinedSchema || schemaAnalysis?.schema;
-                const columnCount = joinedSchema 
-                  ? (Array.isArray(joinedSchema) ? joinedSchema.length : Object.keys(joinedSchema).length)
-                  : (schemaAnalysis?.totalColumns || Object.keys(schemaAnalysis?.schema || {}).length);
-                const columnNames = joinedSchema
-                  ? (Array.isArray(joinedSchema) 
-                      ? joinedSchema.map((col: any) => col.name || col.column || col)
-                      : Object.keys(joinedSchema))
-                  : (schemaAnalysis?.columnNames || []);
-                const columnTypes = joinedSchema && !Array.isArray(joinedSchema)
-                  ? Object.entries(joinedSchema).reduce((acc: Record<string, number>, [_, type]) => {
-                      // FIX: Handle both string and rich metadata object formats
-                      const typeStr = typeof type === 'string'
-                        ? type
-                        : (type as any)?.type || (type as any)?.dataType || 'unknown';
-                      acc[typeStr] = (acc[typeStr] || 0) + 1;
-                      return acc;
-                    }, {})
-                  : (schemaAnalysis?.columnTypes || {});
+                // Uses centralized resolvedSchema for consistent display
+                const schemaToDisplay = resolvedSchema.schema;
+                const columnCount = Object.keys(schemaToDisplay).length;
+                const columnNames = Object.keys(schemaToDisplay);
+                const columnTypes = Object.entries(schemaToDisplay).reduce((acc: Record<string, number>, [_, type]) => {
+                  const typeStr = typeof type === 'string'
+                    ? type
+                    : (type as any)?.type || (type as any)?.dataType || 'unknown';
+                  acc[typeStr] = (acc[typeStr] || 0) + 1;
+                  return acc;
+                }, {});
 
-                return schemaToDisplay ? (
+                return columnCount > 0 ? (
                 <div className="space-y-4">
                   <div className="grid gap-4">
                     <div>
-                      <h4 className="font-semibold mb-2">Detected Schema {joinedSchema ? '(Joined Dataset)' : ''}</h4>
+                      <h4 className="font-semibold mb-2">Detected Schema {resolvedSchema.isJoined ? '(Joined Dataset)' : ''}</h4>
                       <p className="text-sm text-gray-600 mb-4">
                         Total columns: {columnCount}
                       </p>
@@ -2389,7 +2430,7 @@ return (
                 <DataElementsMappingUI
                   requiredDataElements={requiredElements}
                   availableColumns={availableColumns}
-                  schema={projectData?.schema || projectData?.joinedSchema || {}}
+                  schema={resolvedSchema.schema}
                   sampleData={
                     Array.isArray(projectData?.joinedPreview) && projectData.joinedPreview.length > 0
                       ? projectData.joinedPreview.slice(0, 10)
@@ -2727,78 +2768,14 @@ return (
     {/* Schema Validation Dialog */}
     {
       showSchemaDialog && (() => {
-        // FIX: Prioritize joined schema from journeyProgress (SSOT for multi-dataset)
-        // Priority 1: journeyProgress.joinedData.schema (SSOT)
-        // Priority 2: schemaAnalysis.schema from API (fallback)
-        const hasMultipleDatasets = (projectData?.datasets?.length ?? 0) > 1 ||
-                                    !!(journeyProgress as any)?.joinedData?.joinConfig;
+        // PERMANENT FIX: Use centralized resolvedSchema instead of inline resolution
+        console.log(`📊 [Schema Dialog] Using resolvedSchema from '${resolvedSchema.source}' with ${Object.keys(resolvedSchema.schema).length} columns (isJoined: ${resolvedSchema.isJoined})`);
 
-        let schemaSource: Record<string, any> = {};
-        let isJoinedSchema = false;
         const datasetCount = projectData?.datasets?.length || 1;
-
-        // Check journeyProgress.joinedData.schema first (SSOT for joined datasets)
-        const joinedSchema = (journeyProgress as any)?.joinedData?.schema;
-        if (hasMultipleDatasets && joinedSchema && typeof joinedSchema === 'object' && Object.keys(joinedSchema).length > 0) {
-          schemaSource = joinedSchema;
-          isJoinedSchema = true;
-          console.log(`📊 [Schema Dialog] Using JOINED schema from journeyProgress with ${Object.keys(schemaSource).length} columns`);
-        } else if (schemaAnalysis?.schema && typeof schemaAnalysis.schema === 'object') {
-          // Fallback to API response schema
-          schemaSource = schemaAnalysis.schema;
-          isJoinedSchema = schemaAnalysis.isJoinedSchema || false;
-          console.log(`📊 [Schema Dialog] Using API schema (isJoined: ${isJoinedSchema}) with ${Object.keys(schemaSource).length} columns`);
-        } else if (Array.isArray(schemaAnalysis?.columnNames) && schemaAnalysis.columnNames.length > 0) {
-          // Last resort: Create schema from column names only
-          schemaSource = Object.fromEntries(
-            schemaAnalysis.columnNames.map((col: string) => [col, 'string'])
-          );
-          console.log(`📊 [Schema Dialog] Created schema from column names with ${Object.keys(schemaSource).length} columns`);
-        }
-
-        // PHASE 5 FIX: For multi-dataset scenarios, ALWAYS build merged schema from datasets
-        // This ensures we show the complete joined schema, not just one dataset's schema
-        const datasets = projectData?.datasets || [];
-        console.log(`📊 [Schema Dialog] Multi-dataset check: hasMultiple=${hasMultipleDatasets}, datasetCount=${datasets.length}, currentSchemaIsJoined=${isJoinedSchema}`);
-
-        if (hasMultipleDatasets && datasets.length > 1) {
-          // Force build merged schema for multi-dataset scenarios
-          const mergedSchema: Record<string, any> = {};
-          datasets.forEach((ds: any, idx: number) => {
-            const dsSchema = ds.ingestionMetadata?.transformedSchema ||
-                            ds.metadata?.transformedSchema ||
-                            ds.ingestionMetadata?.schema ||
-                            ds.metadata?.schema ||
-                            ds.schema;
-            console.log(`📊 [Schema Dialog] Dataset ${idx} schema source:`, dsSchema ? Object.keys(dsSchema).length + ' columns' : 'none');
-            if (dsSchema && typeof dsSchema === 'object') {
-              for (const [col, type] of Object.entries(dsSchema)) {
-                if (!mergedSchema[col]) {
-                  mergedSchema[col] = type;
-                }
-              }
-            }
-          });
-          if (Object.keys(mergedSchema).length > 0) {
-            schemaSource = mergedSchema;
-            isJoinedSchema = true;
-            console.log(`📊 [Schema Dialog] Built MERGED schema from ${datasets.length} datasets with ${Object.keys(mergedSchema).length} columns`);
-          } else {
-            console.warn(`⚠️ [Schema Dialog] Could not build merged schema from datasets - no valid schemas found`);
-          }
-        } else if (Object.keys(schemaSource).length === 0 && datasets.length === 1) {
-          // Single dataset fallback
-          const ds = datasets[0];
-          const dsSchema = ds?.ingestionMetadata?.schema || ds?.metadata?.schema || ds?.schema;
-          if (dsSchema && typeof dsSchema === 'object') {
-            schemaSource = dsSchema;
-            console.log(`📊 [Schema Dialog] Using single dataset schema with ${Object.keys(schemaSource).length} columns`);
-          }
-        }
 
         // Convert schema to flat Record<string, string> format for the dialog
         const flatSchema: Record<string, string> = Object.fromEntries(
-          Object.entries(schemaSource).map(([key, value]) => [
+          Object.entries(resolvedSchema.schema).map(([key, value]) => [
             key,
             typeof value === 'string' ? value : (value as any)?.type || 'string'
           ])
@@ -2806,7 +2783,7 @@ return (
 
         // Get appropriate sample data - prefer joined preview for multi-dataset
         const joinedPreview = (journeyProgress as any)?.joinedData?.preview;
-        const sampleData = (isJoinedSchema && Array.isArray(joinedPreview) && joinedPreview.length > 0)
+        const sampleData = (resolvedSchema.isJoined && Array.isArray(joinedPreview) && joinedPreview.length > 0)
           ? joinedPreview
           : (Array.isArray(projectData?.preview) ? projectData.preview :
              Array.isArray(projectData?.sampleData) ? projectData.sampleData : []);
@@ -2818,7 +2795,7 @@ return (
             onConfirm={handleSchemaConfirm}
             detectedSchema={flatSchema}
             sampleData={sampleData}
-            isJoinedSchema={isJoinedSchema}
+            isJoinedSchema={resolvedSchema.isJoined}
             datasetCount={datasetCount}
           />
         );

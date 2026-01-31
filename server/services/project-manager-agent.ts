@@ -1255,13 +1255,18 @@ export class ProjectManagerAgent {
 
             let dataAssessment: DataAssessment;
             try {
-                const result = await this.technicalAgent.executeTool('assess_data_quality', {
-                    projectId,
-                    schema: schemaSource || {},
-                    data: dataSample,
-                    goals: goals[0] ?? '',
-                    questions
-                });
+                const result = await withTimeout(
+                    this.technicalAgent.executeTool('assess_data_quality', {
+                        projectId,
+                        schema: schemaSource || {},
+                        data: dataSample,
+                        goals: goals[0] ?? '',
+                        questions
+                    }),
+                    20000,
+                    { result: this.buildFallbackDataAssessment(primaryDataset) },
+                    'Data quality assessment'
+                );
                 dataAssessment = result.result as DataAssessment;
             } catch (error) {
                 console.warn(`Project Manager Agent: Data assessment failed for project ${projectId}`, error);
@@ -1341,14 +1346,19 @@ export class ProjectManagerAgent {
                     journeyType: projectRecord.journeyType || 'non-tech'
                 });
 
-                // Call BA Agent's actual method directly
-                businessContext = await this.businessAgent.provideBusinessContext({
-                    journeyType: projectRecord.journeyType || 'non-tech',
-                    industry,
-                    goals,
-                    analysisTypes: analysisContext.analysisTypes,
-                    dataAssessment
-                });
+                // Call BA Agent's actual method directly, with 20s timeout
+                businessContext = await withTimeout(
+                    this.businessAgent.provideBusinessContext({
+                        journeyType: projectRecord.journeyType || 'non-tech',
+                        industry,
+                        goals,
+                        analysisTypes: analysisContext.analysisTypes,
+                        dataAssessment
+                    }),
+                    20000,
+                    defaultBusinessContext,
+                    'Business context generation'
+                );
 
                 console.log(`✅ [PM Agent] BA Agent returned:`, {
                     kpiCount: businessContext?.relevantKPIs?.length || 0,
