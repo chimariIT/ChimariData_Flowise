@@ -2938,6 +2938,8 @@ router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, r
             descriptiveStats: processedData.descriptiveStats,
             qualityMetrics: processedData.qualityMetrics,
             relationships: processedData.relationships,
+            columnTypes: processedData.columnTypes,
+            validationResults: processedData.validationResults,
             preview: processedData.preview?.slice(0, 20) ?? [],
             generatedAt: new Date().toISOString()
         };
@@ -3992,6 +3994,34 @@ router.put("/:id/verify", ensureAuthenticated, async (req, res) => {
             // Continue anyway - user can manually configure in transformation step
         }
 
+        // Generate column embeddings for semantic mapping (non-blocking)
+        // This ensures embeddings exist BEFORE transformation step needs them
+        try {
+            const embDatasets = await storage.getProjectDatasets(projectId);
+            for (const entry of embDatasets) {
+                const ds = (entry as any).dataset || entry;
+                const dsSchema = ds.ingestionMetadata?.schema || ds.schema;
+                if (dsSchema && typeof dsSchema === 'object') {
+                    columnEmbeddingGenerator.generateEmbeddingsForDataset({
+                        datasetId: ds.id,
+                        projectId,
+                        columns: Object.entries(dsSchema).map(([name, type]: [string, any]) => ({
+                            name,
+                            type: typeof type === 'string' ? type : (type?.type || String(type)),
+                            sampleValues: Array.isArray(type?.sampleValues) ? type.sampleValues.slice(0, 5) : []
+                        }))
+                    }).then(() => {
+                        console.log(`✅ [Verify] Column embeddings generated for dataset ${ds.id}`);
+                    }).catch((embErr: any) => {
+                        console.warn(`⚠️ [Verify] Column embedding generation failed for dataset ${ds.id} (non-blocking):`, embErr?.message || embErr);
+                    });
+                }
+            }
+            console.log(`🔗 [Verify] Column embedding generation triggered for ${embDatasets.length} dataset(s)`);
+        } catch (embError) {
+            console.warn(`⚠️ [Verify] Could not trigger column embedding generation:`, embError);
+        }
+
         // P2-A FIX: Update agent coordination data after verification step
         // This refreshes multiAgentCoordination with latest data quality info
         try {
@@ -4270,6 +4300,8 @@ router.post("/:id/upload", ensureAuthenticated, upload.single('file'), async (re
             descriptiveStats: processedData.descriptiveStats,
             qualityMetrics: processedData.qualityMetrics,
             relationships: processedData.relationships,
+            columnTypes: processedData.columnTypes,
+            validationResults: processedData.validationResults,
             generatedAt: new Date().toISOString()
         };
 
@@ -4826,20 +4858,62 @@ router.get("/:id/schema-analysis", ensureAuthenticated, requireOwnership('projec
         const journeyProgress = (project as any)?.journeyProgress || {};
         const joinedSchema = journeyProgress.joinedData?.schema || journeyProgress.transformedSchema;
 
-        // Use joined schema if available (multiple datasets), otherwise use first dataset schema
-        const schema = joinedSchema || (datasetRecord as any)?.schema || {};
-        const isJoinedSchema = !!joinedSchema;
+        // Build schema: joined first, then merged from ALL datasets, then single dataset fallback
+        let schema: Record<string, any> = {};
+        let isJoinedSchema = false;
+        if (joinedSchema && Object.keys(joinedSchema).length > 0) {
+            schema = joinedSchema;
+            isJoinedSchema = true;
+        } else if (datasets && datasets.length > 1) {
+            // Multi-dataset: merge schemas from ALL datasets
+            const mergedSchema: Record<string, any> = {};
+            datasets.forEach((entry: any) => {
+                const ds = entry.dataset || entry;
+                const dsSchema = ds.ingestionMetadata?.schema || ds.metadata?.schema || ds.schema;
+                if (dsSchema && typeof dsSchema === 'object') {
+                    Object.entries(dsSchema).forEach(([col, type]) => {
+                        if (!mergedSchema[col]) {
+                            mergedSchema[col] = type;
+                        }
+                    });
+                }
+            });
+            schema = mergedSchema;
+            isJoinedSchema = true; // Treat merged as joined for display purposes
+        } else {
+            schema = (datasetRecord as any)?.schema || {};
+        }
 
-        console.log(`📊 [Schema Analysis] Using ${isJoinedSchema ? 'JOINED' : 'individual'} schema with ${Object.keys(schema).length} columns`);
+        console.log(`📊 [Schema Analysis] Using ${isJoinedSchema ? 'MERGED/JOINED' : 'individual'} schema with ${Object.keys(schema).length} columns from ${datasets?.length || 0} dataset(s)`);
 
+        // Merge ingestion metadata from all datasets for multi-dataset projects
         const ingestionMetadata = (datasetRecord as any)?.ingestionMetadata || {};
         const datasetSummary = ingestionMetadata?.datasetSummary || null;
-        const descriptiveStatsByColumn = ingestionMetadata?.descriptiveStats || null;
-        const inferredRelationships = Array.isArray(ingestionMetadata?.relationships)
+        let descriptiveStatsByColumn = ingestionMetadata?.descriptiveStats || null;
+        let inferredRelationships = Array.isArray(ingestionMetadata?.relationships)
             ? ingestionMetadata.relationships
             : Array.isArray((datasetRecord as any)?.relationships)
                 ? (datasetRecord as any).relationships
                 : [];
+
+        // For multi-dataset projects, merge stats and relationships from all datasets
+        if (datasets && datasets.length > 1) {
+            const mergedStats: Record<string, any> = { ...(descriptiveStatsByColumn || {}) };
+            const mergedRelationships: any[] = [...inferredRelationships];
+            datasets.slice(1).forEach((entry: any) => {
+                const ds = entry.dataset || entry;
+                const meta = ds.ingestionMetadata || {};
+                if (meta.descriptiveStats) {
+                    Object.entries(meta.descriptiveStats).forEach(([col, stats]) => {
+                        if (!mergedStats[col]) mergedStats[col] = stats;
+                    });
+                }
+                const rels = Array.isArray(meta.relationships) ? meta.relationships : (Array.isArray(ds.relationships) ? ds.relationships : []);
+                mergedRelationships.push(...rels);
+            });
+            descriptiveStatsByColumn = mergedStats;
+            inferredRelationships = mergedRelationships;
+        }
         const schemaEntries = Object.entries(schema as Record<string, any>);
 
         const columnDetails = schemaEntries.map(([columnName, columnInfo]) => ({
@@ -6639,6 +6713,84 @@ router.put('/:id', ensureAuthenticated, async (req, res) => {
 // NOTE: Duplicate minimal datasets endpoint removed - use GET /:projectId/datasets instead
 // which includes joinedSchema, joinedPreview, and joinInsights
 
+/**
+ * POST /api/projects/:id/restart
+ * Restarts a failed project from the last successful step
+ * Preserves user data (uploads, goals, questions) but clears failed state
+ */
+router.post("/:id/restart", ensureAuthenticated, async (req, res) => {
+    try {
+        const { id: projectId } = req.params;
+        const userId = (req.user as any)?.id;
+        const userIsAdmin = (req.user as any)?.isAdmin || false;
+
+        if (!userId) {
+            return res.status(401).json({ success: false, error: 'Authentication required' });
+        }
+
+        const access = await canAccessProject(userId, projectId, userIsAdmin);
+        if (!access.allowed) {
+            return res.status(403).json({ success: false, error: access.reason });
+        }
+
+        const project = access.project as any;
+        const journeyProgress = project.journeyProgress || {};
+        const completedSteps = journeyProgress.completedSteps || [];
+
+        // Determine restart point: last completed step, or beginning
+        const stepOrder = ['upload', 'verify', 'goals', 'plan', 'transform', 'execute', 'pricing', 'results'];
+        let restartStep = 'upload';
+        for (const step of stepOrder) {
+            if (completedSteps.includes(step)) {
+                const nextIndex = stepOrder.indexOf(step) + 1;
+                if (nextIndex < stepOrder.length) {
+                    restartStep = stepOrder[nextIndex];
+                }
+            }
+        }
+
+        // Clear fields from the failed step onwards
+        const clearFields: any = {
+            status: 'active',
+            analysisResults: null,
+            analysisExecutedAt: null,
+            analysisBilledAt: null,
+            paymentStatus: null,
+            paymentSessionId: null,
+            updatedAt: new Date(),
+            journeyProgress: {
+                ...journeyProgress,
+                currentStep: restartStep,
+                // Keep completedSteps as-is (preserves what succeeded)
+                // Clear execution/payment state
+                lockedCostEstimate: undefined,
+                costLockedAt: undefined,
+                paymentStatus: undefined,
+                paymentCompletedAt: undefined,
+                executionStartedAt: undefined,
+                executionCompletedAt: undefined,
+            }
+        };
+
+        await storage.updateProject(projectId, clearFields);
+
+        console.log(`✅ [Restart] Project ${projectId} restarted to step '${restartStep}'. Completed: [${completedSteps.join(', ')}]`);
+
+        return res.json({
+            success: true,
+            restartStep,
+            completedSteps,
+            message: `Project restarted from "${restartStep}" step`
+        });
+    } catch (error: any) {
+        console.error('❌ [Restart] Error restarting project:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Failed to restart project'
+        });
+    }
+});
+
 export default router;
 
 // Export project data/results in various formats
@@ -7889,7 +8041,8 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
                 reasoning: joinConfig?.foreignKeys?.length > 0
                     ? `Multi-dataset join performed with ${joinConfig.foreignKeys.length} key mapping(s)`
                     : 'Single dataset transformation',
-                evidence: JSON.stringify({
+                alternatives: JSON.stringify([]),
+                context: JSON.stringify({
                     transformationSteps: transformationSteps.map((s: any) => s.type || s),
                     joinConfig: joinConfig || null,
                     resultRowCount: workingData.length,
@@ -7897,8 +8050,9 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
                     mappingsCount: mappings?.length || 0,
                     questionAnswerMappingCount: questionAnswerMapping?.length || 0
                 }),
-                appliedAt: new Date(),
-                createdAt: new Date()
+                impact: 'high',
+                reversible: true,
+                timestamp: new Date()
             });
             console.log(`✅ [GAP 3 FIX] Transformation decision logged to audit trail`);
         } catch (auditError) {
@@ -8932,7 +9086,7 @@ router.get("/:id/cost-estimate", ensureAuthenticated, requireOwnership('project'
             analysisExecution: number;
             rowsProcessed: number;
             analysisTypes: number;
-            perAnalysisBreakdown: Array<{ type: string; cost: number }>;
+            perAnalysisBreakdown: Array<{ type: string; cost: number; factor?: number }>;
         } = {
             basePlatformFee: 0,
             dataProcessing: 0,
@@ -8952,7 +9106,8 @@ router.get("/:id/cost-estimate", ensureAuthenticated, requireOwnership('project'
                 // Individual analysis item - add to per-analysis breakdown
                 breakdownSummary.perAnalysisBreakdown.push({
                     type: item.item.replace(' Analysis', ''),
-                    cost: item.cost
+                    cost: item.cost,
+                    factor: item.factor
                 });
                 breakdownSummary.analysisExecution += item.cost;
             } else if (item.item.includes('Generation')) {

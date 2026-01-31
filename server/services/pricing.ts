@@ -25,6 +25,9 @@ export interface LLMCost {
 
 // Import shared pricing constants for consistency
 import { PRICING_CONSTANTS } from '../../shared/pricing-config';
+import { db } from '../db';
+import { analysisPricingConfig } from '../../shared/schema';
+import { eq } from 'drizzle-orm';
 
 // PHASE 6: Admin-configurable analysis pricing
 export interface AnalysisPricingConfig {
@@ -77,8 +80,9 @@ const DEFAULT_PRICING_CONFIG: AnalysisPricingConfig = {
 };
 
 export class PricingService {
-    // Dynamic pricing config - can be updated by admin
+    // In-memory cache of pricing config (loaded from DB, falls back to defaults)
     private static pricingConfig: AnalysisPricingConfig = { ...DEFAULT_PRICING_CONFIG };
+    private static dbLoaded = false;
 
     // Legacy static costFactors for backwards compatibility
     private static costFactors = {
@@ -91,6 +95,60 @@ export class PricingService {
     };
 
     /**
+     * Load pricing config from DB on startup. Falls back to PRICING_CONSTANTS defaults.
+     * Called once at server initialization.
+     */
+    static async loadFromDatabase(): Promise<void> {
+        try {
+            const [row] = await db.select().from(analysisPricingConfig)
+                .where(eq(analysisPricingConfig.id, 'default'))
+                .limit(1);
+
+            if (row && row.config && typeof row.config === 'object') {
+                const dbConfig = row.config as Partial<AnalysisPricingConfig>;
+                this.pricingConfig = {
+                    ...DEFAULT_PRICING_CONFIG,
+                    ...dbConfig,
+                    complexityMultipliers: {
+                        ...DEFAULT_PRICING_CONFIG.complexityMultipliers,
+                        ...(dbConfig.complexityMultipliers || {})
+                    },
+                    analysisTypeFactors: {
+                        ...DEFAULT_PRICING_CONFIG.analysisTypeFactors,
+                        ...(dbConfig.analysisTypeFactors || {})
+                    }
+                };
+                this.syncLegacyCostFactors();
+                console.log('💲 [PricingService] Loaded pricing config from database');
+            } else {
+                // No DB row yet - seed with defaults
+                await this.seedDefaults();
+                console.log('💲 [PricingService] Seeded default pricing config to database');
+            }
+            this.dbLoaded = true;
+        } catch (error) {
+            console.warn('⚠️ [PricingService] Could not load from DB, using in-memory defaults:', (error as Error).message);
+            this.dbLoaded = false;
+        }
+    }
+
+    /**
+     * Seed default pricing config to DB (first run)
+     */
+    private static async seedDefaults(): Promise<void> {
+        try {
+            await db.insert(analysisPricingConfig).values({
+                id: 'default',
+                config: DEFAULT_PRICING_CONFIG as any,
+                updatedAt: new Date(),
+                updatedBy: 'system'
+            }).onConflictDoNothing();
+        } catch (error) {
+            console.warn('[PricingService] Seed defaults failed:', (error as Error).message);
+        }
+    }
+
+    /**
      * Get current pricing configuration (for admin UI)
      */
     static getPricingConfig(): AnalysisPricingConfig {
@@ -98,7 +156,7 @@ export class PricingService {
     }
 
     /**
-     * Update pricing configuration (from admin UI)
+     * Update pricing configuration (from admin UI) - persists to DB
      */
     static updatePricingConfig(newConfig: Partial<AnalysisPricingConfig>): AnalysisPricingConfig {
         this.pricingConfig = {
@@ -114,7 +172,48 @@ export class PricingService {
             }
         };
 
-        // Also update legacy costFactors for backward compatibility
+        this.syncLegacyCostFactors();
+        console.log(`✅ [PricingService] Updated pricing config:`, this.pricingConfig);
+
+        // Persist to DB (non-blocking)
+        this.persistToDatabase().catch(err =>
+            console.error('[PricingService] Failed to persist config to DB:', err.message)
+        );
+
+        return this.getPricingConfig();
+    }
+
+    /**
+     * Persist current config to database
+     */
+    private static async persistToDatabase(): Promise<void> {
+        try {
+            const existing = await db.select({ id: analysisPricingConfig.id })
+                .from(analysisPricingConfig)
+                .where(eq(analysisPricingConfig.id, 'default'))
+                .limit(1);
+
+            if (existing.length > 0) {
+                await db.update(analysisPricingConfig)
+                    .set({
+                        config: this.pricingConfig as any,
+                        updatedAt: new Date()
+                    })
+                    .where(eq(analysisPricingConfig.id, 'default'));
+            } else {
+                await db.insert(analysisPricingConfig).values({
+                    id: 'default',
+                    config: this.pricingConfig as any,
+                    updatedAt: new Date(),
+                    updatedBy: 'admin'
+                });
+            }
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    private static syncLegacyCostFactors(): void {
         this.costFactors = {
             statistical: this.pricingConfig.analysisTypeFactors.statistical,
             machine_learning: this.pricingConfig.analysisTypeFactors.machine_learning,
@@ -123,16 +222,20 @@ export class PricingService {
             time_series: this.pricingConfig.analysisTypeFactors.time_series,
             default: this.pricingConfig.analysisTypeFactors.default
         };
-
-        console.log(`✅ [PricingService] Updated pricing config:`, this.pricingConfig);
-        return this.getPricingConfig();
     }
 
     /**
-     * Reset pricing to defaults
+     * Reset pricing to defaults and persist
      */
     static resetPricingConfig(): AnalysisPricingConfig {
         this.pricingConfig = { ...DEFAULT_PRICING_CONFIG };
+        this.syncLegacyCostFactors();
+
+        // Persist reset to DB
+        this.persistToDatabase().catch(err =>
+            console.error('[PricingService] Failed to persist reset to DB:', err.message)
+        );
+
         return this.getPricingConfig();
     }
 

@@ -153,6 +153,38 @@ export default function UserQuestionAnswers({ project, className = "", isPaid = 
         );
     }
 
+    // Show failure state when Q&A generation failed
+    if (questionAnswers.length === 0 && aiGeneratedQA?.status === 'failed') {
+        return (
+            <Card className={`${className} border-orange-200`}>
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                        <AlertCircle className="w-5 h-5 text-orange-600" />
+                        AI-Powered Answers Unavailable
+                    </CardTitle>
+                    <CardDescription>
+                        Q&A generation encountered an issue during analysis
+                    </CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <div className="p-4 bg-orange-50 border border-orange-200 rounded-lg space-y-3">
+                        <p className="text-sm text-orange-800">
+                            We were unable to generate AI-powered answers to your questions.
+                            {aiGeneratedQA.error && (
+                                <span className="block text-xs text-orange-600 mt-1">
+                                    Reason: {aiGeneratedQA.error}
+                                </span>
+                            )}
+                        </p>
+                        <p className="text-sm text-orange-700">
+                            Your analysis results, insights, and visualizations are still available below.
+                        </p>
+                    </div>
+                </CardContent>
+            </Card>
+        );
+    }
+
     if (questionAnswers.length === 0) return null;
 
     const getStatusIcon = (status: QuestionAnswer['status']) => {

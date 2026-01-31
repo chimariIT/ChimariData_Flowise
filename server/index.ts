@@ -16,6 +16,7 @@ import { initializeAgents } from './services/agent-initialization';
 import { initializeTools } from './services/tool-initialization';
 import { registerCoreTools } from './services/mcp-tool-registry';
 import { initializePythonWorkerPool } from './services/python-worker-pool';
+import { PricingService } from './services/pricing';
 import { SocketManager } from './socket-manager';
 
 const app = express();
@@ -164,6 +165,9 @@ let server: Server;
   };
 
   try {
+    // Load pricing configuration from database (or seed defaults)
+    await PricingService.loadFromDatabase();
+
     // Initialize agents first
     initializationState.agentInitializationCalled = true;
     const agentStartTime = Date.now();

@@ -322,11 +322,9 @@ export class WebSocketLifecycleManager {
    * Simulate reconnection attempt (would be replaced with actual logic)
    */
   private async simulateReconnection(clientId: string): Promise<boolean> {
-    // Simulate network delay
-    await new Promise(resolve => setTimeout(resolve, 100));
-    
-    // Simulate 70% success rate for testing
-    return Math.random() > 0.3;
+    // Actual reconnection is handled by the ws library.
+    // This stub always returns true - real connection state is checked elsewhere.
+    return true;
   }
 
   /**

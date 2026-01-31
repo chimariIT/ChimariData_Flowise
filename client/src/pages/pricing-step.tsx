@@ -25,6 +25,7 @@ import BillingCapacityDisplay from "@/components/BillingCapacityDisplay";
 import { useProject } from "@/hooks/useProject";
 import { useJourneyState } from "@/hooks/useJourneyState";
 import { useToast } from "@/hooks/use-toast";
+import { PRICING_CONSTANTS, getAnalysisTypeFactor } from "@shared/pricing-config";
 
 interface PricingStepProps {
   journeyType: string;
@@ -379,30 +380,40 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
     return analysisResults.dataSize || 0;
   }, [datasets, analysisResults.dataSize]);
 
-  // Client-side fallback pricing aligned with CostEstimationService
+  // Client-side fallback pricing aligned with UnifiedBillingService
   // Only used when backend estimate is unavailable (Priority 4 in authoritativeCostCents)
   const calculatePricing = useMemo(() => {
-    const basePlatformFee = 0.50;
-    const dataProcessingPer1K = 0.10;
-    const baseAnalysisCost = 1.00;
+    const { basePlatformFee, dataProcessingPer1K, baseAnalysisCost } = PRICING_CONSTANTS;
 
-    // Complexity multiplier (matching CostEstimationService)
+    // Complexity multiplier (matching UnifiedBillingService)
     let complexityMultiplier = 1.0;
-    if (analysisResults.complexity === 'moderate' || analysisResults.complexity === 'intermediate') complexityMultiplier = 1.5;
-    if (analysisResults.complexity === 'complex' || analysisResults.complexity === 'advanced') complexityMultiplier = 2.5;
-    if (analysisResults.complexity === 'expert') complexityMultiplier = 4.0;
+    if (analysisResults.complexity === 'moderate' || analysisResults.complexity === 'intermediate') complexityMultiplier = PRICING_CONSTANTS.complexityMultipliers.intermediate;
+    if (analysisResults.complexity === 'complex' || analysisResults.complexity === 'advanced') complexityMultiplier = PRICING_CONSTANTS.complexityMultipliers.advanced;
+    if (analysisResults.complexity === 'expert') complexityMultiplier = PRICING_CONSTANTS.complexityMultipliers.expert;
 
     // Data processing cost
     const dataRows = totalDataRows || analysisResults.dataSize || 0;
     const dataCost = (dataRows / 1000) * dataProcessingPer1K;
 
-    // Analysis cost (default type factor = 1.0 per analysis)
-    const analysisCount = Math.max(1, analysisResults.totalAnalyses);
-    const analysisCost = baseAnalysisCost * analysisCount * complexityMultiplier;
+    // Analysis cost with type-specific factors from PRICING_CONSTANTS
+    const analysisPath = journeyProgress?.requirementsDocument?.analysisPath;
+    let analysisCost = 0;
+    if (Array.isArray(analysisPath) && analysisPath.length > 0) {
+      // Use per-type factors when analysis types are known
+      for (const step of analysisPath) {
+        const typeName = step.analysisType || step.method || step.type || 'default';
+        const typeFactor = getAnalysisTypeFactor(typeName);
+        analysisCost += baseAnalysisCost * typeFactor * complexityMultiplier;
+      }
+    } else {
+      // Fallback: flat rate per analysis
+      const analysisCount = Math.max(1, analysisResults.totalAnalyses);
+      analysisCost = baseAnalysisCost * analysisCount * complexityMultiplier;
+    }
 
     const totalCost = basePlatformFee + dataCost + analysisCost;
     return parseFloat(totalCost.toFixed(2));
-  }, [analysisResults.dataSize, analysisResults.complexity, analysisResults.totalAnalyses, totalDataRows]);
+  }, [analysisResults.dataSize, analysisResults.complexity, analysisResults.totalAnalyses, totalDataRows, journeyProgress]);
 
   const finalPrice = calculatePricing;
 
@@ -776,17 +787,17 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
       const costToCharge = authoritativeCostCents ? authoritativeCostCents / 100 : finalPrice;
       console.log(`💰 [Payment] Locking cost $${costToCharge.toFixed(2)} to project before checkout`);
 
-      // Save locked cost to project so backend uses it
+      // Save locked cost to project so backend uses it - MUST succeed before checkout
       try {
-        await fetch(`/api/projects/${projectId}/lock-cost`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ lockedCostEstimate: costToCharge })
+        await apiClient.post(`/api/projects/${projectId}/lock-cost`, {
+          lockedCostEstimate: costToCharge
         });
         console.log(`✅ [Payment] Locked cost estimate saved: $${costToCharge.toFixed(2)}`);
-      } catch (lockError) {
-        console.warn('⚠️ [Payment] Could not lock cost estimate, proceeding anyway:', lockError);
+      } catch (lockError: any) {
+        console.error('❌ [Payment] Could not lock cost estimate:', lockError);
+        setPaymentError('Failed to lock your cost estimate. Please refresh the page and try again.');
+        setPaymentProcessing(false);
+        return;
       }
 
       // Call the payment endpoint to create Stripe checkout session
@@ -956,7 +967,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
                     <Skeleton className="h-7 w-24 mt-1" />
                   ) : (
                     <p className={`text-lg font-semibold ${isEstimatedPricing ? 'text-yellow-900' : 'text-blue-900'}`} data-testid="pricing-locked-cost">
-                      {formatCurrency(lockedCostCents ?? authoritativeCostCents, true)}
+                      {formatCurrency(authoritativeCostCents, true)}
                     </p>
                   )}
                   {isEstimatedPricing && (
@@ -1157,9 +1168,14 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
                   <>
                     <div className="text-sm text-gray-600 font-medium mt-2">Analysis Breakdown ({backendCostEstimate.breakdown.perAnalysisBreakdown.length} types):</div>
                     <div className="pl-4 space-y-1 border-l-2 border-blue-100 ml-2">
-                      {backendCostEstimate.breakdown.perAnalysisBreakdown.map((analysis: { type: string; cost: number }, idx: number) => (
+                      {backendCostEstimate.breakdown.perAnalysisBreakdown.map((analysis: { type: string; cost: number; factor?: number }, idx: number) => (
                         <div key={idx} className="flex justify-between items-center text-sm">
-                          <span className="text-gray-500">{analysis.type}</span>
+                          <span className="text-gray-500">
+                            {analysis.type}
+                            {analysis.factor && analysis.factor !== 1.0 && (
+                              <span className="text-xs text-gray-400 ml-1">({analysis.factor}x)</span>
+                            )}
+                          </span>
                           <span className="font-medium text-gray-700">${analysis.cost.toFixed(2)}</span>
                         </div>
                       ))}
@@ -1232,7 +1248,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
               <Separator />
               <div className="flex justify-between items-center text-lg font-semibold">
                 <span>Final Total</span>
-                <span className="text-blue-600">{formatCurrency(lockedCostCents ?? billingBreakdown.totalCost, true)}</span>
+                <span className="text-blue-600">{formatCurrency(authoritativeCostCents, true)}</span>
               </div>
             </div>
           )}
@@ -1246,7 +1262,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
             breakdown={billingBreakdown as any}
             currentTier={currentTier || 'trial'}
             showDetailedBreakdown={false}
-            overrideFinalCost={lockedCostCents ?? billingBreakdown.totalCost}
+            overrideFinalCost={authoritativeCostCents}
           />
         </div>
       )}
@@ -1386,44 +1402,28 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
         </CardContent>
       </Card>
 
-      {/* Payment Summary */}
+      {/* Payment Action */}
       {selectedPlan && (
         <Card className="border-blue-200 bg-blue-50">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-blue-900">
-              <DollarSign className="w-5 h-5" />
-              Payment Summary
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
+          <CardContent className="pt-6">
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-gray-700">Analysis Package</span>
-                <span className="font-medium">
-                  {pricingPlans.find(p => p.id === selectedPlan)?.name}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-700">Data Processing</span>
-                <span className="font-medium">{(totalDataRows || analysisResults.dataSize).toLocaleString()} rows</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-700">Analyses Included</span>
-                <span className="font-medium">{analysisResults.totalAnalyses} analyses</span>
-              </div>
-              <Separator />
               <div className="flex items-center justify-between text-lg font-semibold">
-                <span className="text-blue-900">Total</span>
-                <span className="text-blue-900">
-                  {billingBreakdown
-                    ? formatCurrency(lockedCostCents ?? billingBreakdown.totalCost, true)
-                    : pricingPlans.find(p => p.id === selectedPlan)?.priceDisplay || 'Contact Sales'}
+                <span className="text-blue-900 flex items-center gap-2">
+                  <DollarSign className="w-5 h-5" />
+                  Amount to Pay
+                  {lockedCostCents != null && (
+                    <Badge className="bg-green-100 text-green-800 text-xs">
+                      <Shield className="w-3 h-3 mr-1" />
+                      Locked
+                    </Badge>
+                  )}
                 </span>
+                <span className="text-blue-900">{formatCurrency(authoritativeCostCents, true)}</span>
               </div>
 
               {/* Payment Error Display */}
               {paymentError && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-lg mb-4">
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
                   <div className="flex items-start gap-2">
                     <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
                     <div>
@@ -1436,7 +1436,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
 
               <Button
                 onClick={handlePayment}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white mt-4"
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white mt-2"
                 disabled={!selectedPlan || paymentProcessing || !projectId}
               >
                 {paymentProcessing ? (

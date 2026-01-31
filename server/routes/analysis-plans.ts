@@ -543,18 +543,20 @@ router.post('/:projectId/plan/:planId/approve', ensureAuthenticated, async (req,
     const isAdmin = (req.user as any)?.isAdmin || false;
     const { projectId, planId } = req.params;
 
-    console.log(`✅ Plan approval requested: ${planId} by user ${userId}`);
+    console.log(`✅ [Plan Approval] Step 1/6: Approval requested for plan ${planId} by user ${userId}`);
 
-    // Verify project ownership
+    // Step 1: Verify project ownership
     const accessCheck = await canAccessProject(userId, projectId, isAdmin);
     if (!accessCheck.allowed) {
+      console.warn(`❌ [Plan Approval] Step 1 FAILED: Access denied for user ${userId} on project ${projectId}: ${accessCheck.reason}`);
       return res.status(403).json({
         success: false,
         error: accessCheck.reason
       });
     }
+    console.log(`✅ [Plan Approval] Step 2/6: Access verified for user ${userId}`);
 
-    // Get the plan
+    // Step 2: Get the plan
     const plans = await db.select()
       .from(analysisPlans)
       .where(and(
@@ -564,6 +566,7 @@ router.post('/:projectId/plan/:planId/approve', ensureAuthenticated, async (req,
       .limit(1);
 
     if (plans.length === 0) {
+      console.warn(`❌ [Plan Approval] Step 2 FAILED: Plan ${planId} not found for project ${projectId}`);
       return res.status(404).json({
         success: false,
         error: 'Analysis plan not found'
@@ -571,12 +574,25 @@ router.post('/:projectId/plan/:planId/approve', ensureAuthenticated, async (req,
     }
 
     const plan = plans[0];
+    console.log(`✅ [Plan Approval] Step 2/6: Plan found, status='${plan.status}', estimatedCost=${plan.estimatedCost}`);
 
-    // Verify plan is in 'ready' status
+    // Idempotent: if plan is already approved, return success
+    if (plan.status === 'approved') {
+      console.log(`✅ [Plan Approval] Idempotent: Plan ${planId} already approved, returning success`);
+      return res.json({
+        success: true,
+        message: 'Plan is already approved.',
+        plan: { ...plan, status: 'approved' }
+      });
+    }
+
+    // Step 3: Verify plan is in 'ready' status
     if (plan.status !== 'ready') {
+      console.warn(`❌ [Plan Approval] Step 3 FAILED: Plan ${planId} is in '${plan.status}' status, expected 'ready'`);
       return res.status(400).json({
         success: false,
-        error: `Cannot approve plan in '${plan.status}' status. Plan must be 'ready'.`
+        error: `Cannot approve plan in '${plan.status}' status. Plan must be 'ready'.`,
+        currentStatus: plan.status
       });
     }
 
@@ -584,12 +600,20 @@ router.post('/:projectId/plan/:planId/approve', ensureAuthenticated, async (req,
     // P2-3 FIX: Extract per-analysis breakdown from request body
     const { analysisBreakdown } = req.body || {};
 
-    // Use CostTrackingService to lock the estimated cost
+    // Step 4: Lock the estimated cost
+    console.log(`✅ [Plan Approval] Step 4/6: Locking estimated cost: ${plan.estimatedCost || 'none'}`);
     if (plan.estimatedCost) {
-      const { costTrackingService } = await import('../services/cost-tracking');
-      await costTrackingService.lockEstimatedCost(projectId, plan.estimatedCost);
+      try {
+        const { costTrackingService } = await import('../services/cost-tracking');
+        await costTrackingService.lockEstimatedCost(projectId, plan.estimatedCost);
+        console.log(`✅ [Plan Approval] Step 4/6: Cost locked: $${plan.estimatedCost}`);
+      } catch (costError) {
+        console.warn(`⚠️ [Plan Approval] Step 4: Cost lock failed (non-blocking):`, (costError as Error).message);
+      }
     }
 
+    // Step 5: Update plan and project in transaction
+    console.log(`✅ [Plan Approval] Step 5/6: Starting DB transaction`);
     await db.transaction(async (tx: any) => {
       // P2-3 FIX: Persist analysisBreakdown to plan metadata
       const existingMetadata = (plan as any).metadata || {};
@@ -619,7 +643,10 @@ router.post('/:projectId/plan/:planId/approve', ensureAuthenticated, async (req,
         .where(eq(projects.id, projectId));
     });
 
-    // Sync analysisPath to journeyProgress so execute step can read it
+    console.log(`✅ [Plan Approval] Step 5/6: DB transaction completed`);
+
+    // Step 6: Sync analysisPath to journeyProgress so execute step can read it
+    console.log(`✅ [Plan Approval] Step 6/6: Syncing analysisPath to journeyProgress`);
     try {
       const { storage } = await import('../services/storage');
       const currentProject = await storage.getProject(projectId);

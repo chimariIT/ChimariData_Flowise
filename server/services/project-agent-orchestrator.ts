@@ -2886,11 +2886,25 @@ export class ProjectAgentOrchestrator {
       // Generate synthesis based on progress
       const completedSteps = checkpoints.filter(cp => cp.status === 'completed').length;
 
+      // Priority 0: Use analysisPath from requirementsDocument (SSOT from Prepare step)
+      let derivedKeyFindings: string[] = [];
+      const reqDocForAnalysis = journeyProgress?.requirementsDocument;
+      if (reqDocForAnalysis?.analysisPath && Array.isArray(reqDocForAnalysis.analysisPath) && reqDocForAnalysis.analysisPath.length > 0) {
+        const analysisNames = reqDocForAnalysis.analysisPath
+          .map((a: any) => a.analysisName || a.analysisType || a.type || a.name || (typeof a === 'string' ? a : null))
+          .filter(Boolean)
+          .map((name: string) => name.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()));
+        if (analysisNames.length > 0) {
+          derivedKeyFindings.push(`Planned analyses: ${analysisNames.join(', ')}`);
+        }
+      }
+
       // Build keyFindings from actual analysis insights (not just checkpoints)
-      let derivedKeyFindings: string[] = checkpoints
+      const checkpointFindings: string[] = checkpoints
         .filter(cp => cp.status === 'completed' && cp.data?.keyFindings)
         .flatMap(cp => cp.data.keyFindings)
         .slice(0, 3);
+      derivedKeyFindings = [...derivedKeyFindings, ...checkpointFindings].slice(0, 5);
 
       // Add top insights from actual analysis results
       if (analysisResults?.insights?.length > 0) {
@@ -3093,8 +3107,11 @@ export class ProjectAgentOrchestrator {
         confidence: parseFloat(overallConfidence.toFixed(2)),
         keyFindings: derivedKeyFindings,
         actionableRecommendations: derivedRecommendations,
-        estimatedTimeline: analysisResults ? "Analysis complete" : "On track",
-        estimatedCost: "Within budget",
+        estimatedTimeline: analysisResults ? "Analysis complete"
+          : (journeyProgress?.costEstimate?.timeline || (completedSteps > 2 ? "Nearing completion" : "In progress")),
+        estimatedCost: journeyProgress?.lockedCostEstimate
+          ? `$${(journeyProgress.lockedCostEstimate / 100).toFixed(2)}`
+          : (analysisResults ? "Complete" : (journeyProgress?.costEstimate?.totalCost ? `$${(journeyProgress.costEstimate.totalCost / 100).toFixed(2)}` : "Pending estimation")),
         expertConsensus: {
           dataQuality: dataQualityLabel,
           dataQualityScore: dataQualityScore, // Include numeric score for UI if needed

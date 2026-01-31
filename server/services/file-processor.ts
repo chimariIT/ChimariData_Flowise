@@ -59,6 +59,14 @@ interface DataQualityMetrics {
     dataQualityScore: number;
 }
 
+interface ValidationWarning {
+    column: string;
+    inferredType: string;
+    mismatchCount: number;
+    mismatchPercentage: number;
+    sampleMismatches: string[];
+}
+
 interface ProcessedFileResult {
     preview: any[];
     schema: Record<string, SchemaColumn>;
@@ -73,6 +81,12 @@ interface ProcessedFileResult {
     }>;
     descriptiveStats: Record<string, ColumnDescriptiveStats>;
     datasetSummary: DatasetSummary;
+    columnTypes: Record<string, string[]>;
+    validationResults?: {
+        isValid: boolean;
+        warnings: ValidationWarning[];
+        checkedAt: string;
+    };
 }
 
 export class FileProcessor {
@@ -119,6 +133,60 @@ export class FileProcessor {
 
         const { descriptiveStats, datasetSummary, relationships } = this.createDataProfile(data, schema);
 
+        // Build columnTypes summary for quick access (type -> column names)
+        const columnTypes: Record<string, string[]> = {};
+        for (const [colName, colSchema] of Object.entries(schema)) {
+            const type = colSchema.type || 'string';
+            if (!columnTypes[type]) columnTypes[type] = [];
+            columnTypes[type].push(colName);
+        }
+
+        // Runtime schema validation: sample rows and check for type mismatches
+        const validationWarnings: ValidationWarning[] = [];
+        const sampleSize = Math.min(100, data.length);
+        const sampleRows = data.slice(0, sampleSize);
+        for (const [colName, colSchema] of Object.entries(schema)) {
+            if (colSchema.type === 'string') continue; // string is always valid
+            let mismatchCount = 0;
+            const sampleMismatches: string[] = [];
+            for (const row of sampleRows) {
+                const val = row[colName];
+                if (val == null || val === '') continue;
+                let matches = true;
+                if (colSchema.type === 'number' || colSchema.type === 'integer' || colSchema.type === 'float') {
+                    matches = typeof val === 'number' || (typeof val === 'string' && !isNaN(Number(val)));
+                } else if (colSchema.type === 'boolean') {
+                    matches = typeof val === 'boolean' || (typeof val === 'string' && ['true','false','yes','no','y','n'].includes(val.toLowerCase()));
+                } else if (colSchema.type === 'date') {
+                    matches = val instanceof Date || (typeof val === 'string' && !isNaN(new Date(val).getTime()));
+                }
+                if (!matches) {
+                    mismatchCount++;
+                    if (sampleMismatches.length < 3) sampleMismatches.push(String(val).substring(0, 50));
+                }
+            }
+            const mismatchPct = sampleSize > 0 ? (mismatchCount / sampleSize) * 100 : 0;
+            if (mismatchPct > 10) {
+                validationWarnings.push({
+                    column: colName,
+                    inferredType: colSchema.type,
+                    mismatchCount,
+                    mismatchPercentage: parseFloat(mismatchPct.toFixed(1)),
+                    sampleMismatches
+                });
+            }
+        }
+
+        const validationResults = {
+            isValid: validationWarnings.length === 0,
+            warnings: validationWarnings,
+            checkedAt: new Date().toISOString()
+        };
+
+        if (validationWarnings.length > 0) {
+            console.warn(`⚠️ [Validation] ${validationWarnings.length} columns have type mismatches:`, validationWarnings.map(w => `${w.column} (${w.inferredType}: ${w.mismatchPercentage}% mismatch)`).join(', '));
+        }
+
         return {
             preview,
             schema,
@@ -127,7 +195,9 @@ export class FileProcessor {
             qualityMetrics,
             relationships,
             descriptiveStats,
-            datasetSummary
+            datasetSummary,
+            columnTypes,
+            validationResults
         };
     }
 
@@ -184,16 +254,17 @@ export class FileProcessor {
      */
     private static parseExcel(buffer: Buffer): any[] {
         try {
-            const workbook = XLSX.read(buffer, { type: 'buffer' });
+            const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
 
             // Get first sheet
             const firstSheetName = workbook.SheetNames[0];
             const worksheet = workbook.Sheets[firstSheetName];
 
-            // Convert to JSON
+            // Convert to JSON - raw: true preserves native types (numbers, booleans, dates)
+            // so type inference in detectSchema() works correctly
             const data = XLSX.utils.sheet_to_json(worksheet, {
                 defval: null,
-                raw: false
+                raw: true
             });
 
             return data;
@@ -236,34 +307,55 @@ export class FileProcessor {
     private static inferColumnType(values: any[]): SchemaColumn['type'] {
         if (values.length === 0) return 'string';
 
-        // Check for boolean
-        const booleanValues = values.filter(v =>
-            typeof v === 'boolean' ||
-            v === 'true' ||
-            v === 'false' ||
-            v === 'TRUE' ||
-            v === 'FALSE'
-        );
-        if (booleanValues.length / values.length > 0.8) return 'boolean';
+        // Sample up to 200 values for performance on large datasets
+        const sample = values.length > 200 ? values.slice(0, 200) : values;
+        const sampleSize = sample.length;
 
-        // Check for dates
-        const dateValues = values.filter(v => {
+        // Check for boolean (native booleans + common string representations)
+        const booleanValues = sample.filter(v => {
+            if (typeof v === 'boolean') return true;
+            if (typeof v === 'string') {
+                const lower = v.trim().toLowerCase();
+                return lower === 'true' || lower === 'false' ||
+                       lower === 'yes' || lower === 'no' ||
+                       lower === 'y' || lower === 'n';
+            }
+            // Numeric 0/1 only if ALL non-null values are 0 or 1 (checked below)
+            return false;
+        });
+        if (booleanValues.length / sampleSize > 0.8) return 'boolean';
+
+        // Check for dates (native Date objects + common string formats)
+        const dateValues = sample.filter(v => {
             if (v instanceof Date) return true;
             if (typeof v === 'string') {
-                const parsed = new Date(v);
-                return !isNaN(parsed.getTime()) && v.match(/\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4}/);
+                const trimmed = v.trim();
+                // Match common date patterns before attempting parse
+                if (trimmed.match(/\d{4}[-/]\d{1,2}[-/]\d{1,2}/) ||            // YYYY-MM-DD, YYYY/MM/DD
+                    trimmed.match(/^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}/) ||          // MM/DD/YYYY, DD-MM-YY
+                    trimmed.match(/^\d{1,2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i) || // 01 Jan 2024
+                    trimmed.match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}/i)) { // Jan 01, 2024
+                    const parsed = new Date(trimmed);
+                    return !isNaN(parsed.getTime());
+                }
             }
             return false;
         });
-        if (dateValues.length / values.length > 0.8) return 'date';
+        if (dateValues.length / sampleSize > 0.8) return 'date';
 
         // Check for numbers
-        const numericValues = values.filter(v => {
-            const num = Number(v);
-            return !isNaN(num) && isFinite(num);
+        const numericValues = sample.filter(v => {
+            if (typeof v === 'number') return !isNaN(v) && isFinite(v);
+            if (typeof v === 'string') {
+                const trimmed = v.trim();
+                if (trimmed === '') return false;
+                const num = Number(trimmed);
+                return !isNaN(num) && isFinite(num);
+            }
+            return false;
         });
 
-        if (numericValues.length / values.length > 0.8) {
+        if (numericValues.length / sampleSize > 0.8) {
             // Check if integers
             const integerValues = numericValues.filter(v => {
                 const num = Number(v);

@@ -2247,9 +2247,9 @@ export class SparkToolHandlers {
     return {
       executionId: context.executionId,
       toolId: 'spark_visualization',
-      status: 'success',
-      result: { message: 'Spark visualization generated', chartType: input.chartType || 'bar', data: [] },
-      metrics: { duration: 300, resourcesUsed: { cpu: 3, memory: 80, storage: 5 }, cost: 0.03 }
+      status: 'error',
+      result: { error: 'Spark visualization not available. Spark cluster not configured.', status: 'not_implemented' },
+      metrics: { duration: 0, resourcesUsed: { cpu: 0, memory: 0, storage: 0 }, cost: 0 }
     };
   }
 
@@ -2257,9 +2257,9 @@ export class SparkToolHandlers {
     return {
       executionId: context.executionId,
       toolId: 'spark_statistical_analyzer',
-      status: 'success',
-      result: { message: 'Spark statistical analysis complete', stats: {}, correlations: [] },
-      metrics: { duration: 400, resourcesUsed: { cpu: 4, memory: 120, storage: 10 }, cost: 0.04 }
+      status: 'error',
+      result: { error: 'Spark statistical analyzer not available. Spark cluster not configured.', status: 'not_implemented' },
+      metrics: { duration: 0, resourcesUsed: { cpu: 0, memory: 0, storage: 0 }, cost: 0 }
     };
   }
 
@@ -2267,9 +2267,9 @@ export class SparkToolHandlers {
     return {
       executionId: context.executionId,
       toolId: 'spark_ml_pipeline',
-      status: 'success',
-      result: { message: 'Spark ML pipeline executed', model: input.model || 'default', accuracy: 0.85 },
-      metrics: { duration: 1000, resourcesUsed: { cpu: 8, memory: 200, storage: 50 }, cost: 0.10 }
+      status: 'error',
+      result: { error: 'Spark ML pipeline not available. Spark cluster not configured.', status: 'not_implemented' },
+      metrics: { duration: 0, resourcesUsed: { cpu: 0, memory: 0, storage: 0 }, cost: 0 }
     };
   }
 
@@ -2277,9 +2277,9 @@ export class SparkToolHandlers {
     return {
       executionId: context.executionId,
       toolId: 'spark_data_processor',
-      status: 'success',
-      result: { message: 'Spark data processing complete', rowsProcessed: input.rowCount || 0, transformations: [] },
-      metrics: { duration: 600, resourcesUsed: { cpu: 6, memory: 150, storage: 20 }, cost: 0.06 }
+      status: 'error',
+      result: { error: 'Spark data processor not available. Spark cluster not configured.', status: 'not_implemented' },
+      metrics: { duration: 0, resourcesUsed: { cpu: 0, memory: 0, storage: 0 }, cost: 0 }
     };
   }
 }
@@ -2302,14 +2302,9 @@ export class TroubleshootingToolHandlers {
     return {
       executionId: context.executionId,
       toolId: 'troubleshoot_assistant',
-      status: 'success',
-      result: {
-        message: 'Troubleshooting assistance',
-        issue: input.issue || 'unspecified',
-        suggestions: ['Check logs', 'Verify configurations', 'Restart service'],
-        resolution: 'pending_investigation'
-      },
-      metrics: { duration: 200, resourcesUsed: { cpu: 2, memory: 20, storage: 0 }, cost: 0.005 }
+      status: 'error',
+      result: { error: 'Troubleshooting assistant not yet implemented. Check server logs for diagnostics.', status: 'not_implemented' },
+      metrics: { duration: 0, resourcesUsed: { cpu: 0, memory: 0, storage: 0 }, cost: 0 }
     };
   }
 }
@@ -2332,14 +2327,9 @@ export class GovernanceToolHandlers {
     return {
       executionId: context.executionId,
       toolId: 'data_lineage_tracker',
-      status: 'success',
-      result: {
-        message: 'Data lineage tracked',
-        sourceId: input.sourceId || 'unknown',
-        lineage: [],
-        transformationHistory: []
-      },
-      metrics: { duration: 150, resourcesUsed: { cpu: 2, memory: 30, storage: 5 }, cost: 0.01 }
+      status: 'error',
+      result: { error: 'Data lineage tracking not yet implemented.', status: 'not_implemented' },
+      metrics: { duration: 0, resourcesUsed: { cpu: 0, memory: 0, storage: 0 }, cost: 0 }
     };
   }
 
@@ -2347,14 +2337,9 @@ export class GovernanceToolHandlers {
     return {
       executionId: context.executionId,
       toolId: 'decision_auditor',
-      status: 'success',
-      result: {
-        message: 'Decision audit recorded',
-        decisionId: input.decisionId || 'auto_generated',
-        auditTrail: [],
-        timestamp: new Date().toISOString()
-      },
-      metrics: { duration: 100, resourcesUsed: { cpu: 1, memory: 15, storage: 2 }, cost: 0.005 }
+      status: 'error',
+      result: { error: 'Decision auditor not yet implemented.', status: 'not_implemented' },
+      metrics: { duration: 0, resourcesUsed: { cpu: 0, memory: 0, storage: 0 }, cost: 0 }
     };
   }
 }
@@ -2377,15 +2362,9 @@ export class HealthCheckToolHandlers {
     return {
       executionId: context.executionId,
       toolId: 'ml_health_check',
-      status: 'success',
-      result: {
-        message: 'ML system health check',
-        modelStatus: 'operational',
-        inferenceLatency: '50ms',
-        modelVersion: input.modelVersion || 'latest',
-        healthy: true
-      },
-      metrics: { duration: 100, resourcesUsed: { cpu: 2, memory: 20, storage: 0 }, cost: 0.005 }
+      status: 'error',
+      result: { error: 'ML health check not yet implemented. Use /api/system-status for system health.', status: 'not_implemented' },
+      metrics: { duration: 0, resourcesUsed: { cpu: 0, memory: 0, storage: 0 }, cost: 0 }
     };
   }
 
@@ -2393,15 +2372,9 @@ export class HealthCheckToolHandlers {
     return {
       executionId: context.executionId,
       toolId: 'llm_health_check',
-      status: 'success',
-      result: {
-        message: 'LLM system health check',
-        provider: input.provider || 'default',
-        responseTime: '200ms',
-        tokenQuota: 'available',
-        healthy: true
-      },
-      metrics: { duration: 150, resourcesUsed: { cpu: 1, memory: 10, storage: 0 }, cost: 0.01 }
+      status: 'error',
+      result: { error: 'LLM health check not yet implemented. Use /api/system-status for system health.', status: 'not_implemented' },
+      metrics: { duration: 0, resourcesUsed: { cpu: 0, memory: 0, storage: 0 }, cost: 0 }
     };
   }
 }

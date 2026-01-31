@@ -1369,7 +1369,7 @@ export class ProjectManagerAgent {
             // PHASE 7 FIX: Calculate cost from analysisPath (DS recommendations) not just blueprint.analysisSteps
             // analysisPath contains actual analyses the user needs, while analysisSteps are technical execution steps
             const analysisPathSteps: PlanAnalysisStep[] = (requirementsDoc?.analysisPath || []).map((ap: any, index: number) => ({
-                method: ap.analysisType || 'statistical',
+                method: ap.analysisName || ap.analysisType || 'statistical',
                 name: ap.analysisName || ap.type || 'Analysis',
                 description: ap.description || ap.purpose || '',
                 // PHASE 7 FIX: Confidence should be 0-100 range (not 0-1) for frontend display
@@ -1592,7 +1592,8 @@ export class ProjectManagerAgent {
                                     gaps: requirementsDoc?.gaps || []
                                 },
                                 requirementsLocked: true,
-                                planApproved: false // User still needs to approve
+                                planApproved: false, // User still needs to approve
+                                latestPlanAgentContributions: agentContributions
                             },
                             updatedAt: now
                         } as any)

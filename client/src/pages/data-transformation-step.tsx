@@ -424,9 +424,11 @@ export default function DataTransformationStep({
             return;
         }
 
-        // Extract analysis types from analysisPath - check multiple field names and deduplicate
+        // Extract analysis types from analysisPath - use analysisName (unique per analysis) as primary key
+        // analysisType is a broad category enum (descriptive/diagnostic/predictive/prescriptive) with only 4 values,
+        // so deduplicating on it collapses 6 distinct analyses to ~2. Use analysisName instead.
         const rawAnalysisTypes = analysisPath.map((a: any) =>
-            a.analysisType || a.analysisName || a.type || a.name || 'descriptive_statistics'
+            a.analysisName || a.name || a.analysisType || a.type || 'descriptive_statistics'
         );
         // Deduplicate analysis types to avoid showing identical cards
         const analysisTypes = [...new Set(rawAnalysisTypes)];

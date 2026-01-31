@@ -758,6 +758,13 @@ router.post("/pii-decision", unifiedAuth, (req, res, next) => {
             const project = await storage.createProject(newProjectData);
 
             const { descriptiveStats, datasetSummary, relationships } = FileProcessor.createDataProfile(finalData || [], updatedSchema || {});
+            // Build columnTypes summary from schema
+            const columnTypes: Record<string, string[]> = {};
+            for (const [colName, colSchema] of Object.entries(updatedSchema || {})) {
+                const type = (colSchema as any)?.type || 'string';
+                if (!columnTypes[type]) columnTypes[type] = [];
+                columnTypes[type].push(colName);
+            }
             const ingestionMetadata = {
                 recordCount: finalData.length,
                 fileSize: fileInfo.size,
@@ -767,6 +774,7 @@ router.post("/pii-decision", unifiedAuth, (req, res, next) => {
                 descriptiveStats,
                 qualityMetrics: processedData.qualityMetrics,
                 relationships,
+                columnTypes,
                 generatedAt: new Date().toISOString()
             };
 

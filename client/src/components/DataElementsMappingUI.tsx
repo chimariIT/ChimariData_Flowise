@@ -24,6 +24,18 @@ import {
 } from "lucide-react";
 import { apiClient } from "@/lib/api";
 
+/** Safely convert any value to a renderable string. Handles objects, arrays, nulls. */
+const safeString = (value: any, fallback = ''): string => {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === 'object') {
+    // Try common text-like keys first
+    return value.text || value.name || value.description || value.businessDescription || value.pseudoCode || JSON.stringify(value);
+  }
+  return fallback;
+};
+
 interface RequiredDataElement {
   elementId: string;
   elementName: string;
@@ -74,6 +86,13 @@ interface RequiredDataElement {
     confidence: number;
     source: 'exact' | 'pattern' | 'synonym' | 'ai_inferred' | 'not_found';
     industry?: string;
+  };
+  // Calculation Definition fields (from DS Agent)
+  calculationDefinition?: {
+    calculationType?: 'direct' | 'derived' | 'aggregated' | 'composite' | 'grouped';
+    formula?: string;
+    componentFields?: string[];
+    aggregationMethod?: string;
   };
   hasBusinessDefinition?: boolean;
   definitionConfidence?: number;
@@ -541,10 +560,11 @@ export function DataElementsMappingUI({
                 );
 
                 // Check if transformation is required based on calculationType and derivation info
-                // calculationType is nested under businessDefinition
-                const calculationType = el.businessDefinition?.calculationType || 'direct';
+                // DS agent writes to calculationDefinition.calculationType; also check businessDefinition as fallback
+                const calculationType = el.calculationDefinition?.calculationType || el.businessDefinition?.calculationType || 'direct';
                 const requiresTransformation =
                   calculationType !== 'direct' ||
+                  !!el.calculationDefinition?.formula ||
                   !!el.businessDefinition?.formula ||
                   !!el.transformationLogic ||
                   el.isComposite === true ||
@@ -657,7 +677,7 @@ export function DataElementsMappingUI({
                           {getStatusBadge(status)}
                           {getConfidenceBadge(element.confidence)}
                         </div>
-                        <p className="text-xs text-gray-600">{element.description}</p>
+                        <p className="text-xs text-gray-600">{safeString(element.description)}</p>
                         {getValidationWarnings(element).length > 0 && (
                           <Alert className="mt-2 bg-yellow-50 border-yellow-200">
                             <AlertCircle className="h-4 w-4 text-yellow-600" />
@@ -694,7 +714,7 @@ export function DataElementsMappingUI({
                               Business Definition
                             </span>
                             <Badge variant="outline" className="text-xs bg-emerald-100 text-emerald-800 border-emerald-300">
-                              {element.businessDefinition.calculationType}
+                              {safeString(element.businessDefinition.calculationType, 'derived')}
                             </Badge>
                             {element.businessDefinition.source === 'exact' && (
                               <Badge className="text-xs bg-green-100 text-green-800">
@@ -710,11 +730,11 @@ export function DataElementsMappingUI({
                             )}
                           </div>
                           <p className="text-sm text-emerald-800 mb-2">
-                            {element.businessDefinition.businessDescription}
+                            {safeString(element.businessDefinition.businessDescription)}
                           </p>
                           {element.businessDefinition.formula && (
                             <div className="text-xs font-mono bg-white p-2 rounded border border-emerald-200 text-emerald-700 mb-2">
-                              <strong>Standard Formula:</strong> {element.businessDefinition.formula}
+                              <strong>Standard Formula:</strong> {safeString(element.businessDefinition.formula)}
                             </div>
                           )}
                           {element.businessDefinition.componentFields && element.businessDefinition.componentFields.length > 0 && (
@@ -729,7 +749,7 @@ export function DataElementsMappingUI({
                           )}
                           {element.businessDefinition.aggregationMethod && (
                             <p className="text-xs text-emerald-600 mt-2">
-                              <strong>Aggregation:</strong> {element.businessDefinition.aggregationMethod}
+                              <strong>Aggregation:</strong> {safeString(element.businessDefinition.aggregationMethod)}
                             </p>
                           )}
                           <div className="flex items-center gap-2 mt-2 text-xs text-emerald-500">
@@ -852,7 +872,7 @@ export function DataElementsMappingUI({
                           {/* Show aggregation method if applicable */}
                           {(element as any).calculationDefinition?.formula?.aggregationMethod && (
                             <div className="mt-2 pt-2 border-t border-indigo-200 text-xs text-indigo-700">
-                              <strong>Aggregation:</strong> {(element as any).calculationDefinition.formula.aggregationMethod}
+                              <strong>Aggregation:</strong> {safeString((element as any).calculationDefinition.formula.aggregationMethod)}
                             </div>
                           )}
                         </div>

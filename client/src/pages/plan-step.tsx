@@ -98,6 +98,27 @@ interface AnalysisPlan {
   datasetSize?: number;
 }
 
+// Expected visualization types per analysis type - helps users understand what they'll get
+const ANALYSIS_VISUALIZATION_MAP: Record<string, string[]> = {
+  descriptive: ['Distribution histograms', 'Box plots', 'Summary statistics table'],
+  correlation: ['Correlation heatmap', 'Scatter plot matrix', 'Top correlations bar chart'],
+  regression: ['Scatter plot with regression line', 'Residual plot', 'Coefficient bar chart'],
+  clustering: ['Cluster scatter plot', 'Elbow curve', 'Silhouette diagram'],
+  time_series: ['Time series line chart', 'Trend decomposition', 'Forecast plot'],
+  classification: ['Confusion matrix', 'ROC curve', 'Feature importance bar chart'],
+  sentiment: ['Sentiment distribution', 'Word cloud', 'Sentiment over time'],
+  business_intelligence: ['KPI dashboard cards', 'Trend indicators', 'Benchmark comparison'],
+  visualization: ['Interactive charts', 'Custom dashboards'],
+  statistical: ['Hypothesis test results', 'Distribution plots', 'Statistical summary'],
+};
+
+function getExpectedVisualizations(analysisType: string): string[] {
+  const normalized = analysisType?.toLowerCase().replace(/[\s-]+/g, '_') || '';
+  return ANALYSIS_VISUALIZATION_MAP[normalized] ||
+    ANALYSIS_VISUALIZATION_MAP[normalized.split('_')[0]] ||
+    ['Charts and visual summaries'];
+}
+
 export default function PlanStep({
   projectId: propProjectId,
   journeyType,
@@ -112,7 +133,7 @@ export default function PlanStep({
   const { toast } = useToast();
 
   // FIX: Production Readiness - Use useProject hook for SSOT journey progress
-  const { journeyProgress, updateProgress, updateProgressAsync, queryClient } = useProject(projectId);
+  const { project, journeyProgress, updateProgress, updateProgressAsync, queryClient } = useProject(projectId);
 
   // State management
   const [plan, setPlan] = useState<AnalysisPlan | null>(null);
@@ -930,7 +951,9 @@ export default function PlanStep({
             Analysis Plan
           </h1>
           <p className="text-muted-foreground mt-1">
-            Review the comprehensive analysis plan created by our expert agents
+            {plan.analyses?.length
+              ? `${plan.analyses.length} analyses planned${plan.datasetSize ? ` across ${plan.datasetSize.toLocaleString()} data rows` : ''}${(project as any)?.name ? ` for "${(project as any).name}"` : ''}`
+              : `Review the analysis plan${(project as any)?.name ? ` for "${(project as any).name}"` : ''}`}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -1029,7 +1052,9 @@ export default function PlanStep({
             Data Requirements & Business Context
           </CardTitle>
           <CardDescription>
-            Confirm the fields our agents need and review the KPIs and compliance considerations driving this plan
+            {requiredDataFields.length > 0
+              ? `${requiredDataFields.length} data fields identified. Confirm requirements and review KPIs driving this plan.`
+              : 'Confirm the fields our agents need and review the KPIs and compliance considerations driving this plan'}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -1212,6 +1237,13 @@ export default function PlanStep({
                             {analysis.description}
                           </div>
                         )}
+                        {/* Expected visualizations per analysis type */}
+                        <div className="text-xs text-muted-foreground mt-1 flex items-start gap-1">
+                          <BarChart3 className="h-3 w-3 mt-0.5 shrink-0 text-indigo-500" />
+                          <span className="text-indigo-600">
+                            {getExpectedVisualizations(analysis.analysisType).join(' / ')}
+                          </span>
+                        </div>
                         {/* P3-3: Show which user questions this analysis addresses */}
                         {(() => {
                           const questions = questionsByAnalysis.get(analysis.analysisId) ||
@@ -1418,9 +1450,26 @@ export default function PlanStep({
             ))
           ) : (
             <Card>
-              <CardContent className="py-12 text-center">
-                <BarChart3 className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                <p className="text-muted-foreground">No visualizations planned for this analysis</p>
+              <CardContent className="py-6">
+                <div className="text-center mb-4">
+                  <BarChart3 className="h-10 w-10 mx-auto mb-2 text-indigo-400" />
+                  <p className="text-muted-foreground">Visualizations will be generated based on your analysis types</p>
+                </div>
+                {plan.analyses && plan.analyses.length > 0 && (
+                  <div className="space-y-3">
+                    {plan.analyses.map((analysis, idx) => {
+                      const vizTypes = getExpectedVisualizations(analysis.analysisType);
+                      return (
+                        <div key={idx} className="flex items-start gap-3 p-3 border rounded-lg bg-indigo-50/50">
+                          <Badge variant="outline" className="text-xs shrink-0 mt-0.5">{analysis.analysisType.replace(/_/g, ' ')}</Badge>
+                          <div className="text-sm text-muted-foreground">
+                            {vizTypes.join(', ')}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}

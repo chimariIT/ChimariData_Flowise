@@ -183,7 +183,8 @@ router.post('/analyze-data/:projectId', ensureAuthenticated, async (req, res) =>
           rawResults: processorPayload,
           formattedResults: formattedResult,
           metadata
-        }
+        },
+        createdBy: userId || null
       });
     } catch (artifactError) {
       console.warn('Failed to save analysis artifact:', artifactError);

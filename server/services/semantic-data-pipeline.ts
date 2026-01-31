@@ -124,7 +124,7 @@ export class SemanticDataPipelineService {
         sourceType: 'question',
         targetId: elementId,
         targetType: 'element',
-        confidence: String(confidence),
+        confidence: typeof confidence === 'number' ? confidence : parseFloat(String(confidence)) || 0,
         createdBy,
         metadata: { linkedAt: new Date().toISOString() }
       });
@@ -152,7 +152,7 @@ export class SemanticDataPipelineService {
         sourceType: 'element',
         targetId: transformationId,
         targetType: 'transformation',
-        confidence: '1.0',  // Transformations are explicit, not inferred
+        confidence: 1.0,  // Transformations are explicit, not inferred
         createdBy,
         metadata: { linkedAt: new Date().toISOString() }
       });
@@ -180,7 +180,7 @@ export class SemanticDataPipelineService {
         sourceType: 'transformation',
         targetId: analysisId,
         targetType: 'analysis',
-        confidence: '1.0',
+        confidence: 1.0,
         createdBy,
         metadata: { linkedAt: new Date().toISOString() }
       });
@@ -209,7 +209,7 @@ export class SemanticDataPipelineService {
         sourceType: 'question',
         targetId: answerId,
         targetType: 'insight',
-        confidence: String(confidence),
+        confidence: typeof confidence === 'number' ? confidence : parseFloat(String(confidence)) || 0,
         createdBy,
         metadata: { linkedAt: new Date().toISOString() }
       });

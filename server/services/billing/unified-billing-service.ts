@@ -249,6 +249,75 @@ export interface QuotaStatus {
 }
 
 // ==========================================
+// ANALYSIS PRICING TYPES (consolidated from CostEstimationService)
+// ==========================================
+
+export interface AnalysisPricingConfig {
+  basePlatformFee: number;
+  dataProcessingPer1K: number;
+  baseAnalysisCost: number;
+  complexityMultipliers: {
+    basic: number;
+    intermediate: number;
+    advanced: number;
+    expert: number;
+  };
+  analysisTypeFactors: {
+    descriptive: number;
+    diagnostic: number;
+    predictive: number;
+    prescriptive: number;
+    statistical: number;
+    machine_learning: number;
+    visualization: number;
+    time_series: number;
+    clustering: number;
+    regression: number;
+    correlation: number;
+    business_intelligence: number;
+    sentiment: number;
+    default: number;
+    [key: string]: number;
+  };
+  artifactCosts: {
+    report: number;
+    dashboard: number;
+    presentation: number;
+    exportData: number;
+  };
+}
+
+export interface AnalysisCostBreakdown {
+  item: string;
+  cost: number;
+  units?: string;
+  factor?: number;
+  description?: string;
+}
+
+export interface AnalysisCostEstimate {
+  totalCost: number;
+  breakdown: AnalysisCostBreakdown[];
+  currency: string;
+  creditsRequired: number;
+  estimatedDuration: string;
+  confidenceScore: number;
+  warnings?: string[];
+}
+
+// Import shared pricing constants as defaults
+import { PRICING_CONSTANTS } from '../../../shared/pricing-config';
+
+const ANALYSIS_PRICING_DEFAULTS: AnalysisPricingConfig = {
+  basePlatformFee: PRICING_CONSTANTS.basePlatformFee,
+  dataProcessingPer1K: PRICING_CONSTANTS.dataProcessingPer1K,
+  baseAnalysisCost: PRICING_CONSTANTS.baseAnalysisCost,
+  complexityMultipliers: PRICING_CONSTANTS.complexityMultipliers as AnalysisPricingConfig['complexityMultipliers'],
+  analysisTypeFactors: PRICING_CONSTANTS.analysisTypeFactors as AnalysisPricingConfig['analysisTypeFactors'],
+  artifactCosts: PRICING_CONSTANTS.artifactCosts as AnalysisPricingConfig['artifactCosts']
+};
+
+// ==========================================
 // UNIFIED BILLING SERVICE
 // ==========================================
 
@@ -3159,6 +3228,265 @@ export class UnifiedBillingService {
         computeUsage: { toolExecutions: 0, aiQueries: 0 }
       };
     }
+  }
+
+  // ==========================================
+  // ANALYSIS COST ESTIMATION (consolidated from CostEstimationService)
+  // ==========================================
+
+  private analysisPricingCache: AnalysisPricingConfig | null = null;
+  private analysisPricingCacheExpiry: Date | null = null;
+  private static readonly ANALYSIS_CACHE_TTL_MS = 5 * 60 * 1000;
+
+  /**
+   * Load analysis pricing configuration from PricingService (admin-configurable)
+   */
+  async loadAnalysisPricingConfig(): Promise<AnalysisPricingConfig> {
+    if (this.analysisPricingCache && this.analysisPricingCacheExpiry && new Date() < this.analysisPricingCacheExpiry) {
+      return this.analysisPricingCache;
+    }
+
+    const pricingServiceConfig = PricingService.getPricingConfig();
+
+    this.analysisPricingCache = {
+      basePlatformFee: pricingServiceConfig.platformFee || ANALYSIS_PRICING_DEFAULTS.basePlatformFee,
+      dataProcessingPer1K: pricingServiceConfig.dataSizeCostPer1K || ANALYSIS_PRICING_DEFAULTS.dataProcessingPer1K,
+      baseAnalysisCost: pricingServiceConfig.baseCost || ANALYSIS_PRICING_DEFAULTS.baseAnalysisCost,
+      complexityMultipliers: {
+        basic: pricingServiceConfig.complexityMultipliers?.basic || ANALYSIS_PRICING_DEFAULTS.complexityMultipliers.basic,
+        intermediate: pricingServiceConfig.complexityMultipliers?.intermediate || ANALYSIS_PRICING_DEFAULTS.complexityMultipliers.intermediate,
+        advanced: pricingServiceConfig.complexityMultipliers?.advanced || ANALYSIS_PRICING_DEFAULTS.complexityMultipliers.advanced,
+        expert: 4.0
+      },
+      analysisTypeFactors: {
+        ...ANALYSIS_PRICING_DEFAULTS.analysisTypeFactors,
+        ...(pricingServiceConfig.analysisTypeFactors || {})
+      },
+      artifactCosts: ANALYSIS_PRICING_DEFAULTS.artifactCosts
+    };
+    this.analysisPricingCacheExpiry = new Date(Date.now() + UnifiedBillingService.ANALYSIS_CACHE_TTL_MS);
+    return this.analysisPricingCache;
+  }
+
+  /**
+   * Save analysis pricing configuration
+   */
+  async saveAnalysisPricingConfig(config: Partial<AnalysisPricingConfig>): Promise<boolean> {
+    try {
+      const currentConfig = await this.loadAnalysisPricingConfig();
+      const mergedConfig = { ...currentConfig, ...config };
+
+      PricingService.updatePricingConfig({
+        baseCost: mergedConfig.baseAnalysisCost,
+        dataSizeCostPer1K: mergedConfig.dataProcessingPer1K,
+        platformFee: mergedConfig.basePlatformFee,
+        complexityMultipliers: mergedConfig.complexityMultipliers as any,
+        analysisTypeFactors: mergedConfig.analysisTypeFactors
+      });
+
+      this.analysisPricingCache = null;
+      this.analysisPricingCacheExpiry = null;
+      return true;
+    } catch (error) {
+      console.error('[UnifiedBilling] Failed to save analysis pricing config:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Estimate analysis cost for a project
+   */
+  async estimateAnalysisCost(
+    projectId: string,
+    analysisTypes: string[],
+    dataSize: { rows: number; columns: number; sizeBytes?: number },
+    complexity: 'basic' | 'intermediate' | 'advanced' | 'expert' = 'intermediate',
+    includeArtifacts: string[] = ['report']
+  ): Promise<AnalysisCostEstimate> {
+    const config = await this.loadAnalysisPricingConfig();
+    const breakdown: AnalysisCostBreakdown[] = [];
+    const warnings: string[] = [];
+    let totalCost = 0;
+
+    // 1. Platform fee
+    breakdown.push({
+      item: 'Platform Fee',
+      cost: config.basePlatformFee,
+      description: 'Base platform access fee'
+    });
+    totalCost += config.basePlatformFee;
+
+    // 2. Data processing cost
+    const dataRowsK = dataSize.rows / 1000;
+    const dataCost = dataRowsK * config.dataProcessingPer1K;
+    breakdown.push({
+      item: 'Data Processing',
+      cost: parseFloat(dataCost.toFixed(2)),
+      units: `${dataSize.rows.toLocaleString()} rows`,
+      factor: config.dataProcessingPer1K,
+      description: `$${config.dataProcessingPer1K}/1K rows`
+    });
+    totalCost += dataCost;
+
+    // 3. Analysis costs (per type)
+    const complexityMultiplier = config.complexityMultipliers[complexity] || 1.0;
+
+    for (const analysisType of analysisTypes) {
+      const normalizedType = analysisType.toLowerCase().replace(/[^a-z_]/g, '_');
+      const typeFactor = (config.analysisTypeFactors as any)[normalizedType]
+        || config.analysisTypeFactors.default;
+
+      const analysisCost = config.baseAnalysisCost * typeFactor * complexityMultiplier;
+
+      breakdown.push({
+        item: `${this.formatAnalysisTypeName(analysisType)} Analysis`,
+        cost: parseFloat(analysisCost.toFixed(2)),
+        factor: typeFactor,
+        description: `Base: $${config.baseAnalysisCost} × ${typeFactor} (type) × ${complexityMultiplier} (${complexity})`
+      });
+      totalCost += analysisCost;
+    }
+
+    // 4. Artifact generation costs
+    for (const artifact of includeArtifacts) {
+      const artifactCost = (config.artifactCosts as any)[artifact] || 0.10;
+      if (artifactCost > 0) {
+        breakdown.push({
+          item: `${this.formatArtifactTypeName(artifact)} Generation`,
+          cost: artifactCost,
+          description: 'Artifact generation and formatting'
+        });
+        totalCost += artifactCost;
+      }
+    }
+
+    // 5. Credits (100 credits = $1)
+    const creditsRequired = Math.ceil(totalCost * 100);
+
+    // 6. Duration estimate
+    const estimatedMinutes = this.estimateAnalysisDuration(dataSize.rows, analysisTypes.length, complexity);
+    const estimatedDuration = estimatedMinutes < 60
+      ? `${estimatedMinutes} minutes`
+      : `${Math.round(estimatedMinutes / 60 * 10) / 10} hours`;
+
+    // 7. Confidence score
+    const confidenceScore = this.calculateCostConfidence(dataSize, analysisTypes, complexity);
+
+    if (dataSize.rows > 100000) {
+      warnings.push('Large dataset may require additional processing time');
+    }
+    if (analysisTypes.includes('machine_learning') && dataSize.rows < 1000) {
+      warnings.push('Small dataset may affect ML model accuracy');
+    }
+
+    return {
+      totalCost: parseFloat(totalCost.toFixed(2)),
+      breakdown,
+      currency: 'USD',
+      creditsRequired,
+      estimatedDuration,
+      confidenceScore,
+      warnings: warnings.length > 0 ? warnings : undefined
+    };
+  }
+
+  /**
+   * Calculate credits required for trial users
+   */
+  calculateAnalysisCreditsRequired(
+    complexity: FeatureComplexity,
+    analysisCount: number = 1
+  ): number {
+    const creditCosts: Record<string, number> = {
+      small: 10,
+      medium: 25,
+      large: 50,
+      extra_large: 100
+    };
+    return (creditCosts[complexity] || 10) * analysisCount;
+  }
+
+  /**
+   * Calculate the full project cost including analysis + capacity + subscription credits
+   */
+  async calculateProjectCost(
+    projectId: string,
+    options: {
+      userId: string;
+      analysisTypes: string[];
+      dataSize: { rows: number; columns: number; sizeBytes?: number };
+      complexity?: 'basic' | 'intermediate' | 'advanced' | 'expert';
+      includeArtifacts?: string[];
+    }
+  ): Promise<{
+    analysisCost: AnalysisCostEstimate;
+    subscriptionCredits: number;
+    totalCost: number;
+  }> {
+    const analysisCost = await this.estimateAnalysisCost(
+      projectId,
+      options.analysisTypes,
+      options.dataSize,
+      options.complexity || 'intermediate',
+      options.includeArtifacts || ['report']
+    );
+
+    // Check subscription credits
+    let subscriptionCredits = 0;
+    try {
+      const trialStatus = await this.getTrialCreditsStatus(options.userId);
+      if (trialStatus.hasCredits) {
+        subscriptionCredits = Math.min(trialStatus.remaining / 100, analysisCost.totalCost);
+      }
+    } catch {
+      // No credits available
+    }
+
+    return {
+      analysisCost,
+      subscriptionCredits,
+      totalCost: parseFloat(Math.max(0, analysisCost.totalCost - subscriptionCredits).toFixed(2))
+    };
+  }
+
+  // ==========================================
+  // ANALYSIS COST HELPERS
+  // ==========================================
+
+  private formatAnalysisTypeName(type: string): string {
+    return type.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+  }
+
+  private formatArtifactTypeName(type: string): string {
+    const names: Record<string, string> = {
+      report: 'PDF Report',
+      dashboard: 'Interactive Dashboard',
+      presentation: 'PowerPoint Presentation',
+      exportData: 'Data Export'
+    };
+    return names[type] || this.formatAnalysisTypeName(type);
+  }
+
+  private estimateAnalysisDuration(rows: number, analysisCount: number, complexity: string): number {
+    const baseTimePerUnit = 0.5;
+    const rowUnits = Math.ceil(rows / 10000);
+    const complexityTime: Record<string, number> = { basic: 1, intermediate: 2, advanced: 4, expert: 8 };
+    const complexityFactor = complexityTime[complexity] || 2;
+    return Math.max(1, Math.round((rowUnits * baseTimePerUnit + analysisCount * 2) * complexityFactor));
+  }
+
+  private calculateCostConfidence(
+    dataSize: { rows: number; columns: number },
+    analysisTypes: string[],
+    complexity: string
+  ): number {
+    let score = 0.95;
+    if (dataSize.rows < 100) score -= 0.15;
+    else if (dataSize.rows < 1000) score -= 0.05;
+    if (analysisTypes.some(t => ['machine_learning', 'predictive', 'prescriptive'].includes(t))) score -= 0.05;
+    if (complexity === 'advanced') score -= 0.05;
+    else if (complexity === 'expert') score -= 0.10;
+    return Math.max(0.5, parseFloat(score.toFixed(2)));
   }
 
 }

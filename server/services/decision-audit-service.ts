@@ -63,9 +63,12 @@ class DecisionAuditService {
     decision: any,
     options?: {
       rationale?: string;
+      reasoning?: string;
       alternatives?: any[];
       confidence?: number;
       context?: Record<string, any>;
+      impact?: string;
+      reversible?: boolean;
     }
   ): Promise<DecisionAuditEntry> {
     const entry: DecisionAuditEntry = {
@@ -96,10 +99,13 @@ class DecisionAuditService {
           agent: agent,
           decisionType: decisionType,
           decision: typeof decision === 'string' ? decision : JSON.stringify(decision),
-          rationale: options?.rationale || null,
-          alternatives: options?.alternatives ? JSON.stringify(options.alternatives) : null,
-          confidence: options?.confidence ? String(options.confidence) : null,
-          context: options?.context ? JSON.stringify(options.context) : null,
+          reasoning: options?.rationale || options?.reasoning || 'Automated decision',
+          alternatives: options?.alternatives ? JSON.stringify(options.alternatives) : JSON.stringify([]),
+          confidence: typeof options?.confidence === 'number' ? options.confidence : 80,
+          context: options?.context ? JSON.stringify(options.context) : JSON.stringify({}),
+          impact: options?.impact || 'medium',
+          reversible: options?.reversible ?? true,
+          timestamp: new Date(),
         });
         console.log(`📋 [DecisionAudit] Logged: ${decisionType} by ${agent} for project ${projectId}`);
       }

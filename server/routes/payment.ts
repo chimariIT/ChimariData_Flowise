@@ -55,7 +55,7 @@ router.post('/estimate-cost', ensureAuthenticated, async (req, res) => {
  */
 router.post('/create-checkout-session', ensureAuthenticated, async (req, res) => {
     try {
-        const { projectId } = req.body;
+        const { projectId, amount: clientAmount } = req.body;
         const userId = (req.user as any)?.id;
 
         if (!projectId) {
@@ -81,6 +81,19 @@ router.post('/create-checkout-session', ensureAuthenticated, async (req, res) =>
         }
 
         const amount = parseFloat(lockedCostEstimate);
+
+        // Guard: Verify frontend-sent amount matches the locked cost (tolerance: 1 cent)
+        if (clientAmount != null) {
+            const clientAmountNum = parseFloat(clientAmount);
+            if (!isNaN(clientAmountNum) && Math.abs(clientAmountNum - amount) > 0.01) {
+                console.error(`❌ [Payment] Amount mismatch! Client sent $${clientAmountNum.toFixed(2)}, locked cost is $${amount.toFixed(2)} for project ${projectId}`);
+                return res.status(400).json({
+                    error: 'COST_MISMATCH',
+                    message: 'The displayed cost does not match the locked cost. Please refresh the page and try again.'
+                });
+            }
+        }
+
         console.log(`✅ [Payment SSOT] Using journeyProgress.lockedCostEstimate: $${amount.toFixed(2)} for project ${projectId}`);
 
         const currency = 'USD';
@@ -91,7 +104,34 @@ router.post('/create-checkout-session', ensureAuthenticated, async (req, res) =>
         // Initialize if needed (though it should be singleton)
         const unifiedBillingService = getBillingService();
 
-        const session = await unifiedBillingService.createCheckoutSession(projectId, userId, amount, currency);
+        // Retry logic: 1 retry with 2s delay for transient Stripe errors
+        let session;
+        let lastError: any;
+        for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+                session = await unifiedBillingService.createCheckoutSession(projectId, userId, amount, currency);
+                break;
+            } catch (err: any) {
+                lastError = err;
+                const errorType = err?.type || err?.code || '';
+                const isTransient = errorType === 'StripeConnectionError' ||
+                    errorType === 'StripeRateLimitError' ||
+                    err?.statusCode === 429 ||
+                    err?.statusCode === 502 ||
+                    err?.statusCode === 503;
+
+                if (isTransient && attempt === 0) {
+                    console.warn(`⚠️ [Payment] Transient Stripe error, retrying in 2s: ${err.message}`);
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    continue;
+                }
+                throw err;
+            }
+        }
+
+        if (!session) {
+            throw lastError || new Error('Checkout session creation failed after retry');
+        }
 
         // P1 FIX: Return both 'id' and 'sessionId' for frontend compatibility
         // Frontend checks for 'response.url' first, then 'response.id' as fallback
@@ -102,10 +142,36 @@ router.post('/create-checkout-session', ensureAuthenticated, async (req, res) =>
         });
     } catch (error: any) {
         console.error('❌ [Payment] Checkout session creation failed:', error);
-        res.status(500).json({
+
+        // Classify Stripe errors for specific user feedback
+        const stripeErrorType = error?.type || error?.code || '';
+        let statusCode = 500;
+        let errorType = 'checkout_creation_failed';
+        let userMessage = 'Payment processing failed. Please try again.';
+
+        if (stripeErrorType === 'StripeAuthenticationError' || error?.message?.includes('API key')) {
+            statusCode = 503;
+            errorType = 'payment_service_unavailable';
+            userMessage = 'Payment service is temporarily unavailable. Please try again later.';
+        } else if (stripeErrorType === 'StripeInvalidRequestError') {
+            statusCode = 400;
+            errorType = 'invalid_payment_request';
+            userMessage = `Invalid payment request: ${error.message}`;
+        } else if (stripeErrorType === 'StripeConnectionError') {
+            statusCode = 503;
+            errorType = 'payment_service_unavailable';
+            userMessage = 'Could not connect to payment provider. Please check your connection and try again.';
+        } else if (stripeErrorType === 'StripeRateLimitError') {
+            statusCode = 429;
+            errorType = 'payment_rate_limited';
+            userMessage = 'Too many payment requests. Please wait a moment and try again.';
+        }
+
+        res.status(statusCode).json({
             success: false,
-            error: error.message,
-            errorType: 'checkout_creation_failed'
+            error: userMessage,
+            errorType,
+            retryable: statusCode === 503 || statusCode === 429
         });
     }
 });

@@ -2247,6 +2247,43 @@ return (
                         </div>
                       </div>
                     )}
+
+                    {/* Validation Warnings: Flag columns with type mismatches */}
+                    {(() => {
+                      const validationResults = projectData?.datasets?.[0]?.ingestionMetadata?.validationResults;
+                      if (!validationResults || validationResults.isValid || !validationResults.warnings?.length) return null;
+                      return (
+                        <div>
+                          <h5 className="text-sm font-medium mb-2 flex items-center gap-1.5 text-amber-700">
+                            <AlertTriangle className="w-4 h-4" />
+                            Type Mismatch Warnings
+                          </h5>
+                          <div className="space-y-2">
+                            {validationResults.warnings.map((w: any, idx: number) => (
+                              <div key={idx} className="p-2 bg-amber-50 border border-amber-200 rounded text-sm">
+                                <div className="flex items-center justify-between">
+                                  <span className="font-medium text-amber-900">{w.column}</span>
+                                  <Badge variant="outline" className="text-amber-700 border-amber-300">
+                                    {w.mismatchPercentage}% mismatch
+                                  </Badge>
+                                </div>
+                                <p className="text-xs text-amber-700 mt-1">
+                                  Inferred as <strong>{w.inferredType}</strong>, but {w.mismatchCount} sampled values don't match.
+                                  {w.sampleMismatches?.length > 0 && (
+                                    <span className="block mt-0.5 text-amber-600">
+                                      Examples: {w.sampleMismatches.join(', ')}
+                                    </span>
+                                  )}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-2">
+                            These columns may need attention during transformation. You can override types in Schema Edit.
+                          </p>
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   <Button

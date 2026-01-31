@@ -225,11 +225,43 @@ function formatTimestamp(timestamp?: string) {
   return date.toLocaleString();
 }
 
+/**
+ * Build coordination data from plan agentContributions stored in journeyProgress.
+ * This provides real agent activity data when multiAgentCoordination hasn't been set yet.
+ */
+function buildCoordinationFromContributions(contributions: Record<string, any>): MultiAgentCoordinationResult {
+  return {
+    expertOpinions: Object.entries(contributions).map(([agentId, data]: [string, any]) => ({
+      agentId,
+      agentName: agentDescriptors[agentId]?.label || agentId,
+      opinion: { summary: data.contribution || data.summary },
+      confidence: data.confidence,
+      timestamp: data.completedAt,
+    })),
+    synthesis: {
+      overallAssessment: 'proceed' as const,
+      keyFindings: Object.values(contributions)
+        .map((c: any) => c.contribution)
+        .filter(Boolean) as string[],
+    },
+  };
+}
+
 export default function AgentActivityOverview({ project, journeyState, onNavigateToInsights }: AgentActivityOverviewProps) {
-  const coordination = useMemo(
-    () => safeParseCoordination((project as Record<string, unknown>).multiAgentCoordination),
-    [project.multiAgentCoordination]
-  );
+  const coordination = useMemo(() => {
+    // Primary: multiAgentCoordination from project record
+    const primary = safeParseCoordination((project as Record<string, unknown>).multiAgentCoordination);
+    if (primary?.expertOpinions?.length) return primary;
+
+    // Fallback: Build from plan agentContributions saved to journeyProgress
+    const jp = (project as any)?.journeyProgress;
+    const planContributions = jp?.latestPlanAgentContributions;
+    if (planContributions && typeof planContributions === 'object' && Object.keys(planContributions).length > 0) {
+      return buildCoordinationFromContributions(planContributions);
+    }
+
+    return primary;
+  }, [project.multiAgentCoordination, (project as any)?.journeyProgress]);
 
   const overallAssessment = coordination?.synthesis?.overallAssessment;
   const assessmentInfo = overallAssessment ? assessmentDisplay[overallAssessment] : undefined;

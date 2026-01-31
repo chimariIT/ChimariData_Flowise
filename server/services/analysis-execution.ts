@@ -23,7 +23,7 @@ import {
   projectQuestions,  // Week 1 Option B: Single source of truth for questions
 } from '@shared/schema';
 import type { CostBreakdown } from '@shared/schema';
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, desc, sql } from 'drizzle-orm';
 import { PythonProcessor } from './python-processor';
 import { storage } from './storage';
 import { nanoid } from 'nanoid';
@@ -1052,6 +1052,32 @@ export class AnalysisExecutionService {
       console.log(`💾 Results stored for project ${request.projectId}`);
       console.log(`✅ Analysis complete: ${allInsights.length} insights, ${allRecommendations.length} recommendations`);
 
+      // Consistency check: verify insight counts match between project results and insights table
+      try {
+        const [insightCountResult] = await db.select({ count: sql<number>`count(*)` })
+          .from(insightsTable)
+          .where(eq(insightsTable.projectId, request.projectId));
+        const tableCount = Number(insightCountResult?.count || 0);
+        const resultCount = allInsights.length;
+        if (tableCount !== resultCount) {
+          console.warn(`⚠️ [Consistency] Insight count mismatch for project ${request.projectId}: results=${resultCount}, insights table=${tableCount}`);
+        } else {
+          console.log(`✅ [Consistency] Insight counts match: ${resultCount} in both locations`);
+        }
+        // Store consistency metadata in results
+        (results as any).metadata = {
+          ...((results as any).metadata || {}),
+          consistencyCheck: {
+            insightsInResults: resultCount,
+            insightsInTable: tableCount,
+            isConsistent: tableCount === resultCount,
+            checkedAt: new Date().toISOString()
+          }
+        };
+      } catch (consistencyError) {
+        console.warn('⚠️ [Consistency] Check failed:', (consistencyError as Error).message);
+      }
+
       // ✅ GENERATE AI-POWERED QUESTION ANSWERS
       // Check both userContext AND project fields for business questions
       const businessQuestionsSource = userContext.businessQuestions ||
@@ -1097,7 +1123,26 @@ export class AnalysisExecutionService {
         } catch (qaError) {
           console.error(`❌ Failed to generate question answers:`, qaError);
           console.error(`❌ Error details:`, qaError instanceof Error ? qaError.stack : qaError);
-          // Don't fail the entire analysis if Q&A generation fails
+          // Don't fail the entire analysis - store failure status so frontend can show retry option
+          (results as any).questionAnswers = {
+            status: 'failed',
+            error: qaError instanceof Error ? qaError.message : 'Q&A generation failed',
+            answers: [],
+            answeredCount: 0,
+            totalQuestions: 0
+          };
+          // Persist the failure status
+          try {
+            await db
+              .update(projects)
+              .set({
+                analysisResults: results as any,
+                updatedAt: new Date()
+              })
+              .where(eq(projects.id, request.projectId));
+          } catch (saveError) {
+            console.warn('⚠️ Could not persist Q&A failure status:', (saveError as Error).message);
+          }
         }
       } else {
         console.log(`ℹ️  No business questions provided, skipping Q&A generation`);
@@ -1720,6 +1765,23 @@ export class AnalysisExecutionService {
       ? potentialPath
       : null;
 
+    // FIX 1.2: Final PII verification before payload leaves for Python
+    if (piiColumnsToExclude && piiColumnsToExclude.size > 0 && rows && rows.length > 0) {
+      const payloadKeys = Object.keys(rows[0]);
+      const leakedPII = payloadKeys.filter(key =>
+        Array.from(piiColumnsToExclude).some(col => col.toLowerCase() === key.toLowerCase())
+      );
+      if (leakedPII.length > 0) {
+        console.error(`🚨 [PII PAYLOAD CHECK] PII columns in payload: ${leakedPII.join(', ')} - stripping before send`);
+        // Emergency strip: remove leaked columns as last defense
+        for (const row of rows) {
+          for (const col of leakedPII) {
+            delete row[col];
+          }
+        }
+      }
+    }
+
     return {
       projectId,
       dataset: {
@@ -1847,6 +1909,23 @@ export class AnalysisExecutionService {
     // GAP 2 FIX: Always apply PII filtering using explicit parameter
     if (columnsToExclude && columnsToExclude.size > 0) {
       result = this.filterPIIColumns(result, columnsToExclude);
+
+      // FIX 1.2: Post-filter assertion - verify no PII columns leaked through
+      if (result && result.length > 0) {
+        const sampleRow = result[0];
+        const sampleKeys = Object.keys(sampleRow);
+        const leakedColumns = sampleKeys.filter(key =>
+          Array.from(columnsToExclude).some(col => col.toLowerCase() === key.toLowerCase())
+        );
+        if (leakedColumns.length > 0) {
+          console.error(`🚨 [PII ASSERTION FAILED] Excluded columns found in filtered data: ${leakedColumns.join(', ')}`);
+          throw new Error(
+            `PII enforcement failed: columns [${leakedColumns.join(', ')}] were excluded but still present in data. ` +
+            `Analysis blocked to prevent PII leakage.`
+          );
+        }
+        console.log(`✅ [PII Verified] ${columnsToExclude.size} excluded column(s) confirmed absent from ${source} data`);
+      }
     }
 
     return result;

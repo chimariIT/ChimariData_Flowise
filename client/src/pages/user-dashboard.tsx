@@ -21,7 +21,8 @@ import {
   Settings,
   LogOut,
   Shield,
-  PlayCircle
+  PlayCircle,
+  RefreshCw
 } from "lucide-react";
 
 interface UserDashboardProps {
@@ -155,6 +156,22 @@ export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
       console.error('Failed to resume journey:', error);
       // Fallback to project page if journey state unavailable
       setLocation(`/project/${projectId}?resume=true`);
+    }
+  };
+
+  const [restartingId, setRestartingId] = useState<string | null>(null);
+  const handleRestartProject = async (projectId: string) => {
+    try {
+      setRestartingId(projectId);
+      const result: any = await apiClient.post(`/api/projects/${projectId}/restart`);
+      if (result?.success) {
+        // Navigate to the restart step
+        setLocation(`/project/${projectId}?resume=true`);
+      }
+    } catch (error) {
+      console.error('Failed to restart project:', error);
+    } finally {
+      setRestartingId(null);
     }
   };
 
@@ -350,6 +367,17 @@ export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
                             status={projectStatus}
                             onResume={handleResumeJourney}
                           />
+                          {(projectStatus === 'failed' || projectStatus === 'error') && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleRestartProject(project.id)}
+                              disabled={restartingId === project.id}
+                            >
+                              <RefreshCw className={`w-4 h-4 mr-2 ${restartingId === project.id ? 'animate-spin' : ''}`} />
+                              Restart
+                            </Button>
+                          )}
                           <Button variant="outline" size="sm" onClick={() => handleViewProject(project.id)}>
                             <Eye className="w-4 h-4 mr-2" />
                             View
