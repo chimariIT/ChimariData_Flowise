@@ -1,11 +1,9 @@
-import { Router, Request, Response, NextFunction } from 'express';
+import { Router, Request, Response } from 'express';
 import { getBillingService } from '../services/billing/unified-billing-service';
 import { storage } from '../storage';
 import { z } from 'zod';
-import { tokenStorage } from '../token-storage';
 import { PricingService } from '../services/pricing';
 import { mlLLMUsageTracker } from '../services/ml-llm-usage-tracker';
-import { getAuthHeader } from '../utils/auth-headers';
 import type { FeatureComplexity, JourneyType } from '@shared/canonical-types';
 
 const billingService = getBillingService();
@@ -14,40 +12,6 @@ const router = Router();
 
 // Import the standardized auth middleware
 import { ensureAuthenticated } from './auth';
-
-// Custom authentication middleware for billing routes that optionally allows unauthenticated access
-const billingAuth = async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const authHeader = getAuthHeader(req);
-    if (!authHeader) {
-      // For billing routes that don't require auth (like capacity summary without user), continue
-      return next();
-    }
-
-    const [scheme, token] = authHeader.split(' ');
-    if (!token || scheme?.toLowerCase() !== 'bearer') {
-      return next();
-    }
-
-    const tokenData = tokenStorage.validateToken(token);
-
-    if (!tokenData) {
-      return res.status(401).json({ error: 'Invalid token' });
-    }
-
-    const user = await storage.getUser(tokenData.userId);
-
-    if (!user) {
-      return res.status(401).json({ error: 'User not found' });
-    }
-
-    req.user = { ...user, role: user.role ?? undefined } as any;
-    req.userId = user.id;
-    return next();
-  } catch (error: any) {
-    return res.status(401).json({ error: 'Authentication failed' });
-  }
-};
 
 /**
  * GET /api/billing/health
@@ -214,7 +178,7 @@ router.get('/features/:featureId', ensureAuthenticated, async (req, res) => {
  * GET /api/billing/usage-summary
  * Get usage summary for current user
  */
-router.get('/usage-summary', billingAuth, async (req, res) => {
+router.get('/usage-summary', ensureAuthenticated, async (req, res) => {
   try {
     const userId = req.userId || 'anonymous';
     const usage = await billingService.getUserUsageSummary(userId);
@@ -238,7 +202,7 @@ router.get('/usage-summary', billingAuth, async (req, res) => {
  * GET /api/billing/quota-check/data
  * Check data quota for current user
  */
-router.get('/quota-check/data', billingAuth, async (req, res) => {
+router.get('/quota-check/data', ensureAuthenticated, async (req, res) => {
   try {
     const userId = req.userId || 'anonymous';
     const quotaInfo = await billingService.getUserCapacitySummary(userId);
@@ -263,7 +227,7 @@ router.get('/quota-check/data', billingAuth, async (req, res) => {
  * GET /api/billing/quota-check/compute
  * Check compute quota for current user
  */
-router.get('/quota-check/compute', billingAuth, async (req, res) => {
+router.get('/quota-check/compute', ensureAuthenticated, async (req, res) => {
   try {
     const userId = req.userId || 'anonymous';
     const quotaInfo = await billingService.getUserCapacitySummary(userId);
@@ -312,7 +276,7 @@ const normalizeJourneyType = (journeyType: string): string => {
     'consultation': 'consultation',
     'custom': 'custom'
   };
-  return mapping[journeyType] || journeyType;
+  return mapping[journeyType] || 'non-tech';
 };
 
 const capacitySummarySchema = z.object({
@@ -549,7 +513,7 @@ router.get('/capacity-summary-old', async (req, res) => {
 /**
  * Get ML/LLM usage summary
  */
-router.get('/ml-usage-summary', billingAuth, async (req, res) => {
+router.get('/ml-usage-summary', ensureAuthenticated, async (req, res) => {
   try {
     const userId = req.userId || 'anonymous';
     const usage = await billingService.getMLUsageSummary(userId);
@@ -570,7 +534,7 @@ router.get('/ml-usage-summary', billingAuth, async (req, res) => {
 /**
  * Calculate ML training cost estimate
  */
-router.post('/ml-cost-estimate', billingAuth, async (req, res) => {
+router.post('/ml-cost-estimate', ensureAuthenticated, async (req, res) => {
   try {
     const userId = req.userId || 'anonymous';
     const { toolName, datasetSize, useAutoML, enableExplainability, trials } = req.body;
@@ -604,7 +568,7 @@ router.post('/ml-cost-estimate', billingAuth, async (req, res) => {
 /**
  * Calculate LLM fine-tuning cost estimate
  */
-router.post('/llm-cost-estimate', billingAuth, async (req, res) => {
+router.post('/llm-cost-estimate', ensureAuthenticated, async (req, res) => {
   try {
     const userId = req.userId || 'anonymous';
     const { toolName, datasetSize, method, numEpochs } = req.body;
@@ -936,6 +900,111 @@ router.get('/available-tiers', async (req, res) => {
       success: false,
       error: error.message || 'Failed to get available tiers'
     });
+  }
+});
+
+/**
+ * GET /api/billing/current
+ * Get current user's billing/subscription info
+ */
+router.get('/current', ensureAuthenticated, async (req, res) => {
+  try {
+    const userId = (req.user as any)?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Authentication required' });
+    }
+
+    const user = await storage.getUser(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    const now = new Date();
+    const periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const nextBilling = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+
+    // Look up tier pricing
+    const tier = billingService.config.tiers.find(
+      t => t.id === (user as any).subscriptionTier
+    );
+
+    res.json({
+      success: true,
+      currentPeriodStart: periodStart.toISOString(),
+      currentPeriodEnd: periodEnd.toISOString(),
+      nextBillingDate: nextBilling.toISOString(),
+      amount: tier?.pricing?.monthly ?? 0,
+      currency: 'usd',
+      status: (user as any).subscriptionStatus || 'inactive',
+      tier: (user as any).subscriptionTier || 'none',
+      tierName: tier?.displayName || 'Free'
+    });
+  } catch (error: any) {
+    console.error('Error getting billing info:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to get billing info' });
+  }
+});
+
+/**
+ * POST /api/billing/cancel
+ * Cancel the current user's subscription
+ */
+router.post('/cancel', ensureAuthenticated, async (req, res) => {
+  try {
+    const userId = (req.user as any)?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Authentication required' });
+    }
+
+    const user = await storage.getUser(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    if (user.subscriptionStatus === 'cancelled') {
+      return res.status(400).json({ success: false, error: 'Subscription is already cancelled' });
+    }
+
+    await storage.updateUser(userId, {
+      subscriptionStatus: 'cancelled',
+    } as any);
+
+    res.json({ success: true, message: 'Subscription cancelled successfully' });
+  } catch (error: any) {
+    console.error('Error cancelling subscription:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to cancel subscription' });
+  }
+});
+
+/**
+ * POST /api/billing/reactivate
+ * Reactivate a cancelled subscription
+ */
+router.post('/reactivate', ensureAuthenticated, async (req, res) => {
+  try {
+    const userId = (req.user as any)?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Authentication required' });
+    }
+
+    const user = await storage.getUser(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    if (user.subscriptionStatus !== 'cancelled') {
+      return res.status(400).json({ success: false, error: 'Subscription is not cancelled' });
+    }
+
+    await storage.updateUser(userId, {
+      subscriptionStatus: 'active',
+    } as any);
+
+    res.json({ success: true, message: 'Subscription reactivated successfully' });
+  } catch (error: any) {
+    console.error('Error reactivating subscription:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to reactivate subscription' });
   }
 });
 

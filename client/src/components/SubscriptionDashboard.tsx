@@ -63,9 +63,8 @@ export function SubscriptionDashboard() {
   const loadBillingInfo = async () => {
     try {
       const response = await apiClient.get('/api/billing/current');
-      if (response.ok) {
-        const data = await response.json();
-        setBillingInfo(data);
+      if (response.success) {
+        setBillingInfo(response);
       }
     } catch (error) {
       console.error('Error loading billing info:', error);
@@ -75,9 +74,8 @@ export function SubscriptionDashboard() {
   const loadUsageHistory = async () => {
     try {
       const response = await apiClient.get('/api/usage/history');
-      if (response.ok) {
-        const data = await response.json();
-        setUsageHistory(data.history || []);
+      if (response.success) {
+        setUsageHistory(response.history || []);
       }
     } catch (error) {
       console.error('Error loading usage history:', error);
@@ -92,7 +90,7 @@ export function SubscriptionDashboard() {
     setLoading(true);
     try {
       const response = await apiClient.post('/api/billing/cancel');
-      if (response.ok) {
+      if (response.success) {
         toast({
           title: "Subscription Cancelled",
           description: "Your subscription has been cancelled and will end at the current billing period.",
@@ -117,7 +115,7 @@ export function SubscriptionDashboard() {
     setLoading(true);
     try {
       const response = await apiClient.post('/api/billing/reactivate');
-      if (response.ok) {
+      if (response.success) {
         toast({
           title: "Subscription Reactivated",
           description: "Your subscription has been reactivated.",

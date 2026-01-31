@@ -119,16 +119,15 @@ router.use('/costs', costTrackingRouter); // Cost tracking with 3-table architec
 router.use('/agent-workflow', ensureAuthenticated, agentWorkflowRouter); // Agent workflow orchestration for U2A2A2U pattern
 router.use('/cloud-connectors', cloudConnectorsRouter); // Cloud storage integrations (AWS S3, Azure, Google Drive)
 
-// Direct Stripe payment intent endpoint for testing
+// Direct Stripe payment intent endpoint for testing only
 router.post('/create-payment-intent', async (req, res) => {
+  if (process.env.NODE_ENV !== 'test') {
+    return res.status(404).json({ error: 'Not found' });
+  }
   try {
     const { amount, description, metadata } = req.body;
-
-    // Mock payment intent for testing purposes
-    // Stripe Elements expects a client_secret shaped like: pi_<id>_secret_<secret>
-    // Where <id> and <secret> are base62/hex without underscores. Avoid extra underscores in the id portion.
-    const id = `pi_${crypto.randomBytes(12).toString('hex')}`; // pi_<24 hex chars>
-    const secret = crypto.randomBytes(24).toString('hex'); // sufficient length secret
+    const id = `pi_${crypto.randomBytes(12).toString('hex')}`;
+    const secret = crypto.randomBytes(24).toString('hex');
     const clientSecret = `${id}_secret_${secret}`;
 
     res.json({
@@ -142,12 +141,14 @@ router.post('/create-payment-intent', async (req, res) => {
   }
 });
 
-// Mock expert consultation booking endpoint for UI flows/testing
+// Mock expert consultation booking endpoint for testing only
 router.post('/consultation-booking', async (req, res) => {
+  if (process.env.NODE_ENV !== 'test') {
+    return res.status(404).json({ error: 'Not found' });
+  }
   try {
     const { name, email, company, challenge, consultationType, price } = req.body || {};
     const bookingId = `cb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    // In production, store booking and notify via email/provider integration.
     res.json({
       success: true,
       bookingId,

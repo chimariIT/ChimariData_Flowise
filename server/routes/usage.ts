@@ -418,4 +418,26 @@ router.post("/alerts/:alertId/acknowledge", async (req, res) => {
   }
 });
 
+// Get usage history for the current user
+router.get("/history", async (req, res) => {
+  try {
+    const user = await getUserFromRequest(req);
+    const userId = user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const days = Math.min(parseInt(req.query.days as string) || 30, 90);
+    const history = await UsageTrackingService.getUsageHistory(userId, days);
+
+    res.json({
+      success: true,
+      history
+    });
+  } catch (error) {
+    console.error("Error fetching usage history:", error);
+    res.status(500).json({ error: "Failed to fetch usage history" });
+  }
+});
+
 export default router;

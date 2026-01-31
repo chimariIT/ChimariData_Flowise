@@ -236,12 +236,14 @@ router.get('/artifacts/:projectId/:filename',
       const { projectId, filename } = req.params;
       const userId = (req.user as any)?.id;
 
-      // Security: Prevent directory traversal
-      if (filename.includes('..') || filename.includes('/') || filename.includes('\\') ||
-        projectId.includes('..') || projectId.includes('/') || projectId.includes('\\')) {
-        return res.status(400).json({
+      // Security: Prevent directory traversal using path.resolve() validation
+      const uploadsBaseDir = path.resolve(process.cwd(), 'uploads', 'artifacts');
+      const filePath = path.resolve(uploadsBaseDir, projectId, filename);
+
+      if (!filePath.startsWith(uploadsBaseDir + path.sep)) {
+        return res.status(403).json({
           success: false,
-          error: 'Invalid filename or projectId'
+          error: 'Access denied: invalid path'
         });
       }
 
@@ -254,9 +256,6 @@ router.get('/artifacts/:projectId/:filename',
           error: accessCheck.reason
         });
       }
-
-      // Serve the file
-      const filePath = path.join(process.cwd(), 'uploads', 'artifacts', projectId, filename);
 
       if (!fs.existsSync(filePath)) {
         return res.status(404).json({

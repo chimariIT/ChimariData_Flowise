@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { useLocation, Link } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -45,19 +45,20 @@ interface DashboardProject {
 
 export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
   const [, setLocation] = useLocation();
+  const queryClient = useQueryClient();
 
-  // Check if user has admin permissions
+  // Check if user has admin permissions (only query if user appears to be admin)
   const { data: permissions } = useQuery({
     queryKey: ['/api/admin/permissions'],
     queryFn: async () => {
       try {
-        // Use apiClient which includes auth token automatically
         const result = await apiClient.get('/api/admin/permissions');
         return result.success ? result.data : null;
       } catch {
         return null;
       }
-    }
+    },
+    enabled: user?.isAdmin === true || user?.role === 'admin' || user?.role === 'super_admin'
   });
 
   const isAdmin = permissions?.role?.id === 'admin' || permissions?.role?.id === 'super_admin';
@@ -165,6 +166,7 @@ export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
       setRestartingId(projectId);
       const result: any = await apiClient.post(`/api/projects/${projectId}/restart`);
       if (result?.success) {
+        queryClient.invalidateQueries({ queryKey: ['/api/projects'] });
         // Navigate to the restart step
         setLocation(`/project/${projectId}?resume=true`);
       }

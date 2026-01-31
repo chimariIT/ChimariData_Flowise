@@ -37,7 +37,7 @@ import { performanceWebhookService } from '../services/performance-webhook-servi
 import { requiredDataElementsTool } from '../services/tools/required-data-elements-tool';
 import { db } from '../db';
 import { eq, desc } from 'drizzle-orm';
-import { decisionAudits, projectQuestions, datasets, projectDatasets } from '@shared/schema';
+import { decisionAudits, projectQuestions, datasets, projectDatasets, projects } from '@shared/schema';
 import { DatasetJoiner, JoinConfig } from '../dataset-joiner';
 import { semanticSearchService } from '../services/semantic-search-service';
 import { sourceColumnMapper, type ElementMappingResult, type DataElementDefinition } from '../services/source-column-mapper';
@@ -7982,46 +7982,44 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
 
         console.log(`📊 [FIX 1.1] Saving ${Object.keys(columnMappings).length} column mappings to dataset`);
 
-        await storage.updateDataset(primaryDataset.id, {
-            ingestionMetadata: {
-                ...(primaryDataset.ingestionMetadata || {}),
-                transformedData: workingData,
-                transformedSchema,
-                transformationApplied: true,
-                transformationSteps,
-                joinConfig,
-                questionAnswerMapping,
-                // ✅ FIX 1.1: Add column mappings for evidence chain
-                columnMappings,
-                transformedAt: new Date().toISOString(),
-                transformedRowCount: workingData.length
-            }
-        } as any);
-
-        // Also update project's journeyProgress
+        // Wrap dataset + project updates in a transaction for consistency
         const project = await storage.getProject(projectId);
-        await storage.updateProject(projectId, {
-            journeyProgress: {
-                ...(project as any)?.journeyProgress,
-                transformationApplied: true,
-                transformedRowCount: workingData.length,
-                transformedAt: new Date().toISOString(),
-                // ✅ FIX 1.1: Save mappings to journeyProgress for frontend access
-                transformationMappings: columnMappings,
-                questionAnswerMapping,
-                // ✅ PHASE 9 FIX: Save joinedData to journeyProgress for analysis execution
-                // DataScienceOrchestrator.loadProjectDatasets() looks for this as SSOT
-                joinedData: {
-                    fullData: workingData,
-                    preview: workingData.slice(0, 100),
-                    schema: transformedSchema,
-                    rowCount: workingData.length,
-                    recordCount: workingData.length,
-                    joinConfig: joinConfig || null,
-                    columnCount: Object.keys(transformedSchema).length
+        await db.transaction(async (tx: any) => {
+            await tx.update(datasets).set({
+                ingestionMetadata: {
+                    ...(primaryDataset.ingestionMetadata || {}),
+                    transformedData: workingData,
+                    transformedSchema,
+                    transformationApplied: true,
+                    transformationSteps,
+                    joinConfig,
+                    questionAnswerMapping,
+                    columnMappings,
+                    transformedAt: new Date().toISOString(),
+                    transformedRowCount: workingData.length
                 }
-            }
-        } as any);
+            }).where(eq(datasets.id, primaryDataset.id));
+
+            await tx.update(projects).set({
+                journeyProgress: {
+                    ...(project as any)?.journeyProgress,
+                    transformationApplied: true,
+                    transformedRowCount: workingData.length,
+                    transformedAt: new Date().toISOString(),
+                    transformationMappings: columnMappings,
+                    questionAnswerMapping,
+                    joinedData: {
+                        fullData: workingData,
+                        preview: workingData.slice(0, 100),
+                        schema: transformedSchema,
+                        rowCount: workingData.length,
+                        recordCount: workingData.length,
+                        joinConfig: joinConfig || null,
+                        columnCount: Object.keys(transformedSchema).length
+                    }
+                }
+            } as any).where(eq(projects.id, projectId));
+        });
 
         console.log(`✅ [PHASE 9] Saved joinedData to journeyProgress: ${workingData.length} rows`);
 

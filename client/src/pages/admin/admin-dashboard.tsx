@@ -44,6 +44,16 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
     staleTime: 10000 // Consider data stale after 10 seconds
   });
 
+  // Fetch dynamic tier pricing from API
+  const { data: tierData } = useQuery({
+    queryKey: ['/api/admin/billing/tiers'],
+    queryFn: async () => {
+      const response = await apiClient.get('/api/admin/billing/tiers');
+      return response?.tiers || response?.data?.tiers || [];
+    },
+    staleTime: 60000
+  });
+
   const adminSections = [
     {
       title: "Pricing & Billing",
@@ -226,22 +236,21 @@ export default function AdminDashboard({ user }: AdminDashboardProps) {
           <CardContent>
             <div className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="p-4 border rounded-lg">
-                  <h3 className="font-semibold text-sm text-gray-700 mb-2">Trial ($1/mo)</h3>
-                  <p className="text-xs text-gray-600">1 project, 3 analyses, Basic features</p>
-                </div>
-                <div className="p-4 border rounded-lg">
-                  <h3 className="font-semibold text-sm text-gray-700 mb-2">Starter ($10/mo)</h3>
-                  <p className="text-xs text-gray-600">5 projects, 30 analyses, All journey types</p>
-                </div>
-                <div className="p-4 border rounded-lg">
-                  <h3 className="font-semibold text-sm text-gray-700 mb-2">Professional ($20/mo)</h3>
-                  <p className="text-xs text-gray-600">25 projects, 300 analyses, Priority support</p>
-                </div>
-                <div className="p-4 border rounded-lg">
-                  <h3 className="font-semibold text-sm text-gray-700 mb-2">Enterprise ($50/mo)</h3>
-                  <p className="text-xs text-gray-600">100 projects, 1000 analyses, Custom solutions</p>
-                </div>
+                {(tierData && tierData.length > 0 ? tierData : [
+                  { displayName: 'Trial', pricing: { monthly: 1 }, quotas: { maxProjects: 1, maxAnalyses: 3 }, description: 'Basic features' },
+                  { displayName: 'Starter', pricing: { monthly: 10 }, quotas: { maxProjects: 5, maxAnalyses: 30 }, description: 'All journey types' },
+                  { displayName: 'Professional', pricing: { monthly: 20 }, quotas: { maxProjects: 25, maxAnalyses: 300 }, description: 'Priority support' },
+                  { displayName: 'Enterprise', pricing: { monthly: 50 }, quotas: { maxProjects: 100, maxAnalyses: 1000 }, description: 'Custom solutions' }
+                ]).map((tier: any, idx: number) => (
+                  <div key={idx} className="p-4 border rounded-lg">
+                    <h3 className="font-semibold text-sm text-gray-700 mb-2">
+                      {tier.displayName || tier.name} (${tier.pricing?.monthly ?? tier.price ?? 0}/mo)
+                    </h3>
+                    <p className="text-xs text-gray-600">
+                      {tier.quotas?.maxProjects ?? '?'} projects, {tier.quotas?.maxAnalyses ?? '?'} analyses, {tier.description || ''}
+                    </p>
+                  </div>
+                ))}
               </div>
               <Button
                 onClick={() => setLocation('/admin/subscription-management')}

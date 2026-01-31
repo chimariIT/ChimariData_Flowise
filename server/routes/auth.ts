@@ -208,8 +208,8 @@ router.post("/register", async (req, res) => {
             return res.status(409).json({ error: "User already exists" });
         }
 
-        // Create new user with optimized password hashing (reduced from 12 to 10 rounds for better performance)
-        const hashedPassword = await bcrypt.hash(password, 10);
+        // Hash password with 12 rounds (OWASP 2025 recommendation)
+        const hashedPassword = await bcrypt.hash(password, 12);
 
         // Check environment for email verification
         const isProduction = process.env.NODE_ENV === 'production';
@@ -560,6 +560,9 @@ export const unifiedAuth = async (req: Request, res: Response, next: NextFunctio
  * @dependencies `storage`, `tokenStorage`.
  */
 router.post("/login-test", async (req, res) => {
+    if (process.env.NODE_ENV !== 'test') {
+        return res.status(404).json({ error: 'Not found' });
+    }
     try {
         const testUserId = 'test-user-e2e';
         let user = await storage.getUser(testUserId);
@@ -1137,18 +1140,16 @@ router.post("/setup-admin", async (req, res) => {
             });
         }
 
-        // Optional: Restrict to development environment
-        // Uncomment the following lines to disable in production:
-        // if (process.env.NODE_ENV === 'production' && !process.env.ALLOW_ADMIN_SETUP) {
-        //     return res.status(403).json({ 
-        //         success: false,
-        //         error: "Admin setup is disabled in production" 
-        //     });
-        // }
+        if (process.env.NODE_ENV === 'production' && !process.env.ALLOW_ADMIN_SETUP) {
+            return res.status(403).json({
+                success: false,
+                error: "Admin setup is disabled in production"
+            });
+        }
 
         // Check if user already exists
         const existingUser = await storage.getUserByEmail(normalizedEmail);
-        const hashedPassword = await bcrypt.hash(password, 10);
+        const hashedPassword = await bcrypt.hash(password, 12);
         let isNewUser = false;
 
         let user;
