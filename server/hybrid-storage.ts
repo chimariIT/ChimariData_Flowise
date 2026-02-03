@@ -1574,7 +1574,7 @@ export class HybridStorage {
   }
 
   // Usage Logging - track user actions and AI usage
-  async logUsage(usage: { userId: string; projectId?: string | null; action: string; provider?: string; tokensUsed?: number; cost?: string }): Promise<void> {
+  async logUsage(usage: { userId: string; projectId?: string | null; action: string; provider?: string; tokensUsed?: number; cost?: number }): Promise<void> {
     await this.init();
     
     // Log to console for now (can be expanded to database later)

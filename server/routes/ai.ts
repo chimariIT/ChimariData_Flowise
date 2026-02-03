@@ -1,5 +1,6 @@
 // server/routes/ai.ts
 import { Router, type Request, type Response } from 'express';
+import { nanoid } from 'nanoid';
 import { goalExtractionRequestSchema, GoalExtractionResponse, TechnicalQuery, TechnicalQueryType } from "../../shared/schema";
 import { storage } from '../services/storage';
 import { ensureAuthenticated } from './auth';
@@ -545,7 +546,7 @@ router.post("/analysis/extract-goals",
             const startTime = Date.now();
             const extractedData = await businessAgent.extractGoals(userDescription, journeyType, (context || {}) as BusinessContext);
 
-            const extractionId = `goal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            const extractionId = `goal_${nanoid()}`;
             const response: GoalExtractionResponse = {
                 success: true,
                 extractionId,

@@ -1,3 +1,4 @@
+import { nanoid } from 'nanoid';
 import { db } from './db';
 import {
   artifactTemplates,
@@ -532,7 +533,7 @@ Return as JSON with sections: overview, keyFindings, businessImpact, recommendat
   }
 
   private generateArtifactId(): string {
-    return `artifact_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+    return `artifact_${nanoid()}`;
   }
 
   private async generateTitle(
@@ -741,7 +742,7 @@ Return as structured JSON.`;
     artifact: GeneratedArtifact
   ): Promise<void> {
     await db.insert(decisionAudits).values({
-      id: `decision_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`,
+      id: `decision_${nanoid()}`,
       projectId,
       agent: 'data_scientist',
       decisionType: 'visualization_choice',

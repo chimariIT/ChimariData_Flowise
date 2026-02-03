@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { nanoid } from 'nanoid';
 import { writeFileSync, readFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 
@@ -267,7 +268,7 @@ export class AdvancedAnalyzer {
     
     try {
       // Create temporary files for Python analysis
-      const tempId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const tempId = `temp_${nanoid()}`;
       
       // Ensure python_data directory exists
       const pythonDataDir = join(process.cwd(), 'python_data');

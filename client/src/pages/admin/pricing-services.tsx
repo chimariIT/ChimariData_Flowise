@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, DollarSign, Edit, Plus, Check, X } from "lucide-react";
+import { ArrowLeft, DollarSign, Edit, Plus, Check, X, RefreshCw } from "lucide-react";
 import { apiClient } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 
@@ -56,6 +56,20 @@ export default function PricingServicesPage({ onBack }: PricingServicesPageProps
     },
     onError: (error: any) => {
       toast({ title: "Error", description: error.message || "Failed to update service pricing", variant: "destructive" });
+    },
+  });
+
+  // Stripe sync mutation
+  const stripeSyncMutation = useMutation({
+    mutationFn: async (id: string) => {
+      return apiClient.post(`/api/admin/service-pricing/${id}/sync-stripe`);
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/service-pricing'] });
+      toast({ title: "Synced", description: data.message || "Service synced with Stripe" });
+    },
+    onError: (error: any) => {
+      toast({ title: "Stripe Sync Failed", description: error.message || "Failed to sync with Stripe", variant: "destructive" });
     },
   });
 
@@ -124,10 +138,21 @@ export default function PricingServicesPage({ onBack }: PricingServicesPageProps
                           {service.isActive ? "Active" : "Inactive"}
                         </Badge>
                         {!isEditing && (
-                          <Button onClick={() => handleEdit(service)} variant="outline" size="sm">
-                            <Edit className="w-4 h-4 mr-2" />
-                            Edit
-                          </Button>
+                          <>
+                            <Button onClick={() => handleEdit(service)} variant="outline" size="sm">
+                              <Edit className="w-4 h-4 mr-2" />
+                              Edit
+                            </Button>
+                            <Button
+                              onClick={() => stripeSyncMutation.mutate(service.id)}
+                              variant="outline"
+                              size="sm"
+                              disabled={stripeSyncMutation.isPending}
+                            >
+                              <RefreshCw className={`w-4 h-4 mr-2 ${stripeSyncMutation.isPending ? 'animate-spin' : ''}`} />
+                              Sync Stripe
+                            </Button>
+                          </>
                         )}
                       </div>
                     </div>

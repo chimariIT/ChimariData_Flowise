@@ -5,6 +5,7 @@ import { Router } from 'express';
 import multer from "multer";
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
+import { nanoid } from 'nanoid';
 import { storage } from '../services/storage';
 import { tokenStorage } from '../token-storage';
 import { EmailService } from '../email-service';
@@ -783,7 +784,7 @@ router.post("/pii-decision", unifiedAuth, (req, res, next) => {
 
             // Create a dataset and link it
             const dataset = await storage.createDataset({
-                id: `ds_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                id: `ds_${nanoid()}`,
                 userId: userId,
                 sourceType: 'upload',
                 originalFileName: fileInfo.originalname,

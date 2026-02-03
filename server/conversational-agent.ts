@@ -1,3 +1,4 @@
+import { nanoid } from 'nanoid';
 import { db } from './db';
 import { users, conversationStates, audienceProfiles, artifactTemplates, dataArtifacts } from '@shared/schema';
 import { eq, and, desc } from 'drizzle-orm';
@@ -403,11 +404,11 @@ Update goals and determine next steps. Return JSON:
   }
 
   private generateSessionId(): string {
-    return `session_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+    return `session_${nanoid()}`;
   }
 
   private generateConversationId(): string {
-    return `conv_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+    return `conv_${nanoid()}`;
   }
 
   private calculateOverallConfidence(goals: GoalCandidate[]): number {

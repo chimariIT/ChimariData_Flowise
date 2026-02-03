@@ -10,11 +10,13 @@
  */
 
 import { Router, Request, Response } from 'express';
+import { nanoid } from 'nanoid';
 import { db } from '../db';
 import { servicePricing } from '@shared/schema';
 import { eq } from 'drizzle-orm';
 import { ensureAuthenticated } from './auth';
 import { getStripeSyncService } from '../services/stripe-sync';
+import { PricingService } from '../services/pricing';
 
 type ServicePricing = typeof servicePricing.$inferSelect;
 
@@ -145,7 +147,7 @@ router.post('/', ensureAuthenticated, ensureAdmin, async (req: Request, res: Res
     }
 
     // Generate ID
-    const id = `sp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const id = `sp_${nanoid()}`;
 
     // Insert new pricing tier
     const [newService] = await db
@@ -231,6 +233,9 @@ router.put('/:id', ensureAuthenticated, ensureAdmin, async (req: Request, res: R
       .where(eq(servicePricing.id, id))
       .returning();
 
+    // Refresh PricingService cache so runtime uses new values
+    await PricingService.refreshServicePricing();
+
     res.json({
       success: true,
       message: 'Service pricing tier updated successfully',
@@ -304,13 +309,38 @@ router.post('/:id/sync-stripe', ensureAuthenticated, ensureAdmin, async (req: Re
       return res.status(404).json({ error: 'Service pricing not found' });
     }
 
-    // TODO: Implement Stripe product/price creation for services
-    // This would create a Stripe product for the service and update the database with IDs
-    
+    // Sync service with Stripe (creates/updates product + one-time price)
+    const syncResult = await stripeSyncService.syncServiceWithStripe(id, {
+      displayName: service.displayName,
+      description: service.description || '',
+      basePrice: service.basePrice, // already in cents
+      serviceType: service.serviceType,
+      stripeProductId: service.stripeProductId,
+      stripePriceId: service.stripePriceId,
+    });
+
+    if (!syncResult.success) {
+      return res.status(502).json({
+        success: false,
+        error: syncResult.error || 'Failed to sync with Stripe',
+        stripeSync: syncResult,
+      });
+    }
+
+    // Refresh PricingService cache
+    await PricingService.refreshServicePricing();
+
+    // Fetch updated record
+    const [updated] = await db
+      .select()
+      .from(servicePricing)
+      .where(eq(servicePricing.id, id));
+
     res.json({
       success: true,
-      message: 'Stripe sync initiated',
-      service: service
+      message: 'Service synced with Stripe successfully',
+      service: updated,
+      stripeSync: syncResult,
     });
   } catch (error: any) {
     console.error('Error syncing with Stripe:', error);

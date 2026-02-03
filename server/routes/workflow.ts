@@ -1,4 +1,5 @@
 import express from 'express';
+import { nanoid } from 'nanoid';
 import { db } from '../db';
 import { decisionAudits, projects, analysisSubscriptions, generatedArtifacts } from '@shared/schema';
 import { eq, desc } from 'drizzle-orm';
@@ -390,7 +391,7 @@ router.post('/decisions/:decisionId/question', async (req, res) => {
 
     // Create a new audit entry for the question
     await db.insert(decisionAudits).values({
-      id: `decision_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`,
+      id: `decision_${nanoid()}`,
       projectId: decision.projectId,
       agent: 'system',
       decisionType: 'decision_questioning',

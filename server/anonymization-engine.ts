@@ -130,7 +130,10 @@ export class AnonymizationEngine {
         anonymizedValue = this.randomSubstitution(value, options);
         break;
       case 'encrypt_aes':
-        const encrypted = this.encryptAES(value, options.encryptionKey || 'default-key');
+        if (!options.encryptionKey) {
+          throw new Error('AES encryption requires an encryption key. Set encryptionKey in anonymization options.');
+        }
+        const encrypted = this.encryptAES(value, options.encryptionKey);
         anonymizedValue = encrypted.value;
         metadata = { iv: encrypted.iv };
         break;

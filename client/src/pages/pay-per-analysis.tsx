@@ -26,6 +26,9 @@ import {
   Shield
 } from "lucide-react";
 import { Link } from "wouter";
+import { useQuery } from "@tanstack/react-query";
+import { apiClient } from "@/lib/api";
+import { usePricingConfig } from "@/hooks/usePricingConfig";
 
 interface PayPerAnalysisProps {
   onBack: () => void;
@@ -36,11 +39,22 @@ export default function PayPerAnalysis({ onBack }: PayPerAnalysisProps) {
   const [showWorkflow, setShowWorkflow] = useState(false);
   const [showCalculator, setShowCalculator] = useState(false);
   const [showProviderSelection, setShowProviderSelection] = useState(false);
-  
+
   // API Provider selection state
   const [selectedProvider, setSelectedProvider] = useState("platform");
   const [userApiKey, setUserApiKey] = useState("");
-  
+
+  // Fetch base price from database, fallback to shared constants
+  const { data: servicePricingData } = useQuery({
+    queryKey: ['/api/pricing/services'],
+    queryFn: () => apiClient.get('/api/pricing/services')
+  });
+  const payPerAnalysisService = servicePricingData?.services?.find((s: any) => s.serviceType === 'pay-per-analysis');
+  const { data: runtimeConfig } = usePricingConfig();
+  const BASE_PRICE = payPerAnalysisService
+    ? (payPerAnalysisService.basePrice / 100)
+    : (runtimeConfig?.servicePricing.payPerAnalysis ?? 25);
+
   // Price calculator state
   const [fileSize, setFileSize] = useState([1]); // MB
   const [recordCount, setRecordCount] = useState([1000]); // Number of records
@@ -53,7 +67,7 @@ export default function PayPerAnalysis({ onBack }: PayPerAnalysisProps) {
     apiAccess: false,
     prioritySupport: false
   });
-  const [calculatedPrice, setCalculatedPrice] = useState(25);
+  const [calculatedPrice, setCalculatedPrice] = useState<number>(BASE_PRICE);
 
   // Available AI providers
   const aiProviders = [
@@ -116,7 +130,7 @@ export default function PayPerAnalysis({ onBack }: PayPerAnalysisProps) {
 
   // Price calculation logic
   const calculatePrice = () => {
-    let basePrice = 25;
+    let basePrice = BASE_PRICE;
     
     // File size multiplier
     const sizeMB = fileSize[0];
@@ -160,7 +174,7 @@ export default function PayPerAnalysis({ onBack }: PayPerAnalysisProps) {
 
   useEffect(() => {
     setCalculatedPrice(calculatePrice());
-  }, [fileSize, recordCount, analysisType, features]);
+  }, [fileSize, recordCount, analysisType, features, BASE_PRICE]);
 
   const analysisTypes = [
     {
@@ -267,7 +281,7 @@ export default function PayPerAnalysis({ onBack }: PayPerAnalysisProps) {
     { feature: "Monthly Analyses", freetrial: "1 trial", payper: "1 analysis", starter: "5 analyses", basic: "10 analyses" },
     { feature: "File Size Limit", freetrial: "10MB", payper: "50MB", starter: "10MB", basic: "15MB" },
     { feature: "Priority Support", freetrial: "Community", payper: "Standard", starter: "Standard", basic: "Priority" },
-    { feature: "Cost", freetrial: "Free", payper: "$25 one-time", starter: "$5/month", basic: "$15/month" }
+    { feature: "Cost", freetrial: "Free", payper: `$${BASE_PRICE} one-time`, starter: "$5/month", basic: "$15/month" }
   ];
 
   // Show workflow if user clicked start analysis
@@ -326,7 +340,7 @@ export default function PayPerAnalysis({ onBack }: PayPerAnalysisProps) {
             {/* Quick Start Option */}
             <div className="bg-white rounded-2xl shadow-lg p-8 border border-gray-200">
               <div className="flex items-center justify-center mb-6">
-                <div className="text-6xl font-bold text-gray-700">From $25</div>
+                <div className="text-6xl font-bold text-gray-700">From ${BASE_PRICE}</div>
                 <div className="ml-4 text-left">
                   <div className="text-lg font-semibold text-slate-900">Starting price</div>
                   <div className="text-slate-600">Calculated by complexity</div>
@@ -494,7 +508,7 @@ export default function PayPerAnalysis({ onBack }: PayPerAnalysisProps) {
                     <div className="space-y-3 text-sm">
                       <div className="flex justify-between">
                         <span>Base analysis</span>
-                        <span>$25</span>
+                        <span>${BASE_PRICE}</span>
                       </div>
                       
                       {fileSize[0] > 5 && (
@@ -686,7 +700,7 @@ export default function PayPerAnalysis({ onBack }: PayPerAnalysisProps) {
                 <h3 className="font-semibold text-slate-900 mb-2">{step.title}</h3>
                 <div className="text-sm text-slate-600">
                   {step.id === 1 && "Upload your CSV, Excel, or JSON file"}
-                  {step.id === 2 && "Secure payment via Stripe ($25)"}
+                  {step.id === 2 && `Secure payment via Stripe ($${BASE_PRICE})`}
                   {step.id === 3 && "AI analyzes your data (2-5 min)"}
                   {step.id === 4 && "Download comprehensive report"}
                 </div>
@@ -785,7 +799,7 @@ export default function PayPerAnalysis({ onBack }: PayPerAnalysisProps) {
             size="lg"
             className="bg-white text-gray-800 hover:bg-slate-100 px-8 py-4"
           >
-            Start $25 Analysis
+            Start ${BASE_PRICE} Analysis
             <ArrowRight className="w-5 h-5 ml-2" />
           </Button>
         </div>

@@ -12,7 +12,7 @@
 import Stripe from 'stripe';
 import { getPricingDataService } from './pricing-data-service';
 import { db } from '../db';
-import { subscriptionTierPricing } from '@shared/schema';
+import { subscriptionTierPricing, servicePricing } from '@shared/schema';
 import { eq } from 'drizzle-orm';
 
 export class StripeSyncService {
@@ -301,6 +301,116 @@ export class StripeSyncService {
         success: false,
         error: error.message || 'Failed to sync price',
       };
+    }
+  }
+
+  /**
+   * Sync a service pricing entry with Stripe (one-time price, not recurring)
+   * Creates/updates a Stripe product and a one-time price for the service.
+   */
+  async syncServiceWithStripe(
+    serviceId: string,
+    serviceData: {
+      displayName: string;
+      description: string;
+      basePrice: number; // in cents
+      serviceType: string;
+      stripeProductId?: string | null;
+      stripePriceId?: string | null;
+    }
+  ): Promise<{
+    success: boolean;
+    stripeProductId?: string;
+    stripePriceId?: string;
+    error?: string;
+  }> {
+    if (!this.isConfigured) {
+      return { success: false, error: 'Stripe not configured' };
+    }
+
+    try {
+      // Step 1: Create or update Stripe Product
+      const productResult = await this.syncProduct(serviceId, {
+        displayName: serviceData.displayName,
+        description: serviceData.description,
+        stripeProductId: serviceData.stripeProductId,
+        limits: {},
+        features: { serviceType: serviceData.serviceType },
+      });
+
+      if (!productResult.success || !productResult.productId) {
+        return { success: false, error: `Failed to sync product: ${productResult.error}` };
+      }
+
+      const stripeProductId = productResult.productId;
+
+      // Step 2: Create one-time price (Stripe prices are immutable; archive old, create new)
+      const priceAmountCents = serviceData.basePrice;
+
+      // Check for existing matching price
+      const existingPrices = await this.stripe.prices.list({
+        product: stripeProductId,
+        active: true,
+        limit: 20,
+      });
+
+      const matchingPrice = existingPrices.data.find(
+        (p) => p.unit_amount === priceAmountCents && !p.recurring
+      );
+
+      if (matchingPrice) {
+        console.log(`✅ Using existing Stripe one-time price: ${matchingPrice.id} for service: ${serviceId}`);
+
+        // Update DB with Stripe IDs
+        await db.update(servicePricing)
+          .set({
+            stripeProductId,
+            stripePriceId: matchingPrice.id,
+            updatedAt: new Date(),
+          })
+          .where(eq(servicePricing.id, serviceId));
+
+        return { success: true, stripeProductId, stripePriceId: matchingPrice.id };
+      }
+
+      // Archive old one-time prices
+      for (const oldPrice of existingPrices.data) {
+        if (!oldPrice.recurring) {
+          try {
+            await this.stripe.prices.update(oldPrice.id, { active: false });
+            console.log(`📦 Archived old one-time price: ${oldPrice.id}`);
+          } catch (e) {
+            console.warn(`⚠️  Failed to archive price ${oldPrice.id}`);
+          }
+        }
+      }
+
+      // Create new one-time price
+      const newPrice = await this.stripe.prices.create({
+        product: stripeProductId,
+        unit_amount: priceAmountCents,
+        currency: 'usd',
+        metadata: {
+          serviceId,
+          serviceType: serviceData.serviceType,
+        },
+      });
+
+      console.log(`✅ Created Stripe one-time price: ${newPrice.id} ($${priceAmountCents / 100}) for service: ${serviceId}`);
+
+      // Update DB with Stripe IDs
+      await db.update(servicePricing)
+        .set({
+          stripeProductId,
+          stripePriceId: newPrice.id,
+          updatedAt: new Date(),
+        })
+        .where(eq(servicePricing.id, serviceId));
+
+      return { success: true, stripeProductId, stripePriceId: newPrice.id };
+    } catch (error: any) {
+      console.error(`❌ Error syncing service ${serviceId} with Stripe:`, error);
+      return { success: false, error: error.message || 'Unknown error' };
     }
   }
 

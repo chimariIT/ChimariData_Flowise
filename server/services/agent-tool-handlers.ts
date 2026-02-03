@@ -2183,7 +2183,8 @@ export class DataScientistToolHandlers {
           rowCount: input.dataset.rowCount || 0,
           schema: input.dataset.schema || {},
           preview: input.dataset.preview || [],
-          piiFields: input.dataset.piiFields
+          piiFields: input.dataset.piiFields,
+          businessDefinitions: input.businessDefinitions || []
         });
 
         return {

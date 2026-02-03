@@ -11,6 +11,8 @@
  * - Recovery strategies
  */
 
+import { nanoid } from 'nanoid';
+
 export enum ErrorSeverity {
   LOW = 'low',
   MEDIUM = 'medium',
@@ -358,7 +360,7 @@ export class EnhancedErrorHandler {
     context: ErrorContext,
     retryCount: number
   ): Promise<void> {
-    const errorId = `${operation}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const errorId = `${operation}_${nanoid()}`;
     
     const errorRecord: ErrorRecord = {
       id: errorId,

@@ -13,6 +13,7 @@
  */
 
 import { Router } from 'express';
+import { nanoid } from 'nanoid';
 import { db } from '../db';
 import { projectSessions, projectQuestions } from '@shared/schema';
 import { eq, and, desc, lt } from 'drizzle-orm';
@@ -61,7 +62,10 @@ function generateDataHash(data: any): string {
  * Uses AES-256-GCM for authenticated encryption
  */
 function encryptSessionData(data: any): string {
-  const ENCRYPTION_KEY = process.env.SESSION_ENCRYPTION_KEY || process.env.JWT_SECRET || 'fallback-key-change-in-production';
+  const ENCRYPTION_KEY = process.env.SESSION_ENCRYPTION_KEY || process.env.JWT_SECRET || (() => {
+      console.error('⛔ CRITICAL: No SESSION_ENCRYPTION_KEY or JWT_SECRET set. Using ephemeral key - sessions will not survive restart.');
+      return crypto.randomBytes(32).toString('hex');
+    })();
 
   // Derive a 32-byte key from the secret
   const key = crypto.createHash('sha256').update(ENCRYPTION_KEY).digest();
@@ -89,7 +93,10 @@ function encryptSessionData(data: any): string {
  */
 function decryptSessionData(encryptedData: string): any {
   try {
-    const ENCRYPTION_KEY = process.env.SESSION_ENCRYPTION_KEY || process.env.JWT_SECRET || 'fallback-key-change-in-production';
+    const ENCRYPTION_KEY = process.env.SESSION_ENCRYPTION_KEY || process.env.JWT_SECRET || (() => {
+      console.error('⛔ CRITICAL: No SESSION_ENCRYPTION_KEY or JWT_SECRET set. Using ephemeral key - sessions will not survive restart.');
+      return crypto.randomBytes(32).toString('hex');
+    })();
 
     // Derive the same 32-byte key
     const key = crypto.createHash('sha256').update(ENCRYPTION_KEY).digest();
@@ -166,7 +173,7 @@ router.get('/current', ensureAuthenticated, async (req, res) => {
     }
 
     // Create new session
-    const sessionId = `ps_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const sessionId = `ps_${nanoid()}`;
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + SESSION_EXPIRY_DAYS);
 

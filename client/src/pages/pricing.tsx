@@ -6,6 +6,7 @@ import { CheckCircle, ArrowRight, Sparkles, Users, Shield, Zap, ArrowLeft, User,
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { apiClient } from "@/lib/api";
+import { usePricingConfig } from "@/hooks/usePricingConfig";
 
 interface PricingTier {
   name: string;
@@ -73,8 +74,9 @@ export default function PricingPage({ onGetStarted, onSubscribe, onBack, onPayPe
   const payPerAnalysisService = servicePricingData?.services?.find((s: any) => s.serviceType === 'pay-per-analysis');
   const expertConsultationService = servicePricingData?.services?.find((s: any) => s.serviceType === 'expert-consultation');
   
-  const payPerAnalysisPrice = payPerAnalysisService ? (payPerAnalysisService.basePrice / 100) : 25;
-  const consultationPrice = expertConsultationService ? (expertConsultationService.basePrice / 100) : 150;
+  const { data: runtimeConfig } = usePricingConfig();
+  const payPerAnalysisPrice = payPerAnalysisService ? (payPerAnalysisService.basePrice / 100) : (runtimeConfig?.servicePricing.payPerAnalysis ?? 25);
+  const consultationPrice = expertConsultationService ? (expertConsultationService.basePrice / 100) : (runtimeConfig?.servicePricing.expertConsultation ?? 150);
 
   // Use API tiers - API already has fallback to code-based tiers if database is empty
   const tiers = pricingData?.tiers || [];

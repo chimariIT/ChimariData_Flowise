@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import { apiClient } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
+import { usePricingConfig } from "@/hooks/usePricingConfig";
 
 interface AnalysisPricingConfig {
   baseCost: number;
@@ -105,6 +106,7 @@ export default function AnalysisPricingPage({ onBack }: AnalysisPricingPageProps
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [localConfig, setLocalConfig] = useState<AnalysisPricingConfig | null>(null);
+  const { data: runtimeConfig } = usePricingConfig();
   const [previewParams, setPreviewParams] = useState({
     analysisType: 'statistical',
     recordCount: 10000,
@@ -159,15 +161,11 @@ export default function AnalysisPricingPage({ onBack }: AnalysisPricingPageProps
   });
 
   const config: AnalysisPricingConfig = localConfig || data?.config || {
-    baseCost: 10,
-    dataSizeCostPer1K: 0.05,
-    platformFee: 5,
-    complexityMultipliers: { basic: 1, intermediate: 1.5, advanced: 2.5 },
-    analysisTypeFactors: {
-      statistical: 1, machine_learning: 2.5, visualization: 0.5,
-      business_intelligence: 1.5, time_series: 2, correlation: 1.2,
-      regression: 1.5, clustering: 2, sentiment: 1.8, default: 1
-    }
+    baseCost: runtimeConfig?.baseAnalysisCost ?? 0.50,
+    dataSizeCostPer1K: runtimeConfig?.dataProcessingPer1K ?? 0.10,
+    platformFee: runtimeConfig?.basePlatformFee ?? 0.25,
+    complexityMultipliers: { basic: runtimeConfig?.complexityMultipliers?.basic ?? 1, intermediate: runtimeConfig?.complexityMultipliers?.intermediate ?? 1.5, advanced: runtimeConfig?.complexityMultipliers?.advanced ?? 2.5 },
+    analysisTypeFactors: { ...(runtimeConfig?.analysisTypeFactors ?? { default: 1.0 }) }
   };
 
   const handleBaseCostChange = (field: 'baseCost' | 'dataSizeCostPer1K' | 'platformFee', value: string) => {

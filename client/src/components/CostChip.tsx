@@ -122,7 +122,7 @@ export function CostChip({
     );
   }
 
-  if (!estimate?.success || !estimate.total) {
+  if (!estimate?.success || estimate.total == null) {
     return (
       <Badge variant="outline" className={`${getSizeClasses()} ${className}`} data-testid="cost-chip-unavailable">
         {showIcon && <AlertTriangle className={`${getIconSize()} icon-gap text-gray-400`} />}

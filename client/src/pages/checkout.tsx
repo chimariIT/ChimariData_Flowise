@@ -189,6 +189,19 @@ const GuidedAnalysisCheckout: React.FC = () => {
 
         if (resp.ok) {
           const result = await resp.json();
+
+          // Handle free tier activation (no Stripe payment needed)
+          if (result.success && result.isFree) {
+            console.log('✅ [Checkout] Free trial activated:', result.message);
+            toast({
+              title: 'Free Trial Activated!',
+              description: result.message || 'Your free trial is now active.',
+            });
+            // Redirect to home/dashboard after free trial activation
+            window.location.href = '/';
+            return true;
+          }
+
           if (result.success && result.clientSecret) {
             const checkoutData: CheckoutData = {
               clientSecret: result.clientSecret,
@@ -200,7 +213,7 @@ const GuidedAnalysisCheckout: React.FC = () => {
                 timeline: 'Immediate'
               },
               pricing: {
-                total: subData.amount || subData.pricing?.total || 0,
+                total: subData.amount ?? subData.pricing?.total ?? 0,
                 billingCycle: subData.billingCycle
               },
               projectId: 'subscription'
@@ -438,34 +451,59 @@ const GuidedAnalysisCheckout: React.FC = () => {
                 >
                   <CheckoutForm checkoutData={checkoutData} />
                 </Elements>
-              ) : (
+              ) : import.meta.env.PROD ? (
+                // Production: Show error, no bypass
                 <div className="space-y-4">
-                  <div className="flex items-center gap-2 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-                    <AlertCircle className="w-5 h-5 text-yellow-600" />
+                  <div className="flex items-center gap-2 p-4 bg-red-50 border border-red-200 rounded-lg">
+                    <AlertCircle className="w-5 h-5 text-red-600" />
                     <div>
-                      <h3 className="font-medium text-yellow-800">Payment Processing Unavailable</h3>
-                      <p className="text-sm text-yellow-700">
+                      <h3 className="font-medium text-red-800">Payment Service Unavailable</h3>
+                      <p className="text-sm text-red-700">
                         {stripePromise
-                          ? 'Invalid or missing client secret for Stripe Elements. Falling back to demo mode.'
-                          : 'Stripe payment processing is not configured in this environment.'}
+                          ? 'Unable to initialize payment form. Please refresh the page and try again.'
+                          : 'Payment processing is temporarily unavailable. Please contact support.'}
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    onClick={() => setLocation('/dashboard')}
+                    className="w-full"
+                  >
+                    <ArrowLeft className="w-4 h-4 mr-2" />
+                    Return to Dashboard
+                  </Button>
+                </div>
+              ) : (
+                // Development only: Demo mode with prominent warning
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 p-4 bg-red-50 border-2 border-red-300 rounded-lg">
+                    <AlertCircle className="w-5 h-5 text-red-600" />
+                    <div>
+                      <h3 className="font-bold text-red-800">DEVELOPMENT MODE</h3>
+                      <p className="text-sm text-red-700">
+                        {stripePromise
+                          ? 'Invalid or missing client secret. Payment will be simulated.'
+                          : 'Stripe is not configured. Payment will be simulated.'}
+                        {' '}This bypass does NOT work in production.
                       </p>
                     </div>
                   </div>
                   <Button
                     onClick={() => {
+                      if (!window.confirm('This is a simulated payment for development only. Continue?')) return;
                       toast({
-                        title: "Demo Mode",
-                        description: "This would process payment in production with proper Stripe configuration."
+                        title: "Development Mode - Payment Simulated",
+                        description: "No actual payment was processed. This bypass is disabled in production."
                       });
-                      // Simulate successful payment for demo
                       setTimeout(() => {
                         setLocation(`/guided-analysis-results/${checkoutData.analysisId}`);
                       }, 1000);
                     }}
-                    className="w-full bg-blue-500 hover:bg-blue-600 text-white"
+                    className="w-full bg-yellow-500 hover:bg-yellow-600 text-black"
                   >
                     <CreditCard className="w-4 h-4 mr-2" />
-                    Continue with Demo Mode (${checkoutData.pricing.total.toFixed(2)})
+                    DEV: Simulate Payment (${checkoutData.pricing.total.toFixed(2)})
                   </Button>
                 </div>
               )}

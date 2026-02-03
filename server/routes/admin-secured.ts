@@ -16,6 +16,7 @@ import { storage } from '../services/storage';
 import { agentRegistry } from '../services/agent-registry';
 import { db, getPoolStats } from '../db';
 import { users, projects, datasets } from '../../shared/schema';
+import { PricingService } from '../services/pricing';
 import { sql, count } from 'drizzle-orm';
 
 const router = express.Router();
@@ -970,32 +971,7 @@ router.get('/billing/analytics/usage', requirePermission('billing', 'read'), asy
   }
 });
 
-// Default analysis pricing configuration
-const DEFAULT_ANALYSIS_PRICING: any = {
-  baseCost: 0.50,
-  dataSizeCostPer1K: 0.10,
-  platformFee: 0.25,
-  complexityMultipliers: {
-    basic: 1.0,
-    intermediate: 1.5,
-    advanced: 2.5
-  },
-  analysisTypeFactors: {
-    statistical: 1.0,
-    machine_learning: 2.5,
-    visualization: 0.5,
-    business_intelligence: 1.5,
-    time_series: 2.0,
-    correlation: 1.2,
-    regression: 1.5,
-    clustering: 2.0,
-    sentiment: 1.8,
-    default: 1.0
-  }
-};
-
-// In-memory storage for analysis pricing config (would be in DB in production)
-let analysisPricingConfig = { ...DEFAULT_ANALYSIS_PRICING };
+// Analysis pricing now delegated to PricingService (DB-backed, single runtime source of truth)
 
 /**
  * Get Analysis Pricing Configuration
@@ -1005,7 +981,7 @@ router.get('/billing/analysis-pricing', requirePermission('billing', 'read'), as
   try {
     res.json({
       success: true,
-      config: analysisPricingConfig
+      config: PricingService.getPricingConfig()
     });
   } catch (error: any) {
     console.error('Analysis pricing fetch error:', error);
@@ -1023,7 +999,7 @@ router.get('/billing/analysis-pricing', requirePermission('billing', 'read'), as
 router.post('/billing/analysis-pricing/preview', requirePermission('billing', 'read'), async (req: Request, res: Response) => {
   try {
     const { analysisType, recordCount, complexity, proposedConfig } = req.body;
-    const config = proposedConfig || analysisPricingConfig;
+    const config = proposedConfig || PricingService.getPricingConfig();
 
     // Calculate cost breakdown
     const typeFactor = config.analysisTypeFactors[analysisType] || config.analysisTypeFactors.default || 1.0;
@@ -1069,23 +1045,12 @@ router.put('/billing/analysis-pricing', requirePermission('billing', 'manage'), 
   try {
     const updates = req.body;
 
-    // Merge updates with current config
-    analysisPricingConfig = {
-      ...analysisPricingConfig,
-      ...updates,
-      complexityMultipliers: {
-        ...analysisPricingConfig.complexityMultipliers,
-        ...(updates.complexityMultipliers || {})
-      },
-      analysisTypeFactors: {
-        ...analysisPricingConfig.analysisTypeFactors,
-        ...(updates.analysisTypeFactors || {})
-      }
-    };
+    // Delegate to PricingService (persists to DB + refreshes cache)
+    const updatedConfig = PricingService.updatePricingConfig(updates);
 
     res.json({
       success: true,
-      config: analysisPricingConfig,
+      config: updatedConfig,
       message: 'Analysis pricing updated successfully'
     });
   } catch (error: any) {
@@ -1103,11 +1068,11 @@ router.put('/billing/analysis-pricing', requirePermission('billing', 'manage'), 
  */
 router.post('/billing/analysis-pricing/reset', requirePermission('billing', 'manage'), async (req: Request, res: Response) => {
   try {
-    analysisPricingConfig = { ...DEFAULT_ANALYSIS_PRICING };
+    const resetConfig = PricingService.resetPricingConfig();
 
     res.json({
       success: true,
-      config: analysisPricingConfig,
+      config: resetConfig,
       message: 'Analysis pricing reset to defaults'
     });
   } catch (error: any) {

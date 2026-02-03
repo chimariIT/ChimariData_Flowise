@@ -25,7 +25,7 @@ import BillingCapacityDisplay from "@/components/BillingCapacityDisplay";
 import { useProject } from "@/hooks/useProject";
 import { useJourneyState } from "@/hooks/useJourneyState";
 import { useToast } from "@/hooks/use-toast";
-import { PRICING_CONSTANTS, getAnalysisTypeFactor } from "@shared/pricing-config";
+import { usePricingConfig } from "@/hooks/usePricingConfig";
 
 interface PricingStepProps {
   journeyType: string;
@@ -144,6 +144,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
   const [billingError, setBillingError] = useState<string | null>(null);
   const [billingBreakdown, setBillingBreakdown] = useState<NormalizedBreakdown | null>(null);
   const [currentTier, setCurrentTier] = useState<string>('');
+  const { data: runtimeConfig } = usePricingConfig();
   const [paymentProcessing, setPaymentProcessing] = useState<boolean>(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
   // P0-3 FIX: Guards to prevent infinite payment verification loop
@@ -383,26 +384,34 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
   // Client-side fallback pricing aligned with UnifiedBillingService
   // Only used when backend estimate is unavailable (Priority 4 in authoritativeCostCents)
   const calculatePricing = useMemo(() => {
-    const { basePlatformFee, dataProcessingPer1K, baseAnalysisCost } = PRICING_CONSTANTS;
+    const basePlatformFee = runtimeConfig?.basePlatformFee ?? 0.50;
+    const dataProcessingPer1K = runtimeConfig?.dataProcessingPer1K ?? 0.10;
+    const baseAnalysisCost = runtimeConfig?.baseAnalysisCost ?? 1.00;
+    const cm = runtimeConfig?.complexityMultipliers ?? { basic: 1, intermediate: 1.5, advanced: 2.5, expert: 4 };
 
     // Complexity multiplier (matching UnifiedBillingService)
     let complexityMultiplier = 1.0;
-    if (analysisResults.complexity === 'moderate' || analysisResults.complexity === 'intermediate') complexityMultiplier = PRICING_CONSTANTS.complexityMultipliers.intermediate;
-    if (analysisResults.complexity === 'complex' || analysisResults.complexity === 'advanced') complexityMultiplier = PRICING_CONSTANTS.complexityMultipliers.advanced;
-    if (analysisResults.complexity === 'expert') complexityMultiplier = PRICING_CONSTANTS.complexityMultipliers.expert;
+    if (analysisResults.complexity === 'moderate' || analysisResults.complexity === 'intermediate') complexityMultiplier = cm.intermediate ?? 1.5;
+    if (analysisResults.complexity === 'complex' || analysisResults.complexity === 'advanced') complexityMultiplier = cm.advanced ?? 2.5;
+    if (analysisResults.complexity === 'expert') complexityMultiplier = cm.expert ?? 4.0;
 
     // Data processing cost
     const dataRows = totalDataRows || analysisResults.dataSize || 0;
     const dataCost = (dataRows / 1000) * dataProcessingPer1K;
 
-    // Analysis cost with type-specific factors from PRICING_CONSTANTS
+    // Analysis cost with type-specific factors from runtime config
+    const atf = runtimeConfig?.analysisTypeFactors ?? {};
+    const getTypeFactor = (type: string): number => {
+      const normalized = (type || 'default').toLowerCase().replace(/[^a-z_]/g, '_');
+      return atf[normalized] ?? atf['default'] ?? 1.0;
+    };
     const analysisPath = journeyProgress?.requirementsDocument?.analysisPath;
     let analysisCost = 0;
     if (Array.isArray(analysisPath) && analysisPath.length > 0) {
       // Use per-type factors when analysis types are known
       for (const step of analysisPath) {
         const typeName = step.analysisType || step.method || step.type || 'default';
-        const typeFactor = getAnalysisTypeFactor(typeName);
+        const typeFactor = getTypeFactor(typeName);
         analysisCost += baseAnalysisCost * typeFactor * complexityMultiplier;
       }
     } else {
@@ -413,7 +422,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
 
     const totalCost = basePlatformFee + dataCost + analysisCost;
     return parseFloat(totalCost.toFixed(2));
-  }, [analysisResults.dataSize, analysisResults.complexity, analysisResults.totalAnalyses, totalDataRows, journeyProgress]);
+  }, [analysisResults.dataSize, analysisResults.complexity, analysisResults.totalAnalyses, totalDataRows, journeyProgress, runtimeConfig]);
 
   const finalPrice = calculatePricing;
 
@@ -443,19 +452,22 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
       console.log('💰 [Pricing] Using server billing calculation:', billingBreakdown.totalCost / 100);
       return billingBreakdown.totalCost;
     }
-    // Priority 3: Fallback to client-side calculation
-    console.warn('⚠️ [Pricing] Using client-side fallback pricing. Server cost not available.');
+    // Priority 3: Fallback to client-side calculation (only warn after loading completes)
+    if (!backendCostLoading) {
+      console.warn('⚠️ [Pricing] Using client-side fallback pricing. Server cost not available.');
+    }
     return Math.round(finalPrice * 100);
-  }, [backendCostEstimate, billingBreakdown?.totalCost, finalPrice]);
+  }, [backendCostEstimate, billingBreakdown?.totalCost, finalPrice, backendCostLoading]);
 
   // Track if we're using estimated vs locked pricing
   const isEstimatedPricing = useMemo(() => {
+    if (backendCostLoading) return true; // Still loading, treat as estimated
     // Not estimated if we have backend locked cost or backend estimate or billing calculation
     if (backendCostEstimate?.isLocked) return false;
     if (backendCostEstimate?.totalCost && backendCostEstimate.totalCost > 0) return false;
     if (typeof billingBreakdown?.totalCost === 'number' && billingBreakdown.totalCost > 0) return false;
     return true;
-  }, [backendCostEstimate, billingBreakdown?.totalCost]);
+  }, [backendCostEstimate, billingBreakdown?.totalCost, backendCostLoading]);
 
   const pricingPlans = useMemo(() => {
     const perAnalysisPriceDisplay = formatCurrency(authoritativeCostCents, true);
@@ -652,20 +664,11 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
               console.log(`📊 [Payment] Using ${analysisTypesFromPlan.length} analysis types from plan: [${analysisTypesFromPlan.join(', ')}]`);
 
               // Execute analysis now that payment is confirmed
-              const analysisResponse = await fetch('/api/analysis-execution/execute', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
-                },
-                body: JSON.stringify({
-                  projectId,
-                  analysisTypes: analysisTypesFromPlan,
-                  analysisPath // Pass full analysis path for evidence chain
-                })
+              const analysisData = await apiClient.post('/api/analysis-execution/execute', {
+                projectId,
+                analysisTypes: analysisTypesFromPlan,
+                analysisPath // Pass full analysis path for evidence chain
               });
-
-              const analysisData = await analysisResponse.json();
 
               if (analysisData.success) {
                 console.log('✅ [Payment] Analysis execution completed successfully');
@@ -1213,33 +1216,23 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
         </CardContent>
       </Card>
 
-      {/* Subscription Credits Applied (Server) */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <DollarSign className="w-5 h-5" />
-            Subscription Credits Applied
-          </CardTitle>
-          <CardDescription>
-            Your subscription capacity is applied to reduce usage-based pricing
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {billingLoading && (
-            <div className="text-sm text-gray-600">Calculating with your subscription...</div>
-          )}
-          {!billingLoading && billingError && (
-            <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-              <p className="text-sm text-yellow-800">
-                <strong>Note:</strong> Please sign in to see subscription discounts. Pricing shown is standard rate.
-              </p>
-            </div>
-          )}
-          {!billingLoading && billingBreakdown && (
+      {/* Subscription Credits Applied - only shown when user HAS active subscription credits */}
+      {!billingLoading && billingBreakdown && billingBreakdown.subscriptionCredits > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <DollarSign className="w-5 h-5" />
+              Subscription Credits Applied
+            </CardTitle>
+            <CardDescription>
+              Your subscription credits reduce the total cost
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
             <div className="space-y-3">
               <div className="flex justify-between items-center">
-                <span className="text-sm text-gray-600">Gross Usage Cost</span>
-                <span className="font-medium">{formatCurrency(billingBreakdown.baseCost, true)}</span>
+                <span className="text-sm text-gray-600">Usage Cost</span>
+                <span className="font-medium">{formatCurrency(authoritativeCostCents, true)}</span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-sm text-gray-600">Subscription Credits</span>
@@ -1247,24 +1240,12 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
               </div>
               <Separator />
               <div className="flex justify-between items-center text-lg font-semibold">
-                <span>Final Total</span>
-                <span className="text-blue-600">{formatCurrency(authoritativeCostCents, true)}</span>
+                <span>Amount Due</span>
+                <span className="text-blue-600">{formatCurrency(Math.max(0, authoritativeCostCents - billingBreakdown.subscriptionCredits), true)}</span>
               </div>
             </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Capacity & Billing Visualization */}
-      {billingBreakdown && (
-        <div>
-          <BillingCapacityDisplay
-            breakdown={billingBreakdown as any}
-            currentTier={currentTier || 'trial'}
-            showDetailedBreakdown={false}
-            overrideFinalCost={authoritativeCostCents}
-          />
-        </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* Pricing Plans */}
@@ -1411,7 +1392,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
                 <span className="text-blue-900 flex items-center gap-2">
                   <DollarSign className="w-5 h-5" />
                   Amount to Pay
-                  {lockedCostCents != null && (
+                  {(backendCostEstimate?.isLocked || lockedCostCents != null) && (
                     <Badge className="bg-green-100 text-green-800 text-xs">
                       <Shield className="w-3 h-3 mr-1" />
                       Locked

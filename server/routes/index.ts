@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import crypto from 'crypto';
+import { nanoid } from 'nanoid';
 import authRouter from './auth';
 import projectRouter, { createVisualizationHandler } from './project';
 import dataRouter from './data';
@@ -148,7 +149,7 @@ router.post('/consultation-booking', async (req, res) => {
   }
   try {
     const { name, email, company, challenge, consultationType, price } = req.body || {};
-    const bookingId = `cb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const bookingId = `cb_${nanoid()}`;
     res.json({
       success: true,
       bookingId,

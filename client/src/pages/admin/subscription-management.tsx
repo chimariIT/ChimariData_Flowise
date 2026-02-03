@@ -361,6 +361,8 @@ const SubscriptionManagement: React.FC = () => {
   const [editingTier, setEditingTier] = useState<string | null>(null);
   const [editedTierData, setEditedTierData] = useState<Partial<SubscriptionTier>>({});
   const [tierSyncStatus, setTierSyncStatus] = useState<Record<string, { state: 'idle' | 'pending' | 'success' | 'error'; message?: string }>>({});
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
+  const toggleSection = (key: string) => setExpandedSections(prev => ({ ...prev, [key]: !prev[key] }));
 
   useEffect(() => {
     let isMounted = true;
@@ -725,7 +727,10 @@ const SubscriptionManagement: React.FC = () => {
       try {
         // Send update to backend API
         const result = await apiClient.put(`/api/pricing/tiers/${editingTier}`, {
-          price: editedTierData.monthlyPrice,
+          price: {
+            monthly: editedTierData.monthlyPrice,
+            yearly: editedTierData.yearlyPrice,
+          },
           description: editedTierData.description,
           features: editedTierData.features,
           limits: editedTierData.limits,
@@ -1218,76 +1223,139 @@ const SubscriptionManagement: React.FC = () => {
                       </div>
 
                       {editingTier === tier.id ? (
-                        <div className="space-y-4">
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">
-                              Monthly Price
-                            </label>
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={editedTierData.monthlyPrice || 0}
-                              onChange={(e) => setEditedTierData(prev => ({
-                                ...prev,
-                                monthlyPrice: parseFloat(e.target.value)
-                              }))}
-                              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                            />
-                            <p className="text-xs text-gray-500 mt-1">Enter 0 for free tier</p>
+                        <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1">
+                          {/* Pricing Section */}
+                          <div className="space-y-2">
+                            <h5 className="text-sm font-semibold text-gray-800 border-b pb-1">Pricing</h5>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="block text-xs font-medium text-gray-600">Monthly ($)</label>
+                                <input type="number" min="0" step="0.01"
+                                  value={editedTierData.monthlyPrice || 0}
+                                  onChange={(e) => setEditedTierData(prev => ({ ...prev, monthlyPrice: parseFloat(e.target.value) }))}
+                                  className="w-full px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-blue-500"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-xs font-medium text-gray-600">Yearly ($)</label>
+                                <input type="number" min="0" step="0.01"
+                                  value={editedTierData.yearlyPrice || 0}
+                                  onChange={(e) => setEditedTierData(prev => ({ ...prev, yearlyPrice: parseFloat(e.target.value) }))}
+                                  className="w-full px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-blue-500"
+                                />
+                              </div>
+                            </div>
                           </div>
 
+                          {/* Limits Section */}
                           <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">
-                              Max Data Processing (MB)
-                            </label>
-                            <input
-                              type="number"
-                              min="-1"
-                              value={editedTierData.limits?.maxDataProcessingMB || 0}
-                              onChange={(e) => setEditedTierData(prev => ({
-                                ...prev,
-                                limits: {
-                                  ...prev.limits!,
-                                  maxDataProcessingMB: parseInt(e.target.value)
-                                }
-                              }))}
-                              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                            />
-                            <p className="text-xs text-gray-500 mt-1">Enter -1 for unlimited</p>
+                            <button onClick={() => toggleSection(`limits-${tier.id}`)} className="w-full text-left text-sm font-semibold text-gray-800 border-b pb-1 flex justify-between items-center">
+                              Limits <span className="text-xs text-gray-400">{expandedSections[`limits-${tier.id}`] ? '[-]' : '[+]'}</span>
+                            </button>
+                            {expandedSections[`limits-${tier.id}`] && (
+                              <div className="grid grid-cols-2 gap-2 mt-2">
+                                {([
+                                  ['maxDataProcessingMB', 'Data Processing (MB)'],
+                                  ['maxStorageMB', 'Storage (MB)'],
+                                  ['maxFilesSizeMB', 'Max File Size (MB)'],
+                                  ['maxComputeMinutes', 'Compute (min)'],
+                                  ['maxProjects', 'Projects'],
+                                  ['maxTeamMembers', 'Team Members'],
+                                  ['maxApiCalls', 'API Calls'],
+                                  ['maxAgentInteractions', 'Agent Interactions'],
+                                  ['maxToolExecutions', 'Tool Executions'],
+                                  ['retentionDays', 'Retention (days)'],
+                                ] as [string, string][]).map(([key, label]) => (
+                                  <div key={key}>
+                                    <label className="block text-xs font-medium text-gray-600">{label}</label>
+                                    <input type="number" min="-1"
+                                      value={(editedTierData.limits as any)?.[key] ?? 0}
+                                      onChange={(e) => setEditedTierData(prev => ({
+                                        ...prev,
+                                        limits: { ...prev.limits!, [key]: parseInt(e.target.value) }
+                                      }))}
+                                      className="w-full px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-blue-500"
+                                    />
+                                  </div>
+                                ))}
+                                <p className="col-span-2 text-xs text-gray-400">-1 = unlimited</p>
+                              </div>
+                            )}
                           </div>
 
+                          {/* Overage Pricing Section */}
                           <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">
-                              Max Storage (MB)
-                            </label>
-                            <input
-                              type="number"
-                              min="-1"
-                              value={editedTierData.limits?.maxStorageMB || 0}
-                              onChange={(e) => setEditedTierData(prev => ({
-                                ...prev,
-                                limits: {
-                                  ...prev.limits!,
-                                  maxStorageMB: parseInt(e.target.value)
-                                }
-                              }))}
-                              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                            />
-                            <p className="text-xs text-gray-500 mt-1">Enter -1 for unlimited</p>
+                            <button onClick={() => toggleSection(`overage-${tier.id}`)} className="w-full text-left text-sm font-semibold text-gray-800 border-b pb-1 flex justify-between items-center">
+                              Overage Pricing <span className="text-xs text-gray-400">{expandedSections[`overage-${tier.id}`] ? '[-]' : '[+]'}</span>
+                            </button>
+                            {expandedSections[`overage-${tier.id}`] && (
+                              <div className="grid grid-cols-2 gap-2 mt-2">
+                                {([
+                                  ['dataPerMB', 'Data ($/MB)'],
+                                  ['computePerMinute', 'Compute ($/min)'],
+                                  ['storagePerMB', 'Storage ($/MB)'],
+                                  ['apiCallsPer1000', 'API ($/1K calls)'],
+                                  ['agentInteractionCost', 'Agent ($/use)'],
+                                  ['toolExecutionCost', 'Tool ($/exec)'],
+                                ] as [string, string][]).map(([key, label]) => (
+                                  <div key={key}>
+                                    <label className="block text-xs font-medium text-gray-600">{label}</label>
+                                    <input type="number" min="0" step="0.001"
+                                      value={(editedTierData.overagePricing as any)?.[key] ?? 0}
+                                      onChange={(e) => setEditedTierData(prev => ({
+                                        ...prev,
+                                        overagePricing: { ...prev.overagePricing!, [key]: parseFloat(e.target.value) }
+                                      }))}
+                                      className="w-full px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-blue-500"
+                                    />
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                           </div>
 
-                          <div className="flex items-center space-x-2">
+                          {/* Discounts Section */}
+                          <div>
+                            <button onClick={() => toggleSection(`discounts-${tier.id}`)} className="w-full text-left text-sm font-semibold text-gray-800 border-b pb-1 flex justify-between items-center">
+                              Discounts <span className="text-xs text-gray-400">{expandedSections[`discounts-${tier.id}`] ? '[-]' : '[+]'}</span>
+                            </button>
+                            {expandedSections[`discounts-${tier.id}`] && (
+                              <div className="grid grid-cols-2 gap-2 mt-2">
+                                {([
+                                  ['dataProcessingDiscount', 'Data Processing'],
+                                  ['agentUsageDiscount', 'Agent Usage'],
+                                  ['toolUsageDiscount', 'Tool Usage'],
+                                  ['enterpriseDiscount', 'Enterprise'],
+                                ] as [string, string][]).map(([key, label]) => (
+                                  <div key={key}>
+                                    <label className="block text-xs font-medium text-gray-600">{label} (%)</label>
+                                    <input type="number" min="0" max="100" step="1"
+                                      value={((editedTierData.discounts as any)?.[key] ?? 0) * 100}
+                                      onChange={(e) => setEditedTierData(prev => ({
+                                        ...prev,
+                                        discounts: { ...prev.discounts!, [key]: parseFloat(e.target.value) / 100 }
+                                      }))}
+                                      className="w-full px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-blue-500"
+                                    />
+                                  </div>
+                                ))}
+                                <p className="col-span-2 text-xs text-gray-400">Enter as percentage (e.g. 10 = 10%)</p>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Action Buttons */}
+                          <div className="flex items-center space-x-2 pt-2">
                             <button
                               onClick={handleTierSave}
-                              className="flex-1 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center"
+                              className="flex-1 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center text-sm"
                             >
                               <Save className="h-4 w-4 mr-1" />
                               Save
                             </button>
                             <button
                               onClick={handleTierCancel}
-                              className="flex-1 px-3 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 flex items-center justify-center"
+                              className="flex-1 px-3 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 flex items-center justify-center text-sm"
                             >
                               <X className="h-4 w-4 mr-1" />
                               Cancel

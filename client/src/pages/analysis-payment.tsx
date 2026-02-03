@@ -249,6 +249,17 @@ export default function AnalysisPaymentPage({ projectId, projectData: providedPr
     return toCents(journeyState?.costs?.remaining);
   }, [intentMetrics, journeyState]);
 
+  const derivedRemainingCostCents = useMemo(() => {
+    if (remainingCostCents !== null && remainingCostCents !== undefined) {
+      return remainingCostCents;
+    }
+    if (lockedCostCents !== null && lockedCostCents !== undefined &&
+        spentCostCents !== null && spentCostCents !== undefined) {
+      return Math.max(lockedCostCents - spentCostCents, 0);
+    }
+    return null;
+  }, [remainingCostCents, lockedCostCents, spentCostCents]);
+
   const displayLockedCents = lockedCostCents ?? pricing?.priceInCents ?? null;
 
   const chargeableCents = useMemo(() => {
@@ -256,10 +267,10 @@ export default function AnalysisPaymentPage({ projectId, projectData: providedPr
       return intentMetrics.payableCents;
     }
     if (lockedCostCents !== null && lockedCostCents !== undefined) {
-      return remainingCostCents ?? lockedCostCents;
+      return derivedRemainingCostCents ?? lockedCostCents;
     }
     return pricing?.priceInCents ?? null;
-  }, [intentMetrics, lockedCostCents, remainingCostCents, pricing]);
+  }, [intentMetrics, lockedCostCents, derivedRemainingCostCents, pricing]);
 
   const formatCurrency = (cents: number | null | undefined) => {
     if (cents === null || cents === undefined || Number.isNaN(cents)) {
@@ -341,33 +352,14 @@ export default function AnalysisPaymentPage({ projectId, projectData: providedPr
     } catch (error: any) {
       console.error("Pricing calculation error:", error);
 
-      // Fallback pricing calculation if API fails
-      const basePrice = 5.00;
-      const dataSizeCharge = Math.max(0, (projectData.dataSizeMB - 10) * 0.10);
-      const complexityCharge = projectData.recordCount > 100000 ? 15.00 : projectData.recordCount > 10000 ? 8.00 : 0;
-      const questionsCharge = Math.max(0, (projectData.questions.length - 3) * 1.00);
-      const analysisTypeCharge = analysisType === 'advanced' ? 10.00 : analysisType === 'custom' ? 20.00 : 0;
-
-      const finalPrice = basePrice + dataSizeCharge + complexityCharge + questionsCharge + analysisTypeCharge;
-
-      setPricing({
-        finalPrice,
-        priceInCents: Math.round(finalPrice * 100),
-        breakdown: {
-          basePrice,
-          dataSizeCharge,
-          complexityCharge,
-          questionsCharge,
-          analysisTypeCharge
-        },
-        source: 'calculated'
-      });
-
-      setDataComplexity(projectData.recordCount > 100000 ? 'complex' : projectData.recordCount > 10000 ? 'moderate' : 'simple');
+      // Show error state instead of client-side fallback pricing (which can diverge from server)
+      setPricing(null);
+      setDataComplexity('');
 
       toast({
-        title: "Using Estimated Pricing",
-        description: "Calculated pricing based on project data.",
+        title: "Pricing Unavailable",
+        description: "Unable to calculate pricing from the server. Please refresh the page to try again.",
+        variant: "destructive"
       });
     } finally {
       setIsCalculating(false);
@@ -442,11 +434,22 @@ export default function AnalysisPaymentPage({ projectId, projectData: providedPr
       setClientSecret(data.clientSecret);
       setPricing(data.pricing ?? null);
       setDataComplexity(data.dataComplexity ?? dataComplexity);
+
+      const computedRemaining = typeof data.remainingCostCents === 'number'
+        ? data.remainingCostCents
+        : (typeof data.lockedCostCents === 'number' && typeof data.spentCostCents === 'number'
+            ? Math.max(data.lockedCostCents - data.spentCostCents, 0)
+            : undefined);
+
+      const payableFromResponse = typeof data.payableCents === 'number'
+        ? data.payableCents
+        : (computedRemaining ?? amountForIntent ?? undefined);
+
       setIntentMetrics({
         lockedCostCents: typeof data.lockedCostCents === 'number' ? data.lockedCostCents : undefined,
         spentCostCents: typeof data.spentCostCents === 'number' ? data.spentCostCents : undefined,
-        remainingCostCents: typeof data.remainingCostCents === 'number' ? data.remainingCostCents : undefined,
-        payableCents: typeof data.payableCents === 'number' ? data.payableCents : undefined,
+        remainingCostCents: computedRemaining,
+        payableCents: payableFromResponse,
       });
     } catch (error: any) {
       console.error("Payment creation error:", error);
@@ -577,7 +580,7 @@ export default function AnalysisPaymentPage({ projectId, projectData: providedPr
                 <div className="rounded-lg border border-blue-100 bg-white p-3">
                   <p className="text-xs text-blue-700">Remaining balance</p>
                   <p className="text-lg font-semibold text-blue-900" data-testid="analysis-remaining-cost">
-                    {formatCurrency(remainingCostCents ?? chargeableCents)}
+                    {formatCurrency(derivedRemainingCostCents ?? chargeableCents)}
                   </p>
                 </div>
               </div>
@@ -658,8 +661,9 @@ export default function AnalysisPaymentPage({ projectId, projectData: providedPr
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Calculator className="w-5 h-5" />
-                  Pricing Breakdown
+                  Cost Details
                 </CardTitle>
+                <CardDescription>Amount due based on your locked estimate</CardDescription>
               </CardHeader>
               <CardContent>
                 {isCalculating ? (
@@ -668,54 +672,32 @@ export default function AnalysisPaymentPage({ projectId, projectData: providedPr
                   </div>
                 ) : pricing ? (
                   <div className="space-y-4">
-                    <div className="space-y-2">
-                      <div className="flex justify-between">
-                        <span>Base Analysis</span>
-                        <span>{formatCurrency(toCents(pricing.breakdown.basePrice))}</span>
+                    {/* Per-analysis breakdown when available */}
+                    {(pricing.breakdown as any).perAnalysisBreakdown?.length > 1 && (
+                      <div className="space-y-1">
+                        <p className="text-xs font-medium text-muted-foreground mb-2">Per-analysis costs:</p>
+                        {(pricing.breakdown as any).perAnalysisBreakdown.map((item: any, idx: number) => (
+                          <div key={idx} className="flex justify-between text-sm">
+                            <span className="capitalize">{item.type.replace(/_/g, ' ')}</span>
+                            <span>{formatCurrency(toCents(item.cost))}</span>
+                          </div>
+                        ))}
+                        <Separator className="my-2" />
                       </div>
-                      {pricing.breakdown.dataSizeCharge > 0 && (
-                        <div className="flex justify-between text-sm text-muted-foreground">
-                          <span>Data Size Charge</span>
-                          <span>+{formatCurrency(toCents(pricing.breakdown.dataSizeCharge))}</span>
-                        </div>
-                      )}
-                      {pricing.breakdown.complexityCharge > 0 && (
-                        <div className="flex justify-between text-sm text-muted-foreground">
-                          <span>Complexity Charge</span>
-                          <span>+{formatCurrency(toCents(pricing.breakdown.complexityCharge))}</span>
-                        </div>
-                      )}
-                      {pricing.breakdown.questionsCharge > 0 && (
-                        <div className="flex justify-between text-sm text-muted-foreground">
-                          <span>Extra Questions</span>
-                          <span>+{formatCurrency(toCents(pricing.breakdown.questionsCharge))}</span>
-                        </div>
-                      )}
-                      {pricing.breakdown.analysisTypeCharge > 0 && (
-                        <div className="flex justify-between text-sm text-muted-foreground">
-                          <span>Analysis Type</span>
-                          <span>+{formatCurrency(toCents(pricing.breakdown.analysisTypeCharge))}</span>
-                        </div>
-                      )}
-                    </div>
-                    <Separator />
+                    )}
                     <div className="flex justify-between text-lg font-semibold">
-                      <span>Total</span>
-                      <span>{formatCurrency(pricing.source === 'locked' ? (chargeableCents ?? toCents(pricing.finalPrice)) : toCents(pricing.finalPrice))}</span>
+                      <span>Amount Due</span>
+                      <span>{formatCurrency(chargeableCents ?? toCents(pricing.finalPrice))}</span>
                     </div>
-                    {pricing.source === 'locked' && chargeableCents !== null && chargeableCents !== toCents(pricing.finalPrice) && (
-                      <p className="text-sm text-muted-foreground">
-                        Remaining balance from locked estimate.
+                    {pricing.source === 'locked' && (
+                      <p className="text-xs text-muted-foreground">
+                        Based on locked estimate from plan approval.
                       </p>
                     )}
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Clock className="w-4 h-4" />
-                      {selectedOption?.features.find(f => f.includes('minute'))}
-                    </div>
                   </div>
                 ) : (
                   <div className="text-center py-4 text-muted-foreground">
-                    Calculating pricing...
+                    Unable to load pricing. Please refresh the page.
                   </div>
                 )}
               </CardContent>

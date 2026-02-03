@@ -1,3 +1,4 @@
+import { nanoid } from 'nanoid';
 import { db } from './db';
 import { artifactTemplates, projects, generatedArtifacts, decisionAudits } from '@shared/schema';
 import { eq, and, desc, like, or } from 'drizzle-orm';
@@ -620,7 +621,7 @@ Return the validated template with corrections and a validation score (0-100).`;
     startTime: number
   ): Promise<GeneratedTemplate> {
     const generatedTemplate: GeneratedTemplate = {
-      id: `dyn_template_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`,
+      id: `dyn_template_${nanoid()}`,
       industryMatch: industryResearch.industryName,
       confidence: 0.85, // Would be calculated based on research quality
       template,
@@ -671,7 +672,7 @@ Return the validated template with corrections and a validation score (0-100).`;
     generatedTemplate: GeneratedTemplate
   ): Promise<void> {
     await db.insert(decisionAudits).values({
-      id: `decision_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`,
+      id: `decision_${nanoid()}`,
       projectId: 'template_generation', // Special project ID for template generation
       agent: 'business_agent',
       decisionType: 'template_generation',

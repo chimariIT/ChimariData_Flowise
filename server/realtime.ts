@@ -2,6 +2,7 @@ import WebSocket, { Server as WebSocketServer } from 'ws';
 import { IncomingMessage } from 'http';
 import { URL } from 'url';
 import jwt from 'jsonwebtoken';
+import { nanoid } from 'nanoid';
 import { EventEmitter } from 'events';
 import { WebSocketLifecycleManager, ConnectionHealth } from './services/websocket-lifecycle';
 
@@ -380,7 +381,7 @@ export class RealtimeServer extends EventEmitter {
   }
 
   private generateClientId(): string {
-    return `client_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+    return `client_${nanoid()}`;
   }
 
   // Public API for broadcasting events

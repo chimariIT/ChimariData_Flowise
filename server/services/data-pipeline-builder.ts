@@ -14,6 +14,8 @@
  * - Data quality validation integration
  */
 
+import { nanoid } from 'nanoid';
+
 export interface DataSource {
   sourceId: string;
   type: 'database' | 'file' | 'api' | 'stream' | 'cloud_storage';
@@ -165,7 +167,7 @@ export class DataPipelineBuilder {
    * Create a new data pipeline
    */
   async createPipeline(request: CreatePipelineRequest): Promise<DataPipeline> {
-    const pipelineId = `pipeline_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const pipelineId = `pipeline_${nanoid()}`;
     const now = new Date();
 
     // Validate transformations are ordered
@@ -284,7 +286,7 @@ export class DataPipelineBuilder {
       throw new Error(`Pipeline ${pipelineId} is not active (status: ${pipeline.status})`);
     }
 
-    const executionId = `exec_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const executionId = `exec_${nanoid()}`;
     const startTime = new Date();
 
     const execution: PipelineExecution = {

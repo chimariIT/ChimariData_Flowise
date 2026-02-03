@@ -34,7 +34,10 @@ export class PricingService {
   private estimateCache = new Map<string, CacheEntry>();
   private readonly CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
   private readonly ESTIMATE_VALIDITY_MS = 15 * 60 * 1000; // 15 minutes
-  private readonly SECRET_KEY = process.env.PRICING_SECRET_KEY || 'dev-pricing-secret-key-change-in-production';
+  private readonly SECRET_KEY = process.env.PRICING_SECRET_KEY || process.env.JWT_SECRET || (() => {
+    console.warn('⚠️ PRICING: No PRICING_SECRET_KEY set. Using ephemeral key - pricing estimates will not persist across restarts.');
+    return require('crypto').randomBytes(32).toString('hex');
+  })();
 
   // Base pricing in cents (divide by 100 for dollars)
   private readonly BASE_PRICES = {

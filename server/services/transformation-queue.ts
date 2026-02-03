@@ -13,6 +13,7 @@
  */
 
 import { EventEmitter } from 'events';
+import { nanoid } from 'nanoid';
 import { streamingTransformer, TransformationConfig, StreamingOptions, TransformationProgress } from './streaming-transformer';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -62,7 +63,7 @@ export class TransformationQueue extends EventEmitter {
      * Add a new transformation job to the queue
      */
     async enqueue(job: Omit<TransformationJob, 'jobId' | 'status' | 'createdAt' | 'retryCount'>): Promise<string> {
-        const jobId = `job-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const jobId = `job-${nanoid()}`;
 
         const fullJob: TransformationJob = {
             ...job,

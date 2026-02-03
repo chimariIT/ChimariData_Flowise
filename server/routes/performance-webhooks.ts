@@ -1,5 +1,6 @@
 // server/routes/performance-webhooks.ts
 import { Router } from 'express';
+import { nanoid } from 'nanoid';
 import { performanceWebhookService, WebhookEndpoint, type PerformanceMetric } from '../services/performance-webhook-service';
 import { ensureAuthenticated } from './auth';
 
@@ -59,7 +60,7 @@ router.post('/webhooks', ensureAuthenticated, requireAdmin, (req, res) => {
             return res.status(400).json({ error: 'Webhook URL is required' });
         }
 
-        const webhookId = `webhook_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const webhookId = `webhook_${nanoid()}`;
         
         const webhook: WebhookEndpoint = {
             id: webhookId,

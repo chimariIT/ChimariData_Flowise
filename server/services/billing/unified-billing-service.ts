@@ -305,7 +305,8 @@ export interface AnalysisCostEstimate {
   warnings?: string[];
 }
 
-// Import shared pricing constants as defaults
+// PRICING_CONSTANTS used as seed for ANALYSIS_PRICING_DEFAULTS only;
+// runtime lookups use PricingService (already imported at top of file)
 import { PRICING_CONSTANTS } from '../../../shared/pricing-config';
 
 const ANALYSIS_PRICING_DEFAULTS: AnalysisPricingConfig = {
@@ -328,10 +329,9 @@ export class UnifiedBillingService {
   // ==========================================
   // WEBHOOK IDEMPOTENCY TRACKING
   // ==========================================
-  // Prevents duplicate webhook processing when Stripe retries
-  // Set holds event IDs that have been successfully processed
-  // Cleaned up periodically to prevent memory growth
-  private processedWebhooks: Set<string> = new Set();
+  // P0-1 FIX: DB-backed webhook dedup (survives server restarts)
+  // In-memory Set used as fast cache; DB is authoritative source
+  private processedWebhooksCache: Set<string> = new Set();
   private readonly MAX_PROCESSED_WEBHOOKS = 1000;
 
   // In-memory cache for admin configurations (refreshed periodically)
@@ -791,11 +791,11 @@ export class UnifiedBillingService {
       },
       {
         tier: 'trial',
-        displayName: 'Trial',
-        description: '14-day trial with AI-guided journey',
-        pricing: { monthly: 1, yearly: 10, currency: 'USD' },
-        stripeProductId: 'prod_trial',
-        stripePriceIds: { monthly: 'price_trial', yearly: 'price_trial' },
+        displayName: 'Free Trial',
+        description: '14-day free trial with AI-guided journey',
+        pricing: { monthly: 0, yearly: 0, currency: 'USD' },
+        stripeProductId: '',
+        stripePriceIds: { monthly: '', yearly: '' },
         quotas: {
           maxDataUploadsMB: 10,
           maxStorageMB: 50,
@@ -1693,12 +1693,16 @@ export class UnifiedBillingService {
       }
 
       await db.transaction(async (tx: typeof db) => {
-        // Update Stripe subscription
+        // Update Stripe subscription, preserving the current billing cycle
         const subscription = await this.stripe.subscriptions.retrieve(user.stripeSubscriptionId!);
+        const currentInterval = subscription.items.data[0]?.price?.recurring?.interval;
+        const priceId = currentInterval === 'year' && newTierConfig.stripePriceIds.yearly
+          ? newTierConfig.stripePriceIds.yearly
+          : newTierConfig.stripePriceIds.monthly;
         await this.stripe.subscriptions.update(user.stripeSubscriptionId!, {
           items: [{
             id: subscription.items.data[0].id,
-            price: newTierConfig.stripePriceIds.monthly, // TODO: Preserve billing cycle
+            price: priceId,
           }],
           proration_behavior: 'create_prorations',
           metadata: { tier: newTier },
@@ -1742,18 +1746,37 @@ export class UnifiedBillingService {
       );
 
       // ==========================================
-      // IDEMPOTENCY CHECK
+      // IDEMPOTENCY CHECK (P0-1 FIX: DB-backed, survives restarts)
       // ==========================================
-      // Prevent duplicate processing when Stripe retries webhooks
-      if (this.processedWebhooks.has(event.id)) {
-        console.log(`⚠️ [Webhook] Event ${event.id} already processed, skipping`);
+      // Check in-memory cache first (fast path)
+      if (this.processedWebhooksCache.has(event.id)) {
+        console.log(`[Webhook] Event ${event.id} already processed (cache hit), skipping`);
         return { success: true, skipped: true };
       }
 
-      console.log(`🔔 [Webhook] Processing: ${event.type} (ID: ${event.id})`);
+      // Check DB for events processed before last restart
+      try {
+        const { decisionAudits } = await import('../../../shared/schema');
+        const existing = await db.select({ id: decisionAudits.id })
+          .from(decisionAudits)
+          .where(and(
+            eq(decisionAudits.decisionType, 'webhook_processed'),
+            eq(decisionAudits.context, event.id)
+          ))
+          .limit(1);
+        if (existing.length > 0) {
+          this.processedWebhooksCache.add(event.id);
+          console.log(`[Webhook] Event ${event.id} already processed (DB hit), skipping`);
+          return { success: true, skipped: true };
+        }
+      } catch (dbCheckError) {
+        console.warn(`[Webhook] DB dedup check failed, proceeding:`, dbCheckError);
+      }
 
-      // P0-A FIX: Mark as processing BEFORE transaction to prevent concurrent duplicates
-      this.processedWebhooks.add(event.id);
+      console.log(`[Webhook] Processing: ${event.type} (ID: ${event.id})`);
+
+      // Mark in cache before processing to prevent concurrent duplicates
+      this.processedWebhooksCache.add(event.id);
 
       // Process event within transaction
       try {
@@ -1794,19 +1817,41 @@ export class UnifiedBillingService {
         }
       });
       } catch (txError: any) {
-        // P0-A FIX: On transaction failure, remove from processed set so retry can succeed
-        this.processedWebhooks.delete(event.id);
+        // On transaction failure, remove from cache so Stripe retry can succeed
+        this.processedWebhooksCache.delete(event.id);
         throw txError;
       }
 
-      // Cleanup old entries to prevent memory growth
-      if (this.processedWebhooks.size > this.MAX_PROCESSED_WEBHOOKS) {
-        const entriesToRemove = Array.from(this.processedWebhooks).slice(0, this.MAX_PROCESSED_WEBHOOKS / 2);
-        entriesToRemove.forEach(id => this.processedWebhooks.delete(id));
-        console.log(`🧹 [Webhook] Cleaned up ${entriesToRemove.length} old webhook entries`);
+      // P0-1 FIX: Persist to DB for crash-safe dedup
+      try {
+        const { decisionAudits } = await import('../../../shared/schema');
+        const { nanoid } = await import('nanoid');
+        await db.insert(decisionAudits).values({
+          id: nanoid(),
+          projectId: (event.data.object as any)?.metadata?.projectId || 'system',
+          agent: 'billing',
+          decisionType: 'webhook_processed',
+          decision: `Webhook ${event.type} processed`,
+          reasoning: `Stripe event ${event.id}`,
+          alternatives: JSON.stringify([]),
+          confidence: 100,
+          context: event.id,
+          userInput: null,
+          reversible: false,
+          impact: 'low',
+          timestamp: new Date()
+        });
+      } catch (auditErr) {
+        console.warn(`[Webhook] Failed to persist dedup record (non-blocking):`, auditErr);
       }
 
-      console.log(`✅ [Webhook] Successfully processed: ${event.type}`);
+      // Cleanup old cache entries to prevent memory growth
+      if (this.processedWebhooksCache.size > this.MAX_PROCESSED_WEBHOOKS) {
+        const entriesToRemove = Array.from(this.processedWebhooksCache).slice(0, this.MAX_PROCESSED_WEBHOOKS / 2);
+        entriesToRemove.forEach(id => this.processedWebhooksCache.delete(id));
+      }
+
+      console.log(`[Webhook] Successfully processed: ${event.type}`);
       return { success: true };
     } catch (error: any) {
       console.error('❌ [Webhook] Processing error:', error);
@@ -1916,11 +1961,17 @@ export class UnifiedBillingService {
     const userId = session.metadata?.userId;
 
     if (!projectId || !userId) {
-      console.log(`ℹ️ [Webhook] Checkout session completed but no project/user metadata`);
+      console.log(`[Webhook] Checkout session completed but no project/user metadata`);
       return;
     }
 
-    console.log(`✅ [Webhook] Checkout completed for project ${projectId}`);
+    // P0-2 FIX: Verify payment actually succeeded before marking project as paid
+    if (session.payment_status !== 'paid') {
+      console.warn(`[Webhook] Checkout session ${session.id} completed but payment_status is '${session.payment_status}', NOT marking as paid`);
+      return;
+    }
+
+    console.log(`[Webhook] Checkout completed for project ${projectId} (payment_status: paid)`);
 
     // Update project as paid
     const { projects } = await import('../../../shared/schema');
@@ -1932,7 +1983,7 @@ export class UnifiedBillingService {
       } as any)
       .where(eq(projects.id, projectId));
 
-    console.log(`💳 [Webhook] Project ${projectId} marked as paid`);
+    console.log(`[Webhook] Project ${projectId} marked as paid`);
   }
 
   /**
@@ -2215,7 +2266,19 @@ export class UnifiedBillingService {
             })
             .where(eq(users.id, userId));
 
-          // TODO: Create invoice item in Stripe for overage charges
+          // Create invoice item in Stripe for overage charges
+          if (this.stripe && user.stripeCustomerId && cost > 0) {
+            try {
+              await this.stripe.invoiceItems.create({
+                customer: user.stripeCustomerId,
+                amount: Math.round(cost * 100), // cents
+                currency: 'usd',
+                description: `Overage charge: ${featureId} usage exceeding quota`,
+              });
+            } catch (stripeErr) {
+              console.error('Failed to create Stripe overage invoice item:', stripeErr);
+            }
+          }
 
           return {
             allowed: true, // Allow but charge
@@ -2934,7 +2997,7 @@ export class UnifiedBillingService {
     return {
       journeyType,
       datasetSizeMB,
-      estimatedCost: datasetSizeMB * 0.01, // Simple calculation
+      estimatedCost: datasetSizeMB * PricingService.getDataProcessingPer1K(),
       complexity: datasetSizeMB > 1000 ? 'large' : datasetSizeMB > 100 ? 'medium' : 'small'
     };
   }
@@ -3435,7 +3498,7 @@ export class UnifiedBillingService {
     let subscriptionCredits = 0;
     try {
       const trialStatus = await this.getTrialCreditsStatus(options.userId);
-      if (trialStatus.hasCredits) {
+      if (trialStatus && trialStatus.remaining > 0 && !trialStatus.expired) {
         subscriptionCredits = Math.min(trialStatus.remaining / 100, analysisCost.totalCost);
       }
     } catch {
@@ -3498,6 +3561,15 @@ export function getBillingService(): UnifiedBillingService {
   if (!billingService) {
     const stripeSecretKey = process.env.STRIPE_SECRET_KEY || 'stripe_test_key_placeholder';
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || 'whsec_placeholder';
+
+    // P0-4 FIX: Block production startup with placeholder secrets
+    const isProduction = process.env.NODE_ENV === 'production';
+    if (isProduction && stripeSecretKey === 'stripe_test_key_placeholder') {
+      throw new Error('FATAL: STRIPE_SECRET_KEY is required in production. Set it in environment variables.');
+    }
+    if (isProduction && webhookSecret === 'whsec_placeholder') {
+      throw new Error('FATAL: STRIPE_WEBHOOK_SECRET is required in production. Webhooks will fail signature verification.');
+    }
 
     // Log warning if using development keys
     if (stripeSecretKey === 'stripe_test_key_placeholder') {

@@ -68,7 +68,7 @@ export class CostEstimationService {
     amount: number
   ): Promise<{ cost: number; units: string; rate: number }> {
     return getBillingService().calculateConsumptionCost(userId, usageType, amount)
-      .then(result => ({ cost: result.cost, units: 'units', rate: result.cost / Math.max(amount, 1) }));
+      .then(result => ({ cost: result, units: 'units', rate: result / Math.max(amount, 1) }));
   }
 
   static calculateCreditsRequired(

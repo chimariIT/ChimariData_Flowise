@@ -14,6 +14,8 @@
  * - Issue tracking and recommendations
  */
 
+import { nanoid } from 'nanoid';
+
 export interface QualityRule {
   ruleId: string;
   name: string;
@@ -139,7 +141,7 @@ export class DataQualityMonitor {
    * Validate data quality and generate report
    */
   async validateData(request: ValidateDataRequest): Promise<QualityReport> {
-    const reportId = `quality_report_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const reportId = `quality_report_${nanoid()}`;
     const now = new Date();
 
     // Profile the data
@@ -395,7 +397,7 @@ export class DataQualityMonitor {
         const colProfile = profile.columns.find(c => c.name === field);
         if (colProfile && colProfile.nullPercentage > 0) {
           issues.push({
-            issueId: `issue_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            issueId: `issue_${nanoid()}`,
             ruleId: rule.ruleId,
             ruleName: rule.name,
             severity: rule.severity,

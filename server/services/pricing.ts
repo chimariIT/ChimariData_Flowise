@@ -23,11 +23,15 @@ export interface LLMCost {
     currency: string;
 }
 
-// Import shared pricing constants for consistency
-import { PRICING_CONSTANTS } from '../../shared/pricing-config';
+// Import shared pricing constants for consistency (used as seed/fallback only)
+import { PRICING_CONSTANTS, getAnalysisTypeFactor as getStaticTypeFactor, getRecordCountMultiplier as getStaticRecordMultiplier } from '../../shared/pricing-config';
 import { db } from '../db';
-import { analysisPricingConfig } from '../../shared/schema';
+import { analysisPricingConfig, servicePricing, subscriptionTierPricing } from '../../shared/schema';
 import { eq } from 'drizzle-orm';
+
+// Row types from DB tables
+type ServicePricingRow = typeof servicePricing.$inferSelect;
+type SubscriptionTierRow = typeof subscriptionTierPricing.$inferSelect;
 
 // PHASE 6: Admin-configurable analysis pricing
 export interface AnalysisPricingConfig {
@@ -84,6 +88,11 @@ export class PricingService {
     private static pricingConfig: AnalysisPricingConfig = { ...DEFAULT_PRICING_CONFIG };
     private static dbLoaded = false;
 
+    // Service pricing cache (pay-per-analysis, expert-consultation, etc.)
+    private static servicePricingCache: Map<string, ServicePricingRow> = new Map();
+    // Subscription tier cache
+    private static subscriptionTierCache: Map<string, SubscriptionTierRow> = new Map();
+
     // Legacy static costFactors for backwards compatibility
     private static costFactors = {
         'statistical': 1.0,
@@ -130,6 +139,12 @@ export class PricingService {
             console.warn('⚠️ [PricingService] Could not load from DB, using in-memory defaults:', (error as Error).message);
             this.dbLoaded = false;
         }
+
+        // Load service pricing and subscription tiers in parallel
+        await Promise.allSettled([
+            this.refreshServicePricing(),
+            this.refreshSubscriptionTiers()
+        ]);
     }
 
     /**
@@ -463,4 +478,139 @@ export class PricingService {
     }
 
     // Mock createCheckoutSession removed. Use UnifiedBillingService.createCheckoutSession instead.
+
+    // =========================================================
+    // Service Pricing & Subscription Tier Cache (Phase 1)
+    // =========================================================
+
+    /**
+     * Refresh service pricing cache from DB (pay-per-analysis, expert-consultation, etc.)
+     */
+    static async refreshServicePricing(): Promise<void> {
+        try {
+            const rows = await db.select().from(servicePricing);
+            this.servicePricingCache.clear();
+            for (const row of rows) {
+                this.servicePricingCache.set(row.serviceType, row);
+            }
+            console.log(`💲 [PricingService] Loaded ${rows.length} service pricing rows from DB`);
+        } catch (error) {
+            console.warn('⚠️ [PricingService] Could not load service pricing from DB:', (error as Error).message);
+        }
+    }
+
+    /**
+     * Refresh subscription tier cache from DB
+     */
+    static async refreshSubscriptionTiers(): Promise<void> {
+        try {
+            const rows = await db.select().from(subscriptionTierPricing);
+            this.subscriptionTierCache.clear();
+            for (const row of rows) {
+                this.subscriptionTierCache.set(row.id, row);
+            }
+            console.log(`💲 [PricingService] Loaded ${rows.length} subscription tiers from DB`);
+        } catch (error) {
+            console.warn('⚠️ [PricingService] Could not load subscription tiers from DB:', (error as Error).message);
+        }
+    }
+
+    // --- Service Pricing Getters ---
+
+    /**
+     * Get a service price in dollars (converts from cents stored in DB).
+     * Falls back to PRICING_CONSTANTS.servicePricingDefaults.
+     */
+    static getServicePrice(serviceType: string): number {
+        const row = this.servicePricingCache.get(serviceType);
+        if (row) return row.basePrice / 100;
+        // Fallback
+        const key = serviceType.replace(/-/g, '') as string;
+        if (serviceType === 'pay-per-analysis') return PRICING_CONSTANTS.servicePricingDefaults.payPerAnalysis;
+        if (serviceType === 'expert-consultation') return PRICING_CONSTANTS.servicePricingDefaults.expertConsultation;
+        return 0;
+    }
+
+    /**
+     * Get full service pricing row (or null)
+     */
+    static getServicePricing(serviceType: string): ServicePricingRow | null {
+        return this.servicePricingCache.get(serviceType) || null;
+    }
+
+    /**
+     * Get all cached service pricing rows
+     */
+    static getAllServicePricing(): ServicePricingRow[] {
+        return Array.from(this.servicePricingCache.values());
+    }
+
+    // --- Subscription Tier Getters ---
+
+    /**
+     * Get a subscription tier from cache (or null)
+     */
+    static getSubscriptionTier(tierId: string): SubscriptionTierRow | null {
+        return this.subscriptionTierCache.get(tierId) || null;
+    }
+
+    /**
+     * Get all cached subscription tiers
+     */
+    static getAllSubscriptionTiers(): SubscriptionTierRow[] {
+        return Array.from(this.subscriptionTierCache.values());
+    }
+
+    // --- Analysis Pricing Getters (from pricingConfig cache) ---
+
+    /**
+     * Get base platform fee (DB-backed with fallback)
+     */
+    static getBasePlatformFee(): number {
+        return this.pricingConfig.platformFee;
+    }
+
+    /**
+     * Get data processing cost per 1K rows (DB-backed with fallback)
+     */
+    static getDataProcessingPer1K(): number {
+        return this.pricingConfig.dataSizeCostPer1K;
+    }
+
+    /**
+     * Get base analysis cost (DB-backed with fallback)
+     */
+    static getBaseAnalysisCost(): number {
+        return this.pricingConfig.baseCost;
+    }
+
+    /**
+     * Get analysis type factor (DB-backed with fallback to shared constant)
+     */
+    static getAnalysisTypeFactor(analysisType: string): number {
+        const normalized = (analysisType || 'default').toLowerCase().replace(/[^a-z_]/g, '_');
+        return (this.pricingConfig.analysisTypeFactors as Record<string, number>)[normalized]
+            || this.pricingConfig.analysisTypeFactors.default;
+    }
+
+    /**
+     * Get complexity multiplier by level (DB-backed with fallback)
+     */
+    static getComplexityMultiplier(level: string): number {
+        return (this.pricingConfig.complexityMultipliers as Record<string, number>)[level] || 1.0;
+    }
+
+    /**
+     * Get number of questions included in base price
+     */
+    static getQuestionsIncluded(): number {
+        return PRICING_CONSTANTS.questionsIncluded;
+    }
+
+    /**
+     * Get charge per extra question
+     */
+    static getQuestionsChargePerExtra(): number {
+        return PRICING_CONSTANTS.questionsChargePerExtra;
+    }
 }

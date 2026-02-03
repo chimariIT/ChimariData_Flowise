@@ -4,6 +4,7 @@ import { MLService, MLAnalysisRequest } from './ml-service';
 import { AdvancedAnalyzer } from './advanced-analyzer';
 import { VisualizationAPIService } from './visualization-api-service';
 import { BusinessTemplates } from './services/business-templates';
+import { nanoid } from 'nanoid';
 import { db } from './db';
 import { projects, datasets, decisionAudits, generatedArtifacts } from '../shared/schema';
 import { eq } from 'drizzle-orm';
@@ -796,7 +797,7 @@ export class EnhancedMCPService extends MCPAIService {
   ): Promise<void> {
     try {
       await db.insert(decisionAudits).values({
-        id: `decision_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`,
+        id: `decision_${nanoid()}`,
         projectId,
         agent,
         decisionType,

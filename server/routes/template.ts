@@ -1,4 +1,5 @@
 import express from 'express';
+import { nanoid } from 'nanoid';
 import { db } from '../db';
 import { artifactTemplates, projects, templateFeedback } from '@shared/schema';
 import { eq } from 'drizzle-orm';
@@ -235,7 +236,7 @@ router.post('/:templateId/feedback', async (req, res) => {
     }
 
     // Record feedback
-    const feedbackId = `feedback_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+    const feedbackId = `feedback_${nanoid()}`;
 
     await db.insert(templateFeedback).values({
       id: feedbackId,

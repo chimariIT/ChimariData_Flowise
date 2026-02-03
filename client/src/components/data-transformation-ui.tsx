@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { nanoid } from 'nanoid';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -195,7 +196,7 @@ export function DataTransformationUI({ projectId, project, onProjectUpdate, onNe
         const generatedSteps = data.recommendations
           .filter((rec: any) => rec.transformation.code)
           .map((rec: any) => ({
-            id: `step_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            id: `step_${nanoid()}`,
             type: 'convert',
             name: rec.elementName,
             description: rec.transformation.description,

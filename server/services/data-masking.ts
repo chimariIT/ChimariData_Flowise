@@ -7,6 +7,8 @@
  * @module DataMaskingService
  */
 
+import * as crypto from 'crypto';
+
 /** Masking strategies */
 export enum MaskingStrategy {
     REDACTION = 'redaction',           // ***-**-1234
@@ -296,7 +298,7 @@ export class DataMaskingService {
      */
     private static tokenize(value: string): string {
         // Simplified - in production, use proper tokenization
-        return `TOKEN_${Math.random().toString(36).substring(7).toUpperCase()}`;
+        return `TOKEN_${crypto.randomBytes(8).toString('hex').toUpperCase()}`;
     }
 
     /**

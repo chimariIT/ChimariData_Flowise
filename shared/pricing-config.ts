@@ -39,6 +39,11 @@ export const PRICING_CONSTANTS = {
     default: 1.0
   } as Record<string, number>,
 
+  /** Cost per additional question beyond the included 5 */
+  questionsChargePerExtra: 0.10,
+  /** Number of questions included in base price */
+  questionsIncluded: 5,
+
   artifactCosts: {
     report: 0.25,
     dashboard: 0.50,
@@ -50,6 +55,22 @@ export const PRICING_CONSTANTS = {
   complexityThresholds: {
     complex: 100_000,   // > 100K rows = complex (2.5x)
     moderate: 10_000,   // > 10K rows = moderate (1.5x)
+  },
+
+  /** Service-level pricing defaults (in dollars).
+   *  These are overridden by admin-configured values in service_pricing table.
+   *  Used as fallbacks when API data hasn't loaded yet. */
+  servicePricingDefaults: {
+    payPerAnalysis: 25,      // $25 base for pay-per-analysis service
+    expertConsultation: 150, // $150 base for expert consultation
+  },
+
+  /** Admin analysis pricing defaults (used when no DB config exists).
+   *  Must match server/routes/admin-secured.ts DEFAULT_ANALYSIS_PRICING. */
+  adminPricingDefaults: {
+    baseCost: 0.50,
+    dataSizeCostPer1K: 0.10,
+    platformFee: 0.25,
   }
 } as const;
 

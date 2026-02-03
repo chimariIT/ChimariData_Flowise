@@ -1,3 +1,4 @@
+import { nanoid } from 'nanoid';
 import { db } from './db';
 import {
   analysisSubscriptions,
@@ -481,11 +482,11 @@ export class ContinuousAnalysisEngine {
    * Helper methods
    */
   private generateSubscriptionId(): string {
-    return `sub_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+    return `sub_${nanoid()}`;
   }
 
   private generateExecutionId(): string {
-    return `exec_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+    return `exec_${nanoid()}`;
   }
 
   private async getSubscription(subscriptionId: string): Promise<AnalysisSubscription | null> {
@@ -639,7 +640,7 @@ export class ContinuousAnalysisEngine {
     const mode = subscription.mode as any;
     const audienceProfiles = subscription.audienceProfiles as any[] || [];
     await db.insert(decisionAudits).values({
-      id: `decision_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`,
+      id: `decision_${nanoid()}`,
       projectId: subscription.projectId,
       agent: 'system',
       decisionType: 'analysis_approach',

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { nanoid } from 'nanoid';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -499,7 +500,7 @@ export default function GuidedAnalysisWizard({
 
       if (clientSecret) {
         // Generate a local analysis ID for demo/test flow
-        const analysisId = `ga_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const analysisId = `ga_${nanoid()}`;
 
         // Store checkout data in localStorage for retrieval on checkout page
         const checkoutData = {

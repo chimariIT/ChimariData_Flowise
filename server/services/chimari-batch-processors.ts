@@ -10,6 +10,7 @@
  */
 
 import { batchProcessor, BatchProcessor, BatchProcessingOptions } from './enhanced-batch-processor';
+import { nanoid } from 'nanoid';
 import { dbCache, aiCache } from './enhanced-cache';
 import { db } from '../db';
 import { RoleBasedAIService } from './role-based-ai';
@@ -326,7 +327,7 @@ export class ChimariBatchProcessors {
       
       for (const request of batch) {
         try {
-          const reportId = `report_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+          const reportId = `report_${nanoid()}`;
           const content = await this.generateReport(request);
           
           results.push({

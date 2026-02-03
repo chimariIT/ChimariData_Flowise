@@ -12,6 +12,7 @@
  */
 
 import { Router } from 'express';
+import { nanoid } from 'nanoid';
 import { db } from '../db';
 import { consultationRequests, consultationPricing, projects, datasets } from '@shared/schema';
 import { eq, and, desc } from 'drizzle-orm';
@@ -92,7 +93,7 @@ router.post('/request', ensureAuthenticated, async (req, res) => {
     }
 
     // Create consultation request
-    const requestId = `cr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const requestId = `cr_${nanoid()}`;
 
     const [newRequest] = await db.insert(consultationRequests).values({
       id: requestId,
@@ -458,7 +459,7 @@ router.post('/:id/upload-data', ensureAuthenticated, async (req, res) => {
     }
 
     // Create project for this consultation
-    const projectId = `proj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const projectId = `proj_${nanoid()}`;
 
     const [newProject] = await db.insert(projects).values({
       id: projectId,

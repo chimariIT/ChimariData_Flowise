@@ -1,5 +1,6 @@
 // server/services/tool-analytics.ts
 import { db } from '../db';
+import { nanoid } from 'nanoid';
 import { sql } from 'drizzle-orm';
 
 /**
@@ -100,7 +101,7 @@ export class ToolAnalyticsService {
     projectId?: string;
     executionId?: string;
   }): { executionId: string; startTime: Date; complete: (result: any) => Promise<void> } {
-    const executionId = params.executionId || `exec_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const executionId = params.executionId || `exec_${nanoid()}`;
     const startTime = new Date();
 
     return {

@@ -9,6 +9,7 @@
  */
 
 import { Router } from 'express';
+import { nanoid } from 'nanoid';
 import { db } from '../db';
 import { consultationPricing, users } from '@shared/schema';
 import { eq, desc } from 'drizzle-orm';
@@ -152,7 +153,7 @@ router.post('/', ensureAuthenticated, ensureAdmin, async (req, res) => {
     }
 
     // Generate ID
-    const id = `cp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const id = `cp_${nanoid()}`;
 
     // Insert new pricing tier
     const [newTier] = await db

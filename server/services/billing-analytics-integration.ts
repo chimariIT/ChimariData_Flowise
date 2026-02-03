@@ -12,6 +12,7 @@
 
 import { toolAnalyticsService } from './tool-analytics';
 import { getBillingService } from './billing/unified-billing-service';
+import { PricingService } from './pricing';
 import { FeatureComplexity } from '../../shared/canonical-types';
 
 export interface ToolToBillingMapping {
@@ -391,7 +392,7 @@ export class BillingAnalyticsIntegrationService {
     return {
       allowed: quotaStatus.allowed || quotaStatus.remaining <= 0, // Allow overage
       willIncurCharge: quotaStatus.remaining <= 0,
-      estimatedCost: quotaStatus.remaining <= 0 ? 1.00 : 0, // TODO: Calculate real overage cost
+      estimatedCost: quotaStatus.remaining <= 0 ? PricingService.getBaseAnalysisCost() : 0,
       remainingQuota: quotaStatus.remaining,
       message: quotaStatus.message
     };

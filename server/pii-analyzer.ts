@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as crypto from 'crypto';
 
 export interface PIIAnalysisResult {
   detectedPII: string[];
@@ -222,16 +223,17 @@ export class PIIAnalyzer {
   }
 
   private static substituteValue(value: any, field: string): string {
+    const rand = (len: number) => crypto.randomBytes(len).toString('hex').slice(0, len);
     if (field.toLowerCase().includes('name')) {
-      return `Person${Math.random().toString(36).substr(2, 3)}`;
+      return `Person_${rand(4)}`;
     }
     if (field.toLowerCase().includes('email')) {
-      return `user${Math.random().toString(36).substr(2, 6)}@example.com`;
+      return `user_${rand(6)}@example.com`;
     }
     if (field.toLowerCase().includes('phone')) {
-      return `***-***-${Math.random().toString().substr(2, 4)}`;
+      return `***-***-${rand(4)}`;
     }
-    return `SubstituteValue${Math.random().toString(36).substr(2, 4)}`;
+    return `SubstituteValue_${rand(6)}`;
   }
 
   private static encryptValue(value: string): string {

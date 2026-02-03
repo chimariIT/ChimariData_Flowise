@@ -7,6 +7,7 @@ import { ensureAuthenticated } from './auth';
 import { requirePermission } from '../middleware/rbac';
 import { db } from '../db';
 import { servicePricing, subscriptionTierPricing, users } from '@shared/schema';
+import { PricingService } from '../services/pricing';
 import { eq } from 'drizzle-orm';
 import fs from 'fs';
 import path from 'path';
@@ -338,11 +339,14 @@ export function canUserRequestAIInsight(userTier: string, currentInsights: numbe
       // Continue even if file write fails - the in-memory update still succeeded
     }
 
+    // Refresh PricingService subscription tier cache
+    await PricingService.refreshSubscriptionTiers();
+
     res.json({
       success: true,
-      message: `Subscription tier '${tierId}' configuration updated (runtime only)`,
+      message: `Subscription tier '${tierId}' configuration updated`,
       tier: updatedTier,
-      note: 'To make permanent pricing changes, update them in Stripe or modify shared/unified-subscription-tiers.ts'
+      note: 'Changes synced to PricingService runtime cache'
     });
 
   } catch (error: any) {
@@ -448,7 +452,35 @@ router.post('/subscription', ensureAuthenticated, async (req: Request, res: Resp
     const tier = UNIFIED_SUBSCRIPTION_TIERS[planType];
     const stripeSyncService = getStripeSyncService();
 
-    // Check if Stripe is configured
+    // FREE TIER BYPASS: For $0 tiers (trial/free), create subscription locally without Stripe
+    const tierPrice = billingCycle === 'yearly' ? tier.yearlyPrice : tier.monthlyPrice;
+    if (tierPrice === 0 || planType === 'trial' || planType === 'free') {
+      console.log(`✅ [Subscription] Free tier "${planType}" - creating local subscription without Stripe`);
+
+      const trialEnd = new Date();
+      trialEnd.setDate(trialEnd.getDate() + 14); // 14-day trial
+
+      await db.update(users)
+        .set({
+          subscriptionTier: planType,
+          subscriptionStatus: 'active',
+          stripeSubscriptionId: `local_trial_${Date.now()}`,
+          updatedAt: new Date()
+        })
+        .where(eq(users.id, userId));
+
+      return res.json({
+        success: true,
+        subscriptionId: `local_trial_${userId.substring(0, 8)}`,
+        tier: planType,
+        billingCycle,
+        isFree: true,
+        trialEndsAt: trialEnd.toISOString(),
+        message: 'Free trial activated successfully! You have 14 days of access.'
+      });
+    }
+
+    // Check if Stripe is configured (only needed for paid tiers)
     if (!stripeSyncService.isStripeConfigured()) {
       console.error('🔴 Stripe not configured - cannot process subscription!');
       return res.status(503).json({
@@ -870,7 +902,7 @@ router.get('/services', async (req: Request, res: Response) => {
           serviceType: 'pay-per-analysis',
           displayName: 'Pay-per-Analysis',
           description: 'Perfect for one-time insights without monthly commitment',
-          basePrice: 2500, // $25 in cents
+          basePrice: PricingService.getServicePrice('pay-per-analysis') * 100, // dollars to cents
           pricingModel: 'fixed',
           isActive: true
         },
@@ -879,7 +911,7 @@ router.get('/services', async (req: Request, res: Response) => {
           serviceType: 'expert-consultation',
           displayName: 'Expert Consultation',
           description: '1-hour session with our data science experts',
-          basePrice: 15000, // $150 in cents
+          basePrice: PricingService.getServicePrice('expert-consultation') * 100, // dollars to cents
           pricingModel: 'fixed',
           isActive: true
         }
@@ -1037,6 +1069,39 @@ router.get('/journeys', async (req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       error: 'Failed to get journey pricing'
+    });
+  }
+});
+
+/**
+ * GET /api/pricing/runtime-config
+ * Returns current pricing configuration from PricingService (DB-backed).
+ * Public endpoint - prices are public info.
+ * Client pages use this instead of importing PRICING_CONSTANTS directly.
+ */
+router.get('/runtime-config', async (req: Request, res: Response) => {
+  try {
+    const config = PricingService.getPricingConfig();
+
+    res.json({
+      success: true,
+      basePlatformFee: config.platformFee,
+      dataProcessingPer1K: config.dataSizeCostPer1K,
+      baseAnalysisCost: config.baseCost,
+      complexityMultipliers: config.complexityMultipliers,
+      analysisTypeFactors: config.analysisTypeFactors,
+      questionsIncluded: PricingService.getQuestionsIncluded(),
+      questionsChargePerExtra: PricingService.getQuestionsChargePerExtra(),
+      servicePricing: {
+        payPerAnalysis: PricingService.getServicePrice('pay-per-analysis'),
+        expertConsultation: PricingService.getServicePrice('expert-consultation'),
+      },
+    });
+  } catch (error: any) {
+    console.error('Error getting runtime pricing config:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get pricing configuration',
     });
   }
 });

@@ -13,6 +13,8 @@
  * - SLA tracking
  */
 
+import { nanoid } from 'nanoid';
+
 export interface UserIssue {
   issueId: string;
   userId: string;
@@ -108,7 +110,7 @@ export class UserIssueTracker {
    * Create a new issue
    */
   async createIssue(request: CreateIssueRequest): Promise<UserIssue> {
-    const issueId = `issue_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const issueId = `issue_${nanoid()}`;
     const now = new Date();
 
     // Calculate SLA deadlines

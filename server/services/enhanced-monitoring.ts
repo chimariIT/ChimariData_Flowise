@@ -15,6 +15,7 @@
  */
 
 import { EventEmitter } from 'events';
+import { nanoid } from 'nanoid';
 import { performance } from 'perf_hooks';
 import os from 'os';
 
@@ -591,7 +592,7 @@ export class EnhancedMonitoringService extends EventEmitter {
    */
   private triggerAlert(rule: AlertRule, value: number): void {
     const alert: Alert = {
-      id: `alert_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      id: `alert_${nanoid()}`,
       ruleId: rule.id,
       severity: rule.severity,
       message: `${rule.name}: ${rule.condition.metric} is ${value} (threshold: ${rule.condition.threshold})`,

@@ -11,6 +11,7 @@
  */
 
 import { Pool, PoolClient, QueryConfig } from 'pg';
+import { nanoid } from 'nanoid';
 import { dbCache } from './enhanced-cache';
 
 export interface QueryPerformanceMetrics {
@@ -243,7 +244,7 @@ export class DatabaseOptimizationService {
       const recommendations = this.generateOptimizationRecommendations(queryPlan, query);
       
       const slowQueryAlert: SlowQueryAlert = {
-        id: `slow_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: `slow_${nanoid()}`,
         query,
         executionTime,
         threshold: this.slowQueryThreshold,

@@ -116,10 +116,10 @@ export const UNIFIED_SUBSCRIPTION_TIERS: Record<string, UnifiedSubscriptionTier>
     name: 'Trial',
     displayName: 'Trial',
     description: 'Perfect for testing our platform with basic analytics',
-    
-    // Pricing: $1 (minimal cost to prevent abuse)
-    monthlyPrice: 1,
-    yearlyPrice: 10, // 2 months free
+
+    // Pricing: Matches DB seed in migrations/seed-pricing-data.sql
+    monthlyPrice: 1,     // $1/month (100 cents in DB)
+    yearlyPrice: 10,     // $10/year (1000 cents in DB)
     
     limits: {
       // File Operations

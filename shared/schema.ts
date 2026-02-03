@@ -958,15 +958,6 @@ export const servicePricing = pgTable("service_pricing", {
   activeIdx: index("service_pricing_active_idx").on(table.isActive),
 }));
 
-// Analysis pricing configuration (DB-backed, admin-managed)
-// Single-row table storing the complete pricing config as JSONB
-export const analysisPricingConfig = pgTable("analysis_pricing_config", {
-  id: varchar("id").primaryKey().notNull().default('default'),
-  config: jsonb("config").notNull().default('{}'),
-  updatedAt: timestamp("updated_at").defaultNow(),
-  updatedBy: varchar("updated_by"),
-});
-
 // Subscription tier pricing configuration table (admin-managed)
 export const subscriptionTierPricing = pgTable("subscription_tier_pricing", {
   id: varchar("id").primaryKey().notNull(), // 'trial', 'starter', 'professional', 'enterprise'
@@ -3350,4 +3341,12 @@ export const columnEmbeddings = pgTable("column_embeddings", {
 export const insertColumnEmbeddingsSchema = createInsertSchema(columnEmbeddings).omit({
   id: true,
   createdAt: true,
+});
+
+// Admin-configurable analysis pricing
+export const analysisPricingConfig = pgTable("analysis_pricing_config", {
+  id: varchar("id").primaryKey().notNull(),
+  config: jsonb("config").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  updatedBy: varchar("updated_by"),
 });

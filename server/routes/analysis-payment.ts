@@ -2,7 +2,7 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import { storage } from '../services/storage';
 import { ensureAuthenticated } from './auth';
-import { PRICING_CONSTANTS, getRecordCountMultiplier, getAnalysisTypeFactor } from '../../shared/pricing-config';
+import { PricingService } from '../services/pricing';
 
 interface PricingBreakdown {
   basePrice: number;
@@ -38,12 +38,14 @@ function sanitizeCurrency(value: number): number {
 }
 
 function buildPricing(input: PricingInput, overrideFinalPrice?: number, source: 'locked' | 'calculated' = 'calculated'): PricingResponse {
-  // P1-B FIX: Use shared pricing constants (single source of truth) - imported at top of file
-  const basePlatformFee = PRICING_CONSTANTS.basePlatformFee;
-  const dataProcessingPer1K = PRICING_CONSTANTS.dataProcessingPer1K;
-  const baseAnalysisCost = PRICING_CONSTANTS.baseAnalysisCost;
+  // Use PricingService (DB-backed, falls back to PRICING_CONSTANTS)
+  const basePlatformFee = PricingService.getBasePlatformFee();
+  const dataProcessingPer1K = PricingService.getDataProcessingPer1K();
+  const baseAnalysisCost = PricingService.getBaseAnalysisCost();
 
-  const complexityMultiplier = getRecordCountMultiplier(input.recordCount);
+  const complexityMultiplier = PricingService.getComplexityMultiplier(
+    input.recordCount > 100_000 ? 'advanced' : input.recordCount > 10_000 ? 'intermediate' : 'basic'
+  );
 
   // Data processing charge based on row count
   const dataRowsK = input.recordCount / 1000;
@@ -56,7 +58,7 @@ function buildPricing(input: PricingInput, overrideFinalPrice?: number, source: 
   const perAnalysisBreakdown: Array<{ type: string; cost: number }> = [];
 
   for (const analysisType of analysisTypes) {
-    const typeFactor = getAnalysisTypeFactor(analysisType);
+    const typeFactor = PricingService.getAnalysisTypeFactor(analysisType);
     const analysisCost = sanitizeCurrency(baseAnalysisCost * typeFactor * complexityMultiplier);
     totalAnalysisCharge += analysisCost;
     perAnalysisBreakdown.push({ type: analysisType, cost: analysisCost });
@@ -64,8 +66,8 @@ function buildPricing(input: PricingInput, overrideFinalPrice?: number, source: 
 
   const analysisTypeCharge = sanitizeCurrency(totalAnalysisCharge);
 
-  // Questions don't directly affect cost in CostEstimationService - keep minimal charge for extras
-  const questionsCharge = sanitizeCurrency(Math.max(0, (input.questionsCount - 5) * 0.10));
+  // Questions charge for extras beyond included count (uses shared pricing constants)
+  const questionsCharge = sanitizeCurrency(Math.max(0, (input.questionsCount - PricingService.getQuestionsIncluded()) * PricingService.getQuestionsChargePerExtra()));
 
   const calculatedFinal = basePlatformFee + dataSizeCharge + analysisTypeCharge + questionsCharge;
   const finalPrice = sanitizeCurrency(overrideFinalPrice ?? calculatedFinal);
@@ -140,21 +142,38 @@ router.post('/create-intent', ensureAuthenticated, async (req, res) => {
       return res.status(400).json({ success: false, error: 'projectId is required' });
     }
 
-    if (
-      typeof dataSizeMB !== 'number' ||
-      typeof recordCount !== 'number' ||
-      typeof questionsCount !== 'number'
-    ) {
-      return res.status(400).json({ success: false, error: 'Invalid pricing payload' });
-    }
-
     const project = await storage.getProject(projectId);
     if (!project) {
       return res.status(404).json({ success: false, error: 'Project not found' });
     }
 
-    // PHASE 5 SSOT FIX: Read locked cost from journeyProgress.lockedCostEstimate ONLY (no fallbacks)
+    // Prefer server-side facts over client-provided values to prevent tampering
     const journeyProgress = (project as any).journeyProgress || {};
+    const joinedData = journeyProgress.joinedData || {};
+
+    const effectiveRecordCount = Number.isFinite(joinedData.rowCount)
+      ? Number(joinedData.rowCount)
+      : Number.isFinite(project.recordCount)
+        ? Number(project.recordCount)
+        : recordCount;
+
+    const effectiveDataSizeMB = Number.isFinite(joinedData.dataSizeMB)
+      ? Number(joinedData.dataSizeMB)
+      : Number.isFinite(dataSizeMB)
+        ? dataSizeMB
+        : Math.max(1, Math.ceil(effectiveRecordCount / 1000));
+
+    const effectiveQuestionsCount = Array.isArray(journeyProgress.userQuestions)
+      ? journeyProgress.userQuestions.length
+      : Number.isFinite(questionsCount)
+        ? questionsCount
+        : 0;
+
+    if (!Number.isFinite(effectiveRecordCount) || !Number.isFinite(effectiveDataSizeMB)) {
+      return res.status(400).json({ success: false, error: 'Invalid pricing payload' });
+    }
+
+    // PHASE 5 SSOT FIX: Read locked cost from journeyProgress.lockedCostEstimate ONLY (no fallbacks)
     const lockedCostEstimate = journeyProgress.lockedCostEstimate;
 
     if (!lockedCostEstimate || parseFloat(String(lockedCostEstimate)) <= 0) {
@@ -170,6 +189,10 @@ router.post('/create-intent', ensureAuthenticated, async (req, res) => {
       ? parseFloat(lockedCostEstimate)
       : (typeof lockedCostEstimate === 'number' ? lockedCostEstimate : 0);
 
+    if (typeof lockedCostEstimate !== 'string' && typeof lockedCostEstimate !== 'number') {
+      console.warn(`⚠️ [Payment] lockedCostEstimate has unexpected type: ${typeof lockedCostEstimate}, defaulting to 0 for project ${projectId}`);
+    }
+
     console.log(`✅ [Payment SSOT] Using journeyProgress.lockedCostEstimate: $${lockedCost.toFixed(2)} for project ${projectId}`);
 
     const totalCostIncurred = Number((project as any).totalCostIncurred ?? 0);
@@ -183,7 +206,7 @@ router.post('/create-intent', ensureAuthenticated, async (req, res) => {
     console.log(`✅ [Payment] Project ${projectId}: lockedCostEstimate=${lockedCost}, lockedCostCents=${lockedCostCents}, hasLockedCost=${hasLockedCost}`);
 
     const pricing = buildPricing(
-      { dataSizeMB, recordCount, questionsCount, analysisType },
+      { dataSizeMB: effectiveDataSizeMB, recordCount: effectiveRecordCount, questionsCount: effectiveQuestionsCount, analysisType },
       hasLockedCost ? lockedCostCents / 100 : undefined,
       hasLockedCost ? 'locked' : 'calculated'
     );
@@ -247,7 +270,8 @@ router.post('/create-intent', ensureAuthenticated, async (req, res) => {
         const stripe = new Stripe(stripeSecretKey, { apiVersion: '2024-12-18.acacia' as any });
 
         // P0-A FIX: Use idempotency key to prevent duplicate PaymentIntents
-        const idempotencyKey = `analysis-${projectId}-${userId}-${amountCents}`;
+        // P0-3 FIX: Exclude mutable amountCents - key must be stable across price recalculations
+        const idempotencyKey = `analysis-${projectId}-${userId}-${lockedCostCents}-${spentCostCents}`;
 
         const paymentIntent = await stripe.paymentIntents.create({
           amount: amountCents,
@@ -320,7 +344,7 @@ router.post('/create-intent', ensureAuthenticated, async (req, res) => {
       // Don't fail payment creation if audit logging fails
     }
 
-    const dataComplexity = determineComplexity(recordCount);
+    const dataComplexity = determineComplexity(effectiveRecordCount);
 
     return res.json({
       success: true,
