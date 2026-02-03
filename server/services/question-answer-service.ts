@@ -584,6 +584,12 @@ YOUR ANSWER:`;
             // (normalized tables questionAnswers, evidenceChain were planned but not created)
             // ============================================
             try {
+                // P1-20 FIX: Batch load existing questions to avoid N individual DB queries
+                const existingQuestions = await db.select({ id: projectQuestions.id })
+                    .from(projectQuestions)
+                    .where(eq(projectQuestions.projectId, projectId));
+                const existingIds = new Set(existingQuestions.map((q: any) => q.id));
+
                 for (let i = 0; i < result.answers.length; i++) {
                     const qa = result.answers[i];
 
@@ -592,7 +598,8 @@ YOUR ANSWER:`;
                         .update(qa.question.toLowerCase().trim())
                         .digest('hex')
                         .substring(0, 8);
-                    const questionId = `q_${projectId.substring(0, 8)}_${i}_${questionHash}`;
+                    // P0-14 FIX: Remove array index from ID - index changes on reorder, breaking evidence chains
+                    const questionId = `q_${projectId.substring(0, 8)}_${questionHash}`;
 
                     // Build evidence object combining all evidence sources
                     const evidenceData = {
@@ -604,13 +611,7 @@ YOUR ANSWER:`;
                         generatedBy: result.generatedBy,
                     };
 
-                    // Check if question already exists
-                    const existingQuestion = await db.select()
-                        .from(projectQuestions)
-                        .where(eq(projectQuestions.id, questionId))
-                        .limit(1);
-
-                    if (existingQuestion.length === 0) {
+                    if (!existingIds.has(questionId)) {
                         // Insert new question with answer
                         await db.insert(projectQuestions).values({
                             id: questionId,
@@ -758,7 +759,8 @@ YOUR ANSWER:`;
                     .update(questionText.toLowerCase().trim())
                     .digest('hex')
                     .substring(0, 8);
-                const questionId = `q_${projectId.substring(0, 8)}_${i}_${questionHash}`;
+                // P0-14 FIX: Remove array index from ID - index changes on reorder, breaking evidence chains
+                    const questionId = `q_${projectId.substring(0, 8)}_${questionHash}`;
 
                 // Check if question exists
                 const existing = await db.select()

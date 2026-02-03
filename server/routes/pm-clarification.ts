@@ -6,114 +6,16 @@ import { normalizeQuestions, normalizeQuestion } from '../utils/question-normali
 const router = Router();
 
 /**
- * PM Agent Goal Clarification Endpoint
- * Provides interactive goal clarification with the Project Manager Agent
- * Note: Authentication is handled at router level in index.ts
+ * REMOVED: Duplicate /clarify-goal handler
+ *
+ * This public (unauthenticated) handler was catching ALL /clarify-goal requests
+ * BEFORE the proper authenticated handler in project-manager.ts (line 183) could
+ * receive them. The project-manager.ts handler uses pmAgent.clarifyGoalWithUser()
+ * which provides richer, context-aware clarification.
+ *
+ * The proper handler is now in: server/routes/project-manager.ts
+ * Mounted at: router.use('/project-manager', ensureAuthenticated, projectManagerRouter)
  */
-router.post('/clarify-goal', async (req, res) => {
-  try {
-    const { goal, analysisGoal, projectId, sessionId, step, userResponse, businessQuestions, journeyType } = req.body;
-
-    // Accept either 'goal' or 'analysisGoal' for backwards compatibility
-    const userGoal = goal || analysisGoal;
-
-    if (!userGoal) {
-      return res.status(400).json({
-        success: false,
-        error: 'Goal or analysisGoal is required'
-      });
-    }
-
-    console.log(`PM Agent clarifying goal for session ${sessionId || 'new'}, journey type: ${journeyType || 'unknown'}`);
-
-    // Initialize PM agent
-    const pmAgent = new ProjectManagerAgent();
-    await pmAgent.initialize();
-
-    // Process clarification based on step
-    let result: any;
-
-    if (step === 'initial' || !step) {
-      // First step: Summarize the goal and provide initial clarification
-      // Ensure businessQuestions is an array
-      let questions: string[] = [];
-      if (Array.isArray(businessQuestions)) {
-        questions = businessQuestions;
-      } else if (typeof businessQuestions === 'string') {
-        // If it's a string, try to parse it or split it
-        try {
-          questions = JSON.parse(businessQuestions);
-        } catch {
-          questions = businessQuestions.split('\n').filter(q => q.trim());
-        }
-      }
-
-      const questionText = questions.length > 0
-        ? `\n\nYour questions: ${questions.join(', ')}`
-        : '';
-
-      result = {
-        type: 'summary',
-        content: `I understand you want to analyze your data with the goal: "${userGoal}".${questionText}\n\nLet me help clarify the specifics for a ${journeyType || 'data analysis'} journey.`,
-        originalGoal: userGoal,
-        businessQuestions: questions,
-        journeyType: journeyType,
-        nextStep: 'question',
-        clarification: {
-          summary: `Your analysis goal is: ${userGoal}`,
-          understoodGoals: extractGoals(userGoal, questions),
-          clarifyingQuestions: await generateClarifyingQuestions(userGoal, questions),
-          suggestedFocus: identifySuggestedFocus(userGoal, questions),
-          identifiedGaps: identifyGaps(userGoal, questions),
-          dataRequirements: identifyDataRequirements(userGoal, questions),
-          estimatedComplexity: estimateComplexity(userGoal, questions)
-        }
-      };
-    } else if (step === 'question') {
-      // Generate clarifying question based on user's goal
-      const clarifyingQuestion = await generateClarifyingQuestion(userGoal, userResponse);
-
-      result = {
-        type: 'question',
-        content: clarifyingQuestion,
-        nextStep: 'suggestion'
-      };
-    } else if (step === 'suggestion') {
-      // Provide suggestions based on clarified goal
-      const suggestions = await generateSuggestions(userGoal, userResponse);
-
-      result = {
-        type: 'suggestion',
-        content: 'Based on your goal, I suggest focusing on these areas:',
-        suggestions: suggestions,
-        nextStep: 'complete'
-      };
-    } else {
-      // Final step: Provide summarized clarified goal
-      const clarifiedGoal = await summarizeClarifiedGoal(userGoal, userResponse);
-
-      result = {
-        type: 'complete',
-        clarifiedGoal: clarifiedGoal,
-        originalGoal: userGoal,
-        changes: identifyChanges(userGoal, clarifiedGoal)
-      };
-    }
-
-    res.json({
-      success: true,
-      ...result,
-      timestamp: new Date().toISOString()
-    });
-
-  } catch (error: any) {
-    console.error('PM Agent clarification error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to clarify goal'
-    });
-  }
-});
 
 /**
  * Generate a clarifying question based on the goal
@@ -615,11 +517,14 @@ function identifyGaps(goal: string, questions: string[] | string | undefined): s
  */
 router.post('/suggest-questions', async (req, res) => {
   try {
-    const { goals, questions, journeyType } = req.body;
+    const { goal, goals, questions, journeyType } = req.body;
+
+    // Accept singular 'goal' (from prepare-step.tsx) or plural 'goals' array
+    const userGoal = goal || (Array.isArray(goals) ? goals[0] : goals) || 'Analyze data';
 
     // Generate contextual question suggestions
     const suggestions = await generateClarifyingQuestionsFallback(
-      goals?.[0] || 'Analyze data',
+      userGoal,
       questions || []
     );
 

@@ -1606,10 +1606,31 @@ export class DataScientistAgent implements AgentHandler {
       .map((viz: any) => this.visualizationFromSuggestion(viz));
 
     if (visualizations.length === 0) {
-      visualizations.push(
-        { type: 'bar', title: 'KPI comparison', description: 'Compare primary KPIs across segments.' },
-        { type: 'line', title: 'Trend analysis', description: 'Monitor KPI movement over time.' }
-      );
+      // Derive visualizations from the actual analysis types instead of using generic fallbacks
+      const vizTypes = new Set<string>();
+      for (const analysis of analyses) {
+        const lower = analysis.toLowerCase();
+        if (/correlat|regress/.test(lower) && !vizTypes.has('scatter')) {
+          visualizations.push({ type: 'scatter', title: `${analysis} plot`, description: `Scatter plot showing relationships identified by ${analysis}.` });
+          vizTypes.add('scatter');
+        } else if (/time.?series|forecast|trend/.test(lower) && !vizTypes.has('line')) {
+          visualizations.push({ type: 'line', title: `${analysis} trend`, description: `Line chart tracking trends from ${analysis}.` });
+          vizTypes.add('line');
+        } else if (/cluster|segment/.test(lower) && !vizTypes.has('scatter_cluster')) {
+          visualizations.push({ type: 'scatter', title: `${analysis} distribution`, description: `Cluster groupings from ${analysis}.` });
+          vizTypes.add('scatter_cluster');
+        } else if (/descriptive|statistic|distribut/.test(lower) && !vizTypes.has('histogram')) {
+          visualizations.push({ type: 'histogram', title: `${analysis} distributions`, description: `Value distributions from ${analysis}.` });
+          vizTypes.add('histogram');
+        } else if (!vizTypes.has('bar')) {
+          visualizations.push({ type: 'bar', title: `${analysis} comparison`, description: `Compare key metrics from ${analysis}.` });
+          vizTypes.add('bar');
+        }
+      }
+      // Ensure at least one visualization exists
+      if (visualizations.length === 0) {
+        visualizations.push({ type: 'bar', title: 'Data summary', description: 'Overview of key data metrics.' });
+      }
     }
 
     const recommendations: string[] = [
