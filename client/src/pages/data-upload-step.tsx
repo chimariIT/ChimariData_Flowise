@@ -26,13 +26,12 @@ import {
   BarChart3,
   Settings,
   Eye,
-  Shield,
   ArrowRight,
   Link2,
   FolderOpen
 } from "lucide-react";
 import { PIIDetectionDialog } from "@/components/PIIDetectionDialog";
-import AgentCheckpoints from "@/components/agent-checkpoints";
+// AgentCheckpoints removed - coordination now triggers after prepare step, shown on verification step
 import { AgentRecommendationDialog } from "@/components/AgentRecommendationDialog";
 import { useToast } from "@/hooks/use-toast";
 import { useProject } from "@/hooks/useProject";
@@ -342,8 +341,18 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
           };
 
           if (datasetEntry.schema) {
+            const normalizedSchema: Record<string, string> = {};
+            Object.entries(datasetEntry.schema || {}).forEach(([col, type]) => {
+              if (type && typeof type === 'object' && (type as any).type) {
+                normalizedSchema[col] = (type as any).type;
+              } else if (typeof type === 'string') {
+                normalizedSchema[col] = type;
+              } else {
+                normalizedSchema[col] = 'string';
+              }
+            });
             newSchemas[normalizedTableName] = {
-              columns: datasetEntry.schema,
+              columns: normalizedSchema,
               primaryKey: undefined,
               foreignKeys: []
             };
@@ -896,7 +905,12 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
           uploadNetworkMetric?.end('error', {
             message: error?.message || 'Upload request failed'
           });
-          throw error;
+          // P1-19 FIX: Only throw for first file (creates project). Subsequent file errors are non-fatal.
+          if (index === 0) {
+            throw error;
+          }
+          console.error(`⚠️ [Upload] File ${index + 1} (${file.name}) failed, continuing with remaining files:`, error.message);
+          continue;
         }
 
         setUploadProgress(progressBase + 40);
@@ -919,33 +933,62 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
 
         const preview = data.sampleData || data.project?.preview || [];
         const recordCount = data.recordCount || preview.length || 0;
-
+        const backendSchemaRaw = data.schema || data.ingestionMetadata?.schema;
+        const backendColumnTypes = data.columnTypes || data.ingestionMetadata?.columnTypes;
         const schema: Record<string, string> = {};
         let columns = 0;
         let missingValues = 0;
 
+        if (backendSchemaRaw && typeof backendSchemaRaw === 'object') {
+          Object.entries(backendSchemaRaw).forEach(([key, value]) => {
+            if (value && typeof value === 'object' && (value as any).type) {
+              schema[key] = (value as any).type;
+            } else if (typeof value === 'string') {
+              schema[key] = value;
+            } else if (value && typeof value === 'object') {
+              // Object without .type - extract best available type info
+              schema[key] = (value as any).dataType || (value as any).dtype || 'string';
+            }
+          });
+          columns = Object.keys(schema).length;
+        }
+
+        if (columns === 0 && backendColumnTypes && typeof backendColumnTypes === 'object') {
+          Object.entries(backendColumnTypes).forEach(([type, cols]) => {
+            if (!Array.isArray(cols)) return;
+            cols.forEach((colName: string) => {
+              if (!schema[colName]) {
+                schema[colName] = type;
+              }
+            });
+          });
+          columns = Object.keys(schema).length;
+        }
+
         if (preview.length > 0) {
           const firstRow = preview[0];
-          columns = Object.keys(firstRow).length;
+          columns = columns || Object.keys(firstRow).length;
 
           Object.keys(firstRow).forEach(key => {
             const values = preview.map((row: any) => row[key]);
             const nonNullValues = values.filter((v: any) => v !== null && v !== undefined && v !== '');
             missingValues += (values.length - nonNullValues.length);
 
-            if (nonNullValues.length > 0) {
-              const sample = nonNullValues[0];
-              if (typeof sample === 'number') {
-                schema[key] = Number.isInteger(sample) ? 'integer' : 'float';
-              } else if (typeof sample === 'boolean') {
-                schema[key] = 'boolean';
-              } else if (sample instanceof Date || /^\d{4}-\d{2}-\d{2}/.test(String(sample))) {
-                schema[key] = 'date';
+            if (!schema[key]) {
+              if (nonNullValues.length > 0) {
+                const sample = nonNullValues[0];
+                if (typeof sample === 'number') {
+                  schema[key] = Number.isInteger(sample) ? 'integer' : 'float';
+                } else if (typeof sample === 'boolean') {
+                  schema[key] = 'boolean';
+                } else if (sample instanceof Date || /^\d{4}-\d{2}-\d{2}/.test(String(sample))) {
+                  schema[key] = 'date';
+                } else {
+                  schema[key] = 'string';
+                }
               } else {
                 schema[key] = 'string';
               }
-            } else {
-              schema[key] = 'string';
             }
           });
         }
@@ -965,7 +1008,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
             totalColumns: columns,
             missingValues,
             duplicateRows: 0,
-            qualityScore: qualityScore || 93
+            qualityScore: qualityScore ?? 0
           }
         }));
 
@@ -1622,23 +1665,7 @@ export default function DataUploadStep({ journeyType, onNext, onPrevious, render
         </Card>
       )}
 
-      {/* AI Agents Activity */}
-      {uploadStatus === 'completed' && piiReviewCompleted && currentProjectId && (
-        <Card className="border-purple-200 bg-purple-50">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-purple-900">
-              <Shield className="w-5 h-5" />
-              AI Agents Activity
-            </CardTitle>
-            <CardDescription className="text-purple-700">
-              Our agents are reviewing your data quality and preparing recommendations.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <AgentCheckpoints projectId={currentProjectId} />
-          </CardContent>
-        </Card>
-      )}
+      {/* AI Agents Activity - Moved to data-verification-step after user sets goals */}
 
       {/* Navigation Buttons */}
       {uploadStatus === 'completed' && dataQualityApproved && onNext && (

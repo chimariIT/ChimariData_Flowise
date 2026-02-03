@@ -225,17 +225,21 @@ export default function PlanStep({
       const planData = response?.plan || response?.data?.plan || response?.data;
 
       if (planData && (planData.id || planData.projectId)) {
-        // CRITICAL FIX (Gap D): Check journeyProgress for approval status
-        // This handles the case where the plan was approved but the page was closed
-        // before the API update could complete
+        // Gap D: If journeyProgress says plan was approved but plan status disagrees,
+        // trust the backend plan status (source of truth) but log the discrepancy.
+        // Previously this overrode the status which caused approval button mismatches.
         let enhancedPlanData = planData;
         if (journeyProgress?.planApproved && planData.status !== 'approved') {
-          console.log('📋 [Gap D Fix] Restoring approved status from journeyProgress');
-          enhancedPlanData = {
-            ...planData,
-            status: 'approved',
-            approvedAt: journeyProgress.planApprovedAt || new Date().toISOString()
-          };
+          console.warn('📋 [Gap D] journeyProgress says approved but plan status is:', planData.status, '- trusting backend status');
+          // Only override to approved if the plan actually has content and user navigated away mid-approval
+          if (planData.status === 'ready' && journeyProgress.planApprovedAt) {
+            console.log('📋 [Gap D] Plan is ready and was previously approved - restoring approved status');
+            enhancedPlanData = {
+              ...planData,
+              status: 'approved',
+              approvedAt: journeyProgress.planApprovedAt
+            };
+          }
         }
         setPlan(enhancedPlanData);
         if (enhancedPlanData.status !== 'pending') {
@@ -557,6 +561,18 @@ export default function PlanStep({
       return;
     }
 
+    // Guard against approving a plan with no cost locked (prevents checkout mismatch later)
+    const estimatedTotal = plan.estimatedCost?.total ?? 0;
+    const fallbackTotal = Object.values(plan.estimatedCost?.breakdown || {}).reduce((sum, val) => sum + (typeof val === 'number' ? val : 0), 0);
+    if ((estimatedTotal || fallbackTotal) <= 0) {
+      toast({
+        title: "Cost Not Ready",
+        description: "We could not find a valid cost estimate for this plan. Please regenerate the plan to refresh pricing before approval.",
+        variant: "destructive"
+      });
+      return;
+    }
+
     try {
       setIsSubmitting(true);
       // P2-3 FIX: Include per-analysis breakdown in approval to persist it
@@ -606,9 +622,22 @@ export default function PlanStep({
           // Force cache refresh before navigation
           await queryClient.refetchQueries({ queryKey: ["project", projectId] });
 
-          console.log('✅ [SSOT] Updated journeyProgress with plan approval and step completion');
+          // Verify approval was actually persisted in database
+          const refreshedData = queryClient.getQueryData(["project", projectId]) as any;
+          const refreshedProgress = refreshedData?.journeyProgress || refreshedData?.project?.journeyProgress;
+          if (refreshedProgress && !refreshedProgress.planApproved) {
+            console.error('❌ [SSOT] Plan approval write succeeded but verification read shows planApproved=false');
+            toast({
+              title: "Approval Verification Failed",
+              description: "Plan approval could not be confirmed. Please try again.",
+              variant: "destructive"
+            });
+            return;
+          }
+
+          console.log('✅ [SSOT] Updated journeyProgress with plan approval and step completion (verified)');
         } catch (progressError) {
-          console.warn('⚠️ Failed to update journeyProgress with plan approval:', progressError);
+          console.error('❌ Failed to update journeyProgress with plan approval:', progressError);
           toast({
             title: "Error Saving Progress",
             description: "Plan approved but failed to save completion status. Please refresh the page.",

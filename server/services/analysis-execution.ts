@@ -75,6 +75,7 @@ interface UserContext {
     secondaryAudiences?: string[];
     decisionContext?: string;
   };
+  industry?: string;
 }
 
 interface AnalysisInsight {
@@ -235,7 +236,10 @@ export class AnalysisExecutionService {
 
   /**
    * Retrieve user context from project session
-   * WEEK 1 FIX: Prioritize questions from project_questions table (single source of truth)
+   * Priority 0: journeyProgress (SSOT - written by prepare step)
+   * Priority 1: project_questions table (DB - written by prepare step)
+   * Priority 2: projectSessions.businessQuestions (legacy session)
+   * Priority 3: projects.businessQuestions (ancient legacy)
    */
   private static async getUserContext(projectId: string, userId: string): Promise<UserContext> {
     console.log(`🔍 Retrieving user context for project ${projectId}`);
@@ -251,7 +255,56 @@ export class AnalysisExecutionService {
       return {};
     }
 
-    // WEEK 1 FIX: First try to load questions from project_questions table (single source of truth)
+    // ==========================================
+    // PRIORITY 0: Read from journeyProgress (SSOT)
+    // ==========================================
+    // The prepare step saves goals, questions, audience, and industry to journeyProgress.
+    // This is the most reliable source and should be checked FIRST.
+    const journeyProgress = (project as any)?.journeyProgress;
+    if (journeyProgress) {
+      const jpGoal = journeyProgress.analysisGoal;
+      let jpQuestions: string | undefined;
+
+      // journeyProgress.userQuestions is [{id, text}] array format — convert to string
+      if (journeyProgress.userQuestions && Array.isArray(journeyProgress.userQuestions) && journeyProgress.userQuestions.length > 0) {
+        jpQuestions = journeyProgress.userQuestions
+          .map((q: any) => typeof q === 'string' ? q : q.text || q.question || '')
+          .filter((t: string) => t.trim())
+          .join('\n');
+      }
+
+      const jpAudience = journeyProgress.audience;
+      const jpIndustry = journeyProgress.industry;
+
+      if (jpGoal || jpQuestions) {
+        console.log(`✅ [getUserContext] Priority 0: Using journeyProgress SSOT`, {
+          hasGoal: !!jpGoal,
+          hasQuestions: !!jpQuestions,
+          questionCount: journeyProgress.userQuestions?.length || 0,
+          hasAudience: !!jpAudience,
+          industry: jpIndustry || 'not set'
+        });
+
+        return {
+          analysisGoal: jpGoal,
+          businessQuestions: jpQuestions,
+          selectedTemplates: journeyProgress.selectedAnalysisTypes || journeyProgress.selectedTemplates,
+          audience: jpAudience ? {
+            primaryAudience: jpAudience.primary || jpAudience.primaryAudience || 'mixed',
+            secondaryAudiences: jpAudience.secondary || jpAudience.secondaryAudiences,
+            decisionContext: jpAudience.decisionContext
+          } : undefined,
+          industry: jpIndustry
+        };
+      }
+    }
+
+    // ==========================================
+    // PRIORITY 1+: Fallback chain (legacy sources)
+    // ==========================================
+    // If journeyProgress doesn't have goals/questions, fall back to DB/session
+
+    // Priority 1: project_questions table
     let questionsFromDB: string | undefined;
     try {
       const dbQuestions = await db
@@ -600,14 +653,9 @@ export class AnalysisExecutionService {
         // P2-A FIX: Fallback to journeyProgress SSOT when column doesn't exist
         console.warn(`⚠️ [P2-A] Column questionAnswerMapping may not exist, storing in journeyProgress instead`);
         try {
-          const project = await storage.getProject(request.projectId);
-          const existingProgress = (project as any)?.journeyProgress || {};
-          await storage.updateProject(request.projectId, {
-            journeyProgress: {
-              ...existingProgress,
-              questionAnswerMapping: request.questionAnswerMapping
-            }
-          } as any);
+          await storage.atomicMergeJourneyProgress(request.projectId, {
+            questionAnswerMapping: request.questionAnswerMapping
+          });
           console.log(`✅ [P2-A] Stored questionAnswerMapping in journeyProgress (SSOT fallback)`);
         } catch (fallbackErr) {
           console.warn(`⚠️ [P2-A] Failed to store questionAnswerMapping in journeyProgress:`, fallbackErr);
@@ -955,7 +1003,9 @@ export class AnalysisExecutionService {
 
       const planCostBreakdown = (plan?.estimatedCost as CostBreakdown | undefined) ?? { total: 0, breakdown: {} };
       const projectCostBreakdown = (project.costBreakdown as CostBreakdown | null) ?? planCostBreakdown;
-      const lockedCost = Number(project.lockedCostEstimate ?? planCostBreakdown.total ?? 0);
+      // Cost SSOT: Read from journeyProgress first, project-level as legacy fallback
+      const jpLockedCost = (project as any)?.journeyProgress?.lockedCostEstimate;
+      const lockedCost = Number(jpLockedCost ?? project.lockedCostEstimate ?? planCostBreakdown.total ?? 0);
       const totalCost = Number.isFinite(lockedCost) && lockedCost > 0
         ? lockedCost
         : projectCostBreakdown.total ?? 0;
@@ -1111,14 +1161,16 @@ export class AnalysisExecutionService {
           // Update results with Q&A
           results.questionAnswers = qaResult;
 
-          // Re-save with Q&A included
-          await db
-            .update(projects)
-            .set({
-              analysisResults: results as any,
-              updatedAt: new Date()
-            })
-            .where(eq(projects.id, request.projectId));
+          // P0-13 FIX: Re-save with Q&A included inside a transaction to prevent partial writes
+          await db.transaction(async (tx: any) => {
+            await tx
+              .update(projects)
+              .set({
+                analysisResults: results as any,
+                updatedAt: new Date()
+              })
+              .where(eq(projects.id, request.projectId));
+          });
 
         } catch (qaError) {
           console.error(`❌ Failed to generate question answers:`, qaError);
@@ -1398,7 +1450,23 @@ export class AnalysisExecutionService {
           }
         };
 
-        const artifactResult = await artifactGenerator.generateArtifacts({
+        // P0-12 FIX: Check for existing artifacts to prevent duplicate generation on retry
+        let skipArtifacts = false;
+        try {
+          const { projectArtifacts } = await import('../../shared/schema');
+          const existingArtifacts = await db.select({ id: projectArtifacts.id })
+            .from(projectArtifacts)
+            .where(eq(projectArtifacts.projectId, request.projectId))
+            .limit(1);
+          if (existingArtifacts.length > 0) {
+            console.log(`⚠️ [P0-12] Artifacts already exist for project ${request.projectId}, skipping regeneration`);
+            skipArtifacts = true;
+          }
+        } catch (dedupErr) {
+          console.warn(`⚠️ [P0-12] Artifact dedup check failed, proceeding with generation:`, dedupErr);
+        }
+
+        const artifactResult = skipArtifacts ? null : await artifactGenerator.generateArtifacts({
           projectId: request.projectId,
           projectName: project.name,
           userId: request.userId,
@@ -1410,22 +1478,25 @@ export class AnalysisExecutionService {
           comprehensiveResults // ✅ Pass comprehensive results to artifact generator
         });
 
-        console.log(`✅ Artifacts generated successfully for project ${request.projectId}:`, {
-          totalCost: artifactResult.totalCost,
-          totalSizeMB: artifactResult.totalSizeMB,
-          pdfUrl: artifactResult.pdf?.url,
-          presentationUrl: artifactResult.presentation?.url,
-          csvUrl: artifactResult.csv?.url,
-          dashboardUrl: artifactResult.dashboard?.url
-        });
+        if (artifactResult) {
+          console.log(`✅ Artifacts generated successfully for project ${request.projectId}:`, {
+            totalCost: artifactResult.totalCost,
+            totalSizeMB: artifactResult.totalSizeMB,
+            pdfUrl: artifactResult.pdf?.url,
+            presentationUrl: artifactResult.presentation?.url,
+            csvUrl: artifactResult.csv?.url,
+            dashboardUrl: artifactResult.dashboard?.url
+          });
+        } else {
+          console.log(`ℹ️ [P0-12] Artifact generation skipped (already exists) for project ${request.projectId}`);
+        }
 
         // P2-C FIX: Persist artifact status to journeyProgress for frontend polling
         try {
-          const proj = await storage.getProject(request.projectId);
-          const progress = (proj as any)?.journeyProgress || {};
-          await storage.updateProject(request.projectId, {
-            journeyProgress: { ...progress, artifactStatus: 'ready', artifactGeneratedAt: new Date().toISOString() }
-          } as any);
+          await storage.atomicMergeJourneyProgress(request.projectId, {
+            artifactStatus: 'ready',
+            artifactGeneratedAt: new Date().toISOString()
+          });
         } catch { /* non-fatal */ }
       } catch (artifactError) {
         console.error(`❌ Failed to generate artifacts for project ${request.projectId}:`, artifactError);
@@ -1463,16 +1534,11 @@ export class AnalysisExecutionService {
 
         // P2-C FIX: Persist artifact failure status to journeyProgress
         try {
-          const proj = await storage.getProject(request.projectId);
-          const progress = (proj as any)?.journeyProgress || {};
-          await storage.updateProject(request.projectId, {
-            journeyProgress: {
-              ...progress,
-              artifactStatus: 'failed',
-              artifactError: artifactError instanceof Error ? artifactError.message : 'Unknown error',
-              artifactFailedAt: new Date().toISOString()
-            }
-          } as any);
+          await storage.atomicMergeJourneyProgress(request.projectId, {
+            artifactStatus: 'failed',
+            artifactError: artifactError instanceof Error ? artifactError.message : 'Unknown error',
+            artifactFailedAt: new Date().toISOString()
+          });
         } catch { /* non-fatal */ }
       }
 
@@ -1507,45 +1573,46 @@ export class AnalysisExecutionService {
       }
 
       // Week 2 Priority 1: Auto-Translation Integration
+      // Always translate results - default 'mixed' audience to 'executive' to ensure users see translated answers
       try {
-        const targetAudience = request.userContext?.audience?.primaryAudience || 'mixed';
+        const rawAudience = request.userContext?.audience?.primaryAudience || 'mixed';
+        const effectiveAudience = ['executive', 'business', 'technical'].includes(rawAudience)
+          ? rawAudience : 'executive';
 
-        // Only proceed if audience is specific
-        if (['executive', 'business', 'technical'].includes(targetAudience)) {
-          // Instantiate agent (Week 2 Fix: Call as instance method)
-          const businessAgent = new BusinessAgent();
-          await businessAgent.translateResults({
-            results,
-            audience: targetAudience,
-            decisionContext: request.userContext?.audience?.decisionContext || undefined
+        // Instantiate agent (Week 2 Fix: Call as instance method)
+        const businessAgent = new BusinessAgent();
+        await businessAgent.translateResults({
+          results,
+          audience: effectiveAudience,
+          decisionContext: request.userContext?.audience?.decisionContext || undefined
+        });
+
+        console.log(`✅ Auto-translation complete for audience: ${effectiveAudience} (raw: ${rawAudience})`);
+
+        // Log translation decision to audit trail
+        try {
+          const { nanoid } = await import('nanoid');
+          await db.insert(decisionAudits).values({
+            id: nanoid(),
+            projectId: request.projectId,
+            agent: 'business_analyst',
+            decisionType: 'result_translation',
+            decision: `Translated results for ${effectiveAudience} audience`,
+            reasoning: `Auto-translation triggered. Original audience: ${rawAudience}, effective: ${effectiveAudience}`,
+            alternatives: JSON.stringify(['mixed']),
+            confidence: 95,
+            context: JSON.stringify({
+              originalInsightCount: results.insights.length,
+              targetAudience: effectiveAudience,
+              rawAudience
+            }),
+            userInput: null,
+            reversible: true,
+            impact: 'medium',
+            timestamp: new Date()
           });
-
-          console.log('✅ Auto-translation complete');
-
-          // Log translation decision to audit trail
-          try {
-            const { nanoid } = await import('nanoid');
-            await db.insert(decisionAudits).values({
-              id: nanoid(),
-              projectId: request.projectId,
-              agent: 'business_analyst',
-              decisionType: 'result_translation',
-              decision: `Translated results for ${targetAudience} audience`,
-              reasoning: `Auto-translation triggered by audience setting: ${targetAudience}`,
-              alternatives: JSON.stringify(['mixed']),
-              confidence: 95,
-              context: JSON.stringify({
-                originalInsightCount: results.insights.length,
-                targetAudience
-              }),
-              userInput: null,
-              reversible: true,
-              impact: 'medium',
-              timestamp: new Date()
-            });
-          } catch (auditError) {
-            console.warn('Failed to log translation audit:', auditError);
-          }
+        } catch (auditError) {
+          console.warn('Failed to log translation audit:', auditError);
         }
       } catch (translationError) {
         // Silent fail for translation to not block results
@@ -1847,6 +1914,7 @@ export class AnalysisExecutionService {
   private static extractDatasetRows(dataset: any, columnsToExclude?: Set<string>): any[] | null {
     let result: any[] | null = null;
     let source: string = 'none';
+    let usingRawFallback = false;
 
     // Week 4 Option B: Delegate to unified data accessor logic
     // Priority 1: Use transformed data if available (from transformation step)
@@ -1867,6 +1935,7 @@ export class AnalysisExecutionService {
 
     // Priority 3: Fall back to original data sources
     if (!result) {
+      usingRawFallback = true;
       const candidates = [
         { name: 'data', value: dataset.data },
         { name: 'preview', value: dataset.preview },
@@ -1902,6 +1971,17 @@ export class AnalysisExecutionService {
     if (!result) {
       console.warn(`⚠️ [Week4] No data found for dataset ${dataset?.id || 'unknown'}`);
       return null;
+    }
+
+    // PII SAFETY: Warn when using raw data fallback with PII exclusion expectations
+    if (usingRawFallback && columnsToExclude && columnsToExclude.size > 0) {
+      console.warn(`⚠️ [PII Safety] Using raw data fallback for dataset ${dataset?.id || 'unknown'} with ${columnsToExclude.size} PII columns to exclude. Transformed data was not available.`);
+    } else if (usingRawFallback && (!columnsToExclude || columnsToExclude.size === 0)) {
+      // Check if PII fields exist on the dataset but no exclusions were passed
+      const datasetPiiFields = dataset?.piiFields || [];
+      if (datasetPiiFields.length > 0) {
+        console.error(`🚨 [PII Safety] CRITICAL: Raw data fallback used for dataset ${dataset?.id || 'unknown'} which has ${datasetPiiFields.length} PII fields, but columnsToExclude is empty. PII columns may leak into analysis.`);
+      }
     }
 
     console.log(`📊 [Week4] Using ${source} (${result.length} rows) for analysis`);

@@ -224,6 +224,9 @@ router.post('/:projectId/plan/create', ensureAuthenticated, async (req, res) => 
 
     // ✅ SLA: Plan creation must complete in under 30 seconds for <1 minute total journey lifecycle
     const PLAN_CREATION_TIMEOUT = 30 * 1000; // 30 seconds (reduced from 5 minutes for SLA compliance)
+
+    // Pass full journeyProgress context so PM agent has all previous step data
+    const journeyProgress = (project as any)?.journeyProgress || {};
     const planPromise = projectManagerAgent.createAnalysisPlan({
       projectId,
       userId,
@@ -235,6 +238,18 @@ router.post('/:projectId/plan/create', ensureAuthenticated, async (req, res) => 
         schema: project.schema || {},
         objectives: project.objectives || '',
         businessContext: project.businessContext || {},
+      },
+      // Context from previous journey steps (Verification, Transformation)
+      journeyContext: {
+        requirementsDocument: journeyProgress.requirementsDocument || null,
+        piiDecisions: journeyProgress.piiDecisions || null,
+        elementMappings: journeyProgress.elementMappings || null,
+        dataQuality: journeyProgress.dataQuality || null,
+        verificationChecks: journeyProgress.verificationChecks || null,
+        transformationPlan: journeyProgress.transformationPlan || null,
+        userQuestions: journeyProgress.userQuestions || journeyProgress.requirementsDocument?.userQuestions || [],
+        analysisPath: journeyProgress.requirementsDocument?.analysisPath || [],
+        completedSteps: journeyProgress.completedSteps || [],
       }
     });
 
@@ -586,19 +601,45 @@ router.post('/:projectId/plan/:planId/approve', ensureAuthenticated, async (req,
       });
     }
 
-    // Step 3: Verify plan is in 'ready' status
-    if (plan.status !== 'ready') {
-      console.warn(`❌ [Plan Approval] Step 3 FAILED: Plan ${planId} is in '${plan.status}' status, expected 'ready'`);
+    // Step 3: Verify plan is in an approvable status
+    // Allow 'ready' (normal), 'pending' (content generated but status not updated),
+    // and 'generating' (background task may have completed)
+    const approvableStatuses = ['ready', 'pending', 'generating'];
+    if (!approvableStatuses.includes(plan.status as string)) {
+      console.warn(`❌ [Plan Approval] Step 3 FAILED: Plan ${planId} is in '${plan.status}' status, expected one of: ${approvableStatuses.join(', ')}`);
       return res.status(400).json({
         success: false,
-        error: `Cannot approve plan in '${plan.status}' status. Plan must be 'ready'.`,
+        error: `Cannot approve plan in '${plan.status}' status. Plan must be ready for approval.`,
         currentStatus: plan.status
       });
+    }
+
+    // If plan is 'pending' or 'generating', check it has content before allowing approval
+    if (plan.status !== 'ready') {
+      const hasContent = (plan.analysisSteps && (plan.analysisSteps as any[]).length > 0);
+      if (!hasContent) {
+        console.warn(`❌ [Plan Approval] Step 3 FAILED: Plan ${planId} is '${plan.status}' and has no analysis steps yet`);
+        return res.status(400).json({
+          success: false,
+          error: 'Plan is still being generated. Please wait for the plan to be ready before approving.',
+          currentStatus: plan.status
+        });
+      }
+      console.log(`⚠️ [Plan Approval] Approving plan in '${plan.status}' status (has ${(plan.analysisSteps as any[]).length} steps)`);
     }
 
     const now = new Date();
     // P2-3 FIX: Extract per-analysis breakdown from request body
     const { analysisBreakdown } = req.body || {};
+
+    // P1-23 FIX: Validate cost exists before allowing approval
+    if (!plan.estimatedCost || parseFloat(String(plan.estimatedCost)) <= 0) {
+      console.warn(`⚠️ [Plan Approval] Plan ${planId} has no valid cost estimate (${plan.estimatedCost}), blocking approval`);
+      return res.status(400).json({
+        success: false,
+        error: 'Plan must have a valid cost estimate before approval. Please regenerate the plan.'
+      });
+    }
 
     // Step 4: Lock the estimated cost
     console.log(`✅ [Plan Approval] Step 4/6: Locking estimated cost: ${plan.estimatedCost || 'none'}`);
@@ -663,17 +704,14 @@ router.post('/:projectId/plan/:planId/approve', ensureAuthenticated, async (req,
         requiredDataElements: step.requiredDataElements || step.dataElements || []
       }));
 
-      await storage.updateProject(projectId, {
-        journeyProgress: {
-          ...currentProgress,
-          requirementsDocument: {
-            ...currentReqDoc,
-            analysisPath,
-            approvedPlanId: planId
-          },
-          approvedPlanAnalyses: analysisPath
-        }
-      } as any);
+      await storage.atomicMergeJourneyProgress(projectId, {
+        requirementsDocument: {
+          ...currentReqDoc,
+          analysisPath,
+          approvedPlanId: planId
+        },
+        approvedPlanAnalyses: analysisPath
+      });
 
       console.log(`✅ [Plan Approval] Synced ${analysisPath.length} analyses to journeyProgress.requirementsDocument.analysisPath`);
     } catch (syncError) {
@@ -760,13 +798,13 @@ router.post('/:projectId/plan/:planId/reject', ensureAuthenticated, async (req, 
 
     const plan = plans[0];
 
-    // Verify plan is in a rejectable status (ready or approved)
-    // Users can reject even approved plans if they haven't started execution
-    const rejectableStatuses = ['ready', 'approved'];
+    // Verify plan is in a rejectable status
+    // Users can reject plans in ready, approved, pending (content may exist), or generating status
+    const rejectableStatuses = ['ready', 'approved', 'pending', 'generating'];
     if (!rejectableStatuses.includes(plan.status || '')) {
       return res.status(400).json({
         success: false,
-        error: `Cannot reject plan in '${plan.status}' status. Plan must be 'ready' or 'approved'.`
+        error: `Cannot reject plan in '${plan.status}' status. Plan must be ready for review.`
       });
     }
 
@@ -779,6 +817,19 @@ router.post('/:projectId/plan/:planId/reject', ensureAuthenticated, async (req, 
         updatedAt: new Date(),
       })
       .where(eq(analysisPlans.id, planId));
+
+    // P0-9 FIX: Also update journeyProgress SSOT so downstream steps see rejection
+    try {
+      const { storage } = await import('../storage');
+      await storage.atomicMergeJourneyProgress(projectId, {
+        analysisPlanStatus: 'rejected',
+        analysisPlanRejectionReason: reason,
+        analysisPlanModifications: modifications || null,
+        analysisPlanRejectedAt: new Date().toISOString()
+      });
+    } catch (jpErr) {
+      console.warn(`⚠️ [Plan Rejection] Failed to update journeyProgress (non-blocking):`, jpErr);
+    }
 
     // Publish rejection event
     await messageBroker.publish('plan:rejected', {
@@ -808,10 +859,10 @@ router.post('/:projectId/plan/:planId/reject', ensureAuthenticated, async (req, 
       // Build refinement context from previous plan
       const previousPlanContext = {
         executiveSummary: plan.executiveSummary,
-        analysisSteps: JSON.parse(typeof plan.analysisSteps === 'string' ? plan.analysisSteps : JSON.stringify(plan.analysisSteps || [])),
+        analysisSteps: typeof plan.analysisSteps === 'string' ? JSON.parse(plan.analysisSteps) : (plan.analysisSteps || []),
         complexity: plan.complexity,
-        risks: JSON.parse(typeof plan.risks === 'string' ? plan.risks : JSON.stringify(plan.risks || [])),
-        recommendations: JSON.parse(typeof plan.recommendations === 'string' ? plan.recommendations : JSON.stringify(plan.recommendations || []))
+        risks: typeof plan.risks === 'string' ? JSON.parse(plan.risks) : (plan.risks || []),
+        recommendations: typeof plan.recommendations === 'string' ? JSON.parse(plan.recommendations) : (plan.recommendations || [])
       };
 
       // Import DS agent for refinement

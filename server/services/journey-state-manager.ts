@@ -1,5 +1,6 @@
 import { db } from '../db';
 import { projects } from '@shared/schema';
+import { storage } from '../storage';
 import {
   defaultJourneyTemplateCatalog,
   JourneyTemplate,
@@ -202,15 +203,14 @@ export class JourneyStateManager {
     const nextIndex = Math.min(stepIndex + 1, template.steps.length - 1);
     const updatedProgress = this.buildProgress(template, completedSteps, nextIndex);
 
+    await storage.atomicMergeJourneyProgress(projectId, {
+      ...updatedProgress,
+      lastStepCompletedAt: new Date().toISOString(),
+    });
+    // Update the updatedAt timestamp separately
     await db
       .update(projects)
-      .set({
-        journeyProgress: {
-          ...updatedProgress,
-          lastStepCompletedAt: new Date().toISOString(),
-        },
-        updatedAt: new Date(),
-      })
+      .set({ updatedAt: new Date() })
       .where(eq(projects.id, projectId));
   }
 
@@ -251,7 +251,8 @@ export class JourneyStateManager {
     const currentStepIndex = progress?.currentStepIndex ?? 0;
     const currentStep = stepsWithIndex[currentStepIndex] ?? stepsWithIndex[stepsWithIndex.length - 1];
 
-    const estimatedCost = Number((project as any).lockedCostEstimate ?? 0);
+    // Cost SSOT: Read from journeyProgress first, project-level as legacy fallback
+    const estimatedCost = Number((progress as any)?.lockedCostEstimate ?? (project as any).lockedCostEstimate ?? 0);
     const spentCost = Number((project as any).totalCostIncurred ?? 0);
 
     // Always recalculate estimatedTimeRemaining from template (don't use stored value)

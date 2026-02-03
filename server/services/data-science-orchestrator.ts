@@ -1760,7 +1760,7 @@ export class DataScienceOrchestrator {
       const journeyProgress = (projectRecord as any).journeyProgress || {};
       const joinedData = journeyProgress?.joinedData;
 
-      // Priority 1: Use fullData from joinedData (complete joined dataset)
+      // Priority 1: Use fullData from joinedData (legacy path - kept for backward compat)
       if (joinedData?.fullData && Array.isArray(joinedData.fullData) && joinedData.fullData.length > 0) {
         console.log(`✅ [SSOT] Using joined fullData from journeyProgress: ${joinedData.fullData.length} rows`);
         const schema = joinedData.schema || {};
@@ -1770,6 +1770,28 @@ export class DataScienceOrchestrator {
           totalRows: joinedData.fullData.length,
           totalColumns: Object.keys(schema).length || (joinedData.fullData[0] ? Object.keys(joinedData.fullData[0]).length : 0)
         };
+      }
+
+      // P1-22 FIX: Priority 1b: Use dataset.ingestionMetadata.transformedData (canonical location)
+      try {
+        const { projectDatasets: projectDatasetsTable, datasets: datasetsTable } = await import('../../shared/schema');
+        const linkedDatasets = await db.select({ dataset: datasetsTable })
+          .from(projectDatasetsTable)
+          .innerJoin(datasetsTable, eq(projectDatasetsTable.datasetId, datasetsTable.id))
+          .where(eq(projectDatasetsTable.projectId, projectId));
+        const primaryDs = linkedDatasets[0]?.dataset;
+        if (primaryDs?.ingestionMetadata?.transformedData && Array.isArray(primaryDs.ingestionMetadata.transformedData) && primaryDs.ingestionMetadata.transformedData.length > 0) {
+          console.log(`✅ [SSOT] Using transformedData from dataset.ingestionMetadata: ${primaryDs.ingestionMetadata.transformedData.length} rows`);
+          const schema = primaryDs.ingestionMetadata.transformedSchema || joinedData?.schema || {};
+          return {
+            rows: primaryDs.ingestionMetadata.transformedData,
+            schema,
+            totalRows: primaryDs.ingestionMetadata.transformedData.length,
+            totalColumns: Object.keys(schema).length || (primaryDs.ingestionMetadata.transformedData[0] ? Object.keys(primaryDs.ingestionMetadata.transformedData[0]).length : 0)
+          };
+        }
+      } catch (dsErr) {
+        console.warn('⚠️ [P1-22] Failed to load dataset transformedData:', dsErr);
       }
 
       // Priority 2: Use preview from joinedData if fullData not available
@@ -2097,7 +2119,7 @@ export class DataScienceOrchestrator {
       // Modify step based on feedback
       const refinedStep = {
         ...step,
-        id: `step_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: `step_${nanoid()}`,
         priority: this.adjustPriority(step, shouldFocusOn),
         estimatedDuration: shouldSimplify ? this.reduceStepDuration(step.estimatedDuration) : step.estimatedDuration,
         description: this.refineStepDescription(step.description, rejectionReason),
@@ -2111,7 +2133,7 @@ export class DataScienceOrchestrator {
     if (shouldExpand && shouldFocusOn.length > 0) {
       for (const focus of shouldFocusOn) {
         refinedSteps.push({
-          id: `step_new_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: `step_new_${nanoid()}`,
           name: `Enhanced ${focus} Analysis`,
           description: `Additional ${focus} analysis added based on user feedback`,
           type: 'analysis',

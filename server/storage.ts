@@ -447,7 +447,7 @@ export interface IStorage {
   getJourneySettings(journeyId: string): Promise<any>;
   
   // Usage Logging (missing method)
-  logUsage(usage: { userId: string; projectId?: string | null; action: string; provider?: string; tokensUsed?: number; cost?: string }): Promise<void>;
+  logUsage(usage: { userId: string; projectId?: string | null; action: string; provider?: string; tokensUsed?: number; cost?: number }): Promise<void>;
 
   // Agent checkpoint management
   createAgentCheckpoint(checkpoint: Omit<InsertAgentCheckpoint, 'id' | 'createdAt' | 'timestamp'> & { id?: string; timestamp?: Date; createdAt?: Date }): Promise<AgentCheckpoint>;
@@ -926,7 +926,7 @@ export class MemStorage implements IStorage {
   }
 
   // Usage Logging
-  async logUsage(usage: { userId: string; projectId?: string | null; action: string; provider?: string; tokensUsed?: number; cost?: string }): Promise<void> {
+  async logUsage(usage: { userId: string; projectId?: string | null; action: string; provider?: string; tokensUsed?: number; cost?: number }): Promise<void> {
     // In-memory storage doesn't persist usage logs
     // This is handled by HybridStorage for persistence
     console.log('Usage logged:', usage);
@@ -2047,15 +2047,30 @@ export class DatabaseStorage implements IStorage {
 
   // Project Artifacts
   async createArtifact(artifactData: InsertProjectArtifact): Promise<ProjectArtifact> {
-    // Use provided id or generate one
+    // Sanitize createdBy: agent identifiers (e.g. 'data_engineer_agent', 'pm_agent')
+    // are not valid user IDs and will violate the FK constraint on users table.
+    // Store agent identity in params.generatedBy instead; set createdBy to null.
+    let sanitizedCreatedBy = artifactData.createdBy;
+    if (sanitizedCreatedBy && typeof sanitizedCreatedBy === 'string') {
+      const agentPatterns = ['_agent', '_engineer', 'pm_agent', 'ds_agent', 'de_agent', 'ba_agent'];
+      const isAgentId = agentPatterns.some(p => sanitizedCreatedBy!.includes(p));
+      if (isAgentId) {
+        // Preserve agent identity in params for traceability
+        const existingParams = (artifactData.params || {}) as Record<string, any>;
+        artifactData.params = { ...existingParams, generatedBy: sanitizedCreatedBy };
+        sanitizedCreatedBy = null;
+      }
+    }
+
     const [artifact] = await db
       .insert(projectArtifacts)
       .values({
         ...artifactData,
         id: artifactData.id || nanoid(),
+        createdBy: sanitizedCreatedBy,
       })
       .returning();
-    
+
     return artifact;
   }
 
@@ -2698,7 +2713,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Usage Logging - no-op for now
-  async logUsage(usage: { userId: string; projectId?: string | null; action: string; provider?: string; tokensUsed?: number; cost?: string }): Promise<void> {
+  async logUsage(usage: { userId: string; projectId?: string | null; action: string; provider?: string; tokensUsed?: number; cost?: number }): Promise<void> {
     // Could be persisted to DB in the future
     console.log('Usage logged:', usage);
   }

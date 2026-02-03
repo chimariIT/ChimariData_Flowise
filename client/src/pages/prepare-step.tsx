@@ -29,6 +29,7 @@ import { apiClient } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { useJourneyDataOptional } from "@/contexts/JourneyDataContext";
 import { useQueryClient } from "@tanstack/react-query";
+import { detectIndustryFromText } from "@shared/industry-patterns";
 
 interface PrepareStepProps {
   journeyType: string;
@@ -115,78 +116,8 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
   const [detectedIndustry, setDetectedIndustry] = useState<string>('general');
   const [industryOverride, setIndustryOverride] = useState<string | null>(null);
 
-  // Industry auto-detection function based on analysis goal and business questions
-  const detectIndustry = useCallback((goal: string, questions: string, projectName?: string): string => {
-    const combined = `${goal} ${questions} ${projectName || ''}`.toLowerCase();
-
-    // HR / Employee Engagement patterns
-    const hrPatterns = [
-      'employee', 'engagement', 'workforce', 'hr', 'human resources',
-      'turnover', 'retention', 'hiring', 'talent', 'staff', 'personnel',
-      'satisfaction survey', 'performance review', 'training', 'onboarding',
-      'attrition', 'workplace', 'team morale', 'employee experience'
-    ];
-    if (hrPatterns.some(p => combined.includes(p))) {
-      return 'hr';
-    }
-
-    // Education patterns
-    const educationPatterns = [
-      'student', 'education', 'school', 'university', 'college', 'academic',
-      'graduation', 'enrollment', 'teacher', 'classroom', 'curriculum',
-      'learning', 'course', 'grades', 'parent conference', 'semester'
-    ];
-    if (educationPatterns.some(p => combined.includes(p))) {
-      return 'education';
-    }
-
-    // Healthcare patterns
-    const healthcarePatterns = [
-      'patient', 'healthcare', 'hospital', 'clinical', 'medical',
-      'readmission', 'treatment', 'diagnosis', 'health outcomes'
-    ];
-    if (healthcarePatterns.some(p => combined.includes(p))) {
-      return 'healthcare';
-    }
-
-    // Finance patterns
-    const financePatterns = [
-      'financial', 'investment', 'portfolio', 'risk', 'trading',
-      'loan', 'credit', 'banking', 'roi', 'revenue', 'profit margin'
-    ];
-    if (financePatterns.some(p => combined.includes(p))) {
-      return 'finance';
-    }
-
-    // Retail patterns
-    const retailPatterns = [
-      'customer', 'sales', 'retail', 'ecommerce', 'conversion',
-      'purchase', 'cart', 'order', 'shopping', 'lifetime value'
-    ];
-    if (retailPatterns.some(p => combined.includes(p))) {
-      return 'retail';
-    }
-
-    // Manufacturing patterns
-    const manufacturingPatterns = [
-      'manufacturing', 'production', 'quality control', 'defect',
-      'throughput', 'oee', 'supply chain', 'inventory'
-    ];
-    if (manufacturingPatterns.some(p => combined.includes(p))) {
-      return 'manufacturing';
-    }
-
-    // Non-profit patterns
-    const nonprofitPatterns = [
-      'nonprofit', 'non-profit', 'donor', 'fundraising', 'charity',
-      'volunteer', 'grant', 'mission impact', 'beneficiary'
-    ];
-    if (nonprofitPatterns.some(p => combined.includes(p))) {
-      return 'nonprofit';
-    }
-
-    return 'general';
-  }, []);
+  // Industry auto-detection using shared patterns (shared/industry-patterns.ts)
+  const detectIndustry = useCallback(detectIndustryFromText, []);
 
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -380,73 +311,6 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
     return () => clearTimeout(timeoutId);
   }, [analysisGoal, businessQuestions, primaryAudience, secondaryAudiences, decisionContext, currentProjectId, isSaving, updateProgress, project, detectIndustry, industryOverride]); // Removed journeyProgress from deps to prevent re-trigger
 
-  // Backwards compatibility: Also cache in localStorage for offline access
-  useEffect(() => {
-    if (analysisGoal) {
-      try { localStorage.setItem('chimari_analysis_goal', analysisGoal); } catch { }
-    }
-  }, [analysisGoal]);
-
-  useEffect(() => {
-    if (businessQuestions) {
-      try { localStorage.setItem('chimari_business_questions', businessQuestions); } catch { }
-    }
-  }, [businessQuestions]);
-
-  // Track last saved values to prevent infinite loops for localStorage saves
-  const lastSavedLocalStorageRef = useRef<string>('');
-  const saveLocalStorageTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Save goals and questions for agent recommendations (with ROBUST infinite loop prevention)
-  // P0-2 FIX: Improved debounce and signature checking
-  useEffect(() => {
-    if (!analysisGoal || !businessQuestions) return;
-
-    // Create a signature of current values
-    const currentSignature = `${analysisGoal}::${businessQuestions}`;
-
-    // Skip if nothing changed (prevents infinite loop)
-    if (currentSignature === lastSavedLocalStorageRef.current) return;
-
-    // Clear any pending save timeout to debounce
-    if (saveLocalStorageTimeoutRef.current) {
-      clearTimeout(saveLocalStorageTimeoutRef.current);
-    }
-
-    // Debounce the save operation by 1 second
-    saveLocalStorageTimeoutRef.current = setTimeout(() => {
-      try {
-        // Double-check the signature hasn't changed during debounce
-        const checkSignature = `${analysisGoal}::${businessQuestions}`;
-        if (checkSignature === lastSavedLocalStorageRef.current) {
-          return; // Already saved
-        }
-
-        // Extract questions from the business questions text
-        const questions = businessQuestions
-          .split('\n')
-          .map(q => q.trim())
-          .filter(q => q.length > 0);
-
-        // Save in the format expected by agent recommendations
-        localStorage.setItem('chimari_analysis_goals', JSON.stringify([analysisGoal]));
-        localStorage.setItem('chimari_analysis_questions', JSON.stringify(questions));
-
-        // Update ref AFTER successful save to prevent re-trigger
-        lastSavedLocalStorageRef.current = checkSignature;
-      } catch (error) {
-        console.error('Failed to save goals/questions for agent recommendations:', error);
-      }
-    }, 1000); // 1 second debounce
-
-    // Cleanup timeout on unmount or re-run
-    return () => {
-      if (saveLocalStorageTimeoutRef.current) {
-        clearTimeout(saveLocalStorageTimeoutRef.current);
-      }
-    };
-  }, [analysisGoal, businessQuestions]);
-
   // Fetch AI question suggestions for non-tech users
   useEffect(() => {
     if (journeyType !== 'non-tech' || !analysisGoal || analysisGoal.length < 10) {
@@ -457,20 +321,11 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
     const timer = setTimeout(async () => {
       setLoadingSuggestions(true);
       try {
-        const response = await fetch('/api/project-manager/suggest-questions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            goal: analysisGoal,
-            journeyType
-          })
+        const data = await apiClient.post('/api/project-manager/suggest-questions', {
+          goal: analysisGoal,
+          journeyType
         });
-
-        if (response.ok) {
-          const data = await response.json();
-          setAiSuggestions(data.suggestions || []);
-        }
+        setAiSuggestions(data.suggestions || []);
       } catch (error) {
         console.error('Failed to fetch AI suggestions:', error);
       } finally {
@@ -550,22 +405,8 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
 
           setAvailableTemplates(mapped);
 
-          // Only restore from localStorage if no journeyProgress data exists
-          if (!journeyProgress?.selectedAnalysisTypes || journeyProgress.selectedAnalysisTypes.length === 0) {
-            const saved = localStorage.getItem('chimari_business_templates');
-            console.log('Saved templates from localStorage:', saved);
-
-            if (saved) {
-              try {
-                const parsed = JSON.parse(saved);
-                console.log('Parsed saved templates:', parsed);
-                setSelectedTemplates(parsed);
-              } catch (error) {
-                console.error('Failed to parse saved templates:', error);
-              }
-            }
-          } else {
-            console.log('Using journeyProgress instead of localStorage:', journeyProgress.selectedAnalysisTypes);
+          // Restore template selection from journeyProgress (SSOT)
+          if (journeyProgress?.selectedAnalysisTypes?.length) {
             setSelectedTemplates(journeyProgress.selectedAnalysisTypes);
           }
         }
@@ -697,12 +538,17 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
       }
 
       // Now generate requirements (DS + BA + PM agents collaborate)
-      const data = await apiClient.post(`/api/projects/${projectId}/generate-data-requirements`, {
+      // P0-11 FIX: Add 30s timeout to prevent indefinite loading state
+      const requirementsPromise = apiClient.post(`/api/projects/${projectId}/generate-data-requirements`, {
         userGoals,
         userQuestions,
         // GAP F: Pass researcher recommendations to help guide DS analysis planning
         researcherContext: researcherRecommendations
       });
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Requirements generation timed out after 30 seconds. Please try again.')), 30000)
+      );
+      const data = await Promise.race([requirementsPromise, timeoutPromise]) as any;
 
       if (data.success && data.document) {
         setRequiredDataElements(data.document);
@@ -1038,22 +884,42 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
                       How the PM Agent Can Help
                     </h4>
                     <ul className="text-sm text-gray-600 space-y-1">
-                      <li className="flex items-start gap-2">
-                        <CheckCircle className="w-4 h-4 text-indigo-600 mt-0.5 flex-shrink-0" />
-                        <span>Summarize and validate your analysis goals</span>
-                      </li>
-                      <li className="flex items-start gap-2">
-                        <CheckCircle className="w-4 h-4 text-indigo-600 mt-0.5 flex-shrink-0" />
-                        <span>Ask clarifying questions to ensure requirements are clear</span>
-                      </li>
-                      <li className="flex items-start gap-2">
-                        <CheckCircle className="w-4 h-4 text-indigo-600 mt-0.5 flex-shrink-0" />
-                        <span>Suggest additional considerations for your audience</span>
-                      </li>
-                      <li className="flex items-start gap-2">
-                        <CheckCircle className="w-4 h-4 text-indigo-600 mt-0.5 flex-shrink-0" />
-                        <span>Help structure complex analysis questions</span>
-                      </li>
+                      {(() => {
+                        const hasGoal = analysisGoal.trim().length > 0;
+                        const hasQuestions = businessQuestions.trim().length > 0;
+                        const hasAudience = primaryAudience && primaryAudience !== 'mixed';
+                        const items: string[] = [];
+
+                        if (!hasGoal) {
+                          items.push('Help you articulate a clear analysis goal');
+                          items.push('Suggest relevant business questions for your data');
+                        } else if (!hasQuestions) {
+                          items.push('Validate your analysis goal and identify gaps');
+                          items.push('Generate targeted business questions from your goal');
+                        } else {
+                          items.push('Review your goals and questions for completeness');
+                          items.push('Identify data requirements and potential gaps');
+                        }
+
+                        if (hasAudience) {
+                          items.push(`Tailor recommendations for your ${primaryAudience.replace('_', ' ')} audience`);
+                        } else {
+                          items.push('Suggest the best audience framing for your analysis');
+                        }
+
+                        if (detectedIndustry !== 'general') {
+                          items.push(`Apply ${detectedIndustry} industry best practices and KPIs`);
+                        } else {
+                          items.push('Detect your industry context and apply relevant frameworks');
+                        }
+
+                        return items.map((text, i) => (
+                          <li key={i} className="flex items-start gap-2">
+                            <CheckCircle className="w-4 h-4 text-indigo-600 mt-0.5 flex-shrink-0" />
+                            <span>{text}</span>
+                          </li>
+                        ));
+                      })()}
                     </ul>
                   </div>
                 </div>
@@ -1070,27 +936,24 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
                     setShowClarificationDialog(true);
 
                     try {
-                      const response = await fetch('/api/project-manager/clarify-goal', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        credentials: 'include',
-                        body: JSON.stringify({
-                          projectId: currentProjectId,
-                          analysisGoal,
-                          businessQuestions,
-                          journeyType
-                        })
+                      const availableColumns = journeyProgress?.joinedData?.schema
+                        ? Object.keys(journeyProgress.joinedData.schema)
+                        : [];
+
+                      const data = await apiClient.post('/api/project-manager/clarify-goal', {
+                        projectId: currentProjectId,
+                        analysisGoal,
+                        businessQuestions,
+                        journeyType,
+                        industry: industryOverride || detectedIndustry,
+                        availableColumns,
+                        audience: {
+                          primary: primaryAudience,
+                          secondary: secondaryAudiences,
+                          decisionContext: decisionContext || undefined
+                        }
                       });
 
-                      console.log('PM Clarification Response Status:', response.status, response.statusText);
-
-                      if (!response.ok) {
-                        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-                        console.error('PM Clarification Error Response:', errorData);
-                        throw new Error(errorData.error || `Server returned ${response.status}: ${response.statusText}`);
-                      }
-
-                      const data = await response.json();
                       console.log('PM Clarification Response Data:', data);
 
                       if (data.clarification) {
@@ -1402,15 +1265,22 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
               return;
             }
 
-            // Update journeyProgress with refined goal and answers (SSOT)
+            // Update journeyProgress with refined goal AND PM Agent insights (SSOT)
             updateProgress({
               analysisGoal: refinedGoal || analysisGoal,
-              // Store clarification answers in a way that matches schema if needed,
-              // for now we'll just update the goal
-              currentStep: 'prepare'
+              currentStep: 'prepare',
+              // Persist PM Agent clarification so downstream steps can use it
+              pmClarification: {
+                summary: clarificationData?.summary,
+                understoodGoals: clarificationData?.understoodGoals || [],
+                suggestedFocus: clarificationData?.suggestedFocus ? [clarificationData.suggestedFocus].flat() : [],
+                identifiedGaps: clarificationData?.identifiedGaps || [],
+                clarifyingQuestions: clarificationData?.clarifyingQuestions || [],
+                timestamp: new Date().toISOString()
+              }
             });
 
-            console.log('✅ Clarification saved to journeyProgress');
+            console.log('✅ Clarification + PM Agent insights saved to journeyProgress');
 
             // Generate required data elements based on goals/questions
             // Wrap in try-catch so dialog stays closed even if this fails
@@ -1582,16 +1452,15 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
                   // Force cache refresh to ensure verification step gets fresh data
                   await queryClient.refetchQueries({ queryKey: ["project", reliableProjectId] });
 
-                  // CRITICAL: Verify data actually persisted before navigation
-                  // This prevents navigation to Verification step with stale/missing data
-                  const verifiedProject = queryClient.getQueryData(["project", reliableProjectId]) as any;
-                  const verifiedReqDoc = verifiedProject?.journeyProgress?.requirementsDocument;
+                  // P0-10 FIX: Use saveResult (from mutation response) as authoritative verification
+                  // getQueryData can return stale data if cache hasn't propagated yet
+                  const verifiedReqDoc = saveResult?.journeyProgress?.requirementsDocument
+                    || (queryClient.getQueryData(["project", reliableProjectId]) as any)?.journeyProgress?.requirementsDocument;
 
                   console.log('📋 [Navigation] Pre-navigation verification:', {
-                    hasVerifiedProject: !!verifiedProject,
                     hasVerifiedRequirementsDoc: !!verifiedReqDoc,
                     verifiedElementsCount: verifiedReqDoc?.requiredDataElements?.length || 0,
-                    verifiedLocked: verifiedProject?.journeyProgress?.requirementsLocked
+                    verifiedLocked: saveResult?.journeyProgress?.requirementsLocked
                   });
 
                   if (!verifiedReqDoc) {

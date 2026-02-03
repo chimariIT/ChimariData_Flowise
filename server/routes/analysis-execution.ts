@@ -18,6 +18,7 @@ import { z } from 'zod';
 import { ArtifactGenerator } from '../services/artifact-generator';
 import { storage } from '../storage';
 import { JourneyStateManager } from '../services/journey-state-manager';
+import { getPiiExcludedColumns, getPiiConfig } from '../services/pii-helper';
 import { getBillingService } from '../services/billing/unified-billing-service';
 import { requireAnyFeature, GATED_FEATURES } from '../middleware/feature-gate';
 import type { CostBreakdown } from '@shared/schema';
@@ -193,7 +194,8 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
 
     // P0-B FIX: Validate locked cost exists before execution (unless paid or subscribed)
     const journeyProgress = (project as any).journeyProgress || {};
-    const hasLockedCost = journeyProgress.lockedCostEstimate != null || (project as any).lockedCostEstimate != null;
+    // Cost SSOT: Read from journeyProgress only (project-level field is for admin views)
+    const hasLockedCost = journeyProgress.lockedCostEstimate != null;
 
     // Step 1: Check if project already paid (one-off payment)
     const isPaid = (project as any).isPaid === true;
@@ -265,9 +267,9 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
                 quotaTracked = true;
                 // Store deduction ID for idempotency
                 try {
-                  await storage.updateProject(projectId, {
-                    journeyProgress: { ...journeyProgress, lastCreditDeductionId: currentExecutionId }
-                  } as any);
+                  await storage.atomicMergeJourneyProgress(projectId, {
+                    lastCreditDeductionId: currentExecutionId
+                  });
                 } catch (e) { /* non-fatal */ }
               } else {
                 // P0-B FIX: Return specific error instead of falling through to generic "quota exceeded"
@@ -346,20 +348,13 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
       console.log(`❓ [GAP 5] Received ${questionAnswerMapping.length} question-answer mappings for evidence chain`);
     }
 
-    // PHASE 5 SSOT FIX: Extract PII columns from journeyProgress.piiDecisions ONLY (no fallbacks)
-    // Note: Using existing journeyProgress variable from line 192
-    const piiDecisions = journeyProgress.piiDecisions;
-
-    if (!piiDecisions) {
-      console.log(`⚠️ [PII SSOT] No PII decisions found in journeyProgress - user may not have completed verification step`);
-    }
-
-    const excludedColumns: string[] = piiDecisions?.excludedColumns || [];
-    const piiColumnsToRemove: string[] = piiDecisions?.selectedColumns || piiDecisions?.piiColumnsRemoved || [];
-    const columnsToExclude = [...new Set([...excludedColumns, ...piiColumnsToRemove])];
+    // PII SSOT: Use centralized helper to read excluded columns from journeyProgress
+    const columnsToExclude = getPiiExcludedColumns(journeyProgress);
 
     if (columnsToExclude.length > 0) {
-      console.log(`🔒 [P0-1 FIX] PII columns to exclude from analysis: [${columnsToExclude.join(', ')}]`);
+      console.log(`🔒 [PII] Columns to exclude from analysis: [${columnsToExclude.join(', ')}]`);
+    } else {
+      console.log(`ℹ️ [PII] No PII exclusions found in journeyProgress`);
     }
 
     // Execute analysis
@@ -390,17 +385,12 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
     if (project) {
       console.log(`📦 Queueing artifact generation for project ${projectId} (async)`);
 
-      // ✅ PHASE 5 SSOT FIX: Load PII decision from journeyProgress.piiDecisions ONLY
+      // PII SSOT: Use centralized helper for artifact generation PII config
       const journeyProgressForArtifacts = (project as any)?.journeyProgress || {};
-      const piiDecisionsForArtifacts = journeyProgressForArtifacts.piiDecisions;
-      const piiConfig = piiDecisionsForArtifacts ? {
-        excludedColumns: piiDecisionsForArtifacts.excludedColumns || [],
-        anonymizationApplied: piiDecisionsForArtifacts.anonymizationApplied || false,
-        piiColumnsRemoved: piiDecisionsForArtifacts.piiColumnsRemoved || []
-      } : undefined;
+      const piiConfig = getPiiConfig(journeyProgressForArtifacts);
 
-      if (piiConfig && piiConfig.excludedColumns.length > 0) {
-        console.log(`🔒 [GAP 7 FIX] PII config loaded for artifacts: ${piiConfig.excludedColumns.length} columns to exclude`);
+      if (piiConfig.excludedColumns.length > 0) {
+        console.log(`🔒 [PII] Artifact generation: ${piiConfig.excludedColumns.length} columns to exclude`);
       }
 
       // Run artifact generation in background without awaiting
@@ -569,9 +559,18 @@ router.get('/results/:projectId', ensureAuthenticated, async (req, res) => {
     const results = await AnalysisExecutionService.getResults(projectId, userId);
 
     if (!results) {
+      const executionStatus = (project as any)?.journeyProgress?.executionStatus;
+      const isPaid = (project as any)?.isPaid === true;
       return res.status(404).json({
         success: false,
-        error: 'No analysis results found for this project'
+        error: 'No analysis results found for this project',
+        status: executionStatus || 'not_started',
+        isPaid,
+        hint: !isPaid
+          ? 'Analysis execution requires payment first.'
+          : executionStatus === 'executing' || executionStatus === 'in_progress'
+            ? 'Analysis is still running. Please retry in a few seconds.'
+            : 'Analysis has not been triggered yet. This may indicate a payment processing issue.'
       });
     }
 

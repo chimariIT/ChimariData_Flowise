@@ -6,6 +6,7 @@ import { PythonProcessor } from '../services/python-processor';
 import { ensureAuthenticated } from './auth';
 import { canAccessProject } from '../middleware/ownership';
 import { nanoid } from 'nanoid';
+import { storage } from '../storage';
 import * as path from 'path';
 
 const router = Router();
@@ -370,20 +371,12 @@ router.post('/data-quality/:projectId/approve-quality', ensureAuthenticated, asy
                 .where(eq(agentCheckpoints.id, checkpointId));
         }
 
-        // Update project journeyProgress
-        const project = access.project;
-        const currentProgress = (project as any).journeyProgress || {};
-
-        await db.update(projects)
-            .set({
-                journeyProgress: JSON.stringify({
-                    ...currentProgress,
-                    dataQualityApproved: true,
-                    dataQualityApprovedAt: new Date().toISOString(),
-                    dataQualityApprovedBy: userId
-                })
-            })
-            .where(eq(projects.id, projectId));
+        // Update project journeyProgress using atomic merge
+        await storage.atomicMergeJourneyProgress(projectId, {
+            dataQualityApproved: true,
+            dataQualityApprovedAt: new Date().toISOString(),
+            dataQualityApprovedBy: userId
+        });
 
         console.log(`✅ [Quality Approval] Project ${projectId} quality approved by user ${userId}`);
 
@@ -427,21 +420,13 @@ router.post('/data-quality/:projectId/approve-schema', ensureAuthenticated, asyn
                 .where(eq(agentCheckpoints.id, checkpointId));
         }
 
-        // Update project journeyProgress
-        const project = access.project;
-        const currentProgress = (project as any).journeyProgress || {};
-
-        await db.update(projects)
-            .set({
-                journeyProgress: JSON.stringify({
-                    ...currentProgress,
-                    schemaValidated: true,
-                    schemaValidatedAt: new Date().toISOString(),
-                    schemaValidatedBy: userId,
-                    confirmedSchema
-                })
-            })
-            .where(eq(projects.id, projectId));
+        // Update project journeyProgress using atomic merge
+        await storage.atomicMergeJourneyProgress(projectId, {
+            schemaValidated: true,
+            schemaValidatedAt: new Date().toISOString(),
+            schemaValidatedBy: userId,
+            confirmedSchema
+        });
 
         console.log(`✅ [Schema Approval] Project ${projectId} schema approved by user ${userId}`);
 

@@ -553,47 +553,70 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
     const isPaidProject = (project as any)?.isPaid === true;
     const analysisExecutedAt = (project as any)?.analysisExecutedAt;
     const mightBeProcessing = isPaidProject && !analysisExecutedAt;
+    const hasArtifacts = artifacts.length > 0;
 
     return (
       <div className="space-y-6">
-        <Card className={mightBeProcessing ? "border-blue-200 bg-blue-50" : "border-yellow-200 bg-yellow-50"}>
-          <CardHeader>
-            <CardTitle className={`flex items-center gap-2 ${mightBeProcessing ? 'text-blue-900' : 'text-yellow-900'}`}>
+        {/* When artifacts are available, show a compact info banner instead of a blocking card */}
+        {hasArtifacts ? (
+          <div className={`p-4 rounded-lg border ${mightBeProcessing ? 'border-blue-200 bg-blue-50' : 'border-yellow-200 bg-yellow-50'} flex items-center justify-between`}>
+            <div className="flex items-center gap-2">
               {mightBeProcessing ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
+                <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
               ) : (
-                <AlertCircle className="w-5 h-5" />
+                <AlertCircle className="w-4 h-4 text-yellow-600" />
               )}
-              {mightBeProcessing ? 'Analysis In Progress...' : 'No Analysis Results Yet'}
-            </CardTitle>
-            <CardDescription className={mightBeProcessing ? 'text-blue-800' : 'text-yellow-800'}>
-              {mightBeProcessing
-                ? 'Your analysis is running. Results will appear here shortly.'
-                : "Your analysis hasn't been run yet or is still processing."}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="text-gray-700 mb-4">
-              {mightBeProcessing
-                ? 'Please wait while we analyze your data. This typically takes 1-2 minutes.'
-                : 'To see results here, please go back and run the analysis on your data.'}
-            </p>
-            <div className="flex gap-3">
-              <Button onClick={handleRetryLoad} variant={mightBeProcessing ? "default" : "outline"}>
-                <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
-                {mightBeProcessing ? 'Check for Results' : 'Retry Loading'}
-              </Button>
-              {!mightBeProcessing && (
-                <Button onClick={onPrevious} variant="outline">
-                  Go Back to Analysis
-                </Button>
-              )}
+              <span className={mightBeProcessing ? 'text-blue-800' : 'text-yellow-800'}>
+                {mightBeProcessing
+                  ? 'Analysis is still processing. Artifacts below are ready for download.'
+                  : 'Analysis results are being generated. Artifacts are available below.'}
+              </span>
             </div>
-          </CardContent>
-        </Card>
+            <Button onClick={handleRetryLoad} variant="ghost" size="sm">
+              <RefreshCw className={`w-4 h-4 mr-1 ${isLoading ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
+          </div>
+        ) : (
+          <Card className={mightBeProcessing ? "border-blue-200 bg-blue-50" : "border-yellow-200 bg-yellow-50"}>
+            <CardHeader>
+              <CardTitle className={`flex items-center gap-2 ${mightBeProcessing ? 'text-blue-900' : 'text-yellow-900'}`}>
+                {mightBeProcessing ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <AlertCircle className="w-5 h-5" />
+                )}
+                {mightBeProcessing ? 'Analysis In Progress...' : 'No Analysis Results Yet'}
+              </CardTitle>
+              <CardDescription className={mightBeProcessing ? 'text-blue-800' : 'text-yellow-800'}>
+                {mightBeProcessing
+                  ? 'Your analysis is running. Results will appear here shortly.'
+                  : "Your analysis hasn't been run yet or is still processing."}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <p className="text-gray-700 mb-4">
+                {mightBeProcessing
+                  ? 'Please wait while we analyze your data.'
+                  : 'To see results here, please go back and run the analysis on your data.'}
+              </p>
+              <div className="flex gap-3">
+                <Button onClick={handleRetryLoad} variant={mightBeProcessing ? "default" : "outline"}>
+                  <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
+                  {mightBeProcessing ? 'Check for Results' : 'Retry Loading'}
+                </Button>
+                {!mightBeProcessing && (
+                  <Button onClick={onPrevious} variant="outline">
+                    Go Back to Analysis
+                  </Button>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
-        {/* Show artifacts section even if results aren't ready yet */}
-        {artifacts.length > 0 && (
+        {/* Show artifacts section - prominently when available */}
+        {hasArtifacts && (
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">

@@ -93,16 +93,21 @@ export function useProject(projectId?: string) {
             return apiClient.updateProjectProgress(effectiveProjectId, progressUpdate);
         },
         onSuccess: (data) => {
-            // Optimistically update the cache or just invalidate
+            // DEFENSE-IN-DEPTH: Merge response journeyProgress into cache instead of replacing.
+            // This prevents late-arriving responses from older mutations from wiping newer keys.
+            // E.g., if auto-save response arrives after requirementsDocument was saved,
+            // the merge preserves requirementsDocument while adding auto-save keys.
             queryClient.setQueryData(["project", projectId], (old: any) => {
                 if (!old) return old;
+                const existingProgress = old.journeyProgress || {};
+                const responseProgress = data.journeyProgress || {};
                 return {
                     ...old,
-                    journeyProgress: data.journeyProgress,
+                    journeyProgress: { ...existingProgress, ...responseProgress },
                     updatedAt: new Date().toISOString()
                 };
             });
-            // Also invalidate related queries if needed
+            // Invalidate to refetch authoritative state from server
             queryClient.invalidateQueries({ queryKey: ["project", projectId] });
         },
     });

@@ -301,10 +301,10 @@ export class CostTrackingService {
 
         if (!project) return;
 
-        // ✅ FIX: Check for locked cost estimate first (SSOT: journeyProgress.lockedCostEstimate)
+        // Cost SSOT: Read from journeyProgress first, project-level as legacy fallback
         const journeyProgress = (project as any).journeyProgress || {};
-        const lockedCost = journeyProgress.lockedCostEstimate
-            || parseFloat((project as any).lockedCostEstimate || '0');
+        const lockedCost = Number(journeyProgress.lockedCostEstimate
+            ?? parseFloat((project as any).lockedCostEstimate || '0'));
 
         if (lockedCost > 0) {
             // User already paid the locked amount - don't recalculate

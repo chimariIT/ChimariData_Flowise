@@ -121,14 +121,11 @@ export class ArtifactPersistenceService {
 
       const updatedChain = [...existingChain, ...newEntries];
 
-      await storage.updateProject(projectId, {
-        journeyProgress: {
-          ...existingProgress,
-          artifactChain: updatedChain,
-          lastArtifactAt: new Date().toISOString(),
-          totalArtifacts: updatedChain.length
-        }
-      } as any);
+      await storage.atomicMergeJourneyProgress(projectId, {
+        artifactChain: updatedChain,
+        lastArtifactAt: new Date().toISOString(),
+        totalArtifacts: updatedChain.length
+      });
 
       console.log(`   🔗 [Artifact] Updated artifact chain for project ${projectId} (total: ${updatedChain.length})`);
     } catch (error) {

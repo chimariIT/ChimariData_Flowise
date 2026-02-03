@@ -37,12 +37,13 @@ import { performanceWebhookService } from '../services/performance-webhook-servi
 import { requiredDataElementsTool } from '../services/tools/required-data-elements-tool';
 import { db } from '../db';
 import { eq, desc } from 'drizzle-orm';
-import { decisionAudits, projectQuestions, datasets, projectDatasets, projects } from '@shared/schema';
+import { decisionAudits, projectQuestions, datasets as datasetsTable, projectDatasets, projects } from '@shared/schema';
 import { DatasetJoiner, JoinConfig } from '../dataset-joiner';
 import { semanticSearchService } from '../services/semantic-search-service';
 import { sourceColumnMapper, type ElementMappingResult, type DataElementDefinition } from '../services/source-column-mapper';
 import { columnEmbeddingGenerator } from '../services/column-embedding-generator';
 import { transformationCompiler, type CompiledTransformation } from '../services/transformation-compiler';
+import { getPiiExcludedColumns } from '../services/pii-helper';
 
 const VALID_PROJECT_JOURNEYS: JourneyType[] = ["non-tech", "business", "technical", "consultation", "custom"];
 
@@ -137,6 +138,24 @@ async function markJourneyProgress(projectId: string, stepIds: string[]): Promis
             console.error(`Failed to update journey progress for step ${stepId}:`, progressError);
         }
     }
+}
+
+// Normalize schema objects (with type/name/etc.) into a simple column -> type map
+function normalizeSchemaTypes(schema: Record<string, any> | null | undefined): Record<string, string> {
+    const normalized: Record<string, string> = {};
+    if (!schema || typeof schema !== 'object') return normalized;
+
+    for (const [col, value] of Object.entries(schema)) {
+        if (value && typeof value === 'object' && 'type' in (value as any)) {
+            normalized[col] = (value as any).type || 'string';
+        } else if (typeof value === 'string') {
+            normalized[col] = value;
+        } else {
+            normalized[col] = 'string';
+        }
+    }
+
+    return normalized;
 }
 
 // Initialize Agents for recommendations
@@ -2477,7 +2496,7 @@ router.post("/trial-upload", upload.single('file'), async (req, res) => {
         const processedData = await FileProcessor.processFile(file.buffer, file.originalname, file.mimetype);
         const piiAnalysis = await PIIAnalyzer.analyzePII(processedData.preview || [], processedData.schema || {});
         if (piiAnalysis.detectedPII && piiAnalysis.detectedPII.length > 0) {
-            const tempFileId = `trial_temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            const tempFileId = `trial_temp_${nanoid()}`;
             tempStore.set(tempFileId, {
                 processedData,
                 piiAnalysis,
@@ -2668,7 +2687,7 @@ router.get("/get-transformed-data/:projectId", unifiedAuth, async (req, res) => 
 // Main project upload endpoint
 router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, res) => {
     const uploadStart = Date.now();
-    const uploadTrackingId = `upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const uploadTrackingId = `upload_${nanoid()}`;
     const metricDetails: Record<string, any> = {
         method: req.method,
         path: req.path,
@@ -2933,12 +2952,14 @@ router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, r
             fileSize: req.file.size,
             fileType: req.file.mimetype,
             checksum: checksumMd5,
+            // Persist backend-inferred schema so later steps keep typed columns
+            schema: processedData.schema,
+            columnTypes: processedData.columnTypes,
             dataDescription: processedData.datasetSummary.overview,
             datasetSummary: processedData.datasetSummary,
             descriptiveStats: processedData.descriptiveStats,
             qualityMetrics: processedData.qualityMetrics,
             relationships: processedData.relationships,
-            columnTypes: processedData.columnTypes,
             validationResults: processedData.validationResults,
             preview: processedData.preview?.slice(0, 20) ?? [],
             generatedAt: new Date().toISOString()
@@ -2992,111 +3013,104 @@ router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, r
             'data_health_check'
         ]);
 
-        // ✅ PHASE 2: Map dataset to requirements (if Phase 1 document exists)
-        let dataRequirementsDocument = undefined;
-        try {
-            // Check if Phase 1 document exists in project metadata
-            const phase1DocId = (project.metadata as any)?.dataRequirementsDocId;
+        // ✅ PHASE 1 & 2: Requirements + Mapping - Run in BACKGROUND (non-blocking)
+        // These AI calls (Gemini) take 10-30s each and should not block the upload response.
+        // Results are stored in journeyProgress and loaded by later steps when needed.
+        const bgProjectId = project.id;
+        const bgDatasetId = dataset.id;
+        const bgFileName = req.file.originalname;
+        const bgSchema = processedData.schema;
+        const bgPreview = processedData.preview;
+        const bgRecordCount = processedData.recordCount;
+        const bgIngestionMetadata = dataset.ingestionMetadata;
 
-            // For now, create Phase 1 on-the-fly if not exists
-            // TODO: In production, Phase 1 should be created during goal analysis and stored
-            console.log('📋 Phase 2: Generating/updating data requirements mapping...');
+        // Fire-and-forget async processing
+        (async () => {
+            try {
+                console.log('📋 [Background] Phase 1 & 2: Generating requirements mapping...');
 
-            // Create Phase 1 if it doesn't exist (fallback for projects created without goal analysis)
-            // FIX: Pass datasetMetadata to generate column-based requirements instead of generic ones
-            const datasetColumns = Object.keys(processedData.schema || {});
-            const columnTypes: Record<string, string> = {};
-            for (const [col, info] of Object.entries(processedData.schema || {})) {
-                columnTypes[col] = typeof info === 'object' && (info as any)?.type ? (info as any).type : 'text';
-            }
-
-            const phase1Doc = await requiredDataElementsTool.defineRequirements({
-                projectId: project.id,
-                userGoals: parsedQuestions.length > 0
-                    ? [`Analyze data to answer: ${parsedQuestions.slice(0, 3).join(', ')}`]
-                    : ['Perform comprehensive data analysis'],
-                userQuestions: parsedQuestions,
-                // FIX: Include dataset metadata for column-based requirements
-                datasetMetadata: datasetColumns.length > 0 ? {
-                    columns: datasetColumns,
-                    columnTypes: columnTypes,
-                    schema: processedData.schema
-                } : undefined
-            });
-
-            console.log(`✅ Phase 1 complete: ${phase1Doc.analysisPath.length} analysis paths, ${phase1Doc.requiredDataElements.length} required elements`);
-
-            // Phase 2: Map dataset fields to required data elements
-            const mappingStart = Date.now();
-            const phase2Doc = await requiredDataElementsTool.mapDatasetToRequirements(
-                phase1Doc,
-                {
-                    fileName: req.file.originalname,
-                    rowCount: processedData.recordCount,
-                    schema: processedData.schema,
-                    preview: processedData.preview || []
+                const datasetColumns = Object.keys(bgSchema || {});
+                const columnTypes: Record<string, string> = {};
+                for (const [col, info] of Object.entries(bgSchema || {})) {
+                    columnTypes[col] = typeof info === 'object' && (info as any)?.type ? (info as any).type : 'text';
                 }
-            );
-            const mappingDuration = Date.now() - mappingStart;
 
-            console.log(`✅ Phase 2 complete in ${mappingDuration}ms: ${phase2Doc.completeness.elementsMapped}/${phase2Doc.completeness.totalElements} elements mapped`);
+                const phase1Doc = await requiredDataElementsTool.defineRequirements({
+                    projectId: bgProjectId,
+                    userGoals: parsedQuestions.length > 0
+                        ? [`Analyze data to answer: ${parsedQuestions.slice(0, 3).join(', ')}`]
+                        : ['Perform comprehensive data analysis'],
+                    userQuestions: parsedQuestions,
+                    datasetMetadata: datasetColumns.length > 0 ? {
+                        columns: datasetColumns,
+                        columnTypes: columnTypes,
+                        schema: bgSchema
+                    } : undefined
+                });
 
-            if (phase2Doc.gaps.length > 0) {
-                console.log(`⚠️  Identified ${phase2Doc.gaps.length} data gaps:`);
-                phase2Doc.gaps.forEach(gap => console.log(`  - ${gap.description}`));
-            }
+                console.log(`✅ [Background] Phase 1 complete: ${phase1Doc.analysisPath.length} analysis paths, ${phase1Doc.requiredDataElements.length} required elements`);
 
-            // Store document reference in dataset metadata
-            dataRequirementsDocument = phase2Doc;
+                const mappingStart = Date.now();
+                const phase2Doc = await requiredDataElementsTool.mapDatasetToRequirements(
+                    phase1Doc,
+                    {
+                        fileName: bgFileName,
+                        rowCount: bgRecordCount,
+                        schema: bgSchema,
+                        preview: bgPreview || []
+                    }
+                );
+                const mappingDuration = Date.now() - mappingStart;
 
-            // Update dataset with requirements document
-            await storage.updateDataset(dataset.id, {
-                ingestionMetadata: {
-                    ...(dataset.ingestionMetadata as any || {}),
-                    dataRequirementsDocument: phase2Doc
+                console.log(`✅ [Background] Phase 2 complete in ${mappingDuration}ms: ${phase2Doc.completeness.elementsMapped}/${phase2Doc.completeness.totalElements} elements mapped`);
+
+                if (phase2Doc.gaps.length > 0) {
+                    console.log(`⚠️  [Background] Identified ${phase2Doc.gaps.length} data gaps:`);
+                    phase2Doc.gaps.forEach((gap: any) => console.log(`  - ${gap.description}`));
                 }
-            } as any);
 
-            // CRITICAL FIX: Also store in journeyProgress.requirementsDocument
-            // This is the SSOT for the verification step
-            const currentJourneyProgress = (project as any).journeyProgress || {};
-            await storage.updateProject(project.id, {
-                journeyProgress: {
-                    ...currentJourneyProgress,
+                // Update dataset with requirements document
+                await storage.updateDataset(bgDatasetId, {
+                    ingestionMetadata: {
+                        ...(bgIngestionMetadata as any || {}),
+                        dataRequirementsDocument: phase2Doc
+                    }
+                } as any);
+
+                // Store in journeyProgress (SSOT for verification step)
+                await storage.atomicMergeJourneyProgress(bgProjectId, {
                     requirementsDocument: phase2Doc,
-                    requirementsLocked: false // Allow updates until user confirms
-                }
-            } as any);
+                    requirementsLocked: false
+                });
 
-            console.log(`✅ [Data Elements] Stored requirementsDocument in journeyProgress:`, {
-                totalElements: phase2Doc.requiredDataElements?.length || 0,
-                elementsMapped: phase2Doc.completeness?.elementsMapped || 0,
-                analysisPath: phase2Doc.analysisPath?.length || 0
-            });
+                console.log(`✅ [Background] Stored requirementsDocument in journeyProgress:`, {
+                    totalElements: phase2Doc.requiredDataElements?.length || 0,
+                    elementsMapped: phase2Doc.completeness?.elementsMapped || 0,
+                    analysisPath: phase2Doc.analysisPath?.length || 0
+                });
 
-            performanceWebhookService.recordMetric({
-                timestamp: new Date(),
-                service: 'project_upload',
-                operation: 'phase2_mapping',
-                duration: mappingDuration,
-                status: 'success',
-                details: {
-                    projectId: project.id,
-                    datasetId: dataset.id,
-                    elementsMapped: phase2Doc.completeness.elementsMapped,
-                    totalElements: phase2Doc.completeness.totalElements,
-                    gapsFound: phase2Doc.gaps.length,
-                    uploadId: uploadTrackingId
-                },
-                userId: actualUserId,
-                sessionId: req.sessionID
-            }).catch(error => {
-                console.error('Failed to record Phase 2 mapping metric:', error);
-            });
-        } catch (mappingError) {
-            console.error('⚠️  Phase 2 mapping failed (non-fatal):', mappingError);
-            // Continue without data requirements mapping
-        }
+                performanceWebhookService.recordMetric({
+                    timestamp: new Date(),
+                    service: 'project_upload',
+                    operation: 'phase2_mapping',
+                    duration: mappingDuration,
+                    status: 'success',
+                    details: {
+                        projectId: bgProjectId,
+                        datasetId: bgDatasetId,
+                        elementsMapped: phase2Doc.completeness.elementsMapped,
+                        totalElements: phase2Doc.completeness.totalElements,
+                        gapsFound: phase2Doc.gaps.length,
+                        uploadId: uploadTrackingId
+                    },
+                    userId: actualUserId
+                }).catch(error => {
+                    console.error('Failed to record Phase 2 mapping metric:', error);
+                });
+            } catch (mappingError) {
+                console.error('⚠️  [Background] Phase 1/2 mapping failed (non-fatal):', mappingError);
+            }
+        })();
 
         // Check if PII was detected and needs user decision
         const hasPII = piiAnalysis?.detectedPII?.length > 0;
@@ -3117,8 +3131,11 @@ router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, r
             descriptiveStats: processedData.descriptiveStats,
             qualityMetrics: processedData.qualityMetrics,
             relationships: processedData.relationships,
-            // ✅ NEW: Include data requirements document in response
-            ...(dataRequirementsDocument && { dataRequirementsDocument })
+            schema: processedData.schema,
+            columnTypes: processedData.columnTypes,
+            // Note: dataRequirementsDocument is generated asynchronously in background
+            // and stored in journeyProgress. Later steps load it from there.
+            requirementsProcessing: true // Signal that background AI processing is running
         });
     } catch (error: any) {
         metricDetails.error = error?.message || 'Unknown error';
@@ -3326,7 +3343,7 @@ router.get("/:projectId/datasets", ensureAuthenticated, async (req, res) => {
                 }
             }
 
-            const schema = dataset.schema ?? datasetAny?.ingestionMetadata?.schema ?? null;
+            const schema = normalizeSchemaTypes(dataset.schema ?? datasetAny?.ingestionMetadata?.schema ?? null);
 
             // Keep data for join operations
             const fullData = Array.isArray(datasetAny?.data) ? datasetAny.data :
@@ -3392,7 +3409,8 @@ router.get("/:projectId/datasets", ensureAuthenticated, async (req, res) => {
                         joinedPreview = Array.isArray(joinResult.project.data)
                             ? joinResult.project.data.slice(0, 20)
                             : [];
-                        joinedSchema = joinResult.project.schema || null;
+                        const normalizedJoinedSchema = normalizeSchemaTypes(joinResult.project.schema);
+                        joinedSchema = normalizedJoinedSchema;
 
                         joinInsights = {
                             detectionMethod: 'schema_match',
@@ -3415,29 +3433,21 @@ router.get("/:projectId/datasets", ensureAuthenticated, async (req, res) => {
                         console.log(`✅ [Datasets] Join successful: ${joinResult.recordCount} rows, ${joinResult.joinedFields.length} fields`);
 
                         // ✅ CRITICAL FIX: ALWAYS persist joined schema to journeyProgress (SSOT)
-                        // Updated: Remove the "only if not set" condition - always update on successful join
-                        // This ensures schema reflects latest join results, not stale data
+                        // Uses atomicMergeJourneyProgress to prevent overwriting other progress keys
                         try {
-                            const project = await storage.getProject(projectId);
-                            const currentProgress = (project as any)?.journeyProgress || {};
-
-                            // ✅ PHASE 6 FIX: Always update joined schema on successful join
-                            // This fixes the "schema reverts to individual dataset" issue
-                            await storage.updateProject(projectId, {
-                                journeyProgress: {
-                                    ...currentProgress,
-                                    joinedData: {
-                                        ...(currentProgress.joinedData || {}),
-                                        schema: joinedSchema,
-                                        preview: joinedPreview.slice(0, 50),
-                                        totalRowCount: joinResult.recordCount,
-                                        columnCount: Object.keys(joinedSchema || {}).length,
-                                        joinInsights: joinInsights,
-                                        persistedAt: new Date().toISOString()
-                                    }
+                            await storage.atomicMergeJourneyProgress(projectId, {
+                                joinedData: {
+                                    schema: normalizedJoinedSchema,
+                                    columnTypes: normalizedJoinedSchema,
+                                    preview: joinedPreview.slice(0, 50),
+                                    totalRowCount: joinResult.recordCount,
+                                    columnCount: Object.keys(normalizedJoinedSchema || {}).length,
+                                    joinInsights: joinInsights,
+                                    persistedAt: new Date().toISOString()
                                 }
-                            } as any);
-                            console.log(`✅ [Datasets] Persisted joined schema to journeyProgress: ${Object.keys(joinedSchema || {}).length} columns`);
+                            });
+                            console.log(`✅ [Datasets] Persisted joined schema to journeyProgress: ${Object.keys(normalizedJoinedSchema || {}).length} columns`);
+                            await markJourneyProgress(projectId, ['data_preparation']);
                         } catch (persistError: any) {
                             console.warn('⚠️ [Datasets] Failed to persist joined schema:', persistError.message);
                             // Continue anyway - API response will still have the joined data
@@ -3471,10 +3481,16 @@ router.get("/:projectId/datasets", ensureAuthenticated, async (req, res) => {
                             // ✅ PHASE 1 FIX: Additional safeguard to prevent undefined_ prefix
                             const safePrefix = dsName || `DS${i + 1}`;
                             const prefixedCol = `${safePrefix}_${col}`;
-                            mergedSchema[prefixedCol] = type;
+                            const normalizedType = typeof type === 'object' && (type as any)?.type
+                                ? (type as any).type
+                                : (typeof type === 'string' ? type : 'string');
+                            mergedSchema[prefixedCol] = normalizedType;
                             console.log(`📊 [Datasets] Schema conflict: '${col}' prefixed as '${prefixedCol}'`);
                         } else {
-                            mergedSchema[col] = type;
+                            const normalizedType = typeof type === 'object' && (type as any)?.type
+                                ? (type as any).type
+                                : (typeof type === 'string' ? type : 'string');
+                            mergedSchema[col] = normalizedType;
                         }
                     }
                 }
@@ -3493,26 +3509,21 @@ router.get("/:projectId/datasets", ensureAuthenticated, async (req, res) => {
                 };
 
                 // ✅ FIX: Also persist merged schema to journeyProgress for fallback case
-                // ✅ PHASE 6 FIX: Always update schema - remove "only if not set" condition
+                // Uses atomicMergeJourneyProgress to prevent overwriting other progress keys
                 try {
-                    const project = await storage.getProject(projectId);
-                    const currentProgress = (project as any)?.journeyProgress || {};
-
-                    await storage.updateProject(projectId, {
-                        journeyProgress: {
-                            ...currentProgress,
-                            joinedData: {
-                                ...(currentProgress.joinedData || {}),
-                                schema: mergedSchema,
-                                preview: joinedPreview.slice(0, 50),
-                                totalRowCount: joinInsights.totalRowCount,
-                                columnCount: Object.keys(mergedSchema).length,
-                                joinInsights: joinInsights,
-                                persistedAt: new Date().toISOString()
-                            }
+                    await storage.atomicMergeJourneyProgress(projectId, {
+                        joinedData: {
+                            schema: mergedSchema,
+                            columnTypes: mergedSchema,
+                            preview: joinedPreview.slice(0, 50),
+                            totalRowCount: joinInsights.totalRowCount,
+                            columnCount: Object.keys(mergedSchema).length,
+                            joinInsights: joinInsights,
+                            persistedAt: new Date().toISOString()
                         }
-                    } as any);
+                    });
                     console.log(`✅ [Datasets] Persisted MERGED schema to journeyProgress: ${Object.keys(mergedSchema).length} columns`);
+                    await markJourneyProgress(projectId, ['data_preparation']);
                 } catch (persistError: any) {
                     console.warn('⚠️ [Datasets] Failed to persist merged schema:', persistError.message);
                 }
@@ -3817,47 +3828,57 @@ router.put("/:id/verify", ensureAuthenticated, async (req, res) => {
             console.log(`🔒 [FIX 1.4] Received ${Object.keys(piiDecisions).length} PII decisions for project ${projectId}`);
         }
 
-        // Update journeyProgress with verification info
+        // Update journeyProgress with verification info using atomicMerge to prevent overwriting other keys
         const currentProgress = (project as any)?.journeyProgress || {};
 
-        // ✅ GAP 1 FIX: Merge element mappings into requirements document
-        let mergedRequirementsDocument = currentProgress.requirementsDocument || {};
-        if (requirementsDocument) {
-            mergedRequirementsDocument = {
-                ...mergedRequirementsDocument,
-                ...requirementsDocument
-            };
-        }
-
-        const updatedProgress = {
-            ...currentProgress,
+        // Build only the delta keys to merge (atomicMerge handles deep merge)
+        const verificationDelta: Record<string, any> = {
             dataQualityApproved: verificationStatus === 'approved',
             verificationTimestamp: verificationTimestamp || new Date().toISOString(),
             verificationChecks: verificationChecks || {},
-            // ✅ FIX 1.4: Save PII decisions to journeyProgress (SSOT)
-            piiDecisions: piiDecisions || currentProgress.piiDecisions || {},
-            piiDecisionTimestamp: piiDecisions ? new Date().toISOString() : currentProgress.piiDecisionTimestamp,
-            dataQuality: dataQuality || currentProgress.dataQuality,
-            schemaValidation: schemaValidation ?? currentProgress.schemaValidation,
-            // ✅ GAP 1 FIX: Save element mappings to dedicated field for easy access
-            elementMappings: elementMappings || currentProgress.elementMappings || {},
-            elementMappingTimestamp: elementMappings ? new Date().toISOString() : currentProgress.elementMappingTimestamp,
-            // ✅ GAP 1 FIX: Save updated requirements document
-            requirementsDocument: mergedRequirementsDocument,
-            // ✅ GAP 1 FIX: Save checkpoint ID for audit trail
-            dataQualityCheckpointId: dataQualityCheckpointId || currentProgress.dataQualityCheckpointId,
             verificationCompleted: true,
-            currentStep: 'transformation', // Move to next step
+            currentStep: 'transformation',
             completedSteps: [...(currentProgress.completedSteps || []), 'verification'].filter((v: string, i: number, a: string[]) => a.indexOf(v) === i)
         };
 
+        // PII SSOT: Write to canonical field name only (piiDecisions, plural)
+        // Readers use getPiiExcludedColumns() helper which handles all legacy formats
+        if (piiDecisions && Object.keys(piiDecisions).length > 0) {
+            verificationDelta.piiDecisions = piiDecisions;
+            verificationDelta.piiDecisionTimestamp = new Date().toISOString();
+        }
+
+        if (dataQuality) verificationDelta.dataQuality = dataQuality;
+        if (schemaValidation !== undefined) verificationDelta.schemaValidation = schemaValidation;
+
+        // ✅ GAP 1 FIX: Save element mappings to dedicated field for easy access
+        if (elementMappings) {
+            verificationDelta.elementMappings = elementMappings;
+            verificationDelta.elementMappingTimestamp = new Date().toISOString();
+        }
+
+        // ✅ GAP 1 FIX: Merge element mappings into requirements document
+        if (requirementsDocument) {
+            verificationDelta.requirementsDocument = requirementsDocument;
+        }
+
+        // ✅ GAP 1 FIX: Save checkpoint ID for audit trail
+        if (dataQualityCheckpointId) {
+            verificationDelta.dataQualityCheckpointId = dataQualityCheckpointId;
+        }
+
         console.log(`✅ [Verify] Project ${projectId} verification status: ${verificationStatus}`);
 
-        // Update project - use 'ready' status (valid status value for verified state)
+        // Use atomicMergeJourneyProgress for safe deep merge, then update project status separately
+        const mergedProgress = await storage.atomicMergeJourneyProgress(projectId, verificationDelta);
+
+        // Update project status separately (non-journeyProgress field)
         const updatedProject = await storage.updateProject(projectId, {
-            journeyProgress: updatedProgress,
             status: 'ready' // 'verified' is not a valid status - use 'ready' instead
         } as any);
+
+        // Re-read merged progress for downstream use
+        const updatedProgress = mergedProgress || verificationDelta;
 
         // ✅ FIX 1.4: Also save PII decisions to each dataset's ingestionMetadata
         if (piiDecisions && Object.keys(piiDecisions).length > 0) {
@@ -4104,17 +4125,14 @@ router.post("/:id/checkpoints", ensureAuthenticated, async (req, res) => {
 
         console.log(`📌 [Checkpoint] Created checkpoint ${checkpointId} for project ${projectId} (stage: ${stage})`);
 
-        // Store checkpoint in project journeyProgress
+        // Store checkpoint in project journeyProgress using atomicMerge
         const project = accessCheck.project;
         const currentProgress = (project as any)?.journeyProgress || {};
         const existingCheckpoints = currentProgress.checkpoints || [];
 
-        await storage.updateProject(projectId, {
-            journeyProgress: {
-                ...currentProgress,
-                checkpoints: [...existingCheckpoints, checkpoint]
-            }
-        } as any);
+        await storage.atomicMergeJourneyProgress(projectId, {
+            checkpoints: [...existingCheckpoints, checkpoint]
+        });
 
         res.json({
             success: true,
@@ -4530,116 +4548,12 @@ router.post("/:id/upload", ensureAuthenticated, upload.single('file'), async (re
         });
 
         // ==========================================
-        // MULTI-AGENT COORDINATION (NON-BLOCKING)
+        // MULTI-AGENT COORDINATION - DEFERRED
         // ==========================================
-        // Trigger multi-agent goal analysis in the background after successful file upload
-        // This creates a checkpoint for user review without blocking the upload response
-        setImmediate(async () => {
-            try {
-                console.log(`[project.ts] Starting multi-agent coordination for project ${projectId}`);
-
-                // Extract user goals from project or use default exploratory goals
-                const userGoals = (updatedProject as any).goals || [
-                    'Understand my data',
-                    'Discover patterns and insights',
-                    'Identify key trends'
-                ];
-
-                // Determine industry from project metadata or default to 'general'
-                const industry = (updatedProject as any).industry || 'general';
-
-                // Coordinate goal analysis across all three agents (Data Engineer, Data Scientist, Business Agent)
-                const coordinationResult = await projectManagerAgent.coordinateGoalAnalysis(
-                    projectId,
-                    {
-                        data: processedData.data,
-                        schema: processedData.schema,
-                        qualityMetrics: processedData.qualityMetrics,
-                        descriptiveStats: processedData.descriptiveStats,
-                        datasetSummary: processedData.datasetSummary,
-                        dataDescription: processedData.datasetSummary.overview,
-                        relationships: processedData.relationships,
-                        rowCount: processedData.recordCount,
-                        type: 'tabular'
-                    },
-                    userGoals,
-                    industry
-                );
-
-                console.log(`[project.ts] Multi-agent coordination complete in ${coordinationResult.totalResponseTime}ms`);
-                console.log(`[project.ts] Overall assessment: ${coordinationResult.synthesis.overallAssessment}`);
-                console.log(`[project.ts] Confidence: ${coordinationResult.synthesis.confidence}`);
-
-                // Store coordination result in project metadata for later retrieval
-                await storage.updateProject(projectId, {
-                    multiAgentCoordination: coordinationResult
-                } as any);
-
-                // Notify project orchestrator to create a checkpoint
-                // This will be picked up by the UI through the existing checkpoint polling mechanism
-                await projectAgentOrchestrator.addCheckpoint(projectId, {
-                    id: coordinationResult.coordinationId,
-                    projectId,
-                    agentType: 'project_manager' as const,
-                    stepName: 'multi_agent_goal_analysis',
-                    status: 'waiting_approval' as const,
-                    message: 'Our team of experts has analyzed your data. Please review their recommendations:',
-                    data: {
-                        type: 'multi_agent_coordination',
-                        coordinationResult,
-                        expertOpinions: coordinationResult.expertOpinions,
-                        synthesis: coordinationResult.synthesis,
-                        overallAssessment: coordinationResult.synthesis.overallAssessment,
-                        confidence: coordinationResult.synthesis.confidence,
-                        keyFindings: coordinationResult.synthesis.keyFindings,
-                        actionableRecommendations: coordinationResult.synthesis.actionableRecommendations
-                    },
-                    timestamp: new Date(),
-                    requiresUserInput: true
-                });
-
-                console.log(`[project.ts] Multi-agent checkpoint created for project ${projectId}`);
-
-                try {
-                    const analysisInputRefs = [newDataset.id];
-                    if (ingestionArtifactId) analysisInputRefs.push(ingestionArtifactId);
-                    if (qualityArtifactId) analysisInputRefs.push(qualityArtifactId);
-
-                    await storage.createArtifact({
-                        id: nanoid(),
-                        projectId,
-                        type: 'analysis',
-                        status: 'completed',
-                        inputRefs: analysisInputRefs,
-                        // ✅ FK Fix: Merged params with agent info for traceability
-                        params: {
-                            analysis: 'multi_agent_goal_analysis',
-                            generatedBy: 'pm_agent',
-                            agentType: 'multi_agent_coordination'
-                        },
-                        metrics: {
-                            confidence: coordinationResult.synthesis.confidence,
-                            totalResponseTime: coordinationResult.totalResponseTime
-                        },
-                        output: {
-                            overallAssessment: coordinationResult.synthesis.overallAssessment,
-                            keyFindings: coordinationResult.synthesis.keyFindings,
-                            actionableRecommendations: coordinationResult.synthesis.actionableRecommendations,
-                            expertConsensus: coordinationResult.synthesis.expertConsensus
-                        },
-                        // ✅ FK Fix: Use actual userId instead of agent identifier
-                        createdBy: userId || null
-                    });
-                } catch (artifactError) {
-                    console.error('Failed to create multi-agent coordination artifact:', artifactError);
-                }
-
-            } catch (coordinationError) {
-                console.error(`[project.ts] Multi-agent coordination failed (non-blocking):`, coordinationError);
-                // Don't block upload success, coordination is an enhancement
-                // User can still proceed with analysis using traditional flow
-            }
-        });
+        // Previously triggered coordinateGoalAnalysis() here at upload time, but user
+        // hasn't set goals yet at this point. Coordination now triggers AFTER the
+        // prepare step (goal+questions) via the /clarify-goal handler in project-manager.ts.
+        // This ensures agents receive REAL user goals instead of generic defaults.
         res.json({
             success: true,
             projectId: projectId, // Include for client consistency
@@ -4865,15 +4779,15 @@ router.get("/:id/schema-analysis", ensureAuthenticated, requireOwnership('projec
             schema = joinedSchema;
             isJoinedSchema = true;
         } else if (datasets && datasets.length > 1) {
-            // Multi-dataset: merge schemas from ALL datasets
+            // Multi-dataset: merge schemas from ALL datasets (preserving SchemaColumn objects)
             const mergedSchema: Record<string, any> = {};
             datasets.forEach((entry: any) => {
                 const ds = entry.dataset || entry;
                 const dsSchema = ds.ingestionMetadata?.schema || ds.metadata?.schema || ds.schema;
                 if (dsSchema && typeof dsSchema === 'object') {
-                    Object.entries(dsSchema).forEach(([col, type]) => {
+                    Object.entries(dsSchema).forEach(([col, colInfo]) => {
                         if (!mergedSchema[col]) {
-                            mergedSchema[col] = type;
+                            mergedSchema[col] = colInfo;
                         }
                     });
                 }
@@ -4914,16 +4828,29 @@ router.get("/:id/schema-analysis", ensureAuthenticated, requireOwnership('projec
             descriptiveStatsByColumn = mergedStats;
             inferredRelationships = mergedRelationships;
         }
-        const schemaEntries = Object.entries(schema as Record<string, any>);
+        // Normalize schema: ensure every value is a SchemaColumn object, not a bare string
+        const normalizedSchema: Record<string, any> = {};
+        Object.entries(schema as Record<string, any>).forEach(([col, val]) => {
+            if (typeof val === 'string') {
+                // Convert bare string type (e.g. "string", "integer") to SchemaColumn object
+                normalizedSchema[col] = { name: col, type: val, nullable: true, unique: false, sampleValues: [], missingCount: 0, missingPercentage: 0 };
+            } else if (val && typeof val === 'object' && val.type) {
+                normalizedSchema[col] = val;
+            } else {
+                // Unknown format - extract what we can
+                normalizedSchema[col] = { name: col, type: (val as any)?.dataType || 'unknown', nullable: true, unique: false, sampleValues: [], missingCount: 0, missingPercentage: 0 };
+            }
+        });
+        const schemaEntries = Object.entries(normalizedSchema);
 
         const columnDetails = schemaEntries.map(([columnName, columnInfo]) => ({
             name: columnName,
-            type: columnInfo?.type || 'unknown',
-            nullable: columnInfo?.nullable ?? true,
-            sampleValues: Array.isArray(columnInfo?.sampleValues)
+            type: columnInfo.type || 'unknown',
+            nullable: columnInfo.nullable ?? true,
+            sampleValues: Array.isArray(columnInfo.sampleValues)
                 ? columnInfo.sampleValues.slice(0, 5)
                 : [],
-            descriptiveStats: descriptiveStatsByColumn?.[columnName] ?? columnInfo?.descriptiveStats ?? null
+            descriptiveStats: descriptiveStatsByColumn?.[columnName] ?? columnInfo.descriptiveStats ?? null
         }));
 
         const recommendations = Array.isArray((datasetRecord as any)?.schemaRecommendations)
@@ -4947,8 +4874,8 @@ router.get("/:id/schema-analysis", ensureAuthenticated, requireOwnership('projec
                 acc[key] = (val as any)?.type || 'unknown';
                 return acc;
             }, {} as Record<string, string>),
-            // FIX: Include raw schema object for frontend to use
-            schema: schema,
+            // Normalized schema: every value is a SchemaColumn object with .type
+            schema: normalizedSchema,
             isJoinedSchema,
             datasetSummary,
             dataDescription: typeof datasetSummary?.overview === 'string' ? datasetSummary.overview : null,
@@ -5014,9 +4941,7 @@ router.post("/:id/generate-data-requirements", ensureAuthenticated, requireOwner
         });
 
         // ✅ GAP 9 FIX: Persist requirements document to journeyProgress (SSOT)
-        // This ensures Verification and Transformation steps can access the data elements
-        const project = await storage.getProject(projectId);
-        const existingProgress = (project as any)?.journeyProgress || {};
+        // Uses atomicMergeJourneyProgress to prevent overwriting other progress keys
         const requirementsDocument = {
             documentId: document.documentId,
             analysisPath: document.analysisPath,
@@ -5026,14 +4951,11 @@ router.post("/:id/generate-data-requirements", ensureAuthenticated, requireOwner
             generatedAt: new Date().toISOString()
         };
 
-        await storage.updateProject(projectId, {
-            journeyProgress: {
-                ...existingProgress,
-                requirementsDocument,
-                requirementsLocked: true,
-                requirementsLockedAt: new Date().toISOString()
-            }
-        } as any);
+        await storage.atomicMergeJourneyProgress(projectId, {
+            requirementsDocument,
+            requirementsLocked: true,
+            requirementsLockedAt: new Date().toISOString()
+        });
 
         console.log(`✅ [GAP 9 FIX] Persisted requirements document to journeyProgress for project ${projectId}`);
         console.log(`   - Analysis path items: ${document.analysisPath?.length || 0}`);
@@ -5223,12 +5145,9 @@ router.post("/:id/map-data-elements", ensureAuthenticated, requireOwnership('pro
                 lastMappedAt: new Date().toISOString()
             };
 
-            await storage.updateProject(projectId, {
-                journeyProgress: {
-                    ...journeyProgress,
-                    requirementsDocument: updatedReqDoc
-                }
-            } as any);
+            await storage.atomicMergeJourneyProgress(projectId, {
+                requirementsDocument: updatedReqDoc
+            });
 
             res.json({
                 success: true,
@@ -5358,12 +5277,9 @@ router.post("/:id/map-data-elements", ensureAuthenticated, requireOwnership('pro
                 lastMappedAt: new Date().toISOString()
             };
 
-            await storage.updateProject(projectId, {
-                journeyProgress: {
-                    ...journeyProgress,
-                    requirementsDocument: updatedReqDoc
-                }
-            } as any);
+            await storage.atomicMergeJourneyProgress(projectId, {
+                requirementsDocument: updatedReqDoc
+            });
 
             res.json({
                 success: true,
@@ -5740,12 +5656,9 @@ router.post("/:id/enrich-data-elements", ensureAuthenticated, requireOwnership('
                 enrichedAt: new Date().toISOString()
             };
 
-            await storage.updateProject(projectId, {
-                journeyProgress: {
-                    ...journeyProgress,
-                    requirementsDocument: updatedReqDoc
-                }
-            } as any);
+            await storage.atomicMergeJourneyProgress(projectId, {
+                requirementsDocument: updatedReqDoc
+            });
 
             console.log(`📚 [Business Definitions] Persisted enriched elements to journeyProgress`);
         }
@@ -6758,21 +6671,22 @@ router.post("/:id/restart", ensureAuthenticated, async (req, res) => {
             paymentStatus: null,
             paymentSessionId: null,
             updatedAt: new Date(),
-            journeyProgress: {
-                ...journeyProgress,
-                currentStep: restartStep,
-                // Keep completedSteps as-is (preserves what succeeded)
-                // Clear execution/payment state
-                lockedCostEstimate: undefined,
-                costLockedAt: undefined,
-                paymentStatus: undefined,
-                paymentCompletedAt: undefined,
-                executionStartedAt: undefined,
-                executionCompletedAt: undefined,
-            }
         };
 
         await storage.updateProject(projectId, clearFields);
+
+        // Use atomic merge for journeyProgress to prevent overwriting concurrent changes
+        // Note: Use null (not undefined) to clear keys, since undefined values are skipped in deep merge
+        await storage.atomicMergeJourneyProgress(projectId, {
+            currentStep: restartStep,
+            // Clear execution/payment state
+            lockedCostEstimate: null,
+            costLockedAt: null,
+            paymentStatus: null,
+            paymentCompletedAt: null,
+            executionStartedAt: null,
+            executionCompletedAt: null,
+        });
 
         console.log(`✅ [Restart] Project ${projectId} restarted to step '${restartStep}'. Completed: [${completedSteps.join(', ')}]`);
 
@@ -7494,6 +7408,22 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
             ? [...firstDataset.data]
             : (firstDataset.preview || firstDataset.sampleData || []);
 
+        // PII SSOT: Filter out PII-excluded columns BEFORE transformations run
+        {
+            const jp = (accessCheck.project as any)?.journeyProgress || {};
+            const excludedCols = getPiiExcludedColumns(jp);
+            if (excludedCols.length > 0) {
+                console.log(`🔒 [P0-6] Filtering ${excludedCols.length} PII-excluded columns BEFORE transformations:`, excludedCols);
+                workingData = workingData.map(row => {
+                    const filtered = { ...row };
+                    for (const col of excludedCols) {
+                        delete filtered[col];
+                    }
+                    return filtered;
+                });
+            }
+        }
+
         // MULTI-DATASET JOIN: If we have multiple datasets and join config
         if (datasets.length > 1 && joinConfig?.foreignKeys?.length > 0) {
             console.log(`🔗 [D3 FIX] Performing multi-dataset join with ${joinConfig.foreignKeys.length} key mappings`);
@@ -7505,9 +7435,10 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
                     : (rightDataset.preview || rightDataset.sampleData || []);
 
                 // Find the join key for this dataset pair
+                // P0-5 FIX: Add parentheses - && binds tighter than || causing wrong matches
                 const keyMapping = joinConfig.foreignKeys.find((fk: any) =>
-                    fk.sourceDataset === firstDataset.id && fk.targetDataset === rightDataset.id ||
-                    fk.sourceDataset === rightDataset.id && fk.targetDataset === firstDataset.id
+                    (fk.sourceDataset === firstDataset.id && fk.targetDataset === rightDataset.id) ||
+                    (fk.sourceDataset === rightDataset.id && fk.targetDataset === firstDataset.id)
                 );
 
                 if (keyMapping && rightData.length > 0) {
@@ -7982,10 +7913,9 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
 
         console.log(`📊 [FIX 1.1] Saving ${Object.keys(columnMappings).length} column mappings to dataset`);
 
-        // Wrap dataset + project updates in a transaction for consistency
-        const project = await storage.getProject(projectId);
+        // Update dataset in transaction
         await db.transaction(async (tx: any) => {
-            await tx.update(datasets).set({
+            await tx.update(datasetsTable).set({
                 ingestionMetadata: {
                     ...(primaryDataset.ingestionMetadata || {}),
                     transformedData: workingData,
@@ -7998,27 +7928,25 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
                     transformedAt: new Date().toISOString(),
                     transformedRowCount: workingData.length
                 }
-            }).where(eq(datasets.id, primaryDataset.id));
+            }).where(eq(datasetsTable.id, primaryDataset.id));
+        });
 
-            await tx.update(projects).set({
-                journeyProgress: {
-                    ...(project as any)?.journeyProgress,
-                    transformationApplied: true,
-                    transformedRowCount: workingData.length,
-                    transformedAt: new Date().toISOString(),
-                    transformationMappings: columnMappings,
-                    questionAnswerMapping,
-                    joinedData: {
-                        fullData: workingData,
-                        preview: workingData.slice(0, 100),
-                        schema: transformedSchema,
-                        rowCount: workingData.length,
-                        recordCount: workingData.length,
-                        joinConfig: joinConfig || null,
-                        columnCount: Object.keys(transformedSchema).length
-                    }
-                }
-            } as any).where(eq(projects.id, projectId));
+        // Use atomic merge for journeyProgress to prevent overwriting concurrent changes
+        await storage.atomicMergeJourneyProgress(projectId, {
+            transformationApplied: true,
+            transformedRowCount: workingData.length,
+            transformedAt: new Date().toISOString(),
+            transformationMappings: columnMappings,
+            questionAnswerMapping,
+            // P1-22 FIX: Only store preview in journeyProgress (full data lives in dataset.ingestionMetadata)
+            joinedData: {
+                preview: workingData.slice(0, 100),
+                schema: transformedSchema,
+                rowCount: workingData.length,
+                recordCount: workingData.length,
+                joinConfig: joinConfig || null,
+                columnCount: Object.keys(transformedSchema).length
+            }
         });
 
         console.log(`✅ [PHASE 9] Saved joinedData to journeyProgress: ${workingData.length} rows`);
@@ -8061,8 +7989,7 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
         // ✅ PHASE 6: Generate column embeddings asynchronously (non-blocking)
         // This enables RAG-based column matching for future transformation requests
         // Embeddings are generated ONCE on the final schema (after join + PII filtering)
-        const piiDecision = (project as any)?.journeyProgress?.piiDecision;
-        const excludedPiiColumns = piiDecision?.excludedColumns || [];
+        const excludedPiiColumns = getPiiExcludedColumns((projectForContext as any)?.journeyProgress || {});
         const usableColumns = Object.keys(transformedSchema).filter(col => !excludedPiiColumns.includes(col));
 
         setImmediate(async () => {
@@ -8276,7 +8203,7 @@ router.post("/:id/apply-pii-exclusions", ensureAuthenticated, async (req, res) =
             console.log(`🔒 [D2 FIX] Dataset ${dataset.id}: Removed ${excludedColumns.length} columns, anonymized ${anonymizedColumns.length}`);
         }
 
-        // Update project metadata
+        // Update project metadata (legacy location, kept for backward compat)
         const project = await storage.getProject(projectId);
         await storage.updateProject(projectId, {
             metadata: {
@@ -8288,6 +8215,15 @@ router.post("/:id/apply-pii-exclusions", ensureAuthenticated, async (req, res) =
                 }
             }
         } as any);
+
+        // PII SSOT: Also write to journeyProgress.piiDecisions (canonical location)
+        await storage.atomicMergeJourneyProgress(projectId, {
+            piiDecisions: {
+                excludedColumns,
+                anonymizedColumns,
+                appliedAt: new Date().toISOString()
+            }
+        });
 
         res.json({
             success: true,
@@ -8407,21 +8343,18 @@ router.post("/:id/recommend-templates", ensureAuthenticated, async (req, res) =>
             matchReason: 'semantic'
         }));
 
-        // Store recommendation in project (project already fetched above)
-        await storage.updateProject(projectId, {
-            journeyProgress: {
-                ...(project as any)?.journeyProgress,
-                researcherRecommendation: {
-                    template,
-                    confidence,
-                    marketDemand,
-                    implementationComplexity,
-                    alternativeTemplates,
-                    recommendedAt: new Date().toISOString(),
-                    searchMethod: 'semantic_vector_search'
-                }
+        // Store recommendation in project using atomic merge to prevent overwriting concurrent changes
+        await storage.atomicMergeJourneyProgress(projectId, {
+            researcherRecommendation: {
+                template,
+                confidence,
+                marketDemand,
+                implementationComplexity,
+                alternativeTemplates,
+                recommendedAt: new Date().toISOString(),
+                searchMethod: 'semantic_vector_search'
             }
-        } as any);
+        });
 
         console.log(`✅ [Vector Search] Recommended template: ${template?.name} (confidence: ${confidence.toFixed(3)}) + ${alternativeTemplates.length} alternatives`);
 
@@ -9171,21 +9104,33 @@ router.post("/:id/lock-cost", ensureAuthenticated, async (req, res) => {
             return res.status(400).json({ success: false, error: 'Valid cost estimate required' });
         }
 
-        const costValue = parseFloat(lockedCostEstimate).toFixed(2);
-
-        // FIX: Save to BOTH project.lockedCostEstimate AND journeyProgress.lockedCostEstimate
-        // This ensures both payment routes and cost-estimate endpoint read the same locked value
+        // P1-15 FIX: Server-side cost validation - reject if frontend cost deviates >10% from server estimate
         const project = access.project;
         const existingProgress = (project as any)?.journeyProgress || {};
+        const serverEstimate = existingProgress.backendCostEstimate?.totalCost
+          || existingProgress.costEstimate?.totalCost;
+        const clientCost = parseFloat(lockedCostEstimate);
 
+        if (serverEstimate && Math.abs(clientCost - serverEstimate) / serverEstimate > 0.10) {
+            console.warn(`⚠️ [Lock Cost] Client cost $${clientCost} deviates >10% from server estimate $${serverEstimate} for project ${projectId}`);
+            return res.status(400).json({
+                success: false,
+                error: `Cost mismatch: please refresh pricing. Expected ~$${serverEstimate.toFixed(2)}, got $${clientCost.toFixed(2)}`
+            });
+        }
+
+        const costValue = clientCost.toFixed(2);
+
+        // Update top-level project field
         await storage.updateProject(projectId, {
             lockedCostEstimate: costValue,
-            journeyProgress: {
-                ...existingProgress,
-                lockedCostEstimate: parseFloat(costValue), // Store as number in journeyProgress (SSOT)
-                costLockedAt: new Date().toISOString()
-            }
         } as any);
+
+        // Use atomicMerge for journeyProgress to prevent overwriting other progress keys
+        await storage.atomicMergeJourneyProgress(projectId, {
+            lockedCostEstimate: parseFloat(costValue), // Store as number in journeyProgress (SSOT)
+            costLockedAt: new Date().toISOString()
+        });
 
         console.log(`✅ [Lock Cost] Saved lockedCostEstimate $${costValue} to BOTH project AND journeyProgress for ${projectId}`);
 
@@ -9377,15 +9322,11 @@ router.post("/:id/generate-charts", ensureAuthenticated, async (req, res) => {
             }
         }
 
-        // Save charts to project journeyProgress
-        const project = accessCheck.project;
-        await storage.updateProject(projectId, {
-            journeyProgress: {
-                ...(project as any)?.journeyProgress,
-                generatedCharts: charts,
-                chartsGeneratedAt: new Date().toISOString()
-            }
-        } as any);
+        // Save charts to project journeyProgress using atomic merge
+        await storage.atomicMergeJourneyProgress(projectId, {
+            generatedCharts: charts,
+            chartsGeneratedAt: new Date().toISOString()
+        });
 
         console.log(`✅ [FIX 2.1.3] Generated ${charts.length} charts for project ${projectId}`);
 
@@ -9480,9 +9421,9 @@ router.get("/:id/can-proceed", ensureAuthenticated, async (req, res) => {
         const { WorkflowService } = await import('../workflow-service');
 
         // Get datasets for this project
-        const projectDatasetLinks = await db.select({ dataset: datasets })
+        const projectDatasetLinks = await db.select({ dataset: datasetsTable })
             .from(projectDatasets)
-            .innerJoin(datasets, eq(projectDatasets.datasetId, datasets.id))
+            .innerJoin(datasetsTable, eq(projectDatasets.datasetId, datasetsTable.id))
             .where(eq(projectDatasets.projectId, projectId));
 
         const datasetList = projectDatasetLinks.map((link: { dataset: any }) => link.dataset);
