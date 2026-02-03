@@ -98,44 +98,66 @@ router.get('/activities/:projectId', async (req, res) => {
         });
       }
     } else {
-      // Fallback to project-based status if no journey state
-      // Project Manager Agent
-      const projectManagerStatus = getProjectManagerStatus(project);
+      // Use journeyProgress for dynamic agent activities based on actual step data
+      const progress = (project as any).journeyProgress || {};
+      const currentStep = progress.currentStep || 'upload';
+      const completedSteps = progress.completedSteps || [];
+      const hasRequirements = !!progress.requirementsDocument;
+      const hasTransformations = !!progress.transformationPlan;
+      const hasAnalysisResults = !!(project as any).analysisResults;
+
+      // Project Manager Agent - always active, describe what it's doing based on step
+      const pmActivity = completedSteps.includes('plan') ? 'Monitoring analysis execution' :
+        completedSteps.includes('verification') ? 'Coordinating data transformation and analysis planning' :
+        completedSteps.includes('prepare') ? 'Overseeing data verification process' :
+        hasRequirements ? 'Requirements locked, coordinating verification' :
+        'Analyzing project requirements and generating context';
+
       activities.push({
         id: 'pm_agent',
         agent: 'project_manager',
-        activity: projectManagerStatus.activity,
-        status: projectManagerStatus.status,
-        currentTask: projectManagerStatus.currentTask,
-        progress: projectManagerStatus.progress,
-        estimatedCompletion: new Date(Date.now() + projectManagerStatus.remainingMinutes * 60 * 1000),
-        lastUpdate: new Date()
+        activity: pmActivity,
+        status: hasAnalysisResults ? 'idle' : 'active',
+        currentTask: `Step: ${currentStep}`,
+        progress: Math.min(100, completedSteps.length * 15),
+        estimatedCompletion: undefined,
+        lastUpdate: progress.updatedAt ? new Date(progress.updatedAt) : new Date()
       });
 
       // Data Scientist Agent
-      const dataScientistStatus = getDataScientistStatus(project);
+      const dsActivity = hasAnalysisResults ? 'Analysis complete' :
+        completedSteps.includes('transformation') ? 'Preparing analysis execution plan' :
+        hasTransformations ? 'Transformation plan generated, awaiting execution' :
+        completedSteps.includes('verification') ? 'Generating data transformation recommendations' :
+        hasRequirements ? 'Defining required data elements for analysis' :
+        'Waiting for analysis context';
+
       activities.push({
         id: 'ds_agent',
         agent: 'data_scientist',
-        activity: dataScientistStatus.activity,
-        status: dataScientistStatus.status,
-        currentTask: dataScientistStatus.currentTask,
-        progress: dataScientistStatus.progress,
-        estimatedCompletion: new Date(Date.now() + dataScientistStatus.remainingMinutes * 60 * 1000),
-        lastUpdate: new Date()
+        activity: dsActivity,
+        status: hasAnalysisResults ? 'idle' : (completedSteps.includes('verification') ? 'active' : 'waiting'),
+        currentTask: hasTransformations ? 'Transformation plan ready' : 'Awaiting data context',
+        progress: hasAnalysisResults ? 100 : (hasTransformations ? 60 : (hasRequirements ? 30 : 0)),
+        estimatedCompletion: undefined,
+        lastUpdate: progress.updatedAt ? new Date(progress.updatedAt) : new Date()
       });
 
       // Business Agent
-      const businessAgentStatus = getBusinessAgentStatus(project);
+      const baActivity = hasAnalysisResults ? 'Translating results for audience' :
+        completedSteps.includes('plan') ? 'Preparing audience-specific insights framework' :
+        hasRequirements ? 'Business context defined, awaiting analysis' :
+        'Gathering industry context and business templates';
+
       activities.push({
         id: 'ba_agent',
         agent: 'business_agent',
-        activity: businessAgentStatus.activity,
-        status: businessAgentStatus.status,
-        currentTask: businessAgentStatus.currentTask,
-        progress: businessAgentStatus.progress,
-        estimatedCompletion: new Date(Date.now() + businessAgentStatus.remainingMinutes * 60 * 1000),
-        lastUpdate: new Date()
+        activity: baActivity,
+        status: hasAnalysisResults ? 'active' : (hasRequirements ? 'waiting' : 'active'),
+        currentTask: hasAnalysisResults ? 'Generating business insights' : 'Building business context',
+        progress: hasAnalysisResults ? 80 : (hasRequirements ? 40 : 10),
+        estimatedCompletion: undefined,
+        lastUpdate: progress.updatedAt ? new Date(progress.updatedAt) : new Date()
       });
     }
 
@@ -224,12 +246,10 @@ router.post('/intervention', async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    // Log the intervention request (in a real system, this would trigger actual agent processing)
-    console.log(`Agent intervention requested: ${agent} for project ${projectId}`);
-    console.log(`Request type: ${requestType}`);
-    console.log(`Message: ${message}`);
+    console.log(`📋 [Agent Intervention] ${agent} for project ${projectId}: ${requestType}`);
+    console.log(`   Message: ${message}`);
 
-    // Mock response based on agent and request type
+    // Template response based on agent role and request type
     const response = generateMockAgentResponse(agent, requestType, message, context);
 
     res.json({

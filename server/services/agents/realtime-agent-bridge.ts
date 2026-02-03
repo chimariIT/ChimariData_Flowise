@@ -176,6 +176,16 @@ export class RealtimeAgentBridge extends EventEmitter {
 
     console.log(`Checkpoint ${checkpoint.checkpointId} forwarded to user ${userId} (ws + Socket.IO)`);
     this.emit('checkpoint_forwarded', { checkpointId: checkpoint.checkpointId, userId });
+
+    // P1-17 FIX: Set timeout to auto-expire stale checkpoints that never got a response
+    setTimeout(() => {
+      if (this.pendingCheckpointIds.has(checkpoint.checkpointId)) {
+        console.warn(`⚠️ [P1-17] Checkpoint ${checkpoint.checkpointId} timed out after 5 minutes without user response`);
+        this.pendingCheckpointIds.delete(checkpoint.checkpointId);
+        this.checkpointMap.delete(checkpoint.checkpointId);
+        this.emit('checkpoint_timeout', { checkpointId: checkpoint.checkpointId, userId });
+      }
+    }, 5 * 60 * 1000); // 5 minute timeout
   }
 
   /**

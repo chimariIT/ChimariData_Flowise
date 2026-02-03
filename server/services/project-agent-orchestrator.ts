@@ -91,18 +91,15 @@ export class ProjectAgentOrchestrator {
       const journeyProgress = (project as any).journeyProgress || {};
       const existingAgentResults = journeyProgress.agentResults || {};
 
-      await storage.updateProject(projectId, {
-        journeyProgress: {
-          ...journeyProgress,
-          agentResults: {
-            ...existingAgentResults,
-            [agentName]: {
-              result,
-              completedAt: new Date().toISOString()
-            }
+      await storage.atomicMergeJourneyProgress(projectId, {
+        agentResults: {
+          ...existingAgentResults,
+          [agentName]: {
+            result,
+            completedAt: new Date().toISOString()
           }
         }
-      } as any);
+      });
 
       console.log(`✅ [Orchestrator PHASE 6] Persisted ${agentName} results to journeyProgress.agentResults`);
     } catch (error) {
@@ -245,25 +242,22 @@ export class ProjectAgentOrchestrator {
       console.log(`🔗 [Orchestrator] Built column mapping with ${columnLookup.size} mappings`);
 
       // 6. Store mapping in journeyProgress for use by execute-transformations
-      await storage.updateProject(projectId, {
-        journeyProgress: {
-          ...journeyProgress,
-          columnMappingResults: mappingResults.map(r => ({
-            elementId: r.elementId,
-            elementName: r.elementName,
-            allMapped: r.allMapped,
-            overallConfidence: r.overallConfidence,
-            mappings: r.mappings.map(m => ({
-              abstractField: m.abstractField,
-              actualColumn: m.actualColumn,
-              confidence: m.confidence,
-              matchMethod: m.matchMethod
-            }))
-          })),
-          columnMappingLookup: Object.fromEntries(columnLookup),
-          mappingCreatedAt: new Date().toISOString()
-        }
-      } as any);
+      await storage.atomicMergeJourneyProgress(projectId, {
+        columnMappingResults: mappingResults.map(r => ({
+          elementId: r.elementId,
+          elementName: r.elementName,
+          allMapped: r.allMapped,
+          overallConfidence: r.overallConfidence,
+          mappings: r.mappings.map(m => ({
+            abstractField: m.abstractField,
+            actualColumn: m.actualColumn,
+            confidence: m.confidence,
+            matchMethod: m.matchMethod
+          }))
+        })),
+        columnMappingLookup: Object.fromEntries(columnLookup),
+        mappingCreatedAt: new Date().toISOString()
+      });
 
       console.log(`✅ [Orchestrator] Transformation coordination complete for ${analysisType}`);
       return { success: true, transformedDatasetId: dsDataset.id };
@@ -1351,13 +1345,10 @@ export class ProjectAgentOrchestrator {
                 };
 
                 // Store merged translated results - preserves all audience translations
-                await storage.updateProject(projectId, {
-                  journeyProgress: {
-                    ...journeyProgress,
-                    translatedResults: mergedTranslations,
-                    baTranslatedAt: new Date().toISOString()
-                  }
-                } as any);
+                await storage.atomicMergeJourneyProgress(projectId, {
+                  translatedResults: mergedTranslations,
+                  baTranslatedAt: new Date().toISOString()
+                });
 
                 console.log(`✅ [BA Agent] Results translated for ${audience} audience (merged with ${Object.keys(existingTranslations).length} existing translations)`);
                 return {
@@ -1382,13 +1373,10 @@ export class ProjectAgentOrchestrator {
                 journeyProgress.industry || 'general'
               );
 
-              await storage.updateProject(projectId, {
-                journeyProgress: {
-                  ...journeyProgress,
-                  businessImpact: impactAssessment,
-                  baAssessedAt: new Date().toISOString()
-                }
-              } as any);
+              await storage.atomicMergeJourneyProgress(projectId, {
+                businessImpact: impactAssessment,
+                baAssessedAt: new Date().toISOString()
+              });
 
               console.log(`✅ [BA Agent] Business impact assessment completed`);
               return {
@@ -1406,13 +1394,10 @@ export class ProjectAgentOrchestrator {
                 projectData.analysisType || 'descriptive'
               );
 
-              await storage.updateProject(projectId, {
-                journeyProgress: {
-                  ...journeyProgress,
-                  businessKPIs: kpis,
-                  baKPIsAt: new Date().toISOString()
-                }
-              } as any);
+              await storage.atomicMergeJourneyProgress(projectId, {
+                businessKPIs: kpis,
+                baKPIsAt: new Date().toISOString()
+              });
 
               console.log(`✅ [BA Agent] Business KPIs generated`);
               return {
@@ -1436,13 +1421,10 @@ export class ProjectAgentOrchestrator {
               businessRole: journeyProgress.audience?.primaryAudience || 'executive'
             });
 
-            await storage.updateProject(projectId, {
-              journeyProgress: {
-                ...journeyProgress,
-                industryInsights,
-                baInsightsAt: new Date().toISOString()
-              }
-            } as any);
+            await storage.atomicMergeJourneyProgress(projectId, {
+              industryInsights,
+              baInsightsAt: new Date().toISOString()
+            });
 
             console.log(`✅ [BA Agent] Industry insights generated`);
             return {
@@ -1505,13 +1487,10 @@ export class ProjectAgentOrchestrator {
               };
 
               // Store DS recommendations in project
-              await storage.updateProject(projectId, {
-                journeyProgress: {
-                  ...journeyProgress,
-                  dsRecommendations: recommendations,
-                  dsRecommendedAt: new Date().toISOString()
-                }
-              } as any);
+              await storage.atomicMergeJourneyProgress(projectId, {
+                dsRecommendations: recommendations,
+                dsRecommendedAt: new Date().toISOString()
+              });
 
               console.log(`✅ [DS Agent] Recommended analyses:`, recommendations.recommendedAnalyses);
               return {
@@ -1565,16 +1544,13 @@ export class ProjectAgentOrchestrator {
               }
 
               // Store researcher recommendation
-              await storage.updateProject(projectId, {
-                journeyProgress: {
-                  ...journeyProgress,
-                  researcherRecommendation: {
-                    template,
-                    confidence,
-                    recommendedAt: new Date().toISOString()
-                  }
+              await storage.atomicMergeJourneyProgress(projectId, {
+                researcherRecommendation: {
+                  template,
+                  confidence,
+                  recommendedAt: new Date().toISOString()
                 }
-              } as any);
+              });
 
               console.log(`✅ [Research Agent] Recommended template: ${template?.name}`);
               return {
@@ -2186,15 +2162,19 @@ export class ProjectAgentOrchestrator {
 
       // Use the requirements mapping tool with definitions
       const mapResult = await executeTool(
-        'required_data_elements',
+        'required_data_elements_tool',
         'data_engineer', // agentId
         {
           operation: 'mapDatasetToRequirements',
           document: requirementsDocument,
-          datasetSchema: effectiveSchema,
-          availableColumns: effectiveColumns,
+          dataset: {
+            fileName: datasetMetadata?.fileName || 'dataset',
+            rowCount: datasetMetadata?.rowCount || 0,
+            schema: effectiveSchema,
+            preview: datasetMetadata?.preview || [],
+            piiFields: (journeyProgressForSchema.piiDecisions as any)?.excludedColumns || []
+          },
           businessDefinitions, // Pass the definitions to guide mapping
-          // NEW: Include user-approved column mappings and PII decisions
           userApprovedMappings: journeyProgressForSchema.columnMappings || {},
           piiDecisions: journeyProgressForSchema.piiDecisions || {}
         },
@@ -2244,11 +2224,41 @@ export class ProjectAgentOrchestrator {
         suggestedTransformation: trans.transformationLogic || trans.description || '',
         userDefinedLogic: '',
         relatedQuestions: [],
-        elementId: trans.elementId || `trans_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        elementId: trans.elementId || `trans_${nanoid()}`,
         description: trans.description || '',
         transformationType: trans.type, // direct_mapping, type_conversion, aggregation, derived_calculation
         ...trans
       }));
+
+      // Enrich standardizedMappings with business definition formulas where suggestedTransformation is empty
+      for (const mapping of standardizedMappings) {
+        const matchingDef = (businessDefinitions || []).find((bd: any) => {
+          const concept = (bd.concept || bd.definition?.conceptName || bd.name || '').toLowerCase();
+          const target = (mapping.targetElement || '').toLowerCase();
+          return concept && target && (concept === target || concept.includes(target) || target.includes(concept));
+        });
+        if (matchingDef) {
+          const def = matchingDef.definition || matchingDef;
+          // Populate suggestedTransformation from definition formula if not already set
+          if (!mapping.suggestedTransformation && def.formula) {
+            mapping.suggestedTransformation = typeof def.formula === 'string'
+              ? def.formula
+              : (def.formula.businessDescription || JSON.stringify(def.formula));
+          }
+          // Populate sourceColumns from definition componentFields if empty
+          if ((!mapping.sourceColumns || mapping.sourceColumns.length === 0) && def.componentFields?.length) {
+            mapping.sourceColumns = def.componentFields;
+          }
+          // Populate calculationDefinition from definition if not set
+          if (!mapping.calculationDefinition && (def.calculationType || def.formula || def.aggregationMethod)) {
+            mapping.calculationDefinition = {
+              calculationType: def.calculationType,
+              formula: def.formula,
+              aggregationMethod: def.aggregationMethod
+            };
+          }
+        }
+      }
 
       // Merge: prefer mapped elements, then add transformations for unmapped ones
       const elementNames = new Set(standardizedMappings.map((m: any) => m.targetElement));
@@ -2310,27 +2320,18 @@ export class ProjectAgentOrchestrator {
         checkpoint: completionCheckpoint
       });
 
-      // Fetch latest journeyProgress to merge with
-      const latestProject = await storage.getProject(projectId);
-      const latestJourneyProgress = (latestProject as any)?.journeyProgress || {};
+      console.log(`📝 [PM-SUPERVISED FLOW] Saving transformationPlan to journeyProgress:`);
+      console.log(`   - transformationPlan.mappings.length: ${transformationPlan?.mappings?.length || 0}`);
+      console.log(`   - transformationPlan.readinessScore: ${transformationPlan?.readinessScore || 0}`);
 
-      const updatedProgress = {
-        ...latestJourneyProgress,
+      // Store results in project journey progress (atomic merge)
+      await storage.atomicMergeJourneyProgress(projectId, {
         requirementsDocument,
         businessDefinitions,
         transformationPlan,
         pmValidations,
         dataMappingCompletedAt: new Date().toISOString()
-      };
-
-      console.log(`📝 [PM-SUPERVISED FLOW] Saving transformationPlan to journeyProgress:`);
-      console.log(`   - transformationPlan.mappings.length: ${transformationPlan?.mappings?.length || 0}`);
-      console.log(`   - transformationPlan.readinessScore: ${transformationPlan?.readinessScore || 0}`);
-
-      // Store results in project journey progress
-      await storage.updateProject(projectId, {
-        journeyProgress: updatedProgress
-      } as any);
+      });
 
       // Verify the save
       const verifyProject = await storage.getProject(projectId);

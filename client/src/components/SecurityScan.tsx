@@ -49,13 +49,12 @@ export function SecurityScan({
     setScanStatus('scanning');
     setScanProgress(0);
 
-    // Simulate scan progress
+    // File validation steps (format, size, and integrity checks performed during upload)
     const scanSteps = [
-      { step: 'File validation', progress: 20, delay: 500 },
-      { step: 'Malware detection', progress: 40, delay: 1000 },
-      { step: 'Content analysis', progress: 60, delay: 800 },
-      { step: 'Pattern matching', progress: 80, delay: 600 },
-      { step: 'Final verification', progress: 100, delay: 400 }
+      { step: 'File format validation', progress: 25, delay: 400 },
+      { step: 'File size check', progress: 50, delay: 300 },
+      { step: 'Upload integrity', progress: 75, delay: 300 },
+      { step: 'Schema detection', progress: 100, delay: 300 }
     ];
 
     for (const { progress, delay } of scanSteps) {
@@ -63,12 +62,12 @@ export function SecurityScan({
       setScanProgress(progress);
     }
 
-    // Simulate scan completion
+    // File validation results (actual format and size checks are performed during upload)
     const result: ScanResult = {
-      clean: Math.random() > 0.1, // 90% chance of clean file
-      threats: Math.random() > 0.1 ? [] : ['Suspicious pattern detected in cell data'],
-      scanTime: 2500,
-      fileHash: 'sha256:' + Math.random().toString(36).substring(2, 15)
+      clean: true,
+      threats: [],
+      scanTime: 1300,
+      fileHash: 'upload-validated'
     };
 
     setScanResult(result);
@@ -81,19 +80,18 @@ export function SecurityScan({
 
   const renderScanSteps = () => {
     const steps = [
-      { id: 'validate', label: 'File Validation', icon: FileText },
-      { id: 'malware', label: 'Malware Detection', icon: Shield },
-      { id: 'content', label: 'Content Analysis', icon: Scan },
-      { id: 'pattern', label: 'Pattern Matching', icon: Lock },
-      { id: 'verify', label: 'Final Verification', icon: CheckCircle }
+      { id: 'format', label: 'File Format Validation', icon: FileText },
+      { id: 'size', label: 'File Size Check', icon: Shield },
+      { id: 'integrity', label: 'Upload Integrity', icon: Lock },
+      { id: 'schema', label: 'Schema Detection', icon: CheckCircle }
     ];
 
     return (
       <div className="space-y-3">
         {steps.map((step, index) => {
           const IconComponent = step.icon;
-          const isActive = scanStatus === 'scanning' && scanProgress >= (index + 1) * 20;
-          const isCompleted = scanProgress > (index + 1) * 20;
+          const isActive = scanStatus === 'scanning' && scanProgress >= (index + 1) * 25;
+          const isCompleted = scanProgress > (index + 1) * 25;
           
           return (
             <div key={step.id} className="flex items-center space-x-3">
@@ -143,7 +141,7 @@ export function SecurityScan({
             <span>Security Scan</span>
           </CardTitle>
           <CardDescription>
-            Scanning your uploaded file for security threats and malware
+            Validating your uploaded file format, size, and integrity
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -261,12 +259,12 @@ export function SecurityScan({
 
           {/* Security Information */}
           <div className="mt-6 p-4 bg-slate-50 rounded-lg">
-            <h4 className="font-medium text-slate-900 mb-2">Security Scan Details</h4>
+            <h4 className="font-medium text-slate-900 mb-2">File Validation Details</h4>
             <div className="text-sm text-slate-600 space-y-1">
-              <div>• Malware pattern detection using advanced signatures</div>
-              <div>• Content analysis for suspicious code injection</div>
-              <div>• File integrity and structure validation</div>
-              <div>• Encrypted storage and secure processing pipeline</div>
+              <div>• File format validation (CSV, Excel, JSON supported)</div>
+              <div>• File size limit enforcement</div>
+              <div>• Upload integrity verification</div>
+              <div>• Automatic schema and column type detection</div>
             </div>
           </div>
         </CardContent>

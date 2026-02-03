@@ -1,8 +1,11 @@
+import type { MouseEvent } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { Button } from "@/components/ui/button";
 import { useJourneyState } from "@/hooks/useJourneyState";
-import { Loader2, Navigation, TimerReset } from "lucide-react";
+import { Loader2, Navigation, TimerReset, PanelsTopLeft, PlayCircle } from "lucide-react";
+import { useLocation } from "wouter";
 import clsx from "clsx";
 
 interface JourneyProgressCardProps {
@@ -43,6 +46,7 @@ const formatDate = (value?: string | null) => {
 export function JourneyProgressCard({ project, onSelect }: JourneyProgressCardProps) {
   const { id, name, status, journeyType, analysisExecutedAt, analysisBilledAt } = project;
   const { data, isLoading } = useJourneyState(id);
+  const [, setLocation] = useLocation();
 
   const percentComplete = data?.percentComplete ?? 0;
   const currentStepName = data?.currentStep?.name ?? "Initializing";
@@ -52,7 +56,19 @@ export function JourneyProgressCard({ project, onSelect }: JourneyProgressCardPr
   const handleSelect = () => {
     if (onSelect) {
       onSelect(id);
+      return;
     }
+    setLocation(`/projects/${id}`);
+  };
+
+  const goToDashboards = (event: MouseEvent) => {
+    event.stopPropagation();
+    setLocation(`/projects/${id}/dashboard`);
+  };
+
+  const goToProject = (event: MouseEvent) => {
+    event.stopPropagation();
+    handleSelect();
   };
 
   return (
@@ -120,6 +136,17 @@ export function JourneyProgressCard({ project, onSelect }: JourneyProgressCardPr
             <TimerReset className="h-3 w-3" />
             <span>Billed: {formatDate(analysisBilledAt)}</span>
           </span>
+        </div>
+
+        <div className="flex flex-wrap gap-2 pt-1">
+          <Button size="sm" variant="outline" onClick={goToProject} className="gap-2">
+            <PlayCircle className="h-4 w-4" />
+            View project
+          </Button>
+          <Button size="sm" onClick={goToDashboards} className="gap-2">
+            <PanelsTopLeft className="h-4 w-4" />
+            Dashboards
+          </Button>
         </div>
       </CardContent>
     </Card>

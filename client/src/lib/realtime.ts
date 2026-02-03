@@ -278,8 +278,14 @@ export class RealtimeClient {
 
   private scheduleReconnect(): void {
     if (this.reconnectAttempts >= this.config.maxReconnectAttempts) {
-      this.error('Max reconnection attempts reached');
+      // P1-16 FIX: Instead of giving up permanently, reset after a longer delay
+      // This handles token expiry during long reconnect cycles
+      this.error('Max reconnection attempts reached, scheduling final retry with fresh token in 60s');
       this.setConnectionState('failed');
+      setTimeout(() => {
+        this.reconnectAttempts = 0;
+        this.connect();
+      }, 60000);
       return;
     }
 

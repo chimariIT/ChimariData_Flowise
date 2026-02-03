@@ -5,6 +5,9 @@ import { db } from '../db';
 import { projectSessions } from '@shared/schema';
 import { eq, and, desc } from 'drizzle-orm';
 import { requiredDataElementsTool } from '../services/tools/required-data-elements-tool';
+import { storage } from '../services/storage';
+import { projectAgentOrchestrator } from '../services/project-agent-orchestrator';
+import { nanoid } from 'nanoid';
 
 const router = Router();
 
@@ -187,7 +190,7 @@ router.post('/clarify-goal', ensureAuthenticated, async (req, res) => {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
-    const { sessionId, projectId, analysisGoal, businessQuestions, journeyType } = req.body;
+    const { sessionId, projectId, analysisGoal, businessQuestions, journeyType, audience, industry, availableColumns } = req.body;
 
     // FIX: Accept either sessionId or projectId from client
     const lookupId = sessionId || projectId;
@@ -210,7 +213,10 @@ router.post('/clarify-goal', ensureAuthenticated, async (req, res) => {
       analysisGoal,
       businessQuestions: businessQuestions || '',
       journeyType: journeyType || 'non-tech',
-      userId
+      userId,
+      audience,
+      industry,
+      availableColumns: Array.isArray(availableColumns) ? availableColumns.slice(0, 50) : undefined
     });
 
     res.json({
@@ -224,6 +230,124 @@ router.post('/clarify-goal', ensureAuthenticated, async (req, res) => {
       },
       timestamp: new Date().toISOString()
     });
+
+    // ==========================================
+    // MULTI-AGENT COORDINATION (NON-BLOCKING)
+    // ==========================================
+    // Trigger multi-agent goal analysis AFTER prepare step, when we have REAL user goals.
+    // Previously this ran at upload time with generic defaults - now it runs here with actual context.
+    const effectiveProjectId = projectId || sessionId;
+    if (effectiveProjectId && analysisGoal) {
+      setImmediate(async () => {
+        try {
+          console.log(`[project-manager.ts] Starting multi-agent coordination for project ${effectiveProjectId}`);
+
+          // Get project and dataset for analysis context
+          const project = await storage.getProject(effectiveProjectId);
+          const dataset = await storage.getDatasetForProject(effectiveProjectId);
+
+          if (!dataset || !project) {
+            console.log(`[project-manager.ts] No dataset/project found for ${effectiveProjectId}, skipping coordination`);
+            return;
+          }
+
+          const datasetData = (dataset as any).data || (dataset as any).preview || [];
+          const uploadedData = {
+            data: Array.isArray(datasetData) ? datasetData.slice(0, 100) : datasetData,
+            schema: (dataset as any).schema || [],
+            qualityMetrics: ((dataset as any).ingestionMetadata as any)?.qualityMetrics,
+            rowCount: ((dataset as any).metadata as any)?.rowCount || (Array.isArray(datasetData) ? datasetData.length : 0),
+            type: 'tabular' as const
+          };
+
+          // Build goals from REAL user input
+          const questionsArray = Array.isArray(businessQuestions)
+            ? businessQuestions
+            : typeof businessQuestions === 'string' && businessQuestions.trim()
+              ? [businessQuestions]
+              : [];
+          const userGoals = [analysisGoal, ...questionsArray];
+
+          const effectiveIndustry = industry || (project as any).industry || 'general';
+
+          // Initialize a fresh PM agent for coordination
+          const coordinationPmAgent = new ProjectManagerAgent();
+          await coordinationPmAgent.initialize();
+
+          const coordinationResult = await coordinationPmAgent.coordinateGoalAnalysis(
+            effectiveProjectId,
+            uploadedData,
+            userGoals,
+            effectiveIndustry
+          );
+
+          console.log(`[project-manager.ts] Multi-agent coordination complete in ${coordinationResult.totalResponseTime}ms`);
+          console.log(`[project-manager.ts] Overall assessment: ${coordinationResult.synthesis.overallAssessment}`);
+
+          // Store coordination result
+          await storage.updateProject(effectiveProjectId, {
+            multiAgentCoordination: coordinationResult
+          } as any);
+
+          // Create checkpoint for UI display
+          await projectAgentOrchestrator.addCheckpoint(effectiveProjectId, {
+            id: coordinationResult.coordinationId || nanoid(),
+            projectId: effectiveProjectId,
+            agentType: 'project_manager' as const,
+            stepName: 'multi_agent_goal_analysis',
+            status: 'waiting_approval' as const,
+            message: 'Our team of experts has analyzed your goals and data. Review their recommendations:',
+            data: {
+              type: 'multi_agent_coordination',
+              coordinationResult,
+              expertOpinions: coordinationResult.expertOpinions,
+              synthesis: coordinationResult.synthesis,
+              overallAssessment: coordinationResult.synthesis.overallAssessment,
+              confidence: coordinationResult.synthesis.confidence,
+              keyFindings: coordinationResult.synthesis.keyFindings,
+              actionableRecommendations: coordinationResult.synthesis.actionableRecommendations
+            },
+            timestamp: new Date(),
+            requiresUserInput: true
+          });
+
+          console.log(`[project-manager.ts] Multi-agent checkpoint created for project ${effectiveProjectId}`);
+
+          // Create coordination artifact for traceability
+          try {
+            await storage.createArtifact({
+              id: nanoid(),
+              projectId: effectiveProjectId,
+              type: 'analysis',
+              status: 'completed',
+              inputRefs: [dataset.id],
+              params: {
+                analysis: 'multi_agent_goal_analysis',
+                generatedBy: 'pm_agent',
+                agentType: 'multi_agent_coordination',
+                triggeredFrom: 'clarify_goal'
+              },
+              metrics: {
+                confidence: coordinationResult.synthesis.confidence,
+                totalResponseTime: coordinationResult.totalResponseTime
+              },
+              output: {
+                overallAssessment: coordinationResult.synthesis.overallAssessment,
+                keyFindings: coordinationResult.synthesis.keyFindings,
+                actionableRecommendations: coordinationResult.synthesis.actionableRecommendations,
+                expertConsensus: coordinationResult.synthesis.expertConsensus
+              },
+              createdBy: userId || null
+            });
+          } catch (artifactError) {
+            console.error('Failed to create multi-agent coordination artifact:', artifactError);
+          }
+
+        } catch (coordinationError) {
+          console.error(`[project-manager.ts] Multi-agent coordination failed (non-blocking):`, coordinationError);
+        }
+      });
+    }
 
   } catch (error: any) {
     console.error('PM goal clarification failed:', error);

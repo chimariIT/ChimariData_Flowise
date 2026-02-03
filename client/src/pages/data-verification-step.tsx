@@ -57,6 +57,23 @@ interface VerificationStatus {
   overallApproved: boolean;
 }
 
+const normalizeSchemaTypes = (schema: any): Record<string, string> => {
+  const normalized: Record<string, string> = {};
+  if (!schema || typeof schema !== 'object') return normalized;
+
+  Object.entries(schema).forEach(([col, type]) => {
+    if (type && typeof type === 'object' && (type as any).type) {
+      normalized[col] = (type as any).type;
+    } else if (typeof type === 'string') {
+      normalized[col] = type;
+    } else {
+      normalized[col] = 'string';
+    }
+  });
+
+  return normalized;
+};
+
 export default function DataVerificationStep({
   journeyType,
   onNext,
@@ -129,23 +146,25 @@ export default function DataVerificationStep({
     const hasMultiple = datasets.length > 1 ||
       !!(journeyProgress as any)?.joinedData?.joinConfig;
 
+    const normalize = (schema: any) => normalizeSchemaTypes(schema || {});
+
     // Priority 1: SSOT - journeyProgress.joinedData.schema
     const jpSchema = (journeyProgress as any)?.joinedData?.schema;
     if (jpSchema && typeof jpSchema === 'object' && Object.keys(jpSchema).length > 0) {
-      return { schema: jpSchema, isJoined: true, source: 'journeyProgress' as const };
+      return { schema: normalize(jpSchema), isJoined: true, source: 'journeyProgress' as const };
     }
 
     // Priority 2: projectData.schema (derivedSchema - built from joined data or merged datasets)
     if (projectData?.schema && typeof projectData.schema === 'object' &&
         Object.keys(projectData.schema).length > 0) {
-      return { schema: projectData.schema, isJoined: hasMultiple, source: 'projectData' as const };
+      return { schema: normalize(projectData.schema), isJoined: hasMultiple, source: 'projectData' as const };
     }
 
     // Priority 3: schemaAnalysis from API
     if (schemaAnalysis?.schema && typeof schemaAnalysis.schema === 'object' &&
         Object.keys(schemaAnalysis.schema).length > 0) {
       return {
-        schema: schemaAnalysis.schema,
+        schema: normalize(schemaAnalysis.schema),
         isJoined: schemaAnalysis.isJoinedSchema || false,
         source: 'schemaAnalysis' as const
       };
@@ -166,7 +185,7 @@ export default function DataVerificationStep({
         }
       }
       if (Object.keys(merged).length > 0) {
-        return { schema: merged, isJoined: true, source: 'merged-datasets' as const };
+        return { schema: normalize(merged), isJoined: true, source: 'merged-datasets' as const };
       }
     }
 
@@ -175,7 +194,7 @@ export default function DataVerificationStep({
       const dsData = datasets[0]?.dataset || datasets[0] || {};
       const dsSchema = dsData.ingestionMetadata?.schema || dsData.metadata?.schema || dsData.schema;
       if (dsSchema && typeof dsSchema === 'object' && Object.keys(dsSchema).length > 0) {
-        return { schema: dsSchema, isJoined: false, source: 'single-dataset' as const };
+        return { schema: normalize(dsSchema), isJoined: false, source: 'single-dataset' as const };
       }
     }
 
@@ -861,7 +880,24 @@ export default function DataVerificationStep({
             description: `Mapped ${response.mappingStats?.elementsMapped || 0} of ${response.mappingStats?.totalElements || 0} data elements to source fields.`,
           });
         } else if (response.error === 'preparation_required' || response.requiresPreparation) {
-          console.log('⚠️ [Data Engineer] Preparation required, redirecting...', {
+          // DEFENSE-IN-DEPTH: Before redirecting, refetch project from server to confirm
+          // requirementsDocument is truly missing (not just a transient race condition).
+          console.log('⚠️ [Data Engineer] Server says preparation_required, verifying with fresh fetch...');
+          try {
+            const freshProject = await apiClient.getProject(currentProjectId);
+            const freshProgress = freshProject?.journeyProgress as any;
+            if (freshProgress?.requirementsDocument) {
+              console.log('✅ [Data Engineer] requirementsDocument found on refetch - race condition resolved, retrying mapping');
+              queryClient.setQueryData(["project", currentProjectId], freshProject);
+              setIsMappingElements(false);
+              setHasMappedElements(false);
+              return; // Let the useEffect re-trigger mapping with fresh data
+            }
+          } catch (refetchErr) {
+            console.warn('⚠️ [Data Engineer] Refetch failed during preparation_required check:', refetchErr);
+          }
+
+          console.log('⚠️ [Data Engineer] Preparation confirmed required after refetch, redirecting...', {
             error: response.error,
             message: response.message,
             journeyProgressAtRedirect: {
@@ -941,7 +977,7 @@ export default function DataVerificationStep({
         joinedRows = journeyProgressJoinedData.preview || [];
         // CRITICAL: Only use schema if it has actual content
         joinedSchema = hasSchemaContent(journeyProgressJoinedData.schema)
-          ? journeyProgressJoinedData.schema
+          ? normalizeSchemaTypes(journeyProgressJoinedData.schema)
           : null;
         joinInsightsData = journeyProgressJoinedData.joinInsights || null;
         totalRecordCount = (journeyProgressJoinedData as any).totalRowCount || journeyProgressJoinedData.rowCount || journeyProgressJoinedData.preview?.length || 0;
@@ -955,7 +991,7 @@ export default function DataVerificationStep({
 
           // CRITICAL FIX: If journeyProgress didn't have schema but API response does, use API schema
           if (!joinedSchema && hasSchemaContent(datasetsResponse?.joinedSchema)) {
-            joinedSchema = datasetsResponse.joinedSchema;
+            joinedSchema = normalizeSchemaTypes(datasetsResponse.joinedSchema);
             console.log(`📊 [API Fallback] Using joinedSchema from API: ${Object.keys(joinedSchema).length} columns`);
           }
         } catch (e) { console.warn('Failed to refresh datasets list', e); }
@@ -967,7 +1003,7 @@ export default function DataVerificationStep({
 
           datasets = Array.isArray(datasetsResponse?.datasets) ? datasetsResponse.datasets : [];
           joinedRows = Array.isArray(datasetsResponse?.joinedPreview) ? datasetsResponse.joinedPreview : [];
-          joinedSchema = hasSchemaContent(datasetsResponse?.joinedSchema) ? datasetsResponse.joinedSchema : null;
+          joinedSchema = hasSchemaContent(datasetsResponse?.joinedSchema) ? normalizeSchemaTypes(datasetsResponse.joinedSchema) : null;
           joinInsightsData = datasetsResponse?.joinInsights || null;
           totalRecordCount = datasetsResponse?.totalRecordCount || 0;
         } catch (datasetError) {
@@ -1007,7 +1043,9 @@ export default function DataVerificationStep({
               const rawName = dataset?.originalFileName || dataset?.name || `Dataset${dsIdx + 1}`;
               const cleanName = rawName.replace(/\.[^.]+$/, '').substring(0, 15);
 
-              Object.entries(dataset.schema).forEach(([col, type]) => {
+              const normalizedSchema = normalizeSchemaTypes(dataset.schema);
+
+              Object.entries(normalizedSchema).forEach(([col, type]) => {
                 // [PHASE 4 FIX] Use deterministic prefix for conflicts
                 let finalCol = col;
                 if (derivedSchema[col] !== undefined && datasets.length > 1) {
@@ -1042,17 +1080,18 @@ export default function DataVerificationStep({
 
         // [PHASE 4 & 5 FIX] Prefer backend-provided mergedSchema if available
         if (datasetsResponse?.mergedSchema && Object.keys(datasetsResponse.mergedSchema).length > 0) {
-          derivedSchema = datasetsResponse.mergedSchema;
+          derivedSchema = normalizeSchemaTypes(datasetsResponse.mergedSchema);
           console.log('📊 [Phase 4] Using backend mergedSchema with', Object.keys(derivedSchema).length, 'columns');
         } else {
-          derivedSchema = Object.keys(derivedSchema).length > 0 ? derivedSchema : project.schema || {};
+          const fallbackSchema = Object.keys(derivedSchema).length > 0 ? derivedSchema : project.schema || {};
+          derivedSchema = normalizeSchemaTypes(fallbackSchema);
         }
 
         const projectWithData = {
           ...project,
           preview: previewSource,
           sampleData: previewSource,
-          schema: derivedSchema,
+          schema: normalizeSchemaTypes(derivedSchema),
           datasets,
           datasetCount: datasets.length,
           // [PHASE 5 FIX] Use calculated totalRecordCount from SSOT or API
@@ -1268,6 +1307,7 @@ const handlePIIApproval = async (requiresPII: boolean, anonymizeData: boolean, s
 };
 
 const handleSchemaConfirm = async (schema: Record<string, string>) => {
+  const normalizedSchema = normalizeSchemaTypes(schema);
   const projectId = localStorage.getItem('currentProjectId');
   if (!projectId) {
     toast({
@@ -1283,7 +1323,7 @@ const handleSchemaConfirm = async (schema: Record<string, string>) => {
     // [DAY 7] Route through DE agent for schema validation before approval
     console.log('🔍 [DE Agent] Validating schema via agent...');
     const validationResult = await apiClient.post(`/api/data-quality/${projectId}/validate-schema-via-agent`, {
-      proposedSchema: schema
+      proposedSchema: normalizedSchema
     });
     console.log('🔍 [DE Agent Schema] Validation result:', validationResult);
 
@@ -1310,19 +1350,19 @@ const handleSchemaConfirm = async (schema: Record<string, string>) => {
     // Now call the approval endpoint with the checkpoint ID
     await apiClient.post(`/api/data-quality/${projectId}/approve-schema`, {
       checkpointId: validationResult.validation?.checkpointId,
-      confirmedSchema: schema,
+      confirmedSchema: normalizedSchema,
       feedback: 'Schema confirmed after DE agent validation'
     });
 
     // Update local state
-    setEditedSchema(schema);
+    setEditedSchema(normalizedSchema);
     updateVerificationStatus('schemaValidation', true);
 
     // Update journeyProgress
     updateProgress({
       schemaValidated: true,
       schemaCheckpointId: validationResult.validation?.checkpointId,
-      confirmedSchema: schema,
+      confirmedSchema: normalizedSchema,
       currentStep: 'verification'
     });
 
@@ -1342,11 +1382,11 @@ const handleSchemaConfirm = async (schema: Record<string, string>) => {
     });
 
     // Fallback to direct approval
-    setEditedSchema(schema);
+    setEditedSchema(normalizedSchema);
     updateVerificationStatus('schemaValidation', true);
     updateProgress({
       schemaValidated: true,
-      confirmedSchema: schema,
+      confirmedSchema: normalizedSchema,
       currentStep: 'verification'
     });
   } finally {

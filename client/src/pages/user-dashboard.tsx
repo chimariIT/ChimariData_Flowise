@@ -380,14 +380,29 @@ export default function UserDashboard({ user, onLogout }: UserDashboardProps) {
                               Restart
                             </Button>
                           )}
+                          {projectStatus === 'completed' && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleRestartProject(project.id)}
+                              disabled={restartingId === project.id}
+                            >
+                              <RefreshCw className={`w-4 h-4 mr-2 ${restartingId === project.id ? 'animate-spin' : ''}`} />
+                              Re-analyze
+                            </Button>
+                          )}
                           <Button variant="outline" size="sm" onClick={() => handleViewProject(project.id)}>
                             <Eye className="w-4 h-4 mr-2" />
                             View
                           </Button>
                           {projectStatus === 'completed' && (
-                            <Button variant="outline" size="sm">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setLocation(`/project/${project.id}/results`)}
+                            >
                               <Download className="w-4 h-4 mr-2" />
-                              Download
+                              Results
                             </Button>
                           )}
                         </div>

@@ -164,8 +164,8 @@ export interface DataQualityRequirement {
     field: string;
     currentQuality: 'good' | 'acceptable' | 'poor';
     issues: string[];
-    requiredActions: string[];
-    impact: 'high' | 'medium' | 'low';
+    requiredActions: string[]; // Specify actions needed to address issues
+    impact: 'high' | 'medium' | 'low'; // Assess the impact of the data quality issues
     estimatedEffort?: string;
 }
 
@@ -184,7 +184,7 @@ export interface SynthesizedRecommendation {
     keyFindings: string[];
     combinedRisks: Array<{ source: string; risk: string; severity: 'high' | 'medium' | 'low' }>;
     actionableRecommendations: string[];
-    expertConsensus: {
+    expertConsensus: { // Summary of expert opinions on data quality and feasibility
         dataQuality: 'good' | 'acceptable' | 'poor';
         technicalFeasibility: 'feasible' | 'challenging' | 'not_feasible';
         businessValue: 'high' | 'medium' | 'low';
@@ -242,6 +242,18 @@ interface CreateAnalysisPlanRequest {
     };
     modifications?: string | null;
     previousPlan?: AnalysisPlanRow | null;
+    // Context from previous journey steps (passed from route)
+    journeyContext?: {
+        requirementsDocument?: any;
+        piiDecisions?: Record<string, any> | null;
+        elementMappings?: Record<string, any> | null;
+        dataQuality?: any;
+        verificationChecks?: Record<string, any> | null;
+        transformationPlan?: any;
+        userQuestions?: string[];
+        analysisPath?: any[];
+        completedSteps?: string[];
+    } | null;
 }
 
 interface CreateAnalysisPlanResult {
@@ -664,9 +676,26 @@ export class ProjectManagerAgent {
         // Use CostEstimationService for consistent pricing with execution step
         try {
             const { CostEstimationService } = await import('./cost-estimation-service');
+
+            // Preserve the analysis type coming from analysisPath/steps so the detailed cost reflects
+            // each planned analysis instead of collapsing to coarse categories. Fall back to method/name.
             const analysisTypes = steps.length > 0
-                ? steps.map(s => this.mapStepToCostCategory(s.method))
+                ? steps.map((s) => {
+                    const stepAny = s as any;
+                    return stepAny.analysisType || stepAny.type || s.method || s.name || 'statistical';
+                  })
                 : ['statistical'];
+
+            // Track how many times each label appears so we can disambiguate duplicate analysis items in the breakdown
+            const normalizeLabel = (value: string) => (value || 'Analysis')
+                .replace(/_/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+            const analysisLabels = analysisTypes.map((t) => normalizeLabel(t));
+            const labelCounts = analysisLabels.reduce<Record<string, number>>((acc, label) => {
+                acc[label] = (acc[label] || 0) + 1;
+                return acc;
+            }, {});
 
             const estimate = await CostEstimationService.estimateAnalysisCost(
                 projectId || 'plan-estimate',
@@ -676,12 +705,23 @@ export class ProjectManagerAgent {
                 ['report']
             );
 
-            // Convert to CostBreakdown format
-            // FIX: ACCUMULATE costs for duplicate keys (e.g., multiple "Statistical Analysis" steps)
-            // instead of overwriting, so breakdown total matches the totalCost
+            // Convert to CostBreakdown format with per-analysis detail (no collapsing of multiple analyses)
             const breakdown: Record<string, number> = {};
+            let analysisIndex = 0;
             for (const item of estimate.breakdown) {
-                breakdown[item.item] = (breakdown[item.item] || 0) + item.cost;
+                const isAnalysisItem = /analysis$/i.test(item.item || '');
+                const cost = parseFloat(item.cost.toFixed(2));
+
+                if (isAnalysisItem) {
+                    const baseLabel = analysisLabels[analysisIndex] || normalizeLabel(item.item);
+                    const needsDisambiguation = (labelCounts[baseLabel] || 0) > 1;
+                    const label = needsDisambiguation ? `${baseLabel} (#${analysisIndex + 1})` : baseLabel;
+                    breakdown[label] = cost;
+                    analysisIndex += 1;
+                } else {
+                    // Platform/data/artifact fees can safely accumulate
+                    breakdown[item.item] = (breakdown[item.item] || 0) + cost;
+                }
             }
 
             // Log detailed breakdown for debugging
@@ -1147,6 +1187,17 @@ export class ProjectManagerAgent {
             const prepareData = session?.prepareData as Record<string, any> | undefined;
             const journeyProgress = (freshProjectRecord as any)?.journeyProgress || {};
 
+            // Use journeyContext passed from route (preferred) or fall back to journeyProgress from DB
+            const jctx = request.journeyContext;
+            if (jctx?.requirementsDocument) {
+                console.log(`✅ [PM Agent] Using journeyContext passed from route (avoids stale data):`, {
+                    hasReqDoc: true,
+                    analysisPathCount: jctx.analysisPath?.length || 0,
+                    elementsCount: jctx.requirementsDocument?.requiredDataElements?.length || 0,
+                    completedSteps: jctx.completedSteps || []
+                });
+            }
+
             const goals = this.normalizeStringCollection([
                 request.project?.objectives,
                 prepareData?.analysisGoal,
@@ -1161,10 +1212,13 @@ export class ProjectManagerAgent {
                 goals.push('Generate actionable insights from uploaded data');
             }
 
-            // Include user questions from journeyProgress (SSOT) for richer context
-            const jpUserQuestions = Array.isArray(journeyProgress.userQuestions)
-                ? journeyProgress.userQuestions.map((q: any) => typeof q === 'string' ? q : q.text || '')
-                : [];
+            // Include user questions from journeyContext (preferred) or journeyProgress SSOT
+            const contextQuestions = jctx?.userQuestions || [];
+            const jpUserQuestions = contextQuestions.length > 0
+                ? contextQuestions.map((q: any) => typeof q === 'string' ? q : q.text || '')
+                : (Array.isArray(journeyProgress.userQuestions)
+                    ? journeyProgress.userQuestions.map((q: any) => typeof q === 'string' ? q : q.text || '')
+                    : []);
 
             const questions = this.normalizeStringCollection([
                 prepareData?.businessQuestions,
@@ -1183,18 +1237,20 @@ export class ProjectManagerAgent {
             const dataSample = primaryDataset?.previewRows ?? (Array.isArray(request.project?.data) ? request.project.data.slice(0, 500) : []);
 
             // [INTEGRATION] Required Data Elements Tool
-            // CRITICAL FIX: Check if requirementsDocument already exists in journeyProgress (from Prepare step)
-            // This ensures traceability from Prepare → Verification → Transformation → Plan
-            // PHASE 7 FIX: Use freshProjectRecord instead of stale projectRecord
-            const existingReqDoc = (freshProjectRecord as any)?.journeyProgress?.requirementsDocument;
+            // Prefer journeyContext passed from route > freshProjectRecord.journeyProgress > generate new
+            const existingReqDoc = jctx?.requirementsDocument
+                || (freshProjectRecord as any)?.journeyProgress?.requirementsDocument;
             let requirementsDoc;
 
             if (existingReqDoc && existingReqDoc.requiredDataElements?.length > 0) {
-                // Use existing requirements document from Prepare step (SSOT)
-                console.log(`✅ [PM Agent] Using existing requirementsDocument from Prepare step:`, {
+                // Use existing requirements document from previous steps (SSOT)
+                console.log(`✅ [PM Agent] Using existing requirementsDocument:`, {
                     elementsCount: existingReqDoc.requiredDataElements?.length || 0,
                     analysisPathCount: existingReqDoc.analysisPath?.length || 0,
-                    source: 'journeyProgress.requirementsDocument'
+                    source: jctx?.requirementsDocument ? 'journeyContext (route)' : 'journeyProgress (DB)',
+                    hasPiiDecisions: !!(jctx?.piiDecisions || journeyProgress.piiDecisions),
+                    hasElementMappings: !!(jctx?.elementMappings || journeyProgress.elementMappings),
+                    hasDataQuality: !!(jctx?.dataQuality || journeyProgress.dataQuality)
                 });
                 requirementsDoc = existingReqDoc;
             } else {
@@ -1427,14 +1483,36 @@ export class ProjectManagerAgent {
                 risks.push('Monitor data quality checks before execution.');
             }
 
-            // FIX: Generate context-aware visualizations based on analysis steps and data characteristics
+            // Generate context-aware visualizations based on analysis steps and data characteristics
             // Use stepsForCost which is already computed above (same logic as finalAnalysisSteps)
             let visualizations = blueprint.visualizations || [];
             if (visualizations.length === 0) {
-                console.log('📊 [PM Agent] Generating fallback visualizations from analysis context...');
+                console.log('📊 [PM Agent] Generating context-aware visualizations from analysis context...');
                 const analysisTypes = stepsForCost?.map(s => s.method?.toLowerCase() || s.name?.toLowerCase() || '') || [];
+                const hasNumericColumns = Object.values(schemaSource).some((col: any) => {
+                    const t = typeof col === 'string' ? col : col?.type;
+                    return t && /number|integer|float|numeric/i.test(t);
+                });
+                const hasCategoricalColumns = Object.values(schemaSource).some((col: any) => {
+                    const t = typeof col === 'string' ? col : col?.type;
+                    return t && /string|text|categorical/i.test(t);
+                });
 
-                // Generate based on what analyses are planned
+                // EDA visualizations (always relevant)
+                if (analysisTypes.some(t => /eda|exploratory|descriptive/i.test(t)) || analysisTypes.length === 0) {
+                    if (hasNumericColumns) {
+                        visualizations.push({ type: 'histogram', title: 'Data Distribution Analysis', description: 'Distribution and spread of key numeric variables with outlier detection' });
+                        visualizations.push({ type: 'box', title: 'Statistical Summary', description: 'Box plots showing median, quartiles, and outliers for numeric fields' });
+                    }
+                    if (hasCategoricalColumns) {
+                        visualizations.push({ type: 'bar', title: 'Category Frequency Analysis', description: 'Frequency counts for categorical variables' });
+                    }
+                    if (hasNumericColumns && hasCategoricalColumns) {
+                        visualizations.push({ type: 'bar', title: 'Metrics by Category', description: 'Comparison of numeric metrics across categories' });
+                    }
+                }
+
+                // Analysis-specific visualizations
                 if (analysisTypes.some(t => /correlation/i.test(t))) {
                     visualizations.push({ type: 'heatmap', title: 'Correlation Matrix', description: 'Visualize relationships between key variables' });
                 }
@@ -1448,15 +1526,20 @@ export class ProjectManagerAgent {
                     visualizations.push({ type: 'line', title: 'Time Series Trend', description: 'Track values over time with trend indicators' });
                 }
 
-                // Always add base visualizations if none were added
-                if (visualizations.length === 0) {
-                    visualizations = [
+                // Ensure at least 3 visualizations
+                if (visualizations.length < 3) {
+                    const defaults = [
                         { type: 'bar', title: 'Key Metrics Overview', description: 'Primary KPI performance comparison by segment' },
                         { type: 'histogram', title: 'Data Distribution', description: 'Distribution of key numeric variables' },
                         { type: 'pie', title: 'Category Breakdown', description: 'Distribution of records across categories' }
                     ];
+                    for (const d of defaults) {
+                        if (!visualizations.some(v => v.type === d.type) && visualizations.length < 5) {
+                            visualizations.push(d);
+                        }
+                    }
                 }
-                console.log(`📊 [PM Agent] Generated ${visualizations.length} fallback visualizations`);
+                console.log(`📊 [PM Agent] Generated ${visualizations.length} context-aware visualizations`);
             }
 
             const mlModels = blueprint.mlModels ?? [];
@@ -1585,31 +1668,20 @@ export class ProjectManagerAgent {
             // PM Agent writes to analysisPlans.metadata, but SSOT is journeyProgress
             // This ensures Transform and Execute steps can read from the same source
             try {
-                const existingProject = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
-                if (existingProject.length > 0) {
-                    const existingJourneyProgress = (existingProject[0] as any).journeyProgress || {};
-                    await db
-                        .update(projects)
-                        .set({
-                            journeyProgress: {
-                                ...existingJourneyProgress,
-                                requirementsDocument: {
-                                    analysisPath: requirementsDoc?.analysisPath || [],
-                                    requiredDataElements: requirementsDoc?.requiredDataElements || [],
-                                    questionAnswerMapping: requirementsDoc?.questionAnswerMapping || [],
-                                    transformationPlan: requirementsDoc?.transformationPlan,
-                                    completeness: requirementsDoc?.completeness,
-                                    gaps: requirementsDoc?.gaps || []
-                                },
-                                requirementsLocked: true,
-                                planApproved: false, // User still needs to approve
-                                latestPlanAgentContributions: agentContributions
-                            },
-                            updatedAt: now
-                        } as any)
-                        .where(eq(projects.id, projectId));
-                    console.log(`✅ [PM Agent] Saved requirementsDocument to journeyProgress SSOT with ${requirementsDoc?.analysisPath?.length || 0} analyses`);
-                }
+                await storage.atomicMergeJourneyProgress(projectId, {
+                    requirementsDocument: {
+                        analysisPath: requirementsDoc?.analysisPath || [],
+                        requiredDataElements: requirementsDoc?.requiredDataElements || [],
+                        questionAnswerMapping: requirementsDoc?.questionAnswerMapping || [],
+                        transformationPlan: requirementsDoc?.transformationPlan,
+                        completeness: requirementsDoc?.completeness,
+                        gaps: requirementsDoc?.gaps || []
+                    },
+                    requirementsLocked: true,
+                    planApproved: false, // User still needs to approve
+                    latestPlanAgentContributions: agentContributions
+                });
+                console.log(`✅ [PM Agent] Saved requirementsDocument to journeyProgress SSOT with ${requirementsDoc?.analysisPath?.length || 0} analyses`);
             } catch (ssotError) {
                 console.warn(`⚠️ [PM Agent] Failed to update journeyProgress SSOT, plan metadata still saved:`, ssotError);
             }
@@ -5115,6 +5187,9 @@ export class ProjectManagerAgent {
         businessQuestions: string;
         journeyType: string;
         userId: string;
+        audience?: { primary?: string; secondary?: string[]; decisionContext?: string };
+        industry?: string;
+        availableColumns?: string[];
     }): Promise<{
         summary: string;
         understoodGoals: string[];
@@ -5146,6 +5221,9 @@ export class ProjectManagerAgent {
         const prompt = `You are the Analytics Project Manager AI orchestrator. Your mission is to deeply understand the user's needs, coordinate with the Business Agent, Data Scientist, and Data Engineer, and keep the user engaged at every checkpoint while shaping a clear analysis plan.
 
 **User's Journey Type**: ${input.journeyType}
+**Industry (if known)**: ${input.industry || 'not provided'}
+**Audience**: primary=${input.audience?.primary || 'not provided'}; secondary=${(input.audience?.secondary || []).join(', ') || 'none'}; decisionContext=${input.audience?.decisionContext || 'not provided'}
+**Available Data Columns**: ${(input.availableColumns || []).slice(0, 25).join(', ') || 'not provided'}
 
 **User's Analysis Goal**:
 ${input.analysisGoal}
@@ -5160,11 +5238,16 @@ Your task:
    - What specific metrics or outcomes they care about
    - Who the audience is for the analysis
    - What decisions this analysis will inform
-   - What constraints or requirements exist (timeline, data limitations, etc.)
+    - Data availability or missing fields needed (reference provided columns if helpful)
+    - What constraints or requirements exist (timeline, data limitations, etc.)
 4. **Suggest focus areas** that align with their goals
 5. **Identify any gaps** in their goal statement that need more detail
 6. **List the required data elements and transformations** the team (Business Agent, Data Scientist, Data Engineer) must secure or perform to satisfy the clarified goal
 7. **Confirm the expected audience-ready artifacts** (interactive dashboard, PowerPoint deck, REST API export, PDF report) and when user approval is needed for each
+
+Guardrails:
+- Do NOT promise unsupported capabilities (no external live DB connectors, no custom API-key execution, no real-time streaming dashboards beyond the listed artifacts).
+- Keep language concise and user-approachable.
 
 Respond in JSON format:
 {
@@ -5731,16 +5814,11 @@ ${context.completedSteps?.length > 0 ? `**Completed**: ${context.completedSteps.
             console.error(`❌ [PM Orchestration] Workflow failed for project ${projectId}:`, error.message);
 
             try {
-                const project = await storage.getProject(projectId);
-                const existingProgress = (project as any)?.journeyProgress || {};
-                await storage.updateProject(projectId, {
-                    journeyProgress: {
-                        ...existingProgress,
-                        orchestrationStatus: 'error',
-                        orchestrationError: error.message,
-                        orchestrationFailedAt: new Date().toISOString()
-                    }
-                } as any);
+                await storage.atomicMergeJourneyProgress(projectId, {
+                    orchestrationStatus: 'error',
+                    orchestrationError: error.message,
+                    orchestrationFailedAt: new Date().toISOString()
+                });
             } catch (persistError) {
                 console.error(`❌ [PM Orchestration] Failed to persist error state:`, persistError);
             }

@@ -3716,23 +3716,25 @@ export async function executeTool(
             }
           }
 
-          // Add default visualizations if none were generated
+          // Add default visualizations if none were generated (use available column info)
           if (visualizations.length === 0) {
             if (numericColumns.length >= 2) {
               visualizations.push({
                 type: 'bar',
                 title: 'Key Metrics Overview',
-                description: 'Primary metrics comparison across segments'
+                description: `Compare ${numericColumns.slice(0, 3).join(', ')} across segments`,
+                dataColumns: numericColumns.slice(0, 3)
               });
             }
             if (categoricalColumns.length > 0) {
               visualizations.push({
                 type: 'pie',
                 title: 'Category Breakdown',
-                description: 'Distribution of records by category'
+                description: `Distribution by ${categoricalColumns[0]}`,
+                dataColumns: categoricalColumns.slice(0, 1)
               });
             }
-            // Always add at least one visualization
+            // Last resort: if no columns detected at all
             if (visualizations.length === 0) {
               visualizations.push({
                 type: 'bar',

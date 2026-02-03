@@ -32,7 +32,7 @@ import { apiClient } from "@/lib/api";
 import type { JourneyTemplate } from '@shared/journey-templates';
 import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import AgentCheckpoints from "@/components/agent-checkpoints";
+// AgentCheckpoints removed - coordination shown on verification step + project overview
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { ExecutionProgressTracker } from "@/components/ExecutionProgressTracker";
@@ -3148,11 +3148,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         </Card>
       )}
 
-      {projectId && (
-        <div className="mt-6">
-          <AgentCheckpoints projectId={projectId} />
-        </div>
-      )}
+      {/* Agent Checkpoints removed - coordination shown on verification step + project overview */}
 
       {/* Navigation Buttons */}
       {(onNext || onPrevious) && (

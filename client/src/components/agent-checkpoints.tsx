@@ -63,14 +63,23 @@ export default function AgentCheckpoints({ projectId }: AgentCheckpointsProps) {
   const [feedbackText, setFeedbackText] = useState<Record<string, string>>({});
   const queryClient = useQueryClient();
 
-  // Query to get checkpoints
+  // Query to get checkpoints - smart polling: stops when all checkpoints are resolved
   const { data: checkpoints = [], isLoading, error } = useQuery<AgentCheckpoint[]>({
     queryKey: ['project-checkpoints', projectId],
     queryFn: async () => {
       const result = await apiClient.get(`/api/projects/${projectId}/checkpoints`);
       return (result.checkpoints || []) as AgentCheckpoint[];
     },
-    refetchInterval: 5000,
+    // Smart polling: poll every 10s while waiting for first checkpoint,
+    // 5s when checkpoints are active, stop when all are resolved
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (!data || data.length === 0) return 10000;
+      const hasActiveCheckpoints = data.some(
+        (c: AgentCheckpoint) => c.status === 'in_progress' || c.status === 'pending'
+      );
+      return hasActiveCheckpoints ? 5000 : false;
+    },
     enabled: !!projectId
   });
 

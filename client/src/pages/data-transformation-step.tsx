@@ -18,7 +18,7 @@ import { Popover, PopoverContent, PopoverTrigger, PopoverClose } from '@/compone
 import { apiClient } from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
 import { formatConfidence, getConfidenceBadgeVariant } from '@/lib/utils';
-import AgentCheckpoints from '@/components/agent-checkpoints';
+// AgentCheckpoints removed - coordination shown on verification step + project overview
 import { useJourneyDataOptional } from '@/contexts/JourneyDataContext';
 import { useProject, JourneyProgress } from '@/hooks/useProject';
 
@@ -122,6 +122,9 @@ export default function DataTransformationStep({
     const [showJoinApprovalDialog, setShowJoinApprovalDialog] = useState(false);
     const [joinApproved, setJoinApproved] = useState(false);
     const [isExecutingJoin, setIsExecutingJoin] = useState(false);
+    // Multi-dataset no-join warning: when user has multiple datasets but no join configured
+    const [showNoJoinWarning, setShowNoJoinWarning] = useState(false);
+    const [noJoinAcknowledged, setNoJoinAcknowledged] = useState(false);
 
     // DE Agent async transformation generation polling state
     const [isGeneratingTransformations, setIsGeneratingTransformations] = useState(false);
@@ -2295,9 +2298,12 @@ export default function DataTransformationStep({
             setShowApprovalDialog(false);
 
             // ✅ FIX: Persist approval to journeyProgress (survives navigation/refresh)
+            // P1-21 FIX: Track whether approval was checkpoint-backed or manual
             await updateProgressAsync({
                 transformationApprovedAt: new Date().toISOString(),
                 transformationApproved: true,
+                transformationApprovalSource: checkpointId ? 'checkpoint' : 'manual',
+                transformationCheckpointId: checkpointId || null,
                 currentStep: 'plan' // Advance to next step
             } as any);
 
@@ -2385,6 +2391,13 @@ export default function DataTransformationStep({
                 description: "Please approve the transformation results before continuing.",
                 variant: "destructive"
             });
+            return;
+        }
+
+        // Warn when multiple datasets exist but no join is configured (data loss risk)
+        if (allDatasets.length > 1 && (!joinConfig.enabled || joinConfig.foreignKeys.length === 0) && !transformedPreview && !noJoinAcknowledged) {
+            console.warn(`⚠️ [Multi-Dataset] ${allDatasets.length} datasets present but no join configured. Only primary dataset will be used for analysis.`);
+            setShowNoJoinWarning(true);
             return;
         }
 
@@ -3818,12 +3831,7 @@ export default function DataTransformationStep({
                 </CardContent>
             </Card>
 
-            {/* Agent Checkpoints - shows agent activity and approvals needed */}
-            {pid && (
-                <div className="mt-6">
-                    <AgentCheckpoints projectId={pid} />
-                </div>
-            )}
+            {/* Agent Checkpoints removed - coordination shown on verification step + project overview */}
 
             {/* Transformation Approval Dialog (U2A2A2U checkpoint) */}
             <Dialog open={showApprovalDialog} onOpenChange={setShowApprovalDialog}>
@@ -3890,6 +3898,71 @@ export default function DataTransformationStep({
                         <Button onClick={handleApproveCheckpoint} className="bg-green-600 hover:bg-green-700">
                             <ThumbsUp className="w-4 h-4 mr-2" />
                             Approve & Continue
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            {/* No-Join Warning Dialog - Warns when multiple datasets exist but no join configured */}
+            <Dialog open={showNoJoinWarning} onOpenChange={setShowNoJoinWarning}>
+                <DialogContent className="max-w-lg">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <AlertCircle className="w-5 h-5 text-amber-500" />
+                            Multiple Datasets Without Join
+                        </DialogTitle>
+                        <DialogDescription>
+                            You have {allDatasets.length} datasets uploaded, but no join relationship was configured between them.
+                            Only the primary dataset will be used for analysis. The other dataset(s) will be excluded.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="py-4 space-y-4">
+                        <div className="bg-amber-50 rounded-lg p-4">
+                            <h4 className="font-medium text-sm mb-2 text-amber-900">Datasets uploaded:</h4>
+                            <ul className="space-y-1 text-sm">
+                                {allDatasets.map((ds: any, idx: number) => (
+                                    <li key={idx} className="flex items-center gap-2">
+                                        {idx === 0 ? (
+                                            <CheckCircle className="w-4 h-4 text-green-500" />
+                                        ) : (
+                                            <XCircle className="w-4 h-4 text-gray-400" />
+                                        )}
+                                        <span className={idx === 0 ? 'font-medium' : 'text-gray-500'}>
+                                            {ds.dataset?.fileName || ds.fileName || ds.dataset?.originalFileName || `Dataset ${idx + 1}`}
+                                        </span>
+                                        <span className="text-gray-400 text-xs">
+                                            ({ds.dataset?.rowCount || ds.rowCount || ds.dataset?.recordCount || '?'} rows)
+                                            {idx === 0 ? ' - Primary' : ' - Will be excluded'}
+                                        </span>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+
+                        <Alert>
+                            <Info className="h-4 w-4" />
+                            <AlertDescription>
+                                To include all datasets in analysis, go back and configure a join relationship.
+                                If you only need the primary dataset, you can proceed.
+                            </AlertDescription>
+                        </Alert>
+                    </div>
+
+                    <DialogFooter className="gap-2">
+                        <Button variant="outline" onClick={() => setShowNoJoinWarning(false)}>
+                            Go Back & Configure Join
+                        </Button>
+                        <Button
+                            onClick={() => {
+                                setNoJoinAcknowledged(true);
+                                setShowNoJoinWarning(false);
+                                // Re-trigger handleNext now that warning is acknowledged
+                                handleNext();
+                            }}
+                            variant="default"
+                        >
+                            Continue with Primary Dataset Only
                         </Button>
                     </DialogFooter>
                 </DialogContent>

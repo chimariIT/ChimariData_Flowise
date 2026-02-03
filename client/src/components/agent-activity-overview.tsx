@@ -230,16 +230,28 @@ function formatTimestamp(timestamp?: string) {
  * This provides real agent activity data when multiAgentCoordination hasn't been set yet.
  */
 function buildCoordinationFromContributions(contributions: Record<string, any>): MultiAgentCoordinationResult {
+  const opinions = Object.entries(contributions).map(([agentId, data]: [string, any]) => ({
+    agentId,
+    agentName: agentDescriptors[agentId]?.label || agentId,
+    opinion: { summary: data.contribution || data.summary },
+    confidence: data.confidence,
+    timestamp: data.completedAt,
+  }));
+
+  // P1-24 FIX: Derive overall assessment from actual agent confidence levels instead of hardcoding
+  const avgConfidence = opinions.length > 0
+    ? opinions.reduce((sum, o) => sum + (o.confidence || 0), 0) / opinions.length
+    : 0;
+  const overallAssessment: 'proceed' | 'proceed_with_caution' | 'revise_approach' =
+    avgConfidence >= 70 ? 'proceed' :
+    avgConfidence >= 40 ? 'proceed_with_caution' :
+    'revise_approach';
+
   return {
-    expertOpinions: Object.entries(contributions).map(([agentId, data]: [string, any]) => ({
-      agentId,
-      agentName: agentDescriptors[agentId]?.label || agentId,
-      opinion: { summary: data.contribution || data.summary },
-      confidence: data.confidence,
-      timestamp: data.completedAt,
-    })),
+    expertOpinions: opinions,
     synthesis: {
-      overallAssessment: 'proceed' as const,
+      overallAssessment,
+      confidence: avgConfidence,
       keyFindings: Object.values(contributions)
         .map((c: any) => c.contribution)
         .filter(Boolean) as string[],

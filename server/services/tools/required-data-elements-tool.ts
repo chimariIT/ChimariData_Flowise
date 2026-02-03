@@ -459,6 +459,7 @@ export class RequiredDataElementsTool {
             schema: Record<string, any>;
             preview: any[];
             piiFields?: string[]; // Optional PII field list
+            businessDefinitions?: any[]; // BA/DS definitions for guided mapping
         }
     ): Promise<DataRequirementsMappingDocument> {
         console.log('🔧 [DATA_ENGINEER] Phase 2: Mapping dataset to requirements');
@@ -566,7 +567,8 @@ export class RequiredDataElementsTool {
                 {
                     analysisTypes,
                     userQuestions,
-                    industryDomain: (document as any).industryDomain
+                    industryDomain: (document as any).industryDomain,
+                    businessDefinitions: dataset.businessDefinitions || []
                 }
             );
 
@@ -618,6 +620,8 @@ export class RequiredDataElementsTool {
                                 definitionConfidence: aiMapping.confidence,
                                 notes: `AI-derived: ${aiMapping.reasoning}`
                             };
+                            // Non-direct derivationType always requires transformation
+                            element.transformationRequired = true;
 
                             // FIX: Rebuild sourceColumns from AI-provided componentFields
                             // This is CRITICAL for composite elements - the initial mapping used placeholder names
@@ -2029,6 +2033,7 @@ export class RequiredDataElementsTool {
             analysisTypes: string[];
             userQuestions: string[];
             industryDomain?: string;
+            businessDefinitions?: any[];
         }
     ): Promise<Map<string, {
         sourceField: string;
@@ -2074,13 +2079,39 @@ export class RequiredDataElementsTool {
             return desc;
         }).join('\n\n');
 
+        // Build business definitions context for the AI prompt
+        const businessDefsContext = (analysisContext.businessDefinitions && analysisContext.businessDefinitions.length > 0)
+            ? analysisContext.businessDefinitions.map((bd: any, idx: number) => {
+                const def = bd.definition || bd;
+                const concept = bd.concept || def.conceptName || bd.name || 'Unknown';
+                let defStr = `${idx + 1}. "${concept}"`;
+                if (def.businessDescription) defStr += `\n   - Business Description: ${def.businessDescription}`;
+                if (def.formula) {
+                    try {
+                        const formulaStr = typeof def.formula === 'string' ? def.formula : (def.formula.businessDescription || JSON.stringify(def.formula));
+                        defStr += `\n   - Formula: ${formulaStr}`;
+                    } catch { defStr += `\n   - Formula: (complex)`; }
+                }
+                if (def.componentFields?.length) defStr += `\n   - Component Fields: ${def.componentFields.join(', ')}`;
+                if (def.aggregationMethod) defStr += `\n   - Aggregation: ${def.aggregationMethod}`;
+                if (def.calculationType) defStr += `\n   - Calculation Type: ${def.calculationType}`;
+                return defStr;
+            }).join('\n\n')
+            : '';
+
         const prompt = `You are a Data Analysis Expert (combining Business Analyst, Data Scientist, and Data Engineer roles) working on a data analysis project. Your task is to map required data elements to available dataset columns using INTELLIGENT SEMANTIC MATCHING and DERIVED FIELD CALCULATION.
 
 ANALYSIS CONTEXT:
 - Analysis Types: ${analysisContext.analysisTypes.join(', ')}
 - Business Questions: ${analysisContext.userQuestions.slice(0, 3).join('; ')}
 ${analysisContext.industryDomain ? `- Industry Domain: ${analysisContext.industryDomain}` : ''}
+${businessDefsContext ? `
+BUSINESS ANALYST / DATA SCIENTIST DEFINITIONS:
+These definitions are the AUTHORITATIVE source for how each element should be calculated and transformed.
+CRITICAL: When mapping elements, ALWAYS use the formulas, component fields, and aggregation methods from these definitions instead of generic pattern matching.
 
+${businessDefsContext}
+` : ''}
 AVAILABLE DATASET COLUMNS (with sample values):
 ${schemaDescription}
 

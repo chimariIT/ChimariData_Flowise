@@ -449,49 +449,17 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
           : [...numericFields, ...categoricalFields]),
       });
 
-      // Generate sample data for Recharts if not provided by backend
-      let vizData = [];
-      if (type.includes('categorical') || type.includes('pie')) {
-        vizData = [
-          { name: 'Category A', value: 400 },
-          { name: 'Category B', value: 300 },
-          { name: 'Category C', value: 300 },
-          { name: 'Category D', value: 200 },
-          { name: 'Category E', value: 150 },
-        ];
-      } else if (type.includes('line')) {
-        vizData = [
-          { name: 'Jan', value: 400 },
-          { name: 'Feb', value: 300 },
-          { name: 'Mar', value: 200 },
-          { name: 'Apr', value: 278 },
-          { name: 'May', value: 189 },
-          { name: 'Jun', value: 239 },
-        ];
-      } else if (type.includes('scatter')) {
-        vizData = Array.from({ length: 20 }, () => ({
-          x: Math.floor(Math.random() * 100),
-          y: Math.floor(Math.random() * 100),
-          z: Math.floor(Math.random() * 100),
-        }));
-      } else {
-        // Default bar data
-        vizData = [
-          { name: 'Group A', value: 400 },
-          { name: 'Group B', value: 300 },
-          { name: 'Group C', value: 300 },
-          { name: 'Group D', value: 200 },
-          { name: 'Group E', value: 278 },
-          { name: 'Group F', value: 189 },
-        ];
-      }
+      // Use backend data if available; show pending state otherwise
+      const backendData = result?.visualization?.data;
 
       const enhancedResult = {
         ...result,
         visualization: {
           ...result.visualization,
           type: type,
-          data: vizData
+          data: Array.isArray(backendData) && backendData.length > 0
+            ? backendData
+            : null
         }
       };
 
@@ -1762,12 +1730,19 @@ export default function DataAnalysis({ project }: DataAnalysisProps) {
                     {(() => {
                       const latestViz = visualizations[visualizations.length - 1];
                       const type = latestViz.type || 'bar_chart';
-                      const data = latestViz.data || [
-                        { name: 'A', value: 400 },
-                        { name: 'B', value: 300 },
-                        { name: 'C', value: 300 },
-                        { name: 'D', value: 200 },
-                      ];
+                      const data = latestViz.data;
+
+                      if (!Array.isArray(data) || data.length === 0) {
+                        return (
+                          <BarChart data={[{ name: 'Pending', value: 0 }]}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="name" />
+                            <YAxis />
+                            <Tooltip content={() => <div className="bg-white p-2 rounded shadow text-sm">Visualization data pending from analysis</div>} />
+                            <Bar dataKey="value" fill="#d1d5db" />
+                          </BarChart>
+                        );
+                      }
 
                       if (type.includes('line')) {
                         return (
