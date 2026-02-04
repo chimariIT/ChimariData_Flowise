@@ -5261,24 +5261,30 @@ Respond in JSON format:
 Be conversational, helpful, and specific. Tailor your questions to the ${input.journeyType} journey type.`;
 
         // AI Provider Fallback Cascade: Google Gemini → OpenAI → Anthropic
+        // If all providers fail, falls through to the static fallback below.
         let text: string | null = null;
+        const providerErrors: string[] = [];
+
+        const isPlaceholderKey = (key: string | undefined) =>
+            !key || key.includes('your_') || key.includes('_here') || key.length < 20;
 
         // 1. Try Google Gemini (primary)
-        if (!text && process.env.GOOGLE_AI_API_KEY) {
+        if (!text && !isPlaceholderKey(process.env.GOOGLE_AI_API_KEY)) {
             try {
                 const { GoogleGenerativeAI } = require('@google/generative-ai');
-                const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY);
+                const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY!);
                 const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
                 const result = await model.generateContent(prompt);
                 text = result.response.text();
                 console.log(`[PM Agent] Goal clarification via Google Gemini`);
             } catch (geminiErr: any) {
+                providerErrors.push(`Gemini: ${geminiErr.message}`);
                 console.warn(`[PM Agent] Google Gemini failed: ${geminiErr.message}`);
             }
         }
 
         // 2. Try OpenAI
-        if (!text && process.env.OPENAI_API_KEY) {
+        if (!text && !isPlaceholderKey(process.env.OPENAI_API_KEY)) {
             try {
                 const { default: OpenAI } = require('openai');
                 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -5290,12 +5296,13 @@ Be conversational, helpful, and specific. Tailor your questions to the ${input.j
                 text = completion.choices?.[0]?.message?.content || null;
                 console.log(`[PM Agent] Goal clarification via OpenAI`);
             } catch (openaiErr: any) {
+                providerErrors.push(`OpenAI: ${openaiErr.message}`);
                 console.warn(`[PM Agent] OpenAI failed: ${openaiErr.message}`);
             }
         }
 
         // 3. Try Anthropic Claude
-        if (!text && process.env.ANTHROPIC_API_KEY) {
+        if (!text && !isPlaceholderKey(process.env.ANTHROPIC_API_KEY)) {
             try {
                 const { default: Anthropic } = require('@anthropic-ai/sdk');
                 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -5307,12 +5314,47 @@ Be conversational, helpful, and specific. Tailor your questions to the ${input.j
                 text = message.content?.[0]?.type === 'text' ? message.content[0].text : null;
                 console.log(`[PM Agent] Goal clarification via Anthropic Claude`);
             } catch (anthropicErr: any) {
+                providerErrors.push(`Anthropic: ${anthropicErr.message}`);
                 console.warn(`[PM Agent] Anthropic failed: ${anthropicErr.message}`);
             }
         }
 
+        if (providerErrors.length > 0) {
+            console.error(`[PM Agent] All attempted providers failed:\n  ${providerErrors.join('\n  ')}`);
+        }
+
+        // If no AI provider succeeded, fall through to static fallback (no throw)
         if (!text) {
-            throw new Error('All AI providers failed or no API keys configured (checked GOOGLE_AI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY)');
+            console.warn(`[PM Agent] No AI provider available - using static fallback clarification`);
+            return {
+                summary: `I understand you want to: ${input.analysisGoal}`,
+                understoodGoals: [
+                    input.analysisGoal.substring(0, 100) + (input.analysisGoal.length > 100 ? '...' : '')
+                ],
+                clarifyingQuestions: [
+                    {
+                        question: 'What specific metrics or KPIs are most important for your analysis?',
+                        reason: 'This helps me prioritize the right analyses'
+                    },
+                    {
+                        question: 'Who is the primary audience for these insights?',
+                        reason: 'This helps me format results appropriately'
+                    },
+                    {
+                        question: 'What decision will this analysis help you make?',
+                        reason: 'This helps me focus on actionable insights'
+                    }
+                ],
+                suggestedFocus: ['Data quality assessment', 'Key metric identification'],
+                identifiedGaps: ['Specific success criteria', 'Timeline expectations'],
+                requiredDataAndTransformations: ['Confirm required datasets and metrics', 'Document necessary data transformations or feature engineering steps'],
+                artifactPlan: {
+                    interactiveDashboard: 'Draft dashboard requirements once data readiness is confirmed and review with the user.',
+                    powerPointDeck: 'Outline presentation structure and align with the user before final build.',
+                    restApiExport: 'Verify if an API export is required, including schema and delivery timeline, with the user.',
+                    pdfReport: 'Plan a PDF summary and confirm narrative focus with the user before finalizing.'
+                }
+            };
         }
 
         try {
