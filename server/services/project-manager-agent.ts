@@ -5207,17 +5207,7 @@ export class ProjectManagerAgent {
         console.log(`≡ƒñû PM Agent: Clarifying user goals...`);
         console.log(`≡ƒô¥ Goal: ${input.analysisGoal.substring(0, 100)}...`);
 
-        // Use Google Gemini for intelligent goal clarification
-        const { GoogleGenerativeAI } = require('@google/generative-ai');
-        const apiKey = process.env.GOOGLE_AI_API_KEY;
-
-        if (!apiKey) {
-            throw new Error('AI service not configured - GOOGLE_AI_API_KEY missing');
-        }
-
-        const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
-
+        // Build the prompt for goal clarification (provider-agnostic)
         const prompt = `You are the Analytics Project Manager AI orchestrator. Your mission is to deeply understand the user's needs, coordinate with the Business Agent, Data Scientist, and Data Engineer, and keep the user engaged at every checkpoint while shaping a clear analysis plan.
 
 **User's Journey Type**: ${input.journeyType}
@@ -5270,10 +5260,62 @@ Respond in JSON format:
 
 Be conversational, helpful, and specific. Tailor your questions to the ${input.journeyType} journey type.`;
 
+        // AI Provider Fallback Cascade: Google Gemini → OpenAI → Anthropic
+        let text: string | null = null;
+
+        // 1. Try Google Gemini (primary)
+        if (!text && process.env.GOOGLE_AI_API_KEY) {
+            try {
+                const { GoogleGenerativeAI } = require('@google/generative-ai');
+                const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY);
+                const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
+                const result = await model.generateContent(prompt);
+                text = result.response.text();
+                console.log(`[PM Agent] Goal clarification via Google Gemini`);
+            } catch (geminiErr: any) {
+                console.warn(`[PM Agent] Google Gemini failed: ${geminiErr.message}`);
+            }
+        }
+
+        // 2. Try OpenAI
+        if (!text && process.env.OPENAI_API_KEY) {
+            try {
+                const { default: OpenAI } = require('openai');
+                const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+                const completion = await openai.chat.completions.create({
+                    model: 'gpt-4o',
+                    messages: [{ role: 'user', content: prompt }],
+                    temperature: 0.7,
+                });
+                text = completion.choices?.[0]?.message?.content || null;
+                console.log(`[PM Agent] Goal clarification via OpenAI`);
+            } catch (openaiErr: any) {
+                console.warn(`[PM Agent] OpenAI failed: ${openaiErr.message}`);
+            }
+        }
+
+        // 3. Try Anthropic Claude
+        if (!text && process.env.ANTHROPIC_API_KEY) {
+            try {
+                const { default: Anthropic } = require('@anthropic-ai/sdk');
+                const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+                const message = await anthropic.messages.create({
+                    model: 'claude-sonnet-4-20250514',
+                    max_tokens: 4096,
+                    messages: [{ role: 'user', content: prompt }],
+                });
+                text = message.content?.[0]?.type === 'text' ? message.content[0].text : null;
+                console.log(`[PM Agent] Goal clarification via Anthropic Claude`);
+            } catch (anthropicErr: any) {
+                console.warn(`[PM Agent] Anthropic failed: ${anthropicErr.message}`);
+            }
+        }
+
+        if (!text) {
+            throw new Error('All AI providers failed or no API keys configured (checked GOOGLE_AI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY)');
+        }
+
         try {
-            const result = await model.generateContent(prompt);
-            const response = result.response;
-            const text = response.text();
 
             // Parse JSON response
             const jsonMatch = text.match(/\{[\s\S]*\}/);

@@ -14,19 +14,19 @@ import { useProject } from '@/hooks/useProject';
 import { useJourneyState } from '@/hooks/useJourneyState';
 
 // Load Stripe only if a valid key is configured
-const stripePublicKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY || '';
+const stripePublicKey = (import.meta.env.VITE_STRIPE_PUBLIC_KEY || '').trim();
 
-// FIX: Check for ALL placeholder/development key patterns
-const isValidStripeKey = stripePublicKey &&
-  stripePublicKey !== 'pk_test_your_stripe_public_key' &&
-  stripePublicKey !== 'pk_test_development_key' &&
-  stripePublicKey.startsWith('pk_'); // Real Stripe keys start with 'pk_test_' or 'pk_live_'
+// Validate: real Stripe keys are 'pk_test_...' or 'pk_live_...' (>20 chars)
+const isValidStripeKey = stripePublicKey.startsWith('pk_') && stripePublicKey.length > 20;
 
 const stripePromise = isValidStripeKey ? loadStripe(stripePublicKey) : null;
 
-// Log warning if Stripe isn't properly configured
+// Diagnostic logging for Stripe key status
 if (!isValidStripeKey) {
-  console.warn('⚠️  Stripe not configured. Set VITE_STRIPE_PUBLIC_KEY to a valid Stripe publishable key.');
+  const keyPrefix = stripePublicKey ? stripePublicKey.substring(0, 12) + '...' : '(empty)';
+  console.warn(`[Stripe] Key invalid or missing. Prefix: ${keyPrefix}, Length: ${stripePublicKey.length}. Set VITE_STRIPE_PUBLIC_KEY in .env and restart Vite dev server.`);
+} else {
+  console.log(`[Stripe] Loaded key: ${stripePublicKey.substring(0, 12)}... (${stripePublicKey.length} chars)`);
 }
 
 interface ProjectDataInput {

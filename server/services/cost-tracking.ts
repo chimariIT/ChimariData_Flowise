@@ -11,7 +11,9 @@ import {
 import { eq, and, gte, lte, sql } from 'drizzle-orm';
 import type { CostBreakdown } from '@shared/schema';
 import { getPricingDataService } from './pricing-data-service';
+import { PRICING_CONSTANTS, getAnalysisTypeFactor } from '../../shared/pricing-config';
 import { nanoid } from 'nanoid';
+import { storage } from '../storage';
 
 /**
  * Enhanced Cost Tracking Service (3-Table Architecture)
@@ -38,7 +40,9 @@ export class CostTrackingService {
     }
 
     /**
-     * Calculate estimated cost for an analysis plan based on current admin pricing
+     * Calculate estimated cost for an analysis plan based on current admin pricing.
+     * Each analysis step is itemized separately in the breakdown using DB prices
+     * with fallback to PRICING_CONSTANTS.
      */
     async calculateEstimatedCost(projectId: string, planData: any): Promise<CostBreakdown> {
         const [project] = await db
@@ -62,37 +66,59 @@ export class CostTrackingService {
         const pricingService = getPricingDataService();
         const tierId = user.subscriptionTier || 'trial';
 
-        // 1. Calculate Base Journey Cost
+        // 1. Base Journey Cost (from DB tier pricing)
         const baseCost = await pricingService.calculateJourneyCost(tierId, project.journeyType);
 
-        // 2. Calculate Data Volume Cost
+        // 2. Data Volume Cost
         const dataSizeMB = planData.dataAssessment?.sizeMB || 0;
         const dataCost = await pricingService.calculateOverageCost(tierId, 'dataPerMB', Math.max(0, dataSizeMB));
 
-        // 3. Calculate AI Insights Cost
+        // 3. AI Insights Cost
         const complexity = planData.complexity || 'medium';
         const estimatedQueries = complexity === 'high' ? 20 : complexity === 'medium' ? 10 : 5;
         const aiCost = await pricingService.calculateOverageCost(tierId, 'aiQueryCost', estimatedQueries);
 
-        // 4. Calculate Visualization Cost
+        // 4. Visualization Cost
         const estimatedVisualizations = planData.visualizations?.length || 5;
         const vizCost = await pricingService.calculateOverageCost(tierId, 'visualizationCost', estimatedVisualizations);
 
-        // 5. Calculate Analysis Component Cost
-        const estimatedComponents = planData.analysisSteps?.length || 3;
-        const analysisCost = await pricingService.calculateOverageCost(tierId, 'statistical_analysis', estimatedComponents);
+        // 5. Per-analysis-type itemized costs
+        const analysisSteps: Array<{ method?: string; name?: string }> = planData.analysisSteps || [];
+        const breakdown: Record<string, number> = {
+            base_journey: parseFloat(baseCost.toFixed(2)),
+            data_processing: parseFloat(dataCost.toFixed(2)),
+            ai_insights: parseFloat(aiCost.toFixed(2)),
+            visualizations: parseFloat(vizCost.toFixed(2)),
+        };
 
-        const total = baseCost + dataCost + aiCost + vizCost + analysisCost;
+        let totalAnalysisCost = 0;
+
+        if (analysisSteps.length > 0) {
+            // Get per-unit cost from DB; used as the base for each analysis type
+            const perUnitCost = await pricingService.calculateOverageCost(tierId, 'statistical_analysis', 1);
+            const basePerAnalysis = perUnitCost > 0 ? perUnitCost : PRICING_CONSTANTS.baseAnalysisCost;
+
+            for (const step of analysisSteps) {
+                const method = (step.method || step.name || 'default').toLowerCase().replace(/[^a-z_]/g, '_');
+                const typeFactor = getAnalysisTypeFactor(method);
+                const stepCost = parseFloat((basePerAnalysis * typeFactor).toFixed(2));
+
+                const key = `analysis_${method}`;
+                breakdown[key] = (breakdown[key] || 0) + stepCost;
+                totalAnalysisCost += stepCost;
+            }
+        } else {
+            // Fallback: no analysisSteps provided, estimate 3 generic components
+            totalAnalysisCost = await pricingService.calculateOverageCost(tierId, 'statistical_analysis', 3);
+        }
+
+        breakdown.analysis_components = parseFloat(totalAnalysisCost.toFixed(2));
+
+        const total = baseCost + dataCost + aiCost + vizCost + totalAnalysisCost;
 
         return {
             total: parseFloat(total.toFixed(2)),
-            breakdown: {
-                base_journey: parseFloat(baseCost.toFixed(2)),
-                data_processing: parseFloat(dataCost.toFixed(2)),
-                ai_insights: parseFloat(aiCost.toFixed(2)),
-                visualizations: parseFloat(vizCost.toFixed(2)),
-                analysis_components: parseFloat(analysisCost.toFixed(2))
-            }
+            breakdown
         };
     }
 
@@ -122,22 +148,19 @@ export class CostTrackingService {
             throw new Error(`User for project ${projectId} not found`);
         }
 
-        // Dual-write: Update old project fields (backward compatibility)
-        // CRITICAL FIX: Also save to journeyProgress.lockedCostEstimate (SSOT)
-        const existingProgress = (project as any).journeyProgress || {};
-        const updatedProgress = {
-            ...existingProgress,
+        // Atomic merge cost data into journeyProgress SSOT (race-condition safe)
+        await storage.atomicMergeJourneyProgress(projectId, {
             lockedCostEstimate: estimatedCost.total,
             costBreakdown: estimatedCost,
             costLockedAt: new Date().toISOString()
-        };
+        });
 
+        // Also update project-level fields for backward compatibility
         await db
             .update(projects)
             .set({
                 lockedCostEstimate: estimatedCost.total.toString(),
                 costBreakdown: estimatedCost,
-                journeyProgress: updatedProgress,
                 updatedAt: new Date()
             } as any)
             .where(eq(projects.id, projectId));

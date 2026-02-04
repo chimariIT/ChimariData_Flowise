@@ -389,22 +389,42 @@ export class UnifiedBillingService {
       statistical_analysis: { small: 300, medium: 50, large: 10, extra_large: 0 },
       visualization: { small: 500, medium: 100, large: 10, extra_large: 0 },
       machine_learning: { small: 50, medium: 10, large: 2, extra_large: 0 },
+      agent_workflow: { small: 100, medium: 20, large: 5, extra_large: 0 },
+      pdf_report: { small: 200, medium: 50, large: 10, extra_large: 0 },
+      presentation: { small: 200, medium: 50, large: 10, extra_large: 0 },
+      csv_export: { small: 500, medium: 100, large: 20, extra_large: 0 },
+      json_export: { small: 500, medium: 100, large: 20, extra_large: 0 },
     },
     trial: {
       data_upload: { small: 5, medium: 0, large: 0, extra_large: 0 },
       statistical_analysis: { small: 3, medium: 0, large: 0, extra_large: 0 },
       visualization: { small: 5, medium: 0, large: 0, extra_large: 0 },
+      agent_workflow: { small: 2, medium: 0, large: 0, extra_large: 0 },
+      pdf_report: { small: 3, medium: 0, large: 0, extra_large: 0 },
+      presentation: { small: 3, medium: 0, large: 0, extra_large: 0 },
+      csv_export: { small: 5, medium: 0, large: 0, extra_large: 0 },
+      json_export: { small: 5, medium: 0, large: 0, extra_large: 0 },
     },
     starter: {
       data_upload: { small: 50, medium: 10, large: 0, extra_large: 0 },
       statistical_analysis: { small: 30, medium: 5, large: 0, extra_large: 0 },
       visualization: { small: 50, medium: 10, large: 0, extra_large: 0 },
+      agent_workflow: { small: 10, medium: 3, large: 0, extra_large: 0 },
+      pdf_report: { small: 20, medium: 5, large: 0, extra_large: 0 },
+      presentation: { small: 20, medium: 5, large: 0, extra_large: 0 },
+      csv_export: { small: 50, medium: 10, large: 0, extra_large: 0 },
+      json_export: { small: 50, medium: 10, large: 0, extra_large: 0 },
     },
     professional: {
       data_upload: { small: 500, medium: 100, large: 10, extra_large: 0 },
       statistical_analysis: { small: 300, medium: 50, large: 10, extra_large: 0 },
       visualization: { small: 500, medium: 100, large: 10, extra_large: 0 },
       machine_learning: { small: 50, medium: 10, large: 2, extra_large: 0 },
+      agent_workflow: { small: 100, medium: 20, large: 5, extra_large: 0 },
+      pdf_report: { small: 200, medium: 50, large: 10, extra_large: 0 },
+      presentation: { small: 200, medium: 50, large: 10, extra_large: 0 },
+      csv_export: { small: 500, medium: 100, large: 20, extra_large: 0 },
+      json_export: { small: 500, medium: 100, large: 20, extra_large: 0 },
     },
     enterprise: {
       // Enterprise tier: unlimited quotas for all features (-1 = unlimited)
@@ -412,6 +432,11 @@ export class UnifiedBillingService {
       statistical_analysis: { small: -1, medium: -1, large: -1, extra_large: -1 },
       visualization: { small: -1, medium: -1, large: -1, extra_large: -1 },
       machine_learning: { small: -1, medium: -1, large: -1, extra_large: -1 },
+      agent_workflow: { small: -1, medium: -1, large: -1, extra_large: -1 },
+      pdf_report: { small: -1, medium: -1, large: -1, extra_large: -1 },
+      presentation: { small: -1, medium: -1, large: -1, extra_large: -1 },
+      csv_export: { small: -1, medium: -1, large: -1, extra_large: -1 },
+      json_export: { small: -1, medium: -1, large: -1, extra_large: -1 },
     },
     none: {
       data_upload: { small: 0, medium: 0, large: 0, extra_large: 0 },
@@ -2187,9 +2212,9 @@ export class UnifiedBillingService {
         const quota = featureQuotas[complexity] ?? featureQuotas['small'] ?? 0;
         const isUnlimited = quota === -1;
 
-        // Get current usage
+        // Get current usage - use mappedFeatureId for consistent balance tracking
         const subscriptionBalances = user.subscriptionBalances as any || {};
-        const featureBalances = subscriptionBalances[featureId] || {};
+        const featureBalances = subscriptionBalances[mappedFeatureId] || {};
         const complexityBalance = featureBalances[complexity] || { used: 0, remaining: quota, limit: quota };
 
         const currentUsed = complexityBalance.used || 0;
@@ -2200,7 +2225,7 @@ export class UnifiedBillingService {
           // Within quota - no cost
           const updatedBalances = {
             ...subscriptionBalances,
-            [featureId]: {
+            [mappedFeatureId]: {
               ...featureBalances,
               [complexity]: {
                 used: newUsed,
@@ -2226,16 +2251,13 @@ export class UnifiedBillingService {
         } else {
           // Exceeded quota - calculate overage cost
           const overageQuantity = newUsed - quota;
-          // FIX: Use mappedFeatureId (not featureId) to lookup overage pricing
-          // This ensures 'correlation', 'statistical', etc. map to 'statistical_analysis' pricing
+          // Use mappedFeatureId to lookup overage pricing
           const overagePricing = tierConfig.overagePricing.featureOveragePricing[mappedFeatureId]
             || tierConfig.overagePricing.featureOveragePricing[featureId];
 
           if (!overagePricing) {
-            // FIX: Calculate overage cost from PRICING_CONSTANTS if no tier-specific pricing
-            // Instead of returning $0.00, use base pricing as fallback
             const fallbackCost = 1.00 * overageQuantity; // $1.00 base overage per unit
-            console.log(`⚠️ [Billing] No overage pricing for ${mappedFeatureId}, using fallback: $${fallbackCost.toFixed(2)}`);
+            console.log(`[Billing] No overage pricing for ${mappedFeatureId}, using fallback: $${fallbackCost.toFixed(2)}`);
             return {
               allowed: false,
               cost: fallbackCost,
@@ -2246,10 +2268,10 @@ export class UnifiedBillingService {
 
           const cost = overagePricing[complexity] * overageQuantity;
 
-          // Update balances
+          // Update balances using mapped feature ID
           const updatedBalances = {
             ...subscriptionBalances,
-            [featureId]: {
+            [mappedFeatureId]: {
               ...featureBalances,
               [complexity]: {
                 used: newUsed,
@@ -2311,28 +2333,32 @@ export class UnifiedBillingService {
       const userTier = (user.subscriptionTier || 'trial') as SubscriptionTier;
       const tierConfig = this.getTierConfig(userTier);
 
+      // Map analysis types to canonical feature IDs for consistent lookup
+      const mappedFeatureId = this.mapAnalysisTypeToFeature(featureId);
+
       // Get quota from tier config, or fallback to hardcoded defaults
       let quota = 0;
       if (tierConfig) {
-        const featureQuotas = tierConfig.quotas.featureQuotas[featureId];
+        const featureQuotas = tierConfig.quotas.featureQuotas[mappedFeatureId];
         quota = featureQuotas?.[complexity] || 0;
       }
 
       // Fallback: Use featureQuotaDefaults if tier config missing or quota is 0
       if (quota === 0) {
         const tierDefaults = this.featureQuotaDefaults[userTier] || this.featureQuotaDefaults.default;
-        const featureDefaults = tierDefaults?.[featureId];
+        const featureDefaults = tierDefaults?.[mappedFeatureId];
         if (featureDefaults) {
           quota = featureDefaults[complexity] || 0;
         }
         // Final fallback for trial users: ensure at least small analyses available
         if (quota === 0 && complexity === 'small' && (userTier === 'trial' || !tierConfig)) {
-          quota = this.featureQuotaDefaults.trial?.[featureId]?.small || 3;
+          quota = this.featureQuotaDefaults.trial?.[mappedFeatureId]?.small || 3;
         }
       }
 
+      // Read balances using mappedFeatureId (consistent with trackFeatureUsage writes)
       const subscriptionBalances = user.subscriptionBalances as any || {};
-      const featureBalances = subscriptionBalances[featureId] || {};
+      const featureBalances = subscriptionBalances[mappedFeatureId] || {};
       const complexityBalance = featureBalances[complexity] || { used: 0, remaining: quota, limit: quota };
 
       const used = complexityBalance.used || 0;
