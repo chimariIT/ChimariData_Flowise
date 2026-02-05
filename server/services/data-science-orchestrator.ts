@@ -151,6 +151,8 @@ export interface DataScienceRequest {
     streaming?: boolean;
     memoryLimit?: number;
   };
+  // FIX 1: Required columns for this specific analysis type (only include these columns)
+  requiredColumns?: string[];
 }
 
 export interface QuestionAnalysisLink {
@@ -433,6 +435,63 @@ export class DataScienceOrchestrator {
 
       console.log(`🔒 [PII] Filtered ${request.columnsToExclude.length} PII columns before analysis: [${request.columnsToExclude.join(', ')}]`);
       console.log(`🔒 [PII] Columns reduced: ${originalColumnCount} → ${newColumnCount}`);
+    }
+
+    // FIX 1: Filter to only include required columns for this analysis type
+    // This ensures each analysis type only receives its relevant data elements
+    if (request.requiredColumns && request.requiredColumns.length > 0) {
+      const requiredSet = new Set(request.requiredColumns.map(c => c.toLowerCase()));
+      const availableColumns = datasetData.rows.length > 0 ? Object.keys(datasetData.rows[0]) : [];
+      const beforeColumnCount = datasetData.totalColumns;
+
+      // Build a mapping of lowercase to original case for preservation
+      const columnCaseMap: Record<string, string> = {};
+      for (const col of availableColumns) {
+        columnCaseMap[col.toLowerCase()] = col;
+      }
+
+      // Find matching columns (case-insensitive)
+      const matchedColumns: string[] = [];
+      for (const reqCol of request.requiredColumns) {
+        const lowerReq = reqCol.toLowerCase();
+        if (columnCaseMap[lowerReq]) {
+          matchedColumns.push(columnCaseMap[lowerReq]);
+        } else {
+          console.warn(`⚠️ [RequiredColumns] Column "${reqCol}" not found in dataset`);
+        }
+      }
+
+      // Only filter if we found at least some columns
+      if (matchedColumns.length > 0) {
+        const matchedSet = new Set(matchedColumns);
+
+        datasetData.rows = datasetData.rows.map(row => {
+          const filteredRow: any = {};
+          for (const col of matchedColumns) {
+            if (row.hasOwnProperty(col)) {
+              filteredRow[col] = row[col];
+            }
+          }
+          return filteredRow;
+        });
+
+        // Update schema to only include required columns
+        if (datasetData.schema && typeof datasetData.schema === 'object') {
+          const filteredSchema: any = {};
+          for (const col of matchedColumns) {
+            if (datasetData.schema[col] !== undefined) {
+              filteredSchema[col] = datasetData.schema[col];
+            }
+          }
+          datasetData.schema = filteredSchema;
+        }
+
+        datasetData.totalColumns = matchedColumns.length;
+        console.log(`📊 [RequiredColumns] Filtered to ${matchedColumns.length} required columns for analysis: [${matchedColumns.join(', ')}]`);
+        console.log(`📊 [RequiredColumns] Columns reduced: ${beforeColumnCount} → ${matchedColumns.length}`);
+      } else {
+        console.warn(`⚠️ [RequiredColumns] None of the required columns found, using all available columns`);
+      }
     }
 
     // Phase 1: Data Quality Assessment
@@ -1400,12 +1459,16 @@ export class DataScienceOrchestrator {
       relevantAnalyses: string[];
       relevantDataElements: string[];
     };
+    // Normalize text for robust matching (collapse whitespace, strip trailing punctuation)
+    const normalizeForLookup = (text: string): string =>
+      text.toLowerCase().trim().replace(/\s+/g, ' ').replace(/[?!.,;:]+$/g, '');
+
     const mappingLookup = new Map<string, QuestionMapping>();
     if (questionAnswerMapping && questionAnswerMapping.length > 0) {
       console.log(`🔗 [P0-3] Using ${questionAnswerMapping.length} pre-mapped question-answer links`);
       for (const qam of questionAnswerMapping) {
         // Index by question text (normalized) for matching
-        const normalizedText = qam.questionText?.toLowerCase().trim() || '';
+        const normalizedText = normalizeForLookup(qam.questionText || '');
         if (normalizedText) {
           mappingLookup.set(normalizedText, qam);
         }
@@ -1418,7 +1481,7 @@ export class DataScienceOrchestrator {
 
     for (let i = 0; i < questions.length; i++) {
       const question = questions[i];
-      const questionLower = question.toLowerCase().trim();
+      const questionLower = normalizeForLookup(question);
 
       // P0-3: First check if we have a pre-mapped entry for this question
       const preMapping = mappingLookup.get(questionLower);

@@ -499,6 +499,20 @@ export default function DataTransformationStep({
             attemptCount++;
             setPollingAttempt(attemptCount); // P2-1: Update polling counter for progress UI
 
+            // FIX 3: Stage-specific progress messages for better UX
+            const progressStages = [
+                'AI Agent is analyzing your data structure...',
+                'Examining column types and data patterns...',
+                'Matching source columns to required data elements...',
+                'Generating transformation logic for derived fields...',
+                'Validating data quality and compatibility...',
+                'Building transformation recommendations...',
+                'Finalizing transformation plan...',
+                'Almost done - please wait...'
+            ];
+            const stageIndex = Math.min(Math.floor(attemptCount / 4), progressStages.length - 1);
+            setDeAgentProgress(progressStages[stageIndex]);
+
             try {
                 const freshProject = await apiClient.getProject(pid);
                 const plan = freshProject?.journeyProgress?.transformationPlan;

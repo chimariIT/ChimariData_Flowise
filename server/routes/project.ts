@@ -6082,10 +6082,8 @@ router.post("/:id/questions", ensureAuthenticated, async (req, res) => {
 
         console.log(`📋 [Questions] Saving ${questions.length} questions for project ${projectId}`);
 
-        // Delete existing questions for this project first (replace strategy)
-        await db.delete(projectQuestions).where(eq(projectQuestions.projectId, projectId));
-
-        // Insert new questions
+        // Upsert questions using hash-based IDs (matches question-answer-service.ts format)
+        // This preserves existing answered questions instead of deleting them
         const insertedQuestions = [];
         for (let i = 0; i < questions.length; i++) {
             const questionText = typeof questions[i] === 'string'
@@ -6094,13 +6092,24 @@ router.post("/:id/questions", ensureAuthenticated, async (req, res) => {
 
             if (!questionText?.trim()) continue;
 
-            const questionId = `q_${projectId}_${Date.now()}_${i}`;
+            const questionHash = crypto.createHash('sha256')
+                .update(questionText.trim().toLowerCase())
+                .digest('hex')
+                .substring(0, 8);
+            const questionId = `q_${projectId.substring(0, 8)}_${questionHash}`;
             await db.insert(projectQuestions).values({
                 id: questionId,
                 projectId,
                 questionText: questionText.trim(),
                 questionOrder: i,
                 status: 'pending'
+            }).onConflictDoUpdate({
+                target: projectQuestions.id,
+                set: {
+                    questionText: questionText.trim(),
+                    questionOrder: i,
+                    updatedAt: new Date()
+                }
             });
             insertedQuestions.push({
                 id: questionId,
@@ -7889,6 +7898,52 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
                     type: isNumeric ? 'number' : isDate ? 'date' : 'string',
                     nullable: workingData.some(r => r[key] == null)
                 };
+            }
+        }
+
+        // FIX 2: Verify all required data elements from DS Agent have matching columns
+        // This ensures the transformation step didn't miss any critical elements
+        const availableTransformedColumns = workingData.length > 0
+            ? Object.keys(workingData[0]).map(c => c.toLowerCase())
+            : [];
+        const missingElements: string[] = [];
+
+        if (reqDoc?.requiredDataElements && Array.isArray(reqDoc.requiredDataElements)) {
+            console.log(`📋 [FIX 2] Verifying ${reqDoc.requiredDataElements.length} required elements exist in transformed data`);
+
+            for (const element of reqDoc.requiredDataElements) {
+                const elementName = element.elementName || element.name || element.targetElement;
+                if (!elementName) continue;
+
+                // Check if element exists in transformed data (case-insensitive)
+                const elementNameLower = elementName.toLowerCase();
+                const elementExists = availableTransformedColumns.includes(elementNameLower) ||
+                    availableTransformedColumns.some(col =>
+                        col.replace(/[_\s-]/g, '') === elementNameLower.replace(/[_\s-]/g, '')
+                    );
+
+                if (!elementExists) {
+                    // Check if it was mapped to a different column
+                    const mapping = (mappings || []).find((m: any) =>
+                        (m.targetElement || m.elementName)?.toLowerCase() === elementNameLower
+                    );
+                    const mappedTo = mapping?.sourceColumn;
+
+                    if (mappedTo && availableTransformedColumns.includes(mappedTo.toLowerCase())) {
+                        console.log(`   ✅ ${elementName} → mapped to ${mappedTo}`);
+                    } else {
+                        missingElements.push(elementName);
+                        console.warn(`   ⚠️ [FIX 2] Required element "${elementName}" not found in transformed data`);
+                    }
+                } else {
+                    console.log(`   ✅ ${elementName} → present`);
+                }
+            }
+
+            if (missingElements.length > 0) {
+                console.warn(`⚠️ [FIX 2] ${missingElements.length} required elements missing from transformed data: [${missingElements.join(', ')}]`);
+            } else {
+                console.log(`✅ [FIX 2] All required elements present in transformed data`);
             }
         }
 

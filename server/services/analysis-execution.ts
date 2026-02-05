@@ -638,28 +638,15 @@ export class AnalysisExecutionService {
       }
     }
 
-    // GAP D + GAP E: Store questionAnswerMapping for results traceability
+    // Store questionAnswerMapping in journeyProgress SSOT for results traceability
     if (request.questionAnswerMapping && request.questionAnswerMapping.length > 0) {
-      console.log(`📊 [GAP D] Storing ${request.questionAnswerMapping.length} question-answer mappings for results traceability`);
+      console.log(`📊 [QA Mapping] Storing ${request.questionAnswerMapping.length} question-answer mappings to journeyProgress SSOT`);
       try {
-        await db
-          .update(projects)
-          .set({
-            questionAnswerMapping: request.questionAnswerMapping,
-            updatedAt: new Date()
-          } as any)
-          .where(eq(projects.id, request.projectId));
+        await storage.atomicMergeJourneyProgress(request.projectId, {
+          questionAnswerMapping: request.questionAnswerMapping
+        });
       } catch (err) {
-        // P2-A FIX: Fallback to journeyProgress SSOT when column doesn't exist
-        console.warn(`⚠️ [P2-A] Column questionAnswerMapping may not exist, storing in journeyProgress instead`);
-        try {
-          await storage.atomicMergeJourneyProgress(request.projectId, {
-            questionAnswerMapping: request.questionAnswerMapping
-          });
-          console.log(`✅ [P2-A] Stored questionAnswerMapping in journeyProgress (SSOT fallback)`);
-        } catch (fallbackErr) {
-          console.warn(`⚠️ [P2-A] Failed to store questionAnswerMapping in journeyProgress:`, fallbackErr);
-        }
+        console.warn(`⚠️ Failed to store questionAnswerMapping in journeyProgress:`, err);
       }
     }
 
@@ -847,7 +834,7 @@ export class AnalysisExecutionService {
           : Array.isArray(userContext.businessQuestions) ? userContext.businessQuestions : [];
 
         questionAnswerMapping = questionsText.map((q: string, idx: number) => ({
-          questionId: `q_${idx + 1}_${Buffer.from(q.slice(0, 20)).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 8)}`,
+          questionId: `q_${idx + 1}`,
           questionText: q.trim(),
           requiredDataElements: [],
           recommendedAnalyses: request.analysisTypes || [],
@@ -2504,6 +2491,16 @@ export class AnalysisExecutionService {
         } catch (emitErr) { /* non-blocking */ }
 
         try {
+          // FIX 1: Extract requiredDataElements for this specific analysis type
+          // This ensures each analysis only receives its relevant columns
+          const requiredColumns = analysis.requiredDataElements && analysis.requiredDataElements.length > 0
+            ? analysis.requiredDataElements
+            : undefined;
+
+          if (requiredColumns && requiredColumns.length > 0) {
+            console.log(`  📋 [RequiredColumns] Analysis "${analysis.analysisName}" requires: [${requiredColumns.join(', ')}]`);
+          }
+
           // VI-1 FIX: Execute single analysis with optimal compute engine
           const singleResult = await dataScienceOrchestrator.executeWorkflow({
             projectId: request.projectId,
@@ -2513,6 +2510,8 @@ export class AnalysisExecutionService {
             userQuestions,
             datasetIds: request.datasetIds,
             columnsToExclude: request.columnsToExclude,
+            // FIX 1: Pass required columns for this analysis type
+            requiredColumns,
             computeEngine: selectedEngine.engine,
             computeEngineConfig: ComputeEngineSelector.getEngineConfig(selectedEngine.engine, {
               recordCount: totalRecordCount,
