@@ -3200,6 +3200,17 @@ export class ProjectAgentOrchestrator {
     };
     overallApproved: boolean;
     summary: string;
+    transformationRecommendations: Array<{
+      sourceColumn: string;
+      targetElement: string;
+      issue: string;
+      recommendedTransformation: {
+        type: string;
+        fromType: string;
+        toType: string;
+        method: string;
+      };
+    }>;
   }> {
     console.log(`🔍 [P1-3] Starting BA/DS transformation verification for project ${projectId}`);
 
@@ -3287,12 +3298,25 @@ export class ProjectAgentOrchestrator {
       dataTypeIssues: [] as string[]
     };
 
+    // Hoisted so it's accessible in the return statement
+    let transformationRecommendations: Array<{
+      sourceColumn: string;
+      targetElement: string;
+      issue: string;
+      recommendedTransformation: {
+        type: string;
+        fromType: string;
+        toType: string;
+        method: string;
+      };
+    }> = [];
+
     try {
       const analyticalConcerns: string[] = [];
       const dataTypeIssues: string[] = [];
       let dsScore = 0.8;
 
-      // Check data type compatibility
+      // Check data type compatibility and generate actionable transformation recommendations
       if (dataSchema) {
         for (const mapping of mappings) {
           if (mapping.sourceColumn && dataSchema[mapping.sourceColumn]) {
@@ -3301,14 +3325,42 @@ export class ProjectAgentOrchestrator {
 
             // Check for type mismatches
             if (targetElement.includes('date') && !['date', 'datetime', 'timestamp'].includes(sourceType)) {
-              dataTypeIssues.push(`"${mapping.sourceColumn}" may need date conversion for "${mapping.targetElement}"`);
+              const issue = `"${mapping.sourceColumn}" may need date conversion for "${mapping.targetElement}"`;
+              dataTypeIssues.push(issue);
+              transformationRecommendations.push({
+                sourceColumn: mapping.sourceColumn,
+                targetElement: mapping.targetElement,
+                issue,
+                recommendedTransformation: {
+                  type: 'type_conversion',
+                  fromType: sourceType,
+                  toType: 'datetime',
+                  method: 'parse_date'
+                }
+              });
             }
             if ((targetElement.includes('score') || targetElement.includes('rate')) &&
                 !['number', 'integer', 'float', 'decimal'].includes(sourceType)) {
-              dataTypeIssues.push(`"${mapping.sourceColumn}" should be numeric for "${mapping.targetElement}"`);
+              const issue = `"${mapping.sourceColumn}" should be numeric for "${mapping.targetElement}"`;
+              dataTypeIssues.push(issue);
+              transformationRecommendations.push({
+                sourceColumn: mapping.sourceColumn,
+                targetElement: mapping.targetElement,
+                issue,
+                recommendedTransformation: {
+                  type: 'type_conversion',
+                  fromType: sourceType,
+                  toType: 'numeric',
+                  method: 'parse_numeric'
+                }
+              });
             }
           }
         }
+      }
+
+      if (transformationRecommendations.length > 0) {
+        console.log(`🔧 [P1-3 DS] Generated ${transformationRecommendations.length} transformation recommendations for data type issues`);
       }
 
       // Check if required analyses have sufficient data
@@ -3400,7 +3452,8 @@ export class ProjectAgentOrchestrator {
       baApproval,
       dsApproval,
       overallApproved,
-      summary
+      summary,
+      transformationRecommendations: transformationRecommendations || []
     };
   }
 }

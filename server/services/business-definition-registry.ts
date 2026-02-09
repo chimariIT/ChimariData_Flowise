@@ -116,6 +116,26 @@ class BusinessDefinitionRegistryService {
     // 5. Find alternatives (partial matches)
     const alternatives = await this.findAlternatives(normalizedConcept, params);
 
+    // 6. Try to infer definition dynamically instead of returning not_found
+    try {
+      const inferred = await this.inferDefinition({
+        conceptName: normalizedConcept,
+        industry: params?.industry,
+        context: conceptName, // Use concept name as context for inference
+      });
+      if (inferred) {
+        console.log(`🔍 [BA Registry] Inferred definition for: "${conceptName}"`);
+        return {
+          found: true,
+          definition: inferred,
+          confidence: 0.6,
+          source: 'ai_inferred'
+        };
+      }
+    } catch (inferErr: any) {
+      console.warn(`[BA Registry] Could not infer definition for "${conceptName}":`, inferErr?.message);
+    }
+
     console.log(`❌ [BA Registry] No definition found for: "${conceptName}"`);
     return {
       found: false,

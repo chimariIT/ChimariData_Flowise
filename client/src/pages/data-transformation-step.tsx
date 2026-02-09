@@ -143,11 +143,20 @@ export default function DataTransformationStep({
         dsApproval?: { approved: boolean; confidence: number; feedback: string; analyticalConcerns: string[]; dataTypeIssues: string[] };
         overallApproved?: boolean;
         summary?: string;
+        // FIX 1: Machine-readable transformation recommendations from DS verification
+        transformationRecommendations?: Array<{
+            sourceColumn: string;
+            targetElement: string;
+            issue: string;
+            recommendedTransformation: { type: string; fromType: string; toType: string; method: string; };
+        }>;
     } | null>(null);
 
     // Analysis-Centric View state (Phase 2)
-    const [viewMode, setViewMode] = useState<'by-element' | 'by-analysis'>('by-element');
+    const [viewMode, setViewMode] = useState<'by-element' | 'by-analysis'>('by-analysis');
     const [selectedAnalysisId, setSelectedAnalysisId] = useState<string | null>(null);
+    const [showAllElements, setShowAllElements] = useState(false);
+    const [showAnalysisReadiness, setShowAnalysisReadiness] = useState(false);
 
     // Analysis-aware data preparation state (DE/DS alignment)
     const [analysisPreparations, setAnalysisPreparations] = useState<{
@@ -1881,7 +1890,9 @@ export default function DataTransformationStep({
                     baApproval: response.baApproval,
                     dsApproval: response.dsApproval,
                     overallApproved: response.overallApproved,
-                    summary: response.summary
+                    summary: response.summary,
+                    // FIX 1: Extract transformation recommendations from verification response
+                    transformationRecommendations: response.verification?.transformationRecommendations || [],
                 });
 
                 toast({
@@ -2595,20 +2606,30 @@ export default function DataTransformationStep({
                 </Alert>
             )}
 
-            {/* Analysis View Mode Toggle and Readiness Overview */}
+            {/* Analysis View Mode Toggle and Readiness Summary */}
             <Card className="border-purple-200 bg-gradient-to-br from-purple-50 to-indigo-50">
                 <CardHeader>
                     <div className="flex items-center justify-between">
-                        <div>
-                            <CardTitle className="flex items-center gap-2">
-                                <BarChart3 className="w-5 h-5 text-purple-600" />
-                                Analysis Readiness Overview
-                            </CardTitle>
-                            <CardDescription>
-                                {analysisGroups.length > 0
-                                    ? `${analysisGroups.filter(g => g.status === 'ready').length} of ${analysisGroups.length} analyses ready to execute`
-                                    : 'Loading analysis recommendations...'}
-                            </CardDescription>
+                        <div className="flex items-center gap-3">
+                            <div>
+                                <CardTitle className="flex items-center gap-2">
+                                    <BarChart3 className="w-5 h-5 text-purple-600" />
+                                    Analysis Readiness
+                                    {analysisGroups.length > 0 && (
+                                        <Badge variant="secondary" className="ml-2 text-xs">
+                                            {analysisGroups.filter(g => g.status === 'ready').length}/{analysisGroups.length} ready
+                                        </Badge>
+                                    )}
+                                </CardTitle>
+                            </div>
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-xs text-purple-700"
+                                onClick={() => setShowAnalysisReadiness(!showAnalysisReadiness)}
+                            >
+                                {showAnalysisReadiness ? 'Collapse' : 'Show Details'}
+                            </Button>
                         </div>
                         {/* View Mode Toggle */}
                         <div className="flex items-center gap-2">
@@ -2636,7 +2657,7 @@ export default function DataTransformationStep({
                     </div>
                 </CardHeader>
                 <CardContent>
-                    {analysisGroups.length > 0 ? (
+                    {showAnalysisReadiness && analysisGroups.length > 0 ? (
                         <div className="space-y-4">
                             {/* Analysis Readiness Cards Grid */}
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -2960,8 +2981,8 @@ export default function DataTransformationStep({
                 </CardContent>
             </Card>
 
-            {/* Analysis-Specific Data Preparation Requirements */}
-            {analysisPreparations && (
+            {/* Analysis-Specific Data Preparation Requirements — collapsed by default */}
+            {showAnalysisReadiness && analysisPreparations && (
                 <Card className="border-indigo-200 bg-gradient-to-br from-indigo-50 to-purple-50">
                     <CardHeader>
                         <div className="flex items-center justify-between">
@@ -3123,30 +3144,7 @@ export default function DataTransformationStep({
                 </Card>
             )}
 
-            {/* User Questions Display - Shows actual questions from prepare step */}
-            {userQuestions.length > 0 && (
-                <Card className="border-blue-200 bg-gradient-to-br from-blue-50 to-sky-50">
-                    <CardHeader>
-                        <CardTitle className="flex items-center gap-2">
-                            <Info className="w-5 h-5 text-blue-600" />
-                            Your Business Questions ({userQuestions.length})
-                        </CardTitle>
-                        <CardDescription>
-                            These are the questions you want answered. Data transformations will prepare your data to answer them.
-                        </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="space-y-2">
-                            {userQuestions.map((question, idx) => (
-                                <div key={idx} className="flex items-start gap-2 p-2 bg-white/60 rounded-lg">
-                                    <Badge variant="outline" className="text-blue-700 shrink-0">{idx + 1}</Badge>
-                                    <span className="text-sm">{question}</span>
-                                </div>
-                            ))}
-                        </div>
-                    </CardContent>
-                </Card>
-            )}
+            {/* Business Questions removed from here — shown inline in mapping table's "Related Questions" column */}
 
             {/* GAP B: Completeness Status & Gaps Display */}
             {/* ✅ P0 FIX: Use computedCompleteness which has fallback calculation */}
@@ -3702,6 +3700,54 @@ export default function DataTransformationStep({
                                                     <li key={i}>{issue}</li>
                                                 ))}
                                             </ul>
+                                        </div>
+                                    )}
+                                    {/* FIX 1: Show actionable "Fix Data Type Issues" button when recommendations available */}
+                                    {agentVerification.transformationRecommendations && agentVerification.transformationRecommendations.length > 0 && (
+                                        <div className="mt-3 pt-2 border-t border-gray-200">
+                                            <Button
+                                                size="sm"
+                                                variant="outline"
+                                                className="text-xs bg-amber-50 border-amber-300 hover:bg-amber-100 text-amber-800"
+                                                onClick={() => {
+                                                    const recs = agentVerification.transformationRecommendations!;
+                                                    let appliedCount = 0;
+                                                    const updatedLogic = { ...transformationLogic };
+
+                                                    for (const rec of recs) {
+                                                        const method = rec.recommendedTransformation?.method || 'parse_numeric';
+                                                        const toType = rec.recommendedTransformation?.toType || 'numeric';
+                                                        let code = '';
+
+                                                        // Generate transformation code based on recommendation
+                                                        if (method === 'parse_numeric' || toType === 'numeric') {
+                                                            code = `parseFloat(String(value).replace(/[^0-9.-]/g, '')) || 0`;
+                                                        } else if (method === 'to_date' || toType === 'date' || toType === 'datetime') {
+                                                            code = `new Date(value).toISOString()`;
+                                                        } else if (method === 'to_categorical' || toType === 'categorical' || toType === 'string') {
+                                                            code = `String(value)`;
+                                                        } else if (method === 'to_boolean' || toType === 'boolean') {
+                                                            code = `['true','1','yes','y'].includes(String(value).toLowerCase())`;
+                                                        } else {
+                                                            code = `/* ${rec.issue} */ value`;
+                                                        }
+
+                                                        if (rec.targetElement && code) {
+                                                            updatedLogic[rec.targetElement] = code;
+                                                            appliedCount++;
+                                                        }
+                                                    }
+
+                                                    setTransformationLogic(updatedLogic);
+                                                    toast({
+                                                        title: "Transformation Fixes Applied",
+                                                        description: `Applied ${appliedCount} data type fix${appliedCount !== 1 ? 'es' : ''} from DS agent recommendations.`,
+                                                    });
+                                                }}
+                                            >
+                                                <Wand2 className="w-3 h-3 mr-1" />
+                                                Fix {agentVerification.transformationRecommendations.length} Data Type Issue{agentVerification.transformationRecommendations.length !== 1 ? 's' : ''}
+                                            </Button>
                                         </div>
                                     )}
                                 </div>

@@ -2240,8 +2240,12 @@ const upload = multer({
         fileSize: 100 * 1024 * 1024, // 100MB limit for paid features
     },
     fileFilter: (req, file, cb) => {
-        // Accept CSV, JSON, Excel files
-        const allowedTypes = ['.csv', '.json', '.xlsx', '.xls'];
+        // Accept CSV, JSON, Excel, PDF, TXT, and image files
+        const allowedTypes = [
+            '.csv', '.json', '.xlsx', '.xls',
+            '.pdf', '.txt',
+            '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'
+        ];
         const ext = path.extname(file.originalname).toLowerCase();
         if (allowedTypes.includes(ext)) {
             cb(null, true);
@@ -8823,6 +8827,16 @@ router.get("/:id/cost-estimate", ensureAuthenticated, requireOwnership('project'
 
         const journeyProgress = (project as any).journeyProgress || {};
 
+        // FIX 5: Account for PII-excluded columns in cost estimation
+        // Analysis execution excludes these columns, so cost should reflect effective column count
+        const piiDecisions = journeyProgress.piiDecisions;
+        const piiExcludedCount = (piiDecisions?.excludedColumns?.length || 0) +
+                                 (piiDecisions?.selectedColumns?.length || 0);
+        const effectiveColumns = Math.max(1, totalColumns - piiExcludedCount);
+        if (piiExcludedCount > 0) {
+            console.log(`🔒 [Cost Estimate] PII: ${piiExcludedCount} columns excluded, effective columns: ${effectiveColumns} (was ${totalColumns})`);
+        }
+
         // DEBUG: Log available sources for analysisPath
         console.log(`🔍 [Cost Estimate] Searching for analysisPath in project ${projectId}:`);
         console.log(`   - executionConfig?.analysisPath: ${JSON.stringify(journeyProgress.executionConfig?.analysisPath || 'undefined')}`);
@@ -9030,9 +9044,22 @@ router.get("/:id/cost-estimate", ensureAuthenticated, requireOwnership('project'
             }
         }
 
-        // Fallback if no analysis types found (add basic statistical + descriptive for minimal analysis)
-        if (analysisTypes.length === 0) {
-            console.log(`⚠️ [Cost Estimate] No analysis types detected, using default [statistical, descriptive]`);
+        // Fallback: data-size-aware defaults when no analysis types found
+        if (analysisTypes.length === 0 && totalRows > 0) {
+            analysisTypes.push('statistical');
+            analysisTypes.push('descriptive');
+            if (totalRows > 1000) {
+                analysisTypes.push('correlation');
+            }
+            if (totalRows > 5000) {
+                analysisTypes.push('regression');
+            }
+            if (effectiveColumns > 10) {
+                analysisTypes.push('clustering');
+            }
+            console.log(`⚠️ [Cost Estimate] No analysis types detected, using data-size-aware defaults: [${analysisTypes.join(', ')}] (${totalRows} rows, ${effectiveColumns} effective cols)`);
+        } else if (analysisTypes.length === 0) {
+            console.log(`⚠️ [Cost Estimate] No analysis types detected and no data, using minimal defaults [statistical, descriptive]`);
             analysisTypes.push('statistical');
             analysisTypes.push('descriptive');
         }
@@ -9055,10 +9082,17 @@ router.get("/:id/cost-estimate", ensureAuthenticated, requireOwnership('project'
         const estimate = await CostEstimationService.estimateAnalysisCost(
             projectId,
             analysisTypes,
-            { rows: totalRows, columns: totalColumns },
+            { rows: totalRows, columns: effectiveColumns },  // FIX 5: Use PII-adjusted column count
             complexity as 'basic' | 'intermediate' | 'advanced' | 'expert',
             includeArtifacts
         );
+
+        // Minimum cost floor: ensure estimate is never unrealistically low for real data
+        const MINIMUM_COST_FLOOR = 2.50;
+        if (estimate.totalCost < MINIMUM_COST_FLOOR && totalRows > 0) {
+            console.log(`⚠️ [Cost Estimate] Estimated $${estimate.totalCost.toFixed(2)} below floor, applying minimum $${MINIMUM_COST_FLOOR}`);
+            estimate.totalCost = MINIMUM_COST_FLOOR;
+        }
 
         console.log(`✅ [Cost Estimate] Calculated $${estimate.totalCost.toFixed(2)} for project ${projectId} using admin pricing config`);
         console.log(`   - ${totalRows} rows, ${analysisTypes.length} analyses, ${complexity} complexity`);

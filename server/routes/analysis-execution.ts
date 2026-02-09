@@ -357,6 +357,17 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
       console.log(`ℹ️ [PII] No PII exclusions found in journeyProgress`);
     }
 
+    // Set executionStatus BEFORE starting analysis (so dashboard can detect in-progress state)
+    try {
+      await storage.atomicMergeJourneyProgress(projectId, {
+        executionStatus: 'executing',
+        executionStartedAt: new Date().toISOString()
+      });
+      console.log(`🔄 [Execution] Set executionStatus='executing' in journeyProgress for ${projectId}`);
+    } catch (statusErr) {
+      console.warn(`⚠️ [Execution] Failed to set executionStatus: ${statusErr}`);
+    }
+
     // Execute analysis
     // ✅ FIX: Use executeComprehensiveAnalysis which uses DataScienceOrchestrator
     // with type-specific Python scripts (correlation_analysis.py, regression_analysis.py, etc.)
@@ -370,6 +381,22 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
       questionAnswerMapping,
       columnsToExclude: columnsToExclude.length > 0 ? columnsToExclude : undefined
     });
+
+    // Set executionStatus to completed in journeyProgress + cache summary for dashboard
+    try {
+      await storage.atomicMergeJourneyProgress(projectId, {
+        executionStatus: 'completed',
+        executionCompletedAt: new Date().toISOString(),
+        analysisResults: {
+          insights: (results.insights || []).slice(0, 10),
+          recommendations: (results.recommendations || []).slice(0, 5),
+          summary: results.summary
+        }
+      });
+      console.log(`✅ [Execution] Set executionStatus='completed' in journeyProgress for ${projectId}`);
+    } catch (statusErr) {
+      console.warn(`⚠️ [Execution] Failed to update executionStatus: ${statusErr}`);
+    }
 
     // Track execution cost
     try {
@@ -492,6 +519,15 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
   } catch (error: any) {
     console.error('❌ Analysis execution error:', error);
 
+    // Set executionStatus to failed in journeyProgress
+    try {
+      await storage.atomicMergeJourneyProgress(projectId, {
+        executionStatus: 'failed',
+        executionError: error.message,
+        executionFailedAt: new Date().toISOString()
+      });
+    } catch (statusErr) { /* non-fatal */ }
+
     // ✅ FIX: Refund quota usage if execution failed
     // Note: For subscriptions, we track usage but can reverse it on failure
     if (quotaTracked && trackedFeatureId) {
@@ -561,6 +597,33 @@ router.get('/results/:projectId', ensureAuthenticated, async (req, res) => {
     if (!results) {
       const executionStatus = (project as any)?.journeyProgress?.executionStatus;
       const isPaid = (project as any)?.isPaid === true;
+
+      // FIX 6: Return proper HTTP status codes based on execution state
+      // 202 = still executing (dashboard should continue polling)
+      // 422 = permanently failed (dashboard should stop polling and show error)
+      // 404 = not started (no results exist)
+      if (executionStatus === 'executing' || executionStatus === 'in_progress') {
+        return res.status(202).json({
+          success: false,
+          status: 'executing',
+          executionStatus: 'executing',
+          message: 'Analysis is still running. Results will be available shortly.',
+          isPaid,
+        });
+      }
+
+      if (executionStatus === 'failed') {
+        const executionError = (project as any)?.journeyProgress?.executionError;
+        return res.status(422).json({
+          success: false,
+          status: 'failed',
+          executionStatus: 'failed',
+          error: executionError || 'Analysis execution failed',
+          message: 'Analysis execution failed. Please retry from the Execute step.',
+          isPaid,
+        });
+      }
+
       return res.status(404).json({
         success: false,
         error: 'No analysis results found for this project',
@@ -568,9 +631,7 @@ router.get('/results/:projectId', ensureAuthenticated, async (req, res) => {
         isPaid,
         hint: !isPaid
           ? 'Analysis execution requires payment first.'
-          : executionStatus === 'executing' || executionStatus === 'in_progress'
-            ? 'Analysis is still running. Please retry in a few seconds.'
-            : 'Analysis has not been triggered yet. This may indicate a payment processing issue.'
+          : 'Analysis has not been triggered yet. This may indicate a payment processing issue.'
       });
     }
 

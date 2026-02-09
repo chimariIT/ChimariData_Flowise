@@ -1605,11 +1605,15 @@ export class UnifiedBillingService {
       }
 
       // Get journey type from project for proper redirect back to journey
+      // SSOT: Read from journeyProgress first, then project row, with safe fallback
       const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
-      const journeyType = (project as any)?.journeyType || 'non-tech';
+      const journeyProgress = (project as any)?.journeyProgress || {};
+      const journeyType = (project as any)?.journeyType
+        || journeyProgress?.journeyType
+        || journeyProgress?.currentJourneyType
+        || 'non-tech';
 
-      // CRITICAL FIX: Redirect back to journey pricing step instead of project page
-      // This ensures the payment success handler in pricing-step.tsx is triggered
+      // Redirect back to journey pricing step so payment success handler triggers
       const baseUrl = process.env.APP_URL || 'http://localhost:5000';
       const successUrl = `${baseUrl}/journeys/${journeyType}/pricing?projectId=${projectId}&payment=success&session_id={CHECKOUT_SESSION_ID}`;
       const cancelUrl = `${baseUrl}/journeys/${journeyType}/pricing?projectId=${projectId}&payment=cancelled`;

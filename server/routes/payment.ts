@@ -82,10 +82,11 @@ router.post('/create-checkout-session', ensureAuthenticated, async (req, res) =>
 
         const amount = parseFloat(lockedCostEstimate);
 
-        // Guard: Verify frontend-sent amount matches the locked cost (tolerance: 1 cent)
+        // Guard: Verify frontend-sent amount matches the locked cost (tolerance: 1% or $0.05, whichever larger)
         if (clientAmount != null) {
             const clientAmountNum = parseFloat(clientAmount);
-            if (!isNaN(clientAmountNum) && Math.abs(clientAmountNum - amount) > 0.01) {
+            const tolerance = Math.max(0.05, amount * 0.01);
+            if (!isNaN(clientAmountNum) && Math.abs(clientAmountNum - amount) > tolerance) {
                 console.error(`❌ [Payment] Amount mismatch! Client sent $${clientAmountNum.toFixed(2)}, locked cost is $${amount.toFixed(2)} for project ${projectId}`);
                 return res.status(400).json({
                     error: 'COST_MISMATCH',
@@ -245,14 +246,30 @@ router.post('/verify-session', ensureAuthenticated, async (req, res) => {
         // If isProduction and no Stripe key, we already returned 500 above
 
         if (verification.success && projectId) {
+            const paidTimestamp = new Date().toISOString();
+
             // Update project payment status and mark as paid
             // isPaid: true allows access through the payment gate in analysis-execution.ts
             await storage.updateProject(projectId, {
                 isPaid: true,  // ✅ Critical: This enables pay-per-use access
                 paymentStatus: 'completed',
                 paymentSessionId: sessionId,
-                paidAt: new Date().toISOString()
+                paidAt: paidTimestamp
             } as any);
+
+            // Also update journeyProgress (SSOT) so dashboard polling can detect payment
+            try {
+                await storage.atomicMergeJourneyProgress(projectId, {
+                    isPaid: true,
+                    paymentStatus: 'completed',
+                    paymentSessionId: sessionId,
+                    paidAt: paidTimestamp
+                });
+                console.log(`✅ [Payment] Updated journeyProgress SSOT with isPaid=true for project ${projectId}`);
+            } catch (jpError) {
+                console.error(`⚠️ [Payment] Failed to update journeyProgress: ${jpError}`);
+                // Non-fatal: project table is already updated
+            }
 
             console.log(`✅ [Payment] Session ${sessionId} verified for project ${projectId} - marked as paid`);
         }

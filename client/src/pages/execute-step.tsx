@@ -1091,6 +1091,13 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         executionStartedAt: new Date().toISOString(),
         executionConfig: {
           selectedAnalyses,
+          // FIX 4: Persist analysisPath in object-array format for cost estimation compatibility
+          // server/routes/project.ts reads executionConfig.analysisPath as [{analysisId, analysisType, ...}]
+          analysisPath: selectedAnalyses.map(id => ({
+            analysisId: id,
+            analysisType: id,
+            analysisName: id.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
+          })),
           confirmedAt: new Date().toISOString(),
           executionParams: {
             journeyType,

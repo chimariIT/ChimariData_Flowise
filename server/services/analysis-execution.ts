@@ -2493,9 +2493,25 @@ export class AnalysisExecutionService {
         try {
           // FIX 1: Extract requiredDataElements for this specific analysis type
           // This ensures each analysis only receives its relevant columns
-          const requiredColumns = analysis.requiredDataElements && analysis.requiredDataElements.length > 0
+          let requiredColumns = analysis.requiredDataElements && analysis.requiredDataElements.length > 0
             ? analysis.requiredDataElements
             : undefined;
+
+          // FIX 1E: When no specific columns, derive type requirements from registry
+          // This prevents feeding wrong data types (e.g., text columns to correlation)
+          let requiredColumnTypes: string[] | undefined;
+          if (!requiredColumns) {
+            try {
+              const { getAnalysisRequirements } = await import('./analysis-requirements-registry');
+              const spec = getAnalysisRequirements(analysisType);
+              if (spec && spec.columnRequirements.requiredTypes.length > 0) {
+                requiredColumnTypes = spec.columnRequirements.requiredTypes;
+                console.log(`  📋 [RequiredColumns] No specific columns for "${analysis.analysisName}", using registry types: [${requiredColumnTypes.join(', ')}]`);
+              }
+            } catch (regErr) {
+              console.warn(`  ⚠️ [RequiredColumns] Registry lookup failed: ${regErr}`);
+            }
+          }
 
           if (requiredColumns && requiredColumns.length > 0) {
             console.log(`  📋 [RequiredColumns] Analysis "${analysis.analysisName}" requires: [${requiredColumns.join(', ')}]`);
@@ -2512,6 +2528,8 @@ export class AnalysisExecutionService {
             columnsToExclude: request.columnsToExclude,
             // FIX 1: Pass required columns for this analysis type
             requiredColumns,
+            // FIX 1E: Pass column type requirements from registry when no specific columns
+            requiredColumnTypes,
             computeEngine: selectedEngine.engine,
             computeEngineConfig: ComputeEngineSelector.getEngineConfig(selectedEngine.engine, {
               recordCount: totalRecordCount,

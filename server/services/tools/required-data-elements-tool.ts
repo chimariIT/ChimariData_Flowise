@@ -317,6 +317,28 @@ export class RequiredDataElementsTool {
             // Continue without enrichment - non-blocking error
         }
 
+        // Entity extraction: Decompose formula fields into operational data fields
+        // e.g. "Number of Employees Who Left" → needs employee_id, termination_date, employment_status
+        for (const element of requiredDataElements) {
+            const formula = element.calculationDefinition?.formula;
+            const componentFields = formula?.componentFields;
+            if (componentFields && componentFields.length > 0) {
+                const expandedFields = this.extractOperationalFields(
+                    formula.businessDescription || '',
+                    componentFields,
+                    element.elementName
+                );
+                if (expandedFields.length > 0) {
+                    (formula as any).operationalFields = expandedFields;
+                    // Also set as sourceColumn hint for the transformation step
+                    if (!element.sourceColumn) {
+                        element.sourceColumn = expandedFields.map((f: { fieldName: string }) => f.fieldName).join(', ');
+                    }
+                    console.log(`   🔬 Entity extraction for "${element.elementName}": ${expandedFields.map((f: { fieldName: string }) => f.fieldName).join(', ')}`);
+                }
+            }
+        }
+
         // If dataset is available, ENHANCE (not replace) with column mapping suggestions
         // This helps pre-fill sourceField suggestions, but keeps the conceptual elements
         if (input.datasetMetadata?.columns && input.datasetMetadata.columns.length > 0) {
@@ -2674,6 +2696,80 @@ assert df['${element.sourceField}'].nunique() == len(df), "Field must have uniqu
      * - ADDS suggested column mappings (e.g., sourceField: "Q1_Satisfaction")
      * - Allows verification step to show meaningful elements that users map to columns
      */
+    /**
+     * Entity extraction: Decompose business formula descriptions into operational data fields.
+     * Maps business language like "employees who left" to actual data columns like employee_id, termination_date.
+     */
+    private extractOperationalFields(
+        description: string,
+        componentFields: string[],
+        elementName: string
+    ): Array<{ fieldName: string; reason: string }> {
+        const fields: Array<{ fieldName: string; reason: string }> = [];
+        const descLower = (description + ' ' + elementName + ' ' + componentFields.join(' ')).toLowerCase();
+
+        // Employee-related entities
+        if (descLower.includes('employee') || descLower.includes('staff') || descLower.includes('worker') || descLower.includes('headcount')) {
+            fields.push({ fieldName: 'employee_id', reason: 'Unique identifier for each employee' });
+        }
+        // Leaving/termination entities
+        if (descLower.includes('left') || descLower.includes('termin') || descLower.includes('resign') || descLower.includes('turnover') || descLower.includes('attrition') || descLower.includes('separation')) {
+            fields.push({ fieldName: 'termination_date', reason: 'Date employee left the organization' });
+            fields.push({ fieldName: 'employment_status', reason: 'Current status (active/terminated/resigned)' });
+        }
+        // Period/time entities
+        if (descLower.includes('period') || descLower.includes('during') || descLower.includes('over time') || descLower.includes('quarterly') || descLower.includes('monthly')) {
+            fields.push({ fieldName: 'date', reason: 'Date field to define the analysis period' });
+        }
+        // Hiring entities
+        if (descLower.includes('hire') || descLower.includes('join') || descLower.includes('onboard') || descLower.includes('new employee')) {
+            fields.push({ fieldName: 'hire_date', reason: 'Date employee joined the organization' });
+        }
+        // Revenue/financial entities
+        if (descLower.includes('revenue') || descLower.includes('sales') || descLower.includes('income') || descLower.includes('profit')) {
+            fields.push({ fieldName: 'amount', reason: 'Monetary value (revenue/sales amount)' });
+            fields.push({ fieldName: 'transaction_date', reason: 'Date of the transaction' });
+        }
+        // Cost/expense entities
+        if (descLower.includes('cost') || descLower.includes('expense') || descLower.includes('spend') || descLower.includes('budget')) {
+            fields.push({ fieldName: 'cost_amount', reason: 'Cost or expense value' });
+        }
+        // Customer entities
+        if (descLower.includes('customer') || descLower.includes('client') || descLower.includes('subscriber') || descLower.includes('user')) {
+            fields.push({ fieldName: 'customer_id', reason: 'Unique identifier for each customer' });
+        }
+        // Engagement/satisfaction entities
+        if (descLower.includes('engagement') || descLower.includes('satisfaction') || descLower.includes('score') || descLower.includes('rating') || descLower.includes('nps')) {
+            fields.push({ fieldName: 'score', reason: 'Measurement or rating value' });
+            fields.push({ fieldName: 'survey_date', reason: 'Date of measurement or survey' });
+        }
+        // Department/team entities
+        if (descLower.includes('department') || descLower.includes('team') || descLower.includes('division') || descLower.includes('unit')) {
+            fields.push({ fieldName: 'department', reason: 'Department or team grouping' });
+        }
+        // Company/organization entities
+        if (descLower.includes('company') || descLower.includes('organization') || descLower.includes('branch') || descLower.includes('location')) {
+            fields.push({ fieldName: 'company_name', reason: 'Organization or location identifier' });
+        }
+        // Performance entities
+        if (descLower.includes('performance') || descLower.includes('productivity') || descLower.includes('output') || descLower.includes('kpi')) {
+            fields.push({ fieldName: 'performance_metric', reason: 'Performance measurement value' });
+        }
+        // Retention/churn entities
+        if (descLower.includes('retention') || descLower.includes('churn') || descLower.includes('loyalty')) {
+            fields.push({ fieldName: 'status', reason: 'Active/inactive/churned status' });
+            fields.push({ fieldName: 'start_date', reason: 'Date relationship began' });
+        }
+
+        // Deduplicate by fieldName
+        const seen = new Set<string>();
+        return fields.filter(f => {
+            if (seen.has(f.fieldName)) return false;
+            seen.add(f.fieldName);
+            return true;
+        });
+    }
+
     private async enhanceElementsWithColumnMapping(
         elements: RequiredDataElement[],
         datasetMetadata: { columns: string[]; columnTypes?: Record<string, string>; schema?: Record<string, any> },

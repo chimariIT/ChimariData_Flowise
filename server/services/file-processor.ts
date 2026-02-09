@@ -1,6 +1,7 @@
-import * as Papa from 'papaparse';
+import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import { UnifiedPIIProcessor } from './unified-pii-processor';
+import { dataIngestion, IngestionResult } from './comprehensive-data-ingestion';
 
 interface SchemaColumn {
     name: string;
@@ -114,6 +115,15 @@ export class FileProcessor {
             originalname.endsWith('.xls')
         ) {
             data = this.parseExcel(buffer);
+        } else if (mimetype === 'application/pdf' || originalname.endsWith('.pdf')) {
+            data = await this.parsePDF(buffer, originalname, mimetype);
+        } else if (mimetype === 'text/plain' || originalname.endsWith('.txt')) {
+            data = this.parseTXT(buffer);
+        } else if (
+            mimetype?.startsWith('image/') ||
+            /\.(png|jpg|jpeg|gif|bmp|webp)$/i.test(originalname)
+        ) {
+            data = await this.parseImage(buffer, originalname, mimetype);
         } else {
             throw new Error(`Unsupported file type: ${mimetype}`);
         }
@@ -270,6 +280,75 @@ export class FileProcessor {
             return data;
         } catch (error) {
             throw new Error(`Excel parsing failed: ${(error as Error).message}`);
+        }
+    }
+
+    /**
+     * Parse PDF file using ComprehensiveDataIngestion service
+     */
+    private static async parsePDF(buffer: Buffer, filename: string, mimetype: string): Promise<any[]> {
+        try {
+            const result = await dataIngestion.ingestFile(buffer, filename, mimetype);
+            if (!result.success || !result.data || result.data.length === 0) {
+                throw new Error(result.error || 'PDF parsing returned no data');
+            }
+            return result.data;
+        } catch (error) {
+            throw new Error(`PDF parsing failed: ${(error as Error).message}`);
+        }
+    }
+
+    /**
+     * Parse plain text file into line-based rows
+     */
+    private static parseTXT(buffer: Buffer): any[] {
+        try {
+            const text = buffer.toString('utf8');
+            const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
+
+            if (lines.length === 0) {
+                throw new Error('Text file contains no data');
+            }
+
+            return lines.map((line, index) => ({
+                line_number: index + 1,
+                content: line
+            }));
+        } catch (error) {
+            if ((error as Error).message.includes('Text file contains no data')) {
+                throw error;
+            }
+            throw new Error(`Text parsing failed: ${(error as Error).message}`);
+        }
+    }
+
+    /**
+     * Parse image file using ComprehensiveDataIngestion service (metadata + optional OCR)
+     */
+    private static async parseImage(buffer: Buffer, filename: string, mimetype: string): Promise<any[]> {
+        try {
+            const result = await dataIngestion.ingestFile(buffer, filename, mimetype);
+            if (!result.success || !result.data || result.data.length === 0) {
+                // Return basic metadata if ingestion didn't produce rows
+                return [{
+                    filename,
+                    mimetype,
+                    fileSize: buffer.length,
+                    type: 'image',
+                    note: 'Image metadata extracted. OCR may not be available.'
+                }];
+            }
+            return result.data;
+        } catch (error) {
+            // Graceful fallback: return basic metadata even if parsing fails
+            console.warn(`Image parsing warning: ${(error as Error).message}. Returning basic metadata.`);
+            return [{
+                filename,
+                mimetype,
+                fileSize: buffer.length,
+                type: 'image',
+                note: `Image processing limited: ${(error as Error).message}`
+            }];
         }
     }
 

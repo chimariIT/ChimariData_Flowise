@@ -450,13 +450,23 @@ export function DataElementsMappingUI({
 
   const getMappingStatus = (element: RequiredDataElement) => {
     const mapping = mappings[element.elementId];
-    // FIX: Check both mapping state AND element's sourceField/sourceColumn properties
-    const hasSourceMapping = mapping?.sourceField || element.sourceField || element.sourceColumn;
-    if (hasSourceMapping) {
+
+    // Priority 1: Explicit user mapping exists in mapping state
+    if (mapping?.sourceField) {
       return element.transformationRequired ? 'needs_transformation' : 'mapped';
     }
-    // FIX: Also check sourceAvailable OR any source field
-    return (element.sourceAvailable || element.sourceField || element.sourceColumn) ? 'auto_mapped' : 'missing';
+
+    // Priority 2: Agent-set source column reference (not yet confirmed by user)
+    if (element.sourceField || element.sourceColumn) {
+      return element.transformationRequired ? 'needs_transformation' : 'auto_mapped';
+    }
+
+    // Priority 3: sourceAvailable flag only (weakest indicator, no actual column ref)
+    if (element.sourceAvailable) {
+      return 'auto_mapped';
+    }
+
+    return 'missing';
   };
 
   const getStatusBadge = (status: string) => {
@@ -549,14 +559,16 @@ export function DataElementsMappingUI({
             {(() => {
               // P1 FIX: Compute mutually exclusive categories
               const categories = requiredDataElements.reduce((acc, el) => {
-                // Check if element has a source mapping (normalize across field names)
+                // Check if element has an actual column reference (not just sourceAvailable flag)
                 const mapping = mappings[el.elementId];
                 const hasSource = !!(
-                  el.sourceAvailable ||
+                  mapping?.sourceField ||
                   el.sourceField ||
                   el.sourceColumn ||
-                  mapping?.sourceField ||
-                  (el.sourceColumns && el.sourceColumns.length > 0 && el.sourceColumns.some(sc => sc.matched))
+                  (el.sourceColumns && el.sourceColumns.length > 0 &&
+                    (el.isComposite
+                      ? el.sourceColumns.every(sc => sc.matched)  // Composite: ALL components must match
+                      : el.sourceColumns.some(sc => sc.matched))) // Non-composite: any match suffices
                 );
 
                 // Check if transformation is required based on calculationType and derivation info

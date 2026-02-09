@@ -106,8 +106,8 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
   // FIX: Auto-poll for results when analysis might still be processing
   const [resultsRetryCount, setResultsRetryCount] = useState(0);
   const resultsPollingRef = useRef<NodeJS.Timeout | null>(null);
-  const MAX_RESULTS_RETRIES = 10;
-  const RESULTS_RETRY_DELAY_MS = 5000; // 5 seconds between checks
+  const MAX_RESULTS_RETRIES = 24;  // ~2+ minutes of polling with backoff
+  const RESULTS_RETRY_DELAY_MS = 5000; // Base delay: 5 seconds
 
   // FIX Issue #11: Consolidated data loading with clear source precedence
   // Priority: 1. Fresh API data, 2. JourneyProgress cache, 3. Empty state
@@ -140,28 +140,52 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
   // This handles the case where user arrives from payment before analysis completes
   useEffect(() => {
     // Don't poll if we already have results
-    if (!projectId || analysisResults) return;
+    if (!projectId || analysisResults) {
+      // Clear payment signal since we have results
+      if (projectId && analysisResults) {
+        sessionStorage.removeItem(`payment_completed_${projectId}`);
+      }
+      return;
+    }
 
-    // FIX: Clearer condition for when to poll
-    // Poll if:
-    // 1. Project has journeyProgress with execution in progress, OR
-    // 2. Project is paid but results haven't loaded yet (recently completed payment)
+    // FIX 3C: Check multiple sources for payment/execution status (handles stale cache)
     const executionStatus = (journeyProgress as any)?.executionStatus;
-    const isPaidProject = (project as any)?.isPaid === true;
+    const isPaidProject = (project as any)?.isPaid === true ||
+                          (journeyProgress as any)?.isPaid === true;  // Also check SSOT
     const isExecuting = executionStatus === 'executing' || executionStatus === 'in_progress';
+    // FIX 3: Detect permanent failure — stop polling
+    const isFailed = executionStatus === 'failed';
     const recentlyPaid = isPaidProject && !(project as any)?.analysisExecutedAt;
 
-    // Only poll if there's reason to believe results are coming
-    const shouldPoll = isExecuting || recentlyPaid;
+    // Check if user just came from payment (sessionStorage signal from pricing-step)
+    const paymentJustCompleted = sessionStorage.getItem(`payment_completed_${projectId}`) === 'true';
+
+    // Only poll if there's reason to believe results are coming AND not permanently failed
+    const shouldPoll = !isFailed && (isExecuting || recentlyPaid || paymentJustCompleted);
+
+    // FIX 3: Surface failure state immediately
+    if (isFailed && !error) {
+      const failError = (journeyProgress as any)?.executionError || 'Analysis execution failed';
+      console.log('❌ [Dashboard] Execution failed, stopping polling:', failError);
+      setError(failError);
+      sessionStorage.removeItem(`payment_completed_${projectId}`);
+    }
 
     if (shouldPoll && resultsRetryCount < MAX_RESULTS_RETRIES) {
-      const reason = isExecuting ? 'execution in progress' : 'recently paid, waiting for results';
+      const reason = isExecuting ? 'execution in progress'
+        : paymentJustCompleted ? 'payment just completed'
+        : 'recently paid, waiting for results';
       console.log(`🔄 [Dashboard] Polling for results (${reason}), retry ${resultsRetryCount + 1}/${MAX_RESULTS_RETRIES}`);
+
+      // Exponential backoff: first 3 at base delay, then gradually increase up to 20s
+      const backoffDelay = resultsRetryCount < 3
+        ? RESULTS_RETRY_DELAY_MS
+        : Math.min(RESULTS_RETRY_DELAY_MS * Math.ceil(resultsRetryCount / 3), 20000);
 
       resultsPollingRef.current = setTimeout(() => {
         setResultsRetryCount(prev => prev + 1);
         loadResults(projectId);
-      }, RESULTS_RETRY_DELAY_MS);
+      }, backoffDelay);
     } else if (!shouldPoll && !isLoading) {
       // If we shouldn't poll and not loading, show appropriate message
       console.log('📋 [Dashboard] No results available and no active execution');
@@ -213,28 +237,76 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
   async function loadResults(pid: string) {
     try {
       setIsLoading(true);
-      console.log(`📖 [Issue #11 Fix] Loading analysis results for project ${pid}`);
+      console.log(`📖 [Dashboard] Loading analysis results for project ${pid}`);
 
       // ✅ Use apiClient which includes auth headers
       const data = await apiClient.get(`/api/analysis-execution/results/${pid}`);
 
+      // FIX 7: Handle 202 "still executing" response (some HTTP clients treat 2xx as success)
+      if (data.status === 'executing' || data.status === 'in_progress') {
+        console.log('🔄 [Dashboard] Analysis still executing (202 response), will retry via polling...');
+        return; // Don't set error, let polling useEffect handle retry
+      }
+
+      // FIX 3: Handle permanent failure response in success path
+      if (data.status === 'failed') {
+        const errorMsg = data.error || data.message || 'Analysis execution failed';
+        console.log('❌ [Dashboard] Analysis failed (from API response):', errorMsg);
+        setError(errorMsg);
+        sessionStorage.removeItem(`payment_completed_${pid}`);
+        return;
+      }
+
       if (data.success && data.results) {
-        console.log('✅ [Issue #11 Fix] Results loaded from API (authoritative source)');
+        console.log('✅ [Dashboard] Results loaded from API (authoritative source)');
         console.log(`   Insights: ${data.results.insights?.length || 0}, Recommendations: ${data.results.recommendations?.length || 0}`);
         setAnalysisResults(data.results);
         setInsights(data.results.insights || []);
         setRecommendations(data.results.recommendations || []);
         setError(null); // Clear any previous errors
+        // Clear payment signal since we have results
+        sessionStorage.removeItem(`payment_completed_${pid}`);
       } else {
         throw new Error('No results found');
       }
 
     } catch (err: any) {
-      console.error('❌ [Issue #11 Fix] Error loading results from API:', err);
-      // FIX Issue #11: Fallback to journeyProgress cache if API fails
+      console.error('❌ [Dashboard] Error loading results from API:', err);
+
+      // FIX 3A: Detect execution-in-progress status and continue polling silently
+      const errMessage = err?.message || '';
+      const errData = err?.response?.data || err?.data;
+      const isExecuting = errData?.status === 'executing' ||
+                          errData?.status === 'in_progress' ||
+                          errMessage.includes('still running') ||
+                          errMessage.includes('Analysis is still running') ||
+                          errMessage.includes('currently executing');
+
+      if (isExecuting) {
+        console.log('🔄 [Dashboard] Analysis still executing, will retry via polling...');
+        // Don't set error — let polling useEffect handle retry
+        return;
+      }
+
+      // FIX 3: Detect permanent failure and stop polling
+      const isFailed = errData?.status === 'failed' || errData?.executionStatus === 'failed';
+      if (isFailed) {
+        const errorMsg = errData?.error || errData?.message || 'Analysis execution failed';
+        console.log('❌ [Dashboard] Analysis permanently failed:', errorMsg);
+        setError(errorMsg);
+        sessionStorage.removeItem(`payment_completed_${pid}`);
+        toast({
+          title: "Analysis Failed",
+          description: errorMsg + ". You can retry from the Execute step.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Fallback to journeyProgress cache if API fails
       const cachedResults = (journeyProgress as any)?.analysisResults;
       if (cachedResults) {
-        console.log('📋 [Issue #11 Fix] Using cached results from journeyProgress as fallback');
+        console.log('📋 [Dashboard] Using cached results from journeyProgress as fallback');
         setAnalysisResults(cachedResults);
         setInsights(cachedResults.insights || []);
         setRecommendations(cachedResults.recommendations || []);
@@ -495,12 +567,24 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
   };
 
   // Show loading state
-  if (isLoading) {
+  if (isLoading || (resultsRetryCount > 0 && !analysisResults && !error)) {
+    const progressMessage = resultsRetryCount < 3
+      ? 'Loading your analysis results...'
+      : resultsRetryCount < 10
+        ? 'Analysis is running... Results will appear shortly.'
+        : resultsRetryCount < 18
+          ? 'Still processing your analysis... This may take a couple of minutes for complex analyses.'
+          : 'Analysis is taking longer than expected. Please wait...';
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
+        <div className="text-center max-w-md">
           <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-blue-600" />
-          <p className="text-gray-600">Loading your analysis results...</p>
+          <p className="text-gray-600">{progressMessage}</p>
+          {resultsRetryCount > 2 && (
+            <p className="text-gray-400 text-sm mt-2">
+              Attempt {resultsRetryCount}/{MAX_RESULTS_RETRIES}
+            </p>
+          )}
         </div>
       </div>
     );

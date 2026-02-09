@@ -654,14 +654,17 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
             console.log('💳 [Payment] Payment verified, triggering analysis execution...');
 
             try {
-              // ✅ FIX: Get actual analysis types from the approved plan/requirements document
-              const analysisPath = journeyProgress?.requirementsDocument?.analysisPath ||
-                                   journeyProgress?.executionConfig?.analysisPath || [];
+              // ✅ FIX 2D: executionConfig (DS agent, latest) takes priority over requirementsDocument
+              const analysisPath = journeyProgress?.executionConfig?.analysisPath ||
+                                   journeyProgress?.requirementsDocument?.analysisPath || [];
               const analysisTypesFromPlan = analysisPath.length > 0
                 ? analysisPath.map((a: any) => a.analysisType || a.type || 'statistical_analysis')
                 : ['statistical_analysis', 'exploratory_data_analysis']; // Fallback only if no plan
 
               console.log(`📊 [Payment] Using ${analysisTypesFromPlan.length} analysis types from plan: [${analysisTypesFromPlan.join(', ')}]`);
+
+              // Signal dashboard that payment just completed (for polling even with stale cache)
+              sessionStorage.setItem(`payment_completed_${projectId}`, 'true');
 
               // Execute analysis now that payment is confirmed
               const analysisData = await apiClient.post('/api/analysis-execution/execute', {
@@ -685,22 +688,26 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
                   }
                 }, 500);
               } else {
-                console.error('❌ [Payment] Analysis execution failed:', analysisData.error);
-                // Still navigate to dashboard - they paid, so show what we have
+                console.error('❌ [Payment] Analysis execution returned failure:', analysisData.error);
+                // Payment succeeded — navigate to dashboard, polling will pick up results
+                toast({
+                  title: 'Analysis Processing',
+                  description: 'Your payment was successful. Analysis results may take a moment to process.',
+                });
                 setTimeout(() => {
-                  if (onNext) {
-                    onNext();
-                  }
-                }, 1500);
+                  if (onNext) { onNext(); }
+                }, 3000);
               }
             } catch (analysisError) {
               console.error('❌ [Payment] Analysis execution error:', analysisError);
-              // Still navigate to dashboard - they paid, so show what we have
+              // Payment succeeded — navigate to dashboard, polling will pick up results
+              toast({
+                title: 'Analysis Processing',
+                description: 'Your payment was successful. Analysis is being processed — results will appear on your dashboard shortly.',
+              });
               setTimeout(() => {
-                if (onNext) {
-                  onNext();
-                }
-              }, 1500);
+                if (onNext) { onNext(); }
+              }, 3000);
             }
           } else if (response.paymentStatus === 'pending') {
             setPaymentVerificationResult('pending');

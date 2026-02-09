@@ -1337,29 +1337,37 @@ export class ProjectManagerAgent {
 
             // ✅ FIX: Define fallback blueprint for timeout/error scenarios
             // FIX: Include meaningful visualizations based on data characteristics
+            // Context-aware fallback blueprint using available goals and analysis types
+            const fallbackAnalysisTypes = analysisContext?.analysisTypes?.length > 0
+                ? analysisContext.analysisTypes.slice(0, 5)
+                : ['exploratory_data_analysis'];
+
             const fallbackBlueprint: PlanBlueprint = {
-                analysisSteps: [{
-                    method: 'exploratory_data_analysis',
-                    name: 'Exploratory Data Analysis',
-                    description: 'Analyze data distribution and correlations',
-                    confidence: 0.8,
-                    stepNumber: 1,
+                analysisSteps: fallbackAnalysisTypes.map((type: string, idx: number) => ({
+                    method: type,
+                    name: type.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
+                    description: `Analysis of ${goals[0] || 'your data'} using ${type.replace(/_/g, ' ')}`,
+                    confidence: 0.75,
+                    stepNumber: idx + 1,
                     inputs: [],
-                    expectedOutputs: ['statistical_summary'],
-                    tools: ['pandas', 'matplotlib'],
-                    estimatedDuration: '30 minutes'
-                }],
-                // FIX: Generate context-aware fallback visualizations instead of empty array
-                visualizations: [
-                    { type: 'bar', title: 'Key Metrics Overview', description: 'Primary metrics comparison across segments' },
-                    { type: 'histogram', title: 'Data Distribution', description: 'Distribution of numeric values' },
-                    { type: 'pie', title: 'Category Breakdown', description: 'Distribution of records by category' }
-                ],
+                    expectedOutputs: ['insights', 'visualizations'],
+                    tools: ['pandas', 'matplotlib', 'scipy'],
+                    estimatedDuration: '15-30 minutes'
+                })),
+                visualizations: fallbackAnalysisTypes.slice(0, 4).map((type: string) => ({
+                    type: type.includes('correlation') ? 'heatmap' : type.includes('time') ? 'line' : 'bar',
+                    title: `${type.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())} Results`,
+                    description: `Visualization for ${type.replace(/_/g, ' ')} of ${goals[0] || 'your data'}`
+                })),
                 mlModels: [],
-                complexity: 'low',
-                estimatedDuration: '1 hour',
-                recommendations: ['Perform basic EDA'],
-                risks: ['Data quality unknown']
+                complexity: fallbackAnalysisTypes.length > 3 ? 'medium' : 'low',
+                estimatedDuration: `${fallbackAnalysisTypes.length * 15}-${fallbackAnalysisTypes.length * 30} minutes`,
+                recommendations: goals.length > 0
+                    ? goals.slice(0, 3).map((g: string) => `Focus analysis on: ${g}`)
+                    : ['Perform exploratory data analysis to identify key patterns'],
+                risks: dataAssessment?.qualityScore != null && dataAssessment.qualityScore < 70
+                    ? [`Data quality score (${dataAssessment.qualityScore}%) may impact accuracy`]
+                    : [`Review ${dataAssessment?.recordCount || 'your'} records for completeness before analysis`]
             };
 
             let blueprint: PlanBlueprint;
@@ -1385,12 +1393,15 @@ export class ProjectManagerAgent {
 
             // Business Context
             let businessContext: PlanBusinessContext;
+            // Context-aware default when BA Agent fails — use goals and industry
             const defaultBusinessContext: PlanBusinessContext = {
-                recommendations: [],
-                industryBenchmarks: [],
+                recommendations: goals.length > 0
+                    ? goals.slice(0, 2).map((g: string) => `Align analysis findings with: ${g}`)
+                    : ['Review draft analysis outputs with business stakeholders before final approval'],
+                industryBenchmarks: industry ? [`${industry} industry benchmarks`] : ['General performance benchmarks'],
                 relevantKPIs: [],
-                complianceRequirements: [],
-                reportingStandards: []
+                complianceRequirements: ['Data privacy compliance review'],
+                reportingStandards: ['Executive summary format']
             };
             try {
                 // PHASE 7 FIX: Call BA Agent's provideBusinessContext method DIRECTLY
@@ -5323,31 +5334,64 @@ Be conversational, helpful, and specific. Tailor your questions to the ${input.j
             console.error(`[PM Agent] All attempted providers failed:\n  ${providerErrors.join('\n  ')}`);
         }
 
-        // If no AI provider succeeded, fall through to static fallback (no throw)
+        // If no AI provider succeeded, use context-aware fallback that acknowledges user input
         if (!text) {
-            console.warn(`[PM Agent] No AI provider available - using static fallback clarification`);
+            console.warn(`[PM Agent] No AI provider available - using context-aware fallback clarification`);
+
+            const goals = input.analysisGoal.split(/[.\n]/).filter((g: string) => g.trim()).slice(0, 5);
+            const hasAudience = !!(input.audience?.primary);
+            const hasQuestions = !!(input.businessQuestions && input.businessQuestions.trim());
+            const hasDecisionContext = !!(input.audience?.decisionContext);
+
+            // Build context-aware clarifying questions (only ask what's NOT already provided)
+            const clarifyingQuestions: Array<{ question: string; reason: string }> = [];
+            if (!hasQuestions) {
+                clarifyingQuestions.push({
+                    question: 'What specific metrics or KPIs are most important for your analysis?',
+                    reason: 'This helps me prioritize the right analyses for your goals'
+                });
+            }
+            if (!hasAudience) {
+                clarifyingQuestions.push({
+                    question: 'Who is the primary audience for these insights?',
+                    reason: 'This helps me format results appropriately for your stakeholders'
+                });
+            }
+            if (!hasDecisionContext) {
+                clarifyingQuestions.push({
+                    question: 'What decision will this analysis help you make?',
+                    reason: 'This helps me focus on actionable insights rather than generic reporting'
+                });
+            }
+            // If user provided everything, ask deeper follow-up questions
+            if (clarifyingQuestions.length === 0) {
+                const firstGoal = goals[0]?.trim().substring(0, 80) || 'your analysis goal';
+                clarifyingQuestions.push({
+                    question: `For "${firstGoal}", what threshold or benchmark would indicate success?`,
+                    reason: 'Defining success criteria helps me set analysis targets and meaningful comparisons'
+                });
+            }
+
+            const identifiedGaps: string[] = [];
+            if (!hasAudience) identifiedGaps.push('Target audience details');
+            if (!hasDecisionContext) identifiedGaps.push('Decision context');
+            if (!hasQuestions) identifiedGaps.push('Specific business questions');
+
+            // Build summary that reflects what we understood
+            const summaryParts = [`I understand you want to: ${input.analysisGoal}`];
+            if (hasAudience) summaryParts.push(`Your primary audience is ${input.audience?.primary}.`);
+            if (hasQuestions) summaryParts.push('I see you have specific business questions to address.');
+
             return {
-                summary: `I understand you want to: ${input.analysisGoal}`,
-                understoodGoals: [
-                    input.analysisGoal.substring(0, 100) + (input.analysisGoal.length > 100 ? '...' : '')
+                summary: summaryParts.join(' '),
+                understoodGoals: goals.map((g: string) => g.trim()).filter((g: string) => g),
+                clarifyingQuestions,
+                suggestedFocus: goals.slice(0, 3).map((g: string) => g.trim()).filter((g: string) => g),
+                identifiedGaps: identifiedGaps.length > 0 ? identifiedGaps : ['Additional context would strengthen the analysis'],
+                requiredDataAndTransformations: [
+                    'Identify datasets and columns matching your goals',
+                    'Determine necessary data transformations based on analysis requirements'
                 ],
-                clarifyingQuestions: [
-                    {
-                        question: 'What specific metrics or KPIs are most important for your analysis?',
-                        reason: 'This helps me prioritize the right analyses'
-                    },
-                    {
-                        question: 'Who is the primary audience for these insights?',
-                        reason: 'This helps me format results appropriately'
-                    },
-                    {
-                        question: 'What decision will this analysis help you make?',
-                        reason: 'This helps me focus on actionable insights'
-                    }
-                ],
-                suggestedFocus: ['Data quality assessment', 'Key metric identification'],
-                identifiedGaps: ['Specific success criteria', 'Timeline expectations'],
-                requiredDataAndTransformations: ['Confirm required datasets and metrics', 'Document necessary data transformations or feature engineering steps'],
                 artifactPlan: {
                     interactiveDashboard: 'Draft dashboard requirements once data readiness is confirmed and review with the user.',
                     powerPointDeck: 'Outline presentation structure and align with the user before final build.',

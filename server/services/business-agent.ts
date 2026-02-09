@@ -1015,8 +1015,15 @@ Return ONLY valid JSON with 3-5 recommendations.`;
             relevantKPISet.add(typeof metric === 'string' ? metric : metric.name);
         }
         if (relevantKPISet.size === 0) {
-            relevantKPISet.add('Revenue growth');
-            relevantKPISet.add('Customer retention');
+            // Extract KPI suggestions from user goals instead of generic defaults
+            for (const goal of sanitizedGoals.slice(0, 3)) {
+                const kpi = goal.length > 60 ? goal.substring(0, 60) + '...' : goal;
+                relevantKPISet.add(kpi);
+            }
+            if (relevantKPISet.size === 0) {
+                relevantKPISet.add('Primary outcome metric');
+                relevantKPISet.add('Data quality score');
+            }
         }
 
         const complianceRequirements = regulatoryFrameworks.flatMap(framework =>

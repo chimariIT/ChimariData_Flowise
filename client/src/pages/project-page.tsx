@@ -192,8 +192,52 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
           if (response.success && response.paymentStatus === 'paid') {
             toast({
               title: "Payment Successful!",
-              description: "Your payment has been verified. You can now view your analysis results.",
+              description: "Your payment has been verified. Triggering analysis execution...",
             });
+
+            // Safety net: Trigger analysis execution from project page
+            // This handles the case where Stripe redirect didn't land on pricing-step
+            try {
+              const jp = (project as any)?.journeyProgress || {};
+              const analysisPath = jp?.executionConfig?.analysisPath ||
+                                   jp?.requirementsDocument?.analysisPath || [];
+              const analysisTypes = analysisPath.length > 0
+                ? analysisPath.map((a: any) => a.analysisType || a.type || 'statistical_analysis')
+                : ['statistical_analysis', 'exploratory_data_analysis'];
+
+              console.log(`📊 [ProjectPage] Triggering post-payment analysis execution (${analysisTypes.length} types)`);
+
+              const analysisData = await apiClient.post('/api/analysis-execution/execute', {
+                projectId,
+                analysisTypes,
+                analysisPath
+              });
+
+              if (analysisData.success) {
+                console.log('✅ [ProjectPage] Analysis execution completed');
+                toast({
+                  title: "Analysis Complete",
+                  description: "Your analysis results are ready. Redirecting to results...",
+                });
+              }
+            } catch (analysisError: any) {
+              console.error('Post-payment analysis execution error:', analysisError);
+              toast({
+                title: "Analysis Processing",
+                description: "Your payment was successful. Analysis results will appear shortly.",
+              });
+            }
+
+            // Navigate to results page
+            const jType = (project as any)?.journeyType
+              || (project as any)?.journeyProgress?.journeyType
+              || 'non-tech';
+            const cleanPath = location.split('?')[0];
+            setLocation(cleanPath, { replace: true });
+            // Try to navigate to results step
+            setTimeout(() => {
+              setLocation(`/journeys/${jType}/results?projectId=${projectId}`);
+            }, 500);
           } else {
             toast({
               title: "Payment Verification",
@@ -211,10 +255,6 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
           });
           return; // Don't clear URL params on failure so retry is possible
         }
-
-        // Clear URL parameters after successful processing
-        const cleanPath = location.split('?')[0];
-        setLocation(cleanPath, { replace: true });
       } else if (paymentStatus === 'cancelled') {
         toast({
           title: "Payment Cancelled",

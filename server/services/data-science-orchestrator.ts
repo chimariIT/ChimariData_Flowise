@@ -153,6 +153,8 @@ export interface DataScienceRequest {
   };
   // FIX 1: Required columns for this specific analysis type (only include these columns)
   requiredColumns?: string[];
+  // FIX 1E: Required column types from analysis-requirements-registry (e.g., ['numeric', 'categorical'])
+  requiredColumnTypes?: string[];
 }
 
 export interface QuestionAnalysisLink {

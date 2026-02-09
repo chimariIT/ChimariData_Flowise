@@ -166,6 +166,22 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
     }
   }, [urlProjectId]);
 
+  // FIX: Recovery mechanism — if currentProjectId is null but project loaded, sync state
+  // This handles the case where upload set localStorage but prepare-step initialized before it was written
+  useEffect(() => {
+    if (!currentProjectId) {
+      const storedId = localStorage.getItem('currentProjectId');
+      const projectObjId = (project as any)?.id;
+      const recoveredId = storedId || projectObjId;
+      if (recoveredId) {
+        console.log('🔄 [Prepare] Recovered projectId from', storedId ? 'localStorage' : 'project object', ':', recoveredId);
+        setCurrentProjectId(recoveredId);
+        if (!storedId && projectObjId) {
+          localStorage.setItem('currentProjectId', projectObjId);
+        }
+      }
+    }
+  }, [currentProjectId, project]);
 
   // Debounced session updates
   const debouncedGoal = useDebounce(analysisGoal, 500);
@@ -936,12 +952,19 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
                     setShowClarificationDialog(true);
 
                     try {
+                      // FIX: Use triple-fallback for projectId (same pattern as generateDataRequirements)
+                      // currentProjectId may be null if URL doesn't have ?projectId= and localStorage was cleared
+                      const effectiveProjectId = currentProjectId || urlProjectId || localStorage.getItem('currentProjectId') || (project as any)?.id;
+                      if (!effectiveProjectId) {
+                        throw new Error('No project found. Please upload data first before requesting PM clarification.');
+                      }
+
                       const availableColumns = journeyProgress?.joinedData?.schema
                         ? Object.keys(journeyProgress.joinedData.schema)
                         : [];
 
                       const data = await apiClient.post('/api/project-manager/clarify-goal', {
-                        projectId: currentProjectId,
+                        projectId: effectiveProjectId,
                         analysisGoal,
                         businessQuestions,
                         journeyType,
@@ -1002,7 +1025,7 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
           ) : (
             <div className="space-y-4">
               <AgentChatInterface
-                projectId={currentProjectId ?? undefined}
+                projectId={(currentProjectId || urlProjectId || localStorage.getItem('currentProjectId') || (project as any)?.id) ?? undefined}
                 conversationId={conversationId}
                 initialGoals={analysisGoal ? [analysisGoal] : []}
                 onGoalsConfirmed={(goals) => {
@@ -1346,7 +1369,7 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
 
                 // Auto-generate requirements document before proceeding
                 // This ensures Verification, Transformation, and Execute steps have data
-                if (!requiredDataElements && analysisGoal.trim() && businessQuestions.trim()) {
+                if (!requiredDataElements && analysisGoal.trim()) {
                   console.log('📋 [Auto-Generate] Generating requirements before navigation...');
                   try {
                     // FIX: Capture the returned document directly (don't rely on state update)

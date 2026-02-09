@@ -17,7 +17,7 @@
  * 7. Data Quality Improvements
  */
 
-import * as Papa from 'papaparse';
+import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import { spawn } from 'child_process';
 import * as path from 'path';

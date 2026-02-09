@@ -57,6 +57,7 @@ import dataQualityRouter from './data-quality';
 import costTrackingRouter from './cost-tracking';
 import agentWorkflowRouter from './agent-workflow';
 import cloudConnectorsRouter from './cloud-connectors';
+import dataIngestionRouter from './data-ingestion';
 
 const router = Router();
 
@@ -119,6 +120,7 @@ router.use('/', ensureAuthenticated, dataQualityRouter); // Data quality analysi
 router.use('/costs', costTrackingRouter); // Cost tracking with 3-table architecture (authentication handled per-route)
 router.use('/agent-workflow', ensureAuthenticated, agentWorkflowRouter); // Agent workflow orchestration for U2A2A2U pattern
 router.use('/cloud-connectors', cloudConnectorsRouter); // Cloud storage integrations (AWS S3, Azure, Google Drive)
+router.use('/data-ingestion', ensureAuthenticated, dataIngestionRouter); // Unified multi-source data ingestion
 
 // Direct Stripe payment intent endpoint for testing only
 router.post('/create-payment-intent', async (req, res) => {

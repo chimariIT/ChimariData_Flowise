@@ -11,7 +11,7 @@
  * - Real-time: WebSockets, Streaming APIs
  */
 
-import * as Papa from 'papaparse';
+import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import axios from 'axios';
 import * as cheerio from 'cheerio';

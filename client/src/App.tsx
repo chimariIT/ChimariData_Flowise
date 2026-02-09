@@ -1,6 +1,6 @@
 import { useState, useEffect, lazy, Suspense } from "react";
 import { Switch, Route, useLocation } from "wouter";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { JourneyWizard } from "@/components/JourneyWizard";
@@ -47,6 +47,45 @@ const AdminLayout = lazy(() => import("@/pages/admin"));
 const TemplateSelectionTest = lazy(() => import("@/components/TemplateSelectionTest").then(m => ({ default: m.TemplateSelectionTest })));
 const CustomJourneyBuilder = lazy(() => import("@/pages/custom-journey-builder"));
 const VerifyEmailPage = lazy(() => import("@/pages/verify-email"));
+
+/**
+ * FIX 2: Wrapper component for /projects/:id/results route.
+ * Fetches project to determine journeyType dynamically instead of hardcoding "business".
+ * Sets localStorage.currentProjectId so DashboardStep can read it.
+ */
+function ProjectResultsWrapper({ projectId }: { projectId: string }) {
+  useEffect(() => {
+    if (projectId) {
+      localStorage.setItem('currentProjectId', projectId);
+    }
+  }, [projectId]);
+
+  const { data: project, isLoading } = useQuery({
+    queryKey: ['project', projectId],
+    queryFn: () => apiClient.get(`/api/projects/${projectId}`),
+    enabled: !!projectId,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+      </div>
+    );
+  }
+
+  const journeyType = (project as any)?.journeyProgress?.journeyType
+    || (project as any)?.metadata?.journeyType
+    || 'non-tech';
+
+  return (
+    <div className="p-4">
+      <Suspense fallback={<div className="flex items-center justify-center h-64"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" /></div>}>
+        <DashboardStep journeyType={journeyType} />
+      </Suspense>
+    </div>
+  );
+}
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
@@ -444,14 +483,11 @@ export default function App() {
                         return <AuthPage onLogin={handleLogin} />;
                       }}
                     </Route>
+                    {/* FIX 2: Use ProjectResultsWrapper for dynamic journeyType instead of hardcoded "business" */}
                     <Route path="/projects/:id/results">
                       {(params) => {
                         if (user) {
-                          return (
-                            <div className="p-4">
-                              <DashboardStep journeyType="business" />
-                            </div>
-                          );
+                          return <ProjectResultsWrapper projectId={params.id} />;
                         }
                         routeStorage.setIntendedRoute(`/projects/${params.id}/results`);
                         return <AuthPage onLogin={handleLogin} />;

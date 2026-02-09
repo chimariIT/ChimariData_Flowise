@@ -429,6 +429,18 @@ export class APIClient {
   }
 
   /**
+   * Ingest data from non-file sources (databases, APIs, cloud, scraping, streaming)
+   */
+  async ingestDataSource(params: {
+    sourceType: string;
+    projectId: string;
+    config: Record<string, any>;
+    label?: string;
+  }): Promise<any> {
+    return this.post('/api/data-ingestion/ingest', params);
+  }
+
+  /**
    * Update project progress/journey state
    */
   async updateProjectProgress(projectId: string, progress: Record<string, any>): Promise<any> {
