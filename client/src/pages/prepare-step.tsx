@@ -554,7 +554,7 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
       }
 
       // Now generate requirements (DS + BA + PM agents collaborate)
-      // P0-11 FIX: Add 30s timeout to prevent indefinite loading state
+      // Timeout at 60s — multiple AI calls (analysis inference + business definition enrichment) need time
       const requirementsPromise = apiClient.post(`/api/projects/${projectId}/generate-data-requirements`, {
         userGoals,
         userQuestions,
@@ -562,7 +562,7 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
         researcherContext: researcherRecommendations
       });
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Requirements generation timed out after 30 seconds. Please try again.')), 30000)
+        setTimeout(() => reject(new Error('Requirements generation timed out after 60 seconds. Please try again.')), 60000)
       );
       const data = await Promise.race([requirementsPromise, timeoutPromise]) as any;
 

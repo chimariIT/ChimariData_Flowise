@@ -281,34 +281,53 @@ export class RequiredDataElementsTool {
             }
             console.log(`   Industry context detected: ${industryContext}`);
 
-            let enrichedCount = 0;
-            for (const element of requiredDataElements) {
-                const lookupResult = await businessDefinitionRegistry.lookupDefinition(
-                    element.elementName,
-                    {
-                        industry: industryContext,
-                        projectId: input.projectId,
-                        includeGlobal: true
-                    }
-                );
+            // Run all lookups in parallel with a 10s overall timeout to prevent blocking
+            const ENRICHMENT_TIMEOUT_MS = 10000;
+            const enrichmentPromise = Promise.allSettled(
+                requiredDataElements.map(async (element) => {
+                    const lookupResult = await businessDefinitionRegistry.lookupDefinition(
+                        element.elementName,
+                        {
+                            industry: industryContext,
+                            projectId: input.projectId,
+                            includeGlobal: true
+                        }
+                    );
+                    return { element, lookupResult };
+                })
+            );
+            const timeoutPromise = new Promise<PromiseSettledResult<any>[]>((resolve) =>
+                setTimeout(() => {
+                    console.warn(`⏱️ [Data Elements Tool] Enrichment timed out after ${ENRICHMENT_TIMEOUT_MS}ms - proceeding without full enrichment`);
+                    resolve([]);
+                }, ENRICHMENT_TIMEOUT_MS)
+            );
 
-                if (lookupResult.found && lookupResult.definition) {
-                    const def = lookupResult.definition;
-                    // Attach business definition to the element for DE agent to use
-                    element.calculationDefinition = {
-                        calculationType: (def.calculationType as any) || 'derived',
-                        formula: {
-                            businessDescription: def.businessDescription || '',
-                            componentFields: (def.componentFields as string[]) || [],
-                            aggregationMethod: ((def.aggregationMethod || 'custom') as any)
-                        },
-                        definitionConfidence: lookupResult.confidence,
-                        notes: `From registry: ${lookupResult.source} (${Math.round(lookupResult.confidence * 100)}% confidence)`
-                    };
-                    enrichedCount++;
-                    console.log(`   ✅ Enriched: "${element.elementName}" with ${def.calculationType} definition (${lookupResult.source})`);
-                } else {
-                    console.log(`   ⚠️ No definition found for: "${element.elementName}"`);
+            const results = await Promise.race([enrichmentPromise, timeoutPromise]);
+
+            let enrichedCount = 0;
+            for (const result of results) {
+                if (result.status === 'fulfilled' && result.value) {
+                    const { element, lookupResult } = result.value;
+                    if (lookupResult.found && lookupResult.definition) {
+                        const def = lookupResult.definition;
+                        element.calculationDefinition = {
+                            calculationType: (def.calculationType as any) || 'derived',
+                            formula: {
+                                businessDescription: def.businessDescription || '',
+                                componentFields: (def.componentFields as string[]) || [],
+                                aggregationMethod: ((def.aggregationMethod || 'custom') as any)
+                            },
+                            definitionConfidence: lookupResult.confidence,
+                            notes: `From registry: ${lookupResult.source} (${Math.round(lookupResult.confidence * 100)}% confidence)`
+                        };
+                        enrichedCount++;
+                        console.log(`   ✅ Enriched: "${element.elementName}" with ${def.calculationType} definition (${lookupResult.source})`);
+                    } else {
+                        console.log(`   ⚠️ No definition found for: "${element.elementName}"`);
+                    }
+                } else if (result.status === 'rejected') {
+                    console.warn(`   ⚠️ Enrichment failed for an element:`, result.reason?.message || result.reason);
                 }
             }
             console.log(`📚 [Data Elements Tool] Enriched ${enrichedCount}/${requiredDataElements.length} elements with business definitions`);
