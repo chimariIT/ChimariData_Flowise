@@ -1,6 +1,7 @@
 
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
-import PptxGenJS from 'pptxgenjs';
+import * as PptxGenJSModule from 'pptxgenjs';
+const PptxGenJS = (PptxGenJSModule as any).default || PptxGenJSModule;
 
 // Minimal AnalysisResult shape used by exports to avoid tight coupling
 type AnalysisResult = {

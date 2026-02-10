@@ -1,4 +1,6 @@
-import helmet from 'helmet';
+import * as helmetModule from 'helmet';
+import type _helmet from 'helmet';
+const helmet: typeof _helmet = (helmetModule as any).default || helmetModule;
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 
 const INTERNAL_REQUEST_HEADER = 'x-chimari-internal';

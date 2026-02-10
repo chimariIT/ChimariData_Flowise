@@ -1,5 +1,6 @@
 // IMPORTANT: Load environment variables FIRST before any imports
-import dotenv from 'dotenv';
+import * as dotenvModule from 'dotenv';
+const dotenv = (dotenvModule as any).default || dotenvModule;
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 

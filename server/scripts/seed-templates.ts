@@ -1,5 +1,6 @@
 // Seed artifact_templates table with system templates
-import dotenv from 'dotenv';
+import * as dotenvModule from 'dotenv';
+const dotenv = (dotenvModule as any).default || dotenvModule;
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 import { nanoid } from 'nanoid';

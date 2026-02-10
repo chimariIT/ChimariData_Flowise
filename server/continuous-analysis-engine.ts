@@ -13,7 +13,8 @@ import { realtimeServer } from './realtime';
 import { goalAnalysisEngine } from './goal-analysis-engine';
 import { SparkProcessor } from './services/spark-processor';
 import type { AnalysisSubscription, AudienceProfile } from '../shared/schema';
-import cron from 'node-cron';
+import * as cronModule from 'node-cron';
+const cron = (cronModule as any).default || cronModule;
 
 interface DataConnection {
   id: string;

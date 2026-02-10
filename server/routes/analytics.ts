@@ -1,5 +1,8 @@
 // server/routes/analytics.ts
-import express from 'express';
+import * as expressModule from 'express';
+import type _express from 'express';
+const express: typeof _express = (expressModule as any).default || expressModule;
+import type { Request, Response, NextFunction } from 'express';
 import { toolAnalyticsService } from '../services/tool-analytics';
 
 const router = express.Router();
@@ -15,7 +18,7 @@ const router = express.Router();
  */
 
 // Middleware to check authentication
-const requireAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+const requireAuth = (req: Request, res: Response, next: NextFunction) => {
   if (!req.user) {
     return res.status(401).json({ error: 'Authentication required' });
   }
@@ -23,7 +26,7 @@ const requireAuth = (req: express.Request, res: express.Response, next: express.
 };
 
 // Middleware to check admin access
-const requireAdmin = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+const requireAdmin = (req: Request, res: Response, next: NextFunction) => {
   if (!req.user) {
     return res.status(401).json({ error: 'Authentication required' });
   }

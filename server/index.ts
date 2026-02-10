@@ -1,9 +1,13 @@
 import 'dotenv/config';
-import express from "express";
+import * as expressModule from "express";
+import type _express from "express";
+const express: typeof _express = (expressModule as any).default || expressModule;
 import type { Request, Response, NextFunction } from "express";
 import { createServer, Server } from "http";
 import { WebSocketServer } from 'ws';
-import cors from 'cors';
+import * as corsModule from 'cors';
+import type _cors from 'cors';
+const cors: typeof _cors = (corsModule as any).default || corsModule;
 import { setupVite, serveStatic, log } from "./vite";
 import apiRouter from './routes'; // Use the new modular router
 import { setupOAuth } from './oauth-config'; // OAuth configuration

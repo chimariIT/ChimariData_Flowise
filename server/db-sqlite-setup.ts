@@ -1,4 +1,5 @@
-import Database from 'better-sqlite3';
+import * as DatabaseModule from 'better-sqlite3';
+const Database = (DatabaseModule as any).default || DatabaseModule;
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import * as schema from '../shared/schema';
 

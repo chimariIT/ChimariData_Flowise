@@ -1,5 +1,6 @@
 // Apply analysis patterns migration manually
-import dotenv from 'dotenv';
+import * as dotenvModule from 'dotenv';
+const dotenv = (dotenvModule as any).default || dotenvModule;
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 import fs from 'fs';

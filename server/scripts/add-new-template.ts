@@ -2,7 +2,8 @@
 // Interactive tool to add new templates to the system
 // Usage: npx tsx server/scripts/add-new-template.ts
 
-import dotenv from 'dotenv';
+import * as dotenvModule from 'dotenv';
+const dotenv = (dotenvModule as any).default || dotenvModule;
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 import * as readline from 'readline';

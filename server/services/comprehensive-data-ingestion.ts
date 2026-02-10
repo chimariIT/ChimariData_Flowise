@@ -11,11 +11,15 @@
  * - Real-time: WebSockets, Streaming APIs
  */
 
-import Papa from 'papaparse';
+import * as PapaModule from 'papaparse';
+const Papa: typeof PapaModule = (PapaModule as any).default || PapaModule;
 import * as XLSX from 'xlsx';
-import axios from 'axios';
+import * as axiosModule from 'axios';
+const axios = (axiosModule as any).default || axiosModule;
 import * as cheerio from 'cheerio';
-import puppeteer, { Browser } from 'puppeteer';
+import * as puppeteerModule from 'puppeteer';
+const puppeteer = (puppeteerModule as any).default || puppeteerModule;
+import type { Browser } from 'puppeteer';
 import { Pool as PgPool } from 'pg';
 import { createPool as createMysqlPool, Pool as MysqlPool } from 'mysql2/promise';
 import { MongoClient, Db } from 'mongodb';
@@ -24,12 +28,14 @@ import { BlobServiceClient } from '@azure/storage-blob';
 import { Storage as GCSStorage } from '@google-cloud/storage';
 import { GraphQLClient, gql } from 'graphql-request';
 import { createWorker, Worker } from 'tesseract.js';
-import sharp from 'sharp';
+import * as sharpModule from 'sharp';
+const sharp = (sharpModule as any).default || sharpModule;
 import { io, Socket } from 'socket.io-client';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { Readable } from 'stream';
-import pdfParse from 'pdf-parse';
+import * as pdfParseModule from 'pdf-parse';
+const pdfParse = (pdfParseModule as any).default || pdfParseModule;
 
 // ============================================================================
 // Types and Interfaces
@@ -341,7 +347,7 @@ export class ComprehensiveDataIngestion {
       });
     }
 
-    const page = await this.browserInstance.newPage();
+    const page = await this.browserInstance!.newPage();
 
     // Set headers and cookies
     if (config.headers) {
@@ -726,7 +732,7 @@ export class ComprehensiveDataIngestion {
 
       // Extract text by pages (if available)
       const pages = pdfData.text.split('\f'); // Form feed character separates pages
-      const data = pages.map((pageText, index) => ({
+      const data = pages.map((pageText: string, index: number) => ({
         page: index + 1,
         content: pageText.trim(),
         extractionMethod: 'pdf-parse',
@@ -735,7 +741,7 @@ export class ComprehensiveDataIngestion {
           info: pdfData.info,
           version: pdfData.version
         }
-      })).filter(page => page.content.length > 0);
+      })).filter((page: { content: string }) => page.content.length > 0);
 
       const schema: Record<string, ColumnSchema> = {
         page: { name: 'page', type: 'integer', nullable: false },

@@ -1,4 +1,6 @@
-import express from 'express';
+import * as expressModule from 'express';
+import type _express from 'express';
+const express: typeof _express = (expressModule as any).default || expressModule;
 import type { Request, Response } from 'express';
 import { agentRegistry } from '../services/agent-registry';
 import type { AgentDefinition, AgentHandler, AgentResult, AgentTask } from '../services/agent-registry';

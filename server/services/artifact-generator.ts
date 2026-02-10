@@ -6,7 +6,8 @@ import { db } from '../db';
 import { projectArtifacts, generatedArtifacts } from '../../shared/schema';
 import { nanoid } from 'nanoid';
 // P0-8 FIX: Import pptxgenjs for real presentation generation
-import PptxGenJS from 'pptxgenjs';
+import * as PptxGenJSModule from 'pptxgenjs';
+const PptxGenJS = (PptxGenJSModule as any).default || PptxGenJSModule;
 
 export interface ArtifactConfig {
   projectId: string;

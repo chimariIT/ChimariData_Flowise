@@ -1,6 +1,8 @@
 // server/routes/project.ts
 import { Router, type Request, type Response } from 'express';
-import multer from "multer";
+import * as multerModule from "multer";
+import type _multer from "multer";
+const multer: typeof _multer = (multerModule as any).default || multerModule;
 import path from 'path';
 import fs from 'fs/promises';
 import crypto from 'crypto';

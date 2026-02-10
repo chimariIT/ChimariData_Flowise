@@ -1,6 +1,7 @@
 // Link all database templates to analysis patterns
 // Creates patterns automatically if they don't exist
-import dotenv from 'dotenv';
+import * as dotenvModule from 'dotenv';
+const dotenv = (dotenvModule as any).default || dotenvModule;
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 

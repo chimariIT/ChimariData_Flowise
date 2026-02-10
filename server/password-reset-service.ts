@@ -1,5 +1,6 @@
 import crypto from 'crypto';
-import bcrypt from 'bcrypt';
+import * as bcryptModule from 'bcrypt';
+const bcrypt = (bcryptModule as any).default || bcryptModule;
 
 // In-memory store for reset tokens (in production, use database)
 const resetTokens = new Map<string, {

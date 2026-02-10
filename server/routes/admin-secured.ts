@@ -1,7 +1,9 @@
 // server/routes/admin-secured.ts
 // COMPLETED: Day 5 of Week 1 - Implementing real data for admin endpoints
 
-import express from 'express';
+import * as expressModule from 'express';
+import type _express from 'express';
+const express: typeof _express = (expressModule as any).default || expressModule;
 import type { Request, Response } from 'express';
 import { ensureAuthenticated } from './auth';
 import { adminRateLimit } from '../middleware/security-headers';

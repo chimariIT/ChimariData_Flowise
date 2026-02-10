@@ -17,7 +17,10 @@
  * - payment_intent.payment_failed
  */
 
-import express, { Request, Response } from 'express';
+import * as expressModule from 'express';
+import type _express from 'express';
+const express: typeof _express = (expressModule as any).default || expressModule;
+import type { Request, Response } from 'express';
 import { getBillingService } from '../services/billing/unified-billing-service';
 
 const router = express.Router();

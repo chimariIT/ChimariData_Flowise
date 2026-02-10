@@ -1,4 +1,6 @@
-import express from 'express';
+import * as expressModule from 'express';
+import type _express from 'express';
+const express: typeof _express = (expressModule as any).default || expressModule;
 import { ensureAuthenticated } from './auth';
 import { canAccessProject } from '../middleware/ownership';
 import { enhancedVisualizationEngine } from '../services/enhanced-visualization-engine';

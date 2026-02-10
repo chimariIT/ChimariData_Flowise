@@ -14,8 +14,13 @@
  * - Cache tags for bulk invalidation
  */
 
-import Redis from 'ioredis';
-import LRUCache from 'lru-cache';
+import * as RedisModule from 'ioredis';
+import type _Redis from 'ioredis';
+const Redis: typeof _Redis = (RedisModule as any).default || RedisModule;
+type Redis = _Redis;
+import * as LRUCacheModule from 'lru-cache';
+const LRUCache = (LRUCacheModule as any).default || LRUCacheModule;
+type LRUCache<K = any, V = any> = any;
 import { promisify } from 'util';
 import { gzip, gunzip } from 'zlib';
 import { createHash } from 'crypto';

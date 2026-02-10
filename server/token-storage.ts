@@ -1,4 +1,5 @@
-import jwt from 'jsonwebtoken';
+import * as jwtModule from 'jsonwebtoken';
+const jwt = (jwtModule as any).default || jwtModule;
 import { nanoid } from 'nanoid';
 
 // Security: Do not use default secret in production

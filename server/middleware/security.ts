@@ -1,4 +1,5 @@
-import DOMPurify from 'dompurify';
+import * as DOMPurifyModule from 'dompurify';
+const DOMPurify = (DOMPurifyModule as any).default || DOMPurifyModule;
 import { JSDOM } from 'jsdom';
 
 // Create a virtual DOM for DOMPurify

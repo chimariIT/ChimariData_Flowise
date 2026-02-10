@@ -11,8 +11,14 @@
  * @module PresentationGenerator
  */
 
-import Automizer from 'pptx-automizer';
-import PptxGenJS from 'pptxgenjs';
+import * as AutomizerModule from 'pptx-automizer';
+import type _Automizer from 'pptx-automizer';
+const Automizer: typeof _Automizer = (AutomizerModule as any).default || AutomizerModule;
+type Automizer = _Automizer;
+import * as PptxGenJSModule from 'pptxgenjs';
+import type _PptxGenJS from 'pptxgenjs';
+const PptxGenJS: typeof _PptxGenJS = (PptxGenJSModule as any).default || PptxGenJSModule;
+type PptxGenJS = InstanceType<typeof _PptxGenJS>;
 import path from 'path';
 import fs from 'fs/promises';
 import { nanoid } from 'nanoid';

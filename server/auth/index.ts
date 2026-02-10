@@ -1,6 +1,8 @@
 
 import { Router } from 'express';
-import passport from 'passport';
+import * as passportModule from 'passport';
+import type _passport from 'passport';
+const passport: typeof _passport = (passportModule as any).default || passportModule;
 
 const router = Router();
 

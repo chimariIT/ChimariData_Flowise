@@ -1,7 +1,8 @@
 import WebSocket, { Server as WebSocketServer } from 'ws';
 import { IncomingMessage } from 'http';
 import { URL } from 'url';
-import jwt from 'jsonwebtoken';
+import * as jwtModule from 'jsonwebtoken';
+const jwt = (jwtModule as any).default || jwtModule;
 import { nanoid } from 'nanoid';
 import { EventEmitter } from 'events';
 import { WebSocketLifecycleManager, ConnectionHealth } from './services/websocket-lifecycle';

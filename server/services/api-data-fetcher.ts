@@ -1,5 +1,7 @@
 // server/services/api-data-fetcher.ts
-import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
+import * as axiosModule from 'axios';
+const axios = (axiosModule as any).default || axiosModule;
+import type { AxiosRequestConfig, AxiosResponse } from 'axios';
 import { promisify } from 'util';
 import * as crypto from 'crypto';
 

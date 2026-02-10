@@ -1,10 +1,14 @@
-import express from 'express';
+import * as expressModule from 'express';
+import type _express from 'express';
+const express: typeof _express = (expressModule as any).default || expressModule;
 import { EnhancedWorkflowService } from '../enhanced-workflow-service';
 import { EnhancedMCPService } from '../enhanced-mcp-service';
 import { db } from '../db';
 import { projects } from '@shared/schema';
 import { eq } from 'drizzle-orm';
-import multer from 'multer';
+import * as multerModule from 'multer';
+import type _multer from 'multer';
+const multer: typeof _multer = (multerModule as any).default || multerModule;
 import { BusinessTemplates } from '../services/business-templates';
 import WebSocket from 'ws';
 

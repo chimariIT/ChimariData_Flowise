@@ -1,5 +1,6 @@
 // server/services/performance-webhook-service.ts
-import fetch from 'node-fetch';
+import * as fetchModule from 'node-fetch';
+const fetch = (fetchModule as any).default || fetchModule;
 
 export interface PerformanceMetric {
     timestamp: Date;

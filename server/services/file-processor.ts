@@ -1,4 +1,5 @@
-import Papa from 'papaparse';
+import * as PapaModule from 'papaparse';
+const Papa: typeof PapaModule = (PapaModule as any).default || PapaModule;
 import * as XLSX from 'xlsx';
 import { UnifiedPIIProcessor } from './unified-pii-processor';
 import { dataIngestion, IngestionResult } from './comprehensive-data-ingestion';

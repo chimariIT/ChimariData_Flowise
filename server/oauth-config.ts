@@ -1,7 +1,13 @@
-import passport from 'passport';
+import * as passportModule from 'passport';
+import type _passport from 'passport';
+const passport: typeof _passport = (passportModule as any).default || passportModule;
 import { Express } from 'express';
-import connectPg from 'connect-pg-simple';
-import session from 'express-session';
+import * as connectPgModule from 'connect-pg-simple';
+import type _connectPg from 'connect-pg-simple';
+const connectPg: typeof _connectPg = (connectPgModule as any).default || connectPgModule;
+import * as sessionModule from 'express-session';
+import type _session from 'express-session';
+const session: typeof _session = (sessionModule as any).default || sessionModule;
 import { storage } from './storage';
 import { enabledProviders } from './oauth-providers';
 

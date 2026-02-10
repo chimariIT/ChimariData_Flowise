@@ -1,9 +1,14 @@
 // server/routes/auth.ts
-import express from "express";
+import * as expressModule from "express";
+import type _express from "express";
+const express: typeof _express = (expressModule as any).default || expressModule;
 import type { Express, Request, Response, NextFunction } from "express";
 import { Router } from 'express';
-import multer from "multer";
-import bcrypt from 'bcryptjs';
+import * as multerModule from "multer";
+import type _multer from "multer";
+const multer: typeof _multer = (multerModule as any).default || multerModule;
+import * as bcryptModule from 'bcryptjs';
+const bcrypt = (bcryptModule as any).default || bcryptModule;
 import crypto from 'crypto';
 import { nanoid } from 'nanoid';
 import { storage } from '../services/storage';

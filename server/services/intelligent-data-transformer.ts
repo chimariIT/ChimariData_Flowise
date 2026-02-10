@@ -17,7 +17,8 @@
  * 7. Data Quality Improvements
  */
 
-import Papa from 'papaparse';
+import * as PapaModule from 'papaparse';
+const Papa: typeof PapaModule = (PapaModule as any).default || PapaModule;
 import * as XLSX from 'xlsx';
 import { spawn } from 'child_process';
 import * as path from 'path';

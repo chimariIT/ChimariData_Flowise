@@ -1,5 +1,7 @@
 
-import express from 'express';
+import * as expressModule from 'express';
+import type _express from 'express';
+const express: typeof _express = (expressModule as any).default || expressModule;
 import { storage } from '../storage';
 import { ensureAuthenticated } from './auth';
 
