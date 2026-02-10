@@ -255,7 +255,7 @@ async function generateClarifyingQuestions(goal: string, questions: string[] | s
 
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
     const userQuestionsText = questionArray.length > 0
       ? `\n\nThe user also provided these specific questions:\n${questionArray.map((q, i) => `${i + 1}. ${q}`).join('\n')}`

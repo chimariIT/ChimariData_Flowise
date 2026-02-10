@@ -59,17 +59,17 @@ export class TechnicalAIAgent {
 
   private initializeModels() {
     // Gemini Models
-    this.models.set('gemini-1.5-pro', {
+    this.models.set('gemini-2.5-flash', {
       provider: 'gemini',
-      model: 'gemini-1.5-pro',
+      model: 'gemini-2.5-flash',
       defaultParams: { temperature: 0.7, maxTokens: 8192 },
       capabilities: ['code_generation', 'debugging', 'analysis', 'optimization'],
       costPerToken: 0.0000015
     });
 
-    this.models.set('gemini-2.0-flash', {
+    this.models.set('gemini-2.5-flash-lite', {
       provider: 'gemini',
-      model: 'gemini-2.0-flash',
+      model: 'gemini-2.5-flash-lite',
       defaultParams: { temperature: 0.5, maxTokens: 8192 },
       capabilities: ['code_generation', 'debugging', 'fast_analysis'],
       costPerToken: 0.000001
@@ -101,17 +101,17 @@ export class TechnicalAIAgent {
     });
 
     // Anthropic Models
-    this.models.set('claude-3.5-sonnet', {
+    this.models.set('claude-sonnet-4', {
       provider: 'anthropic',
-      model: 'claude-3-5-sonnet-20241022',
+      model: 'claude-sonnet-4-20250514',
       defaultParams: { temperature: 0.7, maxTokens: 8192 },
       capabilities: ['code_generation', 'debugging', 'analysis', 'documentation'],
       costPerToken: 0.000003
     });
 
-    this.models.set('claude-3-haiku', {
+    this.models.set('claude-haiku-4.5', {
       provider: 'anthropic',
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-20250414',
       defaultParams: { temperature: 0.5, maxTokens: 4096 },
       capabilities: ['fast_coding', 'simple_debugging', 'documentation'],
       costPerToken: 0.00000025
@@ -235,22 +235,22 @@ export class TechnicalAIAgent {
     // Auto-select based on query type and technical level
     switch (type) {
       case 'code_generation':
-        return parameters.technicalLevel === 'expert' ? 'claude-3.5-sonnet' : 'gpt-4o';
+        return parameters.technicalLevel === 'expert' ? 'claude-sonnet-4' : 'gpt-4o';
       
       case 'debugging':
         return 'gpt-4o'; // Best for code analysis
       
       case 'optimization':
-        return parameters.technicalLevel === 'expert' ? 'o1-preview' : 'claude-3.5-sonnet';
+        return parameters.technicalLevel === 'expert' ? 'o1-preview' : 'claude-sonnet-4';
       
       case 'analysis_design':
         return 'o1-preview'; // Best for complex reasoning
       
       case 'documentation':
-        return 'claude-3.5-sonnet'; // Excellent at documentation
+        return 'claude-sonnet-4'; // Excellent at documentation
       
       default:
-        return 'gemini-1.5-pro'; // Good general-purpose model
+        return 'gemini-2.5-flash'; // Good general-purpose model
     }
   }
 

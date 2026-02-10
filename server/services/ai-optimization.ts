@@ -515,8 +515,8 @@ export class AIOptimizationService {
   private static async getAvailableModels(userId: string): Promise<any[]> {
     // Return mock models for demo
     return [
-      { providerId: 'gemini', modelName: 'gemini-1.5-flash', cost: 0.001, quality: 0.8, responseTime: 1500 },
-      { providerId: 'gemini', modelName: 'gemini-1.5-pro', cost: 0.005, quality: 0.95, responseTime: 3000 },
+      { providerId: 'gemini', modelName: 'gemini-2.5-flash-lite', cost: 0.001, quality: 0.8, responseTime: 1500 },
+      { providerId: 'gemini', modelName: 'gemini-2.5-flash', cost: 0.005, quality: 0.95, responseTime: 3000 },
       { providerId: 'openai', modelName: 'gpt-4o-mini', cost: 0.003, quality: 0.85, responseTime: 2000 }
     ];
   }
@@ -533,7 +533,7 @@ export class AIOptimizationService {
   }
 
   private static getFallbackModels(userRole: UserRole, tier: SubscriptionTier): string[] {
-    return ['gemini-1.5-flash', 'gpt-4o-mini'];
+    return ['gemini-2.5-flash-lite', 'gpt-4o-mini'];
   }
 
   private static async getCacheValue(key: string): Promise<any> {

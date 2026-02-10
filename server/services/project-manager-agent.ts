@@ -5284,7 +5284,7 @@ Be conversational, helpful, and specific. Tailor your questions to the ${input.j
             try {
                 const { GoogleGenerativeAI } = require('@google/generative-ai');
                 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY!);
-                const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
+                const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
                 const result = await model.generateContent(prompt);
                 text = result.response.text();
                 console.log(`[PM Agent] Goal clarification via Google Gemini`);

@@ -66,7 +66,7 @@ export class RoleBasedAIService {
         console.log('Using Gemini fallback for OpenAI failure');
         return await this.callAIProvider(
           'gemini',
-          'gemini-1.5-flash',
+          'gemini-2.5-flash-lite',
           'You are a helpful AI assistant.',
           'Please provide a brief response: The AI service is temporarily unavailable. Please try again in a moment.',
           { maxTokens: 1024, temperature: 0.7 }
@@ -122,7 +122,7 @@ export class RoleBasedAIService {
     "non-tech": {
       "none": [{
         providerId: "gemini",
-        modelName: "gemini-1.5-flash",
+        modelName: "gemini-2.5-flash-lite",
         displayName: "Smart Assistant",
         description: "Fast, easy-to-understand analysis",
         maxTokens: 2048,
@@ -133,7 +133,7 @@ export class RoleBasedAIService {
       }],
       "starter": [{
         providerId: "gemini",
-        modelName: "gemini-1.5-pro",
+        modelName: "gemini-2.5-flash",
         displayName: "Smart Assistant Pro",
         description: "Enhanced analysis with deeper insights",
         maxTokens: 4096,
@@ -168,7 +168,7 @@ export class RoleBasedAIService {
     "business": {
       "none": [{
         providerId: "gemini",
-        modelName: "gemini-1.5-flash",
+        modelName: "gemini-2.5-flash-lite",
         displayName: "Business Analyst",
         description: "Business-focused analysis and insights",
         maxTokens: 2048,
@@ -179,7 +179,7 @@ export class RoleBasedAIService {
       }],
       "starter": [{
         providerId: "gemini",
-        modelName: "gemini-1.5-pro",
+        modelName: "gemini-2.5-flash",
         displayName: "Business Intelligence",
         description: "Advanced business analytics and reporting",
         maxTokens: 4096,
@@ -201,7 +201,7 @@ export class RoleBasedAIService {
       }],
       "enterprise": [{
         providerId: "anthropic",
-        modelName: "claude-3-5-sonnet-20241022",
+        modelName: "claude-sonnet-4-20250514",
         displayName: "Executive Intelligence",
         description: "C-suite level insights and strategic guidance",
         maxTokens: 16384,
@@ -214,7 +214,7 @@ export class RoleBasedAIService {
     "technical": {
       "none": [{
         providerId: "gemini",
-        modelName: "gemini-1.5-flash",
+        modelName: "gemini-2.5-flash-lite",
         displayName: "Data Science Assistant",
         description: "Technical analysis with statistical insights",
         maxTokens: 2048,
@@ -225,7 +225,7 @@ export class RoleBasedAIService {
       }],
       "starter": [{
         providerId: "gemini",
-        modelName: "gemini-1.5-pro",
+        modelName: "gemini-2.5-flash",
         displayName: "Advanced Analytics",
         description: "Sophisticated statistical analysis and modeling",
         maxTokens: 4096,
@@ -236,7 +236,7 @@ export class RoleBasedAIService {
       }],
       "professional": [{
         providerId: "anthropic",
-        modelName: "claude-3-5-sonnet-20241022",
+        modelName: "claude-sonnet-4-20250514",
         displayName: "Data Science Expert",
         description: "Expert-level analysis with code generation",
         maxTokens: 8192,
@@ -260,7 +260,7 @@ export class RoleBasedAIService {
     "consultation": {
       "none": [{
         providerId: "gemini",
-        modelName: "gemini-1.5-pro",
+        modelName: "gemini-2.5-flash",
         displayName: "Consultation Assistant",
         description: "Expert guidance for complex projects",
         maxTokens: 4096,
@@ -271,7 +271,7 @@ export class RoleBasedAIService {
       }],
       "starter": [{
         providerId: "anthropic",
-        modelName: "claude-3-5-sonnet-20241022",
+        modelName: "claude-sonnet-4-20250514",
         displayName: "Expert Consultant",
         description: "Professional consultation with detailed guidance",
         maxTokens: 8192,
@@ -306,7 +306,7 @@ export class RoleBasedAIService {
     "custom": {
       "none": [{
         providerId: "gemini",
-        modelName: "gemini-1.5-pro",
+        modelName: "gemini-2.5-flash",
         displayName: "Custom Workflow Assistant",
         description: "Flexible guidance tailored to hybrid project needs",
         maxTokens: 4096,
@@ -317,7 +317,7 @@ export class RoleBasedAIService {
       }],
       "starter": [{
         providerId: "anthropic",
-        modelName: "claude-3-5-sonnet-20241022",
+        modelName: "claude-sonnet-4-20250514",
         displayName: "Custom Strategy Consultant",
         description: "Blends technical depth with strategic planning",
         maxTokens: 8192,

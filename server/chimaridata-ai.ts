@@ -185,7 +185,7 @@ class GeminiProvider implements AIProvider {
   }
 
   async generateInsights(data: any, prompt: string): Promise<string> {
-    const model = this.client.getGenerativeModel({ model: "gemini-1.5-pro" });
+    const model = this.client.getGenerativeModel({ model: "gemini-2.5-flash" });
 
     const result = await model.generateContent({
       contents: [{ role: "user", parts: [{ text: prompt }] }],
@@ -243,7 +243,7 @@ class AnthropicProvider implements AIProvider {
 
   async generateInsights(data: any, prompt: string): Promise<string> {
     const response = await this.client.messages.create({
-      model: "claude-3-sonnet-20240229",
+      model: "claude-sonnet-4-20250514",
       max_tokens: 2000,
       temperature: 0.7,
       messages: [

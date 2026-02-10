@@ -20,7 +20,7 @@ Total Records: ${dataContext.recordCount}
 Provide insights, analysis, and answers based on this data. Be specific and reference actual data patterns when possible.`;
 
     const response = await anthropic.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
+      model: 'claude-sonnet-4-20250514',
       max_tokens: 1024,
       system: systemPrompt,
       messages: [{ role: 'user', content: prompt }],
@@ -33,7 +33,7 @@ Provide insights, analysis, and answers based on this data. Be specific and refe
     const anthropic = new Anthropic({ apiKey });
     
     const response = await anthropic.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
+      model: 'claude-sonnet-4-20250514',
       max_tokens: 1024,
       messages: [{ role: 'user', content: prompt }],
     });
@@ -82,7 +82,7 @@ Provide insights, analysis, and answers based on this data. Be specific and refe
 class GeminiProvider implements AIProvider {
   async queryData(apiKey: string, prompt: string, dataContext: any): Promise<string> {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
     
     const systemPrompt = `You are a data analyst AI. You have access to a dataset with the following schema and sample data:
 
@@ -101,7 +101,7 @@ User Query: ${prompt}`;
 
   async generateResponse(apiKey: string, prompt: string): Promise<string> {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
     
     const result = await model.generateContent(prompt);
     const response = await result.response;
@@ -256,7 +256,7 @@ ${JSON.stringify(sampleData.slice(0, 5), null, 2)}
 - Identify patterns from the real data shown
 - If the question cannot be answered from this data, explain why and suggest what data would be needed`;
 
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
     const result = await model.generateContent(systemPrompt);
     const response = await result.response;
     
@@ -266,7 +266,7 @@ ${JSON.stringify(sampleData.slice(0, 5), null, 2)}
   async generateResponse(apiKey: string, prompt: string): Promise<string> {
     // PlatformProvider using Gemini for now - could be configurable
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
     
     const result = await model.generateContent(prompt);
     const response = await result.response;
