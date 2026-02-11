@@ -173,6 +173,7 @@ export default function PlanStep({
   const pollCountRef = useRef(0);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const [pollTimedOut, setPollTimedOut] = useState(false);
+  const [planPollRetryCount, setPlanPollRetryCount] = useState(0);
   const MAX_PLAN_POLLS = 120; // 60 seconds at 500ms intervals
 
   useEffect(() => {
@@ -187,8 +188,17 @@ export default function PlanStep({
         if (pollCountRef.current >= MAX_PLAN_POLLS) {
           if (intervalRef.current) clearInterval(intervalRef.current);
           intervalRef.current = null;
-          setPollTimedOut(true);
-          console.warn(`⚠️ [Plan] Polling timed out after ${MAX_PLAN_POLLS} attempts`);
+          if (planPollRetryCount < 1) {
+            // Auto-retry once before showing manual retry
+            console.warn(`⚠️ [Plan] Polling timed out — auto-retrying (attempt ${planPollRetryCount + 1})`);
+            setPlanPollRetryCount(prev => prev + 1);
+            pollCountRef.current = 0;
+            // Re-trigger by force-regenerating the plan
+            handleForcePlanRegeneration();
+          } else {
+            setPollTimedOut(true);
+            console.warn(`⚠️ [Plan] Polling timed out after ${MAX_PLAN_POLLS} attempts and auto-retry`);
+          }
           return;
         }
         await checkPlanProgress();

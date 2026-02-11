@@ -134,7 +134,8 @@ export default function DataTransformationStep({
 
     // P2-1: Enhanced loading state with progress tracking
     const [pollingAttempt, setPollingAttempt] = useState(0);
-    const MAX_POLLING_ATTEMPTS = 30; // 30 attempts * 3 seconds = 90 seconds max
+    const MAX_POLLING_ATTEMPTS = 60; // 60 attempts * 3 seconds = 180 seconds max
+    const [deAgentRetryCount, setDeAgentRetryCount] = useState(0);
 
     // P1-3: BA/DS Verification state
     const [isVerifying, setIsVerifying] = useState(false);
@@ -541,27 +542,41 @@ export default function DataTransformationStep({
             }
         }, 3000); // Poll every 3 seconds
 
-        // Timeout after 90 seconds - let user proceed manually or retry
+        // Timeout after 180 seconds - auto-retry once, then let user proceed manually
         const timeout = setTimeout(() => {
             clearInterval(pollInterval);
             setIsGeneratingTransformations(false);
             setDeAgentProgress(null);
-            setPollingAttempt(0); // P2-1: Reset counter
-            setDeAgentTimedOut(true); // HIGH PRIORITY FIX: Mark timeout for retry UI
-            console.warn('⚠️ [DE Agent Polling] Timeout - user can configure manually or retry');
-            toast({
-                title: "AI Analysis Taking Longer Than Expected",
-                description: "Click 'Retry AI Analysis' to try again, or configure transformations manually.",
-                variant: "default"
-            });
-        }, 90000);
+            setPollingAttempt(0);
+
+            if (deAgentRetryCount < 1) {
+                // Auto-retry once before showing manual retry
+                console.warn('⚠️ [DE Agent Polling] Timeout - auto-retrying (attempt ' + (deAgentRetryCount + 1) + ')');
+                setDeAgentRetryCount(prev => prev + 1);
+                toast({
+                    title: "Analysis taking longer than expected",
+                    description: "Automatically retrying... Complex datasets may need extra time.",
+                    variant: "default"
+                });
+                // Trigger re-poll by invalidating cache
+                queryClient.invalidateQueries({ queryKey: ["project", pid] });
+            } else {
+                setDeAgentTimedOut(true);
+                console.warn('⚠️ [DE Agent Polling] Timeout after auto-retry - user can configure manually');
+                toast({
+                    title: "AI Analysis Taking Longer Than Expected",
+                    description: "Click 'Retry AI Analysis' to try again, or configure transformations manually.",
+                    variant: "default"
+                });
+            }
+        }, 180000);
 
         return () => {
             clearInterval(pollInterval);
             clearTimeout(timeout);
             setPollingAttempt(0); // P2-1: Reset counter on cleanup
         };
-    }, [pid, journeyProgress?.verificationCompleted, journeyProgress?.transformationPlan, isLoading, transformationMappings.length]);
+    }, [pid, journeyProgress?.verificationCompleted, journeyProgress?.transformationPlan, isLoading, transformationMappings.length, deAgentRetryCount]);
 
     // Helper function to load transformation mappings from DE-generated plan
     const loadTransformationMappingsFromPlan = (plan: any) => {

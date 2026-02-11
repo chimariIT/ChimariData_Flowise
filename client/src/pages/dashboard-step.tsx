@@ -106,7 +106,7 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
   // FIX: Auto-poll for results when analysis might still be processing
   const [resultsRetryCount, setResultsRetryCount] = useState(0);
   const resultsPollingRef = useRef<NodeJS.Timeout | null>(null);
-  const MAX_RESULTS_RETRIES = 24;  // ~2+ minutes of polling with backoff
+  const MAX_RESULTS_RETRIES = 30;  // ~5+ minutes of polling with exponential backoff
   const RESULTS_RETRY_DELAY_MS = 5000; // Base delay: 5 seconds
 
   // FIX Issue #11: Consolidated data loading with clear source precedence

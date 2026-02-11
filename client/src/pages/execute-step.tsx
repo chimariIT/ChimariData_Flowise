@@ -2712,37 +2712,37 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
             )}
 
             {billingError?.type === 'PAYMENT_REQUIRED' && (
-              <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                <div className="flex items-start gap-3">
-                  <CreditCard className="w-5 h-5 text-blue-600 mt-0.5" />
-                  <div className="flex-1">
-                    <h4 className="font-medium text-blue-800">Payment Required</h4>
-                    <p className="text-sm text-blue-700 mt-1">{billingError.message}</p>
-                    <div className="flex gap-2 mt-3">
-                      <Button
-                        size="sm"
-                        onClick={() => {
-                          setBillingError(null);
-                          window.location.href = billingError.options?.payPerProject?.url || `/projects/${projectId}/payment`;
-                        }}
-                        className="bg-blue-600 hover:bg-blue-700"
-                      >
-                        Pay for Analysis
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          setBillingError(null);
-                          window.location.href = '/billing/subscribe';
-                        }}
-                      >
-                        Subscribe Instead
-                      </Button>
-                    </div>
+              <Card className="border-2 border-amber-400 bg-gradient-to-br from-amber-50 to-orange-50 shadow-lg">
+                <CardContent className="p-8 text-center">
+                  <CreditCard className="w-12 h-12 text-amber-600 mx-auto mb-4" />
+                  <h3 className="text-xl font-semibold text-amber-900 mb-2">Payment Required to Run Analysis</h3>
+                  <p className="text-amber-800 mb-6 max-w-md mx-auto">{billingError.message}</p>
+                  <div className="flex gap-3 justify-center">
+                    <Button
+                      size="lg"
+                      onClick={() => {
+                        setBillingError(null);
+                        window.location.href = billingError.options?.payPerProject?.url || `/projects/${projectId}/payment`;
+                      }}
+                      className="bg-amber-600 hover:bg-amber-700 text-white px-8"
+                    >
+                      <CreditCard className="w-4 h-4 mr-2" />
+                      Pay for This Analysis
+                    </Button>
+                    <Button
+                      size="lg"
+                      variant="outline"
+                      onClick={() => {
+                        setBillingError(null);
+                        window.location.href = '/billing/subscribe';
+                      }}
+                      className="border-amber-400 text-amber-800 hover:bg-amber-100"
+                    >
+                      Subscribe Instead
+                    </Button>
                   </div>
-                </div>
-              </div>
+                </CardContent>
+              </Card>
             )}
 
             {executionStatus === 'idle' && !billingError && (

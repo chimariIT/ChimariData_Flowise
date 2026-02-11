@@ -729,8 +729,21 @@ export default function DataVerificationStep({
         });
         try {
           await queryClient.refetchQueries({ queryKey: ["project", currentProjectId] });
+          let cachedData = queryClient.getQueryData(["project", currentProjectId]) as any;
+
+          // If requirementsDocument missing, poll up to 5 times (5s total) to handle write propagation delay
+          if (!cachedData?.journeyProgress?.requirementsDocument) {
+            const MAX_DOC_POLLS = 5;
+            for (let i = 0; i < MAX_DOC_POLLS; i++) {
+              console.log(`⏳ [Verification] RequirementsDocument not yet available, polling (${i + 1}/${MAX_DOC_POLLS})...`);
+              await new Promise(r => setTimeout(r, 1000));
+              await queryClient.refetchQueries({ queryKey: ["project", currentProjectId] });
+              cachedData = queryClient.getQueryData(["project", currentProjectId]) as any;
+              if (cachedData?.journeyProgress?.requirementsDocument) break;
+            }
+          }
+
           // Check cache data after refresh
-          const cachedData = queryClient.getQueryData(["project", currentProjectId]) as any;
           console.log('✅ [Verification] Force refresh completed:', {
             hasRequirementsDocAfter: !!cachedData?.journeyProgress?.requirementsDocument,
             requirementsLockedAfter: cachedData?.journeyProgress?.requirementsLocked,
@@ -1846,7 +1859,8 @@ const progressPercentage = (completedSteps / totalSteps) * 100;
 // If PII was detected, user MUST review and make a decision before proceeding
 const isPiiDetected = piiResults?.detectedPII && piiResults.detectedPII.length > 0;
 const isPiiReviewPending = isPiiDetected && !verificationStatus.piiReview;
-const canContinue = !isPiiReviewPending; // Can only continue if PII review is not pending
+const hasSchema = Object.keys(resolvedSchema.schema).length > 0;
+const canContinue = !isPiiReviewPending && hasSchema; // Can only continue if PII review is not pending AND schema exists
 
 return (
   <div className="space-y-6">
@@ -1869,6 +1883,17 @@ return (
         </div>
       </CardContent>
     </Card>
+
+    {/* Empty Schema Error - blocks progress when no schema could be resolved */}
+    {!hasSchema && !isLoading && (
+      <Alert variant="destructive" className="border-red-300 bg-red-50">
+        <AlertCircle className="h-4 w-4" />
+        <AlertDescription className="ml-2">
+          <strong>No data schema detected.</strong> We couldn't resolve column information from your uploaded data.
+          Please go back and re-upload your dataset, or try a different file format (CSV, Excel, JSON).
+        </AlertDescription>
+      </Alert>
+    )}
 
     {/* [DATA CONTINUITY] Prepare Step Summary - Show artifacts from Step 2 */}
     {journeyProgress && (journeyProgress.analysisGoal || journeyProgress.userQuestions?.length || requiredDataElements) && (
@@ -2712,7 +2737,7 @@ return (
                 disabled={isProcessing || isLoading || !canContinue}
                 className={verificationStatus.overallApproved ? "bg-green-600 hover:bg-green-700" : isPiiReviewPending ? "bg-red-600 hover:bg-red-700" : "bg-yellow-600 hover:bg-yellow-700"}
                 size="lg"
-                title={isLoading ? "Loading project data..." : isPiiReviewPending ? "PII Review Required - You must review detected PII before continuing" : !verificationStatus.overallApproved ? `${completedSteps}/${totalSteps} verification steps complete - Click to continue anyway` : "All verifications complete - Click to approve and continue"}
+                title={isLoading ? "Loading project data..." : !hasSchema ? "No schema detected - Re-upload your data to continue" : isPiiReviewPending ? "PII Review Required - You must review detected PII before continuing" : !verificationStatus.overallApproved ? `${completedSteps}/${totalSteps} verification steps complete - Click to continue anyway` : "All verifications complete - Click to approve and continue"}
               >
                 {isProcessing ? (
                   <>
