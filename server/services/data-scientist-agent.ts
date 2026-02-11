@@ -2038,6 +2038,7 @@ export class DataScientistAgent implements AgentHandler {
     userQuestions: string[];
     userGoals: string[];
     analysisTypes?: string[];
+    datasetSchema?: Record<string, any>;
   }): Promise<Array<{
     elementName: string;
     description: string;
@@ -2062,13 +2063,16 @@ export class DataScientistAgent implements AgentHandler {
       notes?: string;
     };
   }>> {
-    const { userQuestions, userGoals, analysisTypes = [] } = params;
+    const { userQuestions, userGoals, analysisTypes = [], datasetSchema } = params;
 
     console.log(`🔬 [Data Scientist] Inferring required data elements for ${userQuestions.length} questions and ${userGoals.length} goals`);
+    if (datasetSchema) {
+      console.log(`📊 [Data Scientist] Dataset schema provided with ${Object.keys(datasetSchema).length} columns: ${Object.keys(datasetSchema).slice(0, 10).join(', ')}${Object.keys(datasetSchema).length > 10 ? '...' : ''}`);
+    }
 
     // ✅ PHASE 3 FIX: Try AI-powered inference first with fallback chain
     try {
-      const aiElements = await this.inferRequiredDataElementsWithAI(params);
+      const aiElements = await this.inferRequiredDataElementsWithAI({ ...params, datasetSchema });
       if (aiElements && aiElements.length > 0) {
         console.log(`✅ [DS Agent] AI inference successful: ${aiElements.length} elements identified`);
         return aiElements;
@@ -2546,6 +2550,8 @@ Identify ALL data elements required to answer these questions and achieve these 
 4. Match dataType to one of: numeric, categorical, datetime, text, boolean
 5. calculationType must be one of: direct, derived, aggregated, grouped, composite
 6. aggregationMethod (if applicable) must be one of: average, sum, count, min, max, median, weighted_average, custom
+7. CRITICAL: If a dataset schema is provided above, your elements MUST reference actual columns from that schema. Do NOT generate generic business metrics (like "Average Order Value", "Revenue Growth Rate") unless those columns actually exist in the schema. For "direct" calculation types, use actual column names from the schema in componentFields.
+8. Only generate elements that are answerable from the provided dataset schema. If the schema shows HR data, do not generate financial metrics and vice versa.
 
 Respond with the JSON array ONLY:`;
 

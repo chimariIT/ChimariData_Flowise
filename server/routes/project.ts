@@ -4923,18 +4923,40 @@ router.post("/:id/generate-data-requirements", ensureAuthenticated, requireOwner
             ? userQuestions.filter((q: any) => q && typeof q === 'string' && q.trim() !== '')
             : [];
 
+        // Fetch dataset schema so AI can generate relevant elements based on actual data columns
+        let datasetSchema: Record<string, any> | undefined;
+        try {
+            const projectDatasets = await storage.getProjectDatasets(projectId);
+            if (projectDatasets && projectDatasets.length > 0) {
+                const ds = projectDatasets[0].dataset;
+                datasetSchema = (ds as any).ingestionMetadata?.schema ||
+                                (ds as any).metadata?.schema ||
+                                (ds as any).schema;
+                if (datasetSchema && Object.keys(datasetSchema).length > 0) {
+                    console.log(`📊 [Generate Requirements] Found dataset schema with ${Object.keys(datasetSchema).length} columns`);
+                } else {
+                    datasetSchema = undefined;
+                }
+            }
+        } catch (schemaErr) {
+            console.warn('⚠️ [Generate Requirements] Could not fetch dataset schema:', schemaErr);
+        }
+
         console.log(`📋 [Generate Requirements] Input:`, {
             projectId,
             goalsCount: filteredGoals.length,
             questionsCount: filteredQuestions.length,
             goals: filteredGoals.slice(0, 3),
-            questions: filteredQuestions.slice(0, 3)
+            questions: filteredQuestions.slice(0, 3),
+            hasDatasetSchema: !!datasetSchema,
+            schemaColumns: datasetSchema ? Object.keys(datasetSchema).length : 0
         });
 
         const document = await tool.defineRequirements({
             projectId,
             userGoals: filteredGoals,
-            userQuestions: filteredQuestions
+            userQuestions: filteredQuestions,
+            datasetMetadata: datasetSchema
         });
 
         console.log(`📋 [Generate Requirements] Tool output:`, {

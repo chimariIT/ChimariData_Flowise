@@ -59,7 +59,13 @@ export class ChimaridataAI {
         }
 
         console.log(`Attempting insights generation with ${provider.name}...`);
-        const insights = await provider.generateInsights(data, prompt);
+        // Add per-provider timeout to prevent a single slow API from stalling the entire chain
+        const PROVIDER_TIMEOUT_MS = 25000;
+        const insightsPromise = provider.generateInsights(data, prompt);
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Provider ${provider.name} timed out after ${PROVIDER_TIMEOUT_MS / 1000}s`)), PROVIDER_TIMEOUT_MS)
+        );
+        const insights = await Promise.race([insightsPromise, timeoutPromise]);
 
         return {
           success: true,
@@ -124,7 +130,13 @@ export class ChimaridataAI {
         // For now, to avoid changing all providers, we can reuse generateInsights 
         // passing empty data and our prompt.
 
-        const text = await provider.generateInsights({}, prompt);
+        // Add per-provider timeout to prevent a single slow API from stalling the entire chain
+        const PROVIDER_TIMEOUT_MS = 25000; // 25s per provider — allows failover to next
+        const textPromise = provider.generateInsights({}, prompt);
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Provider ${provider.name} timed out after ${PROVIDER_TIMEOUT_MS / 1000}s`)), PROVIDER_TIMEOUT_MS)
+        );
+        const text = await Promise.race([textPromise, timeoutPromise]);
 
         return {
           text,

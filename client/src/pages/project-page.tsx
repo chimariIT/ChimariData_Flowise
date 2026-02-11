@@ -523,7 +523,9 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
           <TabsList className="grid w-full mb-3 grid-cols-6">
             {PROJECT_TABS.map((tab) => {
               const isJourneyIncomplete = !journeyState || journeyState.percentComplete < 100;
-              const isDisabled = tab.requiresJourneyComplete && isJourneyIncomplete;
+              // Unlock tabs if results exist, even if journey is incomplete
+              const hasResults = !!project?.analysisResults;
+              const isDisabled = tab.requiresJourneyComplete && isJourneyIncomplete && !hasResults;
               const IconComponent = { Database, Bot, Layers, FileText, BarChart3, Brain }[tab.icon];
 
               return (
@@ -724,9 +726,9 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
             />
           </TabsContent>
 
-          {/* Analysis tab - gated by journey completion AND payment */}
+          {/* Analysis tab - gated by journey completion AND payment, but unlocked if results exist */}
           <TabsContent value="analysis" className="mt-6">
-            {!journeyState || journeyState.percentComplete < 100 ? (
+            {(!journeyState || journeyState.percentComplete < 100) && !project?.analysisResults ? (
               <Card className="border-amber-200 bg-amber-50">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
@@ -796,9 +798,9 @@ export default function ProjectPage({ projectId }: ProjectPageProps) {
             )}
           </TabsContent>
 
-          {/* Insights tab - gated by journey completion AND payment */}
+          {/* Insights tab - gated by journey completion AND payment, but unlocked if results exist */}
           <TabsContent value="insights" className="mt-6 space-y-6">
-            {!journeyState || journeyState.percentComplete < 100 ? (
+            {(!journeyState || journeyState.percentComplete < 100) && !project?.analysisResults ? (
               <Card className="border-amber-200 bg-amber-50">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">

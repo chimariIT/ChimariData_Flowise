@@ -562,7 +562,7 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
         researcherContext: researcherRecommendations
       });
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Requirements generation timed out after 60 seconds. Please try again.')), 60000)
+        setTimeout(() => reject(new Error('Requirements generation timed out after 90 seconds. Please try again.')), 90000)
       );
       const data = await Promise.race([requirementsPromise, timeoutPromise]) as any;
 

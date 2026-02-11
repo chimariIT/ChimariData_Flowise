@@ -251,11 +251,12 @@ export class RequiredDataElementsTool {
         //   - "Temporal Trend Indicator" (analysis requirement)
         //
         // NOT column names like "Q1_Workload" or "Q2_Growth" - those come from the DATASET
-        console.log(`🎯 [Data Elements Tool] Generating analysis-based requirements (NOT column-based)`);
+        console.log(`🎯 [Data Elements Tool] Generating analysis-based requirements${input.datasetMetadata ? ' (with dataset schema context)' : ' (no dataset schema)'}`);
         let requiredDataElements: RequiredDataElement[] = await this.inferRequiredDataElementsFromAnalyses(
             analysisPath,
             normalizedGoals,
-            normalizedQuestions
+            normalizedQuestions,
+            input.datasetMetadata
         );
 
         // ========================================================================
@@ -1074,7 +1075,8 @@ export class RequiredDataElementsTool {
     private async inferRequiredDataElementsFromAnalyses(
         analysisPath: AnalysisPath[],
         userGoals: string[],
-        userQuestions: string[]
+        userQuestions: string[],
+        datasetSchema?: Record<string, any>
     ): Promise<RequiredDataElement[]> {
         const elements: RequiredDataElement[] = [];
 
@@ -1093,7 +1095,8 @@ export class RequiredDataElementsTool {
             const inferredElements = await dataScientist.inferRequiredDataElements({
                 userQuestions,
                 userGoals,
-                analysisTypes
+                analysisTypes,
+                datasetSchema
             });
 
             console.log(`🔬 [Data Scientist] Returned ${inferredElements.length} inferred data elements:`);
