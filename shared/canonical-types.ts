@@ -114,11 +114,14 @@ export type SubscriptionTier = z.infer<typeof SubscriptionTierEnum>;
  * Tracks the state of a user's subscription
  */
 export const SubscriptionStatusEnum = z.enum([
-  "inactive",   // No active subscription
-  "active",     // Currently active and paid
-  "past_due",   // Payment failed, grace period
-  "cancelled",  // User cancelled, may still have access until period end
-  "expired"     // Subscription ended
+  "inactive",           // No active subscription
+  "active",             // Currently active and paid
+  "past_due",           // Payment failed, grace period
+  "cancelled",          // User cancelled, may still have access until period end
+  "expired",            // Subscription ended
+  "incomplete",         // Stripe: first payment pending (payment_behavior: 'default_incomplete')
+  "trialing",           // Stripe: subscription in trial period
+  "incomplete_expired"  // Stripe: first payment never completed within window
 ]);
 
 export type SubscriptionStatus = z.infer<typeof SubscriptionStatusEnum>;

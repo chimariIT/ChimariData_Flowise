@@ -1,8 +1,10 @@
 # Billing & Admin Guide
 
-**Part of ChimariData Documentation** | [← Back to Main](../CLAUDE.md) | **Last Updated**: November 30, 2025
+**Part of ChimariData Documentation** | [← Back to Main](../CLAUDE.md) | **Last Updated**: February 13, 2026
 
 This document covers subscription tiers, pricing models, billing integration, admin features, and payment processing.
+
+> **Audit Note (Feb 2026):** Updated to reflect 11 admin UI pages (was 8), 165+ admin API endpoints across 6 route files, campaign/coupon management, analysis pricing tiered model, and runtime config broadcast behavior.
 
 ---
 
@@ -10,8 +12,11 @@ This document covers subscription tiers, pricing models, billing integration, ad
 
 - [Subscription System](#subscription-system)
 - [Pricing Models](#pricing-models)
+- [Analysis Pricing Model](#analysis-pricing-model)
+- [Campaign & Coupon Management](#campaign--coupon-management)
 - [Billing Integration](#billing-integration)
 - [Unified Billing Service](#unified-billing-service)
+- [Runtime Config Broadcast](#runtime-config-broadcast)
 - [Admin Dashboard](#admin-dashboard)
 - [Admin Features](#admin-features)
 - [Payment Processing](#payment-processing)
@@ -170,6 +175,95 @@ Adjusts based on:
 - **Journey Complexity**: Simple analysis vs. advanced ML
 - **Data Size**: Spark processing adds cost
 - **Resource Intensity**: GPU-accelerated models
+
+---
+
+## Analysis Pricing Model
+
+**Location**: `server/routes/admin-billing.ts` (analysis pricing endpoints), `client/src/pages/admin/analysis-pricing.tsx`
+
+### Overview
+
+Analysis pricing is a **tiered model** that calculates cost based on analysis type, data size, and complexity. Admin can configure base prices per analysis type and adjust tier multipliers.
+
+### Pricing Components
+
+| Component | Description | Admin-Configurable |
+|-----------|-------------|-------------------|
+| **Base Price** | Per-analysis-type base cost (e.g., correlation $5, regression $10) | Yes |
+| **Data Size Multiplier** | Scales with row count (1x for <1K, 1.5x for 1K-10K, 2x for 10K+) | Yes |
+| **Complexity Factor** | ML/advanced models cost more than basic stats | Yes |
+| **Subscription Discount** | Tier-based discount (Pro 20%, Enterprise 50%) | Yes |
+| **Campaign Discount** | Active campaign/coupon applied at checkout | Yes |
+
+### Admin Endpoints
+
+- `GET /api/admin/billing/analysis-pricing` - Get current analysis pricing config
+- `PUT /api/admin/billing/analysis-pricing` - Update analysis pricing
+- `POST /api/admin/billing/analysis-pricing/reset` - Reset to defaults
+- `POST /api/admin/billing/analysis-pricing/preview` - Preview cost calculation
+
+### Cost Estimation Flow
+
+```
+User selects analysis type → CostEstimationService calculates base cost
+  → Apply data size multiplier
+  → Apply complexity factor
+  → Apply subscription discount
+  → Apply campaign/coupon discount
+  → Lock cost in journeyProgress.lockedCostCents
+  → Display to user at pricing step
+```
+
+**SSOT**: Locked cost stored in `journeyProgress.lockedCostCents` — never recalculated after lock.
+
+---
+
+## Campaign & Coupon Management
+
+**Location**: `server/routes/admin-billing.ts` (campaign endpoints), `client/src/pages/admin/campaign-management.tsx`
+
+### Overview
+
+Admins can create, manage, and track promotional campaigns and discount coupons.
+
+### Campaign Model
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `campaignId` | string | Unique identifier |
+| `name` | string | Display name |
+| `code` | string | Coupon code users enter |
+| `discountType` | `'percentage' \| 'fixed'` | Discount calculation method |
+| `discountValue` | number | Percentage (0-100) or fixed amount in cents |
+| `maxUses` | number | Maximum total redemptions |
+| `currentUses` | number | Current redemption count |
+| `startDate` | Date | Campaign start |
+| `endDate` | Date | Campaign expiry |
+| `isActive` | boolean | Toggle on/off |
+| `applicableTiers` | string[] | Which subscription tiers can use |
+| `applicableAnalysisTypes` | string[] | Which analysis types apply |
+
+### Admin Endpoints
+
+- `GET /api/admin/billing/campaigns` - List all campaigns
+- `POST /api/admin/billing/campaigns` - Create campaign
+- `PUT /api/admin/billing/campaigns/:campaignId` - Update campaign
+- `PUT /api/admin/billing/campaigns/:campaignId/toggle` - Toggle active status
+- `DELETE /api/admin/billing/campaigns/:campaignId` - Delete campaign
+- `GET /api/admin/billing/analytics/campaigns` - Campaign usage analytics
+
+### Usage Flow
+
+```
+User enters coupon code at pricing step
+  → POST /api/projects/:id/apply-campaign validates code
+  → Reserves campaign (does NOT increment usage yet)
+  → Usage incremented only on successful payment webhook
+  → Campaign discount shown in cost breakdown
+```
+
+**Important**: `applyCampaign()` reserves but does not consume. Usage count incremented atomically inside the Stripe webhook transaction.
 
 ---
 
@@ -342,14 +436,68 @@ const overage = await billingService.calculateOverage(userId, billingPeriod);
 
 ---
 
+## Runtime Config Broadcast
+
+**Location**: `server/routes/admin-billing.ts`, `client/src/lib/realtime.ts`
+
+### Problem Solved
+
+Previously, admin pricing/campaign changes only took effect after a page refresh. Active user sessions showed stale pricing.
+
+### How It Works (Feb 2026)
+
+When admin updates pricing config, the backend broadcasts via WebSocket:
+
+```
+Admin updates pricing → PricingService.refreshFromDatabase()
+  → realtimeServer.broadcast({ type: 'status_change', sourceId: 'admin', data: { eventType: 'analysis_pricing_updated' } })
+  → All connected clients receive event
+  → Frontend invalidates React Query caches for cost/pricing queries
+  → User sees updated pricing without refresh
+```
+
+### Broadcast Event Types
+
+| Admin Action | Event Type | Cache Keys Invalidated |
+|-------------|------------|----------------------|
+| Update analysis pricing | `analysis_pricing_updated` | `cost-estimate`, `pricing`, `analysis-pricing` |
+| Update tier pricing | `tier_pricing_updated` | `cost-estimate`, `pricing` |
+| Toggle campaign | `campaign_updated` | `cost-estimate`, `pricing` |
+| Update consumption rates | `consumption_rates_updated` | `cost-estimate`, `pricing` |
+| Update tax config | `tax_config_updated` | `cost-estimate`, `pricing` |
+
+### Frontend Listener
+
+In `client/src/lib/realtime.ts`, the `updateReactQueryCache()` function detects admin events by checking `event.sourceId === 'admin'` and invalidates all pricing-related React Query caches.
+
+---
+
 ## Admin Dashboard
 
 **Location**: `client/src/pages/admin/`
 
-### Admin Pages (8 Total)
+### Admin Pages (11 Total)
+
+The admin panel is accessed at `/admin/:tab` with 10 tab values. All pages are in `client/src/pages/admin/`.
+
+| # | Tab Value | Component File | Purpose |
+|---|-----------|---------------|---------|
+| 1 | `dashboard` | `admin-dashboard.tsx` | Platform health & metrics overview |
+| 2 | `subscription-management` | `subscription-management.tsx` | Subscription CRUD & billing |
+| 3 | `service-pricing` | `pricing-services.tsx` | Configure service pricing |
+| 4 | `analysis-pricing` | `analysis-pricing.tsx` | Analysis type pricing config |
+| 5 | `campaigns` | `campaign-management.tsx` | Campaign/coupon management |
+| 6 | `consultations` | `consultations.tsx` | Consultation request queue |
+| 7 | `consultation-pricing` | `consultation-pricing.tsx` | Consultation pricing config |
+| 8 | `agent-management` | `agent-management.tsx` | Agent monitoring & config |
+| 9 | `tools-management` | `tools-management.tsx` | Tool registry management |
+| 10 | `state-inspector` | `project-state-inspector.tsx` | Project state debugging |
+
+**Layout**: `index.tsx` provides the admin shell with tab navigation, auth checks, and permission guards.
 
 #### 1. Admin Dashboard (`admin-dashboard.tsx`)
 
+**Tab**: `dashboard`
 **Purpose**: Overview of platform health and key metrics
 
 **Features**:
@@ -361,21 +509,9 @@ const overage = await billingService.calculateOverage(userId, billingPeriod);
 
 ---
 
-#### 2. User Management (`index.tsx`)
+#### 2. Subscription Management (`subscription-management.tsx`)
 
-**Purpose**: Manage users and permissions
-
-**Features**:
-- User list with search and filter
-- View user details and subscription status
-- Change user roles (`non-tech`, `business`, `technical`, `consultation`)
-- Toggle admin status
-- Suspend/delete users
-
----
-
-#### 3. Subscription Management (`subscription-management.tsx`)
-
+**Tab**: `subscription-management`
 **Purpose**: Manage subscriptions and billing
 
 **Features**:
@@ -388,34 +524,9 @@ const overage = await billingService.calculateOverage(userId, billingPeriod);
 
 ---
 
-#### 4. Agent Management (`agent-management.tsx`)
+#### 3. Service Pricing (`pricing-services.tsx`)
 
-**Purpose**: Monitor and configure agents
-
-**Features**:
-- Agent status and health
-- Agent performance metrics
-- Enable/disable agents
-- Configure agent permissions
-- View agent activity logs
-
----
-
-#### 5. Tools Management (`tools-management.tsx`)
-
-**Purpose**: Manage tools and integrations
-
-**Features**:
-- Tool registry overview
-- Enable/disable tools
-- Configure tool permissions
-- View tool usage analytics
-- Tool health monitoring
-
----
-
-#### 6. Pricing Services (`pricing-services.tsx`)
-
+**Tab**: `service-pricing`
 **Purpose**: Configure service pricing
 
 **Features**:
@@ -427,8 +538,38 @@ const overage = await billingService.calculateOverage(userId, billingPeriod);
 
 ---
 
-#### 7. Consultation Management (`consultations.tsx`)
+#### 4. Analysis Pricing (`analysis-pricing.tsx`)
 
+**Tab**: `analysis-pricing`
+**Purpose**: Configure per-analysis-type pricing
+
+**Features**:
+- Base price configuration per analysis type
+- Data size multiplier settings
+- Complexity factor configuration
+- Preview cost calculations
+- Reset to defaults
+
+---
+
+#### 5. Campaign Management (`campaign-management.tsx`)
+
+**Tab**: `campaigns`
+**Purpose**: Create and manage promotional campaigns and coupons
+
+**Features**:
+- Campaign list with status indicators
+- Create/edit/delete campaigns
+- Toggle campaign active status
+- Configure discount type (percentage or fixed)
+- Set usage limits, date ranges, applicable tiers
+- Campaign analytics and redemption tracking
+
+---
+
+#### 6. Consultation Management (`consultations.tsx`)
+
+**Tab**: `consultations`
 **Purpose**: Manage consultation requests
 
 **Features**:
@@ -440,8 +581,9 @@ const overage = await billingService.calculateOverage(userId, billingPeriod);
 
 ---
 
-#### 8. Consultation Pricing (`consultation-pricing.tsx`)
+#### 7. Consultation Pricing (`consultation-pricing.tsx`)
 
+**Tab**: `consultation-pricing`
 **Purpose**: Configure consultation pricing
 
 **Features**:
@@ -452,50 +594,139 @@ const overage = await billingService.calculateOverage(userId, billingPeriod);
 
 ---
 
+#### 8. Agent Management (`agent-management.tsx`)
+
+**Tab**: `agent-management`
+**Purpose**: Monitor and configure agents
+
+**Features**:
+- Agent status and health dashboard
+- Agent performance metrics
+- Enable/disable agents
+- Configure agent permissions
+- View agent activity logs
+- Create agents from templates
+
+---
+
+#### 9. Tools Management (`tools-management.tsx`)
+
+**Tab**: `tools-management`
+**Purpose**: Manage tools and integrations
+
+**Features**:
+- Tool registry overview (130+ registered tools)
+- Enable/disable tools
+- Configure tool permissions and agent access
+- View tool usage analytics
+- Tool health monitoring
+
+---
+
+#### 10. Project State Inspector (`project-state-inspector.tsx`)
+
+**Tab**: `state-inspector`
+**Purpose**: Debug and inspect project journey state
+
+**Features**:
+- Select any project by ID
+- View full `journeyProgress` JSONB tree
+- Inspect step completion status
+- View dataset metadata and ingestion state
+- Examine analysis results and artifacts
+
+---
+
 ## Admin Features
 
-### Admin Routes
+### Admin Routes Overview
 
-**Location**: `server/routes/admin*.ts`
+**Location**: `server/routes/admin*.ts` (6 files, 165+ endpoints total)
 
-#### Admin Billing (`admin-billing.ts`)
+| Route File | Prefix | Endpoint Count | Purpose |
+|-----------|--------|---------------|---------|
+| `admin.ts` | `/api/admin` | ~80 | Core admin (agents, tools, users, projects, monitoring, billing) |
+| `admin-billing.ts` | `/api/admin/billing` | ~25 | Tiers, campaigns, consumption rates, analysis pricing |
+| `admin-secured.ts` | `/api/admin/secured` | ~20 | Additional secured endpoints with extra RBAC |
+| `admin-consultation.ts` | `/api/admin/consultations` | ~9 | Consultation lifecycle management |
+| `admin-consultation-pricing.ts` | `/api/admin/consultation-pricing` | ~7 | Consultation pricing CRUD |
+| `admin-service-pricing.ts` | `/api/admin/service-pricing` | ~6 | Service pricing CRUD |
 
-**Endpoints**:
-- `GET /api/admin/billing/overview` - Revenue and subscription metrics
-- `GET /api/admin/billing/subscriptions` - All subscriptions
-- `POST /api/admin/billing/change-tier` - Change user subscription tier
-- `POST /api/admin/billing/apply-discount` - Apply discount to user
-- `POST /api/admin/billing/refund` - Process refund
+**Full endpoint reference**: See [ADMIN_API_REFERENCE.md](ADMIN_API_REFERENCE.md)
 
-#### Admin Service Pricing (`admin-service-pricing.ts`)
+#### Admin Core (`admin.ts`) - Key Endpoints
 
-**Endpoints**:
-- `GET /api/admin/pricing/services` - All service pricing
-- `PUT /api/admin/pricing/services/:id` - Update service price
-- `POST /api/admin/pricing/services` - Create new service pricing
-- `DELETE /api/admin/pricing/services/:id` - Delete service pricing
+**User Management**:
+- `POST /api/admin/users` - Create user
+- `PUT /api/admin/users/:userId` - Update user
+- `PUT /api/admin/users/:userId/subscription` - Change subscription
+- `POST /api/admin/users/:userId/credits` - Award/revoke credits
+- `POST /api/admin/users/:userId/refund` - Process refund
+- `PUT /api/admin/users/:userId/trial-extension` - Extend trial
+
+**Agent Management**:
+- `GET /api/admin/agents` - List agents with status
+- `POST /api/admin/agents` - Register agent
+- `PUT /api/admin/agents/:agentId` - Update agent
+- `DELETE /api/admin/agents/:agentId` - Unregister agent
+- `POST /api/admin/agents/:agentId/restart` - Restart agent
+
+**Tool Management**:
+- `GET /api/admin/tools` - List all tools
+- `POST /api/admin/tools` - Register tool
+- `DELETE /api/admin/tools/:toolName` - Unregister tool
+- `GET /api/admin/tools/for-agent/:agentId` - Tools per agent
+
+**System Monitoring**:
+- `GET /api/admin/system/status` - System status
+- `GET /api/admin/circuit-breakers/status` - Circuit breaker status
+- `POST /api/admin/circuit-breakers/reset` - Reset circuit breaker
+- `GET /api/admin/database/optimization/health` - DB health
+- `GET /api/admin/database/optimization/slow-queries` - Slow queries
+- `GET /api/admin/errors/statistics` - Error statistics
+- `GET /api/admin/monitoring/dashboard` - Monitoring dashboard
+- `GET /api/admin/monitoring/alerts` - Active alerts
+
+**Project Management**:
+- `GET /api/admin/projects` - List all projects
+- `GET /api/admin/projects/:projectId` - Project details
+- `GET /api/admin/projects/stuck` - Stuck projects
+- `POST /api/admin/projects/:projectId/retry` - Retry stuck project
+
+#### Admin Billing (`admin-billing.ts`) - Key Endpoints
+
+**Tier Pricing**:
+- `GET /api/admin/billing/tiers` - List tier configurations
+- `POST /api/admin/billing/tiers` - Create tier
+- `DELETE /api/admin/billing/tiers/:tierId` - Delete tier
+
+**Campaigns**:
+- `GET /api/admin/billing/campaigns` - List campaigns
+- `POST /api/admin/billing/campaigns` - Create campaign
+- `PUT /api/admin/billing/campaigns/:campaignId` - Update campaign
+- `PUT /api/admin/billing/campaigns/:campaignId/toggle` - Toggle active
+- `DELETE /api/admin/billing/campaigns/:campaignId` - Delete campaign
+
+**Analysis Pricing**:
+- `GET /api/admin/billing/analysis-pricing` - Get config
+- `PUT /api/admin/billing/analysis-pricing` - Update config
+- `POST /api/admin/billing/analysis-pricing/reset` - Reset to defaults
+- `POST /api/admin/billing/analysis-pricing/preview` - Preview cost
+
+**Analytics**:
+- `GET /api/admin/billing/analytics/revenue` - Revenue analytics
+- `GET /api/admin/billing/analytics/campaigns` - Campaign analytics
 
 #### Admin Consultation (`admin-consultation.ts`)
 
-**Endpoints**:
-- `GET /api/admin/consultations` - All consultation requests
-- `PUT /api/admin/consultations/:id/assign` - Assign to expert
-- `PUT /api/admin/consultations/:id/status` - Update status
-- `GET /api/admin/consultations/:id/report` - Generate report
-
-#### Admin Core (`admin.ts`)
-
-**Endpoints**:
-- `GET /api/admin/users` - All users with filters
-- `PUT /api/admin/users/:id/role` - Change user role
-- `PUT /api/admin/users/:id/admin` - Toggle admin status
-- `DELETE /api/admin/users/:id` - Suspend/delete user
-- `GET /api/admin/system/health` - System health check
-- `GET /api/admin/analytics` - Platform analytics
-
-#### Admin Secured (`admin-secured.ts`)
-
-**Endpoints**: Additional secured admin-only endpoints with extra validation
+- `GET /api/admin/consultations/pending-quotes` - Pending quotes
+- `POST /api/admin/consultations/:id/quote` - Send quote
+- `GET /api/admin/consultations/ready-queue` - Ready queue
+- `POST /api/admin/consultations/:id/assign` - Assign expert
+- `POST /api/admin/consultations/:id/schedule` - Schedule session
+- `POST /api/admin/consultations/:id/complete` - Mark complete
+- `GET /api/admin/consultations/all` - All consultations
+- `GET /api/admin/consultations/stats` - Statistics
 
 ### Admin Security
 

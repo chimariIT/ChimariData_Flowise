@@ -34,16 +34,19 @@ type ServicePricingRow = typeof servicePricing.$inferSelect;
 type SubscriptionTierRow = typeof subscriptionTierPricing.$inferSelect;
 
 // PHASE 6: Admin-configurable analysis pricing
+import type { AnalysisTypePricing, VolumeTierThreshold } from '../../shared/pricing-config';
+import { DEFAULT_ANALYSIS_TYPE_PRICING, DEFAULT_DATA_VOLUME_TIERS } from '../../shared/pricing-config';
+
 export interface AnalysisPricingConfig {
-    baseCost: number;                        // Base cost for any analysis ($)
-    dataSizeCostPer1K: number;               // Cost per 1000 records ($)
-    platformFee: number;                     // Platform fee ($)
+    baseCost: number;                        // Base cost for any analysis (legacy, $)
+    dataSizeCostPer1K: number;               // Cost per 1000 records (legacy, $)
+    platformFee: number;                     // Platform fee ($25 from service_pricing)
     complexityMultipliers: {
         basic: number;
         intermediate: number;
         advanced: number;
     };
-    analysisTypeFactors: {
+    analysisTypeFactors: {                   // Legacy: type multipliers
         statistical: number;
         machine_learning: number;
         visualization: number;
@@ -55,15 +58,17 @@ export interface AnalysisPricingConfig {
         sentiment: number;
         default: number;
     };
+    /** Tiered per-type pricing matrix (new model). When present, overrides legacy formula. */
+    analysisTypePricing?: AnalysisTypePricing;
+    /** Data volume tier thresholds for tiered pricing. */
+    dataVolumeTiers?: Record<string, VolumeTierThreshold>;
 }
 
 // Default pricing configuration - uses shared PRICING_CONSTANTS for consistency
-// FIX: Previously had inflated values ($5 platform fee, $10 base cost)
-// Now aligned with PRICING_CONSTANTS ($0.50 platform fee, $1.00 base cost)
 const DEFAULT_PRICING_CONFIG: AnalysisPricingConfig = {
-    baseCost: PRICING_CONSTANTS.baseAnalysisCost,               // $1.00 (was $10.00)
-    dataSizeCostPer1K: PRICING_CONSTANTS.dataProcessingPer1K,   // $0.10 (was $0.05)
-    platformFee: PRICING_CONSTANTS.basePlatformFee,             // $0.50 (was $5.00)
+    baseCost: PRICING_CONSTANTS.baseAnalysisCost,               // $5.00 (legacy fallback)
+    dataSizeCostPer1K: PRICING_CONSTANTS.dataProcessingPer1K,   // $0.10 (legacy)
+    platformFee: PRICING_CONSTANTS.basePlatformFee,             // $25.00 (from service_pricing)
     complexityMultipliers: {
         basic: PRICING_CONSTANTS.complexityMultipliers.basic,           // 1.0
         intermediate: PRICING_CONSTANTS.complexityMultipliers.intermediate, // 1.5
@@ -80,13 +85,19 @@ const DEFAULT_PRICING_CONFIG: AnalysisPricingConfig = {
         clustering: PRICING_CONSTANTS.analysisTypeFactors.clustering || 1.5,
         sentiment: PRICING_CONSTANTS.analysisTypeFactors.sentiment || 1.8,
         default: PRICING_CONSTANTS.analysisTypeFactors.default || 1.0
-    }
+    },
+    // Tiered pricing (new model)
+    analysisTypePricing: DEFAULT_ANALYSIS_TYPE_PRICING,
+    dataVolumeTiers: DEFAULT_DATA_VOLUME_TIERS,
 };
 
 export class PricingService {
     // In-memory cache of pricing config (loaded from DB, falls back to defaults)
     private static pricingConfig: AnalysisPricingConfig = { ...DEFAULT_PRICING_CONFIG };
     private static dbLoaded = false;
+    // Bug #12 fix: Track when pricing was last updated so API can include a version/timestamp.
+    // Frontend can compare this to detect stale cached pricing.
+    private static lastUpdatedAt: string = new Date().toISOString();
 
     // Service pricing cache (pay-per-analysis, expert-consultation, etc.)
     private static servicePricingCache: Map<string, ServicePricingRow> = new Map();
@@ -125,10 +136,20 @@ export class PricingService {
                     analysisTypeFactors: {
                         ...DEFAULT_PRICING_CONFIG.analysisTypeFactors,
                         ...(dbConfig.analysisTypeFactors || {})
-                    }
+                    },
+                    // Tiered pricing: use DB values if present and non-empty, else defaults
+                    // GUARD: empty objects {} are truthy but have 0 keys — fall back to defaults
+                    analysisTypePricing: (dbConfig.analysisTypePricing &&
+                        typeof dbConfig.analysisTypePricing === 'object' &&
+                        Object.keys(dbConfig.analysisTypePricing).length > 0)
+                        ? dbConfig.analysisTypePricing : DEFAULT_PRICING_CONFIG.analysisTypePricing,
+                    dataVolumeTiers: (dbConfig.dataVolumeTiers &&
+                        typeof dbConfig.dataVolumeTiers === 'object' &&
+                        Object.keys(dbConfig.dataVolumeTiers).length > 0)
+                        ? dbConfig.dataVolumeTiers : DEFAULT_PRICING_CONFIG.dataVolumeTiers,
                 };
                 this.syncLegacyCostFactors();
-                console.log('💲 [PricingService] Loaded pricing config from database');
+                console.log(`💲 [PricingService] Loaded pricing config from database (tieredPricing=${!!this.pricingConfig.analysisTypePricing})`);
             } else {
                 // No DB row yet - seed with defaults
                 await this.seedDefaults();
@@ -164,10 +185,30 @@ export class PricingService {
     }
 
     /**
+     * P1-9 FIX: Refresh pricing config from database.
+     * Call this after admin pricing updates to invalidate the in-memory cache.
+     */
+    static async refreshFromDatabase(): Promise<void> {
+        console.log('🔄 [PricingService] Refreshing pricing config from database...');
+        this.dbLoaded = false;
+        await this.loadFromDatabase();
+        this.lastUpdatedAt = new Date().toISOString();
+        console.log(`✅ [PricingService] Pricing config refreshed from database (version: ${this.lastUpdatedAt})`);
+    }
+
+    /**
      * Get current pricing configuration (for admin UI)
      */
     static getPricingConfig(): AnalysisPricingConfig {
         return { ...this.pricingConfig };
+    }
+
+    /**
+     * Bug #12 fix: Get the timestamp of the last pricing update.
+     * Include this in API responses so the frontend can detect stale pricing.
+     */
+    static getLastUpdatedAt(): string {
+        return this.lastUpdatedAt;
     }
 
     /**
@@ -184,11 +225,19 @@ export class PricingService {
             analysisTypeFactors: {
                 ...this.pricingConfig.analysisTypeFactors,
                 ...(newConfig.analysisTypeFactors || {})
-            }
+            },
+            // Tiered pricing: merge if provided, otherwise keep current
+            analysisTypePricing: newConfig.analysisTypePricing !== undefined
+                ? newConfig.analysisTypePricing
+                : this.pricingConfig.analysisTypePricing,
+            dataVolumeTiers: newConfig.dataVolumeTiers !== undefined
+                ? newConfig.dataVolumeTiers
+                : this.pricingConfig.dataVolumeTiers,
         };
 
         this.syncLegacyCostFactors();
-        console.log(`✅ [PricingService] Updated pricing config:`, this.pricingConfig);
+        const hasTiered = !!this.pricingConfig.analysisTypePricing;
+        console.log(`✅ [PricingService] Updated pricing config (tieredPricing=${hasTiered}, platformFee=$${this.pricingConfig.platformFee})`);
 
         // Persist to DB (non-blocking)
         this.persistToDatabase().catch(err =>

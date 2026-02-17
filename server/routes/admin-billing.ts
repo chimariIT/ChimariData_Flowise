@@ -10,6 +10,7 @@ import { AdminAuditLogService } from '../services/admin-audit-log';
 import { requireAdmin } from '../middleware/rbac';
 // PHASE 6: Import PricingService for admin-configurable analysis pricing
 import { PricingService, type AnalysisPricingConfig } from '../services/pricing';
+import { getVolumeTierKey, getTieredAnalysisPrice, type AnalysisTypePricing, type VolumeTierThreshold } from '../../shared/pricing-config';
 
 const billingService = getBillingService();
 
@@ -320,6 +321,108 @@ router.put('/campaigns/:campaignId/toggle', ensureAuthenticated, ensureAdmin, as
     }
 });
 
+// ============================================================================
+// Campaign CRUD: Update and Delete
+// ============================================================================
+
+/**
+ * PUT /api/admin/billing/campaigns/:campaignId
+ * Update an existing campaign
+ */
+router.put('/campaigns/:campaignId', ensureAuthenticated, ensureAdmin, async (req, res) => {
+    try {
+        const { campaignId } = req.params;
+        const { campaign } = req.body;
+
+        if (!campaign || typeof campaign !== 'object') {
+            return res.status(400).json({ success: false, error: 'Request body must include a campaign object' });
+        }
+
+        // Validate campaign type if provided
+        const validTypes = ['percentage_discount', 'fixed_discount', 'trial_extension', 'quota_boost'];
+        if (campaign.type && !validTypes.includes(campaign.type)) {
+            return res.status(400).json({
+                success: false,
+                error: `Invalid campaign type. Must be one of: ${validTypes.join(', ')}`
+            });
+        }
+
+        // Validate value if provided
+        if (campaign.value !== undefined && (typeof campaign.value !== 'number' || campaign.value < 0)) {
+            return res.status(400).json({ success: false, error: 'Campaign value must be a non-negative number' });
+        }
+
+        // Validate percentage is <= 100
+        if (campaign.type === 'percentage_discount' && campaign.value > 100) {
+            return res.status(400).json({ success: false, error: 'Percentage discount cannot exceed 100%' });
+        }
+
+        // Validate date range
+        if (campaign.validFrom && campaign.validTo) {
+            const from = new Date(campaign.validFrom);
+            const to = new Date(campaign.validTo);
+            if (from >= to) {
+                return res.status(400).json({ success: false, error: 'validFrom must be before validTo' });
+            }
+        }
+
+        const updated = await billingService.updateCampaign(campaignId, campaign);
+        if (!updated) {
+            return res.status(404).json({ success: false, error: 'Campaign not found' });
+        }
+
+        // Audit log
+        await AdminAuditLogService.log({
+            action: 'campaign_updated',
+            adminId: (req as any).user?.id || 'unknown',
+            entityType: 'other',
+            changes: { campaignId, updates: campaign, result: updated },
+            reason: 'Admin campaign update',
+            ipAddress: (req as any).ip,
+            userAgent: (req as any).headers?.['user-agent']
+        });
+
+        res.json({ success: true, message: 'Campaign updated successfully', campaign: updated });
+    } catch (error: any) {
+        console.error('Error updating campaign:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * DELETE /api/admin/billing/campaigns/:campaignId
+ * Delete a campaign
+ */
+router.delete('/campaigns/:campaignId', ensureAuthenticated, ensureAdmin, async (req, res) => {
+    try {
+        const { campaignId } = req.params;
+
+        // Verify campaign exists
+        const [existing] = await db.select().from(billingCampaigns).where(eq(billingCampaigns.id, campaignId));
+        if (!existing) {
+            return res.status(404).json({ success: false, error: 'Campaign not found' });
+        }
+
+        await billingService.deleteCampaign(campaignId);
+
+        // Audit log
+        await AdminAuditLogService.log({
+            action: 'campaign_deleted',
+            adminId: (req as any).user?.id || 'unknown',
+            entityType: 'other',
+            changes: { campaignId, deletedCampaign: existing },
+            reason: 'Admin campaign deletion',
+            ipAddress: (req as any).ip,
+            userAgent: (req as any).headers?.['user-agent']
+        });
+
+        res.json({ success: true, message: 'Campaign deleted successfully' });
+    } catch (error: any) {
+        console.error('Error deleting campaign:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 // Tax Configuration
 router.get('/tax-config', ensureAuthenticated, ensureAdmin, async (req, res) => {
     try {
@@ -586,23 +689,37 @@ router.get('/analytics/revenue', ensureAuthenticated, ensureAdmin, async (req, r
 
 router.get('/analytics/campaigns', ensureAuthenticated, ensureAdmin, async (req, res) => {
     try {
-        const config = (billingService as any).config;
+        // Read from DB (authoritative) instead of in-memory cache
+        const dbCampaigns = await db.select().from(billingCampaigns);
 
-        const campaignAnalytics = config.campaigns.map((campaign: any) => ({
+        const now = new Date();
+        const campaignAnalytics = dbCampaigns.map((campaign: any) => ({
             id: campaign.id,
             name: campaign.name,
             type: campaign.type,
-            uses: campaign.currentUses,
+            value: campaign.value,
+            couponCode: campaign.couponCode,
+            uses: campaign.currentUses || 0,
             maxUses: campaign.maxUses,
-            utilizationRate: campaign.maxUses ? (campaign.currentUses / campaign.maxUses * 100) : 0,
+            utilizationRate: campaign.maxUses ? ((campaign.currentUses || 0) / campaign.maxUses * 100) : 0,
             isActive: campaign.isActive,
+            isExpired: campaign.validTo ? new Date(campaign.validTo) < now : false,
             validFrom: campaign.validFrom,
             validTo: campaign.validTo,
-            estimatedSavings: campaign.currentUses * (campaign.value || 0) // Simplified calculation
+            estimatedSavings: (campaign.currentUses || 0) * (campaign.value || 0) // Simplified calculation
         }));
 
-        res.json({ success: true, campaigns: campaignAnalytics });
+        // Summary stats
+        const summary = {
+            totalCampaigns: campaignAnalytics.length,
+            activeCampaigns: campaignAnalytics.filter((c: any) => c.isActive && !c.isExpired).length,
+            totalUses: campaignAnalytics.reduce((sum: number, c: any) => sum + c.uses, 0),
+            totalEstimatedSavings: campaignAnalytics.reduce((sum: number, c: any) => sum + c.estimatedSavings, 0),
+        };
+
+        res.json({ success: true, campaigns: campaignAnalytics, summary });
     } catch (error: any) {
+        console.error('Campaign analytics error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -658,11 +775,13 @@ router.get('/analysis-pricing', ensureAuthenticated, ensureAdmin, async (req, re
             success: true,
             config,
             description: {
-                baseCost: 'Base cost for any analysis ($)',
-                dataSizeCostPer1K: 'Cost per 1000 records ($)',
-                platformFee: 'Platform fee added to each project ($)',
-                complexityMultipliers: 'Multipliers for different complexity levels',
-                analysisTypeFactors: 'Cost multipliers for each analysis type'
+                platformFee: 'Platform fee added once per project ($)',
+                analysisTypePricing: 'Tiered cost matrix: analysisType → volumeTier → complexity → price ($)',
+                dataVolumeTiers: 'Data volume tier thresholds (small, medium, large, xlarge)',
+                baseCost: 'Legacy: base cost for any analysis ($)',
+                dataSizeCostPer1K: 'Legacy: cost per 1000 records ($)',
+                complexityMultipliers: 'Legacy: multipliers for different complexity levels',
+                analysisTypeFactors: 'Legacy: cost multipliers for each analysis type'
             }
         });
     } catch (error: any) {
@@ -713,7 +832,7 @@ router.put('/analysis-pricing', ensureAuthenticated, ensureAdmin, async (req, re
             }
         }
 
-        // Validate analysis type factors
+        // Validate analysis type factors (legacy)
         if (updates.analysisTypeFactors) {
             for (const [key, value] of Object.entries(updates.analysisTypeFactors)) {
                 if (typeof value !== 'number' || value < 0) {
@@ -725,7 +844,85 @@ router.put('/analysis-pricing', ensureAuthenticated, ensureAdmin, async (req, re
             }
         }
 
+        // Validate tiered pricing matrix (new model)
+        if (updates.analysisTypePricing) {
+            const volumeTierKeys = ['small', 'medium', 'large', 'xlarge'];
+            const complexityKeys = ['basic', 'intermediate', 'advanced'];
+
+            for (const [typeName, tierCosts] of Object.entries(updates.analysisTypePricing)) {
+                if (!tierCosts || typeof tierCosts !== 'object') {
+                    return res.status(400).json({
+                        success: false,
+                        error: `analysisTypePricing.${typeName} must be an object with volume tier costs`
+                    });
+                }
+                for (const vtKey of volumeTierKeys) {
+                    const complexityCosts = (tierCosts as any)[vtKey];
+                    if (!complexityCosts || typeof complexityCosts !== 'object') {
+                        return res.status(400).json({
+                            success: false,
+                            error: `analysisTypePricing.${typeName}.${vtKey} must be an object with complexity costs`
+                        });
+                    }
+                    for (const cKey of complexityKeys) {
+                        const val = complexityCosts[cKey];
+                        if (typeof val !== 'number' || val < 0) {
+                            return res.status(400).json({
+                                success: false,
+                                error: `analysisTypePricing.${typeName}.${vtKey}.${cKey} must be a non-negative number (got ${val})`
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Validate data volume tiers
+        if (updates.dataVolumeTiers) {
+            for (const [tierKey, tierDef] of Object.entries(updates.dataVolumeTiers)) {
+                if (!tierDef || typeof (tierDef as any).maxRows !== 'number' || typeof (tierDef as any).label !== 'string') {
+                    return res.status(400).json({
+                        success: false,
+                        error: `dataVolumeTiers.${tierKey} must have numeric maxRows and string label`
+                    });
+                }
+            }
+        }
+
         const updatedConfig = PricingService.updatePricingConfig(updates);
+
+        // P1-9 FIX: Force refresh pricing from database to invalidate cache
+        // This ensures all subsequent requests use the updated config
+        try {
+            await PricingService.refreshFromDatabase();
+            console.log(`🔄 [P1-9] Pricing cache invalidated after admin update`);
+        } catch (refreshErr) {
+            console.warn(`⚠️ [P1-9] Cache refresh failed (in-memory update still applied):`, refreshErr);
+        }
+
+        // FIX P0-2: Broadcast config change to ALL connected clients via WebSocket (not just message broker)
+        // Uses same pattern as admin.ts broadcastAdminEvent to reach frontend RealtimeClient
+        try {
+            const mod = await import('../index.js');
+            const realtimeServer = (mod as any)?.realtimeServer as { broadcast: (payload: any) => void } | undefined;
+            if (realtimeServer) {
+                realtimeServer.broadcast({
+                    type: 'status_change',
+                    sourceType: 'streaming',
+                    sourceId: 'admin',
+                    userId: 'system',
+                    timestamp: new Date(),
+                    data: {
+                        eventType: 'analysis_pricing_updated',
+                        updatedAt: new Date().toISOString(),
+                        updatedBy: (req.user as any)?.id || 'admin',
+                    }
+                });
+                console.log(`📡 [P0-2] Broadcasted pricing update to WebSocket clients`);
+            }
+        } catch (broadcastErr) {
+            console.warn(`⚠️ [P0-2] Failed to broadcast config update (non-blocking):`, broadcastErr);
+        }
 
         // Log the admin action
         const userId = (req.user as any)?.id;
@@ -772,41 +969,58 @@ router.post('/analysis-pricing/preview', ensureAuthenticated, ensureAdmin, async
     try {
         const { analysisType, recordCount, complexity, proposedConfig } = req.body;
 
-        // If proposedConfig provided, temporarily apply it for preview
-        let originalConfig: AnalysisPricingConfig | null = null;
-        if (proposedConfig) {
-            originalConfig = PricingService.getPricingConfig();
-            PricingService.updatePricingConfig(proposedConfig);
-        }
+        const type = analysisType || 'statistical';
+        const rows = recordCount || 10000;
+        const cmplx = complexity || 'intermediate';
 
-        try {
-            const costResult = PricingService.calculateAnalysisCost(
-                analysisType || 'statistical',
-                recordCount || 10000,
-                complexity || 'intermediate'
+        // Determine which config to use for preview
+        const currentConfig = PricingService.getPricingConfig();
+        const previewConfig = proposedConfig
+            ? { ...currentConfig, ...proposedConfig }
+            : currentConfig;
+
+        // Use tiered pricing if available
+        const hasTieredPricing = !!previewConfig.analysisTypePricing &&
+            Object.keys(previewConfig.analysisTypePricing).length > 0;
+
+        let analysisCost: number;
+        let volumeTierLabel = '';
+
+        if (hasTieredPricing) {
+            // Tiered pricing: lookup from matrix
+            const volumeTierKey = getVolumeTierKey(rows, previewConfig.dataVolumeTiers);
+            const tierDef = previewConfig.dataVolumeTiers?.[volumeTierKey];
+            volumeTierLabel = tierDef?.label || volumeTierKey;
+
+            analysisCost = getTieredAnalysisPrice(
+                type,
+                volumeTierKey,
+                cmplx,
+                previewConfig.analysisTypePricing
             );
-
-            // Add platform fee for total project cost
-            const platformFee = PricingService.getPlatformFee();
-            const totalProjectCost = costResult.totalCost + platformFee;
-
-            res.json({
-                success: true,
-                preview: {
-                    analysisType: analysisType || 'statistical',
-                    recordCount: recordCount || 10000,
-                    complexity: complexity || 'intermediate',
-                    analysisCost: costResult,
-                    platformFee,
-                    totalProjectCost: parseFloat(totalProjectCost.toFixed(2))
-                }
-            });
-        } finally {
-            // Restore original config if we changed it
-            if (originalConfig) {
-                PricingService.updatePricingConfig(originalConfig);
-            }
+        } else {
+            // Legacy formula fallback
+            const legacyResult = PricingService.calculateAnalysisCost(type, rows, cmplx as any);
+            analysisCost = legacyResult.totalCost;
         }
+
+        // Platform fee
+        const platformFee = previewConfig.platformFee || PricingService.getPlatformFee();
+        const totalProjectCost = platformFee + analysisCost;
+
+        res.json({
+            success: true,
+            preview: {
+                analysisType: type,
+                recordCount: rows,
+                complexity: cmplx,
+                volumeTier: volumeTierLabel,
+                pricingModel: hasTieredPricing ? 'tiered' : 'legacy',
+                analysisCost: parseFloat(analysisCost.toFixed(2)),
+                platformFee: parseFloat(platformFee.toFixed(2)),
+                totalProjectCost: parseFloat(totalProjectCost.toFixed(2))
+            }
+        });
     } catch (error: any) {
         console.error('❌ [Admin] Error previewing analysis cost:', error);
         res.status(500).json({ success: false, error: error.message });

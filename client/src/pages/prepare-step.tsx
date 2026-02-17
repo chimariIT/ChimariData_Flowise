@@ -251,7 +251,7 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
     // Create a signature of current values to compare
     const currentQuestions = businessQuestions
       .split('\n')
-      .map((q, i) => ({ id: `q-${i}`, text: q.trim() }))
+      .map((q, i) => ({ id: `q_${i + 1}`, text: q.trim() }))
       .filter(q => q.text.length > 0);
 
     const dataToSave = JSON.stringify({
@@ -511,7 +511,7 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
           // CRITICAL FIX: Use effectiveGoal to ensure we save the correct goal (from state or journeyProgress)
           updateProgress({
             analysisGoal: effectiveGoal,
-            userQuestions: userQuestions.map((q: string, i: number) => ({ id: `q-${i}`, text: q })),
+            userQuestions: userQuestions.map((q: string, i: number) => ({ id: `q_${i + 1}`, text: q })),
             currentStep: 'prepare'
           });
           console.log('✅ [SSOT] Persisted goals and questions to journeyProgress');
@@ -553,13 +553,25 @@ export default function PrepareStep({ journeyType, onNext, onPrevious }: Prepare
         setLoadingResearcher(false);
       }
 
+      // FIX 1C: Flush industry to journeyProgress BEFORE triggering requirements generation
+      // This eliminates the race condition where debounced auto-save hasn't fired yet
+      const effectiveIndustry = industryOverride || detectedIndustry || 'general';
+      try {
+        await updateProgressAsync({ industry: effectiveIndustry });
+        console.log(`✅ [Fix 1C] Flushed industry="${effectiveIndustry}" to journeyProgress before requirements call`);
+      } catch (indErr) {
+        console.warn('⚠️ [Fix 1C] Failed to flush industry, continuing with body param:', indErr);
+      }
+
       // Now generate requirements (DS + BA + PM agents collaborate)
       // Timeout at 60s — multiple AI calls (analysis inference + business definition enrichment) need time
       const requirementsPromise = apiClient.post(`/api/projects/${projectId}/generate-data-requirements`, {
         userGoals,
         userQuestions,
         // GAP F: Pass researcher recommendations to help guide DS analysis planning
-        researcherContext: researcherRecommendations
+        researcherContext: researcherRecommendations,
+        // FIX 1A: Pass industry explicitly in request body to eliminate race condition
+        industry: effectiveIndustry
       });
       const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error('Requirements generation timed out after 90 seconds. Please try again.')), 90000)

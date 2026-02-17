@@ -1,3 +1,8 @@
+/**
+ * @deprecated P2-5: This file is LEGACY. Use server/services/billing/unified-billing-service.ts instead.
+ * This enhanced feature billing service should be migrated to the unified service.
+ * All new billing code should go into unified-billing-service.ts.
+ */
 // Enhanced Feature-Based Billing Service
 // Integrates with the new feature complexity system and adaptive billing
 

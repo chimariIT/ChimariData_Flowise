@@ -5,13 +5,15 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft, Calculator, Clock, Database, BarChart3, Zap, Crown, Eye, ShieldCheck, Loader2 } from "lucide-react";
+import { ArrowLeft, Calculator, Clock, Database, BarChart3, Zap, Crown, Eye, ShieldCheck, Loader2, Ticket, X, CheckCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { ResultsPreview } from '@/components/results-preview';
 import { useProject } from '@/hooks/useProject';
 import { useJourneyState } from '@/hooks/useJourneyState';
+import { useLocation } from 'wouter';
 
 // Load Stripe only if a valid key is configured
 const stripePublicKey = (import.meta.env.VITE_STRIPE_PUBLIC_KEY || '').trim();
@@ -109,7 +111,9 @@ const AnalysisPaymentForm = ({ projectId, onSuccess }: { projectId: string; anal
       const { error } = await stripe.confirmPayment({
         elements,
         confirmParams: {
-          return_url: window.location.origin + `/projects/${projectId}`,
+          // P1-4 FIX: Redirect to execute step (matches Stripe success_url) instead of project dashboard
+          // Extract journeyType from current URL path (e.g., /journeys/non-tech/payment) or default to 'non-tech'
+          return_url: window.location.origin + `/journeys/${window.location.pathname.match(/\/journeys\/([^/]+)/)?.[1] || 'non-tech'}/execute?projectId=${projectId}&payment=success`,
         },
       });
 
@@ -163,6 +167,7 @@ const AnalysisPaymentForm = ({ projectId, onSuccess }: { projectId: string; anal
 };
 
 export default function AnalysisPaymentPage({ projectId, projectData: providedProjectData, onBack, onSuccess }: AnalysisPaymentProps) {
+  const [, setLocation] = useLocation();
   const [analysisType, setAnalysisType] = useState<'standard' | 'advanced' | 'custom'>('standard');
   const [pricing, setPricing] = useState<PricingData | null>(null);
   const [dataComplexity, setDataComplexity] = useState<string>('');
@@ -171,6 +176,17 @@ export default function AnalysisPaymentPage({ projectId, projectData: providedPr
   const [showPreview, setShowPreview] = useState(false);
   const [intentMetrics, setIntentMetrics] = useState<{ lockedCostCents?: number; spentCostCents?: number; remainingCostCents?: number; payableCents?: number } | null>(null);
   const [audienceContext, setAudienceContext] = useState<any>(null);
+  // Coupon / discount state
+  const [couponCode, setCouponCode] = useState('');
+  const [couponLoading, setCouponLoading] = useState(false);
+  const [appliedDiscount, setAppliedDiscount] = useState<{
+    campaignId: string;
+    couponCode: string;
+    discountType: string;
+    discountValue: number;
+    discountAmountCents: number;
+    campaignName: string;
+  } | null>(null);
   const { toast } = useToast();
 
   // 🔒 SSOT: Use useProject hook instead of useProjectSession
@@ -400,7 +416,43 @@ export default function AnalysisPaymentPage({ projectId, projectData: providedPr
         return;
       }
 
-      const amountForIntent = chargeableCents;
+      // Use discounted amount if coupon is applied
+      const amountForIntent = appliedDiscount ? discountedChargeableCents : chargeableCents;
+
+      // If coupon covers full cost, handle differently
+      if (appliedDiscount && (amountForIntent === 0 || amountForIntent === null)) {
+        // Full discount - no Stripe payment needed, create intent will handle it
+        try {
+          const response = await apiRequest("POST", "/api/analysis-payment/create-intent", {
+            projectId,
+            analysisType,
+            dataSizeMB: projectData.dataSizeMB,
+            recordCount: projectData.recordCount,
+            questionsCount: projectData.questions.length,
+            payableCents: 0,
+            couponCode: appliedDiscount.couponCode
+          });
+
+          const data = await response.json();
+          if (data?.paymentComplete) {
+            toast({
+              title: "Coupon Covers Full Cost!",
+              description: "Your analysis is starting — no payment required.",
+            });
+            onSuccess();
+            return;
+          }
+        } catch (err: any) {
+          console.error("Full-discount intent error:", err);
+          toast({
+            title: "Error",
+            description: "Failed to apply full discount. Please try again.",
+            variant: "destructive",
+          });
+          return;
+        }
+      }
+
       if (amountForIntent === null || amountForIntent === undefined || Number.isNaN(amountForIntent) || amountForIntent <= 0) {
         toast({
           title: amountForIntent === 0 ? "No Balance Due" : "Pricing Required",
@@ -418,16 +470,36 @@ export default function AnalysisPaymentPage({ projectId, projectData: providedPr
         dataSizeMB: projectData.dataSizeMB,
         recordCount: projectData.recordCount,
         questionsCount: projectData.questions.length,
-        payableCents: amountForIntent
+        payableCents: amountForIntent,
+        ...(appliedDiscount ? { couponCode: appliedDiscount.couponCode } : {})
       });
 
       const data = await response.json();
       if (!data?.success) {
+        // If payment was completed via coupon (full discount), handle success
+        if (data?.paymentComplete) {
+          toast({
+            title: "Coupon Covers Full Cost!",
+            description: "Your analysis is starting — no payment required.",
+          });
+          onSuccess();
+          return;
+        }
         toast({
           title: "Payment Error",
           description: data?.error || 'Failed to create payment intent.',
           variant: "destructive",
         });
+        return;
+      }
+
+      // If response indicates full payment via coupon
+      if (data.paymentComplete) {
+        toast({
+          title: "Coupon Applied Successfully!",
+          description: "Your analysis is starting — coupon covered the full cost.",
+        });
+        onSuccess();
         return;
       }
 
@@ -502,6 +574,70 @@ export default function AnalysisPaymentPage({ projectId, projectData: providedPr
       journeyType: 'business'
     });
   };
+
+  // --- Coupon handling ---
+  const handleApplyCoupon = async () => {
+    const code = couponCode.trim();
+    if (!code) {
+      toast({ title: 'Enter a coupon code', variant: 'destructive' });
+      return;
+    }
+
+    setCouponLoading(true);
+    try {
+      const response = await apiRequest('POST', '/api/analysis-payment/validate-coupon', {
+        projectId,
+        couponCode: code
+      });
+      const data = await response.json();
+
+      if (!data?.success || !data?.valid) {
+        toast({
+          title: 'Invalid Coupon',
+          description: data?.reason || 'This coupon code is not valid.',
+          variant: 'destructive'
+        });
+        setCouponLoading(false);
+        return;
+      }
+
+      setAppliedDiscount({
+        campaignId: data.campaignId,
+        couponCode: data.couponCode,
+        discountType: data.discountType,
+        discountValue: data.discountValue,
+        discountAmountCents: data.discountAmountCents,
+        campaignName: data.campaignName || data.couponCode
+      });
+
+      toast({
+        title: 'Coupon Applied!',
+        description: `${data.discountType === 'percentage_discount' ? `${data.discountValue}% off` : `$${(data.discountAmountCents / 100).toFixed(2)} off`} applied to your order.`,
+      });
+    } catch (error: any) {
+      console.error('Coupon validation error:', error);
+      toast({
+        title: 'Coupon Error',
+        description: 'Unable to validate coupon. Please try again.',
+        variant: 'destructive'
+      });
+    } finally {
+      setCouponLoading(false);
+    }
+  };
+
+  const handleRemoveCoupon = () => {
+    setAppliedDiscount(null);
+    setCouponCode('');
+  };
+
+  // Compute discounted chargeable amount
+  const discountedChargeableCents = useMemo(() => {
+    if (!appliedDiscount || chargeableCents === null || chargeableCents === undefined) {
+      return chargeableCents;
+    }
+    return Math.max(0, chargeableCents - appliedDiscount.discountAmountCents);
+  }, [chargeableCents, appliedDiscount]);
 
   const handleShowPreview = () => {
     setShowPreview(true);
@@ -703,6 +839,87 @@ export default function AnalysisPaymentPage({ projectId, projectData: providedPr
               </CardContent>
             </Card>
 
+            {/* Coupon Code Section */}
+            {pricing && !clientSecret && (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <Ticket className="w-4 h-4" />
+                    Have a coupon code?
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {appliedDiscount ? (
+                    <div className="flex items-center justify-between p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle className="w-4 h-4 text-green-600" />
+                        <div>
+                          <p className="text-sm font-medium text-green-800 dark:text-green-200">
+                            {appliedDiscount.couponCode}
+                          </p>
+                          <p className="text-xs text-green-600 dark:text-green-400">
+                            {appliedDiscount.discountType === 'percentage_discount'
+                              ? `${appliedDiscount.discountValue}% off`
+                              : `$${(appliedDiscount.discountAmountCents / 100).toFixed(2)} off`}
+                            {' '}&mdash; saving {formatCurrency(appliedDiscount.discountAmountCents)}
+                          </p>
+                        </div>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleRemoveCoupon}
+                        className="text-green-700 hover:text-red-600 hover:bg-red-50"
+                      >
+                        <X className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="Enter coupon code"
+                        value={couponCode}
+                        onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleApplyCoupon(); } }}
+                        className="flex-1"
+                        disabled={couponLoading}
+                      />
+                      <Button
+                        onClick={handleApplyCoupon}
+                        variant="outline"
+                        disabled={couponLoading || !couponCode.trim()}
+                      >
+                        {couponLoading ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          'Apply'
+                        )}
+                      </Button>
+                    </div>
+                  )}
+
+                  {/* Show discounted total when coupon is applied */}
+                  {appliedDiscount && chargeableCents !== null && (
+                    <div className="mt-3 pt-3 border-t">
+                      <div className="flex justify-between text-sm text-muted-foreground">
+                        <span>Original total</span>
+                        <span className="line-through">{formatCurrency(chargeableCents)}</span>
+                      </div>
+                      <div className="flex justify-between text-sm text-green-600">
+                        <span>Discount</span>
+                        <span>-{formatCurrency(appliedDiscount.discountAmountCents)}</span>
+                      </div>
+                      <Separator className="my-2" />
+                      <div className="flex justify-between text-lg font-semibold">
+                        <span>New Total</span>
+                        <span>{formatCurrency(discountedChargeableCents)}</span>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
             {pricing && !clientSecret && (
               <div className="space-y-3">
                 <Button
@@ -720,7 +937,10 @@ export default function AnalysisPaymentPage({ projectId, projectData: providedPr
                   size="lg"
                 >
                   <Zap className="w-4 h-4 mr-2" />
-                  Proceed to Payment{chargeableCents !== null ? ` (${formatCurrency(chargeableCents)})` : ''}
+                  {appliedDiscount
+                    ? `Proceed to Payment (${formatCurrency(discountedChargeableCents)})`
+                    : `Proceed to Payment${chargeableCents !== null ? ` (${formatCurrency(chargeableCents)})` : ''}`
+                  }
                 </Button>
               </div>
             )}
@@ -739,7 +959,11 @@ export default function AnalysisPaymentPage({ projectId, projectData: providedPr
                       <AnalysisPaymentForm
                         projectId={projectId}
                         analysisType={analysisType}
-                        onSuccess={onSuccess}
+                        onSuccess={() => {
+                          // FIX F5: Navigate to execute step after payment success
+                          const jType = (project as any)?.journeyType || 'non-tech';
+                          setLocation(`/journeys/${jType}/execute?projectId=${projectId}&payment=success`);
+                        }}
                       />
                     </Elements>
                   ) : (

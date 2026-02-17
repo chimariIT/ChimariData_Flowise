@@ -15,7 +15,7 @@ import {
 describe('Cost Estimation Service', () => {
   describe('PRICING_CONSTANTS', () => {
     it('should have correct base platform fee', () => {
-      expect(PRICING_CONSTANTS.basePlatformFee).toBe(0.50);
+      expect(PRICING_CONSTANTS.basePlatformFee).toBe(25.00);
     });
 
     it('should have correct data processing rate per 1K rows', () => {
@@ -23,7 +23,7 @@ describe('Cost Estimation Service', () => {
     });
 
     it('should have correct base analysis cost', () => {
-      expect(PRICING_CONSTANTS.baseAnalysisCost).toBe(1.00);
+      expect(PRICING_CONSTANTS.baseAnalysisCost).toBe(5.00);
     });
   });
 
@@ -153,11 +153,11 @@ describe('Cost Estimation Service', () => {
         analysisTypes: ['descriptive']
       });
 
-      // $0.50 base + $0.10 (1K rows) + $1.00 (descriptive * 1.0) = $1.60
-      expect(result.totalCost).toBe(1.60);
-      expect(result.breakdown.basePlatformFee).toBe(0.50);
+      // $25.00 platform + $0.10 (1K rows) + $5.00 (descriptive: base $5 * 1.0 factor * 1.0 mult) = $30.10
+      expect(result.totalCost).toBe(30.10);
+      expect(result.breakdown.basePlatformFee).toBe(25.00);
       expect(result.breakdown.dataSizeCharge).toBe(0.10);
-      expect(result.breakdown.analysisTypeCharge).toBe(1.00);
+      expect(result.breakdown.analysisTypeCharge).toBe(5.00);
     });
 
     it('should calculate cost for multiple analysis types', () => {
@@ -166,12 +166,12 @@ describe('Cost Estimation Service', () => {
         analysisTypes: ['descriptive', 'correlation', 'regression']
       });
 
-      // $0.50 base + $0.10 (1K rows) + $1.00 + $1.20 + $1.60 = $4.40
-      expect(result.totalCost).toBe(4.40);
+      // $25.00 platform + $0.10 (1K rows) + $5.00 + $6.00 + $8.00 = $44.10
+      expect(result.totalCost).toBe(44.10);
       expect(result.breakdown.perAnalysisBreakdown).toHaveLength(3);
-      expect(result.breakdown.perAnalysisBreakdown[0]).toEqual({ type: 'descriptive', cost: 1.00 });
-      expect(result.breakdown.perAnalysisBreakdown[1]).toEqual({ type: 'correlation', cost: 1.20 });
-      expect(result.breakdown.perAnalysisBreakdown[2]).toEqual({ type: 'regression', cost: 1.60 });
+      expect(result.breakdown.perAnalysisBreakdown[0]).toEqual({ type: 'descriptive', cost: 5.00 });
+      expect(result.breakdown.perAnalysisBreakdown[1]).toEqual({ type: 'correlation', cost: 6.00 });
+      expect(result.breakdown.perAnalysisBreakdown[2]).toEqual({ type: 'regression', cost: 8.00 });
     });
 
     it('should apply complexity multiplier for large datasets', () => {
@@ -180,10 +180,10 @@ describe('Cost Estimation Service', () => {
         analysisTypes: ['descriptive']
       });
 
-      // $0.50 base + $5.00 (50K rows) + $1.50 (1.0 * 1.5 multiplier) = $7.00
-      expect(result.totalCost).toBe(7.00);
+      // $25.00 platform + $5.00 (50K rows) + $7.50 (base $5 * 1.0 factor * 1.5 mult) = $37.50
+      expect(result.totalCost).toBe(37.50);
       expect(result.breakdown.dataSizeCharge).toBe(5.00);
-      expect(result.breakdown.analysisTypeCharge).toBe(1.50);
+      expect(result.breakdown.analysisTypeCharge).toBe(7.50);
     });
 
     it('should apply 2.5x multiplier for very large datasets', () => {
@@ -192,9 +192,9 @@ describe('Cost Estimation Service', () => {
         analysisTypes: ['descriptive']
       });
 
-      // $0.50 base + $20.00 (200K rows) + $2.50 (1.0 * 2.5 multiplier) = $23.00
-      expect(result.totalCost).toBe(23.00);
-      expect(result.breakdown.analysisTypeCharge).toBe(2.50);
+      // $25.00 platform + $20.00 (200K rows) + $12.50 (base $5 * 1.0 factor * 2.5 mult) = $57.50
+      expect(result.totalCost).toBe(57.50);
+      expect(result.breakdown.analysisTypeCharge).toBe(12.50);
     });
 
     it('should add charge for extra questions', () => {
@@ -204,8 +204,8 @@ describe('Cost Estimation Service', () => {
         questionsCount: 10
       });
 
-      // $0.50 base + $0.10 (1K rows) + $1.00 (descriptive) + $0.50 (5 extra questions) = $2.10
-      expect(result.totalCost).toBe(2.10);
+      // $25.00 platform + $0.10 (1K rows) + $5.00 (descriptive) + $0.50 (5 extra questions) = $30.60
+      expect(result.totalCost).toBe(30.60);
       expect(result.breakdown.questionsCharge).toBe(0.50);
     });
 
@@ -225,9 +225,9 @@ describe('Cost Estimation Service', () => {
         analysisTypes: ['machine_learning']
       });
 
-      // $0.50 base + $10.00 (100K rows) + $7.50 (3.0 factor * 2.5 multiplier) = $18.00
-      expect(result.breakdown.analysisTypeCharge).toBe(7.50);
-      expect(result.totalCost).toBe(18.00);
+      // $25.00 platform + $10.00 (100K rows) + $37.50 (base $5 * 3.0 factor * 2.5 mult) = $72.50
+      expect(result.breakdown.analysisTypeCharge).toBe(37.50);
+      expect(result.totalCost).toBe(72.50);
     });
 
     it('should handle empty analysis types', () => {
@@ -236,8 +236,8 @@ describe('Cost Estimation Service', () => {
         analysisTypes: []
       });
 
-      // $0.50 base + $0.10 (1K rows) + $0 (no analyses) = $0.60
-      expect(result.totalCost).toBe(0.60);
+      // $25.00 platform + $0.10 (1K rows) + $0 (no analyses) = $25.10
+      expect(result.totalCost).toBe(25.10);
       expect(result.breakdown.analysisTypeCharge).toBe(0);
     });
 
@@ -247,8 +247,8 @@ describe('Cost Estimation Service', () => {
         analysisTypes: ['descriptive']
       });
 
-      // $0.50 base + $0 (0 rows) + $1.00 (descriptive) = $1.50
-      expect(result.totalCost).toBe(1.50);
+      // $25.00 platform + $0 (0 rows) + $5.00 (descriptive) = $30.00
+      expect(result.totalCost).toBe(30.00);
       expect(result.breakdown.dataSizeCharge).toBe(0);
     });
   });

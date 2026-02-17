@@ -6,6 +6,11 @@
  * 2. Executing Python analysis scripts
  * 3. Parsing results into structured insights
  * 4. Storing results in database
+ *
+ * P3-1: Refactored — types, data helpers, and insight helpers extracted into:
+ *   - analysis-types.ts
+ *   - analysis-data-helpers.ts
+ *   - analysis-insight-helpers.ts
  */
 
 import { db } from '../db';
@@ -28,206 +33,49 @@ import { PythonProcessor } from './python-processor';
 import { storage } from './storage';
 import { nanoid } from 'nanoid';
 import { dataScienceOrchestrator, type DataScienceResults } from './data-science-orchestrator';
-import { dataAccessor, type DatasetDataResult } from './data-accessor'; // Week 4 Option B: Unified data access
 // PHASE 6 FIX (Friction #2): Import ComputeEngineSelector for intelligent compute routing
 import { ComputeEngineSelector, type ComputeEngine, type ComputeSelectionResult } from './compute-engine-selector';
 
 import { BusinessAgent } from './business-agent';
+import { generateStableQuestionId } from '../constants';
 
-type Dataset = typeof datasets.$inferSelect;
+// P3-1: Import types from extracted module
+import type {
+  Dataset,
+  AnalysisRequest,
+  UserContext,
+  AnalysisInsight,
+  AnalysisRecommendation,
+  QuestionAnalysisMapping,
+  AnalysisResults,
+} from './analysis-types';
 
-interface AnalysisRequest {
-  projectId: string;
-  userId: string;
-  analysisTypes: string[]; // ['descriptive', 'correlation', 'regression', etc.]
-  datasetIds?: string[];
-  userContext?: UserContext;
-  // GAP D + GAP A: DS-recommended analyses from requirements document with priority ordering
-  analysisPath?: Array<{
-    analysisId: string;
-    analysisName: string;
-    analysisType?: string;
-    description?: string;
-    techniques?: string[];
-    requiredDataElements?: string[];
-    estimatedDuration?: string;
-    dependencies?: string[]; // GAP A: Other analysis IDs that must complete first
-    priority?: number;       // GAP A: Lower number = higher priority (earlier execution)
-  }>;
-  // GAP D: Question-to-analysis mapping for traceability
-  questionAnswerMapping?: Array<{
-    questionId: string;
-    questionText: string;
-    recommendedAnalyses?: string[];
-    requiredDataElements?: string[];
-    transformationsNeeded?: string[];
-  }>;
-  // P0-1 FIX: PII columns to exclude from analysis
-  columnsToExclude?: string[];
-}
+// P3-1: Import data helpers from extracted module
+import {
+  extractDatasetRows,
+  buildDatasetPayload,
+  filterPIIColumns,
+  getProjectDataViaAccessor,
+  basicDataProfilingFromDataset,
+} from './analysis-data-helpers';
 
-interface UserContext {
-  analysisGoal?: string;
-  businessQuestions?: string;
-  selectedTemplates?: string[];
-  audience?: {
-    primaryAudience: string;
-    secondaryAudiences?: string[];
-    decisionContext?: string;
-  };
-  industry?: string;
-}
+// P3-1: Import insight helpers from extracted module
+import {
+  parseInsights,
+  generateRecommendations,
+  calculateQualityScore,
+} from './analysis-insight-helpers';
 
-interface AnalysisInsight {
-  id: number;
-  title: string;
-  description: string;
-  impact: 'High' | 'Medium' | 'Low';
-  confidence: number;
-  category: string;
-  dataSource?: string;
-  details?: any;
-  answersQuestions?: string[]; // Phase 3: Question IDs this insight helps answer
-}
-
-interface AnalysisRecommendation {
-  id: number;
-  title: string;
-  description: string;
-  priority: 'High' | 'Medium' | 'Low' | 'high' | 'medium' | 'low';
-  effort: 'High' | 'Medium' | 'Low';
-  expectedImpact?: string;
-  impact?: string; // Extended from DataScienceOrchestrator
-}
-
-// Phase 3: Question-to-Analysis Mapping
-interface QuestionAnalysisMapping {
-  questionId: string;
-  questionText: string;
-  requiredDataElements: string[];
-  recommendedAnalyses: string[];
-  transformationsNeeded: string[];
-  expectedArtifacts: Array<{
-    artifactType: 'visualization' | 'model' | 'report' | 'dashboard' | 'metric';
-    description: string;
-  }>;
-}
-
-interface AnalysisResults {
-  projectId: string;
-  analysisTypes: string[];
-  insights: AnalysisInsight[];
-  recommendations: AnalysisRecommendation[];
-  visualizations: any[];
-  summary: {
-    totalAnalyses: number;
-    dataRowsProcessed: number;
-    columnsAnalyzed: number;
-    executionTime: string;
-    qualityScore: number;
-  };
-  metadata: {
-    executedAt: Date;
-    datasetNames: string[];
-    techniques: string[];
-    // Extended metadata from DataScienceOrchestrator
-    totalRows?: number;
-    totalColumns?: number;
-    analysisTypes?: string[];
-    executionTimeMs?: number;
-  };
-  questionAnswers?: {
-    projectId: string;
-    answers: Array<{
-      question: string;
-      answer: string;
-      confidence: number;
-      sources: string[];
-      relatedInsights: string[];
-      status: 'answered' | 'partial' | 'pending';
-      generatedAt: Date;
-    }>;
-    generatedBy: string;
-    generatedAt: Date;
-    totalQuestions: number;
-    answeredCount: number;
-  };
-  questionAnswerMapping?: QuestionAnalysisMapping[]; // Phase 3: Question-to-analysis mapping
-  insightToQuestionMap?: Record<string, string[]>; // Phase 3: insightId → questionIds
-  // Phase 6: Per-analysis breakdown for dashboard view
-  perAnalysisBreakdown?: Record<string, {
-    status: string;
-    insights?: any[];
-    visualizations?: any[];
-    recommendations?: any[];
-    error?: string;
-    executionTimeMs?: number;
-  }>;
-  analysisStatuses?: Array<{
-    analysisId: string;
-    analysisName: string;
-    analysisType: string;
-    status: string;
-    insightCount: number;
-    errorMessage?: string;
-    executionTimeMs?: number;
-  }>;
-  // Extended properties from DataScienceOrchestrator
-  dataQualityReport?: {
-    overallScore: number;
-    missingValueAnalysis?: any[];
-    outlierDetection?: any[];
-    completenessScore?: number;
-    consistencyScore?: number;
-    piiDetection?: any[];
-  };
-  statisticalAnalysisReport?: {
-    correlationMatrix?: {
-      matrix: number[][];
-      columns: string[];
-      significantCorrelations?: Array<{
-        var1: string;
-        var2: string;
-        correlation: number;
-        pValue?: number;
-      }>;
-    };
-    descriptiveStats?: Record<string, any>;
-    hypothesisTests?: any[];
-  };
-  mlModels?: Array<{
-    modelType: string;
-    problemType: string;
-    targetColumn?: string;
-    features?: string[];
-    metrics: {
-      accuracy?: number;
-      r2?: number;
-      rmse?: number;
-      silhouetteScore?: number;
-    };
-    featureImportance?: Array<{
-      feature: string;
-      importance: number;
-    }>;
-  }>;
-  executiveSummary?: {
-    keyFindings?: string[];
-    answersToQuestions?: Array<{
-      question: string;
-      answer: string;
-      confidence: number;
-      evidence?: string[];
-    }>;
-    recommendations?: Array<{
-      text: string;
-      priority: string;
-      expectedImpact?: string;
-    }>;
-    nextSteps?: string[];
-  };
-  businessKPIs?: any[];
-}
+// P3-1: Re-export for backward compatibility — existing consumers import from this file
+export { SUPPORTED_ANALYSIS_TYPES } from './analysis-types';
+export type {
+  AnalysisRequest,
+  UserContext,
+  AnalysisInsight,
+  AnalysisRecommendation,
+  QuestionAnalysisMapping,
+  AnalysisResults,
+} from './analysis-types';
 
 export class AnalysisExecutionService {
   /**
@@ -467,7 +315,9 @@ export class AnalysisExecutionService {
   }
 
   /**
-   * Execute analysis on a project's datasets
+   * @deprecated Use executeComprehensiveAnalysis() instead. This legacy method
+   * uses hardcoded basic statistics and does NOT route to Python analysis scripts
+   * via DataScienceOrchestrator. Kept for backward compatibility only.
    *
    * Agent Responsibility: DATA_SCIENTIST
    * - Selects and prioritizes analysis types
@@ -705,8 +555,9 @@ export class AnalysisExecutionService {
       }
 
       // Validate that datasets have actual data to analyze
+      // Pass columnsToExclude so the emergency PII filter activates even during validation
       const datasetsWithData = projectDatasetList.filter((ds: any) => {
-        const rows = this.extractDatasetRows(ds);
+        const rows = extractDatasetRows(ds, columnsToExclude);
         return rows && rows.length > 0;
       });
 
@@ -826,24 +677,43 @@ export class AnalysisExecutionService {
         }
       }
 
-      // Priority 3 - Generate stable question IDs from project.businessQuestions if no mapping exists
-      // This ensures evidence chain doesn't break when questions come from prepare step
+      // Priority 3 - P0-8 FIX: Use structured questions with stable IDs from journeyProgress
+      // This ensures evidence chain uses consistent IDs across elements, transformations, and insights
       if (questionAnswerMapping.length === 0 && userContext.businessQuestions) {
-        const questionsText = typeof userContext.businessQuestions === 'string'
-          ? userContext.businessQuestions.split('\n').filter((q: string) => q.trim())
-          : Array.isArray(userContext.businessQuestions) ? userContext.businessQuestions : [];
+        const businessQs = userContext.businessQuestions;
 
-        questionAnswerMapping = questionsText.map((q: string, idx: number) => ({
-          questionId: `q_${idx + 1}`,
-          questionText: q.trim(),
-          requiredDataElements: [],
-          recommendedAnalyses: request.analysisTypes || [],
-          transformationsNeeded: [],
-          expectedArtifacts: []
-        }));
+        // P0-8: Check for structured questions with stable IDs first
+        if (Array.isArray(businessQs) && businessQs.length > 0 && typeof businessQs[0] === 'object' && businessQs[0]?.id) {
+          // Structured questions from /questions endpoint (P0-8 format)
+          questionAnswerMapping = businessQs.map((q: any) => ({
+            questionId: q.id, // Use stable hash-based ID from project_questions table
+            questionText: (q.text || q.question || '').trim(),
+            requiredDataElements: [],
+            recommendedAnalyses: request.analysisTypes || [],
+            transformationsNeeded: [],
+            expectedArtifacts: []
+          }));
+          console.log(`📋 [P0-8] Loaded ${questionAnswerMapping.length} structured question mappings with stable IDs`);
+        } else {
+          // Legacy fallback: plain string questions — generate stable hash-based IDs
+          // Bug #9 fix: Use generateStableQuestionId() instead of index-based `q_${idx + 1}`
+          // so IDs match those from question-answer-service.ts and survive reordering.
+          const questionsText: string[] = typeof businessQs === 'string'
+            ? businessQs.split('\n').filter((q: string) => q.trim())
+            : Array.isArray(businessQs) ? (businessQs as any[]).filter((q: any) => typeof q === 'string') : [];
 
-        if (questionAnswerMapping.length > 0) {
-          console.log(`📋 [Phase 3 Fix] Generated ${questionAnswerMapping.length} question mappings from businessQuestions`);
+          questionAnswerMapping = questionsText.map((q: string) => ({
+            questionId: generateStableQuestionId(request.projectId, q),
+            questionText: q.trim(),
+            requiredDataElements: [],
+            recommendedAnalyses: request.analysisTypes || [],
+            transformationsNeeded: [],
+            expectedArtifacts: []
+          }));
+
+          if (questionAnswerMapping.length > 0) {
+            console.log(`📋 [Phase 3 Fix] Generated ${questionAnswerMapping.length} question mappings from businessQuestions (legacy string format)`);
+          }
         }
       }
 
@@ -917,16 +787,40 @@ export class AnalysisExecutionService {
                 return; // Skip keyword matching if analysis type matched
               }
 
-              // Priority 2: Keyword matching with stricter threshold (2+ keywords required)
+              // Priority 2: P1-2 FIX - Enhanced keyword matching with synonym awareness
               const questionText = qaMap.questionText.toLowerCase();
               const questionKeywords = questionText
                 .split(/\s+/)
-                .filter(w => w.length > 4) // Require 5+ chars for meaningful keywords
-                .filter(w => !['about', 'which', 'there', 'their', 'would', 'could', 'should', 'these', 'those'].includes(w));
-              const matchCount = questionKeywords.filter(keyword => insightText.includes(keyword)).length;
+                .filter(w => w.length > 4)
+                .filter(w => !['about', 'which', 'there', 'their', 'would', 'could', 'should', 'these', 'those', 'between', 'before', 'after'].includes(w));
 
-              // Require at least 2 keyword matches or 30% of keywords matching
-              const matchThreshold = Math.max(2, Math.ceil(questionKeywords.length * 0.3));
+              // P1-2: Add common business synonyms for better matching
+              const synonymMap: Record<string, string[]> = {
+                'turnover': ['attrition', 'retention', 'separation', 'departure', 'leaving', 'churn'],
+                'attrition': ['turnover', 'retention', 'separation', 'departure', 'leaving', 'churn'],
+                'revenue': ['sales', 'income', 'earnings', 'profit'],
+                'sales': ['revenue', 'income', 'earnings'],
+                'employee': ['staff', 'worker', 'headcount', 'personnel', 'workforce'],
+                'performance': ['productivity', 'efficiency', 'output', 'effectiveness'],
+                'satisfaction': ['engagement', 'happiness', 'morale', 'sentiment'],
+                'budget': ['spending', 'expenditure', 'cost', 'expense'],
+                'customer': ['client', 'user', 'buyer', 'consumer'],
+                'growth': ['increase', 'expansion', 'improvement', 'trend'],
+              };
+
+              // Expand keywords with synonyms
+              const expandedKeywords = new Set(questionKeywords);
+              for (const keyword of questionKeywords) {
+                const synonyms = synonymMap[keyword];
+                if (synonyms) {
+                  synonyms.forEach(s => expandedKeywords.add(s));
+                }
+              }
+
+              const matchCount = Array.from(expandedKeywords).filter(keyword => insightText.includes(keyword)).length;
+
+              // Require at least 2 keyword matches or 25% of expanded keywords matching
+              const matchThreshold = Math.max(2, Math.ceil(expandedKeywords.size * 0.25));
               if (matchCount >= matchThreshold) {
                 relatedQuestionIds.push(qaMap.questionId);
               }
@@ -960,7 +854,7 @@ export class AnalysisExecutionService {
       const datasetAnalysisElapsed = ((Date.now() - datasetAnalysisStart) / 1000).toFixed(2);
       console.log(`✅ Parallel dataset analysis completed in ${datasetAnalysisElapsed}s`);
 
-      const syntheticRecommendations = this.generateRecommendations(allInsights);
+      const syntheticRecommendations = generateRecommendations(allInsights);
       allRecommendations.push(...syntheticRecommendations);
 
       const executionTime = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -977,7 +871,7 @@ export class AnalysisExecutionService {
           dataRowsProcessed: totalRows,
           columnsAnalyzed: totalColumns,
           executionTime: `${executionTime} seconds`,
-          qualityScore: this.calculateQualityScore(allInsights)
+          qualityScore: calculateQualityScore(allInsights)
         },
         metadata: {
           executedAt: completedAt,
@@ -1726,7 +1620,7 @@ export class AnalysisExecutionService {
     });
 
     // Parse Python results into insights
-    const insights = this.parseInsights(pythonResults, datasetName);
+    const insights = parseInsights(pythonResults, datasetName);
     const visualizations = pythonResults.visualizations || [];
 
     return {
@@ -1751,7 +1645,17 @@ export class AnalysisExecutionService {
     const { dataset, analysisTypes, projectId, userContext, piiColumnsToExclude } = params;
 
 
-    const datasetPayload = this.buildDatasetPayload(dataset, projectId, piiColumnsToExclude);
+    const datasetPayload = buildDatasetPayload(dataset, projectId, piiColumnsToExclude);
+
+    // P0-5 FIX: Generate analysis-type-specific data preparation hints
+    let analysisDataPrep: any[] = [];
+    try {
+      const { TransformationCompiler } = await import('./transformation-compiler');
+      analysisDataPrep = TransformationCompiler.getAnalysisDataPrep(analysisTypes);
+      console.log(`📋 [P0-5] Generated data prep hints for ${analysisDataPrep.length} analysis types`);
+    } catch (prepError) {
+      console.warn('⚠️ [P0-5] Could not generate data prep hints:', prepError);
+    }
 
     const analysisConfig = {
       analysisTypes,
@@ -1763,6 +1667,8 @@ export class AnalysisExecutionService {
         targetAudience: userContext.audience?.primaryAudience || 'mixed',
         decisionContext: userContext.audience?.decisionContext || null
       },
+      // P0-5: Include analysis-type-specific data prep hints for Python scripts
+      dataPreparation: analysisDataPrep.length > 0 ? analysisDataPrep : undefined,
       requestedAt: new Date().toISOString()
     };
 
@@ -1807,447 +1713,14 @@ export class AnalysisExecutionService {
       }
 
       console.log(`📊 Falling back to basic data profiling (error category: ${errorCategory})`);
-      return await this.basicDataProfilingFromDataset(dataset, piiColumnsToExclude);
+      return await basicDataProfilingFromDataset(dataset, piiColumnsToExclude);
     }
   }
 
-  private static buildDatasetPayload(dataset: any, projectId: string, piiColumnsToExclude?: Set<string>) {
-    const datasetName = dataset.originalFileName || dataset.name || dataset.datasetName || dataset.id;
-    const rows = this.extractDatasetRows(dataset, piiColumnsToExclude);
-    const potentialPath = dataset.storageUri || dataset.filePath || dataset.file_path || null;
-    const resolvedPath = potentialPath && typeof potentialPath === 'string' && !potentialPath.startsWith('mem://')
-      ? potentialPath
-      : null;
-
-    // FIX 1.2: Final PII verification before payload leaves for Python
-    if (piiColumnsToExclude && piiColumnsToExclude.size > 0 && rows && rows.length > 0) {
-      const payloadKeys = Object.keys(rows[0]);
-      const leakedPII = payloadKeys.filter(key =>
-        Array.from(piiColumnsToExclude).some(col => col.toLowerCase() === key.toLowerCase())
-      );
-      if (leakedPII.length > 0) {
-        console.error(`🚨 [PII PAYLOAD CHECK] PII columns in payload: ${leakedPII.join(', ')} - stripping before send`);
-        // Emergency strip: remove leaked columns as last defense
-        for (const row of rows) {
-          for (const col of leakedPII) {
-            delete row[col];
-          }
-        }
-      }
-    }
-
-    return {
-      projectId,
-      dataset: {
-        id: dataset.id,
-        datasetId: dataset.id,
-        name: datasetName,
-        datasetName,
-        filePath: resolvedPath,
-        rows,
-        schema: dataset.schema || null,
-        recordCount: dataset.recordCount || (Array.isArray(rows) ? rows.length : null),
-        preview: dataset.preview || null,
-        metadata: dataset.ingestionMetadata || dataset.metadata || null
-      }
-    };
-  }
-
-  /**
-   * GAP 2 FIX: Filter PII columns from data rows
-   * This is called after extractDatasetRows to ensure PII columns are never passed to analysis
-   */
-  private static filterPIIColumns(
-    rows: any[] | null,
-    columnsToExclude: Set<string>
-  ): any[] | null {
-    if (!rows || columnsToExclude.size === 0) {
-      return rows;
-    }
-
-    console.log(`🔒 [GAP 2 - PII] Filtering ${columnsToExclude.size} PII columns from ${rows.length} rows`);
-
-    const filteredRows = rows.map(row => {
-      const filteredRow: Record<string, any> = {};
-      for (const [key, value] of Object.entries(row)) {
-        // Skip column if it's in the exclude list (case-insensitive check)
-        const keyLower = key.toLowerCase();
-        const shouldExclude = Array.from(columnsToExclude).some(
-          col => col.toLowerCase() === keyLower
-        );
-        if (!shouldExclude) {
-          filteredRow[key] = value;
-        }
-      }
-      return filteredRow;
-    });
-
-    const removedCount = rows.length > 0 ? Object.keys(rows[0]).length - Object.keys(filteredRows[0] || {}).length : 0;
-    console.log(`🔒 [GAP 2 - PII] Removed ${removedCount} PII column(s) from data`);
-
-    return filteredRows;
-  }
-
-  /**
-   * Extract rows from a dataset, preferring transformed data over original.
-   *
-   * Week 4 Option B: This method uses DataAccessorService internally for
-   * consistent data resolution across the platform.
-   *
-   * Priority:
-   * 1. Transformed data (user-approved transformations)
-   * 2. Original data (upload source)
-   */
-  private static extractDatasetRows(dataset: any, columnsToExclude?: Set<string>): any[] | null {
-    let result: any[] | null = null;
-    let source: string = 'none';
-    let usingRawFallback = false;
-
-    // Week 4 Option B: Delegate to unified data accessor logic
-    // Priority 1: Use transformed data if available (from transformation step)
-    const transformedData = dataset?.ingestionMetadata?.transformedData;
-    if (Array.isArray(transformedData) && transformedData.length > 0) {
-      result = transformedData;
-      source = 'transformed (ingestionMetadata)';
-    }
-
-    // Priority 2: Check for transformed data in nested metadata locations
-    if (!result) {
-      const altTransformedData = dataset?.metadata?.transformedData;
-      if (Array.isArray(altTransformedData) && altTransformedData.length > 0) {
-        result = altTransformedData;
-        source = 'transformed (metadata)';
-      }
-    }
-
-    // Priority 3: Fall back to original data sources
-    if (!result) {
-      usingRawFallback = true;
-      const candidates = [
-        { name: 'data', value: dataset.data },
-        { name: 'preview', value: dataset.preview },
-        { name: 'sampleData', value: dataset.sampleData },
-        { name: 'records', value: dataset.records },
-      ];
-
-      for (const { name, value } of candidates) {
-        if (!value) continue;
-        if (Array.isArray(value)) {
-          result = value;
-          source = `original (${name})`;
-          break;
-        }
-        if (Array.isArray(value?.rows)) {
-          result = value.rows;
-          source = `original (${name}.rows)`;
-          break;
-        }
-        if (Array.isArray(value?.records)) {
-          result = value.records;
-          source = `original (${name}.records)`;
-          break;
-        }
-        if (Array.isArray(value?.items)) {
-          result = value.items;
-          source = `original (${name}.items)`;
-          break;
-        }
-      }
-    }
-
-    if (!result) {
-      console.warn(`⚠️ [Week4] No data found for dataset ${dataset?.id || 'unknown'}`);
-      return null;
-    }
-
-    // PII SAFETY: Warn when using raw data fallback with PII exclusion expectations
-    if (usingRawFallback && columnsToExclude && columnsToExclude.size > 0) {
-      console.warn(`⚠️ [PII Safety] Using raw data fallback for dataset ${dataset?.id || 'unknown'} with ${columnsToExclude.size} PII columns to exclude. Transformed data was not available.`);
-    } else if (usingRawFallback && (!columnsToExclude || columnsToExclude.size === 0)) {
-      // Check if PII fields exist on the dataset but no exclusions were passed
-      const datasetPiiFields = dataset?.piiFields || [];
-      if (datasetPiiFields.length > 0) {
-        console.error(`🚨 [PII Safety] CRITICAL: Raw data fallback used for dataset ${dataset?.id || 'unknown'} which has ${datasetPiiFields.length} PII fields, but columnsToExclude is empty. PII columns may leak into analysis.`);
-      }
-    }
-
-    console.log(`📊 [Week4] Using ${source} (${result.length} rows) for analysis`);
-
-    // GAP 2 FIX: Always apply PII filtering using explicit parameter
-    if (columnsToExclude && columnsToExclude.size > 0) {
-      result = this.filterPIIColumns(result, columnsToExclude);
-
-      // FIX 1.2: Post-filter assertion - verify no PII columns leaked through
-      if (result && result.length > 0) {
-        const sampleRow = result[0];
-        const sampleKeys = Object.keys(sampleRow);
-        const leakedColumns = sampleKeys.filter(key =>
-          Array.from(columnsToExclude).some(col => col.toLowerCase() === key.toLowerCase())
-        );
-        if (leakedColumns.length > 0) {
-          console.error(`🚨 [PII ASSERTION FAILED] Excluded columns found in filtered data: ${leakedColumns.join(', ')}`);
-          throw new Error(
-            `PII enforcement failed: columns [${leakedColumns.join(', ')}] were excluded but still present in data. ` +
-            `Analysis blocked to prevent PII leakage.`
-          );
-        }
-        console.log(`✅ [PII Verified] ${columnsToExclude.size} excluded column(s) confirmed absent from ${source} data`);
-      }
-    }
-
-    return result;
-  }
-
-  /**
-   * Week 4 Option B: Get project data using the unified DataAccessor service.
-   * This method provides a cleaner interface for getting all project data
-   * with proper transformed/original resolution.
-   */
-  private static async getProjectDataViaAccessor(projectId: string): Promise<{
-    datasets: DatasetDataResult[];
-    hasTransformations: boolean;
-  }> {
-    const result = await dataAccessor.getProjectData(projectId);
-    return {
-      datasets: result.datasets,
-      hasTransformations: result.hasAnyTransformations,
-    };
-  }
-
-  /**
-   * Basic data profiling fallback (without Python)
-   */
-  private static async basicDataProfilingFromDataset(dataset: any, piiColumnsToExclude?: Set<string>): Promise<any> {
-    console.warn(`⚠️ Falling back to basic profiling for dataset ${dataset.id}`);
-    const rows = this.extractDatasetRows(dataset, piiColumnsToExclude) || [];
-    const columns = rows.length > 0
-      ? Object.keys(rows[0])
-      : dataset.schema
-        ? Object.keys(dataset.schema)
-        : [];
-
-    const numericColumns = columns.filter((column) =>
-      rows.some((row: any) => typeof row?.[column] === 'number')
-    );
-
-    const rowCount = rows.length;
-    const columnCount = columns.length;
-    const missingValues = rows.reduce((total: number, row: any) => {
-      return total + columns.reduce((acc, column) => {
-        const value = row?.[column];
-        return acc + (value === null || value === undefined || value === '' ? 1 : 0);
-      }, 0);
-    }, 0);
-
-    return {
-      success: true,
-      rowCount,
-      columnCount,
-      descriptive: {
-        rowCount,
-        columnCount,
-        numericColumns,
-        missingValues,
-        sampleColumns: columns.slice(0, 5)
-      },
-      correlations: [],
-      regression: null,
-      clustering: null,
-      timeSeries: null,
-      textInsights: [],
-      visualizations: []
-    };
-  }
-
-  /**
-   * Parse Python results into structured insights
-   */
-  private static parseInsights(pythonResults: any, datasetName: string): AnalysisInsight[] {
-    const insights: AnalysisInsight[] = [];
-    let insightId = 1;
-
-    // Parse descriptive statistics
-    if (pythonResults.descriptive) {
-      const desc = pythonResults.descriptive;
-      insights.push({
-        id: insightId++,
-        title: `Data Overview: ${datasetName}`,
-        description: `Dataset contains ${desc.rowCount || 'N/A'} rows and ${desc.columnCount || 'N/A'} columns. ${desc.missingValues ? `Found ${desc.missingValues} missing values.` : ''}`,
-        impact: 'Medium',
-        confidence: 100,
-        category: 'Data Quality',
-        dataSource: datasetName,
-        details: desc
-      });
-    }
-
-    // Parse correlation findings
-    if (pythonResults.correlations && pythonResults.correlations.length > 0) {
-      pythonResults.correlations.forEach((corr: any) => {
-        const strength = Math.abs(corr.correlation) > 0.7 ? 'Strong' : Math.abs(corr.correlation) > 0.4 ? 'Moderate' : 'Weak';
-        insights.push({
-          id: insightId++,
-          title: `${strength} Correlation Found`,
-          description: `${corr.variable1} and ${corr.variable2} show ${strength.toLowerCase()} correlation (r=${corr.correlation.toFixed(2)}). ${corr.correlation > 0 ? 'As one increases, the other tends to increase.' : 'As one increases, the other tends to decrease.'}`,
-          impact: Math.abs(corr.correlation) > 0.7 ? 'High' : 'Medium',
-          confidence: Math.round(Math.abs(corr.correlation) * 100),
-          category: 'Correlation',
-          dataSource: datasetName,
-          details: corr
-        });
-      });
-    }
-
-    // Parse regression results
-    if (pythonResults.regression) {
-      const reg = pythonResults.regression;
-      insights.push({
-        id: insightId++,
-        title: `Predictive Model Performance`,
-        description: `Built prediction model with R² score of ${reg.r2?.toFixed(2) || 'N/A'}. ${reg.topFeatures ? `Key factors: ${reg.topFeatures.slice(0, 3).join(', ')}.` : ''}`,
-        impact: reg.r2 > 0.7 ? 'High' : 'Medium',
-        confidence: Math.round((reg.r2 || 0.5) * 100),
-        category: 'Predictive Analysis',
-        dataSource: datasetName,
-        details: reg
-      });
-    }
-
-    // Parse clustering results
-    if (pythonResults.clustering) {
-      const clust = pythonResults.clustering;
-      insights.push({
-        id: insightId++,
-        title: `${clust.nClusters || 'Multiple'} Distinct Groups Identified`,
-        description: `Clustering analysis revealed ${clust.nClusters || 'multiple'} natural groups in your data. ${clust.description || 'Each group has unique characteristics.'}`,
-        impact: 'High',
-        confidence: Math.round((clust.silhouetteScore || 0.5) * 100),
-        category: 'Segmentation',
-        dataSource: datasetName,
-        details: clust
-      });
-    }
-
-    // Parse time series trends
-    if (pythonResults.timeSeries) {
-      const ts = pythonResults.timeSeries;
-      insights.push({
-        id: insightId++,
-        title: `Trend Analysis: ${ts.trend || 'Patterns'} Detected`,
-        description: `Time series analysis shows ${ts.trend?.toLowerCase() || 'patterns'} with ${ts.seasonality ? 'seasonal patterns' : 'no clear seasonality'}. ${ts.forecast ? `Forecast suggests ${ts.forecast}.` : ''}`,
-        impact: 'Medium',
-        confidence: 75,
-        category: 'Trends',
-        dataSource: datasetName,
-        details: ts
-      });
-    }
-
-    // Parse qualitative/text insights
-    if (pythonResults.textInsights && pythonResults.textInsights.length > 0) {
-      pythonResults.textInsights.forEach((textInsight: any) => {
-        insights.push({
-          id: insightId++,
-          title: textInsight.title || `Qualitative Insight${textInsight.column ? `: ${textInsight.column}` : ''}`,
-          description: textInsight.summary || textInsight.description || 'Key qualitative themes detected.',
-          impact: textInsight.impact || 'Medium',
-          confidence: textInsight.confidence || 65,
-          category: textInsight.category || 'Qualitative',
-          dataSource: datasetName,
-          details: textInsight
-        });
-      });
-    }
-
-    // If no specific insights, add generic summary
-    if (insights.length === 0) {
-      insights.push({
-        id: insightId++,
-        title: `Analysis Completed: ${datasetName}`,
-        description: `Successfully analyzed dataset. ${pythonResults.rowCount ? `Processed ${pythonResults.rowCount} rows of data.` : ''} Additional insights may require more specific analysis types.`,
-        impact: 'Low',
-        confidence: 50,
-        category: 'Summary',
-        dataSource: datasetName
-      });
-    }
-
-    return insights;
-  }
-
-  /**
-   * Generate actionable recommendations based on insights
-   */
-  private static generateRecommendations(insights: AnalysisInsight[]): AnalysisRecommendation[] {
-    const recommendations: AnalysisRecommendation[] = [];
-    let recId = 1;
-
-    // Recommendation based on high-impact insights
-    const highImpactInsights = insights.filter(i => i.impact === 'High');
-    if (highImpactInsights.length > 0) {
-      recommendations.push({
-        id: recId++,
-        title: 'Focus on High-Impact Findings',
-        description: `Prioritize action on the ${highImpactInsights.length} high-impact insight${highImpactInsights.length > 1 ? 's' : ''} identified. These areas show the strongest patterns and potential for improvement.`,
-        priority: 'High',
-        effort: 'Medium',
-        expectedImpact: 'Significant business value'
-      });
-    }
-
-    // Recommendation for data quality issues
-    const qualityInsights = insights.filter(i => i.category === 'Data Quality');
-    if (qualityInsights.some(i => i.description.includes('missing'))) {
-      recommendations.push({
-        id: recId++,
-        title: 'Improve Data Collection',
-        description: 'Address missing values in your dataset to improve analysis accuracy. Consider implementing data validation at the source.',
-        priority: 'Medium',
-        effort: 'Low',
-        expectedImpact: 'Better data reliability'
-      });
-    }
-
-    // Recommendation for correlations
-    const correlationInsights = insights.filter(i => i.category === 'Correlation');
-    if (correlationInsights.length > 0) {
-      recommendations.push({
-        id: recId++,
-        title: 'Leverage Identified Relationships',
-        description: `Use the ${correlationInsights.length} correlation${correlationInsights.length > 1 ? 's' : ''} found to optimize operations. Focus monitoring and improvements on strongly correlated factors.`,
-        priority: 'High',
-        effort: 'Medium',
-        expectedImpact: 'Operational efficiency gains'
-      });
-    }
-
-    // Generic recommendation if none specific
-    if (recommendations.length === 0) {
-      recommendations.push({
-        id: recId++,
-        title: 'Review Analysis Results',
-        description: 'Examine the insights generated and discuss with your team to determine next steps and action items.',
-        priority: 'Medium',
-        effort: 'Low',
-        expectedImpact: 'Informed decision-making'
-      });
-    }
-
-    return recommendations;
-  }
-
-  /**
-   * Calculate overall quality score
-   */
-  private static calculateQualityScore(insights: AnalysisInsight[]): number {
-    if (insights.length === 0) return 0;
-
-    const avgConfidence = insights.reduce((sum, i) => sum + i.confidence, 0) / insights.length;
-    const highImpactCount = insights.filter(i => i.impact === 'High').length;
-    const impactBonus = Math.min(highImpactCount * 5, 20);
-
-    return Math.min(Math.round(avgConfidence + impactBonus), 100);
-  }
+  // P3-1: buildDatasetPayload, filterPIIColumns, extractDatasetRows,
+  // getProjectDataViaAccessor, basicDataProfilingFromDataset, parseInsights,
+  // generateRecommendations, calculateQualityScore — all extracted to:
+  // analysis-data-helpers.ts and analysis-insight-helpers.ts
 
   /**
    * Retrieve stored analysis results
@@ -2460,9 +1933,61 @@ export class AnalysisExecutionService {
 
     let results: DataScienceResults;
 
+    // Phase 4D-1: Direct question-to-analysis mapping from Python results
+    // Declared at outer scope so it's available for legacyResults construction
+    let directQuestionMap: Record<string, Array<{
+      analysisId: string;
+      analysisType: string;
+      analysisName: string;
+      columnRoles?: any;
+      derivedColumns?: string[];
+    }>> = {};
+
     if (usePerAnalysisExecution && analysisPath.length > 0) {
       console.log(`📊 [Phase 6] PARALLEL per-analysis execution mode: ${analysisPath.length} analyses`);
       console.log(`   - Using compute engine: ${selectedEngine.engine.toUpperCase()}`);
+
+      // Phase 4B-2: Resolve column roles and derived columns for each analysis
+      // Uses requirementsDocument.requiredDataElements (with sourceColumn populated at transform step)
+      // to determine target_column, features, group_column, etc. per analysis type.
+      let prepLookup = new Map<string, import('./analysis-data-preparer').AnalysisPreparation>();
+      try {
+        const reqDocElements = request.requirementsDocument?.requiredDataElements || [];
+        if (reqDocElements.length > 0) {
+          // Get available columns from first dataset to verify column existence
+          const firstDatasetId = request.datasetIds?.[0];
+          let availableColumns: string[] = [];
+          if (firstDatasetId) {
+            try {
+              const dataset = await storage.getDataset(firstDatasetId);
+              if (dataset) {
+                const rows = extractDatasetRows(dataset, undefined);
+                if (rows && rows.length > 0) {
+                  availableColumns = Object.keys(rows[0]);
+                }
+              }
+            } catch (colErr) {
+              console.warn(`⚠️ [DataPreparer] Could not load columns: ${colErr}`);
+            }
+          }
+
+          const { AnalysisDataPreparer } = await import('./analysis-data-preparer');
+          const preparer = new AnalysisDataPreparer();
+          const preparations = preparer.prepareAnalyses({
+            analysisPath,
+            requiredDataElements: reqDocElements,
+            questionAnswerMapping: request.questionAnswerMapping || [],
+            availableColumns,
+          });
+          prepLookup = new Map(preparations.map(p => [p.analysisId, p]));
+          console.log(`📋 [DataPreparer] Prepared ${preparations.length} analysis configs with column roles`);
+        } else {
+          console.log(`📋 [DataPreparer] No requirementsDocument — Python scripts will auto-detect`);
+        }
+      } catch (prepErr: any) {
+        console.warn(`⚠️ [DataPreparer] Preparation failed (non-blocking): ${prepErr.message}`);
+        // Non-blocking: continue with auto-detection
+      }
 
       // PHASE 6 FIX (Friction #1): Execute analyses in PARALLEL using Promise.allSettled
       // This maintains graceful degradation - if one analysis fails, others continue
@@ -2491,33 +2016,85 @@ export class AnalysisExecutionService {
         } catch (emitErr) { /* non-blocking */ }
 
         try {
-          // FIX 1: Extract requiredDataElements for this specific analysis type
-          // This ensures each analysis only receives its relevant columns
-          let requiredColumns = analysis.requiredDataElements && analysis.requiredDataElements.length > 0
-            ? analysis.requiredDataElements
-            : undefined;
+          // FIX 2: Resolve ACTUAL column names from AnalysisPreparation.columnRoles
+          // (not element names which don't match dataset columns)
+          const analysisPrep = prepLookup.get(analysis.analysisId);
+          let requiredColumns: string[] | undefined;
 
-          // FIX 1E: When no specific columns, derive type requirements from registry
-          // This prevents feeding wrong data types (e.g., text columns to correlation)
+          if (analysisPrep?.columnRoles) {
+            const roles = analysisPrep.columnRoles;
+            const colSet = new Set<string>();
+
+            // Collect all columns this analysis needs from resolved roles
+            if (roles.target_column) colSet.add(roles.target_column);
+            if (roles.group_column) colSet.add(roles.group_column);
+            if (roles.time_column) colSet.add(roles.time_column);
+            for (const f of (roles.features || [])) colSet.add(f);
+            for (const c of (roles.comparison_columns || [])) colSet.add(c);
+            for (const t of (roles.text_columns || [])) colSet.add(t);
+            for (const c of (roles.columns || [])) colSet.add(c);
+
+            // Also include derived column component sources
+            for (const dc of (analysisPrep.derivedColumns || [])) {
+              for (const comp of (dc.componentColumns || [])) colSet.add(comp);
+            }
+
+            if (colSet.size > 0) {
+              requiredColumns = Array.from(colSet);
+              console.log(`  📋 [RequiredColumns] Analysis "${analysis.analysisName}" resolved ${colSet.size} actual columns: [${requiredColumns.join(', ')}]`);
+            }
+          }
+
+          // Fallback: use column type requirements from registry when no resolved columns
           let requiredColumnTypes: string[] | undefined;
-          if (!requiredColumns) {
+          if (!requiredColumns || requiredColumns.length === 0) {
+            // Also try element names as a secondary fallback
+            if (analysis.requiredDataElements && analysis.requiredDataElements.length > 0) {
+              requiredColumns = analysis.requiredDataElements;
+              console.log(`  📋 [RequiredColumns] Falling back to element names for "${analysis.analysisName}": [${requiredColumns.join(', ')}]`);
+            }
+
             try {
               const { getAnalysisRequirements } = await import('./analysis-requirements-registry');
               const spec = getAnalysisRequirements(analysisType);
               if (spec && spec.columnRequirements.requiredTypes.length > 0) {
                 requiredColumnTypes = spec.columnRequirements.requiredTypes;
-                console.log(`  📋 [RequiredColumns] No specific columns for "${analysis.analysisName}", using registry types: [${requiredColumnTypes.join(', ')}]`);
+                console.log(`  📋 [RequiredColumns] Using registry types for "${analysis.analysisName}": [${requiredColumnTypes.join(', ')}]`);
               }
             } catch (regErr) {
               console.warn(`  ⚠️ [RequiredColumns] Registry lookup failed: ${regErr}`);
             }
           }
 
-          if (requiredColumns && requiredColumns.length > 0) {
-            console.log(`  📋 [RequiredColumns] Analysis "${analysis.analysisName}" requires: [${requiredColumns.join(', ')}]`);
+          // FIX 2B: Pre-execution data validation (warn, don't block)
+          try {
+            const { validateDataForAnalysis } = await import('./analysis-requirements-registry');
+            const { inferDataStats } = await import('./analysis-data-helpers');
+            const firstDatasetId = request.datasetIds?.[0];
+            if (firstDatasetId) {
+              const valDataset = await storage.getDataset(firstDatasetId);
+              if (valDataset) {
+                const valRows = extractDatasetRows(valDataset, undefined);
+                if (valRows && valRows.length > 0) {
+                  const dataStats = inferDataStats(valRows);
+                  const validation = validateDataForAnalysis(analysisType, dataStats);
+                  if (!validation.isValid) {
+                    console.warn(`  ⚠️ [Validation] "${analysis.analysisName}" has ${validation.failedChecks.length} failed checks:`);
+                    for (const check of validation.failedChecks) {
+                      console.warn(`     - ${check.check}: ${check.reason}`);
+                    }
+                    console.warn(`     Proceeding anyway (graceful degradation)`);
+                  } else {
+                    console.log(`  ✅ [Validation] "${analysis.analysisName}" passed all data quality checks`);
+                  }
+                }
+              }
+            }
+          } catch (valErr: any) {
+            console.warn(`  ⚠️ [Validation] Validation failed (non-blocking): ${valErr.message}`);
           }
 
-          // VI-1 FIX: Execute single analysis with optimal compute engine
+          // Execute single analysis with optimal compute engine
           const singleResult = await dataScienceOrchestrator.executeWorkflow({
             projectId: request.projectId,
             userId: request.userId,
@@ -2530,6 +2107,8 @@ export class AnalysisExecutionService {
             requiredColumns,
             // FIX 1E: Pass column type requirements from registry when no specific columns
             requiredColumnTypes,
+            // Phase 4B: Pass column roles, derived columns, business context
+            analysisPreparation: analysisPrep,
             computeEngine: selectedEngine.engine,
             computeEngineConfig: ComputeEngineSelector.getEngineConfig(selectedEngine.engine, {
               recordCount: totalRecordCount,
@@ -2590,11 +2169,30 @@ export class AnalysisExecutionService {
         }
       });
 
+      // P3-2 FIX: Wrap each analysis promise with a per-analysis timeout (5 minutes)
+      const PER_ANALYSIS_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per analysis
+
+      const timedPromises = analysisPromises.map((promise, idx) => {
+        const analysisName = analysisPath[idx]?.analysisName || `analysis_${idx}`;
+        return Promise.race([
+          promise,
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(
+              `Analysis "${analysisName}" timed out after ${PER_ANALYSIS_TIMEOUT_MS / 1000}s`
+            )), PER_ANALYSIS_TIMEOUT_MS)
+          )
+        ]);
+      });
+
       // Wait for all analyses to complete (Promise.allSettled ensures all complete)
-      const settledResults = await Promise.allSettled(analysisPromises);
+      const settledResults = await Promise.allSettled(timedPromises);
 
       const parallelTotalTime = Date.now() - parallelStartTime;
       console.log(`📊 [Phase 6] All ${analysisPath.length} analyses completed in ${parallelTotalTime}ms (parallel)`);
+
+      // Phase 4D-1: directQuestionMap is declared at outer scope (before if/else)
+      // Reset it for this execution path
+      directQuestionMap = {};
 
       // Process results and merge
       let mergedInsights: any[] = [];
@@ -2610,7 +2208,15 @@ export class AnalysisExecutionService {
           continue;
         }
 
-        const result = settled.value;
+        const result = settled.value as {
+          analysisId: string;
+          analysis: any;
+          analysisType: string;
+          executionTimeMs: number;
+          status: 'completed' | 'failed';
+          singleResult?: any;
+          error?: string;
+        };
         const { analysisId, analysis, analysisType, executionTimeMs } = result;
 
         if (result.status === 'failed') {
@@ -2643,6 +2249,44 @@ export class AnalysisExecutionService {
             dataSource: analysisType,
             details: { ...corr, sourceAnalysisId: analysisId }
           });
+        }
+
+        // Phase 4D-1: Extract question_ids from Python results for direct mapping
+        // Python scripts return question_ids at multiple possible nesting levels
+        const extractQuestionIds = (obj: any): string[] => {
+          if (!obj) return [];
+          // Direct top-level question_ids
+          if (Array.isArray(obj.question_ids) && obj.question_ids.length > 0) return obj.question_ids;
+          // Check nested results (edaResults, statisticalReport, etc.)
+          for (const key of ['edaResults', 'statisticalReport', 'mlResults', 'results']) {
+            if (obj[key]?.question_ids && Array.isArray(obj[key].question_ids)) {
+              return obj[key].question_ids;
+            }
+          }
+          // Check all top-level values for nested question_ids
+          for (const val of Object.values(obj)) {
+            if (val && typeof val === 'object' && !Array.isArray(val) && (val as any).question_ids) {
+              const qIds = (val as any).question_ids;
+              if (Array.isArray(qIds) && qIds.length > 0) return qIds;
+            }
+          }
+          return [];
+        };
+
+        const returnedQuestionIds = extractQuestionIds(singleResult);
+        if (returnedQuestionIds.length > 0) {
+          const prep = prepLookup.get(analysisId);
+          for (const qId of returnedQuestionIds) {
+            if (!directQuestionMap[qId]) directQuestionMap[qId] = [];
+            directQuestionMap[qId].push({
+              analysisId,
+              analysisType,
+              analysisName: analysis.analysisName,
+              columnRoles: prep?.columnRoles,
+              derivedColumns: prep?.derivedColumns?.map(d => d.columnName)
+            });
+          }
+          console.log(`  📊 [Phase 4D] Analysis "${analysis.analysisName}" maps to questions: [${returnedQuestionIds.join(', ')}]`);
         }
 
         // Tag visualizations with source analysis
@@ -2679,6 +2323,34 @@ export class AnalysisExecutionService {
             sourceAnalysisId: analysisId
           }))
         );
+      }
+
+      // Phase 4D-2: Tag merged insights with answersQuestions using directQuestionMap
+      // Priority 0: Direct mapping from AnalysisDataPreparer → Python → back
+      // Supplements existing keyword-based matching with precise traceability
+      if (Object.keys(directQuestionMap).length > 0) {
+        for (const insight of mergedInsights) {
+          const insightCategory = (insight.category || '').toLowerCase();
+          const insightAnalysisId = insight.details?.sourceAnalysisId || '';
+          const relatedQuestionIds: string[] = [];
+
+          for (const [qId, mappings] of Object.entries(directQuestionMap)) {
+            // Check if this insight's analysis is directly mapped to this question
+            const isDirectMatch = mappings.some(m =>
+              m.analysisId === insightAnalysisId ||
+              insightCategory.includes(m.analysisType.toLowerCase()) ||
+              (insight.dataSource || '').toLowerCase().includes(m.analysisType.toLowerCase())
+            );
+            if (isDirectMatch) {
+              relatedQuestionIds.push(qId);
+            }
+          }
+
+          if (relatedQuestionIds.length > 0) {
+            insight.answersQuestions = relatedQuestionIds;
+          }
+        }
+        console.log(`📊 [Phase 4D] Tagged ${mergedInsights.filter(i => i.answersQuestions?.length > 0).length}/${mergedInsights.length} insights with direct question mappings`);
       }
 
       // Build combined results from per-analysis execution
@@ -2829,7 +2501,35 @@ export class AnalysisExecutionService {
         dataRowsProcessed: results.metadata.totalRows,
         columnsAnalyzed: results.metadata.totalColumns,
         executionTime: `${(results.metadata.executionTimeMs / 1000).toFixed(1)} seconds`,
-        qualityScore: results.dataQualityReport.overallScore
+        qualityScore: results.dataQualityReport.overallScore,
+        // FIX 3C: Generate trendData from insights for chart rendering
+        trendData: legacyInsights.slice(0, 10).map((insight, idx) => ({
+          label: insight.title?.substring(0, 30) || `Insight ${idx + 1}`,
+          value: insight.confidence ?? (insight as any).score ?? 0,
+          category: insight.category || 'general'
+        })),
+        // FIX 3C: Generate categoryBreakdown from insight categories
+        categoryBreakdown: (() => {
+          const catCounts: Record<string, number> = {};
+          for (const insight of legacyInsights) {
+            const cat = insight.category || 'general';
+            catCounts[cat] = (catCounts[cat] || 0) + 1;
+          }
+          return Object.entries(catCounts).map(([category, count]) => ({
+            category,
+            count,
+            percentage: legacyInsights.length > 0 ? Math.round((count / legacyInsights.length) * 100) : 0
+          }));
+        })(),
+        // FIX 3E: Per-analysis status summary
+        analysisStatus: usePerAnalysisExecution
+          ? Object.fromEntries(
+              Array.from(perAnalysisResults.entries()).map(([id, r]) => [
+                id,
+                { status: r.status, insightCount: r.insights?.length || 0, error: r.error }
+              ])
+            )
+          : undefined
       },
       metadata: {
         executedAt: completedAt,
@@ -2863,6 +2563,11 @@ export class AnalysisExecutionService {
           description: f.title
         }))
       })),
+      // Phase 4D: Direct question-to-analysis mapping from Python results
+      // Enables QuestionAnswerService to use column roles and derived variables in evidence chain
+      directQuestionAnalysisMap: (usePerAnalysisExecution && Object.keys(directQuestionMap).length > 0)
+        ? directQuestionMap
+        : undefined,
       // ==========================================
       // PHASE 6: Per-Analysis Breakdown Storage (Jan 2026)
       // Stores per-analysis results for granular dashboard view

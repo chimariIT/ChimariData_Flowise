@@ -24,7 +24,7 @@ export interface DefinitionLookupResult {
   definition?: BusinessDefinition;
   alternatives?: BusinessDefinition[];
   confidence: number;
-  source: 'exact' | 'pattern' | 'synonym' | 'semantic' | 'ai_inferred' | 'not_found';
+  source: 'exact' | 'pattern' | 'synonym' | 'semantic' | 'ai_inferred' | 'web_search' | 'not_found';
 }
 
 export interface DefinitionSearchParams {
@@ -33,6 +33,7 @@ export interface DefinitionSearchParams {
   domain?: string;
   projectId?: string;
   includeGlobal?: boolean; // Include definitions without projectId
+  datasetSchema?: Record<string, any>; // Available columns for AI context
 }
 
 export interface InferDefinitionParams {
@@ -122,6 +123,7 @@ class BusinessDefinitionRegistryService {
         conceptName: normalizedConcept,
         industry: params?.industry,
         context: conceptName, // Use concept name as context for inference
+        datasetSchema: params?.datasetSchema,
       });
       if (inferred) {
         console.log(`🔍 [BA Registry] Inferred definition for: "${conceptName}"`);
@@ -134,6 +136,45 @@ class BusinessDefinitionRegistryService {
       }
     } catch (inferErr: any) {
       console.warn(`[BA Registry] Could not infer definition for "${conceptName}":`, inferErr?.message);
+    }
+
+    // 7. Try web search via Firecrawl as final fallback
+    try {
+      const { webSearchService } = await import('./web-search-service');
+      if (webSearchService.isAvailable()) {
+        console.log(`🌐 [BA Registry] Trying web search for: "${conceptName}"`);
+        const webResult = await webSearchService.searchAndExtract(
+          conceptName,
+          params?.industry || 'general'
+        );
+        if (webResult.found && webResult.definition) {
+          // Create a definition from web search results and save for future
+          const webDefinition = await this.createDefinition({
+            key: normalizedConcept,
+            name: conceptName,
+            description: webResult.definition,
+            formula: webResult.formula || undefined,
+            alternativeNames: webResult.alternativeNames,
+            industry: webResult.industry || params?.industry,
+            sourceType: 'web_search' as any,
+            sourceAgentId: 'firecrawl',
+            confidence: webResult.confidence,
+            metadata: { sourceUrl: webResult.sourceUrl, sourceName: webResult.source }
+          } as any);
+
+          if (webDefinition) {
+            console.log(`🌐 [BA Registry] Web-sourced definition saved for: "${conceptName}" from ${webResult.sourceUrl}`);
+            return {
+              found: true,
+              definition: webDefinition,
+              confidence: webResult.confidence,
+              source: 'web_search'
+            };
+          }
+        }
+      }
+    } catch (webErr: any) {
+      console.warn(`[BA Registry] Web search failed for "${conceptName}":`, webErr?.message);
     }
 
     console.log(`❌ [BA Registry] No definition found for: "${conceptName}"`);
@@ -189,6 +230,105 @@ class BusinessDefinitionRegistryService {
       .where(and(...conditions))
       .orderBy(desc(businessDefinitions.usageCount));
 
+    return results;
+  }
+
+  // ========================================
+  // PATTERN-BASED LOOKUP (for Question Decomposition)
+  // ========================================
+
+  /**
+   * Find all definitions whose matchPatterns, synonyms, or conceptName contain
+   * any of the given keywords. Used by DS Agent's decomposeQuestion() for fast
+   * KPI identification without AI calls.
+   *
+   * @param keywords - Array of lowercased keyword strings to search for
+   * @param params - Optional search params (industry, projectId)
+   * @returns Array of matching BusinessDefinitions with match confidence
+   */
+  async findByMatchPatterns(
+    keywords: string[],
+    params: DefinitionSearchParams = {}
+  ): Promise<Array<{ definition: BusinessDefinition; matchedKeyword: string; confidence: number }>> {
+    if (!keywords.length) return [];
+
+    console.log(`🔍 [BA Registry] Pattern lookup for keywords: [${keywords.join(', ')}]`);
+
+    const conditions: any[] = [eq(businessDefinitions.status, 'active')];
+
+    if (params.industry) {
+      conditions.push(
+        or(
+          eq(businessDefinitions.industry, params.industry),
+          eq(businessDefinitions.industry, 'general')
+        )
+      );
+    }
+
+    if (params.projectId) {
+      conditions.push(
+        or(
+          eq(businessDefinitions.projectId, params.projectId),
+          sql`${businessDefinitions.projectId} IS NULL`
+        )
+      );
+    }
+
+    // Fetch all active definitions (filtered by industry/project)
+    const allDefs = await db
+      .select()
+      .from(businessDefinitions)
+      .where(and(...conditions))
+      .orderBy(desc(businessDefinitions.confidence));
+
+    const results: Array<{ definition: BusinessDefinition; matchedKeyword: string; confidence: number }> = [];
+    const seenIds = new Set<string>();
+
+    for (const def of allDefs) {
+      if (seenIds.has(def.id)) continue;
+
+      const matchPatterns = (def.matchPatterns as string[]) || [];
+      const synonyms = (def.synonyms as string[]) || [];
+      const conceptNameParts = (def.conceptName || '').toLowerCase().split('_');
+      const allPatterns = [
+        ...matchPatterns.map(p => p.toLowerCase()),
+        ...synonyms.map(s => s.toLowerCase()),
+        ...conceptNameParts
+      ];
+
+      for (const keyword of keywords) {
+        const kw = keyword.toLowerCase().replace(/\s+/g, '_');
+        const kwParts = keyword.toLowerCase().split(/[\s_]+/);
+
+        // Check if any pattern contains the keyword or vice versa
+        const patternMatch = allPatterns.some(p =>
+          p.includes(kw) || kw.includes(p) ||
+          kwParts.some(part => part.length > 3 && p.includes(part))
+        );
+
+        if (patternMatch) {
+          // Score confidence based on match quality
+          const exactMatch = allPatterns.includes(kw);
+          const conceptMatch = def.conceptName === kw;
+          const confidence = conceptMatch ? 1.0
+            : exactMatch ? 0.95
+            : 0.75;
+
+          results.push({
+            definition: def,
+            matchedKeyword: keyword,
+            confidence: Math.min(confidence, def.confidence || 0.8)
+          });
+          seenIds.add(def.id);
+          break; // Only match each definition once
+        }
+      }
+    }
+
+    // Sort by confidence descending
+    results.sort((a, b) => b.confidence - a.confidence);
+
+    console.log(`✅ [BA Registry] Found ${results.length} definitions matching keywords`);
     return results;
   }
 
@@ -579,18 +719,24 @@ class BusinessDefinitionRegistryService {
   }
 
   private buildInferencePrompt(params: InferDefinitionParams): string {
+    // CRITICAL: When industry is 'general' or unknown, the AI must infer from context
+    // Do NOT bias the AI toward any specific industry unless we are confident
+    const industryLine = params.industry && params.industry !== 'general'
+        ? `INDUSTRY: ${params.industry}`
+        : `INDUSTRY: Determine the most likely industry from the concept name, context, and available columns below. Do NOT default to HR unless the data is clearly HR-related.`;
+
     return `You are a business analyst expert. Infer the definition for a business concept.
 
 CONCEPT NAME: ${params.conceptName}
 BUSINESS CONTEXT: ${params.context}
-INDUSTRY: ${params.industry || 'general'}
+${industryLine}
 DOMAIN: ${params.domain || 'not specified'}
 
-${params.datasetSchema ? `AVAILABLE DATA COLUMNS: ${Object.keys(params.datasetSchema).join(', ')}` : ''}
+${params.datasetSchema ? `AVAILABLE DATA COLUMNS: ${Object.keys(params.datasetSchema).join(', ')}\n\nIMPORTANT: Use the column names above to determine the correct business domain. For example, columns like "Campaign_ID", "Impressions", "Click_Rate" indicate marketing — NOT HR.` : ''}
 
 Provide a JSON response with:
 {
-  "businessDescription": "Clear business definition of this concept",
+  "businessDescription": "Clear business definition of this concept IN THE CORRECT INDUSTRY CONTEXT",
   "calculationType": "direct|derived|aggregated|composite",
   "formula": "Mathematical formula if applicable",
   "componentFields": ["list", "of", "likely", "component", "fields"],
@@ -755,7 +901,48 @@ Respond ONLY with the JSON, no other text.`;
           matchPatterns: ['turnover', 'attrition', 'churn'],
           synonyms: ['attrition_rate', 'churn_rate'],
           unit: 'percent',
-          confidence: 0.95
+          confidence: 0.95,
+          componentFieldDescriptors: [
+            {
+              abstractName: 'employees_left',
+              semanticMeaning: 'Count of employees who separated/left during the period',
+              derivationLogic: 'COUNT rows WHERE termination_date IS NOT NULL AND within period',
+              columnMatchPatterns: ['termination', 'separation', 'exit', 'term_date', 'end_date', 'status', 'termination_date', 'leave_date', 'departure'],
+              columnMatchType: 'date_presence_indicator',
+              dataTypeExpected: 'date',
+              isIntermediate: true,
+              statusValues: ['Terminated', 'Left', 'Separated', 'Resigned', 'Involuntary', 'Voluntary'],
+              nullMeaning: 'Employee is still active / has not separated',
+              presenceMeaning: 'Employee has separated from the organization'
+            },
+            {
+              abstractName: 'total_employees',
+              semanticMeaning: 'Average headcount during the period (total employees on roster)',
+              derivationLogic: 'COUNT DISTINCT employees on roster during the period',
+              columnMatchPatterns: ['employee_id', 'emp_id', 'roster', 'headcount', 'staff_id', 'worker_id', 'personnel_id', 'ee_id'],
+              columnMatchType: 'count_distinct',
+              dataTypeExpected: 'identifier',
+              isIntermediate: true
+            },
+            {
+              abstractName: 'period_date',
+              semanticMeaning: 'The date establishing the analysis period (roster date, report date)',
+              derivationLogic: 'Use as period filter for turnover calculation',
+              columnMatchPatterns: ['roster_date', 'report_date', 'period_date', 'effective_date', 'snapshot_date', 'as_of_date'],
+              columnMatchType: 'date_range_filter',
+              dataTypeExpected: 'date',
+              isIntermediate: false
+            },
+            {
+              abstractName: 'hire_date',
+              semanticMeaning: 'Employee hire date - used to exclude employees hired outside the period',
+              derivationLogic: 'Filter employees WHERE hire_date <= period_end to exclude new hires after period',
+              columnMatchPatterns: ['hire_date', 'start_date', 'date_hired', 'employment_start', 'join_date', 'onboard_date'],
+              columnMatchType: 'date_range_filter',
+              dataTypeExpected: 'date',
+              isIntermediate: false
+            }
+          ]
         },
         {
           conceptName: 'tenure',
@@ -768,7 +955,28 @@ Respond ONLY with the JSON, no other text.`;
           matchPatterns: ['tenure', 'years_of_service', 'employment_length'],
           synonyms: ['service_years', 'time_employed'],
           unit: 'days',
-          confidence: 0.95
+          confidence: 0.95,
+          componentFieldDescriptors: [
+            {
+              abstractName: 'hire_date',
+              semanticMeaning: 'The date the employee was hired / started employment',
+              derivationLogic: 'DATEDIFF(current_date OR termination_date, hire_date) to compute tenure in days',
+              columnMatchPatterns: ['hire_date', 'start_date', 'date_hired', 'employment_start', 'join_date', 'onboard_date'],
+              columnMatchType: 'direct_value',
+              dataTypeExpected: 'date',
+              isIntermediate: false
+            },
+            {
+              abstractName: 'reference_date',
+              semanticMeaning: 'End date for tenure calculation (current date or termination date)',
+              derivationLogic: 'Use termination_date if employee left, otherwise use current_date',
+              columnMatchPatterns: ['termination_date', 'end_date', 'leave_date', 'roster_date', 'report_date'],
+              columnMatchType: 'direct_value',
+              dataTypeExpected: 'date',
+              isIntermediate: false,
+              nullMeaning: 'Employee is still active - use current date as reference'
+            }
+          ]
         },
         {
           conceptName: 'employee_satisfaction_index',
@@ -825,7 +1033,27 @@ Respond ONLY with the JSON, no other text.`;
           matchPatterns: ['absenteeism', 'absence_rate', 'sick_days'],
           synonyms: ['absence_percentage', 'attendance_gap'],
           unit: 'percent',
-          confidence: 0.95
+          confidence: 0.95,
+          componentFieldDescriptors: [
+            {
+              abstractName: 'absent_days',
+              semanticMeaning: 'Number of unplanned absence days per employee',
+              derivationLogic: 'SUM or COUNT of absence records per employee',
+              columnMatchPatterns: ['absent', 'absence', 'sick_days', 'days_off', 'unplanned_leave', 'absences_count'],
+              columnMatchType: 'direct_value',
+              dataTypeExpected: 'numeric',
+              isIntermediate: false
+            },
+            {
+              abstractName: 'total_workdays',
+              semanticMeaning: 'Total available workdays in the period',
+              derivationLogic: 'Count of scheduled workdays in the analysis period',
+              columnMatchPatterns: ['workdays', 'total_days', 'scheduled_days', 'working_days', 'available_days'],
+              columnMatchType: 'direct_value',
+              dataTypeExpected: 'numeric',
+              isIntermediate: false
+            }
+          ]
         }
       ],
       sales: [
@@ -1044,6 +1272,252 @@ Respond ONLY with the JSON, no other text.`;
     // Always include general definitions + industry-specific ones
     const industrySpecific = definitions[industry.toLowerCase()] || [];
     return [...generalDefinitions, ...industrySpecific];
+  }
+
+  // ========================================
+  // DATASET-AWARE ENRICHMENT
+  // ========================================
+
+  /**
+   * Enrich a business definition with actual dataset context.
+   * Resolves abstract component fields (e.g., "employees_left", "total_employees")
+   * to actual dataset columns (e.g., "Termination_Date", "Employee_ID").
+   *
+   * Assigns semantic roles to each resolved field:
+   * - period_indicator: date columns defining the analysis time period
+   * - separation_indicator: columns indicating an event (e.g., NULL = active, non-NULL = separated)
+   * - metric_source: numeric columns used in calculations
+   * - grouping_dimension: categorical columns for aggregation (department, region, etc.)
+   * - identifier: ID columns for entity tracking
+   */
+  async enrichDefinitionWithDatasetContext(
+    definition: BusinessDefinition,
+    datasetSchema: Record<string, any>,
+    preview: any[],
+    context?: { industry?: string; dataContext?: string }
+  ): Promise<{
+    resolvedComponentFields: Array<{
+      abstractName: string;
+      resolvedColumn: string | null;
+      role: 'period_indicator' | 'separation_indicator' | 'metric_source' | 'grouping_dimension' | 'identifier';
+      resolution: string;
+    }>;
+    dateContext?: {
+      periodColumn: string | null;
+      periodGranularity: string | null;
+      dateColumns: Array<{ column: string; role: string; nullMeaning: string }>;
+    };
+  }> {
+    const componentFields = (definition.componentFields as string[]) || [];
+    const schemaColumns = Object.keys(datasetSchema);
+    const resolvedFields: Array<{
+      abstractName: string;
+      resolvedColumn: string | null;
+      role: 'period_indicator' | 'separation_indicator' | 'metric_source' | 'grouping_dimension' | 'identifier';
+      resolution: string;
+    }> = [];
+
+    // Classify columns by type
+    const dateColumns: string[] = [];
+    const numericColumns: string[] = [];
+    const categoricalColumns: string[] = [];
+
+    for (const col of schemaColumns) {
+      const colInfo = datasetSchema[col];
+      const colType = (typeof colInfo === 'string' ? colInfo : (colInfo as any)?.type || '').toLowerCase();
+      if (/date|datetime|timestamp/i.test(colType)) dateColumns.push(col);
+      else if (/number|integer|float|numeric|decimal/i.test(colType)) numericColumns.push(col);
+      else if (/string|text|categorical|varchar/i.test(colType)) categoricalColumns.push(col);
+    }
+
+    // Analyze date columns for null patterns (for separation indicators)
+    const dateColumnNullRatios: Record<string, number> = {};
+    if (preview.length > 0) {
+      for (const col of dateColumns) {
+        const values = preview.map(row => row[col]);
+        const nullCount = values.filter(v => v === null || v === undefined || v === '').length;
+        dateColumnNullRatios[col] = nullCount / values.length;
+      }
+    }
+
+    // Find date columns that look like separation/termination indicators
+    // (high null rate = many active employees, non-null = separated)
+    const dateContextResult: {
+      periodColumn: string | null;
+      periodGranularity: string | null;
+      dateColumns: Array<{ column: string; role: string; nullMeaning: string }>;
+    } = { periodColumn: null, periodGranularity: null, dateColumns: [] };
+
+    // Separation indicator patterns
+    const separationPatterns = /terminat|separat|end_date|exit_date|last_day|resign|depart/i;
+    // Period/start date patterns
+    const periodPatterns = /hire_date|start_date|join_date|created|date|period|year|month/i;
+    // Grouping dimension patterns
+    const groupingPatterns = /department|dept|region|location|team|division|unit|office|branch|manager|supervisor|leader/i;
+    // Identifier patterns
+    const identifierPatterns = /employee_id|emp_id|staff_id|worker_id|person_id|customer_id|student_id|id/i;
+
+    for (const abstractField of componentFields) {
+      const normalizedAbstract = abstractField.toLowerCase().replace(/[_\s-]+/g, '');
+
+      // Classify the abstract field's semantic role
+      let role: 'period_indicator' | 'separation_indicator' | 'metric_source' | 'grouping_dimension' | 'identifier' = 'metric_source';
+
+      if (/separat|terminat|left|leave|exit|attrition|turnover_indicator|departed/i.test(abstractField)) {
+        role = 'separation_indicator';
+      } else if (/period|date|time|year|month|quarter/i.test(abstractField)) {
+        role = 'period_indicator';
+      } else if (/group|department|region|division|team|segment|category/i.test(abstractField)) {
+        role = 'grouping_dimension';
+      } else if (/total|count|headcount|employee|number_of|size/i.test(abstractField)) {
+        role = 'metric_source';
+      } else if (/identifier|id$/i.test(abstractField)) {
+        role = 'identifier';
+      }
+
+      let resolvedColumn: string | null = null;
+      let resolution = '';
+
+      switch (role) {
+        case 'separation_indicator': {
+          // Find date columns with high null rate and separation-like names
+          const separationDateCols = dateColumns
+            .filter(col => separationPatterns.test(col))
+            .sort((a, b) => (dateColumnNullRatios[b] || 0) - (dateColumnNullRatios[a] || 0));
+
+          if (separationDateCols.length > 0) {
+            resolvedColumn = separationDateCols[0];
+            const nullPct = ((dateColumnNullRatios[resolvedColumn] || 0) * 100).toFixed(0);
+            resolution = `Date column "${resolvedColumn}" (${nullPct}% null → likely indicates active records)`;
+            dateContextResult.dateColumns.push({
+              column: resolvedColumn,
+              role: 'separation_indicator',
+              nullMeaning: 'employee is still active'
+            });
+          } else {
+            // Fallback: any date column with >20% nulls
+            const highNullDateCols = dateColumns
+              .filter(col => (dateColumnNullRatios[col] || 0) > 0.2)
+              .sort((a, b) => (dateColumnNullRatios[b] || 0) - (dateColumnNullRatios[a] || 0));
+            if (highNullDateCols.length > 0) {
+              resolvedColumn = highNullDateCols[0];
+              resolution = `Date column "${resolvedColumn}" has ${((dateColumnNullRatios[resolvedColumn] || 0) * 100).toFixed(0)}% nulls (potential separation indicator)`;
+              dateContextResult.dateColumns.push({
+                column: resolvedColumn,
+                role: 'potential_separation_indicator',
+                nullMeaning: 'record may still be active'
+              });
+            } else {
+              resolution = 'No date column with separation pattern found';
+            }
+          }
+          break;
+        }
+
+        case 'period_indicator': {
+          // Find best period column
+          const periodCols = dateColumns
+            .filter(col => periodPatterns.test(col))
+            .sort((a, b) => {
+              // Prefer columns with fewer nulls (more complete)
+              return (dateColumnNullRatios[a] || 0) - (dateColumnNullRatios[b] || 0);
+            });
+
+          if (periodCols.length > 0) {
+            resolvedColumn = periodCols[0];
+            // Estimate granularity from preview
+            let granularity = 'unknown';
+            if (preview.length > 0) {
+              const uniqueValues = new Set(preview.map(r => r[resolvedColumn!]).filter(Boolean));
+              if (uniqueValues.size <= 4) granularity = 'quarter';
+              else if (uniqueValues.size <= 12) granularity = 'month';
+              else if (uniqueValues.size <= 52) granularity = 'week';
+              else granularity = 'day';
+            }
+            dateContextResult.periodColumn = resolvedColumn;
+            dateContextResult.periodGranularity = granularity;
+            resolution = `Period column "${resolvedColumn}" (granularity: ~${granularity})`;
+          } else if (dateColumns.length > 0) {
+            resolvedColumn = dateColumns[0];
+            dateContextResult.periodColumn = resolvedColumn;
+            resolution = `Fallback date column "${resolvedColumn}"`;
+          } else {
+            resolution = 'No date columns found in dataset';
+          }
+          break;
+        }
+
+        case 'grouping_dimension': {
+          // Find categorical columns matching grouping patterns
+          const matchingCols = categoricalColumns
+            .filter(col => groupingPatterns.test(col))
+            .sort((a, b) => {
+              // Prefer exact-ish match to the abstract field name
+              const aNorm = a.toLowerCase().replace(/[_\s-]+/g, '');
+              const bNorm = b.toLowerCase().replace(/[_\s-]+/g, '');
+              const aMatch = aNorm.includes(normalizedAbstract) || normalizedAbstract.includes(aNorm) ? 1 : 0;
+              const bMatch = bNorm.includes(normalizedAbstract) || normalizedAbstract.includes(bNorm) ? 1 : 0;
+              return bMatch - aMatch;
+            });
+
+          if (matchingCols.length > 0) {
+            resolvedColumn = matchingCols[0];
+            resolution = `Categorical column "${resolvedColumn}" matches grouping pattern`;
+          } else if (categoricalColumns.length > 0) {
+            // Try fuzzy match
+            const fuzzy = categoricalColumns.find(col =>
+              col.toLowerCase().replace(/[_\s-]+/g, '').includes(normalizedAbstract) ||
+              normalizedAbstract.includes(col.toLowerCase().replace(/[_\s-]+/g, ''))
+            );
+            if (fuzzy) {
+              resolvedColumn = fuzzy;
+              resolution = `Fuzzy match to categorical column "${fuzzy}"`;
+            } else {
+              resolution = `No categorical column matches "${abstractField}"`;
+            }
+          }
+          break;
+        }
+
+        case 'identifier': {
+          const idCols = schemaColumns.filter(col => identifierPatterns.test(col));
+          if (idCols.length > 0) {
+            resolvedColumn = idCols[0];
+            resolution = `Identifier column "${resolvedColumn}"`;
+          }
+          break;
+        }
+
+        case 'metric_source':
+        default: {
+          // Match numeric columns by name similarity
+          const matchingNumerics = numericColumns.filter(col => {
+            const colNorm = col.toLowerCase().replace(/[_\s-]+/g, '');
+            return colNorm.includes(normalizedAbstract) || normalizedAbstract.includes(colNorm);
+          });
+          if (matchingNumerics.length > 0) {
+            resolvedColumn = matchingNumerics[0];
+            resolution = `Numeric column "${resolvedColumn}" matches "${abstractField}"`;
+          } else {
+            resolution = `No numeric column matches "${abstractField}"`;
+          }
+          break;
+        }
+      }
+
+      resolvedFields.push({ abstractName: abstractField, resolvedColumn, role, resolution });
+    }
+
+    const resolvedCount = resolvedFields.filter(f => f.resolvedColumn).length;
+    console.log(`🔧 [BA Registry] Enriched "${definition.conceptName}": ${resolvedCount}/${componentFields.length} fields resolved`);
+    for (const f of resolvedFields) {
+      console.log(`   ${f.resolvedColumn ? '✅' : '⚠️'} ${f.abstractName} → ${f.resolvedColumn || 'UNRESOLVED'} (${f.role}: ${f.resolution})`);
+    }
+
+    return {
+      resolvedComponentFields: resolvedFields,
+      dateContext: dateContextResult
+    };
   }
 }
 

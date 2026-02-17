@@ -33,7 +33,12 @@ export class ChimaridataAI {
       this.providers.push(new AnthropicProvider(process.env.ANTHROPIC_API_KEY));
     }
 
-    // Mock provider (fallback 3 - always available if others fail)
+    // Groq provider (fallback 3 - fast Llama/Mixtral inference)
+    if (process.env.GROQ_API_KEY) {
+      this.providers.push(new GroqProvider(process.env.GROQ_API_KEY));
+    }
+
+    // Mock provider (fallback 4 - always available if others fail)
     if (this.providers.length === 0) {
       this.providers.push(new MockProvider());
     }
@@ -267,6 +272,53 @@ class AnthropicProvider implements AIProvider {
     });
 
     return response.content[0].type === 'text' ? response.content[0].text : "No insights generated";
+  }
+
+  isAvailable(): boolean {
+    return !!this.apiKey;
+  }
+}
+
+class GroqProvider implements AIProvider {
+  public name = "Groq";
+  private apiKey: string;
+
+  constructor(apiKey: string) {
+    this.apiKey = apiKey;
+  }
+
+  async generateInsights(data: any, prompt: string): Promise<string> {
+    // Groq uses OpenAI-compatible API
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'llama-3.1-70b-versatile',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are an expert data analyst. Provide clear, actionable insights based on the data provided.'
+          },
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        max_tokens: 2000,
+        temperature: 0.7
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Groq API error ${response.status}: ${errorText}`);
+    }
+
+    const result = await response.json();
+    return result.choices?.[0]?.message?.content || 'No insights generated';
   }
 
   isAvailable(): boolean {

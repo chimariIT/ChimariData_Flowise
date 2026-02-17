@@ -1,6 +1,6 @@
 # Agentic System Guide
 
-**Part of ChimariData Documentation** | [← Back to Main](../CLAUDE.md) | **Last Updated**: December 10, 2025
+**Part of ChimariData Documentation** | [← Back to Main](../CLAUDE.md) | **Last Updated**: February 13, 2026
 
 This document covers the multi-agent architecture, tool-based system, MCP integration, agent coordination, and development patterns.
 
@@ -46,19 +46,46 @@ User Journey → Agent (via MCP) → Tool Registry → Tool Handler → Real Ser
 
 ### Agent Types
 
-The platform has **6 specialized agents**:
+The platform has **7 specialized agents**:
 
-| Agent | File | Primary Responsibility |
-|-------|------|----------------------|
-| **Project Manager** | `project-manager-agent.ts` | End-to-end orchestration |
-| **Data Scientist** | `data-scientist-agent.ts` | Statistical analysis, ML |
-| **Technical AI** | `technical-ai-agent.ts` | Lower-level technical AI (used BY Data Scientist) |
-| **Business Agent** | `business-agent.ts` | Industry expertise, compliance |
-| **Data Engineer** | `data-engineer-agent.ts` | Data quality, ETL pipelines |
-| **Template Research** | `template-research-agent.ts` | Industry-specific templates |
-| **Customer Support** | `customer-support-agent.ts` | Knowledge base, diagnostics |
+| Agent | File | Primary Responsibility | Status |
+|-------|------|----------------------|--------|
+| **Project Manager** | `project-manager-agent.ts` | End-to-end orchestration | ✅ Active |
+| **Data Scientist** | `data-scientist-agent.ts` | Statistical analysis, ML | ✅ Active |
+| **Technical AI** | `technical-ai-agent.ts` | Lower-level technical AI (used BY Data Scientist) | ✅ Active |
+| **Business Agent** | `business-agent.ts` | Industry expertise, compliance | ✅ Active |
+| **Data Engineer** | `data-engineer-agent.ts` | Data quality, ETL pipelines | ✅ Active |
+| **Template Research** | `template-research-agent.ts` | Industry-specific templates | ⚠️ Initialized, tools not routed |
+| **Customer Support** | `customer-support-agent.ts` | Knowledge base, diagnostics | ⚠️ Initialized, not wired to workflows |
 
 ⚠️ **Important**: `TechnicalAIAgent` and `DataScientistAgent` are **separate agents**. DataScientistAgent uses TechnicalAIAgent as a lower-level service.
+
+### Tool Implementation Status (Feb 2026 Audit)
+
+| Category | Registered | Routed in executeTool | Fully Working |
+|----------|-----------|----------------------|---------------|
+| Core Analysis | 5 | 5 | 5 |
+| ML Pipeline | 5 | 5 | 5 |
+| Visualization | 6 | 4 | 4 |
+| Spark Distributed | 6 | 0 | 0 (PLANNED) |
+| PM Coordination | 6 | 2 | 1 |
+| Research Agent | 7 | 7 | 7 |
+| Data Ingestion | 17+ | 15 | 15 |
+| Data Engineer | 6 | 4 | 3 |
+| Business Agent | 9 | 9 | 9 |
+| Customer Support | 6 | 5 | 4 |
+| Business Definitions | 3 | 3 | 3 |
+| Output Formatting | 4 | 3 | 3 |
+| **Total** | **130+** | **~75** | **~65** |
+
+See [MCP_TOOL_STATUS.md](MCP_TOOL_STATUS.md) for the full tool-by-tool matrix.
+
+### Known Gaps (Feb 2026)
+- **Agent Activity Messages**: Hardcoded static strings in `agents.ts:59-70` and `agent-coordination-service.ts:325-532`. Users see generic status updates.
+- **Socket.IO removed**: Dual-emission to both ws and Socket.IO was causing message duplication. Now uses native `ws` only (per CLAUDE.md).
+- **Business Agent translation**: Post-execution BA translation happens client-side only, not as part of the server-side agent workflow.
+- **Tool input validation**: `executeTool()` does not validate input against registered `inputSchema` before routing.
+- **Intent-based discovery**: `findToolsByIntent()` uses keyword matching only, not semantic similarity.
 
 ---
 

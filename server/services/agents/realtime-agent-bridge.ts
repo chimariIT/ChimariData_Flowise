@@ -10,12 +10,14 @@
  * 3. User responds via WebSocket
  * 4. Bridge forwards response back to agent via message broker
  *
- * FIX: Socket.IO Migration - Now uses Socket.IO for better reconnection handling
+ * FIX P1-4: Removed Socket.IO dual-emission. Platform uses native ws (per CLAUDE.md).
+ * Socket.IO migration was incomplete and caused message duplication.
  */
 
 import { getMessageBroker, AgentMessage, AgentCheckpoint, PendingCheckpointInfo } from './message-broker';
 import { RealtimeServer, RealtimeEvent } from '../../realtime';
-import { SocketManager, AgentCheckpointEvent, ExecutionProgressEvent } from '../../socket-manager';
+// FIX P1-4: Socket.IO import kept for type compat but not used for emission
+import type { AgentCheckpointEvent, ExecutionProgressEvent } from '../../socket-manager';
 import { EventEmitter } from 'events';
 import { storage } from '../../storage';
 
@@ -156,25 +158,8 @@ export class RealtimeAgentBridge extends EventEmitter {
 
     this.realtimeServer.broadcast(event, { userId, projectId: checkpoint.projectId });
 
-    // FIX: Socket.IO Migration - Also emit via Socket.IO for better reconnection handling
-    const socketManager = SocketManager.getInstance();
-    const socketEvent: AgentCheckpointEvent = {
-      checkpointId: checkpoint.checkpointId,
-      projectId: checkpoint.projectId,
-      agentType: checkpoint.agentId || 'unknown',
-      stepName: checkpoint.step || 'unknown',
-      status: 'waiting_approval',
-      message: checkpoint.question || 'Checkpoint requires approval',
-      timestamp: new Date(),
-      userVisible: true, // Checkpoints sent to users are always visible
-      data: {
-        options: checkpoint.options,
-        artifacts: checkpoint.artifacts,
-      },
-    };
-    socketManager.emitAgentCheckpoint(checkpoint.projectId, socketEvent);
-
-    console.log(`Checkpoint ${checkpoint.checkpointId} forwarded to user ${userId} (ws + Socket.IO)`);
+    // FIX P1-4: Removed Socket.IO dual-emission (native ws only)
+    console.log(`Checkpoint ${checkpoint.checkpointId} forwarded to user ${userId} (ws)`);
     this.emit('checkpoint_forwarded', { checkpointId: checkpoint.checkpointId, userId });
 
     // P1-17 FIX: Set timeout to auto-expire stale checkpoints that never got a response
@@ -213,15 +198,7 @@ export class RealtimeAgentBridge extends EventEmitter {
 
     this.realtimeServer.broadcast(event);
 
-    // FIX: Socket.IO Migration - Also broadcast via Socket.IO
-    const socketManager = SocketManager.getInstance();
-    socketManager.broadcast('agent_status', {
-      agentId: message.from,
-      status: status.status,
-      currentTask: status.currentTask,
-      queuedTasks: status.queuedTasks,
-      timestamp: new Date(),
-    });
+    // FIX P1-4: Removed Socket.IO dual-emission (native ws only)
   }
 
   /**
@@ -252,24 +229,11 @@ export class RealtimeAgentBridge extends EventEmitter {
 
     this.realtimeServer.broadcast(event, { userId, projectId });
 
-    // FIX: Socket.IO Migration - Also emit via Socket.IO for project room
-    if (projectId) {
-      const socketManager = SocketManager.getInstance();
-      const progressEvent: ExecutionProgressEvent = {
-        projectId,
-        phase: 'result',
-        status: 'completed',
-        message: `Agent ${message.from} completed task`,
-        progress: 100,
-        data: result,
-      };
-      socketManager.emitExecutionProgress(projectId, progressEvent);
-    }
+    // FIX P1-4: Removed Socket.IO dual-emission (native ws only)
   }
 
   /**
    * Forward agent error to user via WebSocket
-   * FIX: Socket.IO Migration - Now emits via both native ws and Socket.IO
    */
   private async handleAgentError(message: AgentMessage): Promise<void> {
     const error = message.payload;
@@ -296,22 +260,7 @@ export class RealtimeAgentBridge extends EventEmitter {
 
     this.realtimeServer.broadcast(event, { userId, projectId });
 
-    // FIX: Socket.IO Migration - Also emit via Socket.IO for project room
-    if (projectId) {
-      const socketManager = SocketManager.getInstance();
-      const progressEvent: ExecutionProgressEvent = {
-        projectId,
-        phase: 'error',
-        status: 'failed',
-        message: error.message || 'Agent error occurred',
-        data: {
-          agentId: message.from,
-          error: error.message,
-          details: error,
-        },
-      };
-      socketManager.emitExecutionProgress(projectId, progressEvent);
-    }
+    // FIX P1-4: Removed Socket.IO dual-emission (native ws only)
   }
 
   /**
@@ -356,27 +305,7 @@ export class RealtimeAgentBridge extends EventEmitter {
 
     this.realtimeServer.broadcast(event, { userId, projectId });
 
-    // Also emit via Socket.IO for project room
-    const socketManager = SocketManager.getInstance();
-    const progressEvent: ExecutionProgressEvent = {
-      projectId,
-      phase: progressData.phase || 'workflow',
-      status: progressData.status === 'completed' ? 'completed'
-        : progressData.status === 'failed' ? 'failed'
-        : progressData.status === 'started' ? 'starting'
-        : 'in_progress',
-      message: progressData.message || `Workflow phase: ${progressData.phase}`,
-      progress: progressData.percentComplete,
-      data: {
-        workflowId: progressData.workflowId,
-        phaseIndex: progressData.phaseIndex,
-        totalPhases: progressData.totalPhases,
-        slaCompliant: progressData.slaCompliant,
-        durationMs: progressData.durationMs,
-      },
-    };
-    socketManager.emitExecutionProgress(projectId, progressEvent);
-
+    // FIX P1-4: Removed Socket.IO dual-emission (native ws only)
     this.emit('workflow_progress', progressData);
   }
 

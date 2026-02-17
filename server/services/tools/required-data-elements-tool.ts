@@ -13,7 +13,9 @@ import { nanoid } from 'nanoid';
 import * as crypto from 'crypto';
 import { TransformationValidator } from '../transformation-validator';
 import { normalizeQuestions } from '../../utils/question-normalizer';
+import { generateStableQuestionId } from '../../constants';
 import { chimaridataAI } from '../../chimaridata-ai';
+import { sourceColumnMapper } from '../source-column-mapper';
 
 /**
  * Required data element specification
@@ -50,7 +52,20 @@ export interface RequiredDataElement {
         comparisonGroups?: {
             groupingField?: string; // e.g., "Department", "Region"
             groupValues?: string[]; // e.g., ["Sales", "Marketing", "Engineering"]
-            comparisonType: 'between_groups' | 'within_group' | 'time_series';
+            comparisonType: 'between_groups' | 'within_group' | 'time_series' | 'group_vs_baseline';
+
+            // Phase 5: Hierarchical aggregation levels
+            levels?: Array<{
+                name: string;           // e.g., "leader", "company"
+                groupByFields: string[]; // e.g., ["Manager_ID"] or [] for overall
+                role: 'detail' | 'baseline';
+                label?: string;         // Human-readable label
+            }>;
+            baseline?: {
+                type: 'overall' | 'specific_group';
+                groupByFields: string[]; // [] for overall, or specific grouping columns
+                label: string;           // e.g., "Company Average"
+            };
         };
 
         // For derived metrics like "Engagement Score"
@@ -222,7 +237,13 @@ export class RequiredDataElementsTool {
         projectId: string;
         userGoals: string[];
         userQuestions: string[];
+        /** P0-8 FIX: Structured questions with stable IDs from project_questions table */
+        structuredQuestions?: Array<{ id: string; text: string; order?: number }>;
         datasetMetadata?: any;
+        /** Industry/domain context from project or user profile (e.g., 'marketing', 'hr', 'finance') */
+        industry?: string;
+        /** Target audience description from journey progress */
+        audience?: string;
     }): Promise<DataRequirementsMappingDocument> {
         console.log('📋 [Data Elements Tool] Phase 1: Defining requirements from goals and questions');
 
@@ -256,7 +277,9 @@ export class RequiredDataElementsTool {
             analysisPath,
             normalizedGoals,
             normalizedQuestions,
-            input.datasetMetadata
+            input.datasetMetadata,
+            input.structuredQuestions,
+            input.industry
         );
 
         // ========================================================================
@@ -268,19 +291,51 @@ export class RequiredDataElementsTool {
         try {
             const { businessDefinitionRegistry } = await import('../business-definition-registry');
 
-            // Try to detect industry from goals/questions for better definition matching
-            const combinedContext = [...normalizedGoals, ...normalizedQuestions].join(' ').toLowerCase();
+            // Detect industry context using priority: explicit > dataset schema > keyword inference
+            // Priority 1: Explicit industry from project/user profile (most reliable)
             let industryContext = 'general';
-            if (/employee|hr|engagement|turnover|retention|satisfaction|survey/i.test(combinedContext)) {
-                industryContext = 'hr';
-            } else if (/sales|revenue|customer|conversion|churn/i.test(combinedContext)) {
-                industryContext = 'sales';
-            } else if (/finance|revenue|profit|cost|budget|roi/i.test(combinedContext)) {
-                industryContext = 'finance';
-            } else if (/student|education|grade|course|enrollment/i.test(combinedContext)) {
-                industryContext = 'education';
+            if (input.industry && input.industry !== 'general' && input.industry !== 'other') {
+                industryContext = input.industry.toLowerCase();
+                console.log(`   Industry context from project/user: ${industryContext}`);
+            } else {
+                // Priority 2: Infer from dataset column names (more reliable than question keywords)
+                const datasetColumns = input.datasetMetadata?.columns || [];
+                const columnContext = datasetColumns.join(' ').toLowerCase();
+
+                // Priority 3: Infer from goals/questions (least reliable — use tighter patterns)
+                const combinedContext = [...normalizedGoals, ...normalizedQuestions].join(' ').toLowerCase();
+                const fullContext = `${columnContext} ${combinedContext}`;
+
+                // Marketing patterns (check BEFORE HR to prevent false HR matches on "campaign")
+                if (/\b(campaign|impression|click.?rate|ad.?spend|ctr|cpc|cpm|marketing|seo|sem|social.?media|lead.?gen)\b/i.test(fullContext)) {
+                    industryContext = 'marketing';
+                }
+                // HR patterns — require employee/hr-specific terms, NOT just "engagement" or "survey"
+                else if (/\b(employee|hr\b|human.?resource|turnover|headcount|attrition|hire|onboard|payroll|fte)\b/i.test(fullContext)) {
+                    industryContext = 'hr';
+                }
+                // Sales patterns
+                else if (/\b(sales.?pipeline|deal|quota|close.?rate|sales.?rep|opportunity|account.?exec)\b/i.test(fullContext)) {
+                    industryContext = 'sales';
+                }
+                // E-commerce / retail patterns
+                else if (/\b(cart|checkout|product.?page|sku|order|ecommerce|shopif|aov|add.?to.?cart)\b/i.test(fullContext)) {
+                    industryContext = 'ecommerce';
+                }
+                // Finance patterns
+                else if (/\b(profit|loss|balance.?sheet|p&l|ledger|accounts.?payable|accounts.?receivable|budget)\b/i.test(fullContext)) {
+                    industryContext = 'finance';
+                }
+                // Education patterns
+                else if (/\b(student|grade|gpa|course|enrollment|semester|academic|faculty)\b/i.test(fullContext)) {
+                    industryContext = 'education';
+                }
+                // Healthcare patterns
+                else if (/\b(patient|diagnosis|clinical|treatment|hospital|icd|cpt|ehr|readmission)\b/i.test(fullContext)) {
+                    industryContext = 'healthcare';
+                }
+                console.log(`   Industry context inferred: ${industryContext} (from ${input.industry ? 'explicit + ' : ''}${datasetColumns.length > 0 ? 'schema + ' : ''}keywords)`);
             }
-            console.log(`   Industry context detected: ${industryContext}`);
 
             // Run all lookups in parallel with a 10s overall timeout to prevent blocking
             const ENRICHMENT_TIMEOUT_MS = 10000;
@@ -291,7 +346,8 @@ export class RequiredDataElementsTool {
                         {
                             industry: industryContext,
                             projectId: input.projectId,
-                            includeGlobal: true
+                            includeGlobal: true,
+                            datasetSchema: input.datasetMetadata?.schema
                         }
                     );
                     return { element, lookupResult };
@@ -436,13 +492,46 @@ export class RequiredDataElementsTool {
                 return false;
             });
 
-            // PHASE 6 FIX: Ensure linking happened - fallback to numeric elements if no matches
+            // P1-7 FIX: Type-specific fallback instead of "all numeric" dumping
             if (linkedElements.length === 0) {
-                console.warn(`   ⚠️ [Data Elements Tool] No elements matched for "${analysis.analysisName}" - using ALL numeric elements as fallback`);
+                const analysisType = (analysis.analysisType || '').toLowerCase();
                 const numericElements = requiredDataElements.filter(el =>
                     ['integer', 'float', 'number', 'numeric', 'decimal'].includes(el.dataType?.toLowerCase())
                 );
-                analysis.requiredDataElements = numericElements.map(el => el.elementId || el.elementName);
+                const categoricalElements = requiredDataElements.filter(el =>
+                    ['string', 'categorical', 'text', 'varchar'].includes(el.dataType?.toLowerCase())
+                );
+
+                let fallbackElements: typeof requiredDataElements = [];
+                if (['descriptive', 'descriptive_stats', 'summary'].includes(analysisType)) {
+                    // Descriptive: all numeric + categorical dimensions (capped at 15)
+                    fallbackElements = [...numericElements, ...categoricalElements].slice(0, 15);
+                    console.warn(`   ⚠️ [P1-7] Descriptive fallback: ${fallbackElements.length} elements (numeric + categorical)`);
+                } else if (['correlation', 'correlation_analysis'].includes(analysisType)) {
+                    // Correlation: numeric only (capped at 10)
+                    fallbackElements = numericElements.slice(0, 10);
+                    console.warn(`   ⚠️ [P1-7] Correlation fallback: ${fallbackElements.length} numeric elements`);
+                } else if (['regression', 'predictive', 'linear_regression'].includes(analysisType)) {
+                    // Regression: numeric target + predictors (capped at 12)
+                    fallbackElements = numericElements.slice(0, 12);
+                    console.warn(`   ⚠️ [P1-7] Regression fallback: ${fallbackElements.length} numeric elements`);
+                } else if (['clustering', 'segmentation', 'cluster_analysis'].includes(analysisType)) {
+                    // Clustering: numeric features only (capped at 8)
+                    fallbackElements = numericElements.slice(0, 8);
+                    console.warn(`   ⚠️ [P1-7] Clustering fallback: ${fallbackElements.length} numeric features`);
+                } else if (['time_series', 'time-series', 'forecasting'].includes(analysisType)) {
+                    // Time series: date/temporal + numeric (capped at 6)
+                    const dateElements = requiredDataElements.filter(el =>
+                        ['date', 'datetime', 'timestamp', 'time'].includes(el.dataType?.toLowerCase())
+                    );
+                    fallbackElements = [...dateElements, ...numericElements].slice(0, 6);
+                    console.warn(`   ⚠️ [P1-7] Time series fallback: ${fallbackElements.length} elements`);
+                } else {
+                    // Unknown type: cautious subset of numeric (capped at 8)
+                    fallbackElements = numericElements.slice(0, 8);
+                    console.warn(`   ⚠️ [P1-7] Generic fallback for "${analysisType}": ${fallbackElements.length} numeric elements`);
+                }
+                analysis.requiredDataElements = fallbackElements.map(el => el.elementId || el.elementName);
             } else {
                 analysis.requiredDataElements = linkedElements.map(el => el.elementId || el.elementName);
             }
@@ -502,7 +591,11 @@ export class RequiredDataElementsTool {
             preview: any[];
             piiFields?: string[]; // Optional PII field list
             businessDefinitions?: any[]; // BA/DS definitions for guided mapping
-        }
+        },
+        /** Industry/domain context from project or user profile */
+        industry?: string,
+        /** Project ID for RAG-based matching using pre-computed column embeddings */
+        projectId?: string
     ): Promise<DataRequirementsMappingDocument> {
         console.log('🔧 [DATA_ENGINEER] Phase 2: Mapping dataset to requirements');
         console.log('🔧 [DATA_ENGINEER] Using tools: data_quality_monitor, schema_evolution_manager');
@@ -519,22 +612,122 @@ export class RequiredDataElementsTool {
             schema: dataset.schema
         };
 
+        // ✅ FIX 10B: Ensure industry context propagates to AI mapping via document
+        if (industry && !(document as any).industryDomain) {
+            (document as any).industryDomain = industry;
+            console.log(`🏭 [Map Elements] Set industryDomain on document: ${industry}`);
+        }
+
         // Map each required element to dataset fields
         const availableFields = Object.keys(dataset.schema);
         let mappedCount = 0;
         let transformationCount = 0;
         const gaps: typeof document.gaps = [];
 
+        // ========================================================================
+        // ENRICHMENT: Resolve abstract component fields against actual dataset
+        // For derived/composite/aggregated elements (e.g., Turnover Rate, Engagement Score),
+        // use the business definition registry to map abstract fields like "employees_left"
+        // to actual dataset columns like "Termination_Date" with semantic role assignments.
+        // ========================================================================
+        try {
+            const { businessDefinitionRegistry } = await import('../business-definition-registry');
+
+            // Detect industry context: explicit > dataset schema columns > keyword inference
+            let enrichmentIndustry = 'general';
+            if (industry && industry !== 'general' && industry !== 'other') {
+                enrichmentIndustry = industry.toLowerCase();
+            } else {
+                const columnCtx = Object.keys(dataset.schema).join(' ').toLowerCase();
+                const combinedCtx = `${columnCtx} ${[...(document.userGoals || []), ...(document.userQuestions || [])].join(' ').toLowerCase()}`;
+                if (/\b(campaign|impression|click.?rate|ad.?spend|ctr|cpc|cpm|marketing|seo|lead.?gen)\b/i.test(combinedCtx)) enrichmentIndustry = 'marketing';
+                else if (/\b(employee|hr\b|human.?resource|turnover|headcount|attrition|hire|onboard|payroll)\b/i.test(combinedCtx)) enrichmentIndustry = 'hr';
+                else if (/\b(sales.?pipeline|deal|quota|close.?rate|sales.?rep|opportunity)\b/i.test(combinedCtx)) enrichmentIndustry = 'sales';
+                else if (/\b(profit|loss|balance.?sheet|p&l|ledger|accounts.?payable|budget)\b/i.test(combinedCtx)) enrichmentIndustry = 'finance';
+            }
+            console.log(`   Enrichment industry context: ${enrichmentIndustry}`);
+
+            let enrichedCount = 0;
+            for (const element of document.requiredDataElements) {
+                const calcType = element.calculationDefinition?.calculationType;
+                if (calcType && ['derived', 'composite', 'aggregated', 'grouped'].includes(calcType)) {
+                    const lookupResult = await businessDefinitionRegistry.lookupDefinition(
+                        element.elementName,
+                        { industry: enrichmentIndustry, projectId: document.projectId, includeGlobal: true, datasetSchema: dataset.schema }
+                    );
+
+                    if (lookupResult.found && lookupResult.definition) {
+                        const enriched = await businessDefinitionRegistry.enrichDefinitionWithDatasetContext(
+                            lookupResult.definition,
+                            dataset.schema,
+                            sanitizedPreview,
+                            { industry: enrichmentIndustry }
+                        );
+
+                        // Replace abstract componentFields with resolved actual columns
+                        const resolved = enriched.resolvedComponentFields.filter(f => f.resolvedColumn);
+                        if (resolved.length > 0 && element.calculationDefinition?.formula) {
+                            element.calculationDefinition.formula.componentFields =
+                                resolved.map(f => f.resolvedColumn!);
+                            element.calculationDefinition.notes =
+                                `Dataset-enriched: ${resolved.map(f => `${f.abstractName}→${f.resolvedColumn} (${f.role})`).join(', ')}`;
+                            enrichedCount++;
+                            console.log(`✅ [DE Phase 2] Enriched "${element.elementName}": ${resolved.length} fields resolved`);
+                        }
+                    }
+                }
+            }
+            if (enrichedCount > 0) {
+                console.log(`📚 [DE Phase 2] Dataset-enriched ${enrichedCount} elements with actual column mappings`);
+            }
+        } catch (enrichError) {
+            console.warn('⚠️ [DE Phase 2] Dataset enrichment failed (non-blocking):', (enrichError as Error).message);
+        }
+
         for (const element of document.requiredDataElements) {
             // Get question context for this element to improve matching
             const questionContext = element.relatedQuestions || [];
-            const mapping = await this.findBestMatch(
-                element, 
-                availableFields, 
-                dataset.schema, 
-                sanitizedPreview,
-                questionContext
-            );
+
+            // Determine if this is a composite element that needs the legacy findBestMatch
+            const calcDef = element.calculationDefinition;
+            const componentFields = calcDef?.formula?.componentFields || [];
+            const isCompositeElement = componentFields.length > 0 &&
+                ['derived', 'aggregated', 'composite'].includes(calcDef?.calculationType || '');
+
+            // For composite elements: use legacy findBestMatch (handles multi-field matching)
+            // For non-composite elements: delegate to RAG-first sourceColumnMapper
+            let mapping: Awaited<ReturnType<typeof this.findBestMatch>>;
+            if (isCompositeElement) {
+                mapping = await this.findBestMatch(
+                    element,
+                    availableFields,
+                    dataset.schema,
+                    sanitizedPreview,
+                    questionContext
+                );
+            } else {
+                // RAG-first matching via source-column-mapper
+                const scmResult = await sourceColumnMapper.mapSingleElement(element, {
+                    projectId,
+                    availableColumns: availableFields,
+                    schema: dataset.schema,
+                    preview: sanitizedPreview,
+                    questionContext,
+                    industry
+                });
+                // Convert to findBestMatch return format for compatibility
+                mapping = {
+                    found: scmResult.found,
+                    sourceField: scmResult.sourceField,
+                    sourceDataType: scmResult.sourceDataType,
+                    transformationNeeded: scmResult.transformationNeeded,
+                    confidence: scmResult.confidence,
+                    alternatives: scmResult.alternatives,
+                    transformationLogic: undefined,
+                    sourceColumns: undefined,
+                    isComposite: false
+                };
+            }
 
             if (mapping.found) {
                 element.sourceField = mapping.sourceField;
@@ -572,6 +765,16 @@ export class RequiredDataElementsTool {
 
                     element.transformationLogic = mapping.transformationLogic;
                     transformationCount++;
+                } else if (element.calculationDefinition?.calculationType &&
+                           ['derived', 'aggregated', 'grouped', 'composite'].includes(element.calculationDefinition.calculationType)) {
+                    // FIX A2: DS agent specified a non-direct calculationType but pattern matching
+                    // didn't detect the need for transformation. Honor the DS recommendation.
+                    element.transformationRequired = true;
+                    element.transformationLogic = this.buildTransformationLogicFromDefinition(
+                        element, mapping.sourceField!, mapping.sourceDataType || 'unknown'
+                    );
+                    transformationCount++;
+                    console.log(`📊 [DS Override] "${element.elementName}" requires transformation: calculationType=${element.calculationDefinition.calculationType}`);
                 } else {
                     element.transformationRequired = false;
                 }
@@ -609,7 +812,7 @@ export class RequiredDataElementsTool {
                 {
                     analysisTypes,
                     userQuestions,
-                    industryDomain: (document as any).industryDomain,
+                    industryDomain: (document as any).industryDomain || industry,  // ✅ FIX 10A: Fallback to explicit industry param
                     businessDefinitions: dataset.businessDefinitions || []
                 }
             );
@@ -622,8 +825,10 @@ export class RequiredDataElementsTool {
                     const aiConfidence = aiMapping.confidence;
                     const existingConfidence = (element as any).confidence || 0;
 
-                    // Use AI mapping if it has higher confidence OR element wasn't mapped
-                    if (!element.sourceAvailable || aiConfidence > existingConfidence) {
+                    // FIX A3: Use AI mapping if it has similar-or-higher confidence OR element wasn't mapped.
+                    // AI mapping uses full semantic context (descriptions, sample data, questions)
+                    // so it should be preferred when confidence is close (within 10%).
+                    if (!element.sourceAvailable || aiConfidence >= existingConfidence * 0.9) {
                         const wasUnmapped = !element.sourceAvailable;
 
                         element.sourceField = aiMapping.sourceField;
@@ -669,8 +874,15 @@ export class RequiredDataElementsTool {
                             // This is CRITICAL for composite elements - the initial mapping used placeholder names
                             // but now we have actual column names from AI, so rebuild the sourceColumns array
                             if (aiMapping.componentFields && aiMapping.componentFields.length > 0) {
+                                // FIX A4: Normalize AI-provided component field names to match exact dataset column names.
+                                // AI may return slightly different casing or formatting (e.g., "Q1_Score" vs "q1_score").
+                                const normalizedComponentFields = aiMapping.componentFields.map((cf: string) => {
+                                    const exactMatch = availableFields.find(af => af.toLowerCase() === cf.toLowerCase());
+                                    return exactMatch || cf;
+                                });
+
                                 const rebuiltSourceColumns = await this.matchComponentFields(
-                                    aiMapping.componentFields,
+                                    normalizedComponentFields,
                                     availableFields,
                                     dataset.schema
                                 );
@@ -724,7 +936,10 @@ export class RequiredDataElementsTool {
 
             console.log(`✅ [AI Mapping] Complete - ${mappedCount}/${document.requiredDataElements.length} elements mapped`);
         } catch (aiError) {
-            console.error('⚠️ [AI Mapping] Error during AI mapping (continuing with pattern matches):', aiError);
+            // FIX 1E: Make AI mapping failure visible instead of silently swallowing
+            console.error('❌ [AI Mapping] FAILED — 0 elements will be AI-mapped. Error:', aiError);
+            (document as any).aiMappingFailed = true;
+            (document as any).aiMappingError = aiError instanceof Error ? aiError.message : String(aiError);
         }
 
         // Generate transformation plan
@@ -1076,7 +1291,9 @@ export class RequiredDataElementsTool {
         analysisPath: AnalysisPath[],
         userGoals: string[],
         userQuestions: string[],
-        datasetSchema?: Record<string, any>
+        datasetSchema?: Record<string, any>,
+        structuredQuestions?: Array<{ id: string; text: string; order?: number }>,
+        industry?: string
     ): Promise<RequiredDataElement[]> {
         const elements: RequiredDataElement[] = [];
 
@@ -1096,7 +1313,8 @@ export class RequiredDataElementsTool {
                 userQuestions,
                 userGoals,
                 analysisTypes,
-                datasetSchema
+                datasetSchema,
+                industry
             });
 
             console.log(`🔬 [Data Scientist] Returned ${inferredElements.length} inferred data elements:`);
@@ -1124,8 +1342,42 @@ export class RequiredDataElementsTool {
                     analysisUsage: relevantAnalyses.length > 0 ? relevantAnalyses : analysisPath.slice(0, 1).map(a => a.analysisId),
                     required: inferredEl.required,
                     // PRESERVE QUESTION LINKAGE - this is the key fix
+                    // P0-8 FIX: Use stable question IDs from structuredQuestions when available
                     relatedQuestions: inferredEl.relatedQuestions || [],
-                    questionIds: inferredEl.relatedQuestions?.map((q, idx) => `q-${idx}`),
+                    questionIds: (() => {
+                        const structuredQs = structuredQuestions;
+                        if (structuredQs && structuredQs.length > 0 && inferredEl.relatedQuestions) {
+                            // Match question text to structured IDs using fuzzy text matching
+                            return inferredEl.relatedQuestions.map(qText => {
+                                const qTextLower = qText.toLowerCase().trim();
+                                // Try exact match first
+                                const exactMatch = structuredQs.find(sq => sq.text.toLowerCase().trim() === qTextLower);
+                                if (exactMatch) return exactMatch.id;
+                                // Try substring match (question text may be truncated by AI)
+                                const partialMatch = structuredQs.find(sq =>
+                                    sq.text.toLowerCase().includes(qTextLower.slice(0, 30)) ||
+                                    qTextLower.includes(sq.text.toLowerCase().slice(0, 30))
+                                );
+                                if (partialMatch) return partialMatch.id;
+                                // Bug #9 fix: Use hash-based ID instead of index-based.
+                                // projectId may not be available here, so use a text-only hash
+                                // that can still be matched by analysis-execution.ts.
+                                const hash = crypto.createHash('sha256')
+                                    .update(qText.toLowerCase().trim())
+                                    .digest('hex')
+                                    .substring(0, 8);
+                                return `q_txt_${hash}`;
+                            }).filter(Boolean);
+                        }
+                        // Fallback: generate hash-based IDs (Bug #9 fix - avoid index-based IDs)
+                        return inferredEl.relatedQuestions?.map(q => {
+                            const hash = crypto.createHash('sha256')
+                                .update(q.toLowerCase().trim())
+                                .digest('hex')
+                                .substring(0, 8);
+                            return `q_txt_${hash}`;
+                        }) || [];
+                    })(),
                     sourceAvailable: false,
                     // FIX: Derive transformationRequired from DS agent's calculationType
                     // If calculationType is NOT 'direct', transformation IS required
@@ -1196,7 +1448,148 @@ export class RequiredDataElementsTool {
             });
         }
 
+        // P1-7 FIX: Post-process element names to ensure clean metric/dimension naming
+        for (const el of elements) {
+            // Clean sentence-like element names (e.g., "Company Is Turnover Rate" → "Turnover Rate")
+            if (el.elementName && el.elementName.split(/\s+/).length > 4) {
+                // Remove common prefixes that make names too long
+                const cleaned = el.elementName
+                    .replace(/^(the|a|an|company|organization|org|department|dept)\s+(is|has|with|for)\s+/i, '')
+                    .replace(/^(total|overall|average|mean|sum of|count of|number of)\s+/i, (match: string) => match.trim() + ' ')
+                    .trim();
+                if (cleaned !== el.elementName && cleaned.length >= 3) {
+                    console.log(`   📝 [P1-7] Cleaned element name: "${el.elementName}" → "${cleaned}"`);
+                    el.elementName = cleaned;
+                }
+            }
+            // Ensure calculationType is set (Issue 1.1 from pipeline analysis)
+            if (!el.calculationDefinition?.calculationType) {
+                el.calculationDefinition = {
+                    ...el.calculationDefinition,
+                    calculationType: el.transformationRequired ? 'derived' : 'direct'
+                } as RequiredDataElement['calculationDefinition'] & {};
+            }
+        }
+
         return elements;
+    }
+
+    // ========================================================================
+    // Phase 4: Date-Aware Calculations
+    // ========================================================================
+
+    /**
+     * Resolve date context from available schema and sample data.
+     * Identifies date columns, their semantic roles, and null semantics.
+     *
+     * Returns a DateContext object that can be used by compileMultiStepKPI()
+     * to generate date-aware transformations.
+     */
+    resolveDateContext(
+        availableFields: string[],
+        schema: Record<string, any>,
+        preview: any[],
+        descriptors?: any[] // ComponentFieldDescriptor[]
+    ): {
+        periodColumn: string | null;
+        periodGranularity: 'day' | 'month' | 'quarter' | 'year' | null;
+        dateColumns: Array<{
+            columnName: string;
+            semanticRole: 'period_indicator' | 'event_date' | 'start_date' | 'end_date';
+            nullMeaning: string;
+            presenceMeaning: string;
+        }>;
+    } {
+        const dateColumns: Array<{
+            columnName: string;
+            semanticRole: 'period_indicator' | 'event_date' | 'start_date' | 'end_date';
+            nullMeaning: string;
+            presenceMeaning: string;
+        }> = [];
+
+        let periodColumn: string | null = null;
+        let periodGranularity: 'day' | 'month' | 'quarter' | 'year' | null = null;
+
+        for (const field of availableFields) {
+            const fieldLower = field.toLowerCase();
+            const colType = schema[field]?.type?.toLowerCase() || '';
+            const isDateType = /date|time|timestamp/i.test(colType);
+
+            // Check sample values for date-like patterns
+            const sampleValues = preview.slice(0, 10).map(row => row[field]).filter(Boolean);
+            const isDateLike = isDateType || sampleValues.some((v: any) => {
+                if (typeof v !== 'string') return false;
+                return /^\d{4}-\d{2}-\d{2}/.test(v) || /^\d{1,2}\/\d{1,2}\/\d{2,4}/.test(v);
+            });
+
+            if (!isDateLike) continue;
+
+            // Count null values
+            const nullCount = preview.filter(row => row[field] === null || row[field] === undefined || row[field] === '').length;
+            const nullRatio = preview.length > 0 ? nullCount / preview.length : 0;
+
+            // Check if descriptors provide semantic hints
+            const descriptor = descriptors?.find((d: any) =>
+                d.columnMatchPatterns?.some((p: string) => fieldLower.includes(p.toLowerCase()))
+            );
+
+            // Determine semantic role
+            let role: 'period_indicator' | 'event_date' | 'start_date' | 'end_date' = 'event_date';
+            let nullMeaning = 'No date recorded';
+            let presenceMeaning = 'Date is recorded';
+
+            if (descriptor) {
+                // Use descriptor hints
+                if (descriptor.columnMatchType === 'date_presence_indicator') {
+                    role = 'event_date';
+                    nullMeaning = descriptor.nullMeaning || 'Event has not occurred';
+                    presenceMeaning = descriptor.presenceMeaning || 'Event has occurred';
+                } else if (descriptor.columnMatchType === 'date_range_filter') {
+                    role = 'period_indicator';
+                }
+            } else {
+                // Infer from column name
+                if (/roster|report|period|snapshot|as_of|effective/i.test(fieldLower)) {
+                    role = 'period_indicator';
+                    nullMeaning = 'No period recorded';
+                    presenceMeaning = 'Period date recorded';
+                } else if (/termination|separation|exit|end|departure|leave/i.test(fieldLower)) {
+                    role = 'end_date';
+                    nullMeaning = 'Employee is still active';
+                    presenceMeaning = 'Employee has separated';
+                } else if (/hire|start|join|onboard|begin/i.test(fieldLower)) {
+                    role = 'start_date';
+                    nullMeaning = 'Start date not recorded';
+                    presenceMeaning = 'Employee hire date';
+                } else if (nullRatio > 0.3) {
+                    // Many nulls in a date column → likely an event column
+                    role = 'event_date';
+                    nullMeaning = 'Event has not occurred (null = still active/ongoing)';
+                    presenceMeaning = 'Event has occurred';
+                }
+            }
+
+            dateColumns.push({
+                columnName: field,
+                semanticRole: role,
+                nullMeaning,
+                presenceMeaning
+            });
+
+            // Identify the period column
+            if (role === 'period_indicator' && !periodColumn) {
+                periodColumn = field;
+                // Determine granularity from sample data
+                const uniqueCount = new Set(sampleValues.map((v: any) => String(v).substring(0, 10))).size;
+                if (uniqueCount <= 12) periodGranularity = 'month';
+                else if (uniqueCount <= 4) periodGranularity = 'quarter';
+                else if (uniqueCount <= 1) periodGranularity = 'year';
+                else periodGranularity = 'day';
+            }
+        }
+
+        console.log(`📅 [DateContext] Found ${dateColumns.length} date columns, period: ${periodColumn || 'none'}`);
+        return { periodColumn, periodGranularity, dateColumns };
     }
 
     /**
@@ -1237,7 +1630,26 @@ export class RequiredDataElementsTool {
         if (isCompositeElement) {
             console.log(`🔗 [DE Mapping] Composite element "${element.elementName}" has ${componentFields.length} component fields: ${componentFields.join(', ')}`);
 
-            const sourceColumns = await this.matchComponentFields(componentFields, availableFields, schema);
+            // Phase 2C: Try to resolve descriptors for enhanced matching
+            // Check if the element's notes reference a registry key
+            let descriptors: any[] | undefined;
+            const registryKeyMatch = calcDef?.notes?.match(/Registry-matched KPI:\s*(\S+)/);
+            if (registryKeyMatch) {
+                try {
+                    const { businessDefinitionRegistry } = await import('../business-definition-registry');
+                    const lookupResult = await businessDefinitionRegistry.lookupDefinition(registryKeyMatch[1]);
+                    if (lookupResult.found && lookupResult.definition) {
+                        descriptors = (lookupResult.definition.componentFieldDescriptors as any[]) || undefined;
+                        if (descriptors?.length) {
+                            console.log(`   📋 [DE Mapping] Found ${descriptors.length} component field descriptors from registry for "${registryKeyMatch[1]}"`);
+                        }
+                    }
+                } catch (regErr) {
+                    console.warn(`   ⚠️ [DE Mapping] Failed to load descriptors from registry:`, regErr);
+                }
+            }
+
+            const sourceColumns = await this.matchComponentFields(componentFields, availableFields, schema, descriptors);
             const matchedCount = sourceColumns.filter(sc => sc.matched).length;
             const avgConfidence = sourceColumns.length > 0
                 ? sourceColumns.reduce((sum, sc) => sum + sc.matchConfidence, 0) / sourceColumns.length
@@ -1274,7 +1686,12 @@ export class RequiredDataElementsTool {
 
         if (exactMatch) {
             const fieldType = schema[exactMatch]?.type;
-            const needsTransform = !this.typesMatch(element.dataType, fieldType);
+            // FIX A1: Honor DS calculationType even on exact name matches.
+            // If the DS agent specified a non-direct calculationType (derived, aggregated, grouped, composite),
+            // transformation IS required regardless of type matching.
+            const calcType = element.calculationDefinition?.calculationType;
+            const needsTransform = !this.typesMatch(element.dataType, fieldType) ||
+                (calcType != null && calcType !== 'direct');
 
             return {
                 found: true,
@@ -1332,22 +1749,116 @@ export class RequiredDataElementsTool {
     private async matchComponentFields(
         componentFields: string[],
         availableFields: string[],
-        schema: Record<string, any>
+        schema: Record<string, any>,
+        descriptors?: any[] // ComponentFieldDescriptor[] from business definition
     ): Promise<Array<{
         componentField: string;
         matchedColumn?: string;
         matchConfidence: number;
         matched: boolean;
+        isIntermediate?: boolean; // Flag from descriptor: needs further derivation
+        matchType?: string;      // How match was made (descriptor, fuzzy, semantic)
     }>> {
         const results: Array<{
             componentField: string;
             matchedColumn?: string;
             matchConfidence: number;
             matched: boolean;
+            isIntermediate?: boolean;
+            matchType?: string;
         }> = [];
 
         for (const componentField of componentFields) {
             const normalizedComponent = componentField.toLowerCase().replace(/[_\s-]+/g, '');
+
+            // ── DESCRIPTOR-BASED MATCHING (Phase 2C) ──
+            // If descriptors are provided, use them for high-confidence matching first
+            const descriptor = descriptors?.find(d =>
+                d.abstractName?.toLowerCase() === componentField.toLowerCase() ||
+                d.abstractName?.toLowerCase().replace(/_/g, '') === normalizedComponent
+            );
+
+            if (descriptor && descriptor.columnMatchPatterns?.length > 0) {
+                let descriptorBestMatch: { column: string; score: number } | null = null;
+
+                for (const availableField of availableFields) {
+                    const fieldLower = availableField.toLowerCase();
+                    const fieldNormalized = fieldLower.replace(/[_\s-]+/g, '');
+
+                    for (const pattern of descriptor.columnMatchPatterns) {
+                        const patternLower = pattern.toLowerCase();
+
+                        // Exact pattern match against column name
+                        if (fieldLower === patternLower || fieldNormalized === patternLower.replace(/[_\s-]+/g, '')) {
+                            descriptorBestMatch = { column: availableField, score: 95 };
+                            break;
+                        }
+
+                        // Column name contains pattern or pattern contains column
+                        if (fieldLower.includes(patternLower) || patternLower.includes(fieldLower.replace(/[_\s-]+/g, ''))) {
+                            const score = 85;
+                            if (!descriptorBestMatch || score > descriptorBestMatch.score) {
+                                descriptorBestMatch = { column: availableField, score };
+                            }
+                        }
+
+                        // Word overlap between pattern parts and column name parts
+                        const patternParts = patternLower.split(/[_\s-]+/);
+                        const fieldParts = fieldLower.split(/[_\s-]+/);
+                        const overlap = patternParts.filter((pp: string) =>
+                            pp.length > 2 && fieldParts.some((fp: string) => fp.includes(pp) || pp.includes(fp))
+                        );
+                        if (overlap.length > 0 && overlap.length >= patternParts.length * 0.5) {
+                            const overlapScore = 75 + (overlap.length / patternParts.length) * 10;
+                            if (!descriptorBestMatch || overlapScore > descriptorBestMatch.score) {
+                                descriptorBestMatch = { column: availableField, score: overlapScore };
+                            }
+                        }
+                    }
+
+                    if (descriptorBestMatch?.score === 95) break; // Perfect match, no need to continue
+                }
+
+                // Validate matched column's data type against descriptor expectation
+                if (descriptorBestMatch && descriptor.dataTypeExpected) {
+                    const colType = schema[descriptorBestMatch.column]?.type?.toLowerCase() || '';
+                    const expectedType = descriptor.dataTypeExpected;
+
+                    const typeMatches =
+                        (expectedType === 'date' && /date|time|timestamp/i.test(colType)) ||
+                        (expectedType === 'numeric' && /int|float|numeric|number|decimal/i.test(colType)) ||
+                        (expectedType === 'identifier' && /varchar|text|char|string/i.test(colType)) ||
+                        (expectedType === 'categorical' && /varchar|text|char|string|enum/i.test(colType)) ||
+                        !colType; // If no type info, don't penalize
+
+                    if (!typeMatches && colType) {
+                        // Reduce confidence for type mismatch
+                        descriptorBestMatch.score = Math.max(descriptorBestMatch.score - 20, 40);
+                    }
+                }
+
+                // For date_presence_indicator: prefer date columns with many null values
+                if (descriptor.columnMatchType === 'date_presence_indicator' && descriptorBestMatch) {
+                    // The column should be a date type — boost if it matches
+                    const colType = schema[descriptorBestMatch.column]?.type?.toLowerCase() || '';
+                    if (/date|time|timestamp/i.test(colType)) {
+                        descriptorBestMatch.score = Math.min(descriptorBestMatch.score + 5, 98);
+                    }
+                }
+
+                if (descriptorBestMatch && descriptorBestMatch.score >= 50) {
+                    results.push({
+                        componentField,
+                        matchedColumn: descriptorBestMatch.column,
+                        matchConfidence: descriptorBestMatch.score,
+                        matched: true,
+                        isIntermediate: descriptor.isIntermediate || false,
+                        matchType: 'descriptor'
+                    });
+                    console.log(`🔍 [matchComponentFields] Descriptor match: "${componentField}" → "${descriptorBestMatch.column}" (score: ${descriptorBestMatch.score}, type: ${descriptor.columnMatchType})`);
+                    continue; // Skip fuzzy matching since descriptor gave a result
+                }
+            }
 
             // Try exact match first
             let bestMatch: { column: string; score: number } | null = null;
@@ -1434,11 +1945,37 @@ export class RequiredDataElementsTool {
                 }
             }
 
+            // FIX A4: Type-aware fallback — when fuzzy matching fails for generic placeholders
+            // (e.g., "survey_scores"), fall back to matching against ALL numeric columns
+            // that haven't been claimed by a higher-confidence match yet.
+            if (!bestMatch || bestMatch.score < 50) {
+                const componentLower = componentField.toLowerCase();
+                const isNumericExpected = /score|rating|metric|value|amount|count|average|sum|index|level|numeric/i.test(componentLower);
+
+                if (isNumericExpected) {
+                    // Find all unmatched numeric columns as candidates
+                    const alreadyMatched = new Set(results.filter(r => r.matched).map(r => r.matchedColumn));
+                    for (const availableField of availableFields) {
+                        if (alreadyMatched.has(availableField)) continue;
+                        const colType = schema[availableField]?.type?.toLowerCase() || '';
+                        const isNumeric = /int|float|numeric|number|decimal/i.test(colType);
+                        if (isNumeric) {
+                            const fallbackScore = 35;
+                            if (!bestMatch || fallbackScore > bestMatch.score) {
+                                bestMatch = { column: availableField, score: fallbackScore };
+                            }
+                        }
+                    }
+                }
+            }
+
             results.push({
                 componentField,
                 matchedColumn: bestMatch?.column,
                 matchConfidence: bestMatch?.score || 0,
-                matched: bestMatch !== null && bestMatch.score >= 50
+                matched: bestMatch !== null && bestMatch.score >= 30, // FIX A4: Lower threshold from 50 to 30 for fallback matches
+                isIntermediate: descriptor?.isIntermediate || false,
+                matchType: bestMatch ? 'fuzzy' : 'none'
             });
         }
 
@@ -2012,6 +2549,36 @@ export class RequiredDataElementsTool {
                 }
             }
 
+            // 9g. FIX A3: Business definition matching — use BA Agent's enriched businessDescription
+            // This captures semantic meaning that name-based matching misses
+            const bizDef = (element as any).businessDefinition;
+            if (bizDef?.businessDescription) {
+                const bizDescKeywords = bizDef.businessDescription.toLowerCase()
+                    .split(/[\s,;:.]+/)
+                    .filter((w: string) => w.length > 3);
+                let bizDescMatchCount = 0;
+                for (const keyword of bizDescKeywords) {
+                    if (fieldLower.includes(keyword)) {
+                        bizDescMatchCount++;
+                    }
+                }
+                if (bizDescMatchCount > 0) {
+                    score += Math.min(bizDescMatchCount * 15, 45); // Up to +45 for business definition match
+                    reasons.push(`business definition match (${bizDescMatchCount} keywords)`);
+                }
+            }
+
+            // 9h. FIX A3: Sample value semantic matching — check if field values contain words from element description
+            if (preview.length > 0 && element.description) {
+                const descWords = element.description.toLowerCase().split(/[\s,;:.]+/).filter(w => w.length > 4);
+                const sampleValues = preview.slice(0, 5).map(row => String(row[field] || '')).join(' ').toLowerCase();
+                const descMatchCount = descWords.filter(w => sampleValues.includes(w)).length;
+                if (descMatchCount > 0) {
+                    score += Math.min(descMatchCount * 10, 30); // Up to +30 for sample value matches
+                    reasons.push(`sample values match description (${descMatchCount} words)`);
+                }
+            }
+
             console.log(`🔍 [DE Auto-Map] ${element.elementName} ↔ ${field}: score=${score}, reasons=[${reasons.join('; ')}]`);
 
             // Lower threshold to catch more potential matches
@@ -2139,6 +2706,28 @@ export class RequiredDataElementsTool {
                 if (def.componentFields?.length) defStr += `\n   - Component Fields: ${def.componentFields.join(', ')}`;
                 if (def.aggregationMethod) defStr += `\n   - Aggregation: ${def.aggregationMethod}`;
                 if (def.calculationType) defStr += `\n   - Calculation Type: ${def.calculationType}`;
+
+                // Phase 2D: Include component field descriptors for enhanced AI mapping
+                const descriptors = (def.componentFieldDescriptors as any[]) || [];
+                if (descriptors.length > 0) {
+                    defStr += `\n   - COMPONENT FIELD DESCRIPTORS (use these to map abstract terms to actual columns):`;
+                    for (const d of descriptors) {
+                        defStr += `\n     * "${d.abstractName}" means: ${d.semanticMeaning}`;
+                        if (d.columnMatchPatterns?.length) {
+                            defStr += `\n       Look for columns matching: ${d.columnMatchPatterns.join(', ')}`;
+                        }
+                        if (d.columnMatchType === 'date_presence_indicator') {
+                            defStr += `\n       This is derived from a date column — match to columns with dates or null values indicating an event.`;
+                            if (d.nullMeaning) defStr += ` NULL means: ${d.nullMeaning}.`;
+                            if (d.presenceMeaning) defStr += ` Non-NULL means: ${d.presenceMeaning}.`;
+                        } else if (d.columnMatchType === 'count_distinct') {
+                            defStr += `\n       Count distinct values of this column to get the metric.`;
+                        } else if (d.columnMatchType === 'status_filter') {
+                            defStr += `\n       Filter by status values: ${d.statusValues?.join(', ') || 'check column values'}.`;
+                        }
+                    }
+                }
+
                 return defStr;
             }).join('\n\n')
             : '';
@@ -2269,11 +2858,31 @@ IMPORTANT RULES:
 Return ONLY valid JSON array.`;
 
         try {
-            const response = await chimaridataAI.generateText({
-                prompt,
-                maxTokens: 2000,
-                temperature: 0.3
-            });
+            // FIX 1D: Retry AI mapping up to 3 times with exponential backoff
+            let response: any = null;
+            let lastAttemptError: any = null;
+            for (let attempt = 0; attempt < 3; attempt++) {
+                try {
+                    response = await chimaridataAI.generateText({
+                        prompt,
+                        maxTokens: 2000,
+                        temperature: attempt === 0 ? 0.3 : 0.3 + (attempt * 0.15) // Slightly higher temp on retry
+                    });
+                    if (response?.text) break; // Success
+                } catch (attemptErr) {
+                    lastAttemptError = attemptErr;
+                    console.warn(`⚠️ [AI Mapping] Attempt ${attempt + 1}/3 failed:`, attemptErr instanceof Error ? attemptErr.message : attemptErr);
+                    if (attempt < 2) {
+                        const delay = (attempt + 1) * 1000; // 1s, 2s
+                        await new Promise(r => setTimeout(r, delay));
+                    }
+                }
+            }
+
+            if (!response?.text) {
+                console.error('❌ [AI Mapping] All 3 attempts failed. Last error:', lastAttemptError);
+                return new Map();
+            }
 
             // Parse AI response
             const jsonMatch = response.text.match(/\[[\s\S]*\]/);
@@ -2548,14 +3157,11 @@ assert df['${element.sourceField}'].nunique() == len(df), "Field must have uniqu
 
         for (let idx = 0; idx < userQuestions.length; idx++) {
             const question = userQuestions[idx];
-            // Generate stable question ID matching QuestionAnswerService.saveProjectQuestions
-            const questionHash = crypto.createHash('sha256')
-                .update(question.toLowerCase().trim())
-                .digest('hex')
-                .substring(0, 8);
+            // Bug #9 fix: Use canonical generateStableQuestionId() from constants.ts
+            // Never fall back to index-based IDs — they break on question reorder.
             const questionId = projectId
-                ? `q_${projectId.substring(0, 8)}_${idx}_${questionHash}`
-                : `q-${idx}`;
+                ? generateStableQuestionId(projectId, question)
+                : `q_txt_${crypto.createHash('sha256').update(question.toLowerCase().trim()).digest('hex').substring(0, 8)}`;
 
             // Find data elements related to this question
             const relatedElements = requiredDataElements.filter(el =>

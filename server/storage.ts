@@ -3,6 +3,7 @@ import { users, projects, enterpriseInquiries, guidedAnalysisOrders, datasets, p
 import { db, pool } from "./db";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import { DATASET_DATA_ROW_CAP } from "./constants";
 
 // Local type aliases derived from Drizzle tables (schema does not export these named types directly)
 type User = typeof users.$inferSelect;
@@ -620,6 +621,13 @@ export class MemStorage implements IStorage {
 
     if (!resolvedUserId) {
       throw new Error("createDataset requires a userId or ownerId");
+    }
+
+    // Enforce row cap on `data` — same constant used by all storage implementations.
+    // See server/constants.ts for the value and rationale.
+    const rawData = (normalized as any).data;
+    if (Array.isArray(rawData) && rawData.length > DATASET_DATA_ROW_CAP) {
+      (normalized as any).data = rawData.slice(0, DATASET_DATA_ROW_CAP);
     }
 
     const id = (normalized as any).id ?? `dataset_${this.nextId++}`;
@@ -1881,6 +1889,15 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Dataset operations
+  //
+  // IMPORTANT: The `data` JSONB column is capped at DATASET_DATA_ROW_CAP rows
+  // (defined in server/constants.ts) to prevent PostgreSQL statement timeouts
+  // on large INSERT payloads.  This has been a recurring bug (CSV uploads
+  // timing out).  The cap is enforced HERE in the storage layer so it cannot
+  // be bypassed by any upload endpoint.  Full data is always available via the
+  // original file and ingestionMetadata.
+  // DO NOT REMOVE THIS CAP without also verifying statement_timeout in db.ts.
+
   async createDataset(datasetData: InsertDataset): Promise<Dataset> {
     const normalized = { ...(datasetData as any) } as InsertDataset & { ownerId?: string };
     const resolvedUserId = normalized.userId ?? normalized.ownerId;
@@ -1892,6 +1909,17 @@ export class DatabaseStorage implements IStorage {
     normalized.userId = resolvedUserId;
     delete (normalized as any).ownerId;
 
+    // Enforce row cap on the `data` JSONB column to prevent statement timeout.
+    // This is the DEFINITIVE guard — upload endpoints should NOT need their own caps.
+    // Constant defined in server/constants.ts (single source of truth).
+    const rawData = (normalized as any).data;
+    if (Array.isArray(rawData) && rawData.length > DATASET_DATA_ROW_CAP) {
+      console.log(
+        `📊 [Storage] Capping dataset.data from ${rawData.length} to ${DATASET_DATA_ROW_CAP} rows for DB storage (full data available via file)`
+      );
+      (normalized as any).data = rawData.slice(0, DATASET_DATA_ROW_CAP);
+    }
+
     const datasetId = normalized.id ?? nanoid();
 
     const [dataset] = await db
@@ -1901,7 +1929,7 @@ export class DatabaseStorage implements IStorage {
         id: datasetId,
       })
       .returning();
-    
+
     return dataset;
   }
 

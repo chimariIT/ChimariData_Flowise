@@ -3,7 +3,7 @@
  * Column Embedding Generator Service
  *
  * Generates vector embeddings for dataset columns ASYNCHRONOUSLY after:
- * 1. Data upload completes
+ * 1. Data upload completes (NEW — early embedding warmup)
  * 2. Multi-dataset join completes
  * 3. PII decisions are processed
  *
@@ -11,16 +11,16 @@
  * significantly reducing latency during transformation execution.
  *
  * Key Design Decisions:
- * - Single trigger point: After execute-transformations (post-join, post-PII)
  * - Embeddings generated for usable columns only (excludes PII)
  * - Rich context includes column name, type, and sample values
  * - Non-blocking: Uses setImmediate for async generation
+ * - Provider metadata stored per-embedding for cross-provider compatibility
  */
 
 import { db } from '../db';
 import { columnEmbeddings } from '../../shared/schema';
 import { eq, and, sql } from 'drizzle-orm';
-import { embeddingService } from './embedding-service';
+import { embeddingService, type EmbeddingProviderName } from './embedding-service';
 import { storage } from '../storage';
 
 interface ColumnInput {
@@ -43,12 +43,7 @@ interface SimilarColumnResult {
 }
 
 export class ColumnEmbeddingGenerator {
-  private readonly MODEL = 'text-embedding-3-small';
   private readonly BATCH_SIZE = 10;
-
-  // Use task-specific preset for column matching
-  // This uses 512 dimensions and 500 char truncation for efficiency
-  private readonly TASK_TYPE = 'column_matching' as const;
 
   /**
    * Generate embeddings for all columns in a dataset
@@ -72,11 +67,8 @@ export class ColumnEmbeddingGenerator {
             // Build rich context for better embedding quality
             const context = this.buildColumnContext(col);
 
-            // Generate embedding using the embedding service
-            // Uses task-specific preset for column matching (512 dims, 500 char truncation)
-            const embeddingResult = await embeddingService.embedText(context, {
-              taskType: this.TASK_TYPE
-            });
+            // Generate embedding using the unified embedding service
+            const embeddingResult = await embeddingService.embedText(context);
 
             if (!embeddingResult.embedding || embeddingResult.embedding.length === 0) {
               console.error(`  ❌ [Embedding] Failed for ${col.name}: No embedding generated`);
@@ -89,13 +81,15 @@ export class ColumnEmbeddingGenerator {
               columnName: col.name,
               normalizedName: this.normalize(col.name),
               embedding: JSON.stringify(embeddingResult.embedding),
-              embeddingModel: this.MODEL,
+              embeddingModel: embeddingResult.model,
+              embeddingProvider: embeddingResult.provider,
+              embeddingDimensions: embeddingResult.dimensions,
               columnType: col.type,
               sampleValues: col.sampleValues?.slice(0, 5),
-              metadata: { context, model: embeddingResult.model }
+              metadata: { context, model: embeddingResult.model, provider: embeddingResult.provider }
             });
 
-            console.log(`  ✅ [Embedding] ${col.name}`);
+            console.log(`  ✅ [Embedding] ${col.name} (${embeddingResult.provider}, ${embeddingResult.dimensions}d)`);
           } catch (error) {
             console.error(`  ❌ [Embedding] Failed for ${col.name}:`, error);
           }
@@ -210,7 +204,8 @@ export class ColumnEmbeddingGenerator {
 
   /**
    * Find similar columns using RAG approach
-   * Searches pre-computed embeddings for semantic matches
+   * Searches pre-computed embeddings for semantic matches.
+   * Handles cross-provider dimension mismatches via truncation-based cosine similarity.
    */
   async findSimilarColumns(
     projectId: string,
@@ -218,10 +213,8 @@ export class ColumnEmbeddingGenerator {
     topK: number = 5
   ): Promise<SimilarColumnResult[]> {
     try {
-      // Generate query embedding with same settings as stored embeddings
-      const queryResult = await embeddingService.embedText(queryText, {
-        taskType: this.TASK_TYPE
-      });
+      // Generate query embedding with the embedding service
+      const queryResult = await embeddingService.embedText(queryText);
 
       if (!queryResult.embedding || queryResult.embedding.length === 0) {
         console.warn('⚠️ [RAG] Could not generate query embedding');
@@ -241,10 +234,18 @@ export class ColumnEmbeddingGenerator {
       }
 
       // Calculate cosine similarity for each column
-      const results: SimilarColumnResult[] = embeddings.map((row: { embedding: string; columnName: string; datasetId: string; columnType: string | null }) => {
+      // Uses embeddingService.cosineSimilarity which handles dimension mismatches
+      const results: SimilarColumnResult[] = embeddings.map((row: {
+        embedding: string;
+        columnName: string;
+        datasetId: string;
+        columnType: string | null;
+        embeddingProvider: string | null;
+        embeddingDimensions: number | null;
+      }) => {
         try {
           const storedEmbedding = JSON.parse(row.embedding);
-          const similarity = this.cosineSimilarity(queryEmbedding, storedEmbedding);
+          const similarity = embeddingService.cosineSimilarity(queryEmbedding, storedEmbedding);
           return {
             columnName: row.columnName,
             similarity,
@@ -360,24 +361,6 @@ export class ColumnEmbeddingGenerator {
     } catch (error) {
       console.error('❌ [RAG] clearProjectEmbeddings failed:', error);
     }
-  }
-
-  /**
-   * Calculate cosine similarity between two embedding vectors
-   */
-  private cosineSimilarity(a: number[], b: number[]): number {
-    if (!a || !b || a.length !== b.length) {
-      return 0;
-    }
-
-    let dot = 0, normA = 0, normB = 0;
-    for (let i = 0; i < a.length; i++) {
-      dot += a[i] * b[i];
-      normA += a[i] * a[i];
-      normB += b[i] * b[i];
-    }
-    const denom = Math.sqrt(normA) * Math.sqrt(normB);
-    return denom === 0 ? 0 : dot / denom;
   }
 }
 

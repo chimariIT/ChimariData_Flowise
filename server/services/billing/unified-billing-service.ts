@@ -285,6 +285,10 @@ export interface AnalysisPricingConfig {
     presentation: number;
     exportData: number;
   };
+  /** Tiered per-type pricing matrix. When present, overrides legacy formula. */
+  analysisTypePricing?: import('../../../shared/pricing-config').AnalysisTypePricing;
+  /** Data volume tier thresholds for tiered pricing. */
+  dataVolumeTiers?: Record<string, import('../../../shared/pricing-config').VolumeTierThreshold>;
 }
 
 export interface AnalysisCostBreakdown {
@@ -307,7 +311,7 @@ export interface AnalysisCostEstimate {
 
 // PRICING_CONSTANTS used as seed for ANALYSIS_PRICING_DEFAULTS only;
 // runtime lookups use PricingService (already imported at top of file)
-import { PRICING_CONSTANTS } from '../../../shared/pricing-config';
+import { PRICING_CONSTANTS, DEFAULT_ANALYSIS_TYPE_PRICING, DEFAULT_DATA_VOLUME_TIERS, getVolumeTierKey, getTieredAnalysisPrice } from '../../../shared/pricing-config';
 
 const ANALYSIS_PRICING_DEFAULTS: AnalysisPricingConfig = {
   basePlatformFee: PRICING_CONSTANTS.basePlatformFee,
@@ -315,7 +319,9 @@ const ANALYSIS_PRICING_DEFAULTS: AnalysisPricingConfig = {
   baseAnalysisCost: PRICING_CONSTANTS.baseAnalysisCost,
   complexityMultipliers: PRICING_CONSTANTS.complexityMultipliers as AnalysisPricingConfig['complexityMultipliers'],
   analysisTypeFactors: PRICING_CONSTANTS.analysisTypeFactors as AnalysisPricingConfig['analysisTypeFactors'],
-  artifactCosts: PRICING_CONSTANTS.artifactCosts as AnalysisPricingConfig['artifactCosts']
+  artifactCosts: PRICING_CONSTANTS.artifactCosts as AnalysisPricingConfig['artifactCosts'],
+  analysisTypePricing: DEFAULT_ANALYSIS_TYPE_PRICING,
+  dataVolumeTiers: DEFAULT_DATA_VOLUME_TIERS,
 };
 
 // ==========================================
@@ -1303,9 +1309,24 @@ export class UnifiedBillingService {
       return false;
     }
 
+    // P1-13 FIX: Do NOT increment usage here — only reserve the campaign
+    // Usage should be incremented only at payment completion (webhook handler or post-payment)
+    // This prevents usage inflation from abandoned checkouts
+    console.log(`✅ Campaign ${campaign.id} reserved for user ${userId} (current uses: ${campaign.currentUses}, max: ${campaign.maxUses || 'unlimited'})`);
+
+    return true;
+  }
+
+  /**
+   * P1-13 FIX: Increment campaign usage ONLY after payment completes successfully.
+   * Call this from webhook handler or post-payment verification.
+   */
+  public async incrementCampaignUsage(campaignCode: string): Promise<void> {
+    const campaign = this.legacyConfig.campaigns.find(c => c.couponCode === campaignCode || c.id === campaignCode);
+    if (!campaign) return;
+
     campaign.currentUses += 1;
 
-    // Persist the usage count to database
     try {
       await db.update(billingCampaigns)
         .set({
@@ -1313,13 +1334,192 @@ export class UnifiedBillingService {
           updatedAt: new Date(),
         })
         .where(eq(billingCampaigns.id, campaign.id));
-      console.log(`✅ Applied campaign ${campaign.id} for user ${userId} (uses: ${campaign.currentUses})`);
+      console.log(`✅ [P1-13] Incremented campaign ${campaign.id} usage to ${campaign.currentUses} (after payment)`);
     } catch (error) {
       console.error('⚠️ Failed to persist campaign usage to database:', error);
-      // Continue anyway - in-memory count is updated
+    }
+  }
+
+  /**
+   * Validate a coupon code WITHOUT incrementing usage.
+   * Used by the user-facing validate-coupon endpoint for preview.
+   */
+  public async validateCampaign(userId: string, couponCode: string): Promise<{
+    valid: boolean;
+    campaign?: AdminCampaignConfig;
+    reason?: string;
+    discountType?: string;
+    discountValue?: number;
+  }> {
+    // Look up from DB first (authoritative), fall back to in-memory
+    let campaign: AdminCampaignConfig | undefined;
+
+    try {
+      const [dbRow] = await db.select().from(billingCampaigns)
+        .where(eq(billingCampaigns.couponCode, couponCode))
+        .limit(1);
+
+      if (!dbRow) {
+        // Also try matching by ID
+        const [byId] = await db.select().from(billingCampaigns)
+          .where(eq(billingCampaigns.id, couponCode))
+          .limit(1);
+        if (byId) {
+          campaign = this.dbRowToCampaignConfig(byId);
+        }
+      } else {
+        campaign = this.dbRowToCampaignConfig(dbRow);
+      }
+    } catch (error) {
+      console.warn('⚠️ [Campaign] DB lookup failed, using in-memory:', (error as Error).message);
+      campaign = this.legacyConfig.campaigns.find(c => c.couponCode === couponCode || c.id === couponCode);
     }
 
-    return true;
+    if (!campaign) {
+      return { valid: false, reason: 'Invalid coupon code' };
+    }
+
+    if (!campaign.isActive) {
+      return { valid: false, reason: 'This coupon is no longer active' };
+    }
+
+    const now = new Date();
+    if (now < campaign.validFrom) {
+      return { valid: false, reason: 'This coupon is not yet valid' };
+    }
+    if (now > campaign.validTo) {
+      return { valid: false, reason: 'This coupon has expired' };
+    }
+
+    if (campaign.maxUses && campaign.currentUses >= campaign.maxUses) {
+      return { valid: false, reason: 'This coupon has reached its maximum usage limit' };
+    }
+
+    // Check target tier eligibility if specified
+    if (campaign.targetTiers && campaign.targetTiers.length > 0) {
+      try {
+        const user = await this.getUser(userId);
+        const userTier = (user as any)?.subscriptionTier || 'free';
+        if (!campaign.targetTiers.includes(userTier)) {
+          return { valid: false, reason: 'This coupon is not available for your subscription tier' };
+        }
+      } catch {
+        // If user lookup fails, skip tier check
+      }
+    }
+
+    return {
+      valid: true,
+      campaign,
+      discountType: campaign.type,
+      discountValue: campaign.value,
+    };
+  }
+
+  /**
+   * Calculate the discount amount for a campaign given a base price.
+   */
+  public calculateDiscount(campaign: AdminCampaignConfig, basePriceCents: number): number {
+    switch (campaign.type) {
+      case 'percentage_discount':
+        return Math.round(basePriceCents * (campaign.value / 100));
+      case 'fixed_discount':
+        // campaign.value is stored as the discount amount in cents
+        return Math.min(campaign.value, basePriceCents);
+      case 'trial_extension':
+      case 'quota_boost':
+        // These don't reduce the monetary cost
+        return 0;
+      default:
+        return 0;
+    }
+  }
+
+  /**
+   * Convert a DB row to AdminCampaignConfig
+   */
+  private dbRowToCampaignConfig(row: any): AdminCampaignConfig {
+    return {
+      id: row.id,
+      name: row.name || 'Untitled',
+      type: row.type || 'percentage_discount',
+      value: row.value || 0,
+      targetTiers: (row.targetTiers as any) || [],
+      targetRoles: (row.targetRoles as any) || [],
+      validFrom: row.validFrom instanceof Date ? row.validFrom : new Date(row.validFrom),
+      validTo: row.validTo instanceof Date ? row.validTo : new Date(row.validTo),
+      maxUses: row.maxUses ?? undefined,
+      currentUses: row.currentUses || 0,
+      couponCode: row.couponCode || row.id,
+      isActive: row.isActive ?? true,
+    };
+  }
+
+  /**
+   * Update an existing campaign (for admin CRUD).
+   */
+  public async updateCampaign(campaignId: string, updates: Partial<AdminCampaignConfig>): Promise<AdminCampaignConfig | null> {
+    try {
+      const [existing] = await db.select().from(billingCampaigns)
+        .where(eq(billingCampaigns.id, campaignId))
+        .limit(1);
+
+      if (!existing) {
+        return null;
+      }
+
+      const setValues: any = { updatedAt: new Date() };
+      if (updates.name !== undefined) setValues.name = updates.name;
+      if (updates.type !== undefined) setValues.type = updates.type;
+      if (updates.value !== undefined) setValues.value = updates.value;
+      if (updates.targetTiers !== undefined) setValues.targetTiers = updates.targetTiers;
+      if (updates.targetRoles !== undefined) setValues.targetRoles = updates.targetRoles;
+      if (updates.validFrom !== undefined) setValues.validFrom = updates.validFrom instanceof Date ? updates.validFrom : new Date(updates.validFrom);
+      if (updates.validTo !== undefined) setValues.validTo = updates.validTo instanceof Date ? updates.validTo : new Date(updates.validTo);
+      if (updates.maxUses !== undefined) setValues.maxUses = updates.maxUses ?? null;
+      if (updates.couponCode !== undefined) setValues.couponCode = updates.couponCode;
+      if (updates.isActive !== undefined) setValues.isActive = updates.isActive;
+
+      const [updated] = await db.update(billingCampaigns)
+        .set(setValues)
+        .where(eq(billingCampaigns.id, campaignId))
+        .returning();
+
+      const config = this.dbRowToCampaignConfig(updated);
+
+      // Update in-memory cache
+      this.legacyConfig.campaigns = [
+        ...this.legacyConfig.campaigns.filter(c => c.id !== campaignId),
+        config
+      ];
+      this.activeCampaigns = this.legacyConfig.campaigns;
+
+      console.log(`✅ [Campaign] Updated campaign ${campaignId}`);
+      return config;
+    } catch (error) {
+      console.error(`❌ [Campaign] Failed to update campaign ${campaignId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Delete a campaign (for admin CRUD).
+   */
+  public async deleteCampaign(campaignId: string): Promise<boolean> {
+    try {
+      const result = await db.delete(billingCampaigns)
+        .where(eq(billingCampaigns.id, campaignId));
+
+      // Remove from in-memory cache
+      this.legacyConfig.campaigns = this.legacyConfig.campaigns.filter(c => c.id !== campaignId);
+      this.activeCampaigns = this.legacyConfig.campaigns;
+
+      console.log(`✅ [Campaign] Deleted campaign ${campaignId}`);
+      return true;
+    } catch (error) {
+      console.error(`❌ [Campaign] Failed to delete campaign ${campaignId}:`, error);
+      throw error;
+    }
   }
 
   public async checkEligibility(
@@ -1613,9 +1813,17 @@ export class UnifiedBillingService {
         || journeyProgress?.currentJourneyType
         || 'non-tech';
 
-      // Redirect back to journey pricing step so payment success handler triggers
+      // Extract analysisType from journeyProgress for checkout metadata (Bug #15 fix)
+      const analysisType = journeyProgress?.analysisType
+        || journeyProgress?.selectedAnalysisType
+        || journeyProgress?.executionConfig?.analysisType
+        || (project as any)?.analysisType
+        || 'unknown';
+
+      // FIX F5: Redirect to execution step after payment success (not pricing step)
+      // This triggers auto-execution on the execute step page
       const baseUrl = process.env.APP_URL || 'http://localhost:5000';
-      const successUrl = `${baseUrl}/journeys/${journeyType}/pricing?projectId=${projectId}&payment=success&session_id={CHECKOUT_SESSION_ID}`;
+      const successUrl = `${baseUrl}/journeys/${journeyType}/execute?projectId=${projectId}&payment=success&session_id={CHECKOUT_SESSION_ID}`;
       const cancelUrl = `${baseUrl}/journeys/${journeyType}/pricing?projectId=${projectId}&payment=cancelled`;
 
       console.log(`📍 [Checkout] Success URL: ${successUrl}`);
@@ -1645,6 +1853,9 @@ export class UnifiedBillingService {
           userId,
           type: 'one_off_analysis',
           journeyType, // Store for potential recovery
+          analysisType, // Bug #15 fix: Include for transaction reconciliation and webhook processing
+          lockedCostCents: String(Math.round(amount * 100)),
+          quotedAt: new Date().toISOString(),
           ...metadata
         },
       });
@@ -1783,15 +1994,12 @@ export class UnifiedBillingService {
         return { success: true, skipped: true };
       }
 
-      // Check DB for events processed before last restart
+      // FIX F3: Check DB for events processed before last restart using deterministic ID
       try {
         const { decisionAudits } = await import('../../../shared/schema');
         const existing = await db.select({ id: decisionAudits.id })
           .from(decisionAudits)
-          .where(and(
-            eq(decisionAudits.decisionType, 'webhook_processed'),
-            eq(decisionAudits.context, event.id)
-          ))
+          .where(eq(decisionAudits.id, `wh_${event.id}`))
           .limit(1);
         if (existing.length > 0) {
           this.processedWebhooksCache.add(event.id);
@@ -1804,8 +2012,8 @@ export class UnifiedBillingService {
 
       console.log(`[Webhook] Processing: ${event.type} (ID: ${event.id})`);
 
-      // Mark in cache before processing to prevent concurrent duplicates
-      this.processedWebhooksCache.add(event.id);
+      // P1-12 FIX: Do NOT mark in cache before transaction — if tx fails, retries would be skipped
+      // Cache insertion moved to AFTER successful transaction (see below)
 
       // Process event within transaction
       try {
@@ -1841,37 +2049,55 @@ export class UnifiedBillingService {
             await this.handleCustomerDeleted(event.data.object as Stripe.Customer, tx);
             break;
 
+          case 'payment_intent.succeeded':
+            await this.handlePaymentIntentSucceeded(event.data.object as Stripe.PaymentIntent, tx);
+            break;
+
+          case 'payment_intent.payment_failed':
+            await this.handlePaymentIntentFailed(event.data.object as Stripe.PaymentIntent, tx);
+            break;
+
           default:
             console.log(`ℹ️ [Webhook] Unhandled event type: ${event.type}`);
         }
-      });
-      } catch (txError: any) {
-        // On transaction failure, remove from cache so Stripe retry can succeed
-        this.processedWebhooksCache.delete(event.id);
-        throw txError;
-      }
 
-      // P0-1 FIX: Persist to DB for crash-safe dedup
-      try {
-        const { decisionAudits } = await import('../../../shared/schema');
-        const { nanoid } = await import('nanoid');
-        await db.insert(decisionAudits).values({
-          id: nanoid(),
-          projectId: (event.data.object as any)?.metadata?.projectId || 'system',
-          agent: 'billing',
-          decisionType: 'webhook_processed',
-          decision: `Webhook ${event.type} processed`,
-          reasoning: `Stripe event ${event.id}`,
-          alternatives: JSON.stringify([]),
-          confidence: 100,
-          context: event.id,
-          userInput: null,
-          reversible: false,
-          impact: 'low',
-          timestamp: new Date()
-        });
-      } catch (auditErr) {
-        console.warn(`[Webhook] Failed to persist dedup record (non-blocking):`, auditErr);
+        // Bug #13 fix: Write DB idempotency record INSIDE the transaction.
+        // Previously this was outside the transaction, creating a race where:
+        //   1. Transaction commits successfully
+        //   2. Cache updated (line below)
+        //   3. DB record write fails or server crashes
+        //   4. After restart, DB has no record → duplicate processing
+        // Now the DB record is part of the same transaction as the business logic.
+        try {
+          const { decisionAudits } = await import('../../../shared/schema');
+          await tx.insert(decisionAudits).values({
+            id: `wh_${event.id}`,
+            projectId: (event.data.object as any)?.metadata?.projectId || 'system',
+            agent: 'billing',
+            decisionType: 'webhook_processed',
+            decision: `Webhook ${event.type} processed`,
+            reasoning: `Stripe event ${event.id}`,
+            alternatives: JSON.stringify([]),
+            confidence: 100,
+            context: event.id,
+            userInput: null,
+            reversible: false,
+            impact: 'low',
+            timestamp: new Date()
+          }).onConflictDoNothing();
+        } catch (auditErr) {
+          // Non-blocking within transaction — log but don't fail the webhook
+          console.warn(`[Webhook] Failed to persist dedup record inside tx (non-blocking):`, auditErr);
+        }
+      });
+
+      // Only add to cache AFTER transaction commits successfully (includes DB idempotency record)
+      this.processedWebhooksCache.add(event.id);
+
+      } catch (txError: any) {
+        // On transaction failure, event is NOT in cache so Stripe retry can succeed
+        console.error(`❌ [Webhook] Transaction failed for ${event.type} (${event.id}):`, txError.message);
+        throw txError;
       }
 
       // Cleanup old cache entries to prevent memory growth
@@ -1898,8 +2124,23 @@ export class UnifiedBillingService {
                    subscription.metadata?.tier ||
                    subscription.metadata?.planType;
 
+    // Map Stripe subscription status to our canonical values
+    // Stripe uses 'canceled' (one 'l'), we use 'cancelled' (two 'l's)
+    const stripeStatusMap: Record<string, string> = {
+      'active': 'active',
+      'past_due': 'past_due',
+      'canceled': 'cancelled',
+      'cancelled': 'cancelled',
+      'incomplete': 'incomplete',
+      'trialing': 'trialing',
+      'incomplete_expired': 'incomplete_expired',
+      'unpaid': 'past_due',
+      'paused': 'inactive',
+    };
+    const mappedStatus = stripeStatusMap[subscription.status] || 'inactive';
+
     const updateData: any = {
-      subscriptionStatus: subscription.status as SubscriptionStatus,
+      subscriptionStatus: mappedStatus as SubscriptionStatus,
       subscriptionExpiresAt: new Date((subscription as any).current_period_end * 1000),
       stripeSubscriptionId: subscription.id,
       updatedAt: new Date(),
@@ -2002,17 +2243,36 @@ export class UnifiedBillingService {
 
     console.log(`[Webhook] Checkout completed for project ${projectId} (payment_status: paid)`);
 
-    // Update project as paid
+    // FIX 4A: Update project with ALL payment fields (match verify-session behavior)
+    const paidTimestamp = new Date().toISOString();
     const { projects } = await import('../../../shared/schema');
     await tx.update(projects)
       .set({
         isPaid: true,
+        paymentStatus: 'completed',
         paymentIntentId: session.payment_intent as string || session.id,
+        paymentSessionId: session.id,
+        paidAt: paidTimestamp,
         upgradedAt: new Date(),
       } as any)
       .where(eq(projects.id, projectId));
 
-    console.log(`[Webhook] Project ${projectId} marked as paid`);
+    // FIX 4A: Update journeyProgress SSOT so dashboard/execute-step detect payment
+    try {
+      const { storage } = await import('../../services/storage');
+      await storage.atomicMergeJourneyProgress(projectId, {
+        isPaid: true,
+        paymentStatus: 'completed',
+        paymentSessionId: session.id,
+        paidAt: paidTimestamp,
+      });
+      console.log(`[Webhook] Updated journeyProgress SSOT for project ${projectId}`);
+    } catch (jpError) {
+      console.error(`[Webhook] Failed to update journeyProgress:`, jpError);
+      // Non-fatal: project table is already updated in transaction
+    }
+
+    console.log(`[Webhook] Project ${projectId} marked as paid (all fields set)`);
   }
 
   /**
@@ -2052,6 +2312,147 @@ export class UnifiedBillingService {
         updatedAt: new Date(),
       })
       .where(eq(users.id, user.id));
+  }
+
+  /**
+   * Handle payment_intent.succeeded webhook
+   * Marks analysis projects as paid when PaymentIntent completes, and advances journey to 'execute' step
+   */
+  private async handlePaymentIntentSucceeded(paymentIntent: Stripe.PaymentIntent, tx: any): Promise<void> {
+    const projectId = paymentIntent.metadata?.projectId;
+    const userId = paymentIntent.metadata?.userId;
+    const source = paymentIntent.metadata?.source;
+
+    console.log(`💰 [Webhook] PaymentIntent succeeded: ${paymentIntent.id} (source: ${source || 'unknown'}, project: ${projectId || 'N/A'})`);
+
+    if (!projectId) {
+      console.log(`[Webhook] PaymentIntent ${paymentIntent.id} has no projectId in metadata — may be a subscription payment, skipping project update`);
+      return;
+    }
+
+    // Only process analysis payments (not subscription payments which are handled by invoice.paid)
+    if (source !== 'analysis_payment') {
+      console.log(`[Webhook] PaymentIntent ${paymentIntent.id} source is '${source}', not 'analysis_payment' — skipping project update`);
+      return;
+    }
+
+    console.log(`✅ [Webhook] Marking project ${projectId} as paid (PaymentIntent: ${paymentIntent.id})`);
+
+    // FIX 4B: Mark project as paid with ALL payment fields (match verify-session behavior)
+    const paidTimestamp = new Date().toISOString();
+    const { projects } = await import('../../../shared/schema');
+    await tx.update(projects)
+      .set({
+        isPaid: true,
+        paymentStatus: 'completed',
+        paymentIntentId: paymentIntent.id,
+        paidAt: paidTimestamp,
+        upgradedAt: new Date(),
+      } as any)
+      .where(eq(projects.id, projectId));
+
+    // Advance journey progress to 'execute' step
+    try {
+      const { defaultJourneyTemplateCatalog } = await import('../../../shared/journey-templates');
+      const { storage } = await import('../../services/storage');
+
+      const [project] = await tx.select().from(projects).where(eq(projects.id, projectId)).limit(1);
+      if (project) {
+        const progress = (project as any).journeyProgress;
+
+        // Resolve template: try templateId first, then journeyType mapping
+        let template: any = null;
+        const templateId = progress?.templateId;
+        if (templateId) {
+          for (const key of Object.keys(defaultJourneyTemplateCatalog)) {
+            const match = (defaultJourneyTemplateCatalog as any)[key]?.find((tpl: any) => tpl.id === templateId);
+            if (match) { template = JSON.parse(JSON.stringify(match)); break; }
+          }
+        }
+        if (!template) {
+          const jt = (project.journeyType as string || 'non-tech').toLowerCase().replace(/[^a-z_-]/g, '');
+          const mapped = jt === 'business' ? 'non-tech' : jt === 'technical' ? 'technical' : 'non-tech';
+          const catalogEntry = (defaultJourneyTemplateCatalog as any)[mapped]?.[0];
+          if (catalogEntry) template = JSON.parse(JSON.stringify(catalogEntry));
+        }
+        if (!template) throw new Error('No template found');
+        const executeIndex = template.steps.findIndex((s: any) => s.id === 'execute');
+
+        if (executeIndex >= 0) {
+          const completedSteps = Array.isArray(progress?.completedSteps) ? [...progress.completedSteps] : [];
+          // Mark all steps before 'execute' as completed
+          for (let i = 0; i < executeIndex; i++) {
+            const stepId = template.steps[i].id;
+            if (!completedSteps.includes(stepId)) {
+              completedSteps.push(stepId);
+            }
+          }
+
+          await storage.atomicMergeJourneyProgress(projectId, {
+            currentStepId: 'execute',
+            currentStepIndex: executeIndex,
+            currentStepName: 'Execute Analysis',
+            completedSteps,
+            percentComplete: Math.round((completedSteps.length / template.steps.length) * 100),
+            lastStepCompletedAt: new Date().toISOString(),
+            paymentCompletedAt: new Date().toISOString(),
+            // FIX 4B: Include payment SSOT fields
+            isPaid: true,
+            paymentStatus: 'completed',
+            paidAt: paidTimestamp,
+          });
+          console.log(`✅ [Webhook] Journey advanced to 'execute' step for project ${projectId}`);
+        }
+      }
+    } catch (journeyErr) {
+      // Non-critical: payment is already marked, journey can be fixed manually
+      console.warn(`⚠️ [Webhook] Failed to advance journey for project ${projectId}:`, journeyErr);
+    }
+
+    console.log(`✅ [Webhook] Project ${projectId} marked as paid via PaymentIntent ${paymentIntent.id}`);
+  }
+
+  /**
+   * Handle payment_intent.payment_failed webhook
+   * Logs failed analysis payments for audit trail
+   */
+  private async handlePaymentIntentFailed(paymentIntent: Stripe.PaymentIntent, tx: any): Promise<void> {
+    const projectId = paymentIntent.metadata?.projectId;
+    const userId = paymentIntent.metadata?.userId;
+    const source = paymentIntent.metadata?.source;
+
+    console.error(`❌ [Webhook] PaymentIntent failed: ${paymentIntent.id} (project: ${projectId || 'N/A'}, source: ${source || 'unknown'})`);
+
+    if (!projectId || source !== 'analysis_payment') {
+      return;
+    }
+
+    // Log the failure for audit
+    try {
+      const { decisionAudits } = await import('../../../shared/schema');
+      await tx.insert(decisionAudits).values({
+        id: `pif_${paymentIntent.id}`,
+        projectId,
+        agent: 'billing',
+        decisionType: 'payment_failed',
+        decision: `PaymentIntent ${paymentIntent.id} failed`,
+        reasoning: (paymentIntent as any).last_payment_error?.message || 'Payment processing failed',
+        alternatives: JSON.stringify([]),
+        confidence: 100,
+        context: JSON.stringify({
+          paymentIntentId: paymentIntent.id,
+          amount: paymentIntent.amount,
+          errorCode: (paymentIntent as any).last_payment_error?.code,
+          errorType: (paymentIntent as any).last_payment_error?.type,
+        }),
+        userInput: null,
+        reversible: false,
+        impact: 'high',
+        timestamp: new Date()
+      }).onConflictDoNothing();
+    } catch (auditErr) {
+      console.warn('[Webhook] Failed to log payment failure audit:', auditErr);
+    }
   }
 
   // ==========================================
@@ -3341,8 +3742,12 @@ export class UnifiedBillingService {
 
     const pricingServiceConfig = PricingService.getPricingConfig();
 
+    // Platform fee: use service_pricing table's pay-per-analysis base price ($25) as the platform fee
+    const serviceBasePrice = PricingService.getServicePrice('pay-per-analysis');
+    const platformFee = serviceBasePrice > 0 ? serviceBasePrice : (pricingServiceConfig.platformFee || ANALYSIS_PRICING_DEFAULTS.basePlatformFee);
+
     this.analysisPricingCache = {
-      basePlatformFee: pricingServiceConfig.platformFee || ANALYSIS_PRICING_DEFAULTS.basePlatformFee,
+      basePlatformFee: platformFee,
       dataProcessingPer1K: pricingServiceConfig.dataSizeCostPer1K || ANALYSIS_PRICING_DEFAULTS.dataProcessingPer1K,
       baseAnalysisCost: pricingServiceConfig.baseCost || ANALYSIS_PRICING_DEFAULTS.baseAnalysisCost,
       complexityMultipliers: {
@@ -3355,8 +3760,24 @@ export class UnifiedBillingService {
         ...ANALYSIS_PRICING_DEFAULTS.analysisTypeFactors,
         ...(pricingServiceConfig.analysisTypeFactors || {})
       },
-      artifactCosts: ANALYSIS_PRICING_DEFAULTS.artifactCosts
+      artifactCosts: ANALYSIS_PRICING_DEFAULTS.artifactCosts,
+      // Tiered pricing: load from DB config if available, else use defaults
+      // GUARD: empty objects {} are truthy but have 0 keys — fall back to defaults in that case
+      analysisTypePricing: ((pricingServiceConfig as any).analysisTypePricing &&
+        typeof (pricingServiceConfig as any).analysisTypePricing === 'object' &&
+        Object.keys((pricingServiceConfig as any).analysisTypePricing).length > 0)
+        ? (pricingServiceConfig as any).analysisTypePricing
+        : ANALYSIS_PRICING_DEFAULTS.analysisTypePricing,
+      dataVolumeTiers: ((pricingServiceConfig as any).dataVolumeTiers &&
+        typeof (pricingServiceConfig as any).dataVolumeTiers === 'object' &&
+        Object.keys((pricingServiceConfig as any).dataVolumeTiers).length > 0)
+        ? (pricingServiceConfig as any).dataVolumeTiers
+        : ANALYSIS_PRICING_DEFAULTS.dataVolumeTiers,
     };
+
+    const tieredKeyCount = this.analysisPricingCache.analysisTypePricing ? Object.keys(this.analysisPricingCache.analysisTypePricing).length : 0;
+    console.log(`💰 [CostEstimate] Loaded config: platformFee=$${platformFee.toFixed(2)} (source: ${serviceBasePrice > 0 ? 'service_pricing' : 'config_default'}), tieredPricing=${tieredKeyCount > 0} (${tieredKeyCount} analysis types)`);
+
     this.analysisPricingCacheExpiry = new Date(Date.now() + UnifiedBillingService.ANALYSIS_CACHE_TTL_MS);
     return this.analysisPricingCache;
   }
@@ -3374,7 +3795,10 @@ export class UnifiedBillingService {
         dataSizeCostPer1K: mergedConfig.dataProcessingPer1K,
         platformFee: mergedConfig.basePlatformFee,
         complexityMultipliers: mergedConfig.complexityMultipliers as any,
-        analysisTypeFactors: mergedConfig.analysisTypeFactors
+        analysisTypeFactors: mergedConfig.analysisTypeFactors,
+        // Persist tiered pricing to DB
+        analysisTypePricing: mergedConfig.analysisTypePricing as any,
+        dataVolumeTiers: mergedConfig.dataVolumeTiers as any,
       });
 
       this.analysisPricingCache = null;
@@ -3401,43 +3825,71 @@ export class UnifiedBillingService {
     const warnings: string[] = [];
     let totalCost = 0;
 
-    // 1. Platform fee
+    // Determine if tiered pricing is available
+    const hasTieredPricing = config.analysisTypePricing && Object.keys(config.analysisTypePricing).length > 0;
+    console.log(`💰 [CostEstimate] Pricing path: ${hasTieredPricing ? 'TIERED' : 'LEGACY'}, analysisTypePricing keys: ${config.analysisTypePricing ? Object.keys(config.analysisTypePricing).length : 0}, types: [${analysisTypes.join(', ')}], artifacts: [${includeArtifacts.join(', ')}]`);
+
+    // 1. Platform fee ($25 from service_pricing, once per project)
     breakdown.push({
       item: 'Platform Fee',
       cost: config.basePlatformFee,
-      description: 'Base platform access fee'
+      description: `One-time project fee ($${config.basePlatformFee.toFixed(2)})`
     });
     totalCost += config.basePlatformFee;
 
-    // 2. Data processing cost
-    const dataRowsK = dataSize.rows / 1000;
-    const dataCost = dataRowsK * config.dataProcessingPer1K;
-    breakdown.push({
-      item: 'Data Processing',
-      cost: parseFloat(dataCost.toFixed(2)),
-      units: `${dataSize.rows.toLocaleString()} rows`,
-      factor: config.dataProcessingPer1K,
-      description: `$${config.dataProcessingPer1K}/1K rows`
-    });
-    totalCost += dataCost;
+    // Map 'expert' to 'advanced' for tiered lookup (tiered pricing has 3 levels)
+    const effectiveComplexity = complexity === 'expert' ? 'advanced' : complexity;
 
-    // 3. Analysis costs (per type)
-    const complexityMultiplier = config.complexityMultipliers[complexity] || 1.0;
+    if (hasTieredPricing) {
+      // ===== NEW: Tiered per-type pricing =====
+      const volumeTierKey = getVolumeTierKey(dataSize.rows, config.dataVolumeTiers);
+      const volumeLabel = config.dataVolumeTiers?.[volumeTierKey]?.label || `${volumeTierKey} tier`;
 
-    for (const analysisType of analysisTypes) {
-      const normalizedType = analysisType.toLowerCase().replace(/[^a-z_]/g, '_');
-      const typeFactor = (config.analysisTypeFactors as any)[normalizedType]
-        || config.analysisTypeFactors.default;
+      for (const analysisType of analysisTypes) {
+        const analysisCost = getTieredAnalysisPrice(
+          analysisType,
+          volumeTierKey,
+          effectiveComplexity,
+          config.analysisTypePricing
+        );
 
-      const analysisCost = config.baseAnalysisCost * typeFactor * complexityMultiplier;
-
+        breakdown.push({
+          item: `${this.formatAnalysisTypeName(analysisType)} Analysis`,
+          cost: parseFloat(analysisCost.toFixed(2)),
+          description: `${volumeLabel}, ${effectiveComplexity} complexity`
+        });
+        totalCost += analysisCost;
+      }
+    } else {
+      // ===== LEGACY: formula-based pricing (backward compat) =====
+      const dataRowsK = dataSize.rows / 1000;
+      const dataCost = dataRowsK * config.dataProcessingPer1K;
       breakdown.push({
-        item: `${this.formatAnalysisTypeName(analysisType)} Analysis`,
-        cost: parseFloat(analysisCost.toFixed(2)),
-        factor: typeFactor,
-        description: `Base: $${config.baseAnalysisCost} × ${typeFactor} (type) × ${complexityMultiplier} (${complexity})`
+        item: 'Data Processing',
+        cost: parseFloat(dataCost.toFixed(2)),
+        units: `${dataSize.rows.toLocaleString()} rows`,
+        factor: config.dataProcessingPer1K,
+        description: `$${config.dataProcessingPer1K}/1K rows`
       });
-      totalCost += analysisCost;
+      totalCost += dataCost;
+
+      const complexityMultiplier = config.complexityMultipliers[effectiveComplexity] || 1.0;
+
+      for (const analysisType of analysisTypes) {
+        const normalizedType = analysisType.toLowerCase().replace(/[^a-z_]/g, '_');
+        const typeFactor = (config.analysisTypeFactors as any)[normalizedType]
+          || config.analysisTypeFactors.default;
+
+        const analysisCost = config.baseAnalysisCost * typeFactor * complexityMultiplier;
+
+        breakdown.push({
+          item: `${this.formatAnalysisTypeName(analysisType)} Analysis`,
+          cost: parseFloat(analysisCost.toFixed(2)),
+          factor: typeFactor,
+          description: `Base: $${config.baseAnalysisCost} × ${typeFactor} (type) × ${complexityMultiplier} (${effectiveComplexity})`
+        });
+        totalCost += analysisCost;
+      }
     }
 
     // 4. Artifact generation costs
@@ -3457,13 +3909,13 @@ export class UnifiedBillingService {
     const creditsRequired = Math.ceil(totalCost * 100);
 
     // 6. Duration estimate
-    const estimatedMinutes = this.estimateAnalysisDuration(dataSize.rows, analysisTypes.length, complexity);
+    const estimatedMinutes = this.estimateAnalysisDuration(dataSize.rows, analysisTypes.length, effectiveComplexity);
     const estimatedDuration = estimatedMinutes < 60
       ? `${estimatedMinutes} minutes`
       : `${Math.round(estimatedMinutes / 60 * 10) / 10} hours`;
 
     // 7. Confidence score
-    const confidenceScore = this.calculateCostConfidence(dataSize, analysisTypes, complexity);
+    const confidenceScore = this.calculateCostConfidence(dataSize, analysisTypes, effectiveComplexity);
 
     if (dataSize.rows > 100000) {
       warnings.push('Large dataset may require additional processing time');
@@ -3471,6 +3923,8 @@ export class UnifiedBillingService {
     if (analysisTypes.includes('machine_learning') && dataSize.rows < 1000) {
       warnings.push('Small dataset may affect ML model accuracy');
     }
+
+    console.log(`💰 [CostEstimate] Project ${projectId}: $${totalCost.toFixed(2)} (${hasTieredPricing ? 'tiered' : 'legacy'}, ${analysisTypes.length} types, ${dataSize.rows} rows, ${effectiveComplexity})`);
 
     return {
       totalCost: parseFloat(totalCost.toFixed(2)),

@@ -7,7 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api";
-import { ArrowLeft, Download, Share, Database, Lightbulb, BarChart3, PieChart, Calendar, CheckCircle, Settings, CreditCard, Zap, Brain, MessageSquare, Eye, FileSpreadsheet, FileText, ChevronDown, XCircle, AlertCircle, Loader2, Filter } from "lucide-react";
+import { ArrowLeft, Download, Share, Database, Lightbulb, BarChart3, PieChart, Calendar, CheckCircle, Settings, CreditCard, Zap, Brain, MessageSquare, Eye, FileSpreadsheet, FileText, ChevronDown, XCircle, AlertCircle, Loader2, Filter, Lock } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart as RechartsPieChart, Cell, Pie } from "recharts";
 import { AIChatLazy, AIInsightsPanelLazy } from "@/components/LazyComponents";
 // ✅ FIX 3.3: Import PaymentStatusBanner for visual payment status indicators
@@ -43,6 +43,8 @@ export default function ProjectResults({
 
   // Phase 7: Selected analysis filter state for per-analysis breakdown view
   const [selectedAnalysis, setSelectedAnalysis] = useState<string | 'all'>('all');
+  // P3-4 FIX: Track active tab for locked tab gating
+  const [activeResultsTab, setActiveResultsTab] = useState<string>('insights');
 
   const {
     data: project,
@@ -277,14 +279,7 @@ export default function ProjectResults({
         value: typeof item.value === "number" ? item.value : 0,
       }));
     }
-    return [
-      { name: "Jan", value: 40 },
-      { name: "Feb", value: 55 },
-      { name: "Mar", value: 70 },
-      { name: "Apr", value: 45 },
-      { name: "May", value: 80 },
-      { name: "Jun", value: 65 },
-    ];
+    return []; // No placeholder data — show empty state instead
   }, [analysisResults]);
 
   const pieData = useMemo(() => {
@@ -297,12 +292,7 @@ export default function ProjectResults({
         color: item.color || fallbackColors[index % fallbackColors.length],
       }));
     }
-    return [
-      { name: "Category A", value: 35, color: "#3b82f6" },
-      { name: "Category B", value: 28, color: "#8b5cf6" },
-      { name: "Category C", value: 22, color: "#10b981" },
-      { name: "Category D", value: 15, color: "#f59e0b" },
-    ];
+    return []; // No placeholder data — show empty state instead
   }, [analysisResults]);
 
   const fieldCount = Object.keys(project.schema || {}).length;
@@ -632,20 +622,39 @@ export default function ProjectResults({
           </div>
         )}
 
-        {/* AI Analysis Tabs */}
-        <Tabs defaultValue="insights" className="space-y-6">
+        {/* AI Analysis Tabs — P3-4 FIX: Lock premium tabs when unpaid */}
+        {(() => {
+          const isPaid = (project as any)?.isPaid === true;
+          const isPreview = (analysisResults as any)?.isPreview === true;
+          const lockedTabs = !isPaid && isPreview ? new Set(['chat', 'visualizations']) : new Set<string>();
+
+          const handleTabChange = (tab: string) => {
+            if (lockedTabs.has(tab)) {
+              toast({
+                title: 'Premium Content',
+                description: 'Complete payment to unlock AI Chat and full visualizations.',
+                variant: 'default',
+                duration: 4000,
+              });
+              return; // Don't switch to locked tab
+            }
+            setActiveResultsTab(tab);
+          };
+
+          return (
+        <Tabs value={activeResultsTab} onValueChange={handleTabChange} className="space-y-6">
           <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="insights" className="flex items-center gap-2">
               <Brain className="w-4 h-4" />
               AI Insights ({selectedAnalysis === 'all' ? insightList.length : filteredInsights.length})
             </TabsTrigger>
-            <TabsTrigger value="chat" className="flex items-center gap-2">
-              <MessageSquare className="w-4 h-4" />
-              AI Chat
+            <TabsTrigger value="chat" className={`flex items-center gap-2 ${lockedTabs.has('chat') ? 'opacity-60' : ''}`}>
+              {lockedTabs.has('chat') ? <Lock className="w-4 h-4 text-slate-400" /> : <MessageSquare className="w-4 h-4" />}
+              AI Chat {lockedTabs.has('chat') && <span className="text-[10px] ml-1 text-slate-400">Paid</span>}
             </TabsTrigger>
-            <TabsTrigger value="visualizations" className="flex items-center gap-2">
-              <Eye className="w-4 h-4" />
-              Charts
+            <TabsTrigger value="visualizations" className={`flex items-center gap-2 ${lockedTabs.has('visualizations') ? 'opacity-60' : ''}`}>
+              {lockedTabs.has('visualizations') ? <Lock className="w-4 h-4 text-slate-400" /> : <Eye className="w-4 h-4" />}
+              Charts {lockedTabs.has('visualizations') && <span className="text-[10px] ml-1 text-slate-400">Paid</span>}
             </TabsTrigger>
             <TabsTrigger value="data" className="flex items-center gap-2">
               <Database className="w-4 h-4" />
@@ -735,57 +744,117 @@ export default function ProjectResults({
 
           {/* Visualizations Tab */}
           <TabsContent value="visualizations">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Sample Bar Chart */}
+            {chartData.length === 0 && pieData.length === 0 ? (
               <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center">
-                    <BarChart3 className="w-5 h-5 text-primary mr-2" />
-                    Data Trends
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <ResponsiveContainer width="100%" height={300}>
-                    <BarChart data={chartData}>
-                      <XAxis dataKey="name" />
-                      <YAxis />
-                      <Tooltip />
-                      <Bar dataKey="value" fill="#3b82f6" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </CardContent>
-              </Card>
-
-              {/* Sample Pie Chart */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center">
-                    <PieChart className="w-5 h-5 text-primary mr-2" />
-                    Distribution Analysis
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <ResponsiveContainer width="100%" height={300}>
-                    <RechartsPieChart>
-                      <Pie
-                        data={pieData}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={60}
-                        outerRadius={120}
-                        paddingAngle={5}
-                        dataKey="value"
+                <CardContent className="pt-6">
+                  <div className="flex flex-col items-center justify-center py-12 text-center">
+                    <BarChart3 className="w-12 h-12 text-muted-foreground/40 mb-4" />
+                    {/* FIX 5C: Graceful message when charts are empty but insights exist */}
+                    <h3 className="font-semibold text-lg mb-2">
+                      {insightList.length > 0
+                        ? 'Insights Available in Other Tabs'
+                        : 'No Visualization Data Available'}
+                    </h3>
+                    <p className="text-muted-foreground text-sm max-w-md">
+                      {insightList.length > 0
+                        ? `Your analysis generated ${insightList.length} insight${insightList.length !== 1 ? 's' : ''}. View them in the Insights tab above. Charts will render when statistical or trend data is available.`
+                        : 'Charts will appear here once your analysis generates numerical or categorical results that can be visualized.'}
+                    </p>
+                    {insightList.length > 0 && (
+                      <Button
+                        variant="outline"
+                        className="mt-4"
+                        onClick={() => setActiveResultsTab('insights')}
                       >
-                        {pieData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
-                        ))}
-                      </Pie>
-                      <Tooltip />
-                    </RechartsPieChart>
-                  </ResponsiveContainer>
+                        View Insights
+                      </Button>
+                    )}
+                  </div>
                 </CardContent>
               </Card>
-            </div>
+            ) : (
+              <>
+                {/* FIX D1: Introductory card explaining what visualizations represent */}
+                <Card className="mb-6">
+                  <CardContent className="pt-6">
+                    <div className="flex items-start gap-3">
+                      <BarChart3 className="w-6 h-6 text-primary mt-0.5 shrink-0" />
+                      <div>
+                        <h3 className="font-semibold text-lg mb-1">Analysis Visualizations</h3>
+                        <p className="text-muted-foreground text-sm">
+                          These charts are generated from your analysis results. The bar chart shows key metric trends across categories,
+                          while the pie chart illustrates the proportional distribution of your data segments.
+                          Hover over data points for detailed values.
+                        </p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Bar Chart with description */}
+                  {chartData.length > 0 && (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="flex items-center">
+                          <BarChart3 className="w-5 h-5 text-primary mr-2" />
+                          Data Trends
+                        </CardTitle>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Compares metric values across categories identified in your dataset. Higher bars indicate stronger values.
+                        </p>
+                      </CardHeader>
+                      <CardContent>
+                        <ResponsiveContainer width="100%" height={300}>
+                          <BarChart data={chartData}>
+                            <XAxis dataKey="name" />
+                            <YAxis />
+                            <Tooltip />
+                            <Bar dataKey="value" fill="#3b82f6" />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {/* Pie Chart with description */}
+                  {pieData.length > 0 && (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="flex items-center">
+                          <PieChart className="w-5 h-5 text-primary mr-2" />
+                          Distribution Analysis
+                        </CardTitle>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Shows the proportional breakdown of records by category. Larger slices represent more dominant segments.
+                        </p>
+                      </CardHeader>
+                      <CardContent>
+                        <ResponsiveContainer width="100%" height={300}>
+                          <RechartsPieChart>
+                            <Pie
+                              data={pieData}
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={60}
+                              outerRadius={120}
+                              paddingAngle={5}
+                              dataKey="value"
+                              label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+                            >
+                              {pieData.map((entry, index) => (
+                                <Cell key={`cell-${index}`} fill={entry.color} />
+                              ))}
+                            </Pie>
+                            <Tooltip />
+                          </RechartsPieChart>
+                        </ResponsiveContainer>
+                      </CardContent>
+                    </Card>
+                  )}
+                </div>
+              </>
+            )}
           </TabsContent>
 
           {/* Data Schema Tab */}
@@ -857,6 +926,8 @@ export default function ProjectResults({
             </div>
           </TabsContent>
         </Tabs>
+          ); /* end P3-4 IIFE */
+        })()}
 
         {(artifactsLoading || normalizedArtifacts.length > 0 || artifactsError) && (
           <Card className="mt-8" data-testid="project-artifacts-panel">

@@ -172,29 +172,7 @@ let server: Server;
     // Load pricing configuration from database (or seed defaults)
     await PricingService.loadFromDatabase();
 
-    // Initialize agents first
-    initializationState.agentInitializationCalled = true;
-    const agentStartTime = Date.now();
-
-    const agentResults = await initializeAgents();
-    initializationState.agentsInitialized = true;
-    initializationState.agentInitializationTime = new Date();
-    initializationState.agentCount = agentResults.successCount;
-
-    console.log(`✅ Initialized ${agentResults.successCount} agents:`);
-    agentResults.registered.forEach(agent => {
-      console.log(`  - ${agent.name} (${agent.capabilities.join(', ')})`);
-    });
-
-    if (agentResults.failed.length > 0) {
-      console.warn(`⚠️  Failed to initialize ${agentResults.failed.length} agents:`);
-      agentResults.failed.forEach(failure => {
-        console.warn(`  - ${failure.name}: ${failure.error}`);
-        initializationState.errors.push(`Agent ${failure.name}: ${failure.error}`);
-      });
-    }
-
-    // Initialize tools
+    // Initialize tools FIRST (agents depend on tool registry at runtime)
     initializationState.toolInitializationCalled = true;
     const toolStartTime = Date.now();
 
@@ -255,6 +233,28 @@ let server: Server;
         console.error(`Required critical tools: ${criticalTools.join(', ')}`);
         process.exit(1);
       }
+    }
+
+    // Initialize agents (after tools are registered)
+    initializationState.agentInitializationCalled = true;
+    const agentStartTime = Date.now();
+
+    const agentResults = await initializeAgents();
+    initializationState.agentsInitialized = true;
+    initializationState.agentInitializationTime = new Date();
+    initializationState.agentCount = agentResults.successCount;
+
+    console.log(`✅ Initialized ${agentResults.successCount} agents:`);
+    agentResults.registered.forEach(agent => {
+      console.log(`  - ${agent.name} (${agent.capabilities.join(', ')})`);
+    });
+
+    if (agentResults.failed.length > 0) {
+      console.warn(`⚠️  Failed to initialize ${agentResults.failed.length} agents:`);
+      agentResults.failed.forEach(failure => {
+        console.warn(`  - ${failure.name}: ${failure.error}`);
+        initializationState.errors.push(`Agent ${failure.name}: ${failure.error}`);
+      });
     }
 
     // Initialize billing & analytics MCP resources

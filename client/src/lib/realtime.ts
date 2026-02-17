@@ -354,6 +354,26 @@ export class RealtimeClient {
 
   private updateReactQueryCache(event: RealtimeEvent): void {
     try {
+      // FIX P0-2: Handle admin config/pricing updates from WebSocket broadcasts
+      const eventData = (event as any).data;
+      if (event.sourceId === 'admin' && event.type === 'status_change') {
+        const adminEventType = eventData?.eventType;
+        if (adminEventType === 'analysis_pricing_updated' ||
+            adminEventType === 'tier_pricing_updated' ||
+            adminEventType === 'tier_quotas_updated' ||
+            adminEventType === 'tier_features_updated') {
+          console.log(`🔄 [P0-2] Admin pricing updated (${adminEventType}) — invalidating pricing cache`);
+          queryClient.invalidateQueries({ queryKey: ['cost-estimate'] });
+          queryClient.invalidateQueries({ queryKey: ['pricing'] });
+          queryClient.invalidateQueries({ queryKey: ['analysis-pricing'] });
+          // Also invalidate any project-specific cost queries
+          queryClient.invalidateQueries({ predicate: (query) =>
+            query.queryKey.some((k) => typeof k === 'string' && k.includes('cost'))
+          });
+          return;
+        }
+      }
+
       // Invalidate relevant queries based on event type
       switch (event.type) {
         case 'status_change':

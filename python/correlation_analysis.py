@@ -22,8 +22,17 @@ def perform_correlation_analysis(config):
 
         method = config.get('method', 'pearson')
 
-        # Select only numeric columns
-        numeric_data = data.select_dtypes(include=[np.number])
+        # Phase 4C-3: Accept explicit column list from AnalysisDataPreparer
+        columns = config.get('columns')
+        if columns:
+            available = [c for c in columns if c in data.columns]
+            if available:
+                numeric_data = data[available].select_dtypes(include=[np.number])
+            else:
+                numeric_data = data.select_dtypes(include=[np.number])
+        else:
+            # Select only numeric columns (original behavior)
+            numeric_data = data.select_dtypes(include=[np.number])
 
         if numeric_data.shape[1] < 2:
             return {
@@ -76,8 +85,23 @@ def perform_correlation_analysis(config):
                         t_stat = r * np.sqrt(n - 2) / np.sqrt(1 - r ** 2) if abs(r) < 1 else 0
                         p_val = 2 * (1 - stats.t.cdf(abs(t_stat), n - 2))
                     else:
-                        # Kendall p-value (approximation)
-                        p_val = 0.05  # Placeholder
+                        # Kendall p-value using normal approximation
+                        # P1-8 FIX: Replace placeholder with actual calculation
+                        # For Kendall's tau, the z-statistic is tau / sqrt(2(2n+5)/(9n(n-1)))
+                        if n >= 10:
+                            var_tau = (2 * (2 * n + 5)) / (9 * n * (n - 1))
+                            z_stat = r / np.sqrt(var_tau) if var_tau > 0 else 0
+                            p_val = 2 * (1 - stats.norm.cdf(abs(z_stat)))
+                        else:
+                            # For small samples, use scipy's kendalltau directly
+                            try:
+                                _, p_val = stats.kendalltau(
+                                    numeric_df[col1].dropna().values[:n],
+                                    numeric_df[col2].dropna().values[:n]
+                                )
+                                p_val = float(p_val) if not np.isnan(p_val) else 1.0
+                            except Exception:
+                                p_val = 1.0  # Conservative: assume not significant
 
                     p_values[col1][col2] = float(p_val)
 
@@ -126,7 +150,8 @@ def perform_correlation_analysis(config):
                     'warning': f'{col} is highly correlated with {strong_corr_count} other variables'
                 })
 
-        return {
+        # Phase 4C-1: Pass through business context for evidence chain
+        result = {
             'success': True,
             'method': method,
             'correlation_matrix': corr_dict,
@@ -136,6 +161,11 @@ def perform_correlation_analysis(config):
             'multicollinearity_warnings': multicollinearity_warnings,
             'variables': columns
         }
+        business_context = config.get('business_context', {})
+        if business_context:
+            result['business_context'] = business_context
+            result['question_ids'] = business_context.get('question_ids', [])
+        return result
 
     except Exception as e:
         return {

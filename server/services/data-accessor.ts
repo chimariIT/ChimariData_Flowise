@@ -21,6 +21,39 @@ import { db } from '../db';
 import { datasets, projectDatasets } from '@shared/schema';
 import { eq } from 'drizzle-orm';
 
+/**
+ * P2-1 FIX: Normalize element field names to canonical `sourceColumn` format.
+ * The codebase uses 3 different names for the same concept:
+ *   - `sourceField` (used in required-data-elements-tool.ts, project-manager-agent.ts)
+ *   - `sourceColumn` (used in most server services — CANONICAL)
+ *   - `mappedColumn` (used in project.ts)
+ *
+ * This normalizer ensures all elements use `sourceColumn` as the canonical field.
+ */
+export function normalizeElementFieldNames(element: any): any {
+  if (!element) return element;
+
+  // Resolve the mapped column from any of the 3 naming conventions
+  const resolved = element.sourceColumn || element.sourceField || element.mappedColumn;
+
+  return {
+    ...element,
+    sourceColumn: resolved || null,
+    // Keep legacy fields for backward compatibility but sync them
+    sourceField: resolved || element.sourceField || null,
+    // Ensure sourceAvailable is consistent
+    sourceAvailable: resolved ? true : (element.sourceAvailable || false),
+  };
+}
+
+/**
+ * P2-1: Normalize an array of elements
+ */
+export function normalizeAllElements(elements: any[]): any[] {
+  if (!Array.isArray(elements)) return elements;
+  return elements.map(normalizeElementFieldNames);
+}
+
 export interface DatasetDataResult {
   data: any[];
   source: 'transformed' | 'original';

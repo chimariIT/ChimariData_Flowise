@@ -1,8 +1,14 @@
 # Complete u2a2a2u Data Flow Architecture
 
-**Generated**: January 13, 2026
+**Generated**: January 13, 2026 | **Audited**: February 13, 2026
 **Purpose**: Comprehensive mapping of User → Agent → Agent → User data pipeline
 **Scope**: Requirements → Data → Transformation → Analysis → Billing → Results & Artifacts → Dashboard
+
+> **AUDIT NOTE (Feb 2026)**: This document describes the *designed* flow. See "Implementation Reality" sections below for gaps between design and actual implementation. Key findings:
+> - Business Agent translation happens **client-side only**, not as part of server agent workflow
+> - Template Research and Customer Support agents are initialized but **not wired into active workflows**
+> - ~50% of registered MCP tools are stubs/placeholders — see [MCP_TOOL_STATUS.md](MCP_TOOL_STATUS.md)
+> - 5 data continuity break points identified (see section at end)
 
 ---
 
@@ -748,4 +754,55 @@ When running a complete journey, verify these log messages appear:
 
 ---
 
-*Last Updated: January 13, 2026*
+---
+
+## 9. DATA CONTINUITY BREAK POINTS (Feb 2026 Audit)
+
+Five critical points where data from one pipeline stage doesn't properly flow to the next:
+
+### Break 1: Question-Element Linkage via Text
+- **Location**: `required-data-elements-tool.ts:31,1213`
+- **Problem**: Questions linked to elements via text matching, not stable IDs
+- **Fix Status**: `generateStableQuestionId()` added to `server/constants.ts`, partially adopted
+- **Risk**: Evidence chain breaks when question text changes
+
+### Break 2: Element Mappings Split Across Two Sources
+- **Location**: `requirementsDocument.sourceColumn` (NULL) vs `dataset.ingestionMetadata.columnMappings` (actual)
+- **Problem**: Two different locations store the same mapping data, never reconciled
+- **Fix Status**: P0-3 writeback implemented (Feb 2026) writes `columnLookup` back to reqDoc after resolution
+- **Risk**: Element context lost when reading from requirementsDocument
+
+### Break 3: Business Definitions Loaded But Ignored
+- **Location**: `project.ts:7525-7545` (loaded), `7647-7665` (logged), transformation switch (NOT used)
+- **Problem**: Business calculation formulas, component fields, and aggregation methods never injected into transformations
+- **Fix Status**: Partial — pseudoCode execution added (Fix 2B), full business definition consumption pending (P1-5)
+- **Risk**: Derived columns use default aggregation instead of domain-specific calculations
+
+### Break 4: Analysis Insights Linked via Keyword Matching
+- **Location**: `analysis-execution.ts` result assembly
+- **Problem**: No stable ID link between user questions and analysis insights
+- **Fix Status**: Open
+- **Risk**: Cannot trace which insights answer which questions
+
+### Break 5: Verification Step Doesn't Validate Element Satisfaction
+- **Location**: `data-verification-step.tsx`
+- **Problem**: User can proceed past verification without all required data elements being mappable
+- **Fix Status**: P1-6 planned (Feb 2026)
+- **Risk**: Incomplete mappings lead to failed or poor-quality analysis
+
+---
+
+## 10. journeyProgress FIELD REFERENCE BY STEP
+
+| Step | Fields Written | Fields Read |
+|------|---------------|-------------|
+| **Prepare** | `analysisGoal`, `userQuestions`, `audience`, `selectedTemplates`, `industry` | (none — initial step) |
+| **Data Upload** | `joinedData` (preview, schema, rowCount) | (none) |
+| **Verification** | `piiDecision`, `verificationStatus`, `requirementsDocument`, `requirementsLocked` | `verificationStatus` (restoration) |
+| **Transformation** | `transformationApplied`, `transformedRowCount`, `transformationMappings`, `joinedData` (with joinConfig), `columnMappings` | `requirementsDocument`, `joinedData` |
+| **Plan** | `analysisPath`, `lockedCostEstimate` | `requirementsDocument`, `transformedRowCount` |
+| **Pricing** | `paymentStatus`, `appliedCampaign`, `isPaid`, `paidAt` | `lockedCostEstimate` |
+| **Execution** | `executionStatus`, `executionCompletedAt`, `analysisResults` (cached preview), `lastCreditDeductionId` | `analysisGoal`, `userQuestions`, `audience`, `piiDecision`, `analysisPath` |
+| **Dashboard** | (none — display only) | `analysisResults`, `audience` |
+
+*Last Updated: February 13, 2026*

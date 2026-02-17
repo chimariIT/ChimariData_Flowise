@@ -100,7 +100,7 @@ router.get('/activities/:projectId', async (req, res) => {
         });
       }
     } else {
-      // Use journeyProgress for dynamic agent activities based on actual step data
+      // P1-3 FIX: Use journeyProgress for DYNAMIC context-aware agent activities
       const progress = (project as any).journeyProgress || {};
       const currentStep = progress.currentStep || 'upload';
       const completedSteps = progress.completedSteps || [];
@@ -108,55 +108,79 @@ router.get('/activities/:projectId', async (req, res) => {
       const hasTransformations = !!progress.transformationPlan;
       const hasAnalysisResults = !!(project as any).analysisResults;
 
-      // Project Manager Agent - always active, describe what it's doing based on step
-      const pmActivity = completedSteps.includes('plan') ? 'Monitoring analysis execution' :
-        completedSteps.includes('verification') ? 'Coordinating data transformation and analysis planning' :
-        completedSteps.includes('prepare') ? 'Overseeing data verification process' :
-        hasRequirements ? 'Requirements locked, coordinating verification' :
-        'Analyzing project requirements and generating context';
+      // P1-3: Extract project-specific context for dynamic messages
+      const projectName = (project as any).name || 'your project';
+      const datasetCount = progress.datasetCount || 1;
+      const elementCount = progress.requirementsDocument?.requiredDataElements?.length || 0;
+      const questionCount = progress.businessQuestions?.length || 0;
+      const analysisTypes = progress.analysisPath?.map((a: any) => a.analysisName || a.analysisType).filter(Boolean) || [];
+      const audience = progress.audience?.primaryAudience || progress.audience?.primary || '';
+
+      // Project Manager Agent - context-aware activity description
+      const pmActivity = completedSteps.includes('plan')
+        ? `Orchestrating ${analysisTypes.length || 'multiple'} analysis execution${datasetCount > 1 ? ` across ${datasetCount} datasets` : ''}`
+        : completedSteps.includes('verification')
+        ? `Coordinating transformation planning${elementCount > 0 ? ` for ${elementCount} data elements` : ''}`
+        : completedSteps.includes('prepare')
+        ? `Overseeing data verification${questionCount > 0 ? ` (${questionCount} questions to answer)` : ''}`
+        : hasRequirements
+        ? `Requirements locked${elementCount > 0 ? ` (${elementCount} elements)` : ''}, coordinating verification`
+        : `Analyzing requirements for "${projectName}"`;
 
       activities.push({
         id: 'pm_agent',
         agent: 'project_manager',
         activity: pmActivity,
         status: hasAnalysisResults ? 'idle' : 'active',
-        currentTask: `Step: ${currentStep}`,
+        currentTask: `Step: ${currentStep}${completedSteps.length > 0 ? ` (${completedSteps.length} completed)` : ''}`,
         progress: Math.min(100, completedSteps.length * 15),
         estimatedCompletion: undefined,
         lastUpdate: progress.updatedAt ? new Date(progress.updatedAt) : new Date()
       });
 
-      // Data Scientist Agent
-      const dsActivity = hasAnalysisResults ? 'Analysis complete' :
-        completedSteps.includes('transformation') ? 'Preparing analysis execution plan' :
-        hasTransformations ? 'Transformation plan generated, awaiting execution' :
-        completedSteps.includes('verification') ? 'Generating data transformation recommendations' :
-        hasRequirements ? 'Defining required data elements for analysis' :
-        'Waiting for analysis context';
+      // Data Scientist Agent - context-aware
+      const dsActivity = hasAnalysisResults
+        ? `Analysis complete${analysisTypes.length > 0 ? ` (${analysisTypes.slice(0, 3).join(', ')})` : ''}`
+        : completedSteps.includes('transformation')
+        ? `Preparing ${analysisTypes.length > 0 ? analysisTypes.join(', ') : 'analysis'} execution plan`
+        : hasTransformations
+        ? `Transformation plan ready${elementCount > 0 ? ` for ${elementCount} elements` : ''}, awaiting execution`
+        : completedSteps.includes('verification')
+        ? `Generating transformation recommendations${datasetCount > 1 ? ` for ${datasetCount} datasets` : ''}`
+        : hasRequirements
+        ? `Defining ${elementCount || 'required'} data elements for analysis`
+        : 'Waiting for analysis context';
 
       activities.push({
         id: 'ds_agent',
         agent: 'data_scientist',
         activity: dsActivity,
         status: hasAnalysisResults ? 'idle' : (completedSteps.includes('verification') ? 'active' : 'waiting'),
-        currentTask: hasTransformations ? 'Transformation plan ready' : 'Awaiting data context',
+        currentTask: hasTransformations
+          ? `${analysisTypes.length > 0 ? analysisTypes[0] : 'Transformation'} plan ready`
+          : 'Awaiting data context',
         progress: hasAnalysisResults ? 100 : (hasTransformations ? 60 : (hasRequirements ? 30 : 0)),
         estimatedCompletion: undefined,
         lastUpdate: progress.updatedAt ? new Date(progress.updatedAt) : new Date()
       });
 
-      // Business Agent
-      const baActivity = hasAnalysisResults ? 'Translating results for audience' :
-        completedSteps.includes('plan') ? 'Preparing audience-specific insights framework' :
-        hasRequirements ? 'Business context defined, awaiting analysis' :
-        'Gathering industry context and business templates';
+      // Business Agent - context-aware
+      const baActivity = hasAnalysisResults
+        ? `Translating results${audience ? ` for ${audience} audience` : ''}`
+        : completedSteps.includes('plan')
+        ? `Preparing ${audience || 'audience'}-specific insights framework`
+        : hasRequirements
+        ? `Business context defined${questionCount > 0 ? ` (${questionCount} questions mapped)` : ''}, awaiting analysis`
+        : `Gathering industry context for "${projectName}"`;
 
       activities.push({
         id: 'ba_agent',
         agent: 'business_agent',
         activity: baActivity,
         status: hasAnalysisResults ? 'active' : (hasRequirements ? 'waiting' : 'active'),
-        currentTask: hasAnalysisResults ? 'Generating business insights' : 'Building business context',
+        currentTask: hasAnalysisResults
+          ? `Generating ${audience || 'business'} insights`
+          : 'Building business context',
         progress: hasAnalysisResults ? 80 : (hasRequirements ? 40 : 10),
         estimatedCompletion: undefined,
         lastUpdate: progress.updatedAt ? new Date(progress.updatedAt) : new Date()

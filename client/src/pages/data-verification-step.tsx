@@ -216,8 +216,11 @@ export default function DataVerificationStep({
       setIsEnrichingDefinitions(true);
       console.log('📚 [Business Definitions] Starting enrichment for project', projectId);
 
+      // ✅ FIX 9A: Pass detected industry so AI definitions use correct context
+      const jpIndustry = journeyProgress?.industry || (journeyProgress as any)?.industryDomain;
       const response = await apiClient.post(`/api/projects/${projectId}/enrich-data-elements`, {
-        includeInferred: true
+        includeInferred: true,
+        industry: jpIndustry
       });
 
       if (response.success && response.enrichedElements) {
@@ -1706,6 +1709,28 @@ const handleFinalApproval = async () => {
       description: verifyResponse.message || "Your data has been verified and approved. Proceeding to transformation step.",
     });
 
+    // P2-8 FIX: Check element satisfaction before proceeding
+    // Verify that mapped columns actually exist in the dataset
+    if (updatedRequirementsDocument?.requiredDataElements?.length > 0 && availableColumns.length > 0) {
+      const colsLower = new Set(availableColumns.map((c: string) => c.toLowerCase()));
+      const unsatisfied = updatedRequirementsDocument.requiredDataElements.filter((el: any) => {
+        const mapped = el.sourceField || el.sourceColumn;
+        if (!mapped) return true; // Not mapped at all
+        // Check if mapped column exists in dataset (case-insensitive)
+        return !colsLower.has(mapped.toLowerCase());
+      });
+      if (unsatisfied.length > 0) {
+        const names = unsatisfied.slice(0, 3).map((el: any) => el.elementName || el.name).join(', ');
+        console.warn(`⚠️ [P2-8] ${unsatisfied.length} elements not satisfied by dataset columns:`, names);
+        toast({
+          title: "Element Mapping Warning",
+          description: `${unsatisfied.length} required data element(s) could not be mapped to dataset columns (${names}${unsatisfied.length > 3 ? '...' : ''}). The transformation step will attempt to derive them.`,
+          variant: "default",
+          duration: 8000,
+        });
+      }
+    }
+
     // Proceed to next step
     if (onNext) {
       onNext();
@@ -2734,15 +2759,20 @@ return (
 
               <Button
                 onClick={handleApproveData}
-                disabled={isProcessing || isLoading || !canContinue}
-                className={verificationStatus.overallApproved ? "bg-green-600 hover:bg-green-700" : isPiiReviewPending ? "bg-red-600 hover:bg-red-700" : "bg-yellow-600 hover:bg-yellow-700"}
+                disabled={isProcessing || isLoading || !canContinue || isEnrichingDefinitions}
+                className={isEnrichingDefinitions ? "bg-blue-600 hover:bg-blue-700" : verificationStatus.overallApproved ? "bg-green-600 hover:bg-green-700" : isPiiReviewPending ? "bg-red-600 hover:bg-red-700" : "bg-yellow-600 hover:bg-yellow-700"}
                 size="lg"
-                title={isLoading ? "Loading project data..." : !hasSchema ? "No schema detected - Re-upload your data to continue" : isPiiReviewPending ? "PII Review Required - You must review detected PII before continuing" : !verificationStatus.overallApproved ? `${completedSteps}/${totalSteps} verification steps complete - Click to continue anyway` : "All verifications complete - Click to approve and continue"}
+                title={isEnrichingDefinitions ? "Loading business definitions for data elements..." : isLoading ? "Loading project data..." : !hasSchema ? "No schema detected - Re-upload your data to continue" : isPiiReviewPending ? "PII Review Required - You must review detected PII before continuing" : !verificationStatus.overallApproved ? `${completedSteps}/${totalSteps} verification steps complete - Click to continue anyway` : "All verifications complete - Click to approve and continue"}
               >
                 {isProcessing ? (
                   <>
                     <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
                     Approving...
+                  </>
+                ) : isEnrichingDefinitions ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                    Loading Definitions...
                   </>
                 ) : isPiiReviewPending ? (
                   <>

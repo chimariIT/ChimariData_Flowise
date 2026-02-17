@@ -1,8 +1,48 @@
-# Admin Interface - Agent & Tool Management
+# Admin Interface - Complete Admin Panel
+
+**Last Updated**: February 13, 2026
 
 ## Overview
 
-Complete UI-based admin interface for managing agents and tools in the ChimariData platform. This system allows dynamic onboarding, configuration, monitoring, and removal of agents and tools through an intuitive web interface with real-time updates.
+Complete UI-based admin interface for managing all aspects of the ChimariData platform. The admin panel provides 11 UI pages across 10 tabs, backed by 165+ API endpoints across 6 route files. Features include agent/tool management, billing configuration, campaign management, consultation workflow, project debugging, and system monitoring — all with real-time WebSocket updates.
+
+> **Audit Note (Feb 2026):** This document previously covered only agent and tool management (2 pages). Updated to document all 11 admin UI pages, 10 tab values, and the full admin routing system.
+
+## Admin Pages Overview
+
+**Location**: `client/src/pages/admin/`
+**Entry point**: `index.tsx` (admin layout with tab routing)
+**Routing**: `/admin/:tab` — URL path segment maps to tab value
+
+### All Admin Pages (11 files, 10 tabs)
+
+| # | Tab Value | Component File | Description |
+|---|-----------|---------------|-------------|
+| 1 | `dashboard` | `admin-dashboard.tsx` | Platform health, revenue metrics, system status |
+| 2 | `subscription-management` | `subscription-management.tsx` | User subscription CRUD, tier management |
+| 3 | `service-pricing` | `pricing-services.tsx` | Service pricing configuration |
+| 4 | `analysis-pricing` | `analysis-pricing.tsx` | Per-analysis-type pricing, multipliers, complexity |
+| 5 | `campaigns` | `campaign-management.tsx` | Campaign/coupon CRUD, usage tracking |
+| 6 | `consultations` | `consultations.tsx` | Consultation request queue and assignment |
+| 7 | `consultation-pricing` | `consultation-pricing.tsx` | Consultation pricing tiers |
+| 8 | `agent-management` | `agent-management.tsx` | Agent monitoring, creation, templates |
+| 9 | `tools-management` | `tools-management.tsx` | Tool registry, permissions, metrics |
+| 10 | `state-inspector` | `project-state-inspector.tsx` | Project state debugging tool |
+
+**Note**: `index.tsx` is the layout shell (11th file), not a tab itself.
+
+### Backend Route Files (6 files, 165+ endpoints)
+
+| Route File | Mount Prefix | Endpoints | Purpose |
+|-----------|-------------|-----------|---------|
+| `admin.ts` | `/api/admin` | ~80 | Core: agents, tools, users, projects, monitoring |
+| `admin-billing.ts` | `/api/admin/billing` | ~25 | Tiers, campaigns, rates, analysis pricing |
+| `admin-secured.ts` | `/api/admin/secured` | ~20 | Extra-secured endpoints with RBAC |
+| `admin-consultation.ts` | `/api/admin/consultations` | ~9 | Consultation lifecycle |
+| `admin-consultation-pricing.ts` | `/api/admin/consultation-pricing` | ~7 | Consultation pricing CRUD |
+| `admin-service-pricing.ts` | `/api/admin/service-pricing` | ~6 | Service pricing CRUD |
+
+---
 
 ## Architecture
 
@@ -565,37 +605,17 @@ The platform includes 8 pre-configured agent templates for common business use c
 
 ## Current Agent Ecosystem
 
-### Registered Agents
+### Registered Agents (7 Total)
 
-1. **Data Engineer Agent**
-   - Type: `data_processing`
-   - Capabilities: ETL, data quality, pipeline management
-   - Status: Active
-
-2. **Customer Support Agent**
-   - Type: `support`
-   - Capabilities: Ticket management, customer assistance
-   - Status: Active
-
-3. **Data Scientist Agent**
-   - Type: `analysis`
-   - Capabilities: Statistical analysis, ML, feature engineering
-   - Status: Active
-
-4. **Technical AI Agent**
-   - Type: `ai_specialist`
-   - Capabilities: AI model integration, prompt engineering
-   - Status: Active
-
-5. **Business Intelligence Agent**
-   - Type: `business`
-   - Capabilities: Business analysis, compliance, insights
-   - Status: Active
-
-6. **Project Manager Agent**
-   - Type: `orchestration`
-   - Capabilities: Project coordination, workflow management
-   - Status: Active
+| # | Agent | Type | Status | Notes |
+|---|-------|------|--------|-------|
+| 1 | **Project Manager Agent** | `orchestration` | Active | Coordinates all workflows |
+| 2 | **Data Scientist Agent** | `analysis` | Active | Stats, ML, feature engineering |
+| 3 | **Technical AI Agent** | `ai_specialist` | Active | AI model integration |
+| 4 | **Business Intelligence Agent** | `business` | Active | Industry expertise, KPIs |
+| 5 | **Data Engineer Agent** | `data_processing` | Active | ETL, data quality, pipelines |
+| 6 | **Template Research Agent** | `research` | Initialized-Not-Wired | Tools registered but not routed |
+| 7 | **Customer Support Agent** | `support` | Initialized-Not-Wired | Initialized but not called in workflows |
 
 ### Core Tools
 

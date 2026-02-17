@@ -25,7 +25,10 @@ import {
   AlertTriangle,
   MessageSquare,
   Receipt,
-  Calculator
+  Calculator,
+  Tag,
+  Database,
+  ShieldAlert,
 } from "lucide-react";
 import AdminDashboard from "./admin-dashboard";
 import AgentManagement from "./agent-management";
@@ -36,6 +39,11 @@ import ConsultationPricing from "./consultation-pricing";
 import PricingServicesAdmin from "./pricing-services";
 import ProjectStateInspector from "./project-state-inspector";
 import AnalysisPricing from "./analysis-pricing";
+import CampaignManagement from "./campaign-management";
+// P2-1, P2-2, P2-3: New admin pages
+import UserManagement from "./user-management";
+import ErrorTracking from "./error-tracking";
+import DatabaseOptimization from "./database-optimization";
 
 interface AdminLayoutProps {
   user?: any;
@@ -204,47 +212,67 @@ export default function AdminLayout({ user }: AdminLayoutProps) {
       {/* Main Content */}
       <div className="container mx-auto px-4 py-6">
         <Tabs value={activeTab} onValueChange={handleTabChange}>
-          <TabsList className="grid w-full grid-cols-9 mb-6">
-            <TabsTrigger value="dashboard" className="flex items-center gap-2">
-              <BarChart3 className="w-4 h-4" />
+          <TabsList className="flex flex-wrap w-full gap-1 mb-6 h-auto p-1">
+            <TabsTrigger value="dashboard" className="flex items-center gap-1 text-xs">
+              <BarChart3 className="w-3 h-3" />
               Dashboard
             </TabsTrigger>
-            <TabsTrigger value="subscription-management" className="flex items-center gap-2">
-              <DollarSign className="w-4 h-4" />
+            <TabsTrigger value="user-management" className="flex items-center gap-1 text-xs">
+              <Users className="w-3 h-3" />
+              Users
+            </TabsTrigger>
+            <TabsTrigger value="subscription-management" className="flex items-center gap-1 text-xs">
+              <DollarSign className="w-3 h-3" />
               Subscriptions
             </TabsTrigger>
-            <TabsTrigger value="service-pricing" className="flex items-center gap-2">
-              <DollarSign className="w-4 h-4" />
+            <TabsTrigger value="service-pricing" className="flex items-center gap-1 text-xs">
+              <DollarSign className="w-3 h-3" />
               Service Pricing
             </TabsTrigger>
-            <TabsTrigger value="analysis-pricing" className="flex items-center gap-2">
-              <TrendingUp className="w-4 h-4" />
+            <TabsTrigger value="analysis-pricing" className="flex items-center gap-1 text-xs">
+              <TrendingUp className="w-3 h-3" />
               Analysis Pricing
             </TabsTrigger>
-            <TabsTrigger value="consultations" className="flex items-center gap-2">
-              <MessageSquare className="w-4 h-4" />
+            <TabsTrigger value="campaigns" className="flex items-center gap-1 text-xs">
+              <Tag className="w-3 h-3" />
+              Campaigns
+            </TabsTrigger>
+            <TabsTrigger value="consultations" className="flex items-center gap-1 text-xs">
+              <MessageSquare className="w-3 h-3" />
               Consultations
             </TabsTrigger>
-            <TabsTrigger value="consultation-pricing" className="flex items-center gap-2">
-              <Receipt className="w-4 h-4" />
-              Consultation Pricing
+            <TabsTrigger value="consultation-pricing" className="flex items-center gap-1 text-xs">
+              <Receipt className="w-3 h-3" />
+              Consult Pricing
             </TabsTrigger>
-            <TabsTrigger value="agent-management" className="flex items-center gap-2">
-              <Bot className="w-4 h-4" />
+            <TabsTrigger value="agent-management" className="flex items-center gap-1 text-xs">
+              <Bot className="w-3 h-3" />
               Agents
             </TabsTrigger>
-            <TabsTrigger value="tools-management" className="flex items-center gap-2">
-              <Wrench className="w-4 h-4" />
+            <TabsTrigger value="tools-management" className="flex items-center gap-1 text-xs">
+              <Wrench className="w-3 h-3" />
               Tools
             </TabsTrigger>
-            <TabsTrigger value="state-inspector" className="flex items-center gap-2">
-              <Activity className="w-4 h-4" />
+            <TabsTrigger value="error-tracking" className="flex items-center gap-1 text-xs">
+              <ShieldAlert className="w-3 h-3" />
+              Errors
+            </TabsTrigger>
+            <TabsTrigger value="database" className="flex items-center gap-1 text-xs">
+              <Database className="w-3 h-3" />
+              Database
+            </TabsTrigger>
+            <TabsTrigger value="state-inspector" className="flex items-center gap-1 text-xs">
+              <Activity className="w-3 h-3" />
               State Inspector
             </TabsTrigger>
           </TabsList>
 
           <TabsContent value="dashboard">
             <AdminDashboard user={user} />
+          </TabsContent>
+
+          <TabsContent value="user-management">
+            <UserManagement />
           </TabsContent>
 
           <TabsContent value="subscription-management">
@@ -257,6 +285,10 @@ export default function AdminLayout({ user }: AdminLayoutProps) {
 
           <TabsContent value="analysis-pricing">
             <AnalysisPricing onBack={() => setActiveTab('dashboard')} />
+          </TabsContent>
+
+          <TabsContent value="campaigns">
+            <CampaignManagement />
           </TabsContent>
 
           <TabsContent value="consultations">
@@ -273,6 +305,14 @@ export default function AdminLayout({ user }: AdminLayoutProps) {
 
           <TabsContent value="tools-management">
             <ToolsManagement />
+          </TabsContent>
+
+          <TabsContent value="error-tracking">
+            <ErrorTracking />
+          </TabsContent>
+
+          <TabsContent value="database">
+            <DatabaseOptimization />
           </TabsContent>
 
           <TabsContent value="state-inspector">

@@ -1,6 +1,6 @@
 # Architecture Guide
 
-**Part of ChimariData Documentation** | [← Back to Main](../CLAUDE.md) | **Last Updated**: December 10, 2025
+**Part of ChimariData Documentation** | [← Back to Main](../CLAUDE.md) | **Last Updated**: February 11, 2026
 
 This document covers the high-level architecture, technology stack, data models, API structure, and deployment considerations.
 
@@ -796,6 +796,19 @@ const datasetsForProject = projectDatasetsJoin.map((r: any) => r.dataset);
 - Shared datasets across projects
 - Live data connections
 
+### Storage-Layer Row Cap Enforcement
+
+Large CSV uploads can produce INSERT payloads that exceed PostgreSQL's `statement_timeout`. To prevent this recurring production bug, a row cap is enforced at the **storage layer** — not at the caller site:
+
+- **Constant**: `DATASET_DATA_ROW_CAP = 10,000` in `server/constants.ts`
+- **Enforced in**: `DatabaseStorage.createDataset()`, `MemStorage.createDataset()`, `HybridStorage.createDataset()`
+- **DB timeout**: `statement_timeout = 120,000ms` in `server/db.ts` pool config
+- **Startup check**: `MIN_STATEMENT_TIMEOUT_MS = 60,000` validated at server start
+
+Full datasets are always available via the original uploaded file and via `ingestionMetadata.transformedData`. The cap only applies to the `datasets.data` JSONB column.
+
+**NEVER add inline row caps in route handlers.** The storage layer handles this universally.
+
 ### Spark Integration (For Very Large Data)
 
 **Location**: `server/services/spark-processor.ts`
@@ -1236,6 +1249,17 @@ pip install -r python/requirements.txt
 ---
 
 ## Known Issues
+
+### Sprint 6 Bug Fixes (Jan 2026) ✅
+
+| Bug # | Issue | Fix | File(s) |
+|-------|-------|-----|---------|
+| #5 | Payment status check mismatch | Hardened to check both `paymentStatus` and `status` | `pricing-step.tsx` |
+| #7 | PII leakage on raw data fallback | Pass `columnsToExclude` to validation call | `analysis-execution.ts` |
+| #9 | 3 competing question ID patterns | Canonical `generateStableQuestionId()` in `server/constants.ts` | `constants.ts`, `analysis-execution.ts`, `question-answer-service.ts`, `required-data-elements-tool.ts` |
+| #12 | Pricing cache never invalidated | `refreshFromDatabase()` + `pricingVersion` timestamp | `pricing.ts`, `pricing.ts` (routes), `payment.ts` |
+| #13 | Webhook idempotency race | Moved DB write inside transaction | `unified-billing-service.ts` |
+| #15 | Checkout metadata missing | Added `analysisType` to Stripe metadata | `unified-billing-service.ts` |
 
 ### Recent Bug Fixes (Dec 8, 2025) ✅
 

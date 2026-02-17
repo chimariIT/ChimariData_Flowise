@@ -144,7 +144,8 @@ def perform_regression_analysis(config):
             'max': float(np.max(residuals_test))
         }
 
-        return {
+        # Phase 4C-1: Pass through business context for evidence chain
+        result = {
             'success': True,
             'model': 'linear_regression',
             'metrics': {
@@ -176,6 +177,11 @@ def perform_regression_analysis(config):
                 for i in range(min(20, len(y_test)))
             ]
         }
+        business_context = config.get('business_context', {})
+        if business_context:
+            result['business_context'] = business_context
+            result['question_ids'] = business_context.get('question_ids', [])
+        return result
 
     except Exception as e:
         return {

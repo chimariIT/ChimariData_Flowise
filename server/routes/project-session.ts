@@ -301,8 +301,12 @@ router.post('/:sessionId/update-step', ensureAuthenticated, async (req, res) => 
 
             for (let idx = 0; idx < questionsText.length; idx++) {
               const questionText = questionsText[idx];
-              // Generate stable question ID from project and question text
-              const questionId = `q_${projectId.slice(0, 8)}_${idx + 1}`;
+              // Generate stable question ID using hash (matches question-answer-service.ts format)
+              const questionHash = crypto.createHash('sha256')
+                .update(questionText.toLowerCase().trim())
+                .digest('hex')
+                .substring(0, 8);
+              const questionId = `q_${projectId.substring(0, 8)}_${questionHash}`;
 
               try {
                 // Upsert: check if exists first

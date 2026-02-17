@@ -188,7 +188,7 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
     queryFn: async () => {
       if (!projectId) return { datasets: [] };
       const response = await apiClient.get(`/api/projects/${projectId}/datasets`);
-      return response as { datasets: Array<{ id: string; recordCount?: number; name?: string; [key: string]: any }> };
+      return response as { datasets: Array<{ id: string; recordCount?: number; name?: string;[key: string]: any }> };
     },
     enabled: Boolean(projectId),
     staleTime: 1000 * 60, // 1 minute cache
@@ -648,68 +648,26 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
             window.history.replaceState({}, document.title, window.location.pathname);
 
             // =====================================================
-            // FIX: Trigger analysis execution after successful payment
-            // The user pays FIRST, then analysis runs, then results are shown
+            // FIX: Do NOT execute analysis here — the execute step handles it.
+            // Previously this called /api/analysis-execution/execute inline,
+            // causing a double-execution bug because the Stripe success URL
+            // also redirects to the execute step which auto-triggers execution.
+            // Now: verify payment → signal dashboard → navigate to next step.
             // =====================================================
-            console.log('💳 [Payment] Payment verified, triggering analysis execution...');
+            console.log('💳 [Payment] Payment verified. Navigating to execute step (single execution point).');
 
-            try {
-              // ✅ FIX 2D: executionConfig (DS agent, latest) takes priority over requirementsDocument
-              const analysisPath = journeyProgress?.executionConfig?.analysisPath ||
-                                   journeyProgress?.requirementsDocument?.analysisPath || [];
-              const analysisTypesFromPlan = analysisPath.length > 0
-                ? analysisPath.map((a: any) => a.analysisType || a.type || 'statistical_analysis')
-                : ['statistical_analysis', 'exploratory_data_analysis']; // Fallback only if no plan
+            // Signal dashboard that payment just completed (for polling even with stale cache)
+            sessionStorage.setItem(`payment_completed_${projectId}`, 'true');
 
-              console.log(`📊 [Payment] Using ${analysisTypesFromPlan.length} analysis types from plan: [${analysisTypesFromPlan.join(', ')}]`);
-
-              // Signal dashboard that payment just completed (for polling even with stale cache)
-              sessionStorage.setItem(`payment_completed_${projectId}`, 'true');
-
-              // Execute analysis now that payment is confirmed
-              const analysisData = await apiClient.post('/api/analysis-execution/execute', {
-                projectId,
-                analysisTypes: analysisTypesFromPlan,
-                analysisPath // Pass full analysis path for evidence chain
-              });
-
-              if (analysisData.success) {
-                console.log('✅ [Payment] Analysis execution completed successfully');
-                console.log(`   Insights: ${analysisData.results?.insights?.length || 0}`);
-                console.log(`   Recommendations: ${analysisData.results?.recommendations?.length || 0}`);
-
-                // Invalidate again to get fresh results
-                queryClient.invalidateQueries({ queryKey: ["project", projectId] });
-
-                // Navigate to dashboard
-                setTimeout(() => {
-                  if (onNext) {
-                    onNext();
-                  }
-                }, 500);
-              } else {
-                console.error('❌ [Payment] Analysis execution returned failure:', analysisData.error);
-                // Payment succeeded — navigate to dashboard, polling will pick up results
-                toast({
-                  title: 'Analysis Processing',
-                  description: 'Your payment was successful. Analysis results may take a moment to process.',
-                });
-                setTimeout(() => {
-                  if (onNext) { onNext(); }
-                }, 3000);
+            // Navigate to execute step — it will auto-trigger analysis via its useEffect
+            setTimeout(() => {
+              if (onNext) {
+                onNext();
               }
-            } catch (analysisError) {
-              console.error('❌ [Payment] Analysis execution error:', analysisError);
-              // Payment succeeded — navigate to dashboard, polling will pick up results
-              toast({
-                title: 'Analysis Processing',
-                description: 'Your payment was successful. Analysis is being processed — results will appear on your dashboard shortly.',
-              });
-              setTimeout(() => {
-                if (onNext) { onNext(); }
-              }, 3000);
-            }
-          } else if (response.paymentStatus === 'pending') {
+            }, 500);
+          } else if (response.paymentStatus === 'pending' || response.status === 'pending') {
+            // Backend currently returns 'paid' or 'failed' for paymentStatus.
+            // 'pending' is possible during async payment methods (e.g. bank transfers).
             setPaymentVerificationResult('pending');
           } else {
             setPaymentVerificationResult('failed');
@@ -810,6 +768,33 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
         return;
       }
 
+      // FIX: Handle zero-cost (campaign discount fully covers) BEFORE calling Stripe
+      // This was previously unreachable because it was placed after the checkout URL redirect.
+      // Zero-cost should only occur when a campaign discount has been applied.
+      if (costToCharge <= 0) {
+        console.log('💰 [Payment] Zero-cost analysis (campaign discount applied). Marking paid without Stripe.');
+        try {
+          updateProgress({
+            currentStep: 'execute',
+            completedSteps: [...(journeyProgress?.completedSteps || []), 'pricing'],
+            paymentStatus: 'paid',
+            paymentCompletedAt: new Date().toISOString(),
+            stepTimestamps: {
+              ...(journeyProgress?.stepTimestamps || {}),
+              pricingCompleted: new Date().toISOString()
+            }
+          });
+        } catch (progressError) {
+          console.warn('Failed to update pricing step completion:', progressError);
+        }
+
+        // Signal dashboard for polling
+        sessionStorage.setItem(`payment_completed_${projectId}`, 'true');
+
+        if (onNext) onNext();
+        return;
+      }
+
       // Call the payment endpoint to create Stripe checkout session
       const response: any = await apiClient.post('/api/payment/create-checkout-session', {
         projectId,
@@ -830,27 +815,6 @@ export default function PricingStep({ journeyType, onNext, onPrevious }: Pricing
       if (response?.id && !response?.url) {
         const checkoutUrl = `https://checkout.stripe.com/pay/${response.id}`;
         window.location.href = checkoutUrl;
-        return;
-      }
-
-      // If payment was free (covered by subscription credits)
-      if (authoritativeCostCents === 0) {
-        try {
-          updateProgress({
-            currentStep: 'results',
-            completedSteps: [...(journeyProgress?.completedSteps || []), 'pricing'],
-            paymentStatus: 'paid',
-            paymentCompletedAt: new Date().toISOString(),
-            stepTimestamps: {
-              ...(journeyProgress?.stepTimestamps || {}),
-              pricingCompleted: new Date().toISOString()
-            }
-          });
-        } catch (progressError) {
-          console.warn('Failed to update pricing step completion:', progressError);
-        }
-
-        if (onNext) onNext();
         return;
       }
 

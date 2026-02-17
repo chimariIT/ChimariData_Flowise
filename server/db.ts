@@ -2,6 +2,7 @@ import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import * as schema from "@shared/schema";
 import { resolveDatabaseSslConfig } from './utils/database-ssl';
+import { MIN_STATEMENT_TIMEOUT_MS } from './constants';
 
 // Lazy-initialized database connection.
 // Uses getter pattern so that process.env.DATABASE_URL can be populated
@@ -21,6 +22,8 @@ function initializeDb() {
         connectionString: process.env.DATABASE_URL,
         ssl: resolveDatabaseSslConfig(process.env.DATABASE_URL),
 
+        // Statement timeout: 120s accommodates large JSONB inserts (file uploads, analysis results).
+        // The previous 30s limit caused "canceling statement due to statement timeout" on CSV uploads.
         ...(process.env.NODE_ENV === 'production' ? {
           min: 5,
           max: 30,
@@ -28,8 +31,8 @@ function initializeDb() {
           connectionTimeoutMillis: 15000,
           maxUses: 10000,
           allowExitOnIdle: false,
-          statement_timeout: 30000,
-          query_timeout: 30000,
+          statement_timeout: 120000,
+          query_timeout: 120000,
           keepAlive: true,
           keepAliveInitialDelayMillis: 10000
         } : process.env.NODE_ENV === 'test' ? {
@@ -47,8 +50,8 @@ function initializeDb() {
           maxUses: 7500,
           allowExitOnIdle: true,
           application_name: 'chimaridata_agents',
-          statement_timeout: 30000,
-          idle_in_transaction_session_timeout: 60000,
+          statement_timeout: 120000,
+          idle_in_transaction_session_timeout: 120000,
         })
       };
 
@@ -71,8 +74,21 @@ function initializeDb() {
         console.debug(`🔄 Database client acquired. Active connections: ${activeConnections}`);
       });
 
+      // Startup assertion: verify statement_timeout is adequate for large JSONB inserts.
+      // This has been a recurring production bug — CSV uploads fail with "canceling
+      // statement due to statement timeout".  If someone lowers the timeout, this
+      // warning makes it obvious at startup.
+      const effectiveTimeout = (poolConfig as any).statement_timeout ?? 0;
+      if (effectiveTimeout > 0 && effectiveTimeout < MIN_STATEMENT_TIMEOUT_MS) {
+        console.error(
+          `\n⚠️⚠️⚠️  WARNING: statement_timeout is ${effectiveTimeout}ms (below minimum ${MIN_STATEMENT_TIMEOUT_MS}ms).\n` +
+          `    Large CSV uploads WILL fail with "canceling statement due to statement timeout".\n` +
+          `    See server/constants.ts MIN_STATEMENT_TIMEOUT_MS for details.\n`
+        );
+      }
+
       console.log(`✅ Database connection established with optimized pool settings for ${process.env.NODE_ENV || 'development'}`);
-      console.log(`📊 Pool config: min=${poolConfig.min}, max=${poolConfig.max}, idle_timeout=${poolConfig.idleTimeoutMillis}ms`);
+      console.log(`📊 Pool config: min=${poolConfig.min}, max=${poolConfig.max}, idle_timeout=${poolConfig.idleTimeoutMillis}ms, statement_timeout=${effectiveTimeout}ms`);
 
     } catch (error) {
       console.error('❌ Database connection failed:', error);

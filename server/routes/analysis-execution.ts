@@ -368,29 +368,44 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
       console.warn(`⚠️ [Execution] Failed to set executionStatus: ${statusErr}`);
     }
 
-    // Execute analysis
+    // Execute analysis with total timeout guard
     // ✅ FIX: Use executeComprehensiveAnalysis which uses DataScienceOrchestrator
     // with type-specific Python scripts (correlation_analysis.py, regression_analysis.py, etc.)
     // instead of hardcoded generic statistics
-    const results = await AnalysisExecutionService.executeComprehensiveAnalysis({
-      projectId,
-      userId,
-      analysisTypes,
-      datasetIds,
-      analysisPath,
-      questionAnswerMapping,
-      columnsToExclude: columnsToExclude.length > 0 ? columnsToExclude : undefined
-    });
+    const TOTAL_EXECUTION_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes max for entire job
+    const results = await Promise.race([
+      AnalysisExecutionService.executeComprehensiveAnalysis({
+        projectId,
+        userId,
+        analysisTypes,
+        datasetIds,
+        analysisPath,
+        questionAnswerMapping,
+        columnsToExclude: columnsToExclude.length > 0 ? columnsToExclude : undefined,
+        // Phase 4E: Pass requirementsDocument for column role resolution in AnalysisDataPreparer
+        requirementsDocument: journeyProgress?.requirementsDocument,
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(
+          `Total analysis execution timed out after ${TOTAL_EXECUTION_TIMEOUT_MS / 1000}s. ` +
+          `This usually indicates the dataset is too large or too many analysis types were selected.`
+        )), TOTAL_EXECUTION_TIMEOUT_MS)
+      )
+    ]);
 
     // Set executionStatus to completed in journeyProgress + cache summary for dashboard
     try {
+      // FIX 5D: Include isPreview flag — journeyProgress cache stores limited results
+      const isPaid = (project as any)?.isPaid === true;
       await storage.atomicMergeJourneyProgress(projectId, {
         executionStatus: 'completed',
         executionCompletedAt: new Date().toISOString(),
         analysisResults: {
           insights: (results.insights || []).slice(0, 10),
           recommendations: (results.recommendations || []).slice(0, 5),
-          summary: results.summary
+          summary: results.summary,
+          isPreview: !isPaid, // FIX 5D: Flag to indicate limited cached results for unpaid users
+          cachedAt: new Date().toISOString()
         }
       });
       console.log(`✅ [Execution] Set executionStatus='completed' in journeyProgress for ${projectId}`);
@@ -425,6 +440,55 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
         try {
           const artifactGenerator = new ArtifactGenerator();
 
+          // Build comprehensiveResults from analysis output to populate Q&A in artifacts
+          const comprehensiveResults: any = {
+            executiveSummary: {
+              keyFindings: (results.insights || []).slice(0, 5).map((i: any) =>
+                typeof i === 'string' ? i : i.title || i.description || ''
+              ),
+              recommendations: (results.recommendations || []).map((rec: any) => ({
+                title: rec.title || 'Recommendation',
+                description: rec.description || '',
+                priority: rec.priority || 'medium',
+                impact: rec.expectedImpact || rec.impact || ''
+              })),
+              answeredQuestions: [] as Array<{ question: string; answer: string; confidence: number; evidence?: string[] }>
+            },
+            metadata: {
+              totalRows: results.summary?.dataRowsProcessed || 0,
+              totalColumns: results.summary?.columnsAnalyzed || 0,
+              analysisTypes: results.analysisTypes || [],
+              executionTimeMs: parseInt(results.summary?.executionTime || '0') * 1000
+            }
+          };
+
+          // Map questionAnswerMapping + insightToQuestionMap → answeredQuestions
+          const qaMapping = results.questionAnswerMapping || [];
+          if (qaMapping.length > 0) {
+            comprehensiveResults.executiveSummary.answeredQuestions = qaMapping.map((qam: any) => {
+              // Find insights tagged as answering this question
+              const insightIds = results.insightToQuestionMap?.[qam.questionId] || [];
+              const matchedInsights = insightIds
+                .map((iId: string) => (results.insights || []).find((ins: any) => ins.id?.toString() === iId))
+                .filter(Boolean);
+
+              const answer = matchedInsights.length > 0
+                ? matchedInsights.map((ins: any) => `${ins.title}: ${ins.description}`).join('. ')
+                : `Analysis completed for: ${qam.recommendedAnalyses?.join(', ') || 'general analysis'}`;
+
+              const evidence = matchedInsights.map((ins: any) => ins.dataSource || ins.category || '').filter(Boolean);
+              const confidence = matchedInsights.length > 0 ? Math.min(0.95, 0.6 + matchedInsights.length * 0.1) : 0.5;
+
+              return {
+                question: qam.questionText,
+                answer,
+                confidence,
+                evidence: evidence.length > 0 ? evidence : undefined
+              };
+            });
+            console.log(`📋 [Artifacts] Built ${comprehensiveResults.executiveSummary.answeredQuestions.length} answered questions for artifact generation`);
+          }
+
           const artifacts = await artifactGenerator.generateArtifacts({
             projectId,
             projectName: project.name || projectId, // Pass project name for folder structure
@@ -434,7 +498,8 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
             visualizations: results.visualizations || [],
             insights: (results.insights || []).map(insight => insight.title), // Convert AnalysisInsight[] to string[]
             datasetSizeMB: project.data ? (JSON.stringify(project.data).length / (1024 * 1024)) : 0,
-            piiConfig // ✅ GAP 7 FIX: Pass PII config to artifact generator
+            piiConfig, // ✅ GAP 7 FIX: Pass PII config to artifact generator
+            comprehensiveResults // ✅ P0-6/P0-7 FIX: Pass Q&A data to artifact generator
           });
 
           console.log(`✅ Generated ${Object.keys(artifacts).length} artifacts (async):`);
@@ -510,10 +575,38 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
       });
     }
 
+    // FIX E2: Add billing context so frontend knows how the analysis was paid for
+    let billingInfo: { method: string; cost: number | null; quotaRemaining?: number; tierName?: string } | null = null;
+    try {
+      const user = await storage.getUser(userId);
+      const userTier = (user as any)?.subscriptionTier || 'none';
+      const subscriptionStatus = (user as any)?.subscriptionStatus || 'inactive';
+      const isSubscribed = ['active', 'trialing'].includes(subscriptionStatus) && userTier !== 'none';
+
+      if (isSubscribed) {
+        const billingService = getBillingService();
+        const quotaStatus = await billingService.getQuotaStatus(userId, 'analysis_execution', 'small');
+        billingInfo = {
+          method: 'subscription',
+          cost: 0,
+          quotaRemaining: quotaStatus?.remaining ?? undefined,
+          tierName: userTier
+        };
+      } else {
+        billingInfo = {
+          method: 'pay_per_use',
+          cost: totalCost
+        };
+      }
+    } catch (billingErr) {
+      console.warn('⚠️ Failed to fetch billing info for response:', billingErr);
+    }
+
     res.json({
       success: true,
       message: 'Analysis completed successfully',
-      results: responsePayload
+      results: responsePayload,
+      billingInfo
     });
 
   } catch (error: any) {
@@ -600,6 +693,7 @@ router.get('/results/:projectId', ensureAuthenticated, async (req, res) => {
 
       // FIX 6: Return proper HTTP status codes based on execution state
       // 202 = still executing (dashboard should continue polling)
+      // 402 = payment required (not paid yet)
       // 422 = permanently failed (dashboard should stop polling and show error)
       // 404 = not started (no results exist)
       if (executionStatus === 'executing' || executionStatus === 'in_progress') {
@@ -624,14 +718,39 @@ router.get('/results/:projectId', ensureAuthenticated, async (req, res) => {
         });
       }
 
+      // P0-6 FIX: Check if execution completed but results were lost (transaction failure)
+      if (executionStatus === 'completed' || executionStatus === 'complete') {
+        console.error(`🚨 [P0-6] Execution status is '${executionStatus}' but analysisResults is null for project ${projectId}. Data may have been lost during save.`);
+        return res.status(500).json({
+          success: false,
+          error: 'Analysis completed but results could not be retrieved. This may indicate a save error.',
+          status: 'results_missing',
+          isPaid,
+          hint: 'Please re-run the analysis from the Execute step. If the issue persists, contact support.'
+        });
+      }
+
+      // FIX 1A: Only return 402 when execution has genuinely never started AND not paid.
+      // Previously this check was BEFORE the 'completed' check, which meant unpaid projects
+      // returning from Stripe payment (before verify-session sets isPaid=true) would get 402
+      // instead of 404. The frontend treats 402 as a billing error and shows a persistent banner.
+      if (!executionStatus && !isPaid) {
+        return res.status(402).json({
+          success: false,
+          error: 'Payment is required before running the analysis.',
+          status: 'payment_required',
+          isPaid: false
+        });
+      }
+
       return res.status(404).json({
         success: false,
         error: 'No analysis results found for this project',
         status: executionStatus || 'not_started',
         isPaid,
-        hint: !isPaid
-          ? 'Analysis execution requires payment first.'
-          : 'Analysis has not been triggered yet. This may indicate a payment processing issue.'
+        hint: isPaid
+          ? 'Analysis has not been triggered yet. Navigate to the Execute step to start analysis.'
+          : 'Payment may still be processing. Please wait a moment and try again.'
       });
     }
 

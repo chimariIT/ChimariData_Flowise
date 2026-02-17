@@ -897,12 +897,14 @@ export default function PlanStep({
                   Plan creation is taking longer than expected
                 </div>
                 <p className="text-sm text-orange-800">
-                  Our agents usually finish within 30-45 seconds. This delay might be due to:
+                  Plan generation usually completes quickly. This delay might be due to:
                 </p>
                 <ul className="text-sm text-orange-800 list-disc list-inside space-y-1">
+                  {(project as any)?.journeyProgress?.businessQuestions?.length > 5 && (
+                    <li>Processing {(project as any).journeyProgress.businessQuestions.length} business questions</li>
+                  )}
                   <li>Complex dataset requiring additional analysis</li>
                   <li>Server load or temporary service disruption</li>
-                  <li>Large number of user questions to process</li>
                 </ul>
                 <p className="text-sm text-orange-700 font-medium">
                   You can retry plan creation or continue waiting. The system will keep trying in the background.
@@ -964,8 +966,11 @@ export default function PlanStep({
               <div className="text-center space-y-2">
                 <h3 className="text-xl font-semibold text-blue-900">Generating Your Analysis Plan</h3>
                 <p className="text-blue-700 max-w-md">
-                  Our AI agents are analyzing your data requirements and creating a customized analysis plan.
-                  This typically takes 15-30 seconds.
+                  Our AI agents are analyzing your data requirements and creating a customized analysis plan
+                  {(project as any)?.name ? ` for "${(project as any).name}"` : ''}.
+                  {(project as any)?.journeyProgress?.businessQuestions?.length
+                    ? ` Processing ${(project as any).journeyProgress.businessQuestions.length} business questions.`
+                    : ''}
                 </p>
                 {pollTimedOut && (
                   <div className="mt-4">
@@ -1482,6 +1487,23 @@ export default function PlanStep({
                           <Badge key={i} variant="secondary">{field}</Badge>
                         ))}
                       </div>
+                    </div>
+                  )}
+                  {viz.analysisStep && (
+                    <div className="mt-2">
+                      <Badge variant="outline" className="text-xs">
+                        {viz.analysisStep}
+                      </Badge>
+                    </div>
+                  )}
+                  {viz.relatedQuestions && viz.relatedQuestions.length > 0 && (
+                    <div className="mt-3 p-3 bg-muted/50 rounded-lg">
+                      <div className="text-xs font-medium text-muted-foreground mb-1.5">Answers</div>
+                      {viz.relatedQuestions.map((q, i) => (
+                        <p key={i} className="text-xs italic text-muted-foreground leading-relaxed">
+                          "{q}"
+                        </p>
+                      ))}
                     </div>
                   )}
                 </CardContent>

@@ -155,6 +155,8 @@ export interface DataScienceRequest {
   requiredColumns?: string[];
   // FIX 1E: Required column types from analysis-requirements-registry (e.g., ['numeric', 'categorical'])
   requiredColumnTypes?: string[];
+  // Phase 4B: Per-analysis preparation with column roles and derived columns
+  analysisPreparation?: import('./analysis-data-preparer').AnalysisPreparation;
 }
 
 export interface QuestionAnalysisLink {
@@ -496,31 +498,118 @@ export class DataScienceOrchestrator {
       }
     }
 
-    // Phase 1: Data Quality Assessment
-    console.log(`📋 Phase 1: Data Quality Assessment`);
-    const dataQualityReport = await this.runDataQualityAnalysis(datasetData, projectArtifactDir);
-
-    // Phase 2: Exploratory Data Analysis
-    console.log(`📊 Phase 2: Exploratory Data Analysis`);
-    const edaResults = await this.runExploratoryAnalysis(datasetData, request.analysisTypes, projectArtifactDir);
-
-    // Phase 3: Statistical Analysis
-    console.log(`📈 Phase 3: Statistical Analysis`);
-    const statisticalReport = await this.runStatisticalAnalysis(datasetData, request.analysisTypes, projectArtifactDir);
-
-    // Phase 4: ML Model Training (if applicable)
-    console.log(`🤖 Phase 4: ML Model Training`);
-
-    // Health check before ML operations
-    const healthCheck = await performMLHealthCheck();
-    if (!healthCheck.healthy) {
-      console.warn(`⚠️ [DataScienceOrchestrator] ML health check failed, proceeding with caution`);
-      for (const warning of healthCheck.warnings) {
-        console.warn(`  - ${warning}`);
+    // Phase 4B-3: Apply derived columns if analysisPreparation specifies them
+    if (request.analysisPreparation?.derivedColumns?.length) {
+      try {
+        const { AnalysisDataPreparer } = await import('./analysis-data-preparer');
+        const preparer = new AnalysisDataPreparer();
+        datasetData.rows = preparer.applyDerivedColumns(
+          datasetData.rows,
+          request.analysisPreparation.derivedColumns
+        );
+        // Update schema and column count after adding derived columns
+        if (datasetData.rows.length > 0) {
+          datasetData.totalColumns = Object.keys(datasetData.rows[0]).length;
+        }
+        console.log(`🔧 [DataPreparer] Applied ${request.analysisPreparation.derivedColumns.length} derived columns`);
+      } catch (derivErr: any) {
+        console.warn(`⚠️ [DataPreparer] Derived column application failed (non-blocking): ${derivErr.message}`);
       }
     }
 
-    const mlModels = await this.runMLAnalysis(datasetData, request.analysisTypes, projectArtifactDir);
+    // Type-specific data preprocessing before analysis phases
+    const primaryType = (request.analysisTypes[0] || '').toLowerCase();
+
+    // Time series: sort by time column before sending to Python
+    if (['time_series', 'time_series_analysis', 'trend', 'trend_analysis'].includes(primaryType)) {
+      const timeCol = request.analysisPreparation?.columnRoles?.time_column;
+      if (timeCol && datasetData.rows.length > 0 && datasetData.rows[0].hasOwnProperty(timeCol)) {
+        datasetData.rows.sort((a, b) => {
+          const aVal = new Date(a[timeCol]).getTime();
+          const bVal = new Date(b[timeCol]).getTime();
+          if (isNaN(aVal) || isNaN(bVal)) return 0;
+          return aVal - bVal;
+        });
+        console.log(`🕐 [TypePrep] Sorted ${datasetData.rows.length} rows by time column "${timeCol}"`);
+      }
+    }
+
+    // ML types: log null warnings for key columns
+    if (['clustering', 'regression', 'classification', 'predictive'].some(t => primaryType.includes(t))) {
+      const targetCol = request.analysisPreparation?.columnRoles?.target_column;
+      const features = request.analysisPreparation?.columnRoles?.features || [];
+      const keyCols = targetCol ? [targetCol, ...features] : features;
+      for (const col of keyCols.slice(0, 5)) {
+        if (datasetData.rows.length > 0) {
+          const nullCount = datasetData.rows.filter(r => r[col] === null || r[col] === undefined || r[col] === '').length;
+          const nullPct = (nullCount / datasetData.rows.length) * 100;
+          if (nullPct > 20) {
+            console.warn(`⚠️ [TypePrep] Column "${col}" has ${nullPct.toFixed(1)}% null values for ${primaryType} analysis`);
+          }
+        }
+      }
+    }
+
+    // Text analysis: verify text columns exist
+    if (['text_analysis', 'text'].includes(primaryType)) {
+      const textCols = request.analysisPreparation?.columnRoles?.text_columns || [];
+      for (const col of textCols) {
+        if (datasetData.rows.length > 0 && !datasetData.rows[0].hasOwnProperty(col)) {
+          console.warn(`⚠️ [TypePrep] Text column "${col}" not found in dataset`);
+        }
+      }
+    }
+
+    // Determine which phases are relevant for this analysis type
+    let relevantPhases: string[];
+    try {
+      const { getRelevantPhases } = await import('./analysis-requirements-registry');
+      relevantPhases = getRelevantPhases(primaryType);
+    } catch {
+      relevantPhases = ['quality', 'eda', 'statistical', 'ml']; // default: all phases
+    }
+    console.log(`📋 [PhaseGate] Analysis type "${primaryType}" → phases: [${relevantPhases.join(', ')}]`);
+
+    // Phase 1: Data Quality Assessment (always runs)
+    console.log(`📋 Phase 1: Data Quality Assessment`);
+    const dataQualityReport = await this.runDataQualityAnalysis(datasetData, projectArtifactDir);
+
+    // Phase 2: Exploratory Data Analysis (skip for ML-only types)
+    let edaResults: any = {};
+    if (relevantPhases.includes('eda')) {
+      console.log(`📊 Phase 2: Exploratory Data Analysis`);
+      edaResults = await this.runExploratoryAnalysis(datasetData, request.analysisTypes, projectArtifactDir, request.analysisPreparation);
+    } else {
+      console.log(`⏭️ Phase 2: EDA skipped for ${primaryType}`);
+    }
+
+    // Phase 3: Statistical Analysis (skip for text, ML-only types)
+    let statisticalReport: any = {};
+    if (relevantPhases.includes('statistical')) {
+      console.log(`📈 Phase 3: Statistical Analysis`);
+      statisticalReport = await this.runStatisticalAnalysis(datasetData, request.analysisTypes, projectArtifactDir);
+    } else {
+      console.log(`⏭️ Phase 3: Statistical Analysis skipped for ${primaryType}`);
+    }
+
+    // Phase 4: ML Model Training (skip for descriptive-only types)
+    let mlModels: any[] = [];
+    if (relevantPhases.includes('ml')) {
+      console.log(`🤖 Phase 4: ML Model Training`);
+
+      // Health check before ML operations
+      const healthCheck = await performMLHealthCheck();
+      if (!healthCheck.healthy) {
+        console.warn(`⚠️ [DataScienceOrchestrator] ML health check failed, proceeding with caution`);
+        for (const warning of healthCheck.warnings) {
+          console.warn(`  - ${warning}`);
+        }
+      }
+
+      mlModels = await this.runMLAnalysis(datasetData, request.analysisTypes, projectArtifactDir, request.analysisPreparation);
+    } else {
+      console.log(`⏭️ Phase 4: ML Model Training skipped for ${primaryType}`);
+    }
 
     // Phase 5: Generate Visualizations
     console.log(`📉 Phase 5: Visualization Generation`);
@@ -760,6 +849,11 @@ export class DataScienceOrchestrator {
       output_dir: outputDir
     });
 
+    // FIX 3A: Check Python script success
+    if (!result || result.success === false) {
+      console.error(`❌ [Quality Check] descriptive_stats.py failed: ${result?.error || 'unknown error'}`);
+    }
+
     // Clean up temp file
     if (fs.existsSync(tempDataPath)) {
       fs.unlinkSync(tempDataPath);
@@ -934,10 +1028,34 @@ export class DataScienceOrchestrator {
   private async runExploratoryAnalysis(
     datasetData: { rows: any[]; schema: any; totalRows: number; totalColumns: number },
     analysisTypes: string[],
-    outputDir: string
+    outputDir: string,
+    analysisPreparation?: import('./analysis-data-preparer').AnalysisPreparation
   ): Promise<any> {
     const tempDataPath = path.join(outputDir, 'temp_eda_data.json');
     fs.writeFileSync(tempDataPath, JSON.stringify(datasetData.rows));
+
+    // Phase 4B-4: Build enhanced config using AnalysisDataPreparer when preparation available
+    let enhancedConfigBuilder: ((scriptType: string) => Record<string, any>) | null = null;
+    if (analysisPreparation?.columnRoles) {
+      try {
+        const { AnalysisDataPreparer } = await import('./analysis-data-preparer');
+        const preparer = new AnalysisDataPreparer();
+        enhancedConfigBuilder = (scriptType: string) =>
+          preparer.buildPythonConfig(analysisPreparation, tempDataPath, outputDir);
+      } catch (err) {
+        console.warn(`⚠️ [DataPreparer] Could not build enhanced config: ${err}`);
+      }
+    }
+
+    // Helper: get config for a script (enhanced if available, bare otherwise)
+    const getConfig = (scriptType: string, bareConfig: Record<string, any>): Record<string, any> => {
+      if (enhancedConfigBuilder) {
+        const enhanced = enhancedConfigBuilder(scriptType);
+        console.log(`  📋 [Enhanced Config] ${scriptType}: ${JSON.stringify(Object.keys(enhanced).filter(k => k !== 'data_path' && k !== 'output_dir'))}`);
+        return enhanced;
+      }
+      return bareConfig;
+    };
 
     const results: any = {
       descriptiveStats: null,
@@ -947,17 +1065,64 @@ export class DataScienceOrchestrator {
 
     // Run descriptive stats
     if (analysisTypes.includes('descriptive') || analysisTypes.length === 0) {
-      results.descriptiveStats = await this.executePythonScript('descriptive_stats.py', {
-        data_path: tempDataPath
-      });
+      results.descriptiveStats = await this.executePythonScript('descriptive_stats.py',
+        getConfig('descriptive', { data_path: tempDataPath })
+      );
+      // FIX 3A: Check Python script success
+      if (!results.descriptiveStats || results.descriptiveStats.success === false) {
+        console.error(`❌ [Basic Analysis] descriptive_stats.py failed: ${results.descriptiveStats?.error || 'unknown'}`);
+      }
     }
 
     // Run correlation analysis
-    if (analysisTypes.includes('correlation')) {
-      results.correlations = await this.executePythonScript('correlation_analysis.py', {
-        data_path: tempDataPath,
-        method: 'pearson'
-      });
+    if (analysisTypes.includes('correlation') || analysisTypes.includes('correlation_analysis')) {
+      results.correlations = await this.executePythonScript('correlation_analysis.py',
+        getConfig('correlation', { data_path: tempDataPath, method: 'pearson' })
+      );
+      // FIX 3A: Check Python script success
+      if (!results.correlations || results.correlations.success === false) {
+        console.error(`❌ [Basic Analysis] correlation_analysis.py failed: ${results.correlations?.error || 'unknown'}`);
+      }
+    }
+
+    // FIX 2F: Run comparative analysis (cross-group statistical comparison)
+    if (analysisTypes.includes('comparative') || analysisTypes.includes('comparative_analysis')) {
+      results.comparativeAnalysis = await this.executePythonScript('comparative_analysis.py',
+        getConfig('comparative', { data_path: tempDataPath })
+      );
+      if (!results.comparativeAnalysis || results.comparativeAnalysis.success === false) {
+        console.error(`❌ [Analysis] comparative_analysis.py failed: ${results.comparativeAnalysis?.error || 'unknown'}`);
+      }
+    }
+
+    // FIX 2F: Run group analysis (segment/cohort profiling)
+    if (analysisTypes.includes('group_analysis') || analysisTypes.includes('group')) {
+      results.groupAnalysis = await this.executePythonScript('group_analysis.py',
+        getConfig('group_analysis', { data_path: tempDataPath })
+      );
+      if (!results.groupAnalysis || results.groupAnalysis.success === false) {
+        console.error(`❌ [Analysis] group_analysis.py failed: ${results.groupAnalysis?.error || 'unknown'}`);
+      }
+    }
+
+    // FIX 2F: Run text analysis (NLP: topics, sentiment, keywords)
+    if (analysisTypes.includes('text_analysis') || analysisTypes.includes('text')) {
+      results.textAnalysis = await this.executePythonScript('text_analysis.py',
+        getConfig('text_analysis', { data_path: tempDataPath })
+      );
+      if (!results.textAnalysis || results.textAnalysis.success === false) {
+        console.error(`❌ [Analysis] text_analysis.py failed: ${results.textAnalysis?.error || 'unknown'}`);
+      }
+    }
+
+    // FIX 2F: Run time series analysis (trend, decomposition, forecasting)
+    if (analysisTypes.includes('time_series') || analysisTypes.includes('time-series') || analysisTypes.includes('time_series_analysis') || analysisTypes.includes('trend') || analysisTypes.includes('trend_analysis')) {
+      results.timeSeriesAnalysis = await this.executePythonScript('time_series_analysis.py',
+        getConfig('time_series', { data_path: tempDataPath })
+      );
+      if (!results.timeSeriesAnalysis || results.timeSeriesAnalysis.success === false) {
+        console.error(`❌ [Analysis] time_series_analysis.py failed: ${results.timeSeriesAnalysis?.error || 'unknown'}`);
+      }
     }
 
     // Clean up
@@ -984,17 +1149,29 @@ export class DataScienceOrchestrator {
     const descriptiveResult = await this.executePythonScript('descriptive_stats.py', {
       data_path: tempDataPath
     });
+    // FIX 3A: Check Python script success
+    if (!descriptiveResult || descriptiveResult.success === false) {
+      console.error(`❌ [Stats] descriptive_stats.py failed: ${descriptiveResult?.error || 'unknown'}`);
+    }
 
     // Run correlation analysis
     const correlationResult = await this.executePythonScript('correlation_analysis.py', {
       data_path: tempDataPath,
       method: 'pearson'
     });
+    // FIX 3A: Check Python script success
+    if (!correlationResult || correlationResult.success === false) {
+      console.error(`❌ [Stats] correlation_analysis.py failed: ${correlationResult?.error || 'unknown'}`);
+    }
 
     // Run statistical tests
     const testsResult = await this.executePythonScript('statistical_tests.py', {
       data_path: tempDataPath
     });
+    // FIX 3A: Check Python script success
+    if (!testsResult || testsResult.success === false) {
+      console.error(`❌ [Stats] statistical_tests.py failed: ${testsResult?.error || 'unknown'}`);
+    }
 
     // Clean up
     if (fs.existsSync(tempDataPath)) {
@@ -1203,7 +1380,8 @@ export class DataScienceOrchestrator {
   private async runMLAnalysis(
     datasetData: { rows: any[]; schema: any; totalRows: number; totalColumns: number },
     analysisTypes: string[],
-    outputDir: string
+    outputDir: string,
+    analysisPreparation?: import('./analysis-data-preparer').AnalysisPreparation
   ): Promise<MLModelArtifact[]> {
     const models: MLModelArtifact[] = [];
 
@@ -1225,12 +1403,19 @@ export class DataScienceOrchestrator {
 
     console.log(`📊 [ML Analysis] Using ${mlReadyRows.length} rows with ${Object.keys(mlReadyRows[0] || {}).length} features for ML`);
 
+    // Phase 4B-4: Build enhanced configs for ML scripts
+    const roles = analysisPreparation?.columnRoles;
+    const bizCtx = analysisPreparation?.businessContext;
+
     // Clustering analysis
     if (analysisTypes.includes('clustering') || analysisTypes.includes('segmentation')) {
       const clusterResult = await this.executePythonScript('clustering_analysis.py', {
         data_path: tempDataPath,
-        n_clusters: 'auto',
-        output_dir: outputDir
+        n_clusters: roles?.n_clusters || 'auto',
+        method: roles?.method,
+        features: roles?.features,
+        output_dir: outputDir,
+        ...(bizCtx?.questionIds?.length ? { business_context: bizCtx } : {}),
       });
 
       if (clusterResult?.success) {
@@ -1253,7 +1438,10 @@ export class DataScienceOrchestrator {
     if (analysisTypes.includes('regression') || analysisTypes.includes('predictive')) {
       const regressionResult = await this.executePythonScript('regression_analysis.py', {
         data_path: tempDataPath,
-        output_dir: outputDir
+        target_column: roles?.target_column,
+        features: roles?.features,
+        output_dir: outputDir,
+        ...(bizCtx?.questionIds?.length ? { business_context: bizCtx } : {}),
       });
 
       if (regressionResult?.success) {
@@ -1279,7 +1467,10 @@ export class DataScienceOrchestrator {
     if (analysisTypes.includes('classification')) {
       const classResult = await this.executePythonScript('classification_analysis.py', {
         data_path: tempDataPath,
-        output_dir: outputDir
+        target_column: roles?.target_column,
+        model_type: roles?.model_type,
+        output_dir: outputDir,
+        ...(bizCtx?.questionIds?.length ? { business_context: bizCtx } : {}),
       });
 
       if (classResult?.success) {
@@ -1860,8 +2051,9 @@ export class DataScienceOrchestrator {
       }
 
       // Priority 2: Use preview from joinedData if fullData not available
+      // FIX 3B: Warn loudly when falling back to limited preview data
       if (joinedData?.preview && Array.isArray(joinedData.preview) && joinedData.preview.length > 0) {
-        console.log(`✅ [SSOT] Using joined preview from journeyProgress: ${joinedData.preview.length} rows`);
+        console.warn(`⚠️ [FIX 3B] USING PREVIEW DATA (${joinedData.preview.length} rows) — check dataset.ingestionMetadata.transformedData for full data. Analysis quality may be reduced.`);
         const schema = joinedData.schema || {};
         return {
           rows: joinedData.preview,
@@ -1986,25 +2178,53 @@ export class DataScienceOrchestrator {
       pythonProcess.on('close', (code) => {
         if (code === 0) {
           try {
-            // Try to parse JSON from stdout
-            const jsonMatch = stdout.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-              resolve(JSON.parse(jsonMatch[0]));
-            } else {
-              resolve({ success: true, output: stdout });
+            // Try to parse the LAST complete JSON object from stdout
+            // Python scripts may print debug info before the result JSON
+            const trimmed = stdout.trim();
+            // First try parsing the entire trimmed output as JSON
+            try {
+              const parsed = JSON.parse(trimmed);
+              resolve(parsed);
+              return;
+            } catch { /* not pure JSON, try extraction */ }
+
+            // Find the last JSON object (result is typically the final output)
+            let lastBraceIdx = trimmed.lastIndexOf('}');
+            if (lastBraceIdx >= 0) {
+              // Walk backward to find the matching opening brace
+              let depth = 0;
+              let startIdx = -1;
+              for (let i = lastBraceIdx; i >= 0; i--) {
+                if (trimmed[i] === '}') depth++;
+                if (trimmed[i] === '{') depth--;
+                if (depth === 0) { startIdx = i; break; }
+              }
+              if (startIdx >= 0) {
+                const jsonStr = trimmed.substring(startIdx, lastBraceIdx + 1);
+                resolve(JSON.parse(jsonStr));
+                return;
+              }
             }
+
+            // No JSON found in output
+            console.warn(`⚠️ [Python] ${scriptName} returned no JSON. stdout length: ${stdout.length}`);
+            resolve({ success: true, output: stdout });
           } catch (e) {
+            console.warn(`⚠️ [Python] ${scriptName} JSON parse failed: ${(e as Error).message}. stdout: ${stdout.substring(0, 200)}`);
             resolve({ success: true, output: stdout });
           }
         } else {
-          console.error(`❌ Python script ${scriptName} failed:`, stderr);
-          resolve({ success: false, error: stderr || `Script exited with code ${code}` });
+          // Surface Python errors with truncated stderr for debugging
+          const truncatedStderr = stderr.length > 500 ? stderr.substring(0, 500) + '...' : stderr;
+          console.error(`❌ Python script ${scriptName} exited with code ${code}:`);
+          console.error(`   stderr: ${truncatedStderr}`);
+          resolve({ success: false, error: stderr || `Script exited with code ${code}`, scriptName, exitCode: code });
         }
       });
 
       pythonProcess.on('error', (error) => {
-        console.error(`❌ Failed to start Python process for ${scriptName}:`, error);
-        resolve({ success: false, error: error.message });
+        console.error(`❌ Failed to start Python process for ${scriptName}:`, error.message);
+        resolve({ success: false, error: `Failed to start Python: ${error.message}`, scriptName });
       });
 
       // Send config via stdin
@@ -2018,23 +2238,33 @@ export class DataScienceOrchestrator {
 
     scripts.add('descriptive_stats.py'); // Always used
 
-    if (analysisTypes.includes('correlation')) {
+    if (analysisTypes.includes('correlation') || analysisTypes.includes('correlation_analysis')) {
       scripts.add('correlation_analysis.py');
     }
-    if (analysisTypes.includes('regression') || analysisTypes.includes('predictive')) {
+    if (analysisTypes.includes('regression') || analysisTypes.includes('predictive') || analysisTypes.includes('predictive_modeling') || analysisTypes.includes('regression_analysis')) {
       scripts.add('regression_analysis.py');
     }
-    if (analysisTypes.includes('clustering') || analysisTypes.includes('segmentation')) {
+    if (analysisTypes.includes('clustering') || analysisTypes.includes('segmentation') || analysisTypes.includes('clustering_analysis') || analysisTypes.includes('segmentation_analysis')) {
       scripts.add('clustering_analysis.py');
     }
-    if (analysisTypes.includes('classification')) {
+    if (analysisTypes.includes('classification') || analysisTypes.includes('classification_analysis')) {
       scripts.add('classification_analysis.py');
     }
     if (analysisTypes.includes('ml') || analysisTypes.includes('machine-learning')) {
       scripts.add('ml_training.py');
     }
-    if (analysisTypes.includes('time-series')) {
-      scripts.add('statistical_tests.py'); // Would use time series specific script
+    // FIX 2F: Add new analysis type script mappings
+    if (analysisTypes.includes('comparative') || analysisTypes.includes('comparative_analysis')) {
+      scripts.add('comparative_analysis.py');
+    }
+    if (analysisTypes.includes('group_analysis') || analysisTypes.includes('group')) {
+      scripts.add('group_analysis.py');
+    }
+    if (analysisTypes.includes('text_analysis') || analysisTypes.includes('text')) {
+      scripts.add('text_analysis.py');
+    }
+    if (analysisTypes.includes('time_series') || analysisTypes.includes('time-series') || analysisTypes.includes('time_series_analysis') || analysisTypes.includes('trend') || analysisTypes.includes('trend_analysis')) {
+      scripts.add('time_series_analysis.py');
     }
 
     scripts.add('statistical_tests.py'); // General hypothesis testing

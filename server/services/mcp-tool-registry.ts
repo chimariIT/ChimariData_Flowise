@@ -2436,6 +2436,34 @@ export function registerCoreTools(): void {
       complexity: 'medium'
     },
     {
+      name: 'preprocess_survey',
+      description: 'Detect and preprocess survey-type datasets. Identifies question columns, extracts topic labels, encodes Likert-scale responses, and separates metadata from question columns.',
+      service: 'SurveyPreprocessor',
+      permissions: ['preprocess_data', 'reshape_data'],
+      category: 'data_transformation',
+      agentAccess: ['data_engineer', 'data_scientist', 'project_manager'],
+      inputSchema: {
+        mode: '"detect" (analyze structure) or "transform" (apply preprocessing)',
+        datasetId: 'string (dataset ID to analyze)',
+        transformations: 'array of { type: "rename_to_topics" | "encode_likert" | "create_topic_groups" } (required for transform mode)'
+      },
+      examples: [{
+        name: 'Detect survey structure',
+        description: 'Analyze if a dataset has survey-like structure with question columns',
+        input: { mode: 'detect', datasetId: 'abc123' },
+        expectedOutput: {
+          success: true,
+          is_survey: true,
+          confidence: 0.85,
+          question_columns: [{ original_name: 'How comfortable do you feel...', topic_label: 'Comfort Level' }],
+          recommended_transformations: [{ type: 'rename_to_topics', description: 'Rename question columns to short topic labels' }]
+        }
+      }],
+      capabilities: ['survey.detect', 'survey.preprocess', 'likert.encode', 'topic.extract'],
+      inputTypes: ['dataset/survey'],
+      complexity: 'medium'
+    },
+    {
       name: 'dedup_dataset',
       description: 'Remove duplicate rows with hash-based or key-based strategies',
       service: 'IntelligentDataTransformer',
@@ -2757,6 +2785,25 @@ export async function executeTool(
   }
 
   console.log(`🔧 Executing tool: ${toolName} for agent: ${agentId}`);
+
+  // P2-4 FIX: Emit dynamic tool execution event for real-time UI updates
+  try {
+    const brokerModule = await import('./agents/message-broker');
+    const broker = brokerModule.getMessageBroker();
+    broker.emit('message:status', {
+      type: 'status',
+      from: agentId,
+      to: 'system',
+      payload: {
+        status: 'tool_executing',
+        currentTask: `Using ${tool.name}${tool.description ? `: ${tool.description.substring(0, 60)}` : ''}`,
+        toolName,
+        projectId: context?.projectId,
+        userId: context?.userId,
+      },
+      timestamp: new Date(),
+    });
+  } catch { /* non-blocking */ }
 
   // Import tool analytics service
   const analyticsModule = await import('./tool-analytics');
@@ -3810,7 +3857,7 @@ export async function executeTool(
         try {
           const analysisExecModule = await import('./analysis-execution');
           const AnalysisExecutionService = analysisExecModule.AnalysisExecutionService;
-          const analysisResult = await AnalysisExecutionService.executeAnalysis({
+          const analysisResult = await AnalysisExecutionService.executeComprehensiveAnalysis({
             projectId: input.projectId,
             userId: input.userId || executionContext.userId,
             analysisTypes: input.analysisTypes || ['descriptive'],
@@ -4034,6 +4081,40 @@ export async function executeTool(
         break;
       }
 
+      // ========================================
+      // SURVEY PREPROCESSING TOOLS
+      // ========================================
+      case 'preprocess_survey': {
+        const { getSurveyPreprocessor } = await import('./survey-preprocessor');
+        const surveyPreprocessor = getSurveyPreprocessor();
+
+        let surveyResult;
+        const mode = input.mode || 'detect';
+
+        if (mode === 'transform') {
+          // Need dataset rows for transformation
+          const rows = input.rows || input.data || [];
+          surveyResult = await surveyPreprocessor.applySurveyTransformations(rows, input.transformations || []);
+        } else {
+          // Detection mode — need dataset rows
+          const rows = input.rows || input.data || [];
+          surveyResult = await surveyPreprocessor.detectSurveyStructure(rows);
+        }
+
+        result = {
+          executionId: executionContext.executionId,
+          toolId: toolName,
+          status: surveyResult.success ? 'success' : 'error',
+          result: surveyResult,
+          metrics: {
+            duration: 0,
+            resourcesUsed: { cpu: 0.2, memory: 100, storage: 0 },
+            cost: 0.002
+          }
+        };
+        break;
+      }
+
       default:
         // For other tools that don't have real implementations yet
         console.warn(`⚠️ Tool ${toolName} does not have a real implementation - using placeholder`);
@@ -4100,6 +4181,27 @@ export async function executeTool(
         // Non-blocking - tool execution succeeded, just persistence failed
       }
     }
+
+    // P2-4 FIX: Emit tool completion event for real-time UI updates
+    try {
+      const brokerModule2 = await import('./agents/message-broker');
+      const broker2 = brokerModule2.getMessageBroker();
+      broker2.emit('message:status', {
+        type: 'status',
+        from: agentId,
+        to: 'system',
+        payload: {
+          status: 'tool_completed',
+          currentTask: `Completed ${tool.name}${result.status === 'success' ? '' : ` (${result.status})`}`,
+          toolName,
+          toolStatus: result.status,
+          projectId: context?.projectId,
+          userId: context?.userId,
+          durationMs: result.metrics?.duration,
+        },
+        timestamp: new Date(),
+      });
+    } catch { /* non-blocking */ }
 
     console.log(`✅ Tool ${toolName} executed successfully`);
     return result;

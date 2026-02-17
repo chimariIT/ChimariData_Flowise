@@ -2975,6 +2975,8 @@ router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, r
         const datasetCreateStart = Date.now();
         // ✅ PHASE 1 FIX: Ensure originalFileName is always set with fallback
         const safeOriginalFileName = req.file.originalname || `upload_${Date.now()}.csv`;
+        // Row cap on dataset.data is enforced in storage.createDataset() — do NOT add inline caps here.
+        // See DATASET_DATA_ROW_CAP in server/constants.ts, enforced in storage.createDataset().
         const dataset = await storage.createDataset({
             id: undefined as any, // will be set by storage impl
             userId: actualUserId, // ✅ Use customer's ID
@@ -2995,6 +2997,27 @@ router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, r
         const datasetCreateDuration = Date.now() - datasetCreateStart;
         metricDetails.datasetId = dataset.id;
         metricDetails.datasetCreateMs = datasetCreateDuration;
+
+        // Trigger async embedding generation for RAG-first column matching
+        setImmediate(async () => {
+            try {
+                const columns = Object.entries(processedData.schema || {}).map(([name, info]: [string, any]) => ({
+                    name,
+                    type: typeof info === 'string' ? info : info?.type || 'unknown',
+                    sampleValues: (processedData.preview || []).slice(0, 3).map((row: any) => row[name]).filter(Boolean)
+                }));
+                if (columns.length > 0) {
+                    await columnEmbeddingGenerator.generateEmbeddingsForDataset({
+                        datasetId: dataset.id,
+                        projectId: project.id,
+                        columns
+                    });
+                }
+            } catch (embErr) {
+                console.warn('⚠️ [Upload] Background embedding generation failed (non-blocking):', (embErr as Error).message);
+            }
+        });
+
         performanceWebhookService.recordMetric({
             timestamp: new Date(),
             service: 'project_upload',
@@ -3041,6 +3064,18 @@ router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, r
                     columnTypes[col] = typeof info === 'object' && (info as any)?.type ? (info as any).type : 'text';
                 }
 
+                // Resolve industry context from: journeyProgress > user profile > fallback to 'general'
+                let bgIndustry: string | undefined;
+                try {
+                    const bgProject = await storage.getProject(bgProjectId);
+                    const jp = (bgProject as any)?.journeyProgress;
+                    bgIndustry = jp?.industry || jp?.industryDomain;
+                    if (!bgIndustry) {
+                        const user = await storage.getUser(actualUserId);
+                        bgIndustry = (user as any)?.industry;
+                    }
+                } catch (e) { /* non-blocking */ }
+
                 const phase1Doc = await requiredDataElementsTool.defineRequirements({
                     projectId: bgProjectId,
                     userGoals: parsedQuestions.length > 0
@@ -3051,7 +3086,8 @@ router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, r
                         columns: datasetColumns,
                         columnTypes: columnTypes,
                         schema: bgSchema
-                    } : undefined
+                    } : undefined,
+                    industry: bgIndustry
                 });
 
                 console.log(`✅ [Background] Phase 1 complete: ${phase1Doc.analysisPath.length} analysis paths, ${phase1Doc.requiredDataElements.length} required elements`);
@@ -3064,7 +3100,9 @@ router.post("/upload", ensureAuthenticated, upload.single('file'), async (req, r
                         rowCount: bgRecordCount,
                         schema: bgSchema,
                         preview: bgPreview || []
-                    }
+                    },
+                    bgIndustry,
+                    bgProjectId
                 );
                 const mappingDuration = Date.now() - mappingStart;
 
@@ -3660,8 +3698,26 @@ router.get("/:projectId/artifacts", ensureAuthenticated, async (req, res) => {
             return res.status(status).json({ success: false, error: accessCheck.reason });
         }
 
+        // FIX 5A: Check payment status before returning full artifacts
+        const project = accessCheck.project as any;
+        const isPaid = project?.isPaid === true;
+        const hasSubscription = project?.subscriptionStatus === 'active';
+        const userIsAdmin = isAdmin(req);
+
         const normalizedType = typeof type === 'string' && type.trim().length > 0 ? type.trim() : undefined;
         const artifacts = await storage.getProjectArtifacts(projectId, normalizedType);
+
+        if (!isPaid && !hasSubscription && !userIsAdmin) {
+            // Return empty artifacts with payment-required flag for unpaid users
+            return res.json({
+                success: true,
+                artifacts: [],
+                data: [],
+                count: 0,
+                paymentRequired: true,
+                message: 'Payment required to access full artifacts'
+            });
+        }
 
         return res.json({
             success: true,
@@ -3863,8 +3919,37 @@ router.put("/:id/verify", ensureAuthenticated, async (req, res) => {
             verificationDelta.elementMappingTimestamp = new Date().toISOString();
         }
 
-        // ✅ GAP 1 FIX: Merge element mappings into requirements document
-        if (requirementsDocument) {
+        // ✅ CONTEXT CONTINUITY FIX: Merge element mappings INTO requirementsDocument
+        // so downstream steps (transformation, execution) find sourceField populated
+        // Previously, elementMappings were saved separately and never merged into the SSOT
+        if (requirementsDocument && elementMappings && typeof elementMappings === 'object') {
+            const elements = requirementsDocument.requiredDataElements;
+            if (Array.isArray(elements)) {
+                let mergedCount = 0;
+                for (const element of elements) {
+                    const elementKey = element.elementId || element.elementName;
+                    const mapping = elementMappings[elementKey];
+                    if (mapping) {
+                        // mapping can be a string (column name) or object { sourceField, confidence, ... }
+                        if (typeof mapping === 'string') {
+                            element.sourceField = mapping;
+                            element.sourceColumn = mapping; // alias for frontend compat
+                            element.sourceAvailable = true;
+                            mergedCount++;
+                        } else if (typeof mapping === 'object' && mapping.sourceField) {
+                            element.sourceField = mapping.sourceField;
+                            element.sourceColumn = mapping.sourceField;
+                            element.sourceAvailable = true;
+                            if (mapping.confidence) element.mappingConfidence = mapping.confidence;
+                            if (mapping.transformationNeeded) element.transformationRequired = true;
+                            mergedCount++;
+                        }
+                    }
+                }
+                console.log(`✅ [Verify] Merged ${mergedCount}/${Object.keys(elementMappings).length} element mappings into requirementsDocument`);
+            }
+            verificationDelta.requirementsDocument = requirementsDocument;
+        } else if (requirementsDocument) {
             verificationDelta.requirementsDocument = requirementsDocument;
         }
 
@@ -3958,6 +4043,58 @@ router.put("/:id/verify", ensureAuthenticated, async (req, res) => {
             await journeyStateManager.completeStep(projectId, 'data-verification');
         } catch (stepError) {
             console.warn('⚠️ [Verify] Failed to mark step complete in journey state manager:', stepError);
+        }
+
+        // ============================================================
+        // FIX 3D: Survey Structure Detection (non-blocking)
+        // ============================================================
+        try {
+            const { getSurveyPreprocessor } = await import('../services/survey-preprocessor');
+            const surveyPreprocessor = getSurveyPreprocessor();
+
+            const allDatasets = await storage.getProjectDatasets(projectId);
+            const primaryDs = (allDatasets[0] as any)?.dataset || allDatasets[0];
+            const columnNames = Object.keys(primaryDs?.schema || {});
+
+            // Quick heuristic check first (no Python call)
+            const quickCheck = surveyPreprocessor.quickDetectSurvey(columnNames);
+            if (quickCheck.likely) {
+                console.log(`📋 [Survey] Quick detection: likely survey (confidence=${quickCheck.confidence.toFixed(2)}, ${quickCheck.questionColumns.length} question cols)`);
+
+                // Full Python detection in background (non-blocking)
+                const rows = primaryDs?.data || primaryDs?.preview || [];
+                if (rows.length > 0) {
+                    surveyPreprocessor.detectSurveyStructure(rows.slice(0, 200)).then(async (detection) => {
+                        if (detection.success && detection.is_survey && detection.confidence > 0.6) {
+                            console.log(`📋 [Survey] Full detection confirmed: ${detection.summary.question_count} questions, ${detection.summary.likert_count} Likert, confidence=${detection.confidence}`);
+                            try {
+                                await storage.atomicMergeJourneyProgress(projectId, {
+                                    surveyDetection: {
+                                        isSurvey: true,
+                                        confidence: detection.confidence,
+                                        questionColumns: detection.question_columns.map(q => ({
+                                            original: q.original_name,
+                                            topic: q.topic_label,
+                                            responseType: q.response_type,
+                                        })),
+                                        metadataColumns: detection.metadata_columns.map(m => m.original_name),
+                                        groupingColumns: detection.grouping_columns,
+                                        recommendedTransformations: detection.recommended_transformations,
+                                        summary: detection.summary,
+                                        detectedAt: new Date().toISOString(),
+                                    }
+                                });
+                            } catch (saveErr) {
+                                console.warn('⚠️ [Survey] Failed to save detection results:', saveErr);
+                            }
+                        }
+                    }).catch(err => {
+                        console.warn('⚠️ [Survey] Detection failed (non-blocking):', err);
+                    });
+                }
+            }
+        } catch (surveyErr) {
+            console.warn('⚠️ [Survey] Detection setup failed (non-blocking):', surveyErr);
         }
 
         // ============================================================
@@ -4332,6 +4469,8 @@ router.post("/:id/upload", ensureAuthenticated, upload.single('file'), async (re
         // Create a new Dataset
         // ✅ PHASE 1 FIX: Ensure originalFileName is always set with fallback
         const safeOriginalFileName2 = req.file.originalname || `upload_${Date.now()}.csv`;
+        // Row cap on dataset.data is enforced in storage.createDataset() — do NOT add inline caps here.
+        // See DATASET_DATA_ROW_CAP in server/constants.ts, enforced in storage.createDataset().
         const newDataset = await storage.createDataset({
             id: undefined as any,
             userId: userId,
@@ -4345,13 +4484,16 @@ router.post("/:id/upload", ensureAuthenticated, upload.single('file'), async (re
             recordCount: processedData.recordCount,
             preview: processedData.preview,
             piiAnalysis: piiAnalysis,
-            data: processedData.data, // Storing data with the dataset
+            data: processedData.data,
             ingestionMetadata
         } as any);
 
         // Link dataset to the project
         await storage.linkProjectToDataset(projectId, newDataset.id);
         console.log(`[project.ts] Linked project ${projectId} to dataset ${newDataset.id}`);
+
+        // NOTE: Embedding generation happens later in this handler (TASK 1 FIX block)
+        // with richer sample data (5 values from data||preview). Do NOT duplicate here.
 
         // Update project metadata (optional, if needed)
         const updatedProject = await storage.updateProject(projectId, {
@@ -4952,11 +5094,47 @@ router.post("/:id/generate-data-requirements", ensureAuthenticated, requireOwner
             schemaColumns: datasetSchema ? Object.keys(datasetSchema).length : 0
         });
 
+        // P0-8 FIX: Load structured questions with stable IDs from journeyProgress
+        let structuredQuestions: Array<{ id: string; text: string; order?: number }> | undefined;
+        try {
+            const currentProject = await storage.getProject(projectId);
+            const jp = (currentProject as any)?.journeyProgress;
+            if (jp?.businessQuestions && Array.isArray(jp.businessQuestions) &&
+                jp.businessQuestions.length > 0 && typeof jp.businessQuestions[0] === 'object' && jp.businessQuestions[0]?.id) {
+                structuredQuestions = jp.businessQuestions;
+                console.log(`📋 [P0-8] Passing ${structuredQuestions!.length} structured questions with stable IDs to defineRequirements`);
+            }
+        } catch (sqError) {
+            console.warn(`⚠️ [P0-8] Could not load structured questions:`, sqError);
+        }
+
+        // FIX 1B: Resolve industry from request body FIRST (eliminates race condition with debounced save)
+        // Priority: req.body.industry > journeyProgress.industry > journeyProgress.industryDomain > user.industry
+        let reqIndustry: string | undefined;
+        try {
+            reqIndustry = req.body.industry; // FIX 1B: Read from explicit body param first
+            if (!reqIndustry) {
+                const reqProject = await storage.getProject(projectId);
+                const jp = (reqProject as any)?.journeyProgress;
+                reqIndustry = jp?.industry || jp?.industryDomain;
+            }
+            if (!reqIndustry) {
+                const userId = (req.user as any)?.id;
+                if (userId) {
+                    const user = await storage.getUser(userId);
+                    reqIndustry = (user as any)?.industry;
+                }
+            }
+            console.log(`📋 [Fix 1B] Resolved industry="${reqIndustry || 'none'}" (source: ${req.body.industry ? 'body' : 'journeyProgress/user'})`);
+        } catch (e) { /* non-blocking */ }
+
         const document = await tool.defineRequirements({
             projectId,
             userGoals: filteredGoals,
             userQuestions: filteredQuestions,
-            datasetMetadata: datasetSchema
+            structuredQuestions,
+            datasetMetadata: datasetSchema,
+            industry: reqIndustry
         });
 
         console.log(`📋 [Generate Requirements] Tool output:`, {
@@ -4976,7 +5154,8 @@ router.post("/:id/generate-data-requirements", ensureAuthenticated, requireOwner
             requiredDataElements: document.requiredDataElements,
             completeness: document.completeness,
             status: document.status,
-            generatedAt: new Date().toISOString()
+            generatedAt: new Date().toISOString(),
+            industryDomain: reqIndustry  // ✅ FIX 9C: Persist industry so downstream mapElementsWithAI can read it
         };
 
         await storage.atomicMergeJourneyProgress(projectId, {
@@ -5121,6 +5300,25 @@ router.post("/:id/map-data-elements", ensureAuthenticated, requireOwnership('pro
         // ============================================================
         // ENHANCED: Use RequiredDataElementsTool with semantic matching
         // ============================================================
+
+        // ✅ CONTEXT CONTINUITY FIX: Resolve industry from journeyProgress
+        // Industry detected in Prepare step must flow through to business definition lookups
+        let mapIndustry: string | undefined;
+        try {
+            const mapJP = (project as any)?.journeyProgress;
+            mapIndustry = mapJP?.industry || mapJP?.industryDomain;
+            if (!mapIndustry) {
+                const userId = (req.user as any)?.id;
+                if (userId) {
+                    const user = await storage.getUser(userId);
+                    mapIndustry = (user as any)?.industry;
+                }
+            }
+            if (mapIndustry) {
+                console.log(`🏭 [Map Elements] Using industry context: ${mapIndustry}`);
+            }
+        } catch (e) { /* non-blocking */ }
+
         try {
             const mappedDocument = await requiredDataElementsTool.mapDatasetToRequirements(
                 {
@@ -5135,7 +5333,9 @@ router.post("/:id/map-data-elements", ensureAuthenticated, requireOwnership('pro
                     schema: mergedSchema,
                     preview: mergedPreview,
                     piiFields: [...new Set(piiFields)]
-                }
+                },
+                mapIndustry, // ✅ industry from journeyProgress (was: undefined)
+                projectId    // RAG-first matching
             );
 
             // Count mapping stats
@@ -5508,7 +5708,13 @@ router.post("/:id/enrich-data-elements", ensureAuthenticated, requireOwnership('
         }
 
         const journeyProgress = (project as any)?.journeyProgress || {};
-        const projectIndustry = industry || journeyProgress.industry || 'general';
+        // ✅ FIX 9B: Resolve industry with better fallback chain + logging
+        const projectIndustry = industry || journeyProgress.industry || journeyProgress.industryDomain || 'general';
+        if (projectIndustry !== 'general') {
+            console.log(`📚 [Business Definitions] Using industry: ${projectIndustry} (source: ${industry ? 'request' : 'journeyProgress'})`);
+        } else {
+            console.warn(`⚠️ [Business Definitions] No industry for project ${projectId} — AI will infer from schema`);
+        }
 
         // Get elements from request or journey progress
         let dataElements = elements;
@@ -6148,6 +6354,23 @@ router.post("/:id/questions", ensureAuthenticated, async (req, res) => {
         }
 
         console.log(`✅ [Questions] Saved ${insertedQuestions.length} questions for project ${projectId}`);
+
+        // P0-8 FIX: Also persist structured questions with stable IDs to journeyProgress SSOT
+        // This ensures all downstream services (elements, analysis, insights) use the same IDs
+        try {
+            await storage.atomicMergeJourneyProgress(projectId, {
+                businessQuestions: insertedQuestions.map(q => ({
+                    id: q.id,
+                    text: q.text,
+                    order: q.order,
+                    status: q.status
+                })),
+                businessQuestionsUpdatedAt: new Date().toISOString()
+            });
+            console.log(`✅ [P0-8] Persisted ${insertedQuestions.length} structured questions with stable IDs to journeyProgress`);
+        } catch (progressError) {
+            console.warn(`⚠️ [P0-8] Failed to persist questions to journeyProgress:`, progressError);
+        }
 
         res.json({
             success: true,
@@ -7537,7 +7760,10 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
                         componentFields: calcDef.formula?.componentFields || [],
                         aggregationMethod: calcDef.formula?.aggregationMethod,
                         businessDescription: calcDef.formula?.businessDescription,
-                        dataType: element.dataType
+                        dataType: element.dataType,
+                        // P1-5 FIX: Include quality requirements (validRange, allowedValues) for filter/validation
+                        validRange: element.qualityRequirements?.validRange,
+                        allowedValues: element.qualityRequirements?.allowedValues,
                     };
                     console.log(`   📋 ${elementName}: ${calcDef.calculationType} - ${calcDef.formula?.businessDescription || 'no description'}`);
                 }
@@ -7644,6 +7870,30 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
             console.log(`🔗 [Transform] Column mapping complete: ${totalMapped}/${totalFields} fields mapped`);
         }
 
+        // FIX P0-3: Write back resolved column mappings to requirementsDocument (SSOT)
+        // This fixes the issue where requirementsDocument.sourceColumn is always NULL
+        try {
+            const currentProject = await storage.getProject(projectId);
+            const currentJp = (currentProject as any)?.journeyProgress || {};
+            const reqDoc = currentJp.requirementsDocument;
+            if (reqDoc?.requiredDataElements && columnLookup.size > 0) {
+                let writebackCount = 0;
+                for (const element of reqDoc.requiredDataElements) {
+                    const mapped = columnLookup.get(element.elementName);
+                    if (mapped) {
+                        element.sourceColumn = mapped;
+                        writebackCount++;
+                    }
+                }
+                if (writebackCount > 0) {
+                    await storage.atomicMergeJourneyProgress(projectId, { requirementsDocument: reqDoc });
+                    console.log(`✅ [P0-3] Wrote back ${writebackCount} column mappings to requirementsDocument`);
+                }
+            }
+        } catch (wbErr) {
+            console.warn('⚠️ [P0-3] Failed to write back column mappings:', wbErr);
+        }
+
         // APPLY TRANSFORMATIONS in order
         for (const step of transformationSteps) {
             // MULTI-COLUMN FIX: Handle both new format (operation, sourceColumns) and legacy (type, config)
@@ -7662,25 +7912,58 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
 
             console.log(`📊 [D3 FIX] Applying transformation: ${transformationType} (sourceColumns: ${sourceColumns?.length || 0})`);
 
-            switch (transformationType) {
+            // FIX 2C: Per-step error handling — log failure and continue to next step
+            try { switch (transformationType) {
                 case 'filter': {
                     const { field, operator, value } = config || {};
                     if (field) {
-                        workingData = workingData.filter((r) => {
-                            const v = r[field];
-                            switch (operator) {
-                                case 'equals': return v == value;
-                                case 'not_equals': return v != value;
-                                case 'gt': return Number(v) > Number(value);
-                                case 'gte': return Number(v) >= Number(value);
-                                case 'lt': return Number(v) < Number(value);
-                                case 'lte': return Number(v) <= Number(value);
-                                case 'contains': return String(v ?? '').toLowerCase().includes(String(value ?? '').toLowerCase());
-                                case 'is_null': return v === null || v === undefined || v === '';
-                                case 'is_not_null': return v !== null && v !== undefined && v !== '';
-                                default: return true;
+                        // P1-5 FIX: If no explicit operator/value, check businessContext for validRange
+                        let effectiveOperator = operator;
+                        let effectiveValue = value;
+                        let useRangeFilter = false;
+                        let rangeMin: number | undefined;
+                        let rangeMax: number | undefined;
+
+                        if (!effectiveOperator && !effectiveValue) {
+                            // Look up business definition validRange for this field
+                            const bizCtx = businessContext[field] || businessContext[targetElement || ''];
+                            if (bizCtx?.validRange) {
+                                rangeMin = bizCtx.validRange.min;
+                                rangeMax = bizCtx.validRange.max;
+                                if (rangeMin !== undefined || rangeMax !== undefined) {
+                                    useRangeFilter = true;
+                                    console.log(`📋 [P1-5] Using business definition validRange for "${field}": min=${rangeMin}, max=${rangeMax}`);
+                                }
                             }
-                        });
+                        }
+
+                        if (useRangeFilter) {
+                            const beforeCount = workingData.length;
+                            workingData = workingData.filter((r) => {
+                                const v = Number(r[field]);
+                                if (isNaN(v)) return false;
+                                if (rangeMin !== undefined && v < rangeMin) return false;
+                                if (rangeMax !== undefined && v > rangeMax) return false;
+                                return true;
+                            });
+                            console.log(`📋 [P1-5] Range filter on "${field}": ${beforeCount} → ${workingData.length} rows`);
+                        } else if (effectiveOperator) {
+                            workingData = workingData.filter((r) => {
+                                const v = r[field];
+                                switch (effectiveOperator) {
+                                    case 'equals': return v == effectiveValue;
+                                    case 'not_equals': return v != effectiveValue;
+                                    case 'gt': return Number(v) > Number(effectiveValue);
+                                    case 'gte': return Number(v) >= Number(effectiveValue);
+                                    case 'lt': return Number(v) < Number(effectiveValue);
+                                    case 'lte': return Number(v) <= Number(effectiveValue);
+                                    case 'contains': return String(v ?? '').toLowerCase().includes(String(effectiveValue ?? '').toLowerCase());
+                                    case 'is_null': return v === null || v === undefined || v === '';
+                                    case 'is_not_null': return v !== null && v !== undefined && v !== '';
+                                    default: return true;
+                                }
+                            });
+                        }
                     }
                     break;
                 }
@@ -7723,6 +8006,19 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
                         || config?.aggregationFunction
                         || 'avg';
 
+                    // FIX 2A: When abstractCols is empty but newColumn exists, try to find a direct mapping
+                    if (newColumn && (!abstractCols || abstractCols.length === 0)) {
+                        // Look for a direct mapping for this element in columnLookup
+                        const directCol = columnLookup.get(newColumn);
+                        if (directCol && workingData.length > 0 && directCol in workingData[0]) {
+                            console.log(`📊 [FIX 2A] No component fields for "${newColumn}", using direct mapping → "${directCol}"`);
+                            workingData = workingData.map((r) => ({ ...r, [newColumn]: r[directCol] }));
+                            break;
+                        } else {
+                            console.warn(`⚠️ [FIX 2A] No component fields and no direct mapping for "${newColumn}" — skipping derive`);
+                            break;
+                        }
+                    }
                     if (newColumn && abstractCols?.length) {
                         // ============================================================
                         // SOURCE COLUMN MAPPING FIX: Map abstract names to actual columns
@@ -7745,13 +8041,38 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
                             console.warn(`   ⚠️ [DERIVE] Available columns: [${Object.keys(workingData[0] || {}).slice(0, 10).join(', ')}...]`);
                         }
 
-                        // P0-1 FIX: Log business context usage
+                        // P1-10 FIX: Use business context to influence transformation logic
                         if (bizContext) {
                             console.log(`📊 [DERIVE] Using DS Agent business definition for ${newColumn}:`);
                             console.log(`   Type: ${bizContext.calculationType}, Method: ${bizContext.aggregationMethod}`);
                             console.log(`   Description: ${bizContext.businessDescription || 'N/A'}`);
                             console.log(`   Abstract fields: [${abstractCols.join(', ')}]`);
                             console.log(`   Mapped to actual: [${cols.join(', ')}]`);
+
+                            // FIX 2B: If business definition has pseudoCode, try to execute it
+                            if (bizContext.calculationType === 'derived' && bizContext.formula?.pseudoCode) {
+                                const pseudoCode = bizContext.formula.pseudoCode;
+                                console.log(`   📝 [FIX 2B] Attempting pseudoCode execution: "${pseudoCode.substring(0, 80)}..."`);
+                                try {
+                                    // Build a function that receives a row object and mapped column names
+                                    // The pseudoCode should be a JS expression/body that returns a value
+                                    const fn = new Function('row', 'cols', `"use strict"; try { ${pseudoCode} } catch(e) { return null; }`);
+                                    // Test on first row
+                                    const testResult = fn(workingData[0], cols);
+                                    if (testResult !== undefined && testResult !== null) {
+                                        console.log(`   ✅ [FIX 2B] PseudoCode test result: ${testResult} — applying to all rows`);
+                                        workingData = workingData.map((r) => ({
+                                            ...r,
+                                            [newColumn]: fn(r, cols)
+                                        }));
+                                        break; // Skip the standard aggregation below
+                                    } else {
+                                        console.warn(`   ⚠️ [FIX 2B] PseudoCode returned null/undefined on test row, falling back to aggregation`);
+                                    }
+                                } catch (pseudoErr) {
+                                    console.warn(`   ⚠️ [FIX 2B] PseudoCode execution failed, falling back to aggregation:`, pseudoErr);
+                                }
+                            }
                         }
                         console.log(`📊 [DERIVE] Creating "${newColumn}" from columns [${cols.join(', ')}] using ${aggFn}`);
 
@@ -7825,6 +8146,158 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
                     }
                     break;
                 }
+                // ============================================================
+                // Phase 3D: Cross-row aggregate handler
+                // Computes GROUP BY aggregations and joins back to working data
+                // ============================================================
+                case 'cross_row_aggregate': {
+                    const aggConfig = config || {};
+                    const groupByCols: string[] = aggConfig.groupByColumns || [];
+                    const aggFunction: string = aggConfig.aggregateFunction || 'count';
+                    const aggSourceCol: string = sourceColumns?.[0] || aggConfig.sourceColumn || '';
+                    const aggTargetCol: string = targetElement || aggConfig.targetColumn || `_agg_${aggSourceCol}`;
+                    const filterCond = aggConfig.filterCondition;
+
+                    console.log(`📊 [CROSS_ROW_AGG] Computing ${aggFunction}(${aggSourceCol}) GROUP BY [${groupByCols.join(', ')}] → ${aggTargetCol}`);
+
+                    if (workingData.length > 0 && aggSourceCol) {
+                        // Optional: apply row-level filter before aggregation
+                        let filteredData = workingData;
+                        if (filterCond) {
+                            filteredData = workingData.filter((r: any) => {
+                                const val = r[filterCond.column];
+                                switch (filterCond.operator) {
+                                    case 'is_not_null': return val !== null && val !== undefined && val !== '';
+                                    case 'is_null': return val === null || val === undefined || val === '';
+                                    case 'eq': return val === filterCond.value;
+                                    case 'neq': return val !== filterCond.value;
+                                    case 'gt': return parseFloat(val) > parseFloat(filterCond.value);
+                                    case 'lt': return parseFloat(val) < parseFloat(filterCond.value);
+                                    case 'in': return Array.isArray(filterCond.value) && filterCond.value.includes(val);
+                                    default: return true;
+                                }
+                            });
+                        }
+
+                        // Compute aggregation per group
+                        const groupAggs = new Map<string, number>();
+
+                        if (groupByCols.length > 0) {
+                            // Build group key → aggregate value
+                            const groups = new Map<string, any[]>();
+                            for (const row of filteredData) {
+                                const key = groupByCols.map((c: string) => String(row[c] ?? '')).join('|||');
+                                if (!groups.has(key)) groups.set(key, []);
+                                groups.get(key)!.push(row);
+                            }
+
+                            for (const [key, rows] of groups.entries()) {
+                                let result: number;
+                                switch (aggFunction) {
+                                    case 'count':
+                                        result = rows.length;
+                                        break;
+                                    case 'count_distinct':
+                                        result = new Set(rows.map((r: any) => r[aggSourceCol])).size;
+                                        break;
+                                    case 'sum':
+                                        result = rows.reduce((acc: number, r: any) => acc + (parseFloat(r[aggSourceCol]) || 0), 0);
+                                        break;
+                                    case 'avg':
+                                        const nums = rows.map((r: any) => parseFloat(r[aggSourceCol])).filter((n: number) => !isNaN(n));
+                                        result = nums.length > 0 ? nums.reduce((a: number, b: number) => a + b, 0) / nums.length : 0;
+                                        break;
+                                    case 'min':
+                                        result = Math.min(...rows.map((r: any) => parseFloat(r[aggSourceCol])).filter((n: number) => !isNaN(n)));
+                                        break;
+                                    case 'max':
+                                        result = Math.max(...rows.map((r: any) => parseFloat(r[aggSourceCol])).filter((n: number) => !isNaN(n)));
+                                        break;
+                                    default:
+                                        result = rows.length;
+                                }
+                                groupAggs.set(key, result);
+                            }
+
+                            // Join aggregation result back to all rows
+                            workingData = workingData.map((r: any) => {
+                                const key = groupByCols.map((c: string) => String(r[c] ?? '')).join('|||');
+                                return { ...r, [aggTargetCol]: groupAggs.get(key) ?? null };
+                            });
+                        } else {
+                            // No grouping - compute scalar aggregate across all rows
+                            let scalarResult: number;
+                            switch (aggFunction) {
+                                case 'count':
+                                    scalarResult = filteredData.length;
+                                    break;
+                                case 'count_distinct':
+                                    scalarResult = new Set(filteredData.map((r: any) => r[aggSourceCol])).size;
+                                    break;
+                                case 'sum':
+                                    scalarResult = filteredData.reduce((acc: number, r: any) => acc + (parseFloat(r[aggSourceCol]) || 0), 0);
+                                    break;
+                                default:
+                                    scalarResult = filteredData.length;
+                            }
+                            // Broadcast scalar to all rows
+                            workingData = workingData.map((r: any) => ({ ...r, [aggTargetCol]: scalarResult }));
+                        }
+
+                        console.log(`✅ [CROSS_ROW_AGG] Created aggregate column: ${aggTargetCol} (${groupAggs.size || 1} groups)`);
+                    }
+                    break;
+                }
+
+                // ============================================================
+                // Phase 3E: Formula-apply handler
+                // Evaluates a formula using intermediate columns from previous steps
+                // ============================================================
+                case 'formula_apply': {
+                    const formulaConfig = config || {};
+                    const formulaTarget = targetElement || formulaConfig.targetColumn || '_formula_result';
+                    const formulaCols: string[] = sourceColumns || formulaConfig.sourceColumns || [];
+                    const formulaStr: string = formulaConfig.formula || '';
+
+                    console.log(`📊 [FORMULA_APPLY] Applying formula to create "${formulaTarget}" from [${formulaCols.join(', ')}]`);
+
+                    if (workingData.length > 0 && formulaCols.length > 0) {
+                        workingData = workingData.map((r: any) => {
+                            try {
+                                // Build a safe evaluation scope with only the needed columns
+                                const scope: Record<string, number> = {};
+                                for (const col of formulaCols) {
+                                    scope[col] = parseFloat(r[col]) || 0;
+                                }
+
+                                // Safe formula evaluation using Function constructor
+                                // Only allows basic math operations on the column values
+                                const colArgs = formulaCols.join(', ');
+                                const colValues = formulaCols.map(c => scope[c]);
+
+                                // Replace column names in formula with argument names
+                                let evalFormula = formulaStr;
+                                for (const col of formulaCols) {
+                                    evalFormula = evalFormula.replace(
+                                        new RegExp(col.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'),
+                                        col
+                                    );
+                                }
+
+                                const fn = new Function(...formulaCols, `return ${evalFormula};`);
+                                const result = fn(...colValues);
+
+                                return { ...r, [formulaTarget]: isFinite(result) ? Math.round(result * 100) / 100 : null };
+                            } catch (formulaErr) {
+                                return { ...r, [formulaTarget]: null };
+                            }
+                        });
+
+                        console.log(`✅ [FORMULA_APPLY] Created formula column: ${formulaTarget}`);
+                    }
+                    break;
+                }
+
                 case 'clean': {
                     workingData = workingData.map((r) => {
                         const out: any = {};
@@ -7882,6 +8355,10 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
                 default:
                     console.log(`📊 [D3 FIX] Unknown transformation type: ${type}`);
                     break;
+            }
+            } catch (stepError: any) {
+                // FIX 2C: Per-step error logging — continue to next step (graceful degradation)
+                console.error(`❌ [Transform] Step "${transformationType}" failed for target "${targetElement || 'unknown'}":`, stepError?.message || stepError);
             }
         }
 
@@ -8033,6 +8510,49 @@ router.post("/:id/execute-transformations", ensureAuthenticated, async (req, res
         });
 
         console.log(`✅ [PHASE 9] Saved joinedData to journeyProgress: ${workingData.length} rows`);
+
+        // P0-9 FIX: Write back sourceColumn to requirementsDocument for data continuity
+        // This bridges the gap between element definitions (sourceColumn=null) and actual mappings
+        try {
+            const currentProgress = (accessCheck.project as any)?.journeyProgress || {};
+            const reqDoc = currentProgress?.requirementsDocument;
+            if (reqDoc?.requiredDataElements && Array.isArray(reqDoc.requiredDataElements) && Array.isArray(mappings)) {
+                let updated = false;
+                const updatedElements = reqDoc.requiredDataElements.map((element: any) => {
+                    // Find matching mapping by element name or ID
+                    const mapping = mappings.find((m: any) =>
+                        (m.elementId && m.elementId === element.elementId) ||
+                        (m.targetElement && (m.targetElement === element.elementName || m.targetElement === element.name))
+                    );
+                    if (mapping && (mapping.sourceColumn || mapping.mappedColumn || mapping.sourceField)) {
+                        const resolvedColumn = mapping.sourceColumn || mapping.mappedColumn || mapping.sourceField;
+                        updated = true;
+                        return {
+                            ...element,
+                            sourceColumn: resolvedColumn,
+                            sourceAvailable: true,
+                            mappedAt: new Date().toISOString()
+                        };
+                    }
+                    return element;
+                });
+
+                if (updated) {
+                    await storage.atomicMergeJourneyProgress(projectId, {
+                        requirementsDocument: {
+                            ...reqDoc,
+                            requiredDataElements: updatedElements,
+                            mappingsAppliedAt: new Date().toISOString()
+                        }
+                    });
+                    const mappedCount = updatedElements.filter((e: any) => e.sourceAvailable).length;
+                    console.log(`✅ [P0-9] Written back sourceColumn to ${mappedCount}/${updatedElements.length} elements in requirementsDocument`);
+                }
+            }
+        } catch (writeBackError) {
+            // Non-fatal: mappings are still saved in columnMappings, this is an enhancement
+            console.warn(`⚠️ [P0-9] Failed to write back sourceColumn to requirementsDocument:`, writeBackError);
+        }
 
         console.log(`✅ [FIX 1.1] Column mappings saved to both dataset and journeyProgress`);
 

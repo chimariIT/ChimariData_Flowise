@@ -55,6 +55,53 @@ except ImportError:
     PANDAS_AVAILABLE = False
 
 
+# P2-6 FIX: Validate generated code before exec() to prevent dangerous operations
+BLOCKED_PATTERNS = [
+    'import ',     # No importing modules
+    '__import__',  # No dynamic imports
+    'os.',         # No OS operations
+    'subprocess',  # No subprocess calls
+    'shutil',      # No file operations
+    'pathlib',     # No path manipulation
+    'open(',       # No file I/O
+    'eval(',       # No nested eval
+    'compile(',    # No dynamic compilation
+    'globals(',    # No global access
+    'locals(',     # No local scope manipulation
+    'getattr(',    # No attribute access (potential for object traversal)
+    'setattr(',    # No attribute setting
+    'delattr(',    # No attribute deletion
+    '__class__',   # No class manipulation
+    '__subclasses__', # No subclass enumeration
+    '__builtins__',  # No builtins access
+    'breakpoint',  # No debugging
+    'exit(',       # No process exit
+    'quit(',       # No process quit
+    'sys.exit',    # No sys exit
+    'requests.',   # No HTTP requests
+    'urllib',      # No URL operations
+    'socket',      # No socket operations
+]
+
+
+def validate_code_safety(code: str) -> tuple:
+    """P2-6: Validate that generated code only performs data operations.
+    Returns (is_safe, reason)."""
+    if not code or not code.strip():
+        return (True, '')
+
+    code_lower = code.lower()
+    for pattern in BLOCKED_PATTERNS:
+        if pattern.lower() in code_lower:
+            return (False, f"Blocked pattern detected: '{pattern}'")
+
+    # Check for excessive code length (potential injection)
+    if len(code) > 5000:
+        return (False, f"Code too long ({len(code)} chars, max 5000)")
+
+    return (True, '')
+
+
 def execute_with_polars(data: List[Dict], transformations: List[Dict]) -> Dict[str, Any]:
     """Execute transformations using Polars (5-10x faster than Pandas)"""
     if not POLARS_AVAILABLE:
@@ -73,6 +120,12 @@ def execute_with_polars(data: List[Dict], transformations: List[Dict]) -> Dict[s
         try:
             # Try to execute the generated code first
             if code and 'pl.' in code:
+                # P2-6 FIX: Validate code safety before exec()
+                is_safe, reason = validate_code_safety(code)
+                if not is_safe:
+                    print(f"🚫 [P2-6] Blocked unsafe code for {target_col}: {reason}", file=sys.stderr)
+                    errors.append(f"Code for {target_col} blocked by safety check: {reason}")
+                    continue
                 exec(code, {'pl': pl, 'df': df})
                 applied.append(target_col)
                 print(f"✅ [Polars] Added column via code: {target_col}", file=sys.stderr)
@@ -120,6 +173,63 @@ def execute_with_polars(data: List[Dict], transformations: List[Dict]) -> Dict[s
                 df = df.with_columns(
                     pl.coalesce(source_cols).alias(target_col)
                 )
+            # Phase 3F: New aggregation methods for multi-step KPI support
+            elif agg_method == 'indicator':
+                # Date presence indicator: 1 if not null, 0 if null
+                if source_cols:
+                    df = df.with_columns(
+                        pl.when(pl.col(source_cols[0]).is_not_null()).then(1).otherwise(0).alias(target_col)
+                    )
+            elif agg_method in ['group_count', 'group_sum', 'group_avg']:
+                # Cross-row aggregation with GROUP BY
+                group_by_cols = transform.get('groupByColumns', [])
+                agg_source = source_cols[0] if source_cols else None
+                if group_by_cols and agg_source:
+                    if agg_method == 'group_count':
+                        agg_expr = pl.col(agg_source).sum()
+                    elif agg_method == 'group_sum':
+                        agg_expr = pl.col(agg_source).sum()
+                    else:
+                        agg_expr = pl.col(agg_source).mean()
+                    agg_df = df.group_by(group_by_cols).agg(agg_expr.alias(target_col))
+                    df = df.join(agg_df, on=group_by_cols, how='left')
+            elif agg_method == 'group_count_distinct':
+                group_by_cols = transform.get('groupByColumns', [])
+                agg_source = source_cols[0] if source_cols else None
+                if group_by_cols and agg_source:
+                    agg_df = df.group_by(group_by_cols).agg(
+                        pl.col(agg_source).n_unique().alias(target_col)
+                    )
+                    df = df.join(agg_df, on=group_by_cols, how='left')
+            elif agg_method == 'count_distinct':
+                if source_cols:
+                    group_by_cols = transform.get('groupByColumns', [])
+                    if group_by_cols:
+                        agg_df = df.group_by(group_by_cols).agg(
+                            pl.col(source_cols[0]).n_unique().alias(target_col)
+                        )
+                        df = df.join(agg_df, on=group_by_cols, how='left')
+                    else:
+                        count_val = df[source_cols[0]].n_unique()
+                        df = df.with_columns(pl.lit(count_val).alias(target_col))
+            elif agg_method == 'formula':
+                # Formula application - code should be provided
+                if code:
+                    # P2-6 FIX: Validate code safety
+                    is_safe, reason = validate_code_safety(code)
+                    if not is_safe:
+                        print(f"🚫 [P2-6] Blocked unsafe formula code for {target_col}: {reason}", file=sys.stderr)
+                        errors.append(f"Formula code for {target_col} blocked: {reason}")
+                    else:
+                        local_vars = {'pl': pl, 'df': df}
+                        exec(code, local_vars)
+                        df = local_vars.get('df', df)
+            elif agg_method == 'date_presence_indicator':
+                # Create 0/1 from null/not-null date column
+                if source_cols:
+                    df = df.with_columns(
+                        pl.when(pl.col(source_cols[0]).is_not_null()).then(1).otherwise(0).alias(target_col)
+                    )
             else:
                 # Default to mean
                 df = df.with_columns(
@@ -164,6 +274,12 @@ def execute_with_pandas(data: List[Dict], transformations: List[Dict]) -> Dict[s
         try:
             # Try to execute the generated code first
             if code and ('df[' in code or 'pd.' in code):
+                # P2-6 FIX: Validate code safety before exec()
+                is_safe, reason = validate_code_safety(code)
+                if not is_safe:
+                    print(f"🚫 [P2-6] Blocked unsafe code for {target_col}: {reason}", file=sys.stderr)
+                    errors.append(f"Code for {target_col} blocked by safety check: {reason}")
+                    continue
                 exec(code, {'pd': pd, 'np': np, 'df': df})
                 applied.append(target_col)
                 print(f"✅ [Pandas] Added column via code: {target_col}", file=sys.stderr)
@@ -201,6 +317,49 @@ def execute_with_pandas(data: List[Dict], transformations: List[Dict]) -> Dict[s
                 df[target_col] = df[source_cols].astype(str).agg(' '.join, axis=1)
             elif agg_method == 'first':
                 df[target_col] = df[source_cols].bfill(axis=1).iloc[:, 0]
+            # Phase 3F: New aggregation methods for multi-step KPI support
+            elif agg_method == 'indicator':
+                if source_cols:
+                    df[target_col] = df[source_cols[0]].notna().astype(int)
+            elif agg_method in ['group_count', 'group_sum', 'group_avg']:
+                group_by_cols = transform.get('groupByColumns', [])
+                agg_source = source_cols[0] if source_cols else None
+                if group_by_cols and agg_source:
+                    if agg_method == 'group_count':
+                        agg_df = df.groupby(group_by_cols)[agg_source].sum().reset_index(name=target_col)
+                    elif agg_method == 'group_sum':
+                        agg_df = df.groupby(group_by_cols)[agg_source].sum().reset_index(name=target_col)
+                    else:
+                        agg_df = df.groupby(group_by_cols)[agg_source].mean().reset_index(name=target_col)
+                    df = df.merge(agg_df, on=group_by_cols, how='left')
+            elif agg_method == 'group_count_distinct':
+                group_by_cols = transform.get('groupByColumns', [])
+                agg_source = source_cols[0] if source_cols else None
+                if group_by_cols and agg_source:
+                    agg_df = df.groupby(group_by_cols)[agg_source].nunique().reset_index(name=target_col)
+                    df = df.merge(agg_df, on=group_by_cols, how='left')
+            elif agg_method == 'count_distinct':
+                if source_cols:
+                    group_by_cols = transform.get('groupByColumns', [])
+                    if group_by_cols:
+                        agg_df = df.groupby(group_by_cols)[source_cols[0]].nunique().reset_index(name=target_col)
+                        df = df.merge(agg_df, on=group_by_cols, how='left')
+                    else:
+                        df[target_col] = df[source_cols[0]].nunique()
+            elif agg_method == 'formula':
+                if code:
+                    # P2-6 FIX: Validate code safety
+                    is_safe, reason = validate_code_safety(code)
+                    if not is_safe:
+                        print(f"🚫 [P2-6] Blocked unsafe formula code for {target_col}: {reason}", file=sys.stderr)
+                        errors.append(f"Formula code for {target_col} blocked: {reason}")
+                    else:
+                        local_vars = {'pd': pd, 'np': np, 'df': df}
+                        exec(code, local_vars)
+                        df = local_vars.get('df', df)
+            elif agg_method == 'date_presence_indicator':
+                if source_cols:
+                    df[target_col] = df[source_cols[0]].notna().astype(int)
             else:
                 # Default to mean
                 df[target_col] = df[source_cols].mean(axis=1)

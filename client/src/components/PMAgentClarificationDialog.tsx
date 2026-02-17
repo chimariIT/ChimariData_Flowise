@@ -84,7 +84,7 @@ export function PMAgentClarificationDialog({
     );
   }
 
-  if (!clarificationData) {
+  if (!clarificationData || !clarificationData.summary) {
     return null;
   }
 

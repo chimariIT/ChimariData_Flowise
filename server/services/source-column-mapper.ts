@@ -146,7 +146,8 @@ export class SourceColumnMapper {
     datasetSchema: SchemaDefinition,
     userProvidedMappings?: UserProvidedMapping[],
     projectId?: string,
-    context?: MappingContext
+    context?: MappingContext,
+    preview?: any[]       // NEW - sample rows for cardinality-based identifier ranking
   ): Promise<ElementMappingResult[]> {
     const results: ElementMappingResult[] = [];
 
@@ -173,6 +174,32 @@ export class SourceColumnMapper {
       console.log(`🏭 [Mapper] Using context: industry=${context.industry || 'unknown'}, dataContext=${context.dataContext || 'unknown'}`);
     }
 
+    // Phase 1B: Semantic column discovery for derived/composite/aggregated elements
+    // This expands componentFields by finding semantically related columns in the dataset
+    if (projectId) {
+      for (const element of elements) {
+        const calcType = element.calculationDefinition?.calculationType;
+        if (calcType && ['derived', 'composite', 'aggregated'].includes(calcType)) {
+          try {
+            const discovery = await this.discoverSemanticColumns(
+              element, availableColumns, datasetSchema, projectId,
+              {
+                minSimilarity: 0.65,
+                maxAdditional: 10,
+                filterByDataType: element.dataType === 'numeric' ? 'numeric' : undefined
+              }
+            );
+            if (discovery.discoveredFields.length > 0 && element.calculationDefinition?.formula) {
+              element.calculationDefinition.formula.componentFields = discovery.expandedFields;
+            }
+          } catch (err) {
+            // Non-blocking — continue with original componentFields
+            console.warn(`⚠️ [Mapper] Semantic discovery failed for "${element.elementName}":`, (err as Error).message);
+          }
+        }
+      }
+    }
+
     for (const element of elements) {
       // Handle elements with componentFields
       if (element.calculationDefinition?.formula?.componentFields) {
@@ -183,7 +210,8 @@ export class SourceColumnMapper {
             availableColumns,
             datasetSchema,
             context,
-            projectId
+            projectId,
+            preview
           );
 
           // Apply user-provided mappings on top (highest priority)
@@ -237,7 +265,8 @@ export class SourceColumnMapper {
             availableColumns,
             datasetSchema,
             context,
-            projectId
+            projectId,
+            preview
           );
           results.push(mapping);
         }
@@ -245,6 +274,211 @@ export class SourceColumnMapper {
     }
 
     return results;
+  }
+
+  /**
+   * Map a single abstract field name to the best matching actual dataset column.
+   * This is the primary entry point for Phase 3 unification — required-data-elements-tool
+   * delegates its column matching here instead of reimplementing it.
+   *
+   * Returns a result compatible with required-data-elements-tool's findBestMatch() signature.
+   */
+  async mapSingleField(
+    abstractField: string,
+    options: {
+      projectId?: string;
+      availableColumns: string[];
+      schema: SchemaDefinition;
+    }
+  ): Promise<{
+    found: boolean;
+    sourceField?: string;
+    confidence: number;
+    matchMethod: string;
+    alternatives: string[];
+  }> {
+    const mapping = await this.findBestMatch(
+      abstractField,
+      options.availableColumns,
+      options.schema,
+      options.projectId
+    );
+
+    return {
+      found: mapping.actualColumn !== null,
+      sourceField: mapping.actualColumn ?? undefined,
+      confidence: mapping.confidence,
+      matchMethod: mapping.matchMethod,
+      alternatives: mapping.alternatives.map(a => a.column)
+    };
+  }
+
+  /**
+   * Map a single data element to dataset columns, using the full RAG-first cascade.
+   * This wraps mapElementToColumns / mapElementWithDsRecommendation for use by
+   * required-data-elements-tool as a unified entry point.
+   *
+   * Returns a result compatible with required-data-elements-tool's findBestMatch() signature.
+   */
+  async mapSingleElement(
+    element: {
+      elementName: string;
+      description?: string;
+      purpose?: string;
+      dataType?: string;
+      calculationDefinition?: any;
+      dsRecommendation?: string;
+      relatedQuestions?: string[];
+    },
+    options: {
+      projectId?: string;
+      availableColumns: string[];
+      schema: SchemaDefinition;
+      preview?: any[];
+      questionContext?: string[];
+      industry?: string;
+    }
+  ): Promise<{
+    found: boolean;
+    sourceField?: string;
+    sourceDataType?: string;
+    confidence: number;
+    matchMethod: string;
+    alternatives: string[];
+    transformationNeeded: boolean;
+  }> {
+    const context: MappingContext = {
+      industry: options.industry,
+      dataContext: options.industry
+    };
+
+    // Convert to DataElementDefinition
+    const elementDef: DataElementDefinition = {
+      elementId: (element as any).elementId || element.elementName,
+      elementName: element.elementName,
+      calculationDefinition: element.calculationDefinition,
+      dataType: element.dataType,
+      purpose: element.purpose,
+      description: element.description,
+      dsRecommendation: element.dsRecommendation
+    };
+
+    // Use DS-recommendation-aware mapping if context is available
+    const result = await this.mapElementWithDsRecommendation(
+      elementDef,
+      options.availableColumns,
+      options.schema,
+      context,
+      options.projectId,
+      options.preview
+    );
+
+    if (result.mappings.length > 0 && result.mappings[0].actualColumn) {
+      const best = result.mappings[0];
+      const actualCol = best.actualColumn!; // Narrowed by the if-check above
+      const fieldType = options.schema[actualCol]?.type;
+      const calcType = element.calculationDefinition?.calculationType;
+      const needsTransform = calcType != null && calcType !== 'direct';
+
+      return {
+        found: true,
+        sourceField: actualCol,
+        sourceDataType: fieldType,
+        confidence: best.confidence,
+        matchMethod: best.matchMethod,
+        alternatives: best.alternatives.map(a => a.column),
+        transformationNeeded: needsTransform
+      };
+    }
+
+    // Fall back to direct field matching using element name
+    const directMatch = await this.findBestMatch(
+      element.elementName,
+      options.availableColumns,
+      options.schema,
+      options.projectId
+    );
+
+    if (directMatch.actualColumn) {
+      const fieldType = options.schema[directMatch.actualColumn]?.type;
+      return {
+        found: true,
+        sourceField: directMatch.actualColumn,
+        sourceDataType: fieldType,
+        confidence: directMatch.confidence,
+        matchMethod: directMatch.matchMethod,
+        alternatives: directMatch.alternatives.map(a => a.column),
+        transformationNeeded: false
+      };
+    }
+
+    return {
+      found: false,
+      confidence: 0,
+      matchMethod: 'exact',
+      alternatives: directMatch.alternatives.map(a => a.column),
+      transformationNeeded: false
+    };
+  }
+
+  /**
+   * Find candidate columns for an abstract field, returning all matches ranked by confidence.
+   * This replaces findCandidateFieldsEnhanced in required-data-elements-tool.
+   */
+  async findCandidates(
+    abstractField: string,
+    options: {
+      projectId?: string;
+      availableColumns: string[];
+      schema: SchemaDefinition;
+      maxResults?: number;
+    }
+  ): Promise<Array<{ field: string; score: number; method: string }>> {
+    const candidates: Array<{ field: string; score: number; method: string }> = [];
+    const maxResults = options.maxResults ?? 5;
+
+    // RAG candidates
+    if (options.projectId) {
+      try {
+        const ragMatches = await columnEmbeddingGenerator.findSimilarColumns(
+          options.projectId,
+          this.expandFieldName(abstractField),
+          maxResults
+        );
+        for (const match of ragMatches) {
+          if (options.availableColumns.includes(match.columnName) && match.similarity >= 0.3) {
+            candidates.push({
+              field: match.columnName,
+              score: Math.round(match.similarity * 100),
+              method: 'embedding'
+            });
+          }
+        }
+      } catch (e) {
+        // Non-blocking
+      }
+    }
+
+    // Fuzzy candidates
+    for (const col of options.availableColumns) {
+      const score = this.fuzzyScore(abstractField, col);
+      if (score >= 40 && !candidates.find(c => c.field === col)) {
+        candidates.push({ field: col, score, method: 'fuzzy' });
+      }
+    }
+
+    // Semantic pattern candidates
+    const semanticMatches = this.semanticPatternMatch(abstractField, options.availableColumns, options.schema);
+    for (const match of semanticMatches) {
+      if (!candidates.find(c => c.field === match.column)) {
+        candidates.push({ field: match.column, score: match.confidence, method: 'semantic' });
+      }
+    }
+
+    // Sort by score and return top N
+    return candidates
+      .sort((a, b) => b.score - a.score)
+      .slice(0, maxResults);
   }
 
   /**
@@ -262,6 +496,119 @@ export class SourceColumnMapper {
     }
 
     return lookup;
+  }
+
+  /**
+   * Semantic column discovery: expands componentFields by finding additional
+   * dataset columns that are semantically related to the element definition.
+   *
+   * For example, an "Engagement Score" element with componentFields: ["survey_scores"]
+   * will discover Q1_Score, Q2_Score, Q3_Score etc. via embedding similarity.
+   *
+   * Uses existing columnEmbeddingGenerator.findSimilarColumns() infrastructure.
+   */
+  async discoverSemanticColumns(
+    element: DataElementDefinition,
+    availableColumns: string[],
+    datasetSchema: SchemaDefinition,
+    projectId?: string,
+    options?: {
+      minSimilarity?: number;      // default 0.65
+      maxAdditional?: number;      // default 10
+      filterByDataType?: string;   // e.g., 'numeric' to only discover numeric columns
+    }
+  ): Promise<{
+    discoveredFields: string[];
+    originalFields: string[];
+    expandedFields: string[];
+    discoveryDetails: Array<{ column: string; similarity: number; reason: string }>;
+  }> {
+    const minSim = options?.minSimilarity ?? 0.65;
+    const maxAdd = options?.maxAdditional ?? 10;
+    const originalFields = element.calculationDefinition?.formula?.componentFields || [];
+
+    // Normalize original fields for dedup
+    const originalNormalized = new Set(originalFields.map(f => this.normalize(f)));
+
+    // Build rich query from element context
+    const queryParts = [
+      element.elementName,
+      element.description || '',
+      element.purpose || '',
+      element.calculationDefinition?.formula?.businessDescription || ''
+    ].filter(Boolean);
+    const query = queryParts.join(' ');
+
+    if (!query.trim() || !projectId) {
+      return { discoveredFields: [], originalFields, expandedFields: [...originalFields], discoveryDetails: [] };
+    }
+
+    try {
+      // Check if embeddings exist
+      const hasEmbeddings = await columnEmbeddingGenerator.hasEmbeddings(projectId);
+      if (!hasEmbeddings) {
+        console.log(`ℹ️ [Discovery] No embeddings for project ${projectId}, skipping semantic discovery`);
+        return { discoveredFields: [], originalFields, expandedFields: [...originalFields], discoveryDetails: [] };
+      }
+
+      // Find similar columns via embedding search
+      const similar = await columnEmbeddingGenerator.findSimilarColumns(
+        projectId,
+        query,
+        maxAdd + originalFields.length + 5 // Request extra to account for filtering
+      );
+
+      const discoveredFields: string[] = [];
+      const discoveryDetails: Array<{ column: string; similarity: number; reason: string }> = [];
+
+      for (const result of similar) {
+        // Skip if below similarity threshold
+        if (result.similarity < minSim) continue;
+
+        // Skip if already in original fields
+        const normalizedName = this.normalize(result.columnName);
+        if (originalNormalized.has(normalizedName)) continue;
+
+        // Skip if not in available columns (may come from different dataset)
+        const matchedAvailable = availableColumns.find(
+          col => this.normalize(col) === normalizedName || col === result.columnName
+        );
+        if (!matchedAvailable) continue;
+
+        // Filter by data type if requested
+        if (options?.filterByDataType) {
+          const colSchema = datasetSchema[matchedAvailable] || datasetSchema[result.columnName];
+          const colType = typeof colSchema === 'string' ? colSchema : (colSchema as any)?.type || '';
+          const isNumeric = /number|integer|float|numeric|decimal/i.test(colType);
+          const isCategorical = /string|text|categorical/i.test(colType);
+          const isDate = /date|datetime|timestamp/i.test(colType);
+
+          if (options.filterByDataType === 'numeric' && !isNumeric) continue;
+          if (options.filterByDataType === 'categorical' && !isCategorical) continue;
+          if (options.filterByDataType === 'date' && !isDate) continue;
+        }
+
+        // Limit discovered fields
+        if (discoveredFields.length >= maxAdd) break;
+
+        discoveredFields.push(matchedAvailable);
+        discoveryDetails.push({
+          column: matchedAvailable,
+          similarity: result.similarity,
+          reason: `Semantically similar to "${element.elementName}" (${(result.similarity * 100).toFixed(0)}%)`
+        });
+      }
+
+      const expandedFields = [...originalFields, ...discoveredFields];
+      if (discoveredFields.length > 0) {
+        console.log(`🔍 [Discovery] "${element.elementName}": expanded ${originalFields.length} → ${expandedFields.length} fields (+${discoveredFields.length} discovered: ${discoveredFields.join(', ')})`);
+      }
+
+      return { discoveredFields, originalFields, expandedFields, discoveryDetails };
+    } catch (error) {
+      console.warn(`⚠️ [Discovery] Semantic discovery failed for "${element.elementName}":`, (error as Error).message);
+      return { discoveredFields: [], originalFields, expandedFields: [...originalFields], discoveryDetails: [] };
+    }
   }
 
   /**
@@ -306,12 +653,12 @@ export class SourceColumnMapper {
       }
     }
 
-    // Level 3: RAG Match (PRIMARY - 70-95%) - Uses pre-computed embeddings
-    // This is the fastest method for complex matching when embeddings are available
+    // Level 3: RAG Match (PRIMARY - 40-95%) - Uses pre-computed embeddings
+    // RAG is the primary semantic matching method — higher quality than regex/fuzzy
     if (projectId) {
       try {
         const ragMatch = await this.ragMatch(abstractField, projectId, availableColumns);
-        if (ragMatch && ragMatch.confidence >= 70) {
+        if (ragMatch && ragMatch.confidence >= 50) {
           console.log(`🎯 [RAG] "${abstractField}" → "${ragMatch.column}" (${ragMatch.confidence}%)`);
           return {
             abstractField,
@@ -321,7 +668,7 @@ export class SourceColumnMapper {
             alternatives: []
           };
         }
-        if (ragMatch && ragMatch.confidence >= 50) {
+        if (ragMatch && ragMatch.confidence >= 35) {
           alternatives.push({ ...ragMatch, method: 'embedding' });
         }
       } catch (e: any) {
@@ -407,7 +754,9 @@ export class SourceColumnMapper {
       // Filter to only available columns
       const validMatches = matches.filter(m => availableColumns.includes(m.columnName));
 
-      if (validMatches.length > 0 && validMatches[0].similarity >= 0.5) {
+      // Lower threshold to 0.4 to catch more semantic matches
+      // Downstream validation rejects poor matches via CONFIDENCE_THRESHOLD
+      if (validMatches.length > 0 && validMatches[0].similarity >= 0.4) {
         return {
           column: validMatches[0].columnName,
           confidence: Math.round(validMatches[0].similarity * 100)
@@ -684,21 +1033,10 @@ export class SourceColumnMapper {
 
   /**
    * Calculate cosine similarity between two vectors
+   * Delegates to embeddingService which handles cross-provider dimension mismatches
    */
   private cosineSimilarity(a: number[], b: number[]): number {
-    if (a.length !== b.length) {
-      console.warn(`Vector length mismatch: ${a.length} vs ${b.length}`);
-      return 0;
-    }
-
-    let dot = 0, normA = 0, normB = 0;
-    for (let i = 0; i < a.length; i++) {
-      dot += a[i] * b[i];
-      normA += a[i] * a[i];
-      normB += b[i] * b[i];
-    }
-    const denom = Math.sqrt(normA) * Math.sqrt(normB);
-    return denom === 0 ? 0 : dot / denom;
+    return embeddingService.cosineSimilarity(a, b);
   }
 
   /**
@@ -713,11 +1051,24 @@ export class SourceColumnMapper {
    * For employee data, Employee_ID is preferred over Leader_ID
    * For customer data, Customer_ID is preferred over Account_ID
    */
+  /**
+   * Estimate how unique a column is based on sample preview data.
+   * Returns ratio 0-1 where 1.0 = every row has a unique value (likely row-level ID).
+   */
+  private estimateColumnCardinality(columnName: string, preview: any[]): number {
+    if (!preview || preview.length === 0) return 0;
+    const values = preview.map(row => row[columnName]).filter(v => v !== null && v !== undefined);
+    if (values.length === 0) return 0;
+    const unique = new Set(values);
+    return unique.size / values.length;
+  }
+
   findBestIdentifierColumn(
     availableColumns: string[],
     context: MappingContext,
-    purpose?: string
-  ): { column: string; confidence: number } | null {
+    purpose?: string,
+    preview?: any[]       // NEW - sample rows for cardinality-based ranking
+  ): { column: string; confidence: number; granularity?: string } | null {
     const purposeLower = (purpose || '').toLowerCase();
     const contextLower = (context.dataContext || '').toLowerCase();
     const industryLower = (context.industry || '').toLowerCase();
@@ -755,31 +1106,79 @@ export class SourceColumnMapper {
       }
     }
 
-    // Search columns for matches in priority order
+    // Collect ALL matching candidates with priority scores (not just first match)
+    const candidates: Array<{ column: string; confidence: number; priorityIndex: number; matchType: 'exact' | 'partial' }> = [];
+
     for (let i = 0; i < priorityList.length; i++) {
       const priority = priorityList[i];
       const normalizedPriority = this.normalize(priority);
 
       for (const col of availableColumns) {
         const normalizedCol = this.normalize(col);
+        // Skip if already collected
+        if (candidates.some(c => c.column === col)) continue;
 
         // Exact normalized match
         if (normalizedCol === normalizedPriority) {
-          const confidence = 100 - (i * 5); // Higher priority = higher confidence
-          console.log(`🎯 [Identifier] Context-aware match: "${col}" for ${contextLower || 'default'} context (${confidence}%)`);
-          return { column: col, confidence: Math.max(confidence, 70) };
+          const confidence = 100 - (i * 5);
+          candidates.push({ column: col, confidence: Math.max(confidence, 70), priorityIndex: i, matchType: 'exact' });
         }
-
         // Contains match
-        if (normalizedCol.includes(normalizedPriority) || normalizedPriority.includes(normalizedCol)) {
+        else if (normalizedCol.includes(normalizedPriority) || normalizedPriority.includes(normalizedCol)) {
           const confidence = 90 - (i * 5);
-          console.log(`🎯 [Identifier] Partial context match: "${col}" for ${contextLower || 'default'} context (${confidence}%)`);
-          return { column: col, confidence: Math.max(confidence, 60) };
+          candidates.push({ column: col, confidence: Math.max(confidence, 60), priorityIndex: i, matchType: 'partial' });
         }
       }
     }
 
-    return null;
+    // Also check for any column ending in "_id" or "_ID" not already matched (catch-all for IDs)
+    for (const col of availableColumns) {
+      if (candidates.some(c => c.column === col)) continue;
+      const normalizedCol = this.normalize(col);
+      if (normalizedCol.endsWith('id') && normalizedCol.length > 2) {
+        candidates.push({ column: col, confidence: 55, priorityIndex: priorityList.length, matchType: 'partial' });
+      }
+    }
+
+    if (candidates.length === 0) return null;
+
+    // If we have preview data, use cardinality to rank candidates
+    // A true row-level identifier should have near-100% unique values
+    if (preview && preview.length >= 10 && candidates.length > 1) {
+      const candidatesWithCardinality = candidates.map(c => ({
+        ...c,
+        cardinality: this.estimateColumnCardinality(c.column, preview)
+      }));
+
+      // Sort by: (1) cardinality descending (most unique first), (2) priority index ascending
+      candidatesWithCardinality.sort((a, b) => {
+        // Strongly prefer high-cardinality columns (>0.5 uniqueness)
+        const aIsHighCard = a.cardinality >= 0.5 ? 1 : 0;
+        const bIsHighCard = b.cardinality >= 0.5 ? 1 : 0;
+        if (aIsHighCard !== bIsHighCard) return bIsHighCard - aIsHighCard;
+        // Among high-cardinality, prefer higher cardinality
+        if (aIsHighCard && bIsHighCard) {
+          const cardDiff = b.cardinality - a.cardinality;
+          if (Math.abs(cardDiff) > 0.1) return cardDiff;
+        }
+        // Then by priority index
+        return a.priorityIndex - b.priorityIndex;
+      });
+
+      const best = candidatesWithCardinality[0];
+      const granularity = best.cardinality >= 0.95 ? 'row-level' : best.cardinality >= 0.5 ? 'moderate' : 'low';
+      console.log(`🎯 [Identifier] Selected "${best.column}" (cardinality: ${(best.cardinality * 100).toFixed(0)}%, granularity: ${granularity}) from ${candidatesWithCardinality.length} candidates`);
+      if (candidatesWithCardinality.length > 1) {
+        const rejected = candidatesWithCardinality.slice(1).map(c => `${c.column}(${(c.cardinality * 100).toFixed(0)}%)`).join(', ');
+        console.log(`   📊 Other candidates: ${rejected}`);
+      }
+      return { column: best.column, confidence: best.confidence, granularity };
+    }
+
+    // No preview data — fall back to priority-based selection (first match wins)
+    const best = candidates.sort((a, b) => a.priorityIndex - b.priorityIndex)[0];
+    console.log(`🎯 [Identifier] Context-aware match: "${best.column}" for ${contextLower || 'default'} context (${best.confidence}%, no cardinality data)`);
+    return { column: best.column, confidence: best.confidence };
   }
 
   /**
@@ -837,7 +1236,8 @@ export class SourceColumnMapper {
     availableColumns: string[],
     datasetSchema: SchemaDefinition,
     context?: MappingContext,
-    projectId?: string
+    projectId?: string,
+    preview?: any[]      // NEW - sample rows for cardinality-based identifier ranking
   ): Promise<ElementMappingResult> {
     // If element has DS recommendation, use it as primary source
     if (element.dsRecommendation) {
@@ -879,7 +1279,8 @@ export class SourceColumnMapper {
       const identifierMatch = this.findBestIdentifierColumn(
         availableColumns,
         context || {},
-        element.purpose
+        element.purpose,
+        preview
       );
 
       if (identifierMatch) {

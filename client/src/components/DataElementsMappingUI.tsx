@@ -445,8 +445,10 @@ export function DataElementsMappingUI({
     }
   }, [mappings, sampleData]);
 
-  const requiredElements = requiredDataElements.filter(e => e.required);
-  const optionalElements = requiredDataElements.filter(e => !e.required);
+  // FIX B1: Guard against non-array requiredDataElements to prevent "filter is not a function" error
+  const safeElements = Array.isArray(requiredDataElements) ? requiredDataElements : [];
+  const requiredElements = safeElements.filter(e => e.required);
+  const optionalElements = safeElements.filter(e => !e.required);
 
   const getMappingStatus = (element: RequiredDataElement) => {
     const mapping = mappings[element.elementId];

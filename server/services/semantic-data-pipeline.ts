@@ -25,11 +25,19 @@ import { storage } from '../storage';
 // NOTE: The semantic_links table has been created to provide Question → Element → Transformation → Analysis traceability.
 // This service can now store semantic links using the unified table.
 
-// Legacy table stubs (these tables were originally designed but now use unified semantic_links)
-const dataElements: any = null;
-const transformationDefinitions: any = null;
-const questionElementLinks: any = null;
-const elementTransformationLinks: any = null;
+// P2-2 FIX: Legacy tables don't exist in the DB schema. All operations now use
+// the unified `semantic_links` table from shared/schema.ts.
+// These stubs are kept for type compatibility but ALL insert/select operations
+// are redirected to semantic_links with appropriate linkType.
+const dataElements: any = null;          // Use semantic_links with sourceType='data_element'
+const transformationDefinitions: any = null; // Use semantic_links with sourceType='transformation'
+const questionElementLinks: any = null;     // Use semantic_links with linkType='question_to_element'
+const elementTransformationLinks: any = null; // Use semantic_links with linkType='element_to_transformation'
+
+// P2-2: Helper to guard legacy table operations
+function isLegacyTableAvailable(table: any): boolean {
+  return table !== null && table !== undefined;
+}
 
 // Type stubs for legacy code
 type DataElement = any;
@@ -372,28 +380,30 @@ export class SemanticDataPipelineService {
     console.log(`[SemanticPipeline] Storing ${elements.length} elements in database`);
     for (let i = 0; i < elements.length; i++) {
       const element = elements[i];
-      const embedding = embeddings[i]?.embedding || this.createFallbackEmbedding();
+      const rawEmbedding = embeddings[i]?.embedding;
+      const embedding = rawEmbedding && rawEmbedding.length === 1536 ? rawEmbedding : null;
 
       try {
-        await db.insert(dataElements).values({
+        // P2-2 FIX: Use unified semantic_links table instead of null legacy table
+        await db.insert(semanticLinks).values({
           id: element.id,
           projectId,
-          elementName: element.elementName,
-          elementType: element.elementType,
-          dataType: element.dataType,
-          semanticDescription: element.semanticDescription,
-          embedding: embedding,
-          sourceDatasetId: element.sourceDatasetId,
-          sourceColumn: element.sourceColumn,
-          isAvailable: true,
-          analysisRoles: element.analysisRoles,
-        }).onConflictDoUpdate({
-          target: dataElements.id,
-          set: {
-            embedding: embedding,
-            updatedAt: new Date(),
-          }
-        });
+          linkType: 'data_element',
+          sourceId: element.sourceDatasetId || projectId,
+          sourceType: 'dataset',
+          targetId: element.id,
+          targetType: 'data_element',
+          confidence: 1.0,
+          metadata: {
+            elementName: element.elementName,
+            elementType: element.elementType,
+            dataType: element.dataType,
+            semanticDescription: element.semanticDescription,
+            sourceColumn: element.sourceColumn,
+            analysisRoles: element.analysisRoles,
+          },
+          createdBy: 'semantic_pipeline',
+        }).onConflictDoNothing();
       } catch (error) {
         console.error(`[SemanticPipeline] Failed to store element ${element.elementName}:`, error);
       }
@@ -412,16 +422,31 @@ export class SemanticDataPipelineService {
   ): Promise<void> {
     console.log(`[SemanticPipeline] Linking ${questions.length} questions to elements for project ${projectId}`);
 
-    // Get all data elements for this project
-    const elementsResult = await db.select().from(dataElements)
-      .where(eq(dataElements.projectId, projectId));
+    // P2-2 FIX: Use semantic_links table instead of null legacy dataElements table
+    const elementsResult = await db.select().from(semanticLinks)
+      .where(and(
+        eq(semanticLinks.projectId, projectId),
+        eq(semanticLinks.linkType, 'data_element')
+      ));
+    // Map to legacy format for downstream compatibility
+    const mappedElements = elementsResult.map((link: any) => ({
+      id: link.targetId,
+      projectId: link.projectId,
+      elementName: (link.metadata as any)?.elementName || link.targetId,
+      elementType: (link.metadata as any)?.elementType || 'measure',
+      semanticDescription: (link.metadata as any)?.semanticDescription || '',
+      embedding: null, // Embeddings not stored in semantic_links metadata
+      sourceColumn: (link.metadata as any)?.sourceColumn || null,
+    }));
+    // Use mappedElements as elementsResult
+    const elementsForMatching = mappedElements;
 
-    if (elementsResult.length === 0) {
+    if (elementsForMatching.length === 0) {
       console.log(`[SemanticPipeline] No elements found for project ${projectId}`);
       return;
     }
 
-    console.log(`[SemanticPipeline] Found ${elementsResult.length} elements to match against`);
+    console.log(`[SemanticPipeline] Found ${elementsForMatching.length} elements to match against`);
 
     for (const question of questions) {
       // Generate embedding if not present
@@ -450,10 +475,38 @@ export class SemanticDataPipelineService {
       }
 
       // Calculate similarity with each element
-      for (const element of elementsResult) {
+      for (const element of elementsForMatching) {
         const elementEmbedding = element.embedding as number[] | null;
-        if (!elementEmbedding) continue;
 
+        // If either embedding is missing/empty, use keyword similarity fallback
+        if (!questionEmbedding?.length || !elementEmbedding?.length) {
+          const kwSimilarity = this.keywordSimilarity(question.text, element.elementName, (element as any).semanticDescription);
+          if (kwSimilarity >= 0.3) {
+            const linkType = this.inferLinkType(question.text, element.elementName);
+            try {
+              // P2-2 FIX: Use semantic_links instead of null questionElementLinks
+              await db.insert(semanticLinks).values({
+                id: nanoid(),
+                projectId,
+                linkType: `question_to_element`,
+                sourceId: question.id,
+                sourceType: 'question',
+                targetId: element.id,
+                targetType: 'data_element',
+                confidence: kwSimilarity,
+                metadata: { method: `keyword_${linkType}` },
+                createdBy: 'semantic_pipeline',
+              }).onConflictDoNothing();
+            } catch (error) {
+              if (!(error as any)?.message?.includes('duplicate')) {
+                console.error(`[SemanticPipeline] Failed to insert keyword link:`, error);
+              }
+            }
+          }
+          continue;
+        }
+
+        // Normal embedding-based similarity
         const similarity = this.cosineSimilarity(questionEmbedding, elementEmbedding);
 
         // Only link if similarity is above threshold (0.5 for more inclusive matching)
@@ -461,19 +514,19 @@ export class SemanticDataPipelineService {
           const linkType = this.inferLinkType(question.text, element.elementName);
 
           try {
-            await db.insert(questionElementLinks).values({
+            // P2-2 FIX: Use semantic_links instead of null questionElementLinks
+            await db.insert(semanticLinks).values({
               id: nanoid(),
-              questionId: question.id,
-              elementId: element.id,
-              similarityScore: similarity.toFixed(4),
-              linkType,
-            }).onConflictDoUpdate({
-              target: [questionElementLinks.questionId, questionElementLinks.elementId],
-              set: {
-                similarityScore: similarity.toFixed(4),
-                linkType,
-              }
-            });
+              projectId,
+              linkType: 'question_to_element',
+              sourceId: question.id,
+              sourceType: 'question',
+              targetId: element.id,
+              targetType: 'data_element',
+              confidence: parseFloat(similarity.toFixed(4)),
+              metadata: { method: `embedding_${linkType}` },
+              createdBy: 'semantic_pipeline',
+            }).onConflictDoNothing();
           } catch (error) {
             // Ignore duplicate key errors
             if (!(error as any)?.message?.includes('duplicate')) {
@@ -579,28 +632,42 @@ export class SemanticDataPipelineService {
       }
 
       try {
-        await db.insert(transformationDefinitions).values({
+        // P2-2 FIX: Use semantic_links for transformation storage
+        await db.insert(semanticLinks).values({
           id: transform.id,
           projectId,
-          transformationName: transform.transformationName,
-          transformationType: transform.transformationType,
-          semanticDescription: transform.semanticDescription,
-          embedding,
-          sourceElements: transform.sourceElements,
-          targetElements: transform.targetElements,
-          config: transform.config,
-          status: 'pending',
+          linkType: 'transformation',
+          sourceId: transform.sourceElements[0] || projectId,
+          sourceType: 'data_element',
+          targetId: transform.id,
+          targetType: 'transformation',
+          confidence: 1.0,
+          metadata: {
+            transformationName: transform.transformationName,
+            transformationType: transform.transformationType,
+            semanticDescription: transform.semanticDescription,
+            sourceElements: transform.sourceElements,
+            targetElements: transform.targetElements,
+            config: transform.config,
+            status: 'pending',
+          },
+          createdBy: 'semantic_pipeline',
         }).onConflictDoNothing();
 
-        // Link elements to transformation
+        // Link elements to transformation via semantic_links
         for (const elemId of transform.sourceElements) {
           try {
-            await db.insert(elementTransformationLinks).values({
+            await db.insert(semanticLinks).values({
               id: nanoid(),
-              elementId: elemId,
-              transformationId: transform.id,
-              similarityScore: '1.0000',
-              linkType: 'input',
+              projectId,
+              linkType: 'element_to_transformation',
+              sourceId: elemId,
+              sourceType: 'data_element',
+              targetId: transform.id,
+              targetType: 'transformation',
+              confidence: 1.0,
+              metadata: { direction: 'input' },
+              createdBy: 'semantic_pipeline',
             }).onConflictDoNothing();
           } catch (error) {
             // Ignore duplicate key errors
@@ -730,9 +797,22 @@ export class SemanticDataPipelineService {
    * Get all data elements for a project
    */
   async getDataElements(projectId: string): Promise<DataElement[]> {
-    return db.select().from(dataElements)
-      .where(eq(dataElements.projectId, projectId))
-      .orderBy(dataElements.elementName);
+    // P2-2 FIX: Use semantic_links instead of null dataElements table
+    const links = await db.select().from(semanticLinks)
+      .where(and(
+        eq(semanticLinks.projectId, projectId),
+        eq(semanticLinks.linkType, 'data_element')
+      ));
+    return links.map((link: any) => ({
+      id: link.targetId,
+      projectId: link.projectId,
+      elementName: (link.metadata as any)?.elementName || link.targetId,
+      elementType: (link.metadata as any)?.elementType || 'measure',
+      dataType: (link.metadata as any)?.dataType || 'unknown',
+      semanticDescription: (link.metadata as any)?.semanticDescription || '',
+      sourceColumn: (link.metadata as any)?.sourceColumn || null,
+      analysisRoles: (link.metadata as any)?.analysisRoles || [],
+    }));
   }
 
   /**
@@ -764,20 +844,11 @@ export class SemanticDataPipelineService {
   async clearProjectPipelineData(projectId: string): Promise<void> {
     console.log(`[SemanticPipeline] Clearing pipeline data for project ${projectId}`);
 
-    // Delete in reverse dependency order
-    await db.delete(elementTransformationLinks)
-      .where(sql`element_id IN (SELECT id FROM data_elements WHERE project_id = ${projectId})`);
+    // P2-2 FIX: Delete from unified semantic_links table instead of null legacy tables
+    await db.delete(semanticLinks)
+      .where(eq(semanticLinks.projectId, projectId));
 
-    await db.delete(questionElementLinks)
-      .where(sql`element_id IN (SELECT id FROM data_elements WHERE project_id = ${projectId})`);
-
-    await db.delete(transformationDefinitions)
-      .where(eq(transformationDefinitions.projectId, projectId));
-
-    await db.delete(dataElements)
-      .where(eq(dataElements.projectId, projectId));
-
-    console.log(`[SemanticPipeline] Cleared all pipeline data for project ${projectId}`);
+    console.log(`[SemanticPipeline] Cleared all semantic links for project ${projectId}`);
   }
 
   // ============================================
@@ -1113,13 +1184,38 @@ export class SemanticDataPipelineService {
 
   /**
    * Create a simple fallback embedding when embedding service is unavailable
-   * P0-5 FIX: Returns zeros instead of random values for deterministic behavior
+   * Returns empty array as sentinel to trigger keyword-based fallback
    */
   private createFallbackEmbedding(): number[] {
-    // P0-5 FIX: Return zero vector instead of random
-    // In production, embedding service MUST be available for semantic search to work
-    console.warn('[SemanticPipeline] Using fallback zero embedding - semantic search will not work correctly');
-    return new Array(1536).fill(0);
+    // Return empty array sentinel - callers check length to decide between
+    // embedding-based similarity and keyword-based fallback
+    console.warn('[SemanticPipeline] Embedding service unavailable - using keyword fallback for semantic linking');
+    return [];
+  }
+
+  /**
+   * Keyword-based similarity fallback when embedding service is unavailable.
+   * Matches question words against element name and description tokens.
+   * Returns score 0-1 (lower threshold than embedding similarity since less precise).
+   */
+  private keywordSimilarity(questionText: string, elementName: string, elementDescription?: string): number {
+    const stopWords = ['about', 'which', 'there', 'their', 'would', 'could', 'should', 'these', 'those', 'have', 'been', 'with', 'from', 'this', 'that', 'what', 'does', 'will'];
+    const qWords = questionText.toLowerCase().split(/\s+/)
+      .filter(w => w.length > 3)
+      .filter(w => !stopWords.includes(w));
+    const eText = `${elementName} ${elementDescription || ''}`.toLowerCase();
+    const eWords = eText.split(/[\s_\-.,]+/).filter(w => w.length > 2);
+
+    if (qWords.length === 0 || eWords.length === 0) return 0;
+
+    let matches = 0;
+    for (const eWord of eWords) {
+      if (qWords.some(qw => qw.includes(eWord) || eWord.includes(qw))) {
+        matches++;
+      }
+    }
+
+    return eWords.length > 0 ? Math.min(1, matches / Math.max(eWords.length * 0.5, 1)) : 0;
   }
 }
 

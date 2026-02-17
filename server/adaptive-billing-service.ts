@@ -1,3 +1,8 @@
+/**
+ * @deprecated P2-5: This file is LEGACY. Use server/services/billing/unified-billing-service.ts instead.
+ * This adaptive billing service should be migrated to the unified service.
+ * All new billing code should go into unified-billing-service.ts.
+ */
 import { db } from './db';
 import { users, analysisSubscriptions, generatedArtifacts, projects } from '../shared/schema';
 import { eq, and, gte, count, sum, desc } from 'drizzle-orm';

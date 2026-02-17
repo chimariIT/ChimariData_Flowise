@@ -1038,41 +1038,78 @@ export class ResearchAgentToolHandlers {
   }
 
   /**
-   * Web Researcher Tool
+   * Web Researcher Tool — real web search via Firecrawl
+   * Replaces the previous stub implementation with actual web search capabilities.
    */
   async handleWebResearch(input: any, context: ToolExecutionContext): Promise<ToolExecutionResult> {
     const startTime = Date.now();
 
     try {
       const { query, sources, depth, timeRange, includeAcademic } = input;
+      const { webSearchService } = await import('./web-search-service');
 
-      // TODO: Implement real web scraping/search
-      // For now, return structured research results
+      // Check if web search is available
+      if (!webSearchService.isAvailable()) {
+        console.warn('⚠️ [WebResearch] FIRECRAWL_API_KEY not configured, returning limited results');
+        return {
+          executionId: context.executionId,
+          toolId: 'web_researcher',
+          status: 'success',
+          result: {
+            query,
+            searchDepth: depth || 'standard',
+            sources: ['unavailable'],
+            results: [],
+            totalResults: 0,
+            note: 'Web search is not configured. Set FIRECRAWL_API_KEY to enable real web search.',
+            academicPapers: []
+          },
+          metrics: {
+            duration: Date.now() - startTime,
+            resourcesUsed: { cpu: 1, memory: 50, storage: 0 },
+            cost: 0
+          }
+        };
+      }
+
+      // Perform real web search
+      const searchResults = await webSearchService.searchDefinitions(query, {
+        industry: (context as any).industry,
+        maxResults: depth === 'deep' ? 10 : 5
+      });
+
+      // If user wants structured definition extraction, use searchAndExtract
+      let definitionResult = null;
+      if (input.extractDefinition || input.kpiName) {
+        definitionResult = await webSearchService.searchAndExtract(
+          input.kpiName || query,
+          (context as any).industry || 'general'
+        );
+      }
+
       const results = {
         query,
         searchDepth: depth || 'standard',
-        sources: sources || ['general_web'],
-        results: [
-          {
-            title: `Research findings for: ${query}`,
-            url: 'https://example.com/research',
-            snippet: 'Relevant information based on your query...',
-            relevanceScore: 0.92,
-            source: 'web',
-            publishedDate: new Date()
-          }
-        ],
-        totalResults: 10,
-        academicPapers: includeAcademic ? [
-          {
-            title: 'Academic paper related to query',
-            authors: ['Dr. Smith', 'Dr. Johnson'],
-            journal: 'Journal of Data Science',
-            year: 2024,
-            citations: 45,
-            url: 'https://arxiv.org/example'
-          }
-        ] : []
+        sources: sources || ['firecrawl_web'],
+        results: searchResults.map(r => ({
+          title: r.title,
+          url: r.url,
+          snippet: r.snippet,
+          relevanceScore: r.relevanceScore,
+          source: r.source,
+          publishedDate: r.publishedDate
+        })),
+        totalResults: searchResults.length,
+        definition: definitionResult?.found ? {
+          kpiName: definitionResult.kpiName,
+          definition: definitionResult.definition,
+          formula: definitionResult.formula,
+          alternativeNames: definitionResult.alternativeNames,
+          source: definitionResult.source,
+          sourceUrl: definitionResult.sourceUrl,
+          confidence: definitionResult.confidence
+        } : undefined,
+        academicPapers: [] // Firecrawl doesn't distinguish academic papers
       };
 
       return {
@@ -1083,7 +1120,7 @@ export class ResearchAgentToolHandlers {
         metrics: {
           duration: Date.now() - startTime,
           resourcesUsed: { cpu: 3, memory: 100, storage: 0 },
-          cost: 0.05
+          cost: searchResults.length * 0.01 // Approximate per-search cost
         }
       };
     } catch (error) {
@@ -1340,6 +1377,7 @@ export class ResearchAgentToolHandlers {
 export class BusinessAgentToolHandlers {
   /**
    * Industry Research Tool
+   * P0 FIX: Now uses real web search via web-search-service.ts instead of placeholder data.
    */
   async handleIndustryResearch(input: any, context: ToolExecutionContext): Promise<ToolExecutionResult> {
     const startTime = Date.now();
@@ -1347,47 +1385,74 @@ export class BusinessAgentToolHandlers {
     try {
       const { industry, topics, depth, includeRegulations } = input;
 
-      // TODO: Implement real industry research (web scraping, API calls, etc.)
+      // P0 FIX: Import and use real web search service
+      const { webSearchService } = await import('./web-search-service.js');
+
+      console.log(`🔍 [Industry Research] Starting research for industry: ${industry}`);
+
+      // Build search queries based on topics and depth
+      const searchQueries = [
+        `${industry} industry trends 2024 2025`,
+        `${industry} market size forecast growth`,
+        `${industry} key players market leaders`,
+      ];
+
+      // Add topic-specific queries if provided
+      if (topics && Array.isArray(topics)) {
+        for (const topic of topics.slice(0, 3)) {
+          searchQueries.push(`${industry} ${topic}`);
+        }
+      }
+
+      // Execute searches in parallel
+      const searchPromises = searchQueries.map(query =>
+        webSearchService.searchDefinitions(query, { industry, maxResults: 3 })
+      );
+
+      const searchResultsArrays = await Promise.all(searchPromises);
+      const allResults = searchResultsArrays.flat();
+
+      // Extract trends from search results
+      const trends = this.extractTrendsFromResults(allResults, industry);
+
+      // Extract market size information
+      const marketSize = this.extractMarketSizeFromResults(allResults, industry);
+
+      // Extract key players
+      const keyPlayers = this.extractKeyPlayersFromResults(allResults, industry);
+
+      // Build sources list
+      const sources = [...new Set(allResults.map(r => r.title))].slice(0, 10);
+
+      // Build regulations if requested (still requires additional research)
+      let regulations = undefined;
+      if (includeRegulations) {
+        const regResults = await webSearchService.searchDefinitions(
+          `${industry} regulations compliance requirements 2024`,
+          { industry, maxResults: 3 }
+        );
+        regulations = this.extractRegulationsFromResults(regResults, industry);
+      }
+
       const research = {
         industry,
         researchDepth: depth || 'detailed',
         topics: topics || [],
         findings: {
-          trends: [
-            {
-              trend: `${industry} digital transformation`,
-              description: 'Increasing adoption of AI and automation',
-              impact: 'high',
-              timeframe: '2024-2026'
-            }
-          ],
-          marketSize: {
-            current: '$X billion',
-            projected: '$Y billion (2030)',
-            cagr: '15%'
-          },
-          keyPlayers: [
-            'Company A (market leader)',
-            'Company B (fastest growing)',
-            'Company C (innovative solutions)'
-          ]
+          trends,
+          marketSize,
+          keyPlayers
         },
-        regulations: includeRegulations ? [
-          {
-            name: 'Industry-specific regulation',
-            region: 'US/EU',
-            effectiveDate: new Date('2024-01-01'),
-            requirements: ['Data protection', 'Compliance reporting'],
-            impact: 'moderate'
-          }
-        ] : undefined,
-        sources: [
-          'Industry reports',
-          'Government databases',
-          'Trade associations',
-          'Market research firms'
-        ]
+        regulations,
+        sources,
+        metadata: {
+          searchResultsCount: allResults.length,
+          searchedAt: new Date().toISOString(),
+          dataQuality: allResults.length > 0 ? 'real' : 'fallback'
+        }
       };
+
+      console.log(`✅ [Industry Research] Completed with ${allResults.length} sources found`);
 
       return {
         executionId: context.executionId,
@@ -1401,8 +1466,135 @@ export class BusinessAgentToolHandlers {
         }
       };
     } catch (error) {
+      console.error(`❌ [Industry Research] Failed:`, error);
       return this.createErrorResult(context.executionId, 'industry_research', error as Error, startTime);
     }
+  }
+
+  /**
+   * Extract industry trends from search results
+   */
+  private extractTrendsFromResults(results: any[], industry: string): any[] {
+    const trends: any[] = [];
+    const trendKeywords = ['trend', 'growth', 'transformation', 'adoption', 'emerging', 'shift', 'evolution'];
+
+    for (const result of results) {
+      const text = `${result.title} ${result.snippet}`.toLowerCase();
+      for (const keyword of trendKeywords) {
+        if (text.includes(keyword) && !trends.some(t => t.trend === result.title)) {
+          trends.push({
+            trend: result.title,
+            description: result.snippet.slice(0, 200),
+            impact: 'medium',
+            timeframe: '2024-2026',
+            source: result.url
+          });
+          break;
+        }
+      }
+      if (trends.length >= 5) break;
+    }
+
+    // Ensure we have at least one trend
+    if (trends.length === 0 && results.length > 0) {
+      trends.push({
+        trend: `${industry} industry developments`,
+        description: results[0].snippet.slice(0, 200),
+        impact: 'medium',
+        timeframe: '2024-2026',
+        source: results[0].url
+      });
+    }
+
+    return trends;
+  }
+
+  /**
+   * Extract market size information from search results
+   */
+  private extractMarketSizeFromResults(results: any[], industry: string): any {
+    for (const result of results) {
+      const text = result.snippet;
+
+      // Look for market size patterns
+      const billionMatch = text.match(/\$([\d.]+)\s*(?:billion|B)/i);
+      const millionMatch = text.match(/\$([\d.]+)\s*(?:million|M)/i);
+      const cagrMatch = text.match(/CAGR\s*(?:of\s+)?([\d.]+)%?/i);
+      const growthMatch = text.match(/growth\s*(?:rate\s+)?(?:of\s+)?([\d.]+)%?/i);
+
+      if (billionMatch || millionMatch) {
+        return {
+          current: billionMatch ? `$${billionMatch[1]} billion` : `$${millionMatch![1]} million`,
+          projected: 'Growth expected through 2030',
+          cagr: cagrMatch ? `${cagrMatch[1]}%` : (growthMatch ? `${growthMatch[1]}%` : 'Growing'),
+          source: result.url
+        };
+      }
+    }
+
+    return {
+      current: 'See industry reports for current market size',
+      projected: 'Growth expected',
+      cagr: 'Varies by segment',
+      source: 'Multiple industry reports'
+    };
+  }
+
+  /**
+   * Extract key players from search results
+   */
+  private extractKeyPlayersFromResults(results: any[], industry: string): string[] {
+    const players: string[] = [];
+    const playerPatterns = [
+      /([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)\s+(?:is|are|corporation|inc|corp|ltd|company|group)/g,
+      /market leaders?[:\s]+([^,.]+)/gi,
+      /key players[:\s]+([^,.]+)/gi,
+    ];
+
+    for (const result of results) {
+      const text = result.snippet;
+      for (const pattern of playerPatterns) {
+        let match;
+        while ((match = pattern.exec(text)) !== null) {
+          const player = match[1]?.trim();
+          if (player && player.length > 2 && player.length < 50 && !players.includes(player)) {
+            // Filter out common non-company words
+            const nonCompanyWords = ['the', 'industry', 'market', 'sector', 'growth', 'trend'];
+            if (!nonCompanyWords.includes(player.toLowerCase())) {
+              players.push(player);
+            }
+          }
+        }
+      }
+      if (players.length >= 5) break;
+    }
+
+    return players.slice(0, 5);
+  }
+
+  /**
+   * Extract regulations from search results
+   */
+  private extractRegulationsFromResults(results: any[], industry: string): any[] {
+    const regulations: any[] = [];
+
+    for (const result of results) {
+      if (result.snippet.toLowerCase().includes('regulation') ||
+          result.snippet.toLowerCase().includes('compliance') ||
+          result.snippet.toLowerCase().includes('requirement')) {
+        regulations.push({
+          name: result.title,
+          region: 'Various',
+          effectiveDate: new Date(),
+          requirements: [result.snippet.slice(0, 100)],
+          impact: 'moderate',
+          source: result.url
+        });
+      }
+      if (regulations.length >= 3) break;
+    }
+
+    return regulations;
   }
 
   /**
@@ -2146,7 +2338,8 @@ export class DataScientistToolHandlers {
           projectId: input.projectId || context.projectId || 'unknown',
           userGoals: input.userGoals || input.goals || [],
           userQuestions: input.userQuestions || input.questions || [],
-          datasetMetadata: input.datasetMetadata
+          datasetMetadata: input.datasetMetadata,
+          industry: input.industry || (context as any).industry
         });
 
         return {
@@ -2185,7 +2378,7 @@ export class DataScientistToolHandlers {
           preview: input.dataset.preview || [],
           piiFields: input.dataset.piiFields,
           businessDefinitions: input.businessDefinitions || []
-        });
+        }, input.industry || (context as any).industry, input.projectId || (context as any).projectId);
 
         return {
           executionId: context.executionId,

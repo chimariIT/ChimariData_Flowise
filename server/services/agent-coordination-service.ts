@@ -150,6 +150,8 @@ export interface U2A2A2URequest {
   requiredDataElements?: any[];
   // PII decisions for filtering
   piiDecisions?: any;
+  // Number of datasets uploaded (used for dynamic status messages)
+  datasetCount?: number;
 }
 
 // ==========================================
@@ -322,7 +324,8 @@ export class AgentCoordinationService {
         totalPhases: TOTAL_PHASES,
         status: 'started',
         percentComplete: 5,
-        message: 'Data Engineer: Assessing data quality',
+        // P1-3 FIX: Dynamic context-aware message
+        message: `Data Engineer: Assessing data quality${request.datasetCount ? ` for ${request.datasetCount} dataset(s)` : ''}`,
         slaCompliant: true,
         timestamp: new Date().toISOString()
       });
@@ -356,7 +359,15 @@ export class AgentCoordinationService {
       }
 
       if (deResult.status === 'failed') {
-        return this.buildResultWithSLA(workflowId, request.projectId, phases, 'failed', 'data_engineer', startTime, slaMetrics, slaWarnings);
+        // P3-1: Invoke CS agent for error recovery guidance
+        const csGuidance = await this.invokeCustomerSupportForError(
+          request.projectId, 'data_engineer',
+          (deResult as any).error || 'Data Engineer phase failed',
+          { userId: (request as any).userId, workflowId }
+        ).catch(() => null);
+        const failResult = this.buildResultWithSLA(workflowId, request.projectId, phases, 'failed', 'data_engineer', startTime, slaMetrics, slaWarnings);
+        if (csGuidance) (failResult as any).supportGuidance = csGuidance;
+        return failResult;
       }
 
       // ==========================================
@@ -370,7 +381,8 @@ export class AgentCoordinationService {
         totalPhases: TOTAL_PHASES,
         status: 'started',
         percentComplete: 25,
-        message: 'Data Scientist: Planning analysis',
+        // P1-3 FIX: Dynamic context-aware message
+        message: `Data Scientist: Planning analysis${(request as any).analysisTypes?.length ? ` (${(request as any).analysisTypes.slice(0, 3).join(', ')})` : ''}`,
         slaCompliant: true,
         timestamp: new Date().toISOString()
       });
@@ -404,7 +416,15 @@ export class AgentCoordinationService {
       }
 
       if (dsResult.status === 'failed') {
-        return this.buildResultWithSLA(workflowId, request.projectId, phases, 'failed', 'data_scientist', startTime, slaMetrics, slaWarnings);
+        // P3-1: Invoke CS agent for error recovery guidance
+        const csGuidance2 = await this.invokeCustomerSupportForError(
+          request.projectId, 'data_scientist',
+          (dsResult as any).error || 'Data Scientist phase failed',
+          { userId: (request as any).userId, workflowId }
+        ).catch(() => null);
+        const failResult2 = this.buildResultWithSLA(workflowId, request.projectId, phases, 'failed', 'data_scientist', startTime, slaMetrics, slaWarnings);
+        if (csGuidance2) (failResult2 as any).supportGuidance = csGuidance2;
+        return failResult2;
       }
 
       // ==========================================
@@ -418,7 +438,8 @@ export class AgentCoordinationService {
         totalPhases: TOTAL_PHASES,
         status: 'started',
         percentComplete: 55,
-        message: 'Business Agent: Adding business context',
+        // P1-3 FIX: Dynamic context-aware message
+        message: `Business Agent: Adding business context${(request as any).audience ? ` for ${(request as any).audience} audience` : ''}`,
         slaCompliant: true,
         timestamp: new Date().toISOString()
       });
@@ -462,7 +483,8 @@ export class AgentCoordinationService {
         totalPhases: TOTAL_PHASES,
         status: 'started',
         percentComplete: 75,
-        message: 'PM Agent: Synthesizing results',
+        // P1-3 FIX: Dynamic context-aware message
+        message: `PM Agent: Synthesizing results from ${phases.length} agent phases`,
         slaCompliant: true,
         timestamp: new Date().toISOString()
       });
@@ -485,7 +507,8 @@ export class AgentCoordinationService {
         totalPhases: TOTAL_PHASES,
         status: 'completed',
         percentComplete: 90,
-        message: 'PM Agent: Results synthesized',
+        // P1-3 FIX: Dynamic message with synthesis details
+        message: `PM Agent: Results synthesized from ${phases.filter(p => p.status !== 'failed').length} successful phases`,
         slaCompliant: synthMetrics.withinSLA,
         durationMs: synthMetrics.durationMs,
         timestamp: new Date().toISOString()
@@ -506,7 +529,8 @@ export class AgentCoordinationService {
         totalPhases: TOTAL_PHASES,
         status: 'started',
         percentComplete: 92,
-        message: 'Creating checkpoint for approval',
+        // P1-3 FIX: Dynamic checkpoint message
+        message: `Creating analysis plan checkpoint for "${(request as any).projectName || 'your project'}"`,
         slaCompliant: true,
         timestamp: new Date().toISOString()
       });
@@ -529,7 +553,8 @@ export class AgentCoordinationService {
         totalPhases: TOTAL_PHASES,
         status: 'completed',
         percentComplete: 100,
-        message: 'Awaiting user approval',
+        // P1-3 FIX: Dynamic approval message
+        message: 'Analysis plan ready — awaiting your approval to proceed',
         slaCompliant: checkpointMetrics.withinSLA,
         durationMs: checkpointMetrics.durationMs,
         timestamp: new Date().toISOString()
@@ -567,7 +592,15 @@ export class AgentCoordinationService {
         status: 'failed',
         summary: error.message
       });
-      return this.buildResultWithSLA(workflowId, request.projectId, phases, 'failed', 'error', startTime, slaMetrics, slaWarnings);
+      // P3-1: Invoke CS agent for error recovery on general workflow failure
+      const csGuidanceGeneral = await this.invokeCustomerSupportForError(
+        request.projectId, 'workflow',
+        error.message || 'Workflow execution failed',
+        { userId: (request as any).userId, workflowId }
+      ).catch(() => null);
+      const failResultGeneral = this.buildResultWithSLA(workflowId, request.projectId, phases, 'failed', 'error', startTime, slaMetrics, slaWarnings);
+      if (csGuidanceGeneral) (failResultGeneral as any).supportGuidance = csGuidanceGeneral;
+      return failResultGeneral;
     }
   }
 
@@ -1588,6 +1621,120 @@ export class AgentCoordinationService {
   }
 
   // Note: buildResult() was replaced by buildResultWithSLA() for SLA compliance tracking
+
+  // ==========================================
+  // P3-1: Customer Support Agent Integration
+  // ==========================================
+
+  /**
+   * Invoke Customer Support agent for error recovery
+   * Called when a workflow phase fails, to provide user-facing error diagnostics
+   */
+  async invokeCustomerSupportForError(
+    projectId: string,
+    failedPhase: string,
+    errorMessage: string,
+    context?: { userId?: string; workflowId?: string }
+  ): Promise<{ suggestion: string; diagnostics: any; escalate: boolean }> {
+    try {
+      console.log(`🆘 [P3-1] Customer Support Agent invoked for error in phase "${failedPhase}"`);
+
+      // Try to use CS agent via tool registry
+      const { executeTool } = await import('./mcp-tool-registry');
+      const result = await executeTool('knowledge_base_search', 'customer_support', {
+        query: `Error during ${failedPhase}: ${errorMessage}`,
+        category: 'troubleshooting',
+        projectId,
+      }, { userId: context?.userId, projectId });
+
+      if (result.status === 'success' && result.result) {
+        return {
+          suggestion: (result.result as any).answer || 'Please try again or contact support.',
+          diagnostics: {
+            failedPhase,
+            errorMessage,
+            knowledgeBaseHit: true,
+            timestamp: new Date().toISOString(),
+          },
+          escalate: false,
+        };
+      }
+
+      // Fallback: provide generic error guidance
+      return this.getGenericErrorGuidance(failedPhase, errorMessage);
+    } catch (csError) {
+      console.warn('⚠️ [P3-1] Customer Support Agent failed, using fallback:', csError);
+      return this.getGenericErrorGuidance(failedPhase, errorMessage);
+    }
+  }
+
+  private getGenericErrorGuidance(failedPhase: string, errorMessage: string): {
+    suggestion: string; diagnostics: any; escalate: boolean
+  } {
+    const phaseGuidance: Record<string, string> = {
+      data_engineer: 'Check that your data file is properly formatted (CSV, XLSX). Ensure column headers are present and data types are consistent.',
+      data_scientist: 'The analysis engine encountered an issue. This may be due to insufficient data rows, missing required columns, or unsupported data types.',
+      business_agent: 'Business context validation failed. Ensure your industry and analysis goals are properly configured in the Prepare step.',
+      synthesis: 'Result synthesis failed. This usually indicates an issue with one of the earlier analysis phases. Check the workflow details for specific phase errors.',
+      checkpoint: 'Checkpoint creation failed. The analysis results may still be valid — try refreshing the page.',
+    };
+
+    return {
+      suggestion: phaseGuidance[failedPhase] || `An error occurred during ${failedPhase}. Please try again or contact support.`,
+      diagnostics: {
+        failedPhase,
+        errorMessage,
+        knowledgeBaseHit: false,
+        timestamp: new Date().toISOString(),
+      },
+      escalate: !phaseGuidance[failedPhase], // Escalate if unknown phase
+    };
+  }
+
+  // ==========================================
+  // P3-2: Template Research Agent Integration
+  // ==========================================
+
+  /**
+   * Invoke Template Research agent to recommend analysis templates
+   * Called during the Prepare step to suggest appropriate templates based on user goals
+   */
+  async invokeResearchForTemplateRecommendation(
+    projectId: string,
+    userGoals: string,
+    industry?: string,
+    dataContext?: { columnNames?: string[]; rowCount?: number }
+  ): Promise<{ templates: any[]; reasoning: string }> {
+    try {
+      console.log(`🔍 [P3-2] Template Research Agent invoked for project ${projectId}`);
+
+      const { executeTool } = await import('./mcp-tool-registry');
+      const result = await executeTool('template_library_search', 'template_research', {
+        query: userGoals,
+        industry: industry || 'general',
+        dataContext,
+      }, { projectId });
+
+      if (result.status === 'success' && result.result) {
+        return {
+          templates: (result.result as any).templates || [],
+          reasoning: (result.result as any).reasoning || 'Templates selected based on your analysis goals.',
+        };
+      }
+
+      // Fallback: return empty with note
+      return {
+        templates: [],
+        reasoning: 'Template Research Agent could not find matching templates. Please proceed with custom analysis.',
+      };
+    } catch (raError) {
+      console.warn('⚠️ [P3-2] Template Research Agent failed:', raError);
+      return {
+        templates: [],
+        reasoning: 'Template recommendation service is currently unavailable.',
+      };
+    }
+  }
 }
 
 export const agentCoordinationService = new AgentCoordinationService();

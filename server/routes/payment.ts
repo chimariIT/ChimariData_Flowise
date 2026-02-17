@@ -30,7 +30,8 @@ router.post('/estimate-cost', ensureAuthenticated, async (req, res) => {
         }
 
         const cost = PricingService.calculateAnalysisCost(analysisType, recordCount, complexity);
-        res.json(cost);
+        // Bug #12 fix: Include pricing version for frontend cache staleness detection
+        res.json({ ...cost, pricingVersion: PricingService.getLastUpdatedAt() });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
     }

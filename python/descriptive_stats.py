@@ -177,6 +177,12 @@ def perform_descriptive_stats(config):
             'n_categorical_variables': len(categorical_cols)
         }
 
+        # Phase 4C-1: Pass through business context for evidence chain
+        business_context = config.get('business_context', {})
+        if business_context:
+            results['business_context'] = business_context
+            results['question_ids'] = business_context.get('question_ids', [])
+
         return results
 
     except Exception as e:

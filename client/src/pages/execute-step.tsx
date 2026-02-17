@@ -51,8 +51,24 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
+
+  // FIX: Read projectId from URL query params as fallback (Stripe redirect includes ?projectId=...)
+  // This ensures the project loads correctly after Stripe payment redirect.
+  const resolvedInitialProjectId = (() => {
+    const stored = localStorage.getItem('currentProjectId');
+    if (stored) return stored;
+    const params = new URLSearchParams(window.location.search);
+    const fromUrl = params.get('projectId');
+    if (fromUrl) {
+      localStorage.setItem('currentProjectId', fromUrl);
+      console.log(`📌 [Execute] Restored projectId from URL query param: ${fromUrl}`);
+      return fromUrl;
+    }
+    return undefined;
+  })();
+
   // FIX Phase 3: Use updateProgressAsync for proper async handling
-  const { projectId, project, journeyProgress, updateProgress, updateProgressAsync, isUpdating, isLoading: projectLoading } = useProject(localStorage.getItem('currentProjectId') || undefined);
+  const { projectId, project, journeyProgress, updateProgress, updateProgressAsync, isUpdating, isLoading: projectLoading } = useProject(resolvedInitialProjectId);
 
   // const [executionStatus, setExecutionStatus] = useState<'idle' | 'configuring' | 'running' | 'completed' | 'error'>('idle');
   // const [executionProgress, setExecutionProgress] = useState(0);
@@ -236,6 +252,16 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       return;
     }
 
+    // FIX 1B: Skip initial results load when returning from Stripe payment.
+    // The payment verification effect (below) handles the full flow:
+    // verify-session → invalidate cache → trigger execution.
+    // Without this guard, this effect fires BEFORE payment is verified,
+    // gets 402 from the server, and sets billingError state that persists.
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('payment') === 'success') {
+      return;
+    }
+
     let cancelled = false;
     const loadResults = async () => {
       setLoadingServerResults(true);
@@ -257,6 +283,24 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         const status = error?.response?.status || error?.status;
         if (status === 404) {
           // No execution yet; keep idle state
+          return;
+        }
+        // FIX E1: Handle 202 (still executing) - update state to show running
+        if (status === 202) {
+          setExecutionState(prev => ({
+            ...prev,
+            status: 'running',
+            currentStep: { ...prev.currentStep, status: 'running', description: 'Analysis is still running on the server...' }
+          }));
+          return;
+        }
+        // FIX E1: Handle 402 (payment required)
+        if (status === 402) {
+          setBillingError({
+            type: 'PAYMENT_REQUIRED',
+            message: 'Payment is required before running the analysis.',
+            options: { payPerProject: { url: `/projects/${resolvedProjectId}/payment`, description: 'Pay for this analysis' } }
+          });
           return;
         }
         console.error('Failed to load execution results from server:', error);
@@ -995,7 +1039,9 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     const planApproved = journeyProgress?.planApproved === true;
     const planApprovedAt = journeyProgress?.planApprovedAt;
 
-    if (!planApproved && journeyType !== 'non-tech') {
+    // When called from payment auto-trigger (isApprovedOverride=true),
+    // bypass the planApproved gate - user already went through plan+payment flow
+    if (!planApproved && journeyType !== 'non-tech' && !isApprovedOverride) {
       toast({
         title: "Plan Approval Required",
         description: "Please go back to the Plan step and approve the analysis plan before execution.",
@@ -1004,8 +1050,34 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       return;
     }
 
-    // CRITICAL FIX: Show feedback when no analyses selected instead of silent return
-    if (selectedAnalyses.length === 0) {
+    // When payment auto-triggers, selectedAnalyses may not be populated yet from React state
+    // Restore from journeyProgress SSOT
+    let analysesToExecute = [...selectedAnalyses];
+    if (analysesToExecute.length === 0 && isApprovedOverride) {
+      const reqDoc = (journeyProgress as any)?.requirementsDocument;
+      const savedConfig = (journeyProgress as any)?.executionConfig;
+      const analysisPath = reqDoc?.analysisPath || (journeyProgress as any)?.analysisPath || [];
+
+      if (savedConfig?.selectedAnalyses?.length > 0) {
+        analysesToExecute = savedConfig.selectedAnalyses;
+        console.log('🔄 [Auto-Trigger] Restored analyses from executionConfig:', analysesToExecute);
+      } else if (analysisPath.length > 0) {
+        analysesToExecute = analysisPath
+          .map((a: any) => a.analysisType || a.type || a.method || a.analysisName || '')
+          .filter((t: string) => t);
+        console.log('🔄 [Auto-Trigger] Restored analyses from analysisPath:', analysesToExecute);
+      }
+
+      if (analysesToExecute.length > 0) {
+        setSelectedAnalyses(analysesToExecute);
+      }
+    }
+
+    // FIX 1D: Deduplicate analysis types to prevent duplicate React keys in pendingSteps
+    // (e.g., "descriptive" appearing twice from different sources)
+    analysesToExecute = [...new Set(analysesToExecute)];
+
+    if (analysesToExecute.length === 0) {
       toast({
         title: "No Analysis Selected",
         description: "Please select at least one analysis type before executing.",
@@ -1023,8 +1095,8 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     }
 
     // PHASE 6 FIX: Show cost confirmation before execution
-    // If cost confirmation not yet shown, fetch estimate and show dialog
-    if (!showCostConfirmation && estimatedCost === 0) {
+    // Skip for payment auto-trigger - user already paid
+    if (!isApprovedOverride && !showCostConfirmation && estimatedCost === 0) {
       setCostLoading(true);
       try {
         const costResponse = await apiClient.get(`/api/projects/${projectId}/cost-estimate`);
@@ -1050,12 +1122,12 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       overallProgress: 0,
       currentStep: { id: 'config', name: 'Configuring Analysis', status: 'running', description: 'Preparing analysis parameters...' },
       completedSteps: [],
-      pendingSteps: selectedAnalyses.map(id => ({ id, name: id, status: 'pending', description: 'Pending execution...' })),
-      analysisTypes: selectedAnalyses,
+      pendingSteps: analysesToExecute.map(id => ({ id, name: id, status: 'pending', description: 'Pending execution...' })),
+      analysisTypes: analysesToExecute,
       startedAt: new Date().toISOString(),
       executionId: '',
       projectId: resolvedProjectId || '',
-      totalSteps: selectedAnalyses.length + 2
+      totalSteps: analysesToExecute.length + 2
     });
 
 
@@ -1083,17 +1155,17 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       }
 
       console.log(`🚀 Executing real analysis for project ${projectId}`);
-      console.log(`📊 Analysis types: ${selectedAnalyses.join(', ')}`);
+      console.log(`📊 Analysis types: ${analysesToExecute.join(', ')}`);
 
       // Call the REAL analysis execution API
       // Update journeyProgress that execution has started
       updateProgress({
         executionStartedAt: new Date().toISOString(),
         executionConfig: {
-          selectedAnalyses,
+          selectedAnalyses: analysesToExecute,
           // FIX 4: Persist analysisPath in object-array format for cost estimation compatibility
           // server/routes/project.ts reads executionConfig.analysisPath as [{analysisId, analysisType, ...}]
-          analysisPath: selectedAnalyses.map(id => ({
+          analysisPath: analysesToExecute.map(id => ({
             analysisId: id,
             analysisType: id,
             analysisName: id.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
@@ -1116,6 +1188,30 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         currentStep: { id: 'execution', name: 'Executing Analysis', status: 'running', description: 'Sending request to analysis engine...' }
       }));
 
+      // Simulate incremental progress during execution (real progress comes from WebSocket if available)
+      const progressInterval = setInterval(() => {
+        setExecutionState(prev => {
+          if (prev.status !== 'running' || prev.overallProgress >= 85) {
+            clearInterval(progressInterval);
+            return prev;
+          }
+          const newProgress = Math.min(prev.overallProgress + 5, 85);
+          return {
+            ...prev,
+            overallProgress: newProgress,
+            currentStep: {
+              ...prev.currentStep,
+              description: newProgress < 30
+                ? 'Preparing data for analysis...'
+                : newProgress < 50
+                  ? 'Running statistical analyses...'
+                  : newProgress < 70
+                    ? 'Generating insights and answering your questions...'
+                    : 'Finalizing results and building artifacts...'
+            }
+          };
+        });
+      }, 3000);
 
       // apiClient handles authentication headers automatically
 
@@ -1150,7 +1246,7 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
 
       // Build analysisPath for evidence chain if not already available (declared outside try for logging)
       const analysisPathForExecution = requirementsDocument?.analysisPath ||
-        selectedAnalyses.map((type, idx) => ({
+        analysesToExecute.map((type, idx) => ({
           analysisId: `analysis_${idx}`,
           analysisName: type.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
           analysisType: type,
@@ -1160,9 +1256,9 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       // Build questionAnswerMapping from requirements document (declared outside try for logging)
       const questionMappingForExecution = requirementsDocument?.questionAnswerMapping ||
         (savedQuestions || []).map((q: string, idx: number) => ({
-          questionId: `q_${idx}`,
+          questionId: `q_${idx + 1}`,
           questionText: q,
-          recommendedAnalyses: selectedAnalyses.slice(0, 2),
+          recommendedAnalyses: analysesToExecute.slice(0, 2),
           requiredDataElements: []
         }));
 
@@ -1170,13 +1266,14 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       try {
         data = await apiClient.post('/api/analysis-execution/execute', {
           projectId: projectId,
-          analysisTypes: selectedAnalyses,
+          analysisTypes: analysesToExecute,
           analysisPath: analysisPathForExecution,
           questionAnswerMapping: questionMappingForExecution,
           previewOnly: false
         }, { signal: controller.signal });
       } catch (fetchError: any) {
         clearTimeout(timeoutId);
+        clearInterval(progressInterval);
 
         if (fetchError.name === 'AbortError') {
           throw new Error('Agentic workflow timed out after 5 minutes. Your analysis may be processing in the background - please check back in a few minutes.');
@@ -1232,9 +1329,10 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
         throw fetchError;
       }
       clearTimeout(timeoutId);
+      clearInterval(progressInterval);
 
       console.log('🔄 [PHASE 9] Analysis execution request sent');
-      console.log('📈 [PHASE 9] Analysis types:', selectedAnalyses.length);
+      console.log('📈 [PHASE 9] Analysis types:', analysesToExecute.length);
       console.log('📋 [PHASE 9] Analysis path items:', analysisPathForExecution.length);
       console.log('❓ [PHASE 9] Question mappings:', questionMappingForExecution.length);
 
@@ -1287,10 +1385,10 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
           description: `Generated ${results.insights?.length || 0} insights. View your results!`,
         });
 
-        // Navigate to results after short delay
+        // Navigate to results - DashboardStep has its own loading state
         setTimeout(() => {
           setLocation(`/journeys/${journeyType}/results?projectId=${projectId}`);
-        }, 1500);
+        }, 500);
 
         return;
       }
@@ -1384,6 +1482,79 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
       });
     }
   };
+
+  // FIX F5: Auto-trigger execution when arriving from payment success
+  // Step 1: Verify payment with backend (marks isPaid=true in DB)
+  // Step 2: Invalidate project queries to pick up isPaid=true
+  // Step 3: Auto-trigger execution
+  const [paymentVerified, setPaymentVerified] = useState(false);
+  const [paymentVerifying, setPaymentVerifying] = useState(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const paymentSuccess = params.get('payment') === 'success';
+    const sessionId = params.get('session_id');
+
+    if (!paymentSuccess || !resolvedProjectId || paymentVerified || paymentVerifying || projectLoading) return;
+
+    // Step 1: Verify payment session with backend (sets isPaid=true in DB)
+    const verifyAndExecute = async () => {
+      setPaymentVerifying(true);
+      try {
+        if (sessionId) {
+          console.log(`💳 [Payment] Verifying session ${sessionId} for project ${resolvedProjectId}`);
+          const verifyResult = await apiClient.post('/api/payment/verify-session', {
+            sessionId,
+            projectId: resolvedProjectId
+          });
+          console.log(`✅ [Payment] Verification result:`, verifyResult);
+
+          if (!verifyResult.success) {
+            console.error('❌ [Payment] Verification failed:', verifyResult);
+            toast({
+              title: "Payment Verification Failed",
+              description: "Please contact support if you were charged.",
+              variant: "destructive"
+            });
+            setPaymentVerifying(false);
+            return;
+          }
+        }
+
+        setPaymentVerified(true);
+        // FIX 1C: Clear any billing error from the initial load race condition
+        setBillingError(null);
+
+        // Step 2: Invalidate project queries to refetch with isPaid=true
+        await queryClient.invalidateQueries({ queryKey: [`/api/projects/${resolvedProjectId}`] });
+        await queryClient.invalidateQueries({ queryKey: [`/api/projects/${resolvedProjectId}/journey-state`] });
+
+        // Clean the URL so refresh doesn't re-trigger
+        const cleanUrl = window.location.pathname;
+        window.history.replaceState({}, '', cleanUrl + '?projectId=' + resolvedProjectId);
+
+        console.log('🚀 [Auto-Trigger] Payment verified, starting analysis execution');
+        // Step 3: Wait for React state to propagate, then trigger execution
+        setTimeout(() => {
+          handleExecuteAnalysis(true);
+        }, 800);
+      } catch (err: any) {
+        console.error('❌ [Payment] Verification error:', err);
+        toast({
+          title: "Payment Error",
+          description: err?.message || "Could not verify payment. Please try again.",
+          variant: "destructive"
+        });
+      } finally {
+        setPaymentVerifying(false);
+      }
+    };
+
+    // Only trigger when journeyProgress is loaded (needed for analysis config)
+    if (journeyProgress && executionStatus === 'idle' && !executionResults) {
+      verifyAndExecute();
+    }
+  }, [resolvedProjectId, executionStatus, executionResults, journeyProgress, projectLoading, paymentVerified, paymentVerifying]);
 
   // =====================================================
   // U2A2A2U WORKFLOW HELPER FUNCTIONS

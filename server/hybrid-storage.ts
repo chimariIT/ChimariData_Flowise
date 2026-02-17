@@ -3,6 +3,7 @@ import { users, projects, enterpriseInquiries, guidedAnalysisOrders, datasets, p
 import { db } from "./db";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import { DATASET_DATA_ROW_CAP } from "./constants";
 
 // Local type aliases derived from Drizzle tables
 type User = typeof users.$inferSelect;
@@ -616,6 +617,14 @@ export class HybridStorage {
   // Dataset operations
   async createDataset(datasetData: InsertDataset): Promise<Dataset> {
     await this.init();
+
+    // Enforce row cap on `data` — same constant used by all storage implementations.
+    // See server/constants.ts for the value and rationale.
+    const rawData = (datasetData as any).data;
+    if (Array.isArray(rawData) && rawData.length > DATASET_DATA_ROW_CAP) {
+      (datasetData as any).data = rawData.slice(0, DATASET_DATA_ROW_CAP);
+    }
+
     const id = nanoid();
     const dataset: Dataset = {
       ...datasetData,
@@ -623,7 +632,7 @@ export class HybridStorage {
       sourceType: datasetData.sourceType ?? "upload",
       // no format field in schema
       dataType: datasetData.dataType ?? null,
-  data: (datasetData as any).data ?? null,
+      data: (datasetData as any).data ?? null,
   status: (datasetData as any).status ?? 'ready',
       schema: datasetData.schema ?? null,
       recordCount: datasetData.recordCount ?? null,

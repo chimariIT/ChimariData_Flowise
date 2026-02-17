@@ -21,6 +21,7 @@ import { projectQuestions } from '@shared/schema';
 import { nanoid } from 'nanoid';
 import { eq, and, desc } from 'drizzle-orm';
 import * as crypto from 'crypto';
+import { generateStableQuestionId } from '../constants';
 import { normalizeQuestions, normalizeQuestion } from '../utils/question-normalizer';
 
 export interface QuestionAnswer {
@@ -173,13 +174,26 @@ export class QuestionAnswerService {
                     answer.dataElementsUsed = questionMappingMatch.requiredDataElements || answer.dataElementsUsed || [];
                     answer.analysisTypes = questionMappingMatch.recommendedAnalyses || answer.analysisTypes || [];
 
-                    // Add evidence chain metadata
+                    // Phase 4D-3: Build enriched evidence chain with column roles & derived variables
+                    // directQuestionAnalysisMap is stored in analysisResults by Phase 4D-1
+                    const directMapping = analysisResults?.directQuestionAnalysisMap?.[questionMappingMatch.questionId];
+
                     (answer as any).evidenceChain = {
                         questionId: questionMappingMatch.questionId,
                         dataElements: questionMappingMatch.requiredDataElements || [],
                         analyses: questionMappingMatch.recommendedAnalyses || [],
                         transformationsApplied: questionMappingMatch.transformationsNeeded || [],
-                        insightIds: answer.evidenceInsights
+                        insightIds: answer.evidenceInsights,
+                        // Phase 4D: Column roles used by the analysis (e.g., target_column, features)
+                        columnRoles: directMapping?.[0]?.columnRoles || undefined,
+                        // Phase 4D: Derived variables created for this analysis
+                        derivedVariables: directMapping?.[0]?.derivedColumns || undefined,
+                        // Phase 4D: Which specific analyses executed for this question
+                        executedAnalyses: directMapping?.map((m: any) => ({
+                            analysisId: m.analysisId,
+                            analysisType: m.analysisType,
+                            analysisName: m.analysisName
+                        })) || undefined
                     };
                 }
 
@@ -593,13 +607,8 @@ YOUR ANSWER:`;
                 for (let i = 0; i < result.answers.length; i++) {
                     const qa = result.answers[i];
 
-                    // Generate stable question ID based on project + question text
-                    const questionHash = crypto.createHash('sha256')
-                        .update(qa.question.toLowerCase().trim())
-                        .digest('hex')
-                        .substring(0, 8);
-                    // P0-14 FIX: Remove array index from ID - index changes on reorder, breaking evidence chains
-                    const questionId = `q_${projectId.substring(0, 8)}_${questionHash}`;
+                    // Bug #9 fix: Use shared canonical ID generator from server/constants.ts
+                    const questionId = generateStableQuestionId(projectId, qa.question);
 
                     // Build evidence object combining all evidence sources
                     const evidenceData = {
@@ -754,13 +763,8 @@ YOUR ANSWER:`;
                 const questionText = questions[i].trim();
                 if (!questionText) continue;
 
-                // Generate stable question ID
-                const questionHash = crypto.createHash('sha256')
-                    .update(questionText.toLowerCase().trim())
-                    .digest('hex')
-                    .substring(0, 8);
-                // P0-14 FIX: Remove array index from ID - index changes on reorder, breaking evidence chains
-                    const questionId = `q_${projectId.substring(0, 8)}_${questionHash}`;
+                // Bug #9 fix: Use shared canonical ID generator from server/constants.ts
+                const questionId = generateStableQuestionId(projectId, questionText);
 
                 // Check if question exists
                 const existing = await db.select()

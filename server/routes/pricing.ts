@@ -1096,6 +1096,8 @@ router.get('/runtime-config', async (req: Request, res: Response) => {
         payPerAnalysis: PricingService.getServicePrice('pay-per-analysis'),
         expertConsultation: PricingService.getServicePrice('expert-consultation'),
       },
+      // Bug #12 fix: Include pricing version so frontend can detect stale cache
+      pricingVersion: PricingService.getLastUpdatedAt(),
     });
   } catch (error: any) {
     console.error('Error getting runtime pricing config:', error);

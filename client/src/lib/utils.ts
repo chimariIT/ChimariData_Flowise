@@ -5,6 +5,50 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+// ==========================================
+// P3-5 FIX: Shared Currency Formatting
+// ==========================================
+
+/**
+ * Format a currency amount for display.
+ * Supports both cents (integer) and dollars (float) input.
+ *
+ * @param amount - The amount to format
+ * @param options.isCents - If true, amount is in cents and will be divided by 100 (default: false)
+ * @param options.currency - ISO 4217 currency code (default: 'USD')
+ * @param options.locale - BCP 47 locale string (default: 'en-US')
+ * @returns Formatted currency string (e.g., "$12.50") or "—" for null/undefined
+ */
+export function formatCurrency(
+  amount: number | null | undefined,
+  options?: { isCents?: boolean; currency?: string; locale?: string }
+): string {
+  if (amount === null || amount === undefined || isNaN(amount)) return '—';
+
+  const { isCents = false, currency = 'USD', locale = 'en-US' } = options || {};
+  const value = isCents ? amount / 100 : amount;
+
+  return new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency,
+  }).format(value);
+}
+
+/**
+ * Format cents as currency (convenience wrapper).
+ * Equivalent to formatCurrency(cents, { isCents: true }).
+ *
+ * @param cents - Amount in cents
+ * @param currency - ISO 4217 currency code (default: 'USD')
+ * @returns Formatted currency string
+ */
+export function formatCents(
+  cents: number | null | undefined,
+  currency = 'USD'
+): string {
+  return formatCurrency(cents, { isCents: true, currency });
+}
+
 // Route storage utilities for post-auth navigation
 export const routeStorage = {
   // Store the route user intended to visit before authentication

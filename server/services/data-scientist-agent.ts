@@ -6,6 +6,7 @@ import { nanoid } from 'nanoid';
 import { normalizeQuestions, standardizeElementName } from '../utils/question-normalizer';
 import type { AnalysisStep, MLModelSpec, VisualizationSpec, DataAssessment } from '@shared/schema';
 import { ChimaridataAI } from '../chimaridata-ai';
+import { businessDefinitionRegistry } from './business-definition-registry';
 
 // ==========================================
 // CONSULTATION INTERFACES (Multi-Agent Coordination)
@@ -51,6 +52,37 @@ export interface PlanAnalysisBlueprint {
   risks: string[];
   estimatedDuration: string;
   complexity: 'low' | 'medium' | 'high' | 'very_high';
+}
+
+// ==========================================
+// QUESTION DECOMPOSITION (KPI Synthesis)
+// ==========================================
+
+/**
+ * Represents a decomposed user question broken into:
+ * - The KPI/metric being asked about (e.g., "turnover rate")
+ * - The dimensions for aggregation (e.g., "leader" = grouping, "company" = baseline)
+ * - The comparison type (e.g., group_vs_baseline)
+ * - Temporal scope if present
+ *
+ * Used by decomposeQuestion() to drive KPI registry lookup and multi-field element generation.
+ */
+export interface QuestionDecomposition {
+  originalQuestion: string;
+  kpiName: string | null;           // "turnover rate"
+  kpiRegistryKey: string | null;    // "turnover_rate"
+  dimensions: Array<{
+    name: string;                   // "leader", "company", "department"
+    role: 'grouping' | 'baseline' | 'filter';
+    level: 'detail' | 'aggregate';
+  }>;
+  comparisonType: 'none' | 'between_groups' | 'group_vs_baseline' | 'time_series';
+  temporalScope: {
+    periodType: string | null;      // "monthly", "quarterly", "yearly"
+    periodColumn: string | null;
+    keywords: string[];             // ["over time", "trend", "monthly"]
+  } | null;
+  registryDefinition: any | null;   // The full BusinessDefinition if found in registry
 }
 
 // ==========================================
@@ -2028,6 +2060,205 @@ export class DataScientistAgent implements AgentHandler {
     this.activeAnalyses.clear();
   }
 
+  // ==========================================
+  // QUESTION DECOMPOSITION (Phase 1B)
+  // ==========================================
+
+  /**
+   * Decompose a user question into KPI + dimensions + comparison type.
+   * Uses a two-tier approach:
+   *   1. Registry-scan: Check if any business definition's matchPatterns match keywords in the question
+   *   2. Dimension extraction: Use regex patterns to extract grouping/baseline dimensions
+   *
+   * @param question - A single user question (e.g., "How does the turnover rate for each leader compare to the company rate?")
+   * @param params - Optional search params for registry lookup
+   * @returns QuestionDecomposition with KPI, dimensions, comparison type
+   */
+  async decomposeQuestion(
+    question: string,
+    params: { industry?: string; projectId?: string } = {}
+  ): Promise<QuestionDecomposition> {
+    const questionLower = question.toLowerCase();
+    console.log(`🔬 [DS Agent] Decomposing question: "${question.substring(0, 80)}..."`);
+
+    const decomposition: QuestionDecomposition = {
+      originalQuestion: question,
+      kpiName: null,
+      kpiRegistryKey: null,
+      dimensions: [],
+      comparisonType: 'none',
+      temporalScope: null,
+      registryDefinition: null
+    };
+
+    // ── TIER 1: Registry-scan for KPI identification ──
+    // Extract potential KPI keywords from the question
+    const kpiKeywords = this.extractKPIKeywords(questionLower);
+
+    if (kpiKeywords.length > 0) {
+      try {
+        const matches = await businessDefinitionRegistry.findByMatchPatterns(
+          kpiKeywords,
+          { industry: params.industry, projectId: params.projectId }
+        );
+
+        if (matches.length > 0) {
+          const bestMatch = matches[0];
+          decomposition.kpiName = bestMatch.definition.displayName || bestMatch.definition.conceptName;
+          decomposition.kpiRegistryKey = bestMatch.definition.conceptName;
+          decomposition.registryDefinition = bestMatch.definition;
+
+          console.log(`✅ [DS Agent] KPI identified via registry: "${decomposition.kpiName}" (key: ${decomposition.kpiRegistryKey}, confidence: ${bestMatch.confidence})`);
+        }
+      } catch (err) {
+        console.warn(`⚠️ [DS Agent] Registry lookup failed, continuing with regex:`, err);
+      }
+    }
+
+    // ── TIER 2: Dimension extraction via regex ──
+
+    // "for each X" / "by X" / "per X" → grouping dimension
+    const groupingPatterns = [
+      /(?:for\s+each|by\s+each|per\s+each|for\s+every)\s+([\w\s]+?)(?:\s+compare|\s+vs|\s+versus|\s+against|\?|,|$)/gi,
+      /(?:by|per|across|among)\s+([\w\s]+?)(?:\s+compare|\s+vs|\s+versus|\s+against|\?|,|and\s|$)/gi,
+      /(?:group(?:ed)?\s+by)\s+([\w\s]+?)(?:\?|,|$)/gi,
+    ];
+
+    for (const pattern of groupingPatterns) {
+      let match;
+      while ((match = pattern.exec(questionLower)) !== null) {
+        const dimName = match[1]?.trim();
+        if (dimName && dimName.length > 1 && dimName.length < 40 &&
+            !['the', 'a', 'an', 'is', 'are', 'was', 'were', 'each', 'their'].includes(dimName)) {
+          const cleanName = dimName.replace(/\s+/g, '_');
+          if (!decomposition.dimensions.some(d => d.name === cleanName)) {
+            decomposition.dimensions.push({
+              name: cleanName,
+              role: 'grouping',
+              level: 'detail'
+            });
+          }
+        }
+      }
+    }
+
+    // "compare to X" / "vs X" / "against X" / "X rate" after comparison words → baseline dimension
+    const baselinePatterns = [
+      /(?:compare\s+to|compared?\s+(?:to|with)|vs\.?|versus|against|relative\s+to)\s+(?:the\s+)?([\w\s]+?)(?:\s+rate|\s+average|\s+level|\?|$)/gi,
+      /(?:company|organization|overall|total)\s+(?:wide|level|rate|average)/gi,
+    ];
+
+    for (const pattern of baselinePatterns) {
+      let match;
+      while ((match = pattern.exec(questionLower)) !== null) {
+        const dimName = match[1]?.trim() || match[0]?.trim();
+        if (dimName && dimName.length > 1 && dimName.length < 40) {
+          const cleanName = dimName.replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+          if (cleanName && !decomposition.dimensions.some(d => d.name === cleanName)) {
+            decomposition.dimensions.push({
+              name: cleanName,
+              role: 'baseline',
+              level: 'aggregate'
+            });
+          }
+        }
+      }
+    }
+
+    // ── Determine comparison type ──
+    const hasGrouping = decomposition.dimensions.some(d => d.role === 'grouping');
+    const hasBaseline = decomposition.dimensions.some(d => d.role === 'baseline');
+
+    if (hasGrouping && hasBaseline) {
+      decomposition.comparisonType = 'group_vs_baseline';
+    } else if (hasGrouping) {
+      decomposition.comparisonType = 'between_groups';
+    }
+
+    // ── Temporal scope detection ──
+    const temporalKeywords: string[] = [];
+    const temporalMatches: Record<string, string> = {
+      'over time': 'time_series',
+      'trend': 'time_series',
+      'monthly': 'month',
+      'quarterly': 'quarter',
+      'yearly': 'year',
+      'annually': 'year',
+      'weekly': 'week',
+      'daily': 'day',
+      'seasonal': 'season',
+    };
+
+    let periodType: string | null = null;
+    for (const [keyword, period] of Object.entries(temporalMatches)) {
+      if (questionLower.includes(keyword)) {
+        temporalKeywords.push(keyword);
+        periodType = period;
+        if (decomposition.comparisonType === 'none') {
+          decomposition.comparisonType = 'time_series';
+        }
+      }
+    }
+
+    if (temporalKeywords.length > 0) {
+      decomposition.temporalScope = {
+        periodType,
+        periodColumn: null, // Will be resolved when dataset is available
+        keywords: temporalKeywords
+      };
+    }
+
+    console.log(`✅ [DS Agent] Decomposition result: KPI=${decomposition.kpiName || 'none'}, dimensions=${decomposition.dimensions.length}, comparison=${decomposition.comparisonType}`);
+    return decomposition;
+  }
+
+  /**
+   * Extract potential KPI keyword phrases from a question.
+   * Looks for known metric patterns: "X rate", "X score", "X ratio", etc.
+   * Also extracts 2-3 word noun phrases that might be KPI names.
+   */
+  private extractKPIKeywords(questionLower: string): string[] {
+    const keywords: string[] = [];
+
+    // Pattern: "<adjective/noun> rate/score/ratio/index/metric/percentage/average"
+    const metricPatterns = [
+      /(\w+(?:\s+\w+)?)\s+(?:rate|score|ratio|index|metric|percentage|average|coefficient)/gi,
+      /(?:overall|total|average|mean|median)\s+(\w+(?:\s+\w+)?)/gi,
+    ];
+
+    for (const pattern of metricPatterns) {
+      let match;
+      while ((match = pattern.exec(questionLower)) !== null) {
+        const phrase = match[1]?.trim() || match[0]?.trim();
+        if (phrase && phrase.length > 2 && phrase.length < 40) {
+          keywords.push(phrase.replace(/\s+/g, '_'));
+          // Also add the full match as a keyword
+          const fullMatch = match[0]?.trim();
+          if (fullMatch && fullMatch !== phrase) {
+            keywords.push(fullMatch.replace(/\s+/g, '_'));
+          }
+        }
+      }
+    }
+
+    // Also extract common standalone KPI terms
+    const standaloneKPIs = [
+      'turnover', 'attrition', 'churn', 'retention', 'engagement',
+      'satisfaction', 'performance', 'productivity', 'absenteeism',
+      'revenue', 'profit', 'roi', 'conversion', 'nps', 'csat',
+      'tenure', 'headcount', 'utilization'
+    ];
+
+    for (const kpi of standaloneKPIs) {
+      if (questionLower.includes(kpi)) {
+        keywords.push(kpi);
+      }
+    }
+
+    // Deduplicate
+    return [...new Set(keywords)];
+  }
+
   /**
    * Core method to answer: "What data do I need to answer these questions and achieve these goals?"
    * This is the Phase 1 data requirements inference - before any data is uploaded.
@@ -2039,6 +2270,7 @@ export class DataScientistAgent implements AgentHandler {
     userGoals: string[];
     analysisTypes?: string[];
     datasetSchema?: Record<string, any>;
+    industry?: string;
   }): Promise<Array<{
     elementName: string;
     description: string;
@@ -2072,7 +2304,7 @@ export class DataScientistAgent implements AgentHandler {
 
     // ✅ PHASE 3 FIX: Try AI-powered inference first with fallback chain
     try {
-      const aiElements = await this.inferRequiredDataElementsWithAI({ ...params, datasetSchema });
+      const aiElements = await this.inferRequiredDataElementsWithAI({ ...params, datasetSchema, industry: params.industry });
       if (aiElements && aiElements.length > 0) {
         console.log(`✅ [DS Agent] AI inference successful: ${aiElements.length} elements identified`);
         return aiElements;
@@ -2081,35 +2313,216 @@ export class DataScientistAgent implements AgentHandler {
       console.warn(`⚠️ [DS Agent] AI inference failed, falling back to pattern matching:`, aiError);
     }
 
+    // ── KPI DECOMPOSITION: Decompose each question before regex fallback ──
+    // When a KPI match is found via the registry, generate composite elements
+    // from the business definition rather than relying on generic regex patterns.
+    console.log(`🔬 [DS Agent] Running KPI decomposition on ${userQuestions.length} questions...`);
+
+    const decompositions: QuestionDecomposition[] = [];
+    const kpiElements: Array<any> = [];
+    const decomposedQuestions = new Set<string>(); // Track which questions were handled by decomposition
+
+    for (const question of userQuestions) {
+      try {
+        const decomp = await this.decomposeQuestion(question);
+        decompositions.push(decomp);
+
+        // If we found a KPI with a registry definition, generate elements from it
+        if (decomp.registryDefinition && decomp.kpiRegistryKey) {
+          const def = decomp.registryDefinition;
+          decomposedQuestions.add(question);
+
+          // Add the KPI element itself (composite type)
+          kpiElements.push({
+            elementName: def.displayName || def.conceptName,
+            description: def.businessDescription || `Metric: ${def.formula}`,
+            dataType: (def.expectedDataType === 'numeric' ? 'numeric' : 'categorical') as any,
+            purpose: `Calculate ${def.displayName || def.conceptName} to answer: "${question}"`,
+            required: true,
+            relatedQuestions: [question],
+            calculationDefinition: {
+              calculationType: 'composite' as const,
+              formula: {
+                businessDescription: def.formula || '',
+                componentFields: (def.componentFields as string[]) || [],
+                aggregationMethod: (def.aggregationMethod || 'custom') as any,
+                pseudoCode: def.pseudoCode || def.formula || ''
+              },
+              comparisonGroups: decomp.dimensions.length > 0 ? {
+                comparisonType: decomp.comparisonType as any,
+                levels: decomp.dimensions.map(d => ({
+                  name: d.name,
+                  groupByFields: [d.name],
+                  role: d.role === 'baseline' ? 'baseline' as const : 'detail' as const,
+                  label: d.name.replace(/_/g, ' ')
+                })),
+                baseline: decomp.dimensions.find(d => d.role === 'baseline')
+                  ? {
+                      type: 'overall' as const,
+                      groupByFields: [],
+                      label: decomp.dimensions.find(d => d.role === 'baseline')!.name.replace(/_/g, ' ')
+                    }
+                  : undefined
+              } : undefined,
+              notes: `Registry-matched KPI: ${decomp.kpiRegistryKey}. Formula: ${def.formula}`
+            }
+          });
+
+          // Add dimension elements (grouping/baseline columns)
+          for (const dim of decomp.dimensions) {
+            const dimExists = kpiElements.some(e =>
+              e.elementName.toLowerCase().includes(dim.name.replace(/_/g, ' '))
+            );
+            if (!dimExists) {
+              kpiElements.push({
+                elementName: this.capitalizeWords(dim.name.replace(/_/g, ' ')),
+                description: `${dim.role === 'baseline' ? 'Baseline' : 'Grouping'} dimension: ${dim.name.replace(/_/g, ' ')}`,
+                dataType: 'categorical' as const,
+                purpose: `${dim.role === 'grouping' ? 'Group data by' : 'Compare against'} ${dim.name.replace(/_/g, ' ')} for: "${question}"`,
+                required: dim.role === 'grouping',
+                relatedQuestions: [question],
+                calculationDefinition: {
+                  calculationType: 'grouped' as const,
+                  comparisonGroups: {
+                    comparisonType: decomp.comparisonType as any
+                  },
+                  notes: `${dim.role} dimension at ${dim.level} level`
+                }
+              });
+            }
+          }
+
+          // Add component field elements from descriptors if available
+          const descriptors = (def.componentFieldDescriptors as any[]) || [];
+          for (const descriptor of descriptors) {
+            const descExists = kpiElements.some(e =>
+              e.elementName.toLowerCase() === descriptor.abstractName?.replace(/_/g, ' ')
+            );
+            if (!descExists && descriptor.abstractName) {
+              const dataType = descriptor.dataTypeExpected === 'date' ? 'datetime'
+                : descriptor.dataTypeExpected === 'identifier' ? 'categorical'
+                : descriptor.dataTypeExpected === 'numeric' ? 'numeric'
+                : 'text';
+
+              kpiElements.push({
+                elementName: this.capitalizeWords(descriptor.abstractName.replace(/_/g, ' ')),
+                description: descriptor.semanticMeaning || `Component field for ${def.displayName}`,
+                dataType: dataType as any,
+                purpose: `Component of ${def.displayName}: ${descriptor.derivationLogic || descriptor.semanticMeaning}`,
+                required: true,
+                derivedFrom: def.displayName || def.conceptName,
+                relatedQuestions: [question],
+                calculationDefinition: {
+                  calculationType: descriptor.isIntermediate ? 'derived' as const : 'direct' as const,
+                  formula: {
+                    businessDescription: descriptor.derivationLogic || descriptor.semanticMeaning,
+                    componentFields: descriptor.columnMatchPatterns?.slice(0, 3) || [],
+                    pseudoCode: descriptor.derivationLogic || ''
+                  },
+                  notes: `Component field descriptor: matchType=${descriptor.columnMatchType}${descriptor.nullMeaning ? `, null=${descriptor.nullMeaning}` : ''}${descriptor.presenceMeaning ? `, presence=${descriptor.presenceMeaning}` : ''}`
+                }
+              });
+            }
+          }
+
+          // Add temporal elements if temporal scope detected
+          if (decomp.temporalScope) {
+            const temporalExists = kpiElements.some(e => e.dataType === 'datetime' && !e.derivedFrom);
+            if (!temporalExists) {
+              kpiElements.push({
+                elementName: 'Analysis Period',
+                description: 'Date/time for establishing the analysis period',
+                dataType: 'datetime' as const,
+                purpose: `Define temporal scope for ${def.displayName} calculation`,
+                required: true,
+                relatedQuestions: [question],
+                calculationDefinition: {
+                  calculationType: 'direct' as const,
+                  formula: {
+                    businessDescription: `Period date for ${decomp.temporalScope.periodType || 'time-based'} analysis`,
+                    pseudoCode: 'PARSE_DATE(period_column) to establish analysis window'
+                  },
+                  notes: `Temporal scope: ${decomp.temporalScope.keywords.join(', ')}`
+                }
+              });
+            }
+          }
+
+          console.log(`✅ [DS Agent] Generated ${kpiElements.length} elements from KPI decomposition for "${question.substring(0, 60)}..."`);
+        }
+      } catch (decompError) {
+        console.warn(`⚠️ [DS Agent] Question decomposition failed for "${question.substring(0, 60)}...":`, decompError);
+      }
+    }
+
+    // If KPI decomposition produced elements, combine with a unique identifier and return
+    if (kpiElements.length > 0) {
+      // Add unique identifier at the beginning
+      kpiElements.unshift({
+        elementName: 'Unique Identifier',
+        description: 'Unique ID for each record in the dataset',
+        dataType: 'text' as const,
+        purpose: 'Uniquely identify and track each record throughout the analysis',
+        required: true,
+        relatedQuestions: [],
+        calculationDefinition: {
+          calculationType: 'direct' as const,
+          formula: {
+            businessDescription: 'Direct mapping from source ID column (e.g., record_id, campaign_id, customer_id, row_number)',
+            pseudoCode: 'SELECT id_column AS unique_identifier FROM source_data'
+          },
+          notes: 'Use existing ID column or generate row numbers if none exists'
+        }
+      });
+
+      // Also run regex patterns for questions NOT handled by KPI decomposition
+      // to catch dimension/metric elements that the decomposition didn't cover
+      const unhandledQuestions = userQuestions.filter(q => !decomposedQuestions.has(q));
+      if (unhandledQuestions.length > 0) {
+        console.log(`🔬 [DS Agent] Running regex patterns on ${unhandledQuestions.length} unhandled questions`);
+        // The regex fallback below will handle these
+      }
+
+      // If all questions were handled by decomposition, return the KPI elements directly
+      if (decomposedQuestions.size === userQuestions.length) {
+        console.log(`✅ [DS Agent] All ${userQuestions.length} questions handled by KPI decomposition: ${kpiElements.length} elements total`);
+        return kpiElements;
+      }
+    }
+
     // Fallback to regex-based pattern matching
     console.log(`🔬 [Data Scientist] Using pattern-based inference (fallback mode)`);
     console.log(`🔬 [Data Scientist] Each element will include calculationDefinition with how to derive it`);
 
-    const requiredElements: Array<any> = [];
+    const requiredElements: Array<any> = [...kpiElements]; // Include any KPI elements found above
 
     // Combine goals and questions for context analysis
     const allText = [...userGoals, ...userQuestions].join(' ').toLowerCase();
 
-    // Always need a unique identifier
-    requiredElements.push({
-      elementName: 'Unique Identifier',
-      description: 'Unique ID for each record in the dataset',
-      dataType: 'text' as const,
-      purpose: 'Uniquely identify and track each record throughout the analysis',
-      required: true,
-      relatedQuestions: [],
-      calculationDefinition: {
-        calculationType: 'direct' as const,
-        formula: {
-          businessDescription: 'Direct mapping from source ID column (e.g., employee_id, record_id, row_number)',
-          pseudoCode: 'SELECT id_column AS unique_identifier FROM source_data'
-        },
-        notes: 'Use existing ID column or generate row numbers if none exists'
-      }
-    });
+    // Always need a unique identifier (skip if already added by KPI decomposition)
+    if (!kpiElements.some(e => e.elementName === 'Unique Identifier')) {
+      requiredElements.push({
+        elementName: 'Unique Identifier',
+        description: 'Unique ID for each record in the dataset',
+        dataType: 'text' as const,
+        purpose: 'Uniquely identify and track each record throughout the analysis',
+        required: true,
+        relatedQuestions: [],
+        calculationDefinition: {
+          calculationType: 'direct' as const,
+          formula: {
+            businessDescription: 'Direct mapping from source ID column (e.g., record_id, campaign_id, customer_id, row_number)',
+            pseudoCode: 'SELECT id_column AS unique_identifier FROM source_data'
+          },
+          notes: 'Use existing ID column or generate row numbers if none exists'
+        }
+      });
+    }
 
     // For each question, use AI reasoning to infer what data is needed
+    // Skip questions already fully handled by KPI decomposition
     for (const question of userQuestions) {
+      if (decomposedQuestions.has(question)) continue;
       const questionLower = question.toLowerCase();
 
       // Temporal data requirements
@@ -2354,7 +2767,7 @@ export class DataScientistAgent implements AgentHandler {
     if (analysisTypes.length > 0) {
       for (const analysisType of analysisTypes) {
         const analysisLower = analysisType.toLowerCase();
-        const analysisSpecificElements = this.getAnalysisTypeRequirements(analysisType, userQuestions);
+        const analysisSpecificElements = this.getAnalysisTypeRequirements(analysisType, userQuestions, params.industry);
 
         // Add analysis-specific elements if not already present
         for (const reqElement of analysisSpecificElements) {
@@ -2466,6 +2879,7 @@ export class DataScientistAgent implements AgentHandler {
     userGoals: string[];
     analysisTypes?: string[];
     datasetSchema?: Record<string, any>;
+    industry?: string;
   }): Promise<Array<{
     elementName: string;
     description: string;
@@ -2500,6 +2914,12 @@ export class DataScientistAgent implements AgentHandler {
       ? Object.entries(datasetSchema).map(([col, info]) => `  - ${col}: ${typeof info === 'object' ? (info as any).type || 'unknown' : info}`).join('\n')
       : '  (No schema available - infer from questions and goals)';
 
+    // Generate industry-appropriate example for the prompt
+    const exampleElement = this.getIndustryExampleElement(params.industry);
+    const industryDirective = params.industry
+      ? `\n## Industry Context:\nThis is a **${params.industry}** analysis project. Generate elements relevant to ${params.industry} — do NOT generate elements for other industries (e.g., do not generate HR elements for a marketing project).\n`
+      : '\n## Industry Context:\nIndustry not specified — infer from questions and dataset schema.\n';
+
     const prompt = `You are an expert data scientist. Analyze the following business questions and goals to determine the required data elements for analysis.
 
 ## User Questions:
@@ -2513,34 +2933,26 @@ ${analysisTypes.length > 0 ? analysisTypes.map((a, i) => `${i + 1}. ${a}`).join(
 
 ## Available Dataset Schema:
 ${schemaDescription}
+${industryDirective}
+## Step 0: Question Decomposition
+For each question, first identify:
+- The KPI/metric being asked about (e.g., "turnover rate", "engagement score", "conversion rate")
+- Grouping dimensions ("for each X", "by X", "per X") that define how data should be segmented
+- Comparison baselines ("compare to X", "vs X", "against X") for group-vs-baseline analysis
+- The formula components needed (e.g., "turnover rate" needs "employees_left" and "total_employees")
+Then generate elements for the KPI itself AND each of its formula components as separate elements.
 
 ## Your Task:
 Identify ALL data elements required to answer these questions and achieve these goals. For each element, provide:
 1. A clear business-friendly name
 2. The data type needed
-3. How it should be calculated or mapped from source data
+3. How it should be calculated or mapped from source data (include formula components for composite KPIs)
 4. Which questions it helps answer
+5. For composite/derived KPIs: use calculationType "composite" and list componentFields in the formula
 
 ## Response Format (JSON array):
 [
-  {
-    "elementName": "Employee Engagement Score",
-    "description": "Composite metric measuring employee engagement levels",
-    "dataType": "numeric",
-    "purpose": "Measure and compare employee engagement across teams",
-    "required": true,
-    "relatedQuestions": ["What is the average engagement score by department?"],
-    "calculationDefinition": {
-      "calculationType": "derived",
-      "formula": {
-        "businessDescription": "Average of survey response scores for engagement-related questions",
-        "componentFields": ["Q1_Score", "Q2_Score", "Q3_Score"],
-        "aggregationMethod": "average",
-        "pseudoCode": "AVERAGE(Q1_Score, Q2_Score, Q3_Score)"
-      },
-      "notes": "User should identify which survey questions relate to engagement"
-    }
-  }
+  ${JSON.stringify(exampleElement, null, 2).split('\n').join('\n  ')}
 ]
 
 ## Rules:
@@ -2551,7 +2963,7 @@ Identify ALL data elements required to answer these questions and achieve these 
 5. calculationType must be one of: direct, derived, aggregated, grouped, composite
 6. aggregationMethod (if applicable) must be one of: average, sum, count, min, max, median, weighted_average, custom
 7. CRITICAL: If a dataset schema is provided above, your elements MUST reference actual columns from that schema. Do NOT generate generic business metrics (like "Average Order Value", "Revenue Growth Rate") unless those columns actually exist in the schema. For "direct" calculation types, use actual column names from the schema in componentFields.
-8. Only generate elements that are answerable from the provided dataset schema. If the schema shows HR data, do not generate financial metrics and vice versa.
+8. Only generate elements that are answerable from the provided dataset schema. If the schema shows HR data, do not generate financial metrics and vice versa.${params.industry ? `\n9. IMPORTANT: This is a ${params.industry} project. Only generate elements relevant to ${params.industry}. Do not generate HR elements for marketing data or vice versa.` : ''}
 
 Respond with the JSON array ONLY:`;
 
@@ -2649,7 +3061,7 @@ Respond with the JSON array ONLY:`;
           calculationDefinition: {
             calculationType: 'direct' as const,
             formula: {
-              businessDescription: 'Direct mapping from source ID column (e.g., employee_id, record_id, row_number)',
+              businessDescription: 'Direct mapping from source ID column (e.g., record_id, campaign_id, customer_id, row_number)',
               pseudoCode: 'SELECT id_column AS unique_identifier FROM source_data'
             },
             notes: 'Use existing ID column or generate row numbers if none exists'
@@ -2667,10 +3079,111 @@ Respond with the JSON array ONLY:`;
   }
 
   /**
+   * Returns an industry-appropriate example element for the AI inference prompt.
+   * Prevents HR bias by showing the LLM a relevant example based on the project's industry.
+   */
+  private getIndustryExampleElement(industry?: string): object {
+    switch ((industry || '').toLowerCase()) {
+      case 'marketing':
+        return {
+          elementName: "Campaign ROI",
+          description: "Return on investment for each marketing campaign",
+          dataType: "numeric",
+          purpose: "Measure campaign profitability and compare across channels",
+          required: true,
+          relatedQuestions: ["What is the ROI for each campaign?"],
+          calculationDefinition: {
+            calculationType: "derived",
+            formula: {
+              businessDescription: "ROI = (Revenue Generated - Campaign Cost) / Campaign Cost",
+              componentFields: ["revenue", "cost"],
+              aggregationMethod: "custom",
+              pseudoCode: "(SUM(revenue) - SUM(cost)) / SUM(cost) * 100"
+            }
+          }
+        };
+      case 'hr':
+      case 'human_resources':
+        return {
+          elementName: "Employee Engagement Score",
+          description: "Composite metric measuring employee engagement levels",
+          dataType: "numeric",
+          purpose: "Measure and compare employee engagement across teams",
+          required: true,
+          relatedQuestions: ["What is the average engagement score by department?"],
+          calculationDefinition: {
+            calculationType: "derived",
+            formula: {
+              businessDescription: "Average of survey response scores for engagement-related questions",
+              componentFields: ["Q1_Score", "Q2_Score", "Q3_Score"],
+              aggregationMethod: "average",
+              pseudoCode: "AVERAGE(Q1_Score, Q2_Score, Q3_Score)"
+            }
+          }
+        };
+      case 'finance':
+        return {
+          elementName: "Revenue Growth Rate",
+          description: "Period-over-period revenue change percentage",
+          dataType: "numeric",
+          purpose: "Track financial performance and growth trends",
+          required: true,
+          relatedQuestions: ["What is the revenue growth trend?"],
+          calculationDefinition: {
+            calculationType: "derived",
+            formula: {
+              businessDescription: "(Current Period Revenue - Previous Period Revenue) / Previous Period Revenue",
+              componentFields: ["revenue", "period"],
+              aggregationMethod: "custom",
+              pseudoCode: "(revenue_current - revenue_previous) / revenue_previous * 100"
+            }
+          }
+        };
+      case 'retail':
+      case 'ecommerce':
+        return {
+          elementName: "Customer Lifetime Value",
+          description: "Total predicted revenue from a customer relationship",
+          dataType: "numeric",
+          purpose: "Segment customers by value and optimize retention",
+          required: true,
+          relatedQuestions: ["What is the average customer lifetime value?"],
+          calculationDefinition: {
+            calculationType: "derived",
+            formula: {
+              businessDescription: "Average Purchase Value × Purchase Frequency × Customer Lifespan",
+              componentFields: ["order_value", "purchase_count", "tenure"],
+              aggregationMethod: "custom",
+              pseudoCode: "AVG(order_value) * COUNT(orders) / COUNT(DISTINCT customers) * AVG(tenure)"
+            }
+          }
+        };
+      default:
+        return {
+          elementName: "Primary Performance Metric",
+          description: "Main quantitative measure for the analysis",
+          dataType: "numeric",
+          purpose: "Calculate and compare the primary metric across groups",
+          required: true,
+          relatedQuestions: ["What is the trend of this metric over time?"],
+          calculationDefinition: {
+            calculationType: "derived",
+            formula: {
+              businessDescription: "Calculated from source data columns relevant to the analysis goal",
+              componentFields: ["metric_value", "dimension"],
+              aggregationMethod: "average",
+              pseudoCode: "AGGREGATE(metric_column) GROUP BY dimension_column"
+            }
+          }
+        };
+    }
+  }
+
+  /**
    * Get required data elements for specific analysis types
    * Aligns data requirements to the exact needs of each analysis
    */
-  private getAnalysisTypeRequirements(analysisType: string, userQuestions: string[]): Array<{
+  private getAnalysisTypeRequirements(analysisType: string, userQuestions: string[], industry?: string): Array<{
     elementName: string;
     description: string;
     dataType: 'numeric' | 'categorical' | 'datetime' | 'text' | 'boolean';
@@ -2686,12 +3199,20 @@ Respond with the JSON array ONLY:`;
 
     // Descriptive/Exploratory Analysis - with domain-specific naming
     if (/descriptive|exploratory|summary|overview|understand/i.test(analysisLower)) {
-      // Check for domain context from user questions to generate meaningful element names
+      // Use explicit industry FIRST, only fall back to keyword regex if not set
       const questionContext = userQuestions.join(' ').toLowerCase();
-      const isEmployeeAnalysis = /employee|staff|worker|hr|engagement|workforce|turnover/i.test(questionContext);
-      const isSurveyAnalysis = /survey|feedback|response|satisfaction|opinion|questionnaire/i.test(questionContext);
-      const isCustomerAnalysis = /customer|client|buyer|user|consumer/i.test(questionContext);
-      const isFinancialAnalysis = /revenue|sales|profit|cost|financial|budget/i.test(questionContext);
+      const industryLower = (industry || '').toLowerCase();
+
+      const isEmployeeAnalysis = industryLower === 'hr' || industryLower === 'human_resources' ||
+          (!industry && /\b(employee|staff|worker|hr\b|workforce|turnover|headcount|attrition)\b/i.test(questionContext));
+      const isMarketingAnalysis = industryLower === 'marketing' ||
+          (!industry && /\b(campaign|impression|click.?rate|ad.?spend|ctr|cpc|cpm|lead.?gen|marketing)\b/i.test(questionContext));
+      const isSurveyAnalysis = !isEmployeeAnalysis && !isMarketingAnalysis && !industry &&
+          /\b(survey|feedback|response|satisfaction|opinion|questionnaire)\b/i.test(questionContext);
+      const isCustomerAnalysis = industryLower === 'retail' || industryLower === 'ecommerce' ||
+          (!industry && !isMarketingAnalysis && /\b(customer|client|buyer|consumer)\b/i.test(questionContext));
+      const isFinancialAnalysis = industryLower === 'finance' ||
+          (!industry && /\b(revenue|profit|cost|financial|budget|ledger)\b/i.test(questionContext));
 
       if (isEmployeeAnalysis) {
         elements.push({
@@ -2827,6 +3348,48 @@ Respond with the JSON array ONLY:`;
           purpose: 'Track individual customer behavior and preferences',
           required: true,
           relatedQuestions: relevantQuestions
+        });
+      } else if (isMarketingAnalysis) {
+        elements.push({
+          elementName: 'Campaign Performance Metric',
+          description: 'Primary campaign performance measure (e.g., ROI, conversion rate, CTR)',
+          dataType: 'numeric' as const,
+          purpose: 'Measure and compare marketing campaign effectiveness',
+          required: true,
+          relatedQuestions: relevantQuestions,
+          calculationDefinition: {
+            calculationType: 'derived' as const,
+            formula: {
+              businessDescription: 'Campaign metric calculated from spend, impressions, clicks, or conversions',
+              componentFields: ['spend', 'impressions', 'clicks', 'conversions'],
+              pseudoCode: 'ROI = (Revenue - Cost) / Cost; CTR = Clicks / Impressions'
+            },
+            notes: 'Specific formula depends on which KPI the question asks about'
+          }
+        });
+        elements.push({
+          elementName: 'Campaign Identifier',
+          description: 'Unique campaign ID or name for grouping',
+          dataType: 'categorical' as const,
+          purpose: 'Group metrics by individual campaign for comparison',
+          required: true,
+          relatedQuestions: relevantQuestions,
+          calculationDefinition: {
+            calculationType: 'direct' as const,
+            notes: 'Direct mapping to campaign ID or campaign name column'
+          }
+        });
+        elements.push({
+          elementName: 'Marketing Channel',
+          description: 'Channel or platform where the campaign runs',
+          dataType: 'categorical' as const,
+          purpose: 'Enable channel-level performance comparison',
+          required: false,
+          relatedQuestions: relevantQuestions,
+          calculationDefinition: {
+            calculationType: 'grouped' as const,
+            notes: 'Direct mapping to channel column (e.g., email, social, search, display)'
+          }
         });
       } else if (isFinancialAnalysis) {
         elements.push({

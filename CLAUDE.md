@@ -113,6 +113,8 @@ docs/                  # 13 doc files + 148+ archived session docs
 | Project ownership | `server/middleware/ownership.ts` |
 | Payment routes | `server/routes/payment.ts` |
 | Production validator | `server/services/production-validator.ts` |
+| Shared constants & helpers | `server/constants.ts` |
+| Database connection pool | `server/db.ts` |
 
 ---
 
@@ -141,6 +143,15 @@ Uses `executeComprehensiveAnalysis()` which routes to type-specific Python scrip
 - `python/correlation_analysis.py`, `regression_analysis.py`, `clustering_analysis.py`, `time_series_analysis.py`, `descriptive_stats.py`
 
 Do NOT use `executeAnalysis()` (legacy, hardcoded basic stats only).
+
+### Shared Constants (`server/constants.ts`)
+
+Cross-cutting values that multiple modules must agree on are centralized here:
+- `DATASET_DATA_ROW_CAP` (10,000) — enforced in ALL 3 storage implementations to prevent CSV upload timeouts
+- `MIN_STATEMENT_TIMEOUT_MS` (60,000) — validated at DB pool startup in `server/db.ts`
+- `generateStableQuestionId(projectId, text)` — canonical question ID generator (SHA-256 hash-based, replaces 3 competing patterns)
+
+**NEVER duplicate these values inline.** Always import from `server/constants.ts`.
 
 ### Service File Locations
 
@@ -329,8 +340,13 @@ storage.updateProject(id, { status: 'ready' } as any);
 |----------|---------|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Tech stack, data models, API routes, deployment |
 | [docs/AGENTIC_SYSTEM.md](docs/AGENTIC_SYSTEM.md) | Agents, tools, MCP, coordination workflows |
+| [docs/AGENTIC_ORCHESTRATION_DESIGN.md](docs/AGENTIC_ORCHESTRATION_DESIGN.md) | Dynamic tool discovery design (with implementation status) |
 | [docs/USER_JOURNEYS.md](docs/USER_JOURNEYS.md) | Journey types, workflows, analysis components |
+| [docs/U2A2A2U_COMPLETE_DATA_FLOW.md](docs/U2A2A2U_COMPLETE_DATA_FLOW.md) | U2A2A2U pipeline data flow, continuity breaks |
 | [docs/BILLING_ADMIN.md](docs/BILLING_ADMIN.md) | Subscriptions, payments, admin features |
+| [docs/ADMIN_INTERFACE.md](docs/ADMIN_INTERFACE.md) | All 11 admin UI pages, routing, architecture |
+| [docs/ADMIN_API_REFERENCE.md](docs/ADMIN_API_REFERENCE.md) | 165+ admin API endpoints reference |
+| [docs/MCP_TOOL_STATUS.md](docs/MCP_TOOL_STATUS.md) | 130+ MCP tool implementation status matrix |
 | [docs/SYSTEM_STATUS.md](docs/SYSTEM_STATUS.md) | System health, phase completion |
 | [FIX_PLANS.md](FIX_PLANS.md) | Fix specifications (P0-P3 priorities) |
 | [DOCKER-SETUP.md](DOCKER-SETUP.md) | Docker and Redis setup |

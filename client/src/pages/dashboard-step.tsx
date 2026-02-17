@@ -278,6 +278,8 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
       const errData = err?.response?.data || err?.data;
       const isExecuting = errData?.status === 'executing' ||
                           errData?.status === 'in_progress' ||
+                          err?.status === 202 ||
+                          err?.details?.status === 'executing' ||
                           errMessage.includes('still running') ||
                           errMessage.includes('Analysis is still running') ||
                           errMessage.includes('currently executing');
@@ -695,6 +697,21 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
                   </Button>
                 )}
               </div>
+              {/* Polling progress indicator */}
+              {mightBeProcessing && resultsRetryCount > 0 && (
+                <div className="mt-4">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs text-blue-600">Checking for results...</span>
+                    <span className="text-xs text-blue-600">Attempt {resultsRetryCount}/{MAX_RESULTS_RETRIES}</span>
+                  </div>
+                  <div className="w-full bg-blue-100 rounded-full h-1.5">
+                    <div
+                      className="bg-blue-500 h-1.5 rounded-full transition-all duration-500"
+                      style={{ width: `${(resultsRetryCount / MAX_RESULTS_RETRIES) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
@@ -973,12 +990,13 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
 
       {/* Results Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="grid w-full grid-cols-6">
+        <TabsList className="grid w-full grid-cols-7">
           <TabsTrigger value="translated">For You</TabsTrigger>
           <TabsTrigger value="answers">Q&A</TabsTrigger>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="insights">Insights</TabsTrigger>
           <TabsTrigger value="recommendations">Actions</TabsTrigger>
+          <TabsTrigger value="technical">Technical</TabsTrigger>
           <TabsTrigger value="artifacts">Artifacts</TabsTrigger>
         </TabsList>
 
@@ -1294,6 +1312,157 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
               </Card>
             ))}
           </div>
+        </TabsContent>
+
+        {/* Technical Details Tab — Statistical outputs, methodology, model parameters */}
+        <TabsContent value="technical" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <TrendingUp className="w-5 h-5" />
+                Statistical Details & Methodology
+              </CardTitle>
+              <CardDescription>
+                Detailed statistical outputs, model parameters, and methodology notes
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {/* Analysis Types Run */}
+              {analysisResults?.analysisTypes && analysisResults.analysisTypes.length > 0 && (
+                <div>
+                  <h4 className="font-medium text-gray-900 mb-2">Analyses Performed</h4>
+                  <div className="flex flex-wrap gap-2">
+                    {analysisResults.analysisTypes.map((type: string) => (
+                      <Badge key={type} variant="secondary">
+                        {type.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Per-Analysis Statistical Details */}
+              {analysisResults?.perAnalysisBreakdown && Object.keys(analysisResults.perAnalysisBreakdown).length > 0 && (
+                <div>
+                  <h4 className="font-medium text-gray-900 mb-3">Per-Analysis Results</h4>
+                  {Object.entries(analysisResults.perAnalysisBreakdown).map(([analysisId, result]: [string, any]) => (
+                    <Card key={analysisId} className="mb-3 border-gray-200">
+                      <CardHeader className="pb-2">
+                        <CardTitle className="text-base flex items-center gap-2">
+                          {result.analysisName || analysisId.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())}
+                          <Badge variant="outline" className={result.status === 'completed' ? 'bg-green-50 text-green-700' : result.status === 'failed' ? 'bg-red-50 text-red-700' : ''}>
+                            {result.status || 'completed'}
+                          </Badge>
+                          {result.executionTimeMs && (
+                            <Badge variant="outline">{(result.executionTimeMs / 1000).toFixed(1)}s</Badge>
+                          )}
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        {/* Statistical Metrics Grid */}
+                        {(result.statisticalDetails || result.metrics || result.summary) && (
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                            {(result.statisticalDetails?.rSquared ?? result.metrics?.r2) != null && (
+                              <div className="text-center p-2 bg-gray-50 rounded">
+                                <p className="text-xs text-gray-500">R²</p>
+                                <p className="text-lg font-semibold">{(result.statisticalDetails?.rSquared ?? result.metrics?.r2).toFixed(4)}</p>
+                              </div>
+                            )}
+                            {(result.statisticalDetails?.pValue ?? result.metrics?.pValue) != null && (
+                              <div className="text-center p-2 bg-gray-50 rounded">
+                                <p className="text-xs text-gray-500">p-value</p>
+                                <p className="text-lg font-semibold">
+                                  {(result.statisticalDetails?.pValue ?? result.metrics?.pValue) < 0.001 ? '<0.001' : (result.statisticalDetails?.pValue ?? result.metrics?.pValue).toFixed(4)}
+                                </p>
+                              </div>
+                            )}
+                            {(result.statisticalDetails?.rmse ?? result.metrics?.rmse) != null && (
+                              <div className="text-center p-2 bg-gray-50 rounded">
+                                <p className="text-xs text-gray-500">RMSE</p>
+                                <p className="text-lg font-semibold">{(result.statisticalDetails?.rmse ?? result.metrics?.rmse).toFixed(4)}</p>
+                              </div>
+                            )}
+                            {(result.metrics?.accuracy) != null && (
+                              <div className="text-center p-2 bg-gray-50 rounded">
+                                <p className="text-xs text-gray-500">Accuracy</p>
+                                <p className="text-lg font-semibold">{(result.metrics.accuracy * 100).toFixed(1)}%</p>
+                              </div>
+                            )}
+                            {(result.metrics?.silhouetteScore) != null && (
+                              <div className="text-center p-2 bg-gray-50 rounded">
+                                <p className="text-xs text-gray-500">Silhouette Score</p>
+                                <p className="text-lg font-semibold">{result.metrics.silhouetteScore.toFixed(4)}</p>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Feature Importance */}
+                        {result.featureImportance && result.featureImportance.length > 0 && (
+                          <div className="mb-3">
+                            <h5 className="text-sm font-medium text-gray-700 mb-2">Feature Importance</h5>
+                            <div className="space-y-1">
+                              {result.featureImportance.slice(0, 8).map((fi: any, idx: number) => (
+                                <div key={idx} className="flex items-center gap-2">
+                                  <span className="text-xs text-gray-600 w-32 truncate">{fi.feature || fi.name}</span>
+                                  <div className="flex-1 bg-gray-100 rounded-full h-2">
+                                    <div
+                                      className="bg-blue-500 h-2 rounded-full"
+                                      style={{ width: `${Math.min(100, (fi.importance || fi.value || 0) * 100)}%` }}
+                                    />
+                                  </div>
+                                  <span className="text-xs text-gray-500 w-12 text-right">{((fi.importance || fi.value || 0) * 100).toFixed(1)}%</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Insight count */}
+                        {result.insights && result.insights.length > 0 && (
+                          <p className="text-sm text-gray-500">{result.insights.length} insight{result.insights.length !== 1 ? 's' : ''} generated</p>
+                        )}
+
+                        {/* Raw output (expandable) */}
+                        {(result.rawOutput || result.details) && (
+                          <details className="mt-2">
+                            <summary className="text-sm text-gray-500 cursor-pointer hover:text-gray-700">
+                              View raw statistical output
+                            </summary>
+                            <pre className="mt-2 p-3 bg-gray-50 rounded text-xs overflow-auto max-h-60 border">
+                              {JSON.stringify(result.rawOutput || result.details, null, 2)}
+                            </pre>
+                          </details>
+                        )}
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+
+              {/* Methodology */}
+              <div>
+                <h4 className="font-medium text-gray-900 mb-2">Methodology</h4>
+                <p className="text-sm text-gray-600">
+                  {analysisResults?.metadata?.methodology ||
+                    `Analysis performed using Python statistical libraries (scipy, statsmodels, sklearn) on ${
+                      analysisSummary.dataRowsProcessed?.toLocaleString() || '0'
+                    } rows across ${analysisSummary.datasetCount || 1} dataset(s). Execution time: ${analysisSummary.executionTime || '—'}.`}
+                </p>
+              </div>
+
+              {/* If no breakdown data available */}
+              {(!analysisResults?.perAnalysisBreakdown || Object.keys(analysisResults.perAnalysisBreakdown).length === 0) && (
+                <div className="text-center py-6 text-gray-500">
+                  <TrendingUp className="w-10 h-10 mx-auto mb-2 text-gray-300" />
+                  <p className="font-medium">Detailed statistical breakdown not available</p>
+                  <p className="text-sm mt-1">
+                    Statistical details are generated during analysis execution and may not be available for all analysis types.
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="artifacts" className="space-y-4">

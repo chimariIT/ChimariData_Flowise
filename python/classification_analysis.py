@@ -152,7 +152,8 @@ def perform_classification_analysis(config):
 
             predictions.append(pred_dict)
 
-        return {
+        # Phase 4C-1: Pass through business context for evidence chain
+        result = {
             'success': True,
             'model_type': model_type,
             'n_classes': n_classes,
@@ -176,6 +177,11 @@ def perform_classification_analysis(config):
             'train_size': len(X_train),
             'test_size': len(X_test)
         }
+        business_context = config.get('business_context', {})
+        if business_context:
+            result['business_context'] = business_context
+            result['question_ids'] = business_context.get('question_ids', [])
+        return result
 
     except Exception as e:
         return {

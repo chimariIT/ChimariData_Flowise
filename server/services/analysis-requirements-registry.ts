@@ -814,6 +814,43 @@ export function generateTransformationRecommendations(
   return results;
 }
 
+// Phase-relevance mapping: which orchestrator phases are relevant per analysis type
+const PHASE_MAP: Record<string, string[]> = {
+  descriptive: ['quality', 'eda', 'statistical'],
+  descriptive_statistics: ['quality', 'eda', 'statistical'],
+  statistical_aggregation: ['quality', 'eda', 'statistical'],
+  correlation: ['quality', 'eda', 'statistical'],
+  correlation_analysis: ['quality', 'eda', 'statistical'],
+  comparative: ['quality', 'eda', 'statistical'],
+  comparative_analysis: ['quality', 'eda', 'statistical'],
+  group_analysis: ['quality', 'eda', 'statistical'],
+  regression: ['quality', 'ml'],
+  regression_analysis: ['quality', 'ml'],
+  classification: ['quality', 'ml'],
+  classification_analysis: ['quality', 'ml'],
+  predictive: ['quality', 'ml'],
+  predictive_modeling: ['quality', 'ml'],
+  clustering: ['quality', 'ml'],
+  clustering_analysis: ['quality', 'ml'],
+  segmentation: ['quality', 'ml'],
+  segmentation_analysis: ['quality', 'ml'],
+  time_series: ['quality', 'ml'],
+  time_series_analysis: ['quality', 'ml'],
+  trend: ['quality', 'eda', 'ml'],
+  trend_analysis: ['quality', 'eda', 'ml'],
+  text_analysis: ['quality', 'ml'],
+  text: ['quality', 'ml'],
+};
+
+/**
+ * Get which orchestrator phases are relevant for a given analysis type.
+ * Used to skip irrelevant phases (e.g., no correlation for text analysis).
+ */
+export function getRelevantPhases(analysisType: string): string[] {
+  const normalized = analysisType.toLowerCase().replace(/[-\s]/g, '_');
+  return PHASE_MAP[normalized] || ['quality', 'eda', 'statistical', 'ml'];
+}
+
 // Export singleton for convenient access
 export const analysisRegistry = {
   getRequirements: getAnalysisRequirements,
@@ -821,6 +858,7 @@ export const analysisRegistry = {
   getMergedRequirements,
   validateDataForAnalysis,
   generateTransformationRecommendations,
+  getRelevantPhases,
   allAnalysisTypes: Object.keys(AnalysisDataRequirements) as AnalysisTypeKey[],
 };
 

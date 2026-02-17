@@ -413,7 +413,7 @@ export const users = pgTable("users", {
     sql`${table.subscriptionTier} IN ('none', 'trial', 'starter', 'professional', 'enterprise')`
   ),
   subscriptionStatusCheck: check("subscription_status_check",
-    sql`${table.subscriptionStatus} IN ('active', 'inactive', 'cancelled', 'past_due', 'expired')`
+    sql`${table.subscriptionStatus} IN ('active', 'inactive', 'cancelled', 'past_due', 'expired', 'incomplete', 'trialing', 'incomplete_expired')`
   ),
   userRoleCheck: check("user_role_check",
     sql`${table.userRole} IN ('non-tech', 'business', 'technical', 'consultation', 'custom')`
@@ -2070,6 +2070,8 @@ export const visualizationSpecSchema = z.object({
   title: z.string().max(200),
   description: z.string().max(500),
   dataFields: z.array(z.string()).optional(),
+  relatedQuestions: z.array(z.string()).optional(),
+  analysisStep: z.string().max(200).optional(),
 });
 export type VisualizationSpec = z.infer<typeof visualizationSpecSchema>;
 
@@ -2226,6 +2228,10 @@ export const businessDefinitions = pgTable("business_definitions", {
   matchPatterns: jsonb("match_patterns").default("[]"), // ["engagement", "eng_score", "satisfaction"]
   synonyms: jsonb("synonyms").default("[]"), // Alternative names for the concept
 
+  // Component field descriptors - rich semantic descriptors for abstract formula terms
+  // Maps abstract component names (e.g., "employees_left") to concrete column detection patterns
+  componentFieldDescriptors: jsonb("component_field_descriptors"), // Array<ComponentFieldDescriptor>
+
   // Source tracking
   sourceType: varchar("source_type", { length: 50 }).default("manual"), // 'manual', 'ai_inferred', 'external_research', 'template'
   sourceReference: text("source_reference"), // URL or citation for external definitions
@@ -2261,6 +2267,32 @@ export const businessDefinitions = pgTable("business_definitions", {
 
 export type BusinessDefinition = typeof businessDefinitions.$inferSelect;
 export type InsertBusinessDefinition = typeof businessDefinitions.$inferInsert;
+
+/**
+ * Component Field Descriptor - rich semantic descriptor for an abstract formula component.
+ * Bridges abstract terms like "employees_left" to actual dataset column patterns.
+ *
+ * Used by matchComponentFields() and mapElementsWithAI() to resolve
+ * formula components to concrete columns in the user's dataset.
+ */
+export interface ComponentFieldDescriptor {
+  abstractName: string;              // "employees_left" - the name used in the formula
+  semanticMeaning: string;           // "Count of employees who separated during the period"
+  derivationLogic: string;           // "COUNT rows WHERE termination_date IS NOT NULL AND within period"
+  columnMatchPatterns: string[];     // ["termination", "separation", "exit", "term_date", "end_date", "status"]
+  columnMatchType:                   // How the column value maps to the abstract concept
+    | 'direct_value'                 // Column value IS the value (e.g., salary → salary)
+    | 'date_presence_indicator'      // Non-null date = event occurred (e.g., Termination Date → separated)
+    | 'count_distinct'               // Count of distinct values (e.g., Employee_ID → headcount)
+    | 'status_filter'                // Filter by status value (e.g., Status = "Terminated")
+    | 'date_range_filter'            // Filter rows by date range (e.g., Hire Date within period)
+    | 'aggregation';                 // Pre-aggregated value
+  dataTypeExpected: 'date' | 'identifier' | 'numeric' | 'categorical' | 'text' | 'boolean';
+  isIntermediate: boolean;           // True if this needs further derivation (not a direct column)
+  statusValues?: string[];           // For status_filter: which values indicate the condition
+  nullMeaning?: string;              // What a NULL value means (e.g., "employee is still active")
+  presenceMeaning?: string;          // What a non-NULL value means (e.g., "employee has separated")
+}
 
 // ============================================
 // Cost Tracking Tables (3-Table Architecture)
@@ -3329,6 +3361,8 @@ export const columnEmbeddings = pgTable("column_embeddings", {
   normalizedName: varchar("normalized_name"),
   embedding: text("embedding").notNull(),       // JSON-serialized float array
   embeddingModel: varchar("embedding_model"),
+  embeddingProvider: varchar("embedding_provider"),     // 'openai' | 'together' | 'gemini'
+  embeddingDimensions: integer("embedding_dimensions"), // 768, 1024, or 1536
   columnType: varchar("column_type"),
   sampleValues: jsonb("sample_values"),
   metadata: jsonb("metadata"),

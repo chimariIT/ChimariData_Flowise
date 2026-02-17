@@ -26,8 +26,17 @@ def perform_clustering_analysis(config):
         n_clusters = config.get('n_clusters', 3)
         method = config.get('method', 'kmeans')
 
-        # Select only numeric columns
-        numeric_data = data.select_dtypes(include=[np.number])
+        # Phase 4C-2: Accept explicit feature columns from AnalysisDataPreparer
+        features = config.get('features')
+        if features:
+            available = [f for f in features if f in data.columns]
+            if available:
+                numeric_data = data[available].select_dtypes(include=[np.number])
+            else:
+                numeric_data = data.select_dtypes(include=[np.number])
+        else:
+            # Select only numeric columns (original behavior)
+            numeric_data = data.select_dtypes(include=[np.number])
 
         if numeric_data.shape[1] == 0:
             return {
@@ -146,7 +155,8 @@ def perform_clustering_analysis(config):
                     'feature_stds': cluster_data.std().to_dict()
                 }
 
-        return {
+        # Phase 4C-1: Pass through business context for evidence chain
+        result = {
             'success': True,
             'method': method,
             'n_clusters': n_clusters,
@@ -164,6 +174,11 @@ def perform_clustering_analysis(config):
             'labels': labels.tolist(),
             'feature_names': numeric_data.columns.tolist()
         }
+        business_context = config.get('business_context', {})
+        if business_context:
+            result['business_context'] = business_context
+            result['question_ids'] = business_context.get('question_ids', [])
+        return result
 
     except Exception as e:
         return {

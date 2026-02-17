@@ -126,6 +126,7 @@ export interface OrchestrationPlan {
         tools: string[];
         estimatedDuration: number;
         dependencies: string[];
+        context?: Record<string, any>; // FIX A5: Optional context for step-specific data (e.g., requirementsDocument)
     }>;
     estimatedTotalDuration: number;
     confidence: number;
@@ -669,7 +670,8 @@ export class ProjectManagerAgent {
         recordCount: number,
         complexity: PlanBlueprint['complexity'],
         projectId?: string,
-        columnCount?: number
+        columnCount?: number,
+        requirementsDoc?: any
     ): Promise<CostBreakdown> {
         const costComplexity = this.mapPlanComplexityToCost(complexity);
 
@@ -683,7 +685,7 @@ export class ProjectManagerAgent {
                 ? steps.map((s) => {
                     const stepAny = s as any;
                     return stepAny.analysisType || stepAny.type || s.method || s.name || 'statistical';
-                  })
+                })
                 : ['statistical'];
 
             // Track how many times each label appears so we can disambiguate duplicate analysis items in the breakdown
@@ -697,12 +699,33 @@ export class ProjectManagerAgent {
                 return acc;
             }, {});
 
+            // Collect artifacts from analysis plan instead of hardcoding ['report']
+            const artifactSet = new Set<string>(['report']); // Always include PDF report
+            if (requirementsDoc?.analysisPath) {
+                for (const analysis of requirementsDoc.analysisPath) {
+                    for (const artifact of (analysis.expectedArtifacts || [])) {
+                        const aType = (artifact.artifactType || '').toLowerCase();
+                        if (aType === 'visualization' || aType === 'dashboard') artifactSet.add('dashboard');
+                        if (aType === 'presentation') artifactSet.add('presentation');
+                        if (aType === 'model' || aType === 'exportdata') artifactSet.add('exportData');
+                    }
+                }
+            }
+            // Include presentation for multi-analysis plans
+            if (analysisTypes.length > 1) artifactSet.add('presentation');
+            // Include dashboard when visualizations are likely
+            if (analysisTypes.some(t => /visualization|comparative|correlation|regression|clustering|time.?series/i.test(t))) {
+                artifactSet.add('dashboard');
+            }
+            const includeArtifacts = Array.from(artifactSet);
+            console.log(`💰 [PM Agent] Artifacts for cost: [${includeArtifacts.join(', ')}] (from ${requirementsDoc?.analysisPath?.length || 0} analyses)`);
+
             const estimate = await CostEstimationService.estimateAnalysisCost(
                 projectId || 'plan-estimate',
                 analysisTypes,
                 { rows: recordCount, columns: columnCount || 10 },
                 costComplexity as 'basic' | 'intermediate' | 'advanced' | 'expert',
-                ['report']
+                includeArtifacts
             );
 
             // Convert to CostBreakdown format with per-analysis detail (no collapsing of multiple analyses)
@@ -935,10 +958,10 @@ export class ProjectManagerAgent {
         // HR / Employee Engagement patterns - high priority file name patterns
         const hrFilePatterns = ['employeeroster', 'hrengagement', 'hrdata', 'employee_', 'staff_', 'workforce'];
         const hrColumnPatterns = ['employee_id', 'employeeid', 'department', 'manager', 'hire_date', 'hiredate',
-                                  'engagement_score', 'engagementscore', 'tenure', 'job_title', 'jobtitle'];
+            'engagement_score', 'engagementscore', 'tenure', 'job_title', 'jobtitle'];
         const hrTextPatterns = ['employee', 'engagement', 'workforce', 'hr ', 'human resource',
-                               'staff', 'turnover', 'retention', 'satisfaction survey', 'hiring',
-                               'talent', 'personnel', 'workplace', 'job satisfaction', 'team performance'];
+            'staff', 'turnover', 'retention', 'satisfaction survey', 'hiring',
+            'talent', 'personnel', 'workplace', 'job satisfaction', 'team performance'];
 
         // Score HR
         industryScores['hr'] = 0;
@@ -949,10 +972,10 @@ export class ProjectManagerAgent {
         // Education patterns
         const educationFilePatterns = ['student', 'enrollment', 'academic', 'gradebook', 'courselist'];
         const educationColumnPatterns = ['student_id', 'studentid', 'grade_level', 'gradelevel', 'gpa',
-                                         'enrollment_date', 'credits', 'course_id', 'teacher_id'];
+            'enrollment_date', 'credits', 'course_id', 'teacher_id'];
         const educationTextPatterns = ['student', 'graduation', 'academic', 'school', 'university',
-                                       'teacher', 'learning', 'enrollment', 'course', 'curriculum',
-                                       'classroom', 'education', 'parent', 'conference'];
+            'teacher', 'learning', 'enrollment', 'course', 'curriculum',
+            'classroom', 'education', 'parent', 'conference'];
 
         industryScores['education'] = 0;
         educationFilePatterns.forEach(p => { if (combinedText.includes(p)) industryScores['education'] += 3; });
@@ -962,9 +985,9 @@ export class ProjectManagerAgent {
         // Healthcare patterns
         const healthcareFilePatterns = ['patient', 'clinical', 'medical', 'diagnosis', 'treatment'];
         const healthcareColumnPatterns = ['patient_id', 'patientid', 'diagnosis', 'treatment', 'prescription',
-                                          'appointment', 'doctor_id', 'admission_date'];
+            'appointment', 'doctor_id', 'admission_date'];
         const healthcareTextPatterns = ['patient', 'hospital', 'clinic', 'medical', 'healthcare',
-                                        'health care', 'doctor', 'nurse', 'diagnosis', 'treatment'];
+            'health care', 'doctor', 'nurse', 'diagnosis', 'treatment'];
 
         industryScores['healthcare'] = 0;
         healthcareFilePatterns.forEach(p => { if (combinedText.includes(p)) industryScores['healthcare'] += 3; });
@@ -974,9 +997,9 @@ export class ProjectManagerAgent {
         // Finance patterns
         const financeFilePatterns = ['transaction', 'account', 'portfolio', 'loan', 'investment'];
         const financeColumnPatterns = ['account_id', 'accountid', 'transaction_id', 'balance', 'amount',
-                                       'interest_rate', 'loan_amount', 'credit_score'];
+            'interest_rate', 'loan_amount', 'credit_score'];
         const financeTextPatterns = ['bank', 'financial', 'loan', 'investment', 'trading',
-                                     'portfolio', 'credit', 'mortgage', 'insurance'];
+            'portfolio', 'credit', 'mortgage', 'insurance'];
 
         industryScores['finance'] = 0;
         financeFilePatterns.forEach(p => { if (combinedText.includes(p)) industryScores['finance'] += 3; });
@@ -986,9 +1009,9 @@ export class ProjectManagerAgent {
         // Retail patterns
         const retailFilePatterns = ['sales', 'order', 'product', 'inventory', 'customer'];
         const retailColumnPatterns = ['product_id', 'productid', 'order_id', 'orderid', 'quantity',
-                                      'price', 'discount', 'customer_id', 'sku'];
+            'price', 'discount', 'customer_id', 'sku'];
         const retailTextPatterns = ['customer', 'purchase', 'shopping', 'retail', 'ecommerce',
-                                    'store', 'product', 'sales', 'order', 'cart'];
+            'store', 'product', 'sales', 'order', 'cart'];
 
         industryScores['retail'] = 0;
         retailFilePatterns.forEach(p => { if (combinedText.includes(p)) industryScores['retail'] += 3; });
@@ -998,9 +1021,9 @@ export class ProjectManagerAgent {
         // Nonprofit patterns
         const nonprofitFilePatterns = ['donor', 'donation', 'volunteer', 'fundrais', 'campaign'];
         const nonprofitColumnPatterns = ['donor_id', 'donorid', 'donation_amount', 'campaign_id',
-                                         'volunteer_hours', 'grant_amount'];
+            'volunteer_hours', 'grant_amount'];
         const nonprofitTextPatterns = ['donor', 'nonprofit', 'non-profit', 'charity', 'volunteer',
-                                       'fundraising', 'foundation', 'ngo', 'mission'];
+            'fundraising', 'foundation', 'ngo', 'mission'];
 
         industryScores['nonprofit'] = 0;
         nonprofitFilePatterns.forEach(p => { if (combinedText.includes(p)) industryScores['nonprofit'] += 3; });
@@ -1010,9 +1033,9 @@ export class ProjectManagerAgent {
         // Manufacturing patterns
         const manufacturingFilePatterns = ['production', 'assembly', 'quality', 'defect', 'batch'];
         const manufacturingColumnPatterns = ['batch_id', 'batchid', 'defect_count', 'quality_score',
-                                             'production_date', 'machine_id', 'yield'];
+            'production_date', 'machine_id', 'yield'];
         const manufacturingTextPatterns = ['manufacturing', 'production', 'factory', 'assembly',
-                                           'inventory', 'supply chain', 'quality control'];
+            'inventory', 'supply chain', 'quality control'];
 
         industryScores['manufacturing'] = 0;
         manufacturingFilePatterns.forEach(p => { if (combinedText.includes(p)) industryScores['manufacturing'] += 3; });
@@ -1209,7 +1232,12 @@ export class ProjectManagerAgent {
             ], { splitPattern: /[\r\n]+|[.;]+/, limit: 6 });
 
             if (goals.length === 0) {
-                goals.push('Generate actionable insights from uploaded data');
+                // FIX C1: Context-aware fallback using project/dataset info
+                const datasetName = primaryDataset?.name || primaryDataset?.originalFileName || 'the uploaded dataset';
+                const projectName = projectRecord.name || request.project?.name || 'this project';
+                const columnNames = primaryDataset?.schema ? Object.keys(primaryDataset.schema).slice(0, 5).join(', ') : '';
+                const columnHint = columnNames ? ` focusing on ${columnNames}` : '';
+                goals.push(`Analyze ${datasetName} to generate insights for ${projectName}${columnHint}`);
             }
 
             // Include user questions from journeyContext (preferred) or journeyProgress SSOT
@@ -1228,7 +1256,16 @@ export class ProjectManagerAgent {
             ], { splitPattern: /[\r\n]+|[?•]+/, limit: 6 });
 
             if (questions.length === 0) {
-                questions.push('Which factors have the greatest impact on performance?');
+                // FIX C1: Context-aware fallback questions based on data characteristics
+                const numericCols = primaryDataset?.schema
+                    ? Object.entries(primaryDataset.schema).filter(([_, v]: [string, any]) => /int|float|numeric|number|decimal/i.test(v?.type || '')).map(([k]) => k)
+                    : [];
+                if (numericCols.length >= 2) {
+                    questions.push(`What is the relationship between ${numericCols[0]} and ${numericCols[1]}?`);
+                } else {
+                    const datasetName = primaryDataset?.name || 'the data';
+                    questions.push(`What are the key patterns and trends in ${datasetName}?`);
+                }
             }
 
             // P1-4 FIX: Pass loaded datasets to determineIndustry for better industry detection
@@ -1295,13 +1332,21 @@ export class ProjectManagerAgent {
             // Only map dataset if we just generated new requirements (existing ones are already mapped from Verification step)
             if (primaryDataset && !existingReqDoc) {
                 try {
+                    // ✅ CONTEXT CONTINUITY FIX: Resolve industry from journeyProgress
+                    let pmIndustry: string | undefined;
+                    try {
+                        const pmProject = await storage.getProject(projectId);
+                        const pmJP = (pmProject as any)?.journeyProgress;
+                        pmIndustry = pmJP?.industry || pmJP?.industryDomain;
+                    } catch (e) { /* non-blocking */ }
+
                     const requiredDataToolForMapping = new RequiredDataElementsTool();
                     requirementsDoc = await requiredDataToolForMapping.mapDatasetToRequirements(requirementsDoc, {
                         fileName: primaryDataset.name,
                         rowCount: primaryDataset.recordCount,
                         schema: primaryDataset.schema as Record<string, any>,
                         preview: primaryDataset.previewRows
-                    });
+                    }, pmIndustry, projectId);
                 } catch (error) {
                     console.warn('Error mapping dataset to requirements:', error);
                 }
@@ -1338,6 +1383,12 @@ export class ProjectManagerAgent {
             // ✅ FIX: Define fallback blueprint for timeout/error scenarios
             // FIX: Include meaningful visualizations based on data characteristics
             // Context-aware fallback blueprint using available goals and analysis types
+            // Includes dataset metadata for richer descriptions (FIX C1)
+            const fbDatasetName = primaryDataset?.name || 'the dataset';
+            const fbColCount = primaryDataset?.schema ? Object.keys(primaryDataset.schema).length : 0;
+            const fbRowCount = primaryDataset?.recordCount || primaryDataset?.previewRows?.length || 0;
+            const dataDesc = fbRowCount > 0 ? `${fbDatasetName} (${fbRowCount.toLocaleString()} rows, ${fbColCount} columns)` : (goals[0] || 'your data');
+
             const fallbackAnalysisTypes = analysisContext?.analysisTypes?.length > 0
                 ? analysisContext.analysisTypes.slice(0, 5)
                 : ['exploratory_data_analysis'];
@@ -1346,7 +1397,7 @@ export class ProjectManagerAgent {
                 analysisSteps: fallbackAnalysisTypes.map((type: string, idx: number) => ({
                     method: type,
                     name: type.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
-                    description: `Analysis of ${goals[0] || 'your data'} using ${type.replace(/_/g, ' ')}`,
+                    description: `Analysis of ${dataDesc} using ${type.replace(/_/g, ' ')}`,
                     confidence: 0.75,
                     stepNumber: idx + 1,
                     inputs: [],
@@ -1469,7 +1520,8 @@ export class ProjectManagerAgent {
                 dataAssessment.recordCount,
                 blueprint.complexity,
                 projectId,
-                dataAssessment.columnCount
+                dataAssessment.columnCount,
+                requirementsDoc
             );
 
             const executiveSummary = this.buildExecutiveSummary({
@@ -1494,63 +1546,167 @@ export class ProjectManagerAgent {
                 risks.push('Monitor data quality checks before execution.');
             }
 
-            // Generate context-aware visualizations based on analysis steps and data characteristics
-            // Use stepsForCost which is already computed above (same logic as finalAnalysisSteps)
+            // Generate data-element-aware visualizations with column names and question linkage
             let visualizations = blueprint.visualizations || [];
             if (visualizations.length === 0) {
-                console.log('📊 [PM Agent] Generating context-aware visualizations from analysis context...');
-                const analysisTypes = stepsForCost?.map(s => s.method?.toLowerCase() || s.name?.toLowerCase() || '') || [];
-                const hasNumericColumns = Object.values(schemaSource).some((col: any) => {
-                    const t = typeof col === 'string' ? col : col?.type;
-                    return t && /number|integer|float|numeric/i.test(t);
-                });
-                const hasCategoricalColumns = Object.values(schemaSource).some((col: any) => {
-                    const t = typeof col === 'string' ? col : col?.type;
-                    return t && /string|text|categorical/i.test(t);
-                });
+                console.log('📊 [PM Agent] Generating element-aware visualizations from analysis context...');
 
-                // EDA visualizations (always relevant)
-                if (analysisTypes.some(t => /eda|exploratory|descriptive/i.test(t)) || analysisTypes.length === 0) {
-                    if (hasNumericColumns) {
-                        visualizations.push({ type: 'histogram', title: 'Data Distribution Analysis', description: 'Distribution and spread of key numeric variables with outlier detection' });
-                        visualizations.push({ type: 'box', title: 'Statistical Summary', description: 'Box plots showing median, quartiles, and outliers for numeric fields' });
-                    }
-                    if (hasCategoricalColumns) {
-                        visualizations.push({ type: 'bar', title: 'Category Frequency Analysis', description: 'Frequency counts for categorical variables' });
-                    }
-                    if (hasNumericColumns && hasCategoricalColumns) {
-                        visualizations.push({ type: 'bar', title: 'Metrics by Category', description: 'Comparison of numeric metrics across categories' });
-                    }
+                // Collect actual column info from schema
+                const numericColumns: string[] = [];
+                const categoricalColumns: string[] = [];
+                for (const [colName, colInfo] of Object.entries(schemaSource)) {
+                    const t = typeof colInfo === 'string' ? colInfo : (colInfo as any)?.type;
+                    if (t && /number|integer|float|numeric/i.test(t)) numericColumns.push(colName);
+                    if (t && /string|text|categorical/i.test(t)) categoricalColumns.push(colName);
                 }
 
-                // Analysis-specific visualizations
-                if (analysisTypes.some(t => /correlation/i.test(t))) {
-                    visualizations.push({ type: 'heatmap', title: 'Correlation Matrix', description: 'Visualize relationships between key variables' });
-                }
-                if (analysisTypes.some(t => /regression|predict/i.test(t))) {
-                    visualizations.push({ type: 'scatter', title: 'Regression Analysis', description: 'Predicted vs actual values with trend line' });
-                }
-                if (analysisTypes.some(t => /cluster/i.test(t))) {
-                    visualizations.push({ type: 'scatter', title: 'Cluster Visualization', description: 'Data points grouped by cluster assignment' });
-                }
-                if (analysisTypes.some(t => /time.?series|trend|forecast/i.test(t))) {
-                    visualizations.push({ type: 'line', title: 'Time Series Trend', description: 'Track values over time with trend indicators' });
-                }
+                // Get data elements and their question linkage from requirements doc
+                const dataElements = requirementsDoc?.requiredDataElements || [];
+                const addedVizTypes = new Set<string>();
 
-                // Ensure at least 3 visualizations
-                if (visualizations.length < 3) {
-                    const defaults = [
-                        { type: 'bar', title: 'Key Metrics Overview', description: 'Primary KPI performance comparison by segment' },
-                        { type: 'histogram', title: 'Data Distribution', description: 'Distribution of key numeric variables' },
-                        { type: 'pie', title: 'Category Breakdown', description: 'Distribution of records across categories' }
-                    ];
-                    for (const d of defaults) {
-                        if (!visualizations.some(v => v.type === d.type) && visualizations.length < 5) {
-                            visualizations.push(d);
+                for (const step of (stepsForCost || [])) {
+                    const analysisType = (step.method || step.name || '').toLowerCase();
+
+                    // Find elements linked to this analysis step
+                    const linkedElements = dataElements.filter((el: any) =>
+                        el.analysisUsage?.some((au: string) =>
+                            analysisType.includes(au.toLowerCase()) || au.toLowerCase().includes(analysisType)
+                        )
+                    );
+
+                    // Get question linkage from elements
+                    const linkedQuestions: string[] = [...new Set<string>(
+                        linkedElements.flatMap((el: any) => (el.relatedQuestions || []) as string[])
+                    )].slice(0, 2);
+
+                    // Get relevant columns from linked elements
+                    const relevantColumns: string[] = linkedElements
+                        .map((el: any) => (el.sourceField || el.sourceColumn) as string)
+                        .filter(Boolean)
+                        .slice(0, 5);
+                    // Use element columns if available, else fall back to schema columns
+                    const vizColumns: string[] = relevantColumns.length > 0 ? relevantColumns : numericColumns.slice(0, 4);
+
+                    if (/correlation/i.test(analysisType) && !addedVizTypes.has('heatmap')) {
+                        const cols = vizColumns.length >= 2 ? vizColumns : numericColumns.slice(0, 6);
+                        visualizations.push({
+                            type: 'heatmap',
+                            title: `Correlation Analysis${cols.length > 0 ? ': ' + cols.slice(0, 3).join(' vs ') : ''}`,
+                            description: linkedQuestions.length > 0
+                                ? `Visualize relationships to answer: "${linkedQuestions[0]}"`
+                                : `Correlation matrix for ${cols.join(', ')}`,
+                            dataFields: cols,
+                            relatedQuestions: linkedQuestions,
+                            analysisStep: step.name
+                        });
+                        addedVizTypes.add('heatmap');
+                    }
+
+                    if (/regression|predict/i.test(analysisType) && !addedVizTypes.has('scatter')) {
+                        visualizations.push({
+                            type: 'scatter',
+                            title: `Regression: ${vizColumns.slice(0, 2).join(' vs ') || 'Predicted vs Actual'}`,
+                            description: linkedQuestions.length > 0
+                                ? `Trend analysis to answer: "${linkedQuestions[0]}"`
+                                : 'Scatter plot with trend line showing predicted vs actual values',
+                            dataFields: vizColumns.slice(0, 3),
+                            relatedQuestions: linkedQuestions,
+                            analysisStep: step.name
+                        });
+                        addedVizTypes.add('scatter');
+                    }
+
+                    if (/cluster/i.test(analysisType) && !addedVizTypes.has('cluster_scatter')) {
+                        visualizations.push({
+                            type: 'scatter',
+                            title: `Cluster Analysis${vizColumns.length > 0 ? ': ' + vizColumns.slice(0, 2).join(', ') : ''}`,
+                            description: linkedQuestions.length > 0
+                                ? `Segment data to answer: "${linkedQuestions[0]}"`
+                                : 'Data points colored by cluster assignment',
+                            dataFields: vizColumns.slice(0, 3),
+                            relatedQuestions: linkedQuestions,
+                            analysisStep: step.name
+                        });
+                        addedVizTypes.add('cluster_scatter');
+                    }
+
+                    if (/time.?series|trend|forecast/i.test(analysisType) && !addedVizTypes.has('line')) {
+                        visualizations.push({
+                            type: 'line',
+                            title: `Time Series: ${vizColumns[0] || 'Trend Analysis'}`,
+                            description: linkedQuestions.length > 0
+                                ? `Track trends to answer: "${linkedQuestions[0]}"`
+                                : 'Track values over time with trend indicators',
+                            dataFields: vizColumns.slice(0, 3),
+                            relatedQuestions: linkedQuestions,
+                            analysisStep: step.name
+                        });
+                        addedVizTypes.add('line');
+                    }
+
+                    if (/descriptive|statistic|eda|exploratory/i.test(analysisType) && !addedVizTypes.has('histogram')) {
+                        const histCols = numericColumns.slice(0, 4);
+                        visualizations.push({
+                            type: 'histogram',
+                            title: `Distribution: ${histCols.slice(0, 3).join(', ') || 'Numeric Variables'}`,
+                            description: linkedQuestions.length > 0
+                                ? `Data distribution to answer: "${linkedQuestions[0]}"`
+                                : `Distribution and spread of ${histCols.join(', ')}`,
+                            dataFields: histCols,
+                            relatedQuestions: linkedQuestions,
+                            analysisStep: step.name
+                        });
+                        addedVizTypes.add('histogram');
+                    }
+
+                    if (/comparative|group|segment/i.test(analysisType) && !addedVizTypes.has('bar_compare')) {
+                        const groupCol = categoricalColumns[0];
+                        const metricCols = vizColumns.filter((c: string) => !categoricalColumns.includes(c)).slice(0, 3);
+                        if (groupCol) {
+                            visualizations.push({
+                                type: 'bar',
+                                title: `Comparison by ${groupCol}: ${metricCols.slice(0, 2).join(', ') || 'Key Metrics'}`,
+                                description: linkedQuestions.length > 0
+                                    ? `Compare groups to answer: "${linkedQuestions[0]}"`
+                                    : `Compare ${metricCols.join(', ')} across ${groupCol} groups`,
+                                dataFields: [groupCol, ...metricCols],
+                                relatedQuestions: linkedQuestions,
+                                analysisStep: step.name
+                            });
+                            addedVizTypes.add('bar_compare');
                         }
                     }
                 }
-                console.log(`📊 [PM Agent] Generated ${visualizations.length} context-aware visualizations`);
+
+                // Ensure at least 3 visualizations with meaningful column references
+                if (visualizations.length < 3) {
+                    if (numericColumns.length >= 2 && !addedVizTypes.has('bar')) {
+                        visualizations.push({
+                            type: 'bar',
+                            title: `Key Metrics: ${numericColumns.slice(0, 3).join(', ')}`,
+                            description: `Overview of primary metrics across segments`,
+                            dataFields: numericColumns.slice(0, 4)
+                        });
+                    }
+                    if (numericColumns.length > 0 && !addedVizTypes.has('histogram')) {
+                        visualizations.push({
+                            type: 'histogram',
+                            title: `Distribution: ${numericColumns.slice(0, 3).join(', ')}`,
+                            description: `Value distribution for key numeric columns`,
+                            dataFields: numericColumns.slice(0, 3)
+                        });
+                    }
+                    if (categoricalColumns.length > 0 && !addedVizTypes.has('pie')) {
+                        visualizations.push({
+                            type: 'pie',
+                            title: `Breakdown by ${categoricalColumns[0]}`,
+                            description: `Distribution of records by ${categoricalColumns[0]}`,
+                            dataFields: categoricalColumns.slice(0, 1)
+                        });
+                    }
+                }
+
+                console.log(`📊 [PM Agent] Generated ${visualizations.length} element-aware visualizations (${visualizations.filter(v => (v as any).relatedQuestions?.length > 0).length} with question linkage)`);
             }
 
             const mlModels = blueprint.mlModels ?? [];
@@ -4762,6 +4918,8 @@ export class ProjectManagerAgent {
             dataSize: number;
             fieldTypes: string[];
             journeyType: string;
+            // FIX A5: Accept requirementsDocument for element-aware transformation recommendations
+            requirementsDocument?: any;
         },
         journeyType: string
     ): Promise<{
@@ -4774,7 +4932,20 @@ export class ProjectManagerAgent {
         try {
             console.log(`[PM Agent] Generating transformation recommendations for ${journeyType} journey`);
 
-            const { columnCount, dataSize, fieldTypes } = dataCharacteristics;
+            const { columnCount, dataSize, fieldTypes, requirementsDocument } = dataCharacteristics;
+
+            // FIX A5: Use element definitions to generate more accurate transformation recommendations
+            if (requirementsDocument?.requiredDataElements) {
+                const elements = requirementsDocument.requiredDataElements;
+                const elementsNeedingTransform = elements.filter((el: any) =>
+                    el.transformationRequired ||
+                    (el.calculationDefinition?.calculationType &&
+                     ['derived', 'aggregated', 'grouped', 'composite'].includes(el.calculationDefinition.calculationType))
+                );
+                if (elementsNeedingTransform.length > 0) {
+                    console.log(`[PM Agent] ${elementsNeedingTransform.length}/${elements.length} elements require transformation based on DS/BA definitions`);
+                }
+            }
 
             // Analyze data characteristics
             const numericFields = fieldTypes.filter(type => ['number', 'integer', 'float'].includes(type)).length;
@@ -5282,7 +5453,7 @@ Be conversational, helpful, and specific. Tailor your questions to the ${input.j
         // 1. Try Google Gemini (primary)
         if (!text && !isPlaceholderKey(process.env.GOOGLE_AI_API_KEY)) {
             try {
-                const { GoogleGenerativeAI } = require('@google/generative-ai');
+                const { GoogleGenerativeAI } = await import('@google/generative-ai');
                 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY!);
                 const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
                 const result = await model.generateContent(prompt);
@@ -5297,7 +5468,7 @@ Be conversational, helpful, and specific. Tailor your questions to the ${input.j
         // 2. Try OpenAI
         if (!text && !isPlaceholderKey(process.env.OPENAI_API_KEY)) {
             try {
-                const { default: OpenAI } = require('openai');
+                const { default: OpenAI } = await import('openai');
                 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
                 const completion = await openai.chat.completions.create({
                     model: 'gpt-4o',
@@ -5315,14 +5486,16 @@ Be conversational, helpful, and specific. Tailor your questions to the ${input.j
         // 3. Try Anthropic Claude
         if (!text && !isPlaceholderKey(process.env.ANTHROPIC_API_KEY)) {
             try {
-                const { default: Anthropic } = require('@anthropic-ai/sdk');
+                const { default: Anthropic } = await import('@anthropic-ai/sdk');
                 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
                 const message = await anthropic.messages.create({
                     model: 'claude-sonnet-4-20250514',
                     max_tokens: 4096,
                     messages: [{ role: 'user', content: prompt }],
                 });
-                text = message.content?.[0]?.type === 'text' ? message.content[0].text : null;
+                // Fix: Properly access text content from Anthropic response
+                const contentBlock = message.content[0];
+                text = contentBlock.type === 'text' ? contentBlock.text : null;
                 console.log(`[PM Agent] Goal clarification via Anthropic Claude`);
             } catch (anthropicErr: any) {
                 providerErrors.push(`Anthropic: ${anthropicErr.message}`);
@@ -5406,6 +5579,7 @@ Be conversational, helpful, and specific. Tailor your questions to the ${input.j
             // Parse JSON response
             const jsonMatch = text.match(/\{[\s\S]*\}/);
             if (!jsonMatch) {
+                console.error('[PM Agent] Failed to find JSON in response:', text);
                 throw new Error('Could not parse AI response as JSON');
             }
 
@@ -5857,85 +6031,85 @@ ${context.completedSteps?.length > 0 ? `**Completed**: ${context.completedSteps.
 
         try {
 
-        // Phase 1: Data Engineer assesses data quality (no dependencies)
-        console.log(`📊 [Phase 1] Data Engineer: Assessing data quality...`);
-        const qualityReport = await this.queryDataEngineer(projectId, uploadedData);
+            // Phase 1: Data Engineer assesses data quality (no dependencies)
+            console.log(`📊 [Phase 1] Data Engineer: Assessing data quality...`);
+            const qualityReport = await this.queryDataEngineer(projectId, uploadedData);
 
-        this.emitOrchestrationProgress(projectId, {
-            phase: 1,
-            agent: 'data_engineer',
-            status: 'complete',
-            message: 'Data quality assessment complete',
-            result: qualityReport
-        });
+            this.emitOrchestrationProgress(projectId, {
+                phase: 1,
+                agent: 'data_engineer',
+                status: 'complete',
+                message: 'Data quality assessment complete',
+                result: qualityReport
+            });
 
-        // Phase 2: Data Scientist generates requirements (depends on quality report)
-        console.log(`🔬 [Phase 2] Data Scientist: Generating analysis requirements...`);
-        const enhancedData = {
-            ...uploadedData,
-            qualityReport: qualityReport.opinion,
-            dataQuality: qualityReport.opinion?.overallScore || 0.7
-        };
+            // Phase 2: Data Scientist generates requirements (depends on quality report)
+            console.log(`🔬 [Phase 2] Data Scientist: Generating analysis requirements...`);
+            const enhancedData = {
+                ...uploadedData,
+                qualityReport: qualityReport.opinion,
+                dataQuality: qualityReport.opinion?.overallScore || 0.7
+            };
 
-        const requirements = await this.queryDataScientist(projectId, enhancedData, safeGoals);
+            const requirements = await this.queryDataScientist(projectId, enhancedData, safeGoals);
 
-        this.emitOrchestrationProgress(projectId, {
-            phase: 2,
-            agent: 'data_scientist',
-            status: 'complete',
-            message: `Generated ${(requirements.opinion as any)?.analysisPath?.length || 0} analysis recommendations`,
-            result: requirements
-        });
+            this.emitOrchestrationProgress(projectId, {
+                phase: 2,
+                agent: 'data_scientist',
+                status: 'complete',
+                message: `Generated ${(requirements.opinion as any)?.analysisPath?.length || 0} analysis recommendations`,
+                result: requirements
+            });
 
-        // Phase 3: Data Engineer plans transformations (depends on requirements)
-        console.log(`🔧 [Phase 3] Data Engineer: Planning transformations...`);
-        const transformationPlan = await this.planTransformationsFromRequirements(
-            projectId,
-            uploadedData,
-            requirements.opinion
-        );
+            // Phase 3: Data Engineer plans transformations (depends on requirements)
+            console.log(`🔧 [Phase 3] Data Engineer: Planning transformations...`);
+            const transformationPlan = await this.planTransformationsFromRequirements(
+                projectId,
+                uploadedData,
+                requirements.opinion
+            );
 
-        this.emitOrchestrationProgress(projectId, {
-            phase: 3,
-            agent: 'data_engineer',
-            status: 'complete',
-            message: `Planned ${transformationPlan?.steps?.length || 0} transformations`,
-            result: transformationPlan
-        });
+            this.emitOrchestrationProgress(projectId, {
+                phase: 3,
+                agent: 'data_engineer',
+                status: 'complete',
+                message: `Planned ${transformationPlan?.steps?.length || 0} transformations`,
+                result: transformationPlan
+            });
 
-        // Phase 4: Business Agent validates alignment (depends on all previous phases)
-        console.log(`💼 [Phase 4] Business Agent: Validating business alignment...`);
-        const businessContextData = {
-            ...uploadedData,
-            qualityReport: qualityReport.opinion,
-            analysisRequirements: requirements.opinion,
-            transformationPlan
-        };
+            // Phase 4: Business Agent validates alignment (depends on all previous phases)
+            console.log(`💼 [Phase 4] Business Agent: Validating business alignment...`);
+            const businessContextData = {
+                ...uploadedData,
+                qualityReport: qualityReport.opinion,
+                analysisRequirements: requirements.opinion,
+                transformationPlan
+            };
 
-        const businessValidation = await this.queryBusinessAgent(projectId, businessContextData, safeGoals, effectiveIndustry);
+            const businessValidation = await this.queryBusinessAgent(projectId, businessContextData, safeGoals, effectiveIndustry);
 
-        this.emitOrchestrationProgress(projectId, {
-            phase: 4,
-            agent: 'business_agent',
-            status: 'complete',
-            message: (businessValidation.opinion as any)?.approved !== false
-                ? 'Business alignment validated'
-                : 'Needs review',
-            result: businessValidation
-        });
+            this.emitOrchestrationProgress(projectId, {
+                phase: 4,
+                agent: 'business_agent',
+                status: 'complete',
+                message: (businessValidation.opinion as any)?.approved !== false
+                    ? 'Business alignment validated'
+                    : 'Needs review',
+                result: businessValidation
+            });
 
-        console.log(`✅ [PM Orchestration] Full workflow complete for project ${projectId}`);
+            console.log(`✅ [PM Orchestration] Full workflow complete for project ${projectId}`);
 
-        this.activeOrchestrations.delete(projectId);
+            this.activeOrchestrations.delete(projectId);
 
-        return {
-            qualityReport: qualityReport.opinion,
-            requirements: requirements.opinion,
-            transformationPlan,
-            businessValidation: businessValidation.opinion,
-            orchestrationComplete: true,
-            timestamp: new Date().toISOString()
-        };
+            return {
+                qualityReport: qualityReport.opinion,
+                requirements: requirements.opinion,
+                transformationPlan,
+                businessValidation: businessValidation.opinion,
+                orchestrationComplete: true,
+                timestamp: new Date().toISOString()
+            };
         } catch (error: any) {
             // P0-D FIX: On failure, clear lock and persist error state to journeyProgress
             this.activeOrchestrations.delete(projectId);

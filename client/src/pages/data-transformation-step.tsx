@@ -867,16 +867,39 @@ export default function DataTransformationStep({
                 // [DATA CONTINUITY FIX] Check if Step 3 (Verification) already created mappings
                 // Mappings are stored in requiredDataElements[].sourceColumn OR sourceField
                 const reqDoc = journeyProgress.requirementsDocument;
+                // FIX B1: Guard array access — ensure requiredDataElements is always treated as an array
+                let elementsArray = Array.isArray(reqDoc?.requiredDataElements) ? reqDoc.requiredDataElements : [];
+
+                // ✅ CONTEXT CONTINUITY FIX: Defensive merge of elementMappings into elements
+                // If verify endpoint didn't merge (old data), merge client-side from journeyProgress.elementMappings
+                const jpElementMappings = (journeyProgress as any)?.elementMappings || {};
+                if (Object.keys(jpElementMappings).length > 0) {
+                    let clientMergeCount = 0;
+                    elementsArray = elementsArray.map((el: any) => {
+                        if (el.sourceField || el.sourceColumn) return el; // already mapped
+                        const key = el.elementId || el.elementName;
+                        const mapping = jpElementMappings[key];
+                        if (!mapping) return el;
+                        const sf = typeof mapping === 'string' ? mapping : mapping?.sourceField;
+                        if (!sf) return el;
+                        clientMergeCount++;
+                        return { ...el, sourceField: sf, sourceColumn: sf, sourceAvailable: true };
+                    });
+                    if (clientMergeCount > 0) {
+                        console.log(`✅ [Transformation] Client-side merged ${clientMergeCount} element mappings from journeyProgress.elementMappings`);
+                    }
+                }
+
                 // FIX: Accept both sourceColumn AND sourceField (backend uses sourceField, frontend expects sourceColumn)
-                const elementsWithMappings = reqDoc?.requiredDataElements?.filter(
+                const elementsWithMappings = elementsArray.filter(
                     (el: any) => (el.sourceColumn && el.sourceColumn !== '') || (el.sourceField && el.sourceField !== '')
-                ) || [];
+                );
                 const hasMappingsFromVerification = elementsWithMappings.length > 0;
 
-                if (hasMappingsFromVerification && reqDoc?.requiredDataElements) {
+                if (hasMappingsFromVerification && elementsArray.length > 0) {
                     // [STEP 3→4 FIX] Use mappings from Verification step instead of regenerating
                     console.log(`✅ [Transformation] Using ${elementsWithMappings.length} verified mappings from Step 3 (Verification)`);
-                    const existingMappings: TransformationMapping[] = reqDoc.requiredDataElements.map((el: any) => {
+                    const existingMappings: TransformationMapping[] = elementsArray.map((el: any) => {
                         // FIX: Accept both field names - prioritize sourceColumn but fallback to sourceField
                         const mappedColumn = el.sourceColumn || el.sourceField || null;
                         const calcDef = el.calculationDefinition;
@@ -978,7 +1001,8 @@ export default function DataTransformationStep({
                     const mappingsWithDefs = existingMappings.filter(m => m.calculationDefinition).length;
                     console.log(`🔗 [Field Mapping] Loaded ${existingMappings.filter(m => m.sourceColumn).length} elements with source columns`);
                     console.log(`📐 [Business Definition] ${mappingsWithDefs} elements have calculation definitions`);
-                    setTransformationMappings(existingMappings);
+                    // FIX B1: Ensure we always set an array
+                    setTransformationMappings(Array.isArray(existingMappings) ? existingMappings : []);
                 } else {
                     // No mappings from Verification - generate new ones
                     const schemaForMappings = mergedSchemaForMappings || currentSchema;
@@ -2441,6 +2465,19 @@ export default function DataTransformationStep({
             return;
         }
 
+        // P0-1 FIX (Strengthened): Check if join is configured but transformations not executed
+        // BLOCK navigation if join keys exist but no transformed data — secondary datasets would be silently lost
+        if (allDatasets.length > 1 && joinConfig?.enabled && joinConfig?.foreignKeys?.length > 0 && !transformedPreview) {
+            toast({
+                title: "Multi-Dataset Join Required",
+                description: `You have ${allDatasets.length} datasets with join keys configured. Please click "Execute Transformations" first to combine your datasets before proceeding. Skipping this step will result in only the primary dataset being used for analysis.`,
+                variant: "destructive",
+                duration: 8000,
+            });
+            console.error(`🚫 [P0-1] Blocked navigation: ${allDatasets.length} datasets with join config but no transformation executed`);
+            return;
+        }
+
         // P0-1 FIX: Check if join is required but not executed - show approval dialog
         // This replaces auto-execute with explicit user approval (u2a2a2u pattern)
         if (!promptJoinApproval()) {
@@ -2474,12 +2511,14 @@ export default function DataTransformationStep({
                 transformedSchema: previewSchema,
                 // CRITICAL FIX: Save transformed preview data for restoration
                 // This updates journeyProgress.joinedData.preview so it can be restored
+                // P0-1 FIX: Also persist joinConfig so multi-dataset joins aren't silently lost
                 joinedData: {
                     ...(journeyProgress as any)?.joinedData,
                     preview: previewData.length > 0 ? previewData : (journeyProgress as any)?.joinedData?.preview,
                     schema: previewSchema,
                     totalRowCount: previewRowCount,
                     rowCount: previewRowCount,
+                    joinConfig: allDatasets.length > 1 ? (joinConfig || (journeyProgress as any)?.joinedData?.joinConfig || null) : null,
                     transformationApplied: true,
                     transformedAt: new Date().toISOString()
                 },
