@@ -725,7 +725,10 @@ export const projects = pgTable("projects", {
   }).onDelete("cascade"),
   // Indexes
   userIdIdx: index("projects_user_id_idx").on(table.userId),
-  analysisResultsIdx: index("projects_analysis_results_idx").on(table.analysisResults),
+  // REMOVED: B-tree index on JSONB analysisResults — row size exceeds 2704 byte B-tree limit.
+  // Original migration (003) used GIN, but Drizzle's index() creates B-tree. JSONB data is
+  // always fetched by project ID (projectIdIdx), not filtered by analysisResults content.
+  // analysisResultsIdx: index("projects_analysis_results_idx").on(table.analysisResults),
   consultationProposalIdx: index("projects_consultation_proposal_idx").on(table.consultationProposalId),
   projectOwnerStatusIdx: index("project_owner_status_idx").on(table.userId, table.status),
 }));
