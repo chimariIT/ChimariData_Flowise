@@ -186,11 +186,11 @@ router.post('/create-checkout-session', ensureAuthenticated, async (req, res) =>
  */
 router.post('/verify-session', ensureAuthenticated, async (req, res) => {
     try {
-        const { sessionId, projectId } = req.body;
+        const { sessionId, projectId, paymentIntentId } = req.body;
         const userId = (req.user as any)?.id;
 
-        if (!sessionId) {
-            return res.status(400).json({ error: 'sessionId is required' });
+        if (!sessionId && !paymentIntentId) {
+            return res.status(400).json({ error: 'sessionId or paymentIntentId is required' });
         }
 
         let verification = { success: false, status: 'unknown' };
@@ -209,17 +209,29 @@ router.post('/verify-session', ensureAuthenticated, async (req, res) => {
             });
         }
 
-        // Verify the session with Stripe if configured
+        // Verify with Stripe if configured
         if (process.env.STRIPE_SECRET_KEY) {
             try {
                 const Stripe = await import('stripe');
                 const stripe = new Stripe.default(process.env.STRIPE_SECRET_KEY);
-                const session = await stripe.checkout.sessions.retrieve(sessionId);
 
-                verification = {
-                    success: session.payment_status === 'paid',
-                    status: session.payment_status
-                };
+                if (paymentIntentId) {
+                    // Stripe Elements flow: verify via PaymentIntent
+                    console.log(`💳 [Payment] Verifying PaymentIntent ${paymentIntentId}`);
+                    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+                    verification = {
+                        success: paymentIntent.status === 'succeeded',
+                        status: paymentIntent.status
+                    };
+                } else if (sessionId) {
+                    // Stripe Checkout flow: verify via Checkout Session
+                    console.log(`💳 [Payment] Verifying Checkout Session ${sessionId}`);
+                    const session = await stripe.checkout.sessions.retrieve(sessionId);
+                    verification = {
+                        success: session.payment_status === 'paid',
+                        status: session.payment_status
+                    };
+                }
             } catch (stripeError) {
                 console.warn('⚠️ [Payment] Stripe verification failed:', stripeError);
 
@@ -228,7 +240,8 @@ router.post('/verify-session', ensureAuthenticated, async (req, res) => {
                 // ==========================================
                 // ONLY allow simulated success in development
                 // Production will return failure
-                if (!isProduction && sessionId.startsWith('cs_')) {
+                const identifier = paymentIntentId || sessionId || '';
+                if (!isProduction && (identifier.startsWith('cs_') || identifier.startsWith('pi_'))) {
                     console.warn('⚠️ [Payment] Using SIMULATED payment success (development only)');
                     verification = { success: true, status: 'simulated_dev_only' };
                 } else if (isProduction) {

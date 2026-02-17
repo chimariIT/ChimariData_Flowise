@@ -1494,17 +1494,26 @@ export default function ExecuteStep({ journeyType, onNext, onPrevious }: Execute
     const params = new URLSearchParams(window.location.search);
     const paymentSuccess = params.get('payment') === 'success';
     const sessionId = params.get('session_id');
+    // Stripe Elements appends payment_intent and redirect_status to return_url
+    const paymentIntentId = params.get('payment_intent');
+    const redirectStatus = params.get('redirect_status');
 
     if (!paymentSuccess || !resolvedProjectId || paymentVerified || paymentVerifying || projectLoading) return;
 
-    // Step 1: Verify payment session with backend (sets isPaid=true in DB)
+    // Step 1: Verify payment with backend (sets isPaid=true in DB)
+    // Supports both Checkout Sessions (session_id) and Payment Intents (payment_intent)
     const verifyAndExecute = async () => {
       setPaymentVerifying(true);
       try {
-        if (sessionId) {
-          console.log(`💳 [Payment] Verifying session ${sessionId} for project ${resolvedProjectId}`);
+        const hasVerifiablePayment = sessionId || paymentIntentId;
+        if (hasVerifiablePayment) {
+          console.log(`💳 [Payment] Verifying payment for project ${resolvedProjectId}`);
+          if (sessionId) console.log(`   Session ID: ${sessionId}`);
+          if (paymentIntentId) console.log(`   PaymentIntent ID: ${paymentIntentId}, redirect_status: ${redirectStatus}`);
+
           const verifyResult = await apiClient.post('/api/payment/verify-session', {
-            sessionId,
+            sessionId: sessionId || undefined,
+            paymentIntentId: paymentIntentId || undefined,
             projectId: resolvedProjectId
           });
           console.log(`✅ [Payment] Verification result:`, verifyResult);
