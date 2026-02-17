@@ -5133,7 +5133,19 @@ router.post("/:id/generate-data-requirements", ensureAuthenticated, requireOwner
             userGoals: filteredGoals,
             userQuestions: filteredQuestions,
             structuredQuestions,
-            datasetMetadata: datasetSchema,
+            // FIX: Transform flat schema Record<string, any> into structured format
+            // that enhanceElementsWithColumnMapping() expects { columns: string[], columnTypes: Record, schema: Record }
+            // Without this, .columns is undefined and column mapping NEVER runs
+            datasetMetadata: datasetSchema ? {
+                columns: Object.keys(datasetSchema),
+                columnTypes: Object.fromEntries(
+                    Object.entries(datasetSchema).map(([col, info]) => [
+                        col,
+                        typeof info === 'object' ? (info as any).type || 'unknown' : String(info)
+                    ])
+                ),
+                schema: datasetSchema
+            } : undefined,
             industry: reqIndustry
         });
 

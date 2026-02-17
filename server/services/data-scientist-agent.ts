@@ -2496,14 +2496,28 @@ export class DataScientistAgent implements AgentHandler {
 
     const requiredElements: Array<any> = [...kpiElements]; // Include any KPI elements found above
 
+    // Build column lookup for schema-aware fallback elements
+    const schemaColumnNames = datasetSchema ? Object.keys(datasetSchema) : [];
+    const findSchemaColumn = (patterns: RegExp[]): string | undefined => {
+      for (const pattern of patterns) {
+        const match = schemaColumnNames.find(col => pattern.test(col));
+        if (match) return match;
+      }
+      return undefined;
+    };
+
     // Combine goals and questions for context analysis
     const allText = [...userGoals, ...userQuestions].join(' ').toLowerCase();
 
     // Always need a unique identifier (skip if already added by KPI decomposition)
-    if (!kpiElements.some(e => e.elementName === 'Unique Identifier')) {
+    if (!kpiElements.some(e => e.elementName === 'Unique Identifier' || (datasetSchema && Object.keys(datasetSchema).some(col => /id$|_id$/i.test(col) && e.elementName.toLowerCase().replace(/[\s-]/g, '_') === col.toLowerCase())))) {
+      // Find actual ID column from schema instead of using placeholder
+      const actualIdCol = findSchemaColumn([/^id$/i, /[_-]id$/i, /^.*_id$/i, /^key$/i, /identifier/i, /^code$/i, /^record/i]);
+      const idName = actualIdCol || 'Unique Identifier';
+
       requiredElements.push({
-        elementName: 'Unique Identifier',
-        description: 'Unique ID for each record in the dataset',
+        elementName: idName,
+        description: actualIdCol ? `Unique identifier from ${actualIdCol} column` : 'Unique ID for each record in the dataset',
         dataType: 'text' as const,
         purpose: 'Uniquely identify and track each record throughout the analysis',
         required: true,
@@ -2511,10 +2525,11 @@ export class DataScientistAgent implements AgentHandler {
         calculationDefinition: {
           calculationType: 'direct' as const,
           formula: {
-            businessDescription: 'Direct mapping from source ID column (e.g., record_id, campaign_id, customer_id, row_number)',
-            pseudoCode: 'SELECT id_column AS unique_identifier FROM source_data'
+            businessDescription: `Direct mapping from ${actualIdCol || 'source ID'} column`,
+            componentFields: actualIdCol ? [actualIdCol] : [],
+            pseudoCode: `SELECT ${(actualIdCol || 'id_column')} AS unique_identifier FROM source_data`
           },
-          notes: 'Use existing ID column or generate row numbers if none exists'
+          notes: actualIdCol ? `Schema-matched ID column: ${actualIdCol}` : 'Use existing ID column or generate row numbers if none exists'
         }
       });
     }
@@ -2529,9 +2544,13 @@ export class DataScientistAgent implements AgentHandler {
       if (/when|date|time|trend|over time|temporal|seasonal|period|year|month|day/i.test(questionLower)) {
         const existingTemporal = requiredElements.find(e => e.dataType === 'datetime');
         if (!existingTemporal) {
+          // Schema-aware: find actual date column instead of using placeholder
+          const actualDateCol = findSchemaColumn([/date/i, /time/i, /timestamp/i, /created/i, /period/i, /month/i, /year/i, /day/i]);
+          const dateColName = actualDateCol || 'Timestamp';
+
           requiredElements.push({
-            elementName: 'Timestamp',
-            description: 'Date and time information for temporal analysis',
+            elementName: dateColName,
+            description: actualDateCol ? `Date/time information from ${actualDateCol} column` : 'Date and time information for temporal analysis',
             dataType: 'datetime' as const,
             purpose: 'Enable time-based analysis, trends, and temporal patterns',
             required: true,
@@ -2539,10 +2558,11 @@ export class DataScientistAgent implements AgentHandler {
             calculationDefinition: {
               calculationType: 'direct' as const,
               formula: {
-                businessDescription: 'Map from date/time column. Parse various formats (ISO, US, EU) to standardized datetime',
-                pseudoCode: 'PARSE_DATE(source_date_column, format) AS timestamp'
+                businessDescription: actualDateCol ? `Direct mapping from ${actualDateCol} column` : 'Map from date/time column. Parse various formats (ISO, US, EU) to standardized datetime',
+                componentFields: actualDateCol ? [actualDateCol] : [],
+                pseudoCode: `PARSE_DATE(${actualDateCol || 'source_date_column'}, format) AS timestamp`
               },
-              notes: 'Support multiple date formats: YYYY-MM-DD, MM/DD/YYYY, DD-MM-YYYY'
+              notes: actualDateCol ? `Schema-matched date column: ${actualDateCol}` : 'Support multiple date formats: YYYY-MM-DD, MM/DD/YYYY, DD-MM-YYYY'
             }
           });
         } else {
@@ -2914,8 +2934,10 @@ export class DataScientistAgent implements AgentHandler {
       ? Object.entries(datasetSchema).map(([col, info]) => `  - ${col}: ${typeof info === 'object' ? (info as any).type || 'unknown' : info}`).join('\n')
       : '  (No schema available - infer from questions and goals)';
 
-    // Generate industry-appropriate example for the prompt
-    const exampleElement = this.getIndustryExampleElement(params.industry);
+    // Generate example: prefer schema-based example (uses ACTUAL column names) over industry example
+    const exampleElement = datasetSchema && Object.keys(datasetSchema).length > 0
+      ? this.getSchemaBasedExampleElement(datasetSchema)
+      : this.getIndustryExampleElement(params.industry);
     const industryDirective = params.industry
       ? `\n## Industry Context:\nThis is a **${params.industry}** analysis project. Generate elements relevant to ${params.industry} — do NOT generate elements for other industries (e.g., do not generate HR elements for a marketing project).\n`
       : '\n## Industry Context:\nIndustry not specified — infer from questions and dataset schema.\n';
@@ -2957,13 +2979,15 @@ Identify ALL data elements required to answer these questions and achieve these 
 
 ## Rules:
 1. Return ONLY a valid JSON array - no markdown, no explanation text
-2. Include at least one "Unique Identifier" element
+2. Include at least one "Unique Identifier" element — use the ACTUAL ID column name from the schema (e.g., "employee_id", "order_id"), not a generic "Unique Identifier"
 3. Each element must have calculationDefinition explaining HOW to derive it
 4. Match dataType to one of: numeric, categorical, datetime, text, boolean
 5. calculationType must be one of: direct, derived, aggregated, grouped, composite
 6. aggregationMethod (if applicable) must be one of: average, sum, count, min, max, median, weighted_average, custom
-7. CRITICAL: If a dataset schema is provided above, your elements MUST reference actual columns from that schema. Do NOT generate generic business metrics (like "Average Order Value", "Revenue Growth Rate") unless those columns actually exist in the schema. For "direct" calculation types, use actual column names from the schema in componentFields.
-8. Only generate elements that are answerable from the provided dataset schema. If the schema shows HR data, do not generate financial metrics and vice versa.${params.industry ? `\n9. IMPORTANT: This is a ${params.industry} project. Only generate elements relevant to ${params.industry}. Do not generate HR elements for marketing data or vice versa.` : ''}
+7. HARD CONSTRAINT: If a dataset schema is provided above, EVERY element with calculationType "direct" MUST use an exact column name from the schema as its elementName or in componentFields. Do NOT invent column names that are not in the schema.
+8. Only generate elements that are answerable from the provided dataset schema. If the schema shows HR data, do not generate financial metrics and vice versa.
+9. For "derived" or "composite" elements, componentFields MUST contain only column names that exist in the schema above.
+10. FORBIDDEN: Do NOT generate generic placeholder elements (like "Primary Performance Metric", "Key Performance Indicator") when a schema is provided. Use the ACTUAL column names from the schema.${params.industry ? `\n11. IMPORTANT: This is a ${params.industry} project. Only generate elements relevant to ${params.industry}. Do not generate HR elements for marketing data or vice versa.` : ''}
 
 Respond with the JSON array ONLY:`;
 
@@ -3045,15 +3069,59 @@ Respond with the JSON array ONLY:`;
         };
       });
 
-      // Ensure we have at least a unique identifier
+      // POST-AI VALIDATION: Ensure "direct" elements reference actual schema columns
+      if (datasetSchema && Object.keys(datasetSchema).length > 0) {
+        const schemaColumns = Object.keys(datasetSchema).map(c => c.toLowerCase());
+        const schemaColumnsSet = new Set(schemaColumns);
+
+        for (const el of validatedElements) {
+          const calcDef = el.calculationDefinition;
+          if (calcDef?.calculationType === 'direct') {
+            const elNameLower = el.elementName.toLowerCase().replace(/[\s-]/g, '_');
+            const componentFields = (calcDef.formula?.componentFields || []).map((f: string) => f.toLowerCase());
+
+            const hasSchemaMatch = schemaColumnsSet.has(elNameLower) ||
+              componentFields.some((f: string) => schemaColumnsSet.has(f)) ||
+              schemaColumns.some(col => elNameLower.includes(col) || col.includes(elNameLower));
+
+            if (!hasSchemaMatch) {
+              console.warn(`⚠️ [DS Agent AI] Element "${el.elementName}" (direct) does not reference any schema column`);
+              // Auto-correct: find closest matching column by fuzzy word match
+              const bestMatch = schemaColumns.find(col => {
+                const colWords = col.split(/[_\s-]/).filter((w: string) => w.length > 2);
+                const elWords = elNameLower.split(/[_\s-]/).filter((w: string) => w.length > 2);
+                return colWords.some((cw: string) => elWords.some((ew: string) => cw.includes(ew) || ew.includes(cw)));
+              });
+              if (bestMatch) {
+                if (!calcDef.formula) (calcDef as any).formula = { businessDescription: '' };
+                calcDef.formula!.componentFields = [bestMatch];
+                console.log(`   ✅ Auto-corrected: mapped to "${bestMatch}"`);
+              }
+            }
+          }
+        }
+        console.log(`✅ [DS Agent AI] Post-AI validation complete for ${validatedElements.length} elements`);
+      }
+
+      // Ensure we have at least a unique identifier — use actual schema ID column if available
       const hasUniqueId = validatedElements.some(el =>
-        /unique.*id|identifier|record.*id|primary.*key/i.test(el.elementName)
+        /unique.*id|identifier|record.*id|primary.*key/i.test(el.elementName) ||
+        // Also check if any element name matches a schema ID column
+        (datasetSchema && Object.keys(datasetSchema).some(col =>
+          /id$|_id$|^id_|^key$|identifier/i.test(col) && el.elementName.toLowerCase().replace(/[\s-]/g, '_') === col.toLowerCase()
+        ))
       );
 
       if (!hasUniqueId) {
+        // Schema-aware: find actual ID column instead of using placeholder
+        const schemaIdCol = datasetSchema
+          ? Object.keys(datasetSchema).find(col => /^id$|[_-]id$|^.*_id$|^key$|identifier/i.test(col))
+          : undefined;
+        const idColName = schemaIdCol || 'Unique Identifier';
+
         validatedElements.unshift({
-          elementName: 'Unique Identifier',
-          description: 'Unique ID for each record in the dataset',
+          elementName: idColName,
+          description: schemaIdCol ? `Unique identifier from ${schemaIdCol} column` : 'Unique ID for each record in the dataset',
           dataType: 'text' as const,
           purpose: 'Uniquely identify and track each record throughout the analysis',
           required: true,
@@ -3061,10 +3129,11 @@ Respond with the JSON array ONLY:`;
           calculationDefinition: {
             calculationType: 'direct' as const,
             formula: {
-              businessDescription: 'Direct mapping from source ID column (e.g., record_id, campaign_id, customer_id, row_number)',
-              pseudoCode: 'SELECT id_column AS unique_identifier FROM source_data'
+              businessDescription: `Direct mapping from ${idColName} column`,
+              componentFields: schemaIdCol ? [schemaIdCol] : [],
+              pseudoCode: `SELECT ${idColName.replace(/\s+/g, '_').toLowerCase()} AS unique_identifier FROM source_data`
             },
-            notes: 'Use existing ID column or generate row numbers if none exists'
+            notes: schemaIdCol ? `Using actual schema column: ${schemaIdCol}` : 'Use existing ID column or generate row numbers if none exists'
           }
         });
       }
@@ -3177,6 +3246,75 @@ Respond with the JSON array ONLY:`;
           }
         };
     }
+  }
+
+  /**
+   * Generate an example element from ACTUAL dataset schema columns.
+   * This replaces the hardcoded industry examples so the AI sees real column names
+   * as the pattern to follow, producing column-aware elements instead of generic ones.
+   */
+  private getSchemaBasedExampleElement(schema: Record<string, any>): object {
+    const columns = Object.entries(schema);
+
+    // Find a numeric column for the example
+    const numericCol = columns.find(([_, info]) => {
+      const type = typeof info === 'object' ? (info as any).type : String(info);
+      return /numeric|number|integer|float|decimal/i.test(type || '');
+    });
+
+    // Find a categorical/text column
+    const catCol = columns.find(([_, info]) => {
+      const type = typeof info === 'object' ? (info as any).type : String(info);
+      return /categorical|text|string|varchar/i.test(type || '');
+    });
+
+    // Find an ID column
+    const idCol = columns.find(([name]) => /id|key|code|identifier/i.test(name));
+
+    if (numericCol) {
+      const colName = numericCol[0];
+      const groupCol = catCol ? catCol[0] : (idCol ? idCol[0] : columns[0]?.[0] || 'group_column');
+      return {
+        elementName: colName,
+        description: `Analysis of ${colName.replace(/[_-]/g, ' ')} values`,
+        dataType: 'numeric',
+        purpose: `Analyze ${colName.replace(/[_-]/g, ' ')} across different groups`,
+        required: true,
+        relatedQuestions: [],
+        calculationDefinition: {
+          calculationType: 'direct',
+          formula: {
+            businessDescription: `Direct mapping from ${colName} column`,
+            componentFields: [colName],
+            pseudoCode: `SELECT ${colName} FROM dataset`
+          }
+        }
+      };
+    }
+
+    // No numeric column — use first available column
+    const firstCol = columns[0];
+    if (firstCol) {
+      return {
+        elementName: firstCol[0],
+        description: `Data element from ${firstCol[0].replace(/[_-]/g, ' ')} column`,
+        dataType: 'text',
+        purpose: 'Direct mapping from source data',
+        required: true,
+        relatedQuestions: [],
+        calculationDefinition: {
+          calculationType: 'direct',
+          formula: {
+            businessDescription: `Direct mapping from ${firstCol[0]} column`,
+            componentFields: [firstCol[0]],
+            pseudoCode: `SELECT ${firstCol[0]} FROM dataset`
+          }
+        }
+      };
+    }
+
+    // No schema columns at all — fall back to generic
+    return this.getIndustryExampleElement(undefined);
   }
 
   /**

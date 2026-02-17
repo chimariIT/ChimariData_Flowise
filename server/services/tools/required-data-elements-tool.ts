@@ -262,16 +262,17 @@ export class RequiredDataElementsTool {
         );
 
         // FIX: ALWAYS generate analysis-based elements first (what data is NEEDED)
-        // These represent the conceptual data requirements based on goals/questions
-        // NOT just listing existing columns - that defeats the purpose of verification!
-        //
-        // The verification step is where users MAP these requirements TO their columns
-        // So we must show meaningful analysis-based elements like:
-        //   - "Employee Engagement Score" (conceptual need)
-        //   - "Survey Response Rate" (derived metric)
-        //   - "Temporal Trend Indicator" (analysis requirement)
-        //
-        // NOT column names like "Q1_Workload" or "Q2_Growth" - those come from the DATASET
+        // FIX: Resolve industry from DATA SIGNALS first, before element generation
+        // This ensures the DS Agent AI receives the data-inferred industry, not the
+        // user-profile industry which may not match the uploaded dataset
+        const resolvedIndustry = this.resolveIndustryFromData(
+            input.datasetMetadata, normalizedGoals, normalizedQuestions, input.industry
+        );
+        console.log(`🏭 [Data Elements Tool] Resolved industry for element generation: ${resolvedIndustry}`);
+
+        // Generate analysis-based requirements with actual dataset context
+        // When schema is available, elements should reference actual column names
+        // The verification step is where users confirm/adjust these mappings
         console.log(`🎯 [Data Elements Tool] Generating analysis-based requirements${input.datasetMetadata ? ' (with dataset schema context)' : ' (no dataset schema)'}`);
         let requiredDataElements: RequiredDataElement[] = await this.inferRequiredDataElementsFromAnalyses(
             analysisPath,
@@ -279,7 +280,7 @@ export class RequiredDataElementsTool {
             normalizedQuestions,
             input.datasetMetadata,
             input.structuredQuestions,
-            input.industry
+            resolvedIndustry  // Use data-inferred industry, not raw input.industry
         );
 
         // ========================================================================
@@ -291,51 +292,8 @@ export class RequiredDataElementsTool {
         try {
             const { businessDefinitionRegistry } = await import('../business-definition-registry');
 
-            // Detect industry context using priority: explicit > dataset schema > keyword inference
-            // Priority 1: Explicit industry from project/user profile (most reliable)
-            let industryContext = 'general';
-            if (input.industry && input.industry !== 'general' && input.industry !== 'other') {
-                industryContext = input.industry.toLowerCase();
-                console.log(`   Industry context from project/user: ${industryContext}`);
-            } else {
-                // Priority 2: Infer from dataset column names (more reliable than question keywords)
-                const datasetColumns = input.datasetMetadata?.columns || [];
-                const columnContext = datasetColumns.join(' ').toLowerCase();
-
-                // Priority 3: Infer from goals/questions (least reliable — use tighter patterns)
-                const combinedContext = [...normalizedGoals, ...normalizedQuestions].join(' ').toLowerCase();
-                const fullContext = `${columnContext} ${combinedContext}`;
-
-                // Marketing patterns (check BEFORE HR to prevent false HR matches on "campaign")
-                if (/\b(campaign|impression|click.?rate|ad.?spend|ctr|cpc|cpm|marketing|seo|sem|social.?media|lead.?gen)\b/i.test(fullContext)) {
-                    industryContext = 'marketing';
-                }
-                // HR patterns — require employee/hr-specific terms, NOT just "engagement" or "survey"
-                else if (/\b(employee|hr\b|human.?resource|turnover|headcount|attrition|hire|onboard|payroll|fte)\b/i.test(fullContext)) {
-                    industryContext = 'hr';
-                }
-                // Sales patterns
-                else if (/\b(sales.?pipeline|deal|quota|close.?rate|sales.?rep|opportunity|account.?exec)\b/i.test(fullContext)) {
-                    industryContext = 'sales';
-                }
-                // E-commerce / retail patterns
-                else if (/\b(cart|checkout|product.?page|sku|order|ecommerce|shopif|aov|add.?to.?cart)\b/i.test(fullContext)) {
-                    industryContext = 'ecommerce';
-                }
-                // Finance patterns
-                else if (/\b(profit|loss|balance.?sheet|p&l|ledger|accounts.?payable|accounts.?receivable|budget)\b/i.test(fullContext)) {
-                    industryContext = 'finance';
-                }
-                // Education patterns
-                else if (/\b(student|grade|gpa|course|enrollment|semester|academic|faculty)\b/i.test(fullContext)) {
-                    industryContext = 'education';
-                }
-                // Healthcare patterns
-                else if (/\b(patient|diagnosis|clinical|treatment|hospital|icd|cpt|ehr|readmission)\b/i.test(fullContext)) {
-                    industryContext = 'healthcare';
-                }
-                console.log(`   Industry context inferred: ${industryContext} (from ${input.industry ? 'explicit + ' : ''}${datasetColumns.length > 0 ? 'schema + ' : ''}keywords)`);
-            }
+            // Reuse the industry resolved above (before element generation)
+            const industryContext = resolvedIndustry;
 
             // Run all lookups in parallel with a 10s overall timeout to prevent blocking
             const ENRICHMENT_TIMEOUT_MS = 10000;
@@ -1309,11 +1267,15 @@ export class RequiredDataElementsTool {
             const analysisTypes = analysisPath.map(a => a.analysisName);
             console.log(`   Analysis Types: ${analysisTypes.join(', ')}`);
 
+            // FIX: datasetSchema may be structured { columns, columnTypes, schema } or flat Record<string, any>
+            // The DS agent expects a flat Record<string, any> (column names as keys)
+            const flatSchema = datasetSchema?.schema || datasetSchema;
+
             const inferredElements = await dataScientist.inferRequiredDataElements({
                 userQuestions,
                 userGoals,
                 analysisTypes,
-                datasetSchema,
+                datasetSchema: flatSchema,
                 industry
             });
 
@@ -3462,6 +3424,67 @@ assert df['${element.sourceField}'].nunique() == len(df), "Field must have uniqu
 
         console.log(`✅ [Data Elements Tool] Enhanced ${elements.length} elements with mapping hints`);
         return elements;
+    }
+
+    /**
+     * Resolve industry context from data signals first, explicit param as fallback.
+     * Requires 2+ matching signals for confidence — prevents single-keyword false positives
+     * (e.g., "engagement" alone won't trigger "hr" industry).
+     */
+    private resolveIndustryFromData(
+        datasetMetadata: any,
+        normalizedGoals: string[],
+        normalizedQuestions: string[],
+        explicitIndustry?: string
+    ): string {
+        // Priority 1: Infer from dataset column names + goals/questions (data doesn't lie)
+        const datasetColumns = datasetMetadata?.columns ||
+            (datasetMetadata && typeof datasetMetadata === 'object' && !Array.isArray(datasetMetadata)
+                ? Object.keys(datasetMetadata) : []);
+        const columnContext = datasetColumns.join(' ').toLowerCase();
+        const combinedContext = [...normalizedGoals, ...normalizedQuestions].join(' ').toLowerCase();
+        const fullContext = `${columnContext} ${combinedContext}`;
+
+        // Score-based detection — require 2+ signals for confidence
+        const industryScores: Record<string, number> = {};
+
+        const marketingSignals = (fullContext.match(/\b(campaign|impression|click.?rate|ad.?spend|ctr|cpc|cpm|marketing|seo|sem|social.?media|lead.?gen|conversion.?rate)\b/gi) || []).length;
+        if (marketingSignals >= 2) industryScores['marketing'] = marketingSignals;
+
+        // HR: require HR-specific terms — "engagement" alone is NOT enough
+        const hrSignals = (fullContext.match(/\b(employee|hr\b|human.?resource|turnover|headcount|attrition|hire|onboard|payroll|fte|termination|separation)\b/gi) || []).length;
+        if (hrSignals >= 2) industryScores['hr'] = hrSignals;
+
+        const salesSignals = (fullContext.match(/\b(sales.?pipeline|deal|quota|close.?rate|sales.?rep|opportunity|account.?exec)\b/gi) || []).length;
+        if (salesSignals >= 2) industryScores['sales'] = salesSignals;
+
+        const ecomSignals = (fullContext.match(/\b(cart|checkout|product.?page|sku|order.?id|ecommerce|shopif|aov|add.?to.?cart)\b/gi) || []).length;
+        if (ecomSignals >= 2) industryScores['ecommerce'] = ecomSignals;
+
+        const finSignals = (fullContext.match(/\b(profit|loss|balance.?sheet|p&l|ledger|accounts.?payable|accounts.?receivable|budget)\b/gi) || []).length;
+        if (finSignals >= 2) industryScores['finance'] = finSignals;
+
+        const eduSignals = (fullContext.match(/\b(student|grade|gpa|course|enrollment|semester|academic|faculty)\b/gi) || []).length;
+        if (eduSignals >= 2) industryScores['education'] = eduSignals;
+
+        const healthSignals = (fullContext.match(/\b(patient|diagnosis|clinical|treatment|hospital|icd|cpt|ehr|readmission)\b/gi) || []).length;
+        if (healthSignals >= 2) industryScores['healthcare'] = healthSignals;
+
+        // Pick highest-scoring industry from data signals
+        const topIndustry = Object.entries(industryScores).sort((a, b) => b[1] - a[1])[0];
+        if (topIndustry && topIndustry[1] >= 2) {
+            console.log(`   Industry context from data signals: ${topIndustry[0]} (${topIndustry[1]} signals)`);
+            return topIndustry[0];
+        }
+
+        // Priority 2: Fallback to explicit industry ONLY if no data signals detected
+        if (explicitIndustry && explicitIndustry !== 'general' && explicitIndustry !== 'other') {
+            console.log(`   Industry context from explicit param (no data signals): ${explicitIndustry.toLowerCase()}`);
+            return explicitIndustry.toLowerCase();
+        }
+
+        console.log(`   Industry context: general (insufficient signals)`);
+        return 'general';
     }
 
     /**
