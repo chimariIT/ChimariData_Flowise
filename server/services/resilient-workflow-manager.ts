@@ -235,17 +235,20 @@ export class ResilientWorkflowManager {
     allowFallbacks: boolean
   ): Promise<any> {
     // Use file processor service
-    const { fileProcessor } = require('./file-processor');
+    const fs = await import('fs');
+    const { FileProcessor } = await import('./file-processor');
 
     const processedFiles = [];
     for (const file of files) {
       try {
-        const result = await fileProcessor.processFile(file.path, file.name);
+        const buffer = fs.readFileSync(file.path);
+        const mimetype = file.name.endsWith('.csv') ? 'text/csv' : 'application/octet-stream';
+        const result = await FileProcessor.processFile(buffer, file.name, mimetype);
         processedFiles.push({
           fileName: file.name,
           schema: result.schema,
           data: result.preview || result.data,
-          rowCount: result.rowCount || (result.data ? result.data.length : 0)
+          rowCount: (result as any).rowCount || (result.data ? result.data.length : 0)
         });
       } catch (error: any) {
         if (!allowFallbacks) throw error;
@@ -328,17 +331,19 @@ export class ResilientWorkflowManager {
     options: WorkflowOptions,
     allowFallbacks: boolean
   ): Promise<any> {
-    // Delegate to Data Scientist Agent
-    const { dataScientistAgent } = require('./data-scientist-agent');
+    // Delegate to Data Scientist via MCP tool registry (U2A2A2U)
+    const { executeTool } = await import('./mcp-tool-registry');
 
     try {
-      const analysis = await dataScientistAgent.analyzeData({
-        data: transformedData.files[0].data,
-        schema: transformedData.files[0].schema,
-        goals: options.userGoal || '',
-        questions: options.questions || []
+      const toolResult = await executeTool('comprehensive_analysis', 'data_scientist', {
+        projectId: options.projectId,
+        analysisTypes: ['descriptive', 'correlation'],
+        userGoals: options.userGoal ? [options.userGoal] : [],
+        userQuestions: options.questions || []
+      }, {
+        projectId: options.projectId
       });
-      return { analysis };
+      return { analysis: toolResult?.result };
     } catch (error: any) {
       if (!allowFallbacks) throw error;
       console.warn('⚠️  Advanced analysis failed, using descriptive stats');

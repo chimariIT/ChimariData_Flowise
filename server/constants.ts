@@ -47,7 +47,7 @@ export const MIN_STATEMENT_TIMEOUT_MS = 60_000;
  *
  * Format: `q_{first8OfProjectId}_{first8OfSha256(lowercaseTrimmedText)}`
  */
-import crypto from 'crypto';
+import * as crypto from 'crypto';
 
 export function generateStableQuestionId(projectId: string, questionText: string): string {
   const hash = crypto.createHash('sha256')

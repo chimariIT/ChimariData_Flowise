@@ -840,6 +840,8 @@ const PHASE_MAP: Record<string, string[]> = {
   trend_analysis: ['quality', 'eda', 'ml'],
   text_analysis: ['quality', 'ml'],
   text: ['quality', 'ml'],
+  statistical_tests: ['quality', 'eda', 'statistical'],
+  hypothesis_testing: ['quality', 'eda', 'statistical'],
 };
 
 /**

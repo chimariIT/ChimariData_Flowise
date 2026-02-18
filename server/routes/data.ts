@@ -306,11 +306,11 @@ router.post('/outlier-detection', async (req, res) => {
       return res.status(400).json({ error: 'Project dataset is empty. Upload data before requesting outlier detection.' });
     }
 
-    const { executeTool } = require('../services/mcp-tool-registry');
+    const { executeTool } = await import('../services/mcp-tool-registry');
 
     const toolResult = await executeTool(
       'data_quality_monitor',
-      'data_engineer_agent',
+      'data_engineer',
       {
         operation: 'profile',
         datasetId: projectId,
@@ -383,11 +383,11 @@ router.post('/missing-data-analysis', async (req, res) => {
       return res.status(400).json({ error: 'Project dataset is empty. Upload data before requesting missing data analysis.' });
     }
 
-    const { executeTool } = require('../services/mcp-tool-registry');
+    const { executeTool } = await import('../services/mcp-tool-registry');
 
     const toolResult = await executeTool(
       'data_quality_monitor',
-      'data_engineer_agent',
+      'data_engineer',
       {
         operation: 'profile',
         datasetId: projectId,
@@ -456,7 +456,7 @@ router.post('/normality-test', async (req, res) => {
       return res.status(400).json({ error: 'No numeric columns available for normality testing.' });
     }
 
-    const { executeTool } = require('../services/mcp-tool-registry');
+    const { executeTool } = await import('../services/mcp-tool-registry');
 
     const toolResult = await executeTool(
       'statistical_analyzer',

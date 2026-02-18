@@ -361,14 +361,22 @@ export class AnalysisDataPreparer {
       }
     }
 
-    // Direct type mapping
+    // Direct type mapping — covers all AnalysisTypeEnum values,
+    // DS agent recommendation names, and Python script naming conventions
     const typeMap: Record<string, string> = {
       'descriptive': 'descriptive',
       'descriptive_stats': 'descriptive',
       'descriptive_statistics': 'descriptive',
+      'frequency': 'descriptive',
+      'frequency_analysis': 'descriptive',
+      'statistical_aggregation': 'descriptive',
       'diagnostic': 'comparative',
       'comparative': 'comparative',
       'comparative_analysis': 'comparative',
+      'anova': 'comparative',
+      'ancova': 'comparative',
+      'manova': 'comparative',
+      'mancova': 'comparative',
       'group': 'group_analysis',
       'group_analysis': 'group_analysis',
       'predictive': 'regression',
@@ -376,7 +384,9 @@ export class AnalysisDataPreparer {
       'regression': 'regression',
       'regression_analysis': 'regression',
       'classification': 'classification',
+      'classification_analysis': 'classification',
       'clustering': 'clustering',
+      'clustering_analysis': 'clustering',
       'segmentation': 'clustering',
       'correlation': 'correlation',
       'correlation_analysis': 'correlation',
@@ -386,7 +396,9 @@ export class AnalysisDataPreparer {
       'trend_analysis': 'time_series',
       'text': 'text_analysis',
       'text_analysis': 'text_analysis',
+      'sentiment': 'text_analysis',
       'statistical_tests': 'statistical_tests',
+      'custom': 'descriptive',
     };
 
     return typeMap[type] || type;
@@ -584,6 +596,10 @@ export class AnalysisDataPreparer {
     elements: Array<PrepareParams['requiredDataElements'][0] & { actualColumn: string }>,
     preferredType: 'numeric' | 'categorical'
   ): (PrepareParams['requiredDataElements'][0] & { actualColumn: string }) | undefined {
+    // Priority 0: Element with explicit analysisRole: 'target' set by QuestionIntentAnalyzer
+    const byAnalysisRole = elements.find(el => (el as any).analysisRole === 'target');
+    if (byAnalysisRole) return byAnalysisRole;
+
     // Priority 1: Element with purpose explicitly mentioning "target"
     const purposeKeywords = ['target', 'outcome', 'predict', 'dependent', 'response variable', 'label', 'class'];
     const byPurpose = elements.find(el => {

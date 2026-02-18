@@ -68,7 +68,7 @@ export class SparkVisualizationEngine {
       console.log(`🔥 Creating distributed visualization with Spark for ${data.length} records`);
 
       // Use ComputeEngineSelector for consistency
-      const { ComputeEngineSelector } = require('./compute-engine-selector');
+      const { ComputeEngineSelector } = await import('./compute-engine-selector');
       const selection = ComputeEngineSelector.selectEngine({
         recordCount: data.length,
         analysisType: 'visualization',
@@ -379,7 +379,7 @@ export class SparkStatisticalAnalyzer {
       console.log(`📊 Performing distributed statistical analysis with Spark for ${data.length} records`);
 
       // Use ComputeEngineSelector for consistency
-      const { ComputeEngineSelector } = require('./compute-engine-selector');
+      const { ComputeEngineSelector } = await import('./compute-engine-selector');
       const selection = ComputeEngineSelector.selectEngine({
         recordCount: data.length,
         analysisType: config.analysisType,

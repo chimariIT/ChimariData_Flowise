@@ -862,8 +862,8 @@ How can I help you with your data engineering needs today?`;
       console.log(`🔒 [DE Agent] Starting PII scan for project ${projectId}`);
 
       // Use the MCP tool via executeTool (U2A2A2U pattern)
-      const { executeTool } = require('./mcp-tool-registry');
-      const toolResult = await executeTool('scan_pii_columns', {
+      const { executeTool } = await import('./mcp-tool-registry');
+      const toolResult = await executeTool('scan_pii_columns', 'data_engineer', {
         projectId,
         datasetId,
         sensitivityLevel: sensitivityLevel || 'moderate',
@@ -871,10 +871,7 @@ How can I help you with your data engineering needs today?`;
         includeMLDetection: false
       }, {
         userId: task.context?.userId,
-        agentId: 'data_engineer',
-        projectId,
-        executionId: `exec_${nanoid()}`,
-        startTime: Date.now()
+        projectId
       });
 
       if (toolResult.status === 'error') {
@@ -967,8 +964,8 @@ How can I help you with your data engineering needs today?`;
       }
 
       // Use the MCP tool via executeTool (U2A2A2U pattern)
-      const { executeTool } = require('./mcp-tool-registry');
-      const toolResult = await executeTool('apply_pii_exclusions', {
+      const { executeTool } = await import('./mcp-tool-registry');
+      const toolResult = await executeTool('apply_pii_exclusions', 'data_engineer', {
         projectId,
         excludedColumns,
         maskingStrategy: maskingStrategy || 'remove',
@@ -976,10 +973,7 @@ How can I help you with your data engineering needs today?`;
         userConfirmed: true
       }, {
         userId: task.context?.userId,
-        agentId: 'data_engineer',
-        projectId,
-        executionId: `exec_${nanoid()}`,
-        startTime: Date.now()
+        projectId
       });
 
       if (toolResult.status === 'error') {

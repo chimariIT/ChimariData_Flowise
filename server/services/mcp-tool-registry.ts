@@ -1469,6 +1469,77 @@ export function registerCoreTools(): void {
       }
     },
     // ========================================
+    // BUSINESS AGENT CORE TOOLS (U2A2A2U Compliance)
+    // These wrap BusinessAgent methods so analysis-execution routes through the tool registry
+    // ========================================
+    {
+      name: 'ba_translate_results',
+      description: 'Translate analysis results for a target audience (executive, technical, analyst) using Business Agent AI',
+      service: 'BusinessAgent',
+      permissions: ['translate_content', 'read_analysis'],
+      category: 'ba_analysis',
+      agentAccess: ['business_agent', 'project_manager', 'data_scientist'],
+      capabilities: ['translate.results', 'audience.adapt', 'business.contextualize'],
+      inputTypes: ['analysis/results'],
+      outputTypes: ['translation/audience'],
+      complexity: 'medium',
+      inputSchema: {
+        results: 'object { insights, recommendations, summary }',
+        audience: 'string (executive | technical | analyst)',
+        decisionContext: 'string (optional)'
+      },
+      outputSchema: {
+        insights: 'array (translated)',
+        recommendations: 'array (translated)',
+        executiveSummary: 'string',
+        translatedAt: 'string (ISO date)'
+      }
+    },
+    {
+      name: 'ba_assess_business_impact',
+      description: 'Assess business impact of analysis findings against project goals using Business Agent AI',
+      service: 'BusinessAgent',
+      permissions: ['assess_impact', 'read_analysis'],
+      category: 'ba_analysis',
+      agentAccess: ['business_agent', 'project_manager'],
+      capabilities: ['impact.assess', 'business.evaluate', 'goal.alignment'],
+      inputTypes: ['analysis/results', 'goals/list'],
+      outputTypes: ['impact/assessment'],
+      complexity: 'medium',
+      inputSchema: {
+        goals: 'array of strings',
+        analysisResults: 'object { insights, recommendations }',
+        industry: 'string',
+        analysisMethod: 'string (optional) — e.g. "rfm_analysis", "descriptive, correlation" for industry-specific impact branches'
+      },
+      outputSchema: {
+        impactLevel: 'string (high | medium | low)',
+        goalAlignment: 'array of { goal, alignment, findings }',
+        actionItems: 'array of strings'
+      }
+    },
+    {
+      name: 'ba_generate_industry_insights',
+      description: 'Generate industry-specific insights and recommendations using Business Agent domain knowledge',
+      service: 'BusinessAgent',
+      permissions: ['generate_insights', 'industry_analysis'],
+      category: 'ba_research',
+      agentAccess: ['business_agent', 'project_manager'],
+      capabilities: ['insights.generate', 'industry.contextualize', 'business.recommend'],
+      inputTypes: ['industry/context'],
+      outputTypes: ['insights/industry'],
+      complexity: 'medium',
+      inputSchema: {
+        industry: 'string',
+        userGoals: 'array of strings',
+        dataSchema: 'Record<string, any> (optional) — column names/types for industry template matching'
+      },
+      outputSchema: {
+        industryInsights: 'array of { insight, relevance, recommendation }',
+        benchmarks: 'object (optional)'
+      }
+    },
+    // ========================================
     // BUSINESS DEFINITION REGISTRY TOOLS (Data Element Mapping)
     // ========================================
     {
@@ -3019,6 +3090,107 @@ export async function executeTool(
         break;
 
       // ========================================
+      // BUSINESS AGENT CORE TOOLS (U2A2A2U Compliance)
+      // ========================================
+      case 'ba_translate_results': {
+        try {
+          const { BusinessAgent } = await import('./business-agent');
+          const ba = new BusinessAgent();
+          const baTranslation = await ba.translateResults({
+            results: input.results,
+            audience: input.audience,
+            decisionContext: input.decisionContext
+          });
+          result = {
+            executionId: executionContext.executionId,
+            toolId: toolName,
+            status: 'success',
+            result: baTranslation,
+            metrics: { duration: 200, resourcesUsed: { cpu: 20, memory: 100, storage: 0 }, cost: 0.02 }
+          };
+        } catch (baErr: any) {
+          console.error('ba_translate_results failed:', baErr);
+          result = {
+            executionId: executionContext.executionId,
+            toolId: toolName,
+            status: 'error',
+            error: baErr.message,
+            result: null,
+            metrics: { duration: 0, resourcesUsed: { cpu: 0, memory: 0, storage: 0 }, cost: 0 }
+          };
+        }
+        break;
+      }
+
+      case 'ba_assess_business_impact': {
+        try {
+          const { BusinessAgent } = await import('./business-agent');
+          const ba = new BusinessAgent();
+          // Method expects (goals, proposedApproach, industry) where proposedApproach.method
+          // is checked for industry-specific branches (e.g., 'rfm_analysis' for retail).
+          // Merge analysisResults with method field so both code paths work.
+          const proposedApproach = {
+            ...input.analysisResults,
+            method: input.analysisMethod || input.analysisResults?.method
+          };
+          const baImpact = await ba.assessBusinessImpact(
+            input.goals,
+            proposedApproach,
+            input.industry
+          );
+          result = {
+            executionId: executionContext.executionId,
+            toolId: toolName,
+            status: 'success',
+            result: baImpact,
+            metrics: { duration: 200, resourcesUsed: { cpu: 20, memory: 100, storage: 0 }, cost: 0.02 }
+          };
+        } catch (baErr: any) {
+          console.error('ba_assess_business_impact failed:', baErr);
+          result = {
+            executionId: executionContext.executionId,
+            toolId: toolName,
+            status: 'error',
+            error: baErr.message,
+            result: null,
+            metrics: { duration: 0, resourcesUsed: { cpu: 0, memory: 0, storage: 0 }, cost: 0 }
+          };
+        }
+        break;
+      }
+
+      case 'ba_generate_industry_insights': {
+        try {
+          const { BusinessAgent } = await import('./business-agent');
+          const ba = new BusinessAgent();
+          // Pass full BusinessContext: method expects { industry, dataSchema, userGoals, ... }
+          const baInsights = await ba.generateIndustryInsights({
+            industry: input.industry,
+            userGoals: input.userGoals,
+            dataSchema: input.dataSchema
+          });
+          result = {
+            executionId: executionContext.executionId,
+            toolId: toolName,
+            status: 'success',
+            result: baInsights,
+            metrics: { duration: 150, resourcesUsed: { cpu: 15, memory: 80, storage: 0 }, cost: 0.015 }
+          };
+        } catch (baErr: any) {
+          console.error('ba_generate_industry_insights failed:', baErr);
+          result = {
+            executionId: executionContext.executionId,
+            toolId: toolName,
+            status: 'error',
+            error: baErr.message,
+            result: null,
+            metrics: { duration: 0, resourcesUsed: { cpu: 0, memory: 0, storage: 0 }, cost: 0 }
+          };
+        }
+        break;
+      }
+
+      // ========================================
       // BUSINESS AGENT TOOLS
       // ========================================
       case 'cost_calculator':
@@ -3282,6 +3454,7 @@ export async function executeTool(
       // ========================================
       case 'comprehensive_analysis':
         // Use the DataScienceOrchestrator for full analysis pipeline
+        // U2A2A2U: Pass through ALL input fields to support per-analysis execution path
         try {
           const dsModule = await import('./data-science-orchestrator');
           const dsResult = await dsModule.dataScienceOrchestrator.executeWorkflow({
@@ -3289,7 +3462,14 @@ export async function executeTool(
             userId: input.userId || executionContext.userId,
             analysisTypes: input.analysisTypes || ['descriptive', 'correlation'],
             userGoals: input.userGoals || [],
-            userQuestions: input.userQuestions || []
+            userQuestions: input.userQuestions || [],
+            datasetIds: input.datasetIds,
+            columnsToExclude: input.columnsToExclude,
+            requiredColumns: input.requiredColumns,
+            requiredColumnTypes: input.requiredColumnTypes,
+            analysisPreparation: input.analysisPreparation,
+            computeEngine: input.computeEngine,
+            computeEngineConfig: input.computeEngineConfig
           });
           result = {
             executionId: executionContext.executionId,
@@ -3385,18 +3565,20 @@ export async function executeTool(
         break;
 
       case 'artifact_generator':
-        // Use ArtifactGenerator service
+        // Use ArtifactGenerator service — U2A2A2U: pass through ALL input fields
         try {
           const agModule = await import('./artifact-generator');
           const artifactGen = new agModule.ArtifactGenerator();
           const artifactResult = await artifactGen.generateArtifacts({
             projectId: input.projectId,
+            projectName: input.projectName,
             userId: input.userId || executionContext.userId,
             journeyType: input.journeyType || 'business',
             analysisResults: input.analysisResults || [],
             visualizations: input.visualizations || [],
             insights: input.insights || [],
-            datasetSizeMB: input.datasetSizeMB || 1
+            datasetSizeMB: input.datasetSizeMB || 1,
+            comprehensiveResults: input.comprehensiveResults
           });
           result = {
             executionId: executionContext.executionId,

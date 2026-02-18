@@ -32,11 +32,13 @@ import { eq, and, desc, sql } from 'drizzle-orm';
 import { PythonProcessor } from './python-processor';
 import { storage } from './storage';
 import { nanoid } from 'nanoid';
-import { dataScienceOrchestrator, type DataScienceResults } from './data-science-orchestrator';
+// U2A2A2U: DataScienceOrchestrator accessed via executeTool('comprehensive_analysis')
+import { type DataScienceResults } from './data-science-orchestrator';
 // PHASE 6 FIX (Friction #2): Import ComputeEngineSelector for intelligent compute routing
 import { ComputeEngineSelector, type ComputeEngine, type ComputeSelectionResult } from './compute-engine-selector';
 
-import { BusinessAgent } from './business-agent';
+// U2A2A2U: BusinessAgent accessed via executeTool('ba_translate_results'|'ba_assess_business_impact'|'ba_generate_industry_insights')
+// import { BusinessAgent } from './business-agent'; // Removed: routed through MCP tool registry
 import { generateStableQuestionId } from '../constants';
 
 // P3-1: Import types from extracted module
@@ -1024,18 +1026,24 @@ export class AnalysisExecutionService {
 
       if (businessQuestionsSource) {
         try {
-          console.log(`🤔 Generating AI-powered answers to user questions...`);
+          console.log(`🤔 Generating AI-powered answers to user questions via question_answer_generator tool...`);
           console.log(`🤔 Questions to answer: "${businessQuestionsSource.substring(0, 200)}..."`);
-          const { QuestionAnswerService } = await import('./question-answer-service');
-
-          const qaResult = await QuestionAnswerService.generateAnswers({
-            projectId: request.projectId,
-            userId: request.userId,
-            questions: [businessQuestionsSource], // Use resolved source
-            analysisResults: results,
-            analysisGoal: analysisGoalSource,
-            audience: userContext.audience // Pass audience context for appropriate formatting
-          });
+          // U2A2A2U: Route through MCP tool registry
+          const { executeTool: execQATool } = await import('./mcp-tool-registry');
+          const qaToolResult = await execQATool(
+            'question_answer_generator',
+            'data_scientist',
+            {
+              projectId: request.projectId,
+              userId: request.userId,
+              questions: [businessQuestionsSource],
+              analysisResults: results,
+              analysisGoal: analysisGoalSource,
+              audience: userContext.audience
+            },
+            { userId: request.userId, projectId: request.projectId }
+          );
+          const qaResult = qaToolResult?.result as any;
 
           console.log(`✅ Generated ${qaResult.answeredCount}/${qaResult.totalQuestions} AI-powered answers`);
 
@@ -1084,12 +1092,11 @@ export class AnalysisExecutionService {
         console.log(`ℹ️  [Debug] project.analysisGoals: ${(project as any).analysisGoals}`);
       }
 
-      // ✅ PHASE 4 FIX: BUSINESS AGENT RESULTS TRANSLATION FOR ALL AUDIENCES
-      // Translate results for ALL audience types (executive, technical, analyst)
+      // ✅ U2A2A2U FIX: BUSINESS AGENT RESULTS TRANSLATION VIA MCP TOOL REGISTRY
+      // All Business Agent calls go through executeTool() for proper U2A2A2U compliance
       try {
-        console.log(`💼 [BA Translation] Starting results translation for ALL audiences...`);
-        const { BusinessAgent } = await import('./business-agent');
-        const businessAgent = new BusinessAgent();
+        console.log(`💼 [BA Translation] Starting results translation via MCP tools for ALL audiences...`);
+        const { executeTool } = await import('./mcp-tool-registry');
 
         // Get primary audience from project context
         const audienceContext = userContext.audience as any;
@@ -1105,25 +1112,31 @@ export class AnalysisExecutionService {
           journeyAudience?.decisionContext ||
           'General business decision support';
 
-        // ✅ PHASE 4 FIX: Translate for ALL audiences, not just primary
+        // Translate for ALL audiences via MCP tool
         const allAudiences = ['executive', 'technical', 'analyst'];
         const allTranslations: Record<string, any> = {};
 
         for (const audience of allAudiences) {
           try {
-            console.log(`💼 [BA Translation] Translating for ${audience} audience...`);
+            console.log(`💼 [BA Translation] Translating for ${audience} audience via ba_translate_results tool...`);
 
-            const translatedResults = await businessAgent.translateResults({
-              results: {
-                insights: allInsights,
-                recommendations: allRecommendations,
-                summary: results.summary
+            const toolResult = await executeTool(
+              'ba_translate_results',
+              'business_agent',
+              {
+                results: {
+                  insights: allInsights,
+                  recommendations: allRecommendations,
+                  summary: results.summary
+                },
+                audience,
+                decisionContext
               },
-              audience,
-              decisionContext
-            });
+              { userId: request.userId, projectId: request.projectId }
+            );
 
-            if (translatedResults) {
+            const translatedResults = toolResult?.result;
+            if (translatedResults && toolResult.status === 'success') {
               allTranslations[audience] = {
                 insights: translatedResults.insights || allInsights,
                 recommendations: translatedResults.recommendations || allRecommendations,
@@ -1138,30 +1151,63 @@ export class AnalysisExecutionService {
           }
         }
 
-        // Generate business impact assessment
+        // Generate business impact assessment via MCP tool
         let businessImpact: any = null;
         try {
           const projectGoals = (project as any).journeyProgress?.goals ||
             (userContext as any).goals ||
             (userContext as any).businessQuestions ||
             [];
-          businessImpact = await businessAgent.assessBusinessImpact(
-            Array.isArray(projectGoals) ? projectGoals : [projectGoals],
-            { insights: allInsights, recommendations: allRecommendations },
-            (project as any).journeyProgress?.industry || 'general'
+          const impactResult = await executeTool(
+            'ba_assess_business_impact',
+            'business_agent',
+            {
+              goals: Array.isArray(projectGoals) ? projectGoals : [projectGoals],
+              analysisResults: { insights: allInsights, recommendations: allRecommendations },
+              industry: (project as any).journeyProgress?.industry || 'general',
+              // Pass analysis method for industry-specific impact branches (e.g., RFM in retail)
+              analysisMethod: request.analysisTypes?.join(', ') || 'descriptive'
+            },
+            { userId: request.userId, projectId: request.projectId }
           );
+          if (impactResult?.status === 'success') {
+            businessImpact = impactResult.result;
+          }
           console.log(`✅ [BA Translation] Business impact assessment complete`);
         } catch (impactError) {
           console.warn(`⚠️ [BA Translation] Business impact assessment failed:`, impactError);
         }
 
-        // Generate industry-specific insights
+        // Generate industry-specific insights via MCP tool
         let industryInsights: any = null;
         try {
-          industryInsights = await businessAgent.generateIndustryInsights({
-            industry: (project as any).journeyProgress?.industry || 'general',
-            userGoals: (project as any).journeyProgress?.goals || []
-          });
+          // Build dataSchema from first dataset's columns for industry template matching
+          const firstDataset = projectDatasetList?.[0] as any;
+          const dataSchema: Record<string, any> = {};
+          if (firstDataset) {
+            const sampleRow = (firstDataset.ingestionMetadata?.transformedData?.[0] ||
+              firstDataset.metadata?.transformedData?.[0] ||
+              (Array.isArray(firstDataset.data) ? firstDataset.data[0] : firstDataset.preview?.[0]));
+            if (sampleRow && typeof sampleRow === 'object') {
+              for (const [key, value] of Object.entries(sampleRow)) {
+                dataSchema[key] = typeof value;
+              }
+            }
+          }
+
+          const insightsResult = await executeTool(
+            'ba_generate_industry_insights',
+            'business_agent',
+            {
+              industry: (project as any).journeyProgress?.industry || 'general',
+              userGoals: (project as any).journeyProgress?.goals || [],
+              dataSchema: Object.keys(dataSchema).length > 0 ? dataSchema : undefined
+            },
+            { userId: request.userId, projectId: request.projectId }
+          );
+          if (insightsResult?.status === 'success') {
+            industryInsights = insightsResult.result;
+          }
           console.log(`✅ [BA Translation] Industry insights generated`);
         } catch (industryError) {
           console.warn(`⚠️ [BA Translation] Industry insights failed:`, industryError);
@@ -1229,9 +1275,8 @@ export class AnalysisExecutionService {
 
       // ✅ GENERATE ARTIFACTS
       try {
-        console.log(`🎨 Generating artifacts for project ${request.projectId}...`);
-        const { ArtifactGenerator } = await import('./artifact-generator');
-        const artifactGenerator = new ArtifactGenerator();
+        console.log(`🎨 Generating artifacts for project ${request.projectId} via artifact_generator tool...`);
+        const { executeTool: execArtifactTool } = await import('./mcp-tool-registry');
 
         // Calculate total dataset size
         const totalSizeBytes = projectDatasetList.reduce((acc: number, ds: any) => acc + (ds.fileSize || 0), 0);
@@ -1347,17 +1392,24 @@ export class AnalysisExecutionService {
           console.warn(`⚠️ [P0-12] Artifact dedup check failed, proceeding with generation:`, dedupErr);
         }
 
-        const artifactResult = skipArtifacts ? null : await artifactGenerator.generateArtifacts({
-          projectId: request.projectId,
-          projectName: project.name,
-          userId: request.userId,
-          journeyType: (project.journeyType as any) || 'non-tech',
-          analysisResults: [results], // Wrap in array as expected by interface
-          visualizations: allVisualizations,
-          insights: allInsights.map(i => `${i.title}: ${i.description}`),
-          datasetSizeMB: totalSizeMB || 1, // Default to 1MB if unknown
-          comprehensiveResults // ✅ Pass comprehensive results to artifact generator
-        });
+        // U2A2A2U: Route through MCP tool registry
+        const artifactToolResult = skipArtifacts ? null : await execArtifactTool(
+          'artifact_generator',
+          'data_scientist',
+          {
+            projectId: request.projectId,
+            projectName: project.name,
+            userId: request.userId,
+            journeyType: (project.journeyType as any) || 'non-tech',
+            analysisResults: [results], // Wrap in array as expected by interface
+            visualizations: allVisualizations,
+            insights: allInsights.map(i => `${i.title}: ${i.description}`),
+            datasetSizeMB: totalSizeMB || 1,
+            comprehensiveResults
+          },
+          { userId: request.userId, projectId: request.projectId }
+        );
+        const artifactResult = artifactToolResult?.result as any;
 
         if (artifactResult) {
           console.log(`✅ Artifacts generated successfully for project ${request.projectId}:`, {
@@ -1460,13 +1512,18 @@ export class AnalysisExecutionService {
         const effectiveAudience = ['executive', 'business', 'technical'].includes(rawAudience)
           ? rawAudience : 'executive';
 
-        // Instantiate agent (Week 2 Fix: Call as instance method)
-        const businessAgent = new BusinessAgent();
-        await businessAgent.translateResults({
-          results,
-          audience: effectiveAudience,
-          decisionContext: request.userContext?.audience?.decisionContext || undefined
-        });
+        // U2A2A2U Fix: Route through MCP tool registry instead of direct instantiation
+        const { executeTool: execToolAuto } = await import('./mcp-tool-registry');
+        await execToolAuto(
+          'ba_translate_results',
+          'business_agent',
+          {
+            results,
+            audience: effectiveAudience,
+            decisionContext: request.userContext?.audience?.decisionContext || undefined
+          },
+          { userId: request.userId, projectId: request.projectId }
+        );
 
         console.log(`✅ Auto-translation complete for audience: ${effectiveAudience} (raw: ${rawAudience})`);
 
@@ -2153,27 +2210,34 @@ export class AnalysisExecutionService {
             console.warn(`  ⚠️ [Validation] Validation failed (non-blocking): ${valErr.message}`);
           }
 
-          // Execute single analysis with optimal compute engine
-          const singleResult = await dataScienceOrchestrator.executeWorkflow({
-            projectId: request.projectId,
-            userId: request.userId,
-            analysisTypes: [analysisType],
-            userGoals,
-            userQuestions,
-            datasetIds: request.datasetIds,
-            columnsToExclude: request.columnsToExclude,
-            // FIX 1: Pass required columns for this analysis type
-            requiredColumns,
-            // FIX 1E: Pass column type requirements from registry when no specific columns
-            requiredColumnTypes,
-            // Phase 4B: Pass column roles, derived columns, business context
-            analysisPreparation: analysisPrep,
-            computeEngine: selectedEngine.engine,
-            computeEngineConfig: ComputeEngineSelector.getEngineConfig(selectedEngine.engine, {
-              recordCount: totalRecordCount,
-              analysisType: analysisType
-            })
-          });
+          // U2A2A2U: Execute single analysis via MCP tool registry
+          const { executeTool: execAnalysisTool } = await import('./mcp-tool-registry');
+          const dsToolResult = await execAnalysisTool(
+            'comprehensive_analysis',
+            'data_scientist',
+            {
+              projectId: request.projectId,
+              userId: request.userId,
+              analysisTypes: [analysisType],
+              userGoals,
+              userQuestions,
+              datasetIds: request.datasetIds,
+              columnsToExclude: request.columnsToExclude,
+              // FIX 1: Pass required columns for this analysis type
+              requiredColumns,
+              // FIX 1E: Pass column type requirements from registry when no specific columns
+              requiredColumnTypes,
+              // Phase 4B: Pass column roles, derived columns, business context
+              analysisPreparation: analysisPrep,
+              computeEngine: selectedEngine.engine,
+              computeEngineConfig: ComputeEngineSelector.getEngineConfig(selectedEngine.engine, {
+                recordCount: totalRecordCount,
+                analysisType: analysisType
+              })
+            },
+            { userId: request.userId, projectId: request.projectId }
+          );
+          const singleResult = dsToolResult?.result as DataScienceResults;
 
           const executionTimeMs = Date.now() - startTime;
           console.log(`  ✅ Completed: ${analysis.analysisName} (${executionTimeMs}ms)`);
@@ -2262,8 +2326,25 @@ export class AnalysisExecutionService {
 
       for (const settled of settledResults) {
         if (settled.status === 'rejected') {
-          // This shouldn't happen since we catch errors above, but handle it just in case
-          console.error(`  ⚠️ Unexpected rejection:`, settled.reason);
+          // Phase 4C: Per-analysis timeout or unexpected rejection — surface as error insight
+          const reason = settled.reason?.message || String(settled.reason);
+          console.error(`  ⚠️ Analysis rejection (likely timeout):`, reason);
+
+          const timeoutInsight: AnalysisInsight = {
+            id: insightIdCounter++,
+            title: `Analysis Timed Out`,
+            description: `An analysis could not complete within the time limit. ${
+              reason.includes('timed out')
+                ? 'The dataset may be too large or the analysis too complex. Consider reducing data size or simplifying the analysis.'
+                : reason
+            }`,
+            impact: 'Low',
+            confidence: 100,
+            category: 'error',
+            dataSource: 'timeout',
+            details: { error: reason }
+          };
+          mergedInsights.push(timeoutInsight);
           continue;
         }
 
@@ -2279,15 +2360,52 @@ export class AnalysisExecutionService {
         const { analysisId, analysis, analysisType, executionTimeMs } = result;
 
         if (result.status === 'failed') {
-          // Store failure (graceful degradation)
+          // Phase 4C: Surface failures as user-visible error insights instead of silent empty results
+          const errorInsight: AnalysisInsight = {
+            id: insightIdCounter++,
+            title: `[${analysis.analysisName}] Analysis Failed`,
+            description: `The ${analysis.analysisName} analysis could not be completed. ${
+              result.error?.includes('timed out')
+                ? 'The analysis timed out — the dataset may be too large or complex for this analysis type.'
+                : result.error?.includes('target_column')
+                ? 'No suitable target variable was found. Please ensure your data includes the outcome variable this analysis needs.'
+                : result.error?.includes('No numeric')
+                ? 'Insufficient numeric columns for this analysis. Ensure your data has the required column types.'
+                : 'This may be due to data quality issues or missing required columns. Other analyses may still provide useful insights.'
+            }`,
+            impact: 'Low',
+            confidence: 100,
+            category: 'error',
+            dataSource: analysisType,
+            details: { error: result.error, sourceAnalysisId: analysisId, analysisType }
+          };
+
           perAnalysisResults.set(analysisId, {
             status: 'failed',
-            insights: [],
+            insights: [errorInsight],
             visualizations: [],
             recommendations: [],
             error: result.error,
             executionTimeMs
           });
+
+          // Include error insight in merged results so it appears in the dashboard
+          mergedInsights.push(errorInsight);
+
+          // Phase 4B fallback: Even for failed analyses, map question IDs from prep context
+          const failedPrep = prepLookup.get(analysisId);
+          if (failedPrep?.businessContext?.questionIds?.length) {
+            for (const qId of failedPrep.businessContext.questionIds) {
+              if (!directQuestionMap[qId]) directQuestionMap[qId] = [];
+              directQuestionMap[qId].push({
+                analysisId,
+                analysisType,
+                analysisName: analysis.analysisName,
+                columnRoles: failedPrep.columnRoles,
+                derivedColumns: failedPrep.derivedColumns?.map(d => d.columnName)
+              });
+            }
+          }
           continue;
         }
 
@@ -2383,9 +2501,9 @@ export class AnalysisExecutionService {
             const metricDesc = model.problemType === 'regression'
               ? `R²=${(model.metrics.r2 || 0).toFixed(3)}, RMSE=${(model.metrics.rmse || 0).toFixed(3)}`
               : model.problemType === 'classification'
-              ? `Accuracy=${((model.metrics.accuracy || 0) * 100).toFixed(1)}%`
+              ? `Accuracy=${((model.metrics.accuracy || 0) * 100).toFixed(1)}%, F1=${((model.metrics.f1Score || 0) * 100).toFixed(1)}%`
               : model.problemType === 'clustering'
-              ? `Silhouette=${(model.metrics.silhouetteScore || 0).toFixed(3)}`
+              ? `Silhouette=${(model.metrics.silhouetteScore || 0).toFixed(3)}, ${model.features?.length || '?'} features`
               : 'Model trained';
             analysisInsights.push({
               id: insightIdCounter++,
@@ -2395,8 +2513,29 @@ export class AnalysisExecutionService {
               confidence: 80,
               category: analysis.analysisName,
               dataSource: analysisType,
-              details: { ...model.metrics, sourceAnalysisId: analysisId }
+              details: { ...model.metrics, modelType: model.modelType, problemType: model.problemType, sourceAnalysisId: analysisId }
             });
+
+            // Feature importance insights (top 5 features)
+            const featureImportance = model.featureImportance || [];
+            if (featureImportance.length > 0) {
+              const topFeatures = featureImportance
+                .sort((a: any, b: any) => Math.abs(b.importance || 0) - Math.abs(a.importance || 0))
+                .slice(0, 5);
+              const featureList = topFeatures.map((f: any) =>
+                `${f.feature || f.name}: ${(Math.abs(f.importance || f.coefficient || 0) * 100).toFixed(1)}%`
+              ).join(', ');
+              analysisInsights.push({
+                id: insightIdCounter++,
+                title: `[${analysis.analysisName}] Key Drivers`,
+                description: `Top factors: ${featureList}`,
+                impact: 'High',
+                confidence: 75,
+                category: analysis.analysisName,
+                dataSource: analysisType,
+                details: { featureImportance: topFeatures, sourceAnalysisId: analysisId }
+              });
+            }
           }
         }
 
@@ -2432,6 +2571,86 @@ export class AnalysisExecutionService {
           });
         }
 
+        // === Comparative analysis insights (ANOVA, t-tests, chi-square from comparative_analysis.py) ===
+        const comparativeTests = singleResult.tests || singleResult.edaResults?.comparativeAnalysis?.tests;
+        if (Array.isArray(comparativeTests) && comparativeTests.length > 0) {
+          const significantTests = comparativeTests.filter((t: any) => t.significant);
+          // Summary insight
+          if (comparativeTests.length > 0) {
+            analysisInsights.push({
+              id: insightIdCounter++,
+              title: `[${analysis.analysisName}] Statistical Tests Summary`,
+              description: `Ran ${comparativeTests.length} statistical tests. ${significantTests.length} showed significant differences (p<0.05).${
+                singleResult.summary?.most_significant_variable
+                  ? ` Most significant variable: ${singleResult.summary.most_significant_variable}.`
+                  : ''
+              }`,
+              impact: significantTests.length > 0 ? 'High' : 'Low',
+              confidence: 85,
+              category: analysis.analysisName,
+              dataSource: analysisType,
+              details: { ...singleResult.summary, sourceAnalysisId: analysisId }
+            });
+          }
+          // Individual significant test insights (top 3)
+          for (const test of significantTests.slice(0, 3)) {
+            const effectLabel = test.effect_size !== undefined
+              ? ` (${test.effect_size_name || 'effect size'}=${Number(test.effect_size).toFixed(3)})`
+              : '';
+            analysisInsights.push({
+              id: insightIdCounter++,
+              title: `[${analysis.analysisName}] ${test.variable}: ${test.test_name || 'Significant'}`,
+              description: test.interpretation || `Significant difference found for ${test.variable} (p=${Number(test.p_value).toFixed(4)}${effectLabel}).`,
+              impact: (test.effect_size || 0) > 0.14 ? 'High' : 'Medium',
+              confidence: Math.round((1 - (test.p_value || 0.05)) * 100),
+              category: analysis.analysisName,
+              dataSource: analysisType,
+              details: { ...test, sourceAnalysisId: analysisId }
+            });
+          }
+        }
+
+        // === Group/segment analysis insights (from group_analysis.py) ===
+        const groupProfiles = singleResult.group_profiles || singleResult.edaResults?.groupAnalysis?.group_profiles;
+        const groupSummary = singleResult.summary;
+        if (groupProfiles && typeof groupProfiles === 'object') {
+          // Group summary
+          if (groupSummary?.n_groups) {
+            analysisInsights.push({
+              id: insightIdCounter++,
+              title: `[${analysis.analysisName}] Group Profiling Summary`,
+              description: `Identified ${groupSummary.n_groups} groups. Largest: "${groupSummary.largest_group}", smallest: "${groupSummary.smallest_group}". ${groupSummary.n_variables_analyzed || 0} variables analyzed across ${groupSummary.n_comparisons || 0} comparisons.`,
+              impact: 'Medium',
+              confidence: 80,
+              category: analysis.analysisName,
+              dataSource: analysisType,
+              details: { ...groupSummary, sourceAnalysisId: analysisId }
+            });
+          }
+          // Distinctive features per group (top 2 groups)
+          const distinctiveFeatures = singleResult.distinctive_features || singleResult.edaResults?.groupAnalysis?.distinctive_features;
+          if (distinctiveFeatures && typeof distinctiveFeatures === 'object') {
+            for (const [groupName, features] of Object.entries(distinctiveFeatures).slice(0, 2)) {
+              const featureList = features as any[];
+              if (Array.isArray(featureList) && featureList.length > 0) {
+                const featureDesc = featureList.slice(0, 3).map((f: any) =>
+                  typeof f === 'string' ? f : `${f.variable || f.feature}: ${f.description || f.value || ''}`
+                ).join('; ');
+                analysisInsights.push({
+                  id: insightIdCounter++,
+                  title: `[${analysis.analysisName}] "${groupName}" Distinctive Traits`,
+                  description: `Group "${groupName}" stands out for: ${featureDesc}`,
+                  impact: 'Medium',
+                  confidence: 70,
+                  category: analysis.analysisName,
+                  dataSource: analysisType,
+                  details: { group: groupName, features: featureList, sourceAnalysisId: analysisId }
+                });
+              }
+            }
+          }
+        }
+
         // Phase 4D-1: Extract question_ids from Python results for direct mapping
         // Python scripts return question_ids at multiple possible nesting levels
         const extractQuestionIds = (obj: any): string[] => {
@@ -2455,9 +2674,15 @@ export class AnalysisExecutionService {
         };
 
         const returnedQuestionIds = extractQuestionIds(singleResult);
-        if (returnedQuestionIds.length > 0) {
-          const prep = prepLookup.get(analysisId);
-          for (const qId of returnedQuestionIds) {
+        const prep = prepLookup.get(analysisId);
+
+        // Phase 4B: Use Python-returned question_ids first, fallback to prep context
+        const effectiveQuestionIds = returnedQuestionIds.length > 0
+          ? returnedQuestionIds
+          : (prep?.businessContext?.questionIds || []);
+
+        if (effectiveQuestionIds.length > 0) {
+          for (const qId of effectiveQuestionIds) {
             if (!directQuestionMap[qId]) directQuestionMap[qId] = [];
             directQuestionMap[qId].push({
               analysisId,
@@ -2467,7 +2692,8 @@ export class AnalysisExecutionService {
               derivedColumns: prep?.derivedColumns?.map(d => d.columnName)
             });
           }
-          console.log(`  📊 [Phase 4D] Analysis "${analysis.analysisName}" maps to questions: [${returnedQuestionIds.join(', ')}]`);
+          const source = returnedQuestionIds.length > 0 ? 'Python' : 'prep-context';
+          console.log(`  📊 [Phase 4B] Analysis "${analysis.analysisName}" maps to questions (${source}): [${effectiveQuestionIds.join(', ')}]`);
         }
 
         // Tag visualizations with source analysis
@@ -2594,17 +2820,24 @@ export class AnalysisExecutionService {
         }
       };
     } else {
-      // Fallback: Execute all analyses together (legacy behavior)
-      console.log(`📊 [Phase 6] Monolithic execution mode (no analysisPath)`);
-      results = await dataScienceOrchestrator.executeWorkflow({
-        projectId: request.projectId,
-        userId: request.userId,
-        analysisTypes: request.analysisTypes,
-        userGoals,
-        userQuestions,
-        datasetIds: request.datasetIds,
-        columnsToExclude: request.columnsToExclude
-      });
+      // Fallback: Execute all analyses together (legacy behavior) via MCP tool
+      console.log(`📊 [Phase 6] Monolithic execution mode (no analysisPath) via comprehensive_analysis tool`);
+      const { executeTool: execLegacyTool } = await import('./mcp-tool-registry');
+      const legacyToolResult = await execLegacyTool(
+        'comprehensive_analysis',
+        'data_scientist',
+        {
+          projectId: request.projectId,
+          userId: request.userId,
+          analysisTypes: request.analysisTypes,
+          userGoals,
+          userQuestions,
+          datasetIds: request.datasetIds,
+          columnsToExclude: request.columnsToExclude
+        },
+        { userId: request.userId, projectId: request.projectId }
+      );
+      results = legacyToolResult?.result as DataScienceResults;
     }
 
     // Convert orchestrator results to legacy format for backward compatibility
@@ -2789,6 +3022,35 @@ export class AnalysisExecutionService {
               // PHASE 6 FIX (ROOT CAUSE #3): Include requiredDataElements for traceability
               // This allows the dashboard to show which data elements were used per analysis
               requiredDataElements: analysisInfo?.requiredDataElements || []
+            };
+          })
+        : undefined,
+      // Phase 5C: Per-question answer status — tracks which analyses ran for each question
+      questionAnswerStatus: (usePerAnalysisExecution && Object.keys(directQuestionMap).length > 0)
+        ? Object.entries(directQuestionMap).map(([questionId, mappings]) => {
+            const analysesRan = mappings.map(m => m.analysisId);
+            const analysesSucceeded = analysesRan.filter(id => perAnalysisResults.get(id)?.status === 'completed');
+            const analysesFailed = analysesRan.filter(id => perAnalysisResults.get(id)?.status === 'failed');
+            // Count insights from per-analysis results that are tagged for this question's analyses
+            const insightsMapped = analysesSucceeded.reduce((count, id) => {
+              return count + (perAnalysisResults.get(id)?.insights?.length || 0);
+            }, 0);
+            return {
+              questionId,
+              analysesRan: analysesRan.length,
+              analysesSucceeded: analysesSucceeded.length,
+              analysesFailed: analysesFailed.length,
+              insightsMapped,
+              status: analysesSucceeded.length > 0 && insightsMapped > 0 ? 'answered' as const
+                : analysesSucceeded.length > 0 ? 'partial' as const
+                : analysesFailed.length > 0 ? 'no_data' as const
+                : 'pending' as const,
+              analyses: mappings.map(m => ({
+                analysisId: m.analysisId,
+                analysisName: m.analysisName,
+                analysisType: m.analysisType,
+                status: perAnalysisResults.get(m.analysisId)?.status || 'unknown'
+              }))
             };
           })
         : undefined

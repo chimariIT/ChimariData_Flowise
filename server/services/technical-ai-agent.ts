@@ -16,7 +16,7 @@ export class TechnicalAIAgent {
      * Exposed for other agents to use
      */
     async executeTool(toolName: string, input: any, context?: any): Promise<any> {
-        const { executeTool } = require('./mcp-tool-registry');
+        const { executeTool } = await import('./mcp-tool-registry');
         return await executeTool(
             toolName,
             'technical_ai_agent',
@@ -97,7 +97,7 @@ export class TechnicalAIAgent {
         const cost = this.estimateCost(query.type, recordCount, 'basic');
 
         // Use ComputeEngineSelector to decide execution engine
-        const { ComputeEngineSelector } = require('./compute-engine-selector');
+        const { ComputeEngineSelector } = await import('./compute-engine-selector');
 
         const selection = ComputeEngineSelector.selectEngine({
             recordCount,
@@ -138,7 +138,7 @@ export class TechnicalAIAgent {
 
         try {
             // Import tool execution function
-            const { executeTool } = require('./mcp-tool-registry');
+            const { executeTool } = await import('./mcp-tool-registry');
 
             const data = query.context?.data || [];
             const parameters = query.parameters || {};
@@ -566,7 +566,7 @@ export class TechnicalAIAgent {
 
         try {
             // Import tool execution function
-            const { executeTool } = require('./mcp-tool-registry');
+            const { executeTool } = await import('./mcp-tool-registry');
 
             const { engineered } = features;
             const targetColumn = this.detectTargetColumn(engineered) || metadata.targetColumn;
@@ -669,7 +669,7 @@ export class TechnicalAIAgent {
 
         try {
             // Import tool execution function
-            const { executeTool } = require('./mcp-tool-registry');
+            const { executeTool } = await import('./mcp-tool-registry');
 
             const visualizations: { charts: any[]; recommendations: string[]; interactiveElements: any[]; realVisualizations: boolean } = {
                 charts: [] as any[],

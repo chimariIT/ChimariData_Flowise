@@ -10,6 +10,7 @@ import { AgentMessageBroker, AgentMessage, AgentCheckpoint, getMessageBroker } f
 import { AgentTask } from './agent-registry';
 import { taskQueue, EnhancedTaskQueue, QueuedTask } from './enhanced-task-queue';
 import { measurePerformance } from '../utils/performance-monitor';
+import { getCapabilityById } from '../../shared/custom-journey-capabilities';
 import { KnowledgeGraphService, type KnowledgeTemplate, type IndustryKnowledge } from './knowledge-graph-service';
 import { RequiredDataElementsTool } from './tools/required-data-elements-tool';
 import { db } from '../db';
@@ -2657,7 +2658,7 @@ export class ProjectManagerAgent {
      * Topological sort for capability dependencies
      */
     private topologicalSortCapabilities(capabilityIds: string[]): string[] {
-        const { getCapabilityById } = require('../../shared/custom-journey-capabilities');
+        // getCapabilityById imported at top of file (ESM — no require())
 
         const result: string[] = [];
         const visited = new Set<string>();

@@ -560,16 +560,16 @@ router.post('/update-goal-after-clarification', async (req, res) => {
     }
 
     // Update project with clarified information
-    const { storage } = require('../storage');
+    const { storage } = await import('../storage');
     await storage.updateProject(projectId, {
       description: clarifiedGoal || undefined,
       clarification: clarification || undefined
     });
 
     // Log decision to audit trail
-    const { db } = require('../db');
-    const { decisionAudits } = require('@shared/schema');
-    const { nanoid } = require('nanoid');
+    const { db } = await import('../db');
+    const { decisionAudits } = await import('@shared/schema');
+    const { nanoid } = await import('nanoid');
 
     if (db && decisionAudits) {
       try {

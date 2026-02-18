@@ -6504,7 +6504,7 @@ router.post("/project-manager/suggest-questions", ensureAuthenticated, async (re
         }
 
         // Use AI service to generate question suggestions
-        const { GoogleGenerativeAI } = require('@google/generative-ai');
+        const { GoogleGenerativeAI } = await import('@google/generative-ai');
         const apiKey = process.env.GOOGLE_AI_API_KEY;
 
         if (!apiKey) {

@@ -137,7 +137,7 @@ export interface RequiredDataElement {
 export interface AnalysisPath {
     analysisId: string;
     analysisName: string;
-    analysisType: 'descriptive' | 'diagnostic' | 'predictive' | 'prescriptive';
+    analysisType: string; // Fine-grained types: descriptive, classification, regression, clustering, correlation, comparative, group_analysis, text_analysis, time_series, etc.
     description: string;
     techniques: string[]; // e.g., ["regression", "time-series", "clustering"]
     requiredDataElements: string[]; // References to elementIds
@@ -222,6 +222,16 @@ export interface DataRequirementsMappingDocument {
             description: string;
         }>;
     }>;
+
+    // Phase 1C: Structured question intents from QuestionIntentAnalyzer
+    questionIntents?: Array<{
+        originalQuestion: string;
+        intentType: string;
+        subjectConcept?: string;
+        conceptNeedsResolution?: boolean;
+        recommendedAnalysisTypes: string[];
+        confidence: number;
+    }>;
 }
 
 /**
@@ -253,6 +263,34 @@ export class RequiredDataElementsTool {
         const normalizedQuestions = normalizeQuestions(input.userQuestions, true); // Enable logging
         const normalizedGoals = normalizeQuestions(input.userGoals, true); // Enable logging
         console.log(`✅ [Data Elements Tool] Normalized ${normalizedGoals.length} goals and ${normalizedQuestions.length} questions`);
+
+        // ========================================================================
+        // Analyze question intents for structured analysis type selection
+        // This drives both analysis path and data element role assignment
+        // ========================================================================
+        let questionIntents: any[] = [];
+        try {
+            const { QuestionIntentAnalyzer } = await import('../question-intent-analyzer');
+            const intentAnalyzer = new QuestionIntentAnalyzer();
+            const columnNames = Array.isArray(input.datasetMetadata?.columns)
+                ? input.datasetMetadata.columns.map((c: any) => typeof c === 'string' ? c : c.name || c.column || '')
+                : (input.datasetMetadata && typeof input.datasetMetadata === 'object' && !Array.isArray(input.datasetMetadata))
+                    ? Object.keys(input.datasetMetadata)
+                    : [];
+            questionIntents = intentAnalyzer.analyzeQuestions(normalizedQuestions, {
+                hasTimeSeries: false, // Will be refined when dataset is loaded
+                hasText: false,
+                hasCategories: true,
+                hasNumeric: true,
+                columnNames,
+            }, input.projectId);
+            console.log(`🎯 [Data Elements Tool] Question intents: ${questionIntents.length} analyzed`);
+            for (const qi of questionIntents) {
+                console.log(`   - "${qi.questionText.substring(0, 50)}..." → ${qi.intentType} [${qi.recommendedAnalysisTypes.join(', ')}]${qi.subjectConcept ? ` concept="${qi.subjectConcept}"` : ''}`);
+            }
+        } catch (intentErr: any) {
+            console.warn(`⚠️ [Data Elements Tool] Intent analysis failed (non-blocking): ${intentErr.message}`);
+        }
 
         // Use Data Scientist Agent to properly infer analysis types and required data elements
         const analysisPath = await this.inferAnalysisPathWithDataScientist(
@@ -349,6 +387,53 @@ export class RequiredDataElementsTool {
         } catch (enrichError) {
             console.warn(`⚠️ [Data Elements Tool] Business definition enrichment failed (non-blocking):`, enrichError);
             // Continue without enrichment - non-blocking error
+        }
+
+        // ========================================================================
+        // Link question intents to data elements for role assignment
+        // Sets analysisRole: 'target' for elements that are the subject of
+        // probability/causal questions (enables correct target column assignment)
+        // ========================================================================
+        if (questionIntents.length > 0) {
+            console.log(`🎯 [Data Elements Tool] Linking ${questionIntents.length} intents to ${requiredDataElements.length} elements...`);
+            for (const element of requiredDataElements) {
+                const elementNameLower = element.elementName.toLowerCase();
+                const purposeLower = (element.purpose || '').toLowerCase();
+
+                for (const intent of questionIntents) {
+                    if (!intent.subjectConcept) continue;
+                    const conceptLower = intent.subjectConcept.toLowerCase();
+
+                    // Check if this element relates to the intent's subject concept
+                    const isConceptMatch = elementNameLower.includes(conceptLower) ||
+                        purposeLower.includes(conceptLower) ||
+                        (element.relatedQuestions || []).some((rq: string) =>
+                            rq.toLowerCase().includes(conceptLower));
+
+                    if (!isConceptMatch) continue;
+
+                    // Set analysis role based on intent type
+                    if (intent.intentType === 'probability' || intent.intentType === 'causal') {
+                        (element as any).analysisRole = 'target';
+                        (element as any).intendedAnalysisType = intent.intentType === 'probability' ? 'classification' : 'regression';
+                        console.log(`   📌 Element "${element.elementName}" → analysisRole: target (${intent.intentType} intent for "${intent.subjectConcept}")`);
+                    } else if (intent.intentType === 'relationship') {
+                        (element as any).analysisRole = 'target';
+                        (element as any).intendedAnalysisType = 'correlation';
+                        console.log(`   📌 Element "${element.elementName}" → analysisRole: target (relationship intent for "${intent.subjectConcept}")`);
+                    } else if (intent.intentType === 'segmentation') {
+                        (element as any).analysisRole = 'feature';
+                        (element as any).intendedAnalysisType = 'clustering';
+                    }
+
+                    // Link question ID to element
+                    if (!element.questionIds) element.questionIds = [];
+                    if (!element.questionIds.includes(intent.questionId)) {
+                        element.questionIds.push(intent.questionId);
+                    }
+                    break; // One intent per element
+                }
+            }
         }
 
         // Entity extraction: Decompose formula fields into operational data fields
@@ -518,6 +603,7 @@ export class RequiredDataElementsTool {
             analysisPath,
             requiredDataElements,
             questionAnswerMapping,
+            questionIntents: questionIntents.length > 0 ? questionIntents : undefined,
             completeness: {
                 totalElements: requiredDataElements.length,
                 elementsMapped: 0,
@@ -1045,13 +1131,28 @@ export class RequiredDataElementsTool {
     }
 
     /**
-     * Map analysis name from Data Scientist to analysis type
+     * Map analysis name from Data Scientist to fine-grained analysis type
+     * that matches Python script routing keys in data-science-orchestrator.ts
+     * and normalizeAnalysisType() in analysis-data-preparer.ts.
+     *
+     * ORDER MATTERS: more specific patterns (classification, clustering) must
+     * come before broader patterns (predict) to avoid misclassification.
      */
-    private mapAnalysisNameToType(analysisName: string): 'descriptive' | 'diagnostic' | 'predictive' | 'prescriptive' {
+    private mapAnalysisNameToType(analysisName: string): string {
         const lower = analysisName.toLowerCase();
-        if (/predict|forecast|time.*series/i.test(lower)) return 'predictive';
-        if (/segment|cluster|correlation|compar/i.test(lower)) return 'diagnostic';
-        if (/optimi[zs]|recommend|prescri/i.test(lower)) return 'prescriptive';
+        // Fine-grained: specific analysis types first
+        if (/classif/i.test(lower)) return 'classification';
+        if (/cluster|segment/i.test(lower)) return 'clustering';
+        if (/regress/i.test(lower)) return 'regression';
+        if (/time.*series|trend|forecast/i.test(lower)) return 'time_series';
+        if (/correlat/i.test(lower)) return 'correlation';
+        if (/compar/i.test(lower)) return 'comparative';
+        if (/group/i.test(lower)) return 'group_analysis';
+        if (/text|sentiment|nlp/i.test(lower)) return 'text_analysis';
+        if (/frequen/i.test(lower)) return 'descriptive';
+        if (/aggregat/i.test(lower)) return 'descriptive';
+        // Broad: predictive defaults to regression unless techniques refine it
+        if (/predict/i.test(lower)) return 'regression';
         return 'descriptive';
     }
 

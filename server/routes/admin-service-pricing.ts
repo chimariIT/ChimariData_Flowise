@@ -33,7 +33,7 @@ async function ensureAdmin(req: any, res: any, next: any) {
     }
 
     // Fetch user with role
-    const { users } = require('@shared/schema');
+    const { users } = await import('@shared/schema');
     const [user] = await db.select().from(users).where(eq(users.id, userId));
 
     if (!user) {

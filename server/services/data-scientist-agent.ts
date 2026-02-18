@@ -7,6 +7,7 @@ import { normalizeQuestions, standardizeElementName } from '../utils/question-no
 import type { AnalysisStep, MLModelSpec, VisualizationSpec, DataAssessment } from '@shared/schema';
 import { ChimaridataAI } from '../chimaridata-ai';
 import { businessDefinitionRegistry } from './business-definition-registry';
+import { QuestionIntentAnalyzer } from './question-intent-analyzer';
 
 // ==========================================
 // CONSULTATION INTERFACES (Multi-Agent Coordination)
@@ -1815,79 +1816,37 @@ export class DataScientistAgent implements AgentHandler {
   }
 
   /**
-   * Map user questions to specific analysis types
+   * Map user questions to specific analysis types using structured intent analysis.
+   * Replaces keyword-based matching with QuestionIntentAnalyzer for more accurate
+   * analysis type selection (e.g., "likelihood of churn" → classification, not descriptive).
    */
   private mapQuestionsToAnalyses(
     questions: string[],
     dataCharacteristics: any
   ): string[] {
+    // QuestionIntentAnalyzer imported at top of file (ESM — no require())
+    const analyzer = new QuestionIntentAnalyzer();
+
     // Normalize questions to handle object/string mix (fixes: question.toLowerCase crash)
     const normalizedQuestions = normalizeQuestions(questions);
-    const analyses: Set<string> = new Set();
 
-    // Always start with descriptive statistics
-    analyses.add('Descriptive Statistics');
+    // Analyze all questions for structured intent
+    const intents = analyzer.analyzeQuestions(normalizedQuestions, {
+      hasTimeSeries: dataCharacteristics.hasTimeSeries,
+      hasText: dataCharacteristics.hasText,
+      hasCategories: dataCharacteristics.hasCategories || false,
+      hasNumeric: dataCharacteristics.hasNumeric || true,
+    });
 
-    for (const question of normalizedQuestions) {
-      const questionLower = question.toLowerCase();
+    // Convert intents to display names for backward compatibility
+    const displayNames = QuestionIntentAnalyzer.intentToDisplayNames(intents);
 
-      // Time series analysis
-      if (dataCharacteristics.hasTimeSeries &&
-        (questionLower.includes('trend') || questionLower.includes('over time') ||
-          questionLower.includes('change') || questionLower.includes('temporal') ||
-          questionLower.includes('when') || questionLower.includes('date'))) {
-        analyses.add('Time Series Analysis');
-        analyses.add('Trend Analysis');
-      }
-
-      // Group comparisons
-      if (questionLower.includes('compare') || questionLower.includes('each') ||
-        questionLower.includes('team') || questionLower.includes('group') ||
-        questionLower.includes('which')) {
-        analyses.add('Comparative Analysis');
-        analyses.add('Group Analysis');
-      }
-
-      // Averages and aggregations
-      if (questionLower.includes('average') || questionLower.includes('score') ||
-        questionLower.includes('mean') || questionLower.includes('median')) {
-        analyses.add('Statistical Aggregation');
-      }
-
-      // Sentiment / text analysis
-      if (questionLower.includes('sentiment') || questionLower.includes('view') ||
-        questionLower.includes('opinion') || questionLower.includes('policy') ||
-        dataCharacteristics.hasText) {
-        analyses.add('Text Analysis');
-      }
-
-      // Correlation / relationships
-      if (questionLower.includes('correlat') || questionLower.includes('relationship') ||
-        questionLower.includes('impact') || questionLower.includes('affect') ||
-        questionLower.includes('influence')) {
-        analyses.add('Correlation Analysis');
-      }
-
-      // Predictive modeling
-      if (questionLower.includes('predict') || questionLower.includes('forecast') ||
-        questionLower.includes('future') || questionLower.includes('will')) {
-        analyses.add('Predictive Modeling');
-      }
-
-      // Clustering / segmentation
-      if (questionLower.includes('segment') || questionLower.includes('cluster') ||
-        questionLower.includes('group') || questionLower.includes('pattern')) {
-        analyses.add('Clustering Analysis');
-      }
-
-      // Count/frequency analysis
-      if (questionLower.includes('how many') || questionLower.includes('count') ||
-        questionLower.includes('number of') || questionLower.includes('total')) {
-        analyses.add('Frequency Analysis');
-      }
+    console.log(`📊 [DS Agent] Intent analysis: ${normalizedQuestions.length} questions → ${displayNames.length} analysis types`);
+    for (const intent of intents) {
+      console.log(`   - "${intent.questionText.substring(0, 60)}..." → ${intent.intentType} (${(intent.confidence * 100).toFixed(0)}%) → [${intent.recommendedAnalysisTypes.join(', ')}]`);
     }
 
-    return Array.from(analyses);
+    return displayNames;
   }
 
   /**

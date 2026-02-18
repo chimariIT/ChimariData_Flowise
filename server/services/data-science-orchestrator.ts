@@ -1086,7 +1086,8 @@ export class DataScienceOrchestrator {
     }
 
     // FIX 2F: Run comparative analysis (cross-group statistical comparison)
-    if (analysisTypes.includes('comparative') || analysisTypes.includes('comparative_analysis')) {
+    // Also handles statistical_tests since comparative_analysis.py performs ANOVA, t-tests, chi-square
+    if (analysisTypes.includes('comparative') || analysisTypes.includes('comparative_analysis') || analysisTypes.includes('statistical_tests')) {
       results.comparativeAnalysis = await this.executePythonScript('comparative_analysis.py',
         getConfig('comparative', { data_path: tempDataPath })
       );
@@ -1124,6 +1125,10 @@ export class DataScienceOrchestrator {
         console.error(`❌ [Analysis] time_series_analysis.py failed: ${results.timeSeriesAnalysis?.error || 'unknown'}`);
       }
     }
+
+    // NOTE: classification, regression, clustering are handled in Phase 4 (runMLAnalysis),
+    // not in EDA. The phase gate in analysis-requirements-registry.ts routes these types
+    // to ['quality', 'ml'], skipping EDA. This avoids duplicate Python script execution.
 
     // Clean up
     if (fs.existsSync(tempDataPath)) {
@@ -1419,14 +1424,16 @@ export class DataScienceOrchestrator {
       });
 
       if (clusterResult?.success) {
+        // Python returns metrics nested under .metrics or at top level
+        const clusterMetrics = clusterResult.metrics || clusterResult;
         models.push({
           modelId: nanoid(),
-          modelType: clusterResult.algorithm || 'kmeans',
+          modelType: clusterResult.method || clusterResult.algorithm || 'kmeans',
           problemType: 'clustering',
-          features: clusterResult.features_used || [],
+          features: clusterResult.feature_names || clusterResult.features_used || [],
           metrics: {
-            silhouetteScore: clusterResult.silhouette_score,
-            inertia: clusterResult.inertia
+            silhouetteScore: clusterMetrics.silhouette_score || clusterMetrics.silhouetteScore,
+            inertia: clusterMetrics.inertia
           },
           featureImportance: [],
           modelPath: clusterResult.model_path
@@ -1445,18 +1452,22 @@ export class DataScienceOrchestrator {
       });
 
       if (regressionResult?.success) {
+        // Python returns metrics nested under .metrics.test and .metrics.train
+        const regTestMetrics = regressionResult.metrics?.test || regressionResult.metrics || regressionResult;
         models.push({
           modelId: nanoid(),
-          modelType: regressionResult.model_type || 'linear_regression',
+          modelType: regressionResult.model || regressionResult.model_type || 'linear_regression',
           problemType: 'regression',
           targetColumn: regressionResult.target_column,
-          features: regressionResult.features || [],
+          features: regressionResult.feature_columns || regressionResult.features || [],
           metrics: {
-            r2: regressionResult.r2_score,
-            rmse: regressionResult.rmse,
-            mae: regressionResult.mae
+            r2: regTestMetrics.r2 || regressionResult.r2_score,
+            rmse: regTestMetrics.rmse || regressionResult.rmse,
+            mae: regTestMetrics.mae || regressionResult.mae
           },
-          featureImportance: regressionResult.feature_importance || [],
+          featureImportance: (regressionResult.coefficients || []).map((c: any) =>
+            typeof c === 'object' ? { feature: c.feature || c.name, importance: Math.abs(c.coefficient || c.importance || 0) } : c
+          ),
           crossValidation: regressionResult.cv_results,
           modelPath: regressionResult.model_path
         });
@@ -1474,21 +1485,23 @@ export class DataScienceOrchestrator {
       });
 
       if (classResult?.success) {
+        // Python returns metrics nested under .metrics, or at top level
+        const classMetrics = classResult.metrics || classResult;
         models.push({
           modelId: nanoid(),
           modelType: classResult.model_type || 'random_forest',
           problemType: 'classification',
           targetColumn: classResult.target_column,
-          features: classResult.features || [],
+          features: (classResult.feature_importance || []).map((f: any) => f.feature || f.name || f),
           metrics: {
-            accuracy: classResult.accuracy,
-            precision: classResult.precision,
-            recall: classResult.recall,
-            f1Score: classResult.f1_score,
-            auc: classResult.auc
+            accuracy: classMetrics.accuracy,
+            precision: classMetrics.precision,
+            recall: classMetrics.recall,
+            f1Score: classMetrics.f1_score || classMetrics.f1Score,
+            auc: classMetrics.roc_auc || classMetrics.auc
           },
           featureImportance: classResult.feature_importance || [],
-          crossValidation: classResult.cv_results,
+          crossValidation: classResult.cross_validation || classResult.cv_results,
           modelPath: classResult.model_path
         });
       }

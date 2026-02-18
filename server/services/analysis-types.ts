@@ -199,6 +199,21 @@ export interface AnalysisResults {
     errorMessage?: string;
     executionTimeMs?: number;
   }>;
+  // Phase 5C: Per-question answer status tracking
+  questionAnswerStatus?: Array<{
+    questionId: string;
+    analysesRan: number;
+    analysesSucceeded: number;
+    analysesFailed: number;
+    insightsMapped: number;
+    status: 'answered' | 'partial' | 'no_data' | 'pending';
+    analyses: Array<{
+      analysisId: string;
+      analysisName: string;
+      analysisType: string;
+      status: string;
+    }>;
+  }>;
   // Extended properties from DataScienceOrchestrator
   dataQualityReport?: {
     overallScore: number;

@@ -160,12 +160,42 @@ export class QuestionAnswerService {
                     console.log(`📊 [GAP E] Found mapping for question: ${questionMappingMatch.questionId}`);
                 }
 
+                // Phase 5B: Load question intent for this question from directQuestionAnalysisMap
+                let questionIntentContext: { intentType?: string; analysisTypes?: string[]; subjectConcept?: string } | undefined;
+                if (questionMappingMatch?.questionId && analysisResults?.directQuestionAnalysisMap?.[questionMappingMatch.questionId]) {
+                    const mappings = analysisResults.directQuestionAnalysisMap[questionMappingMatch.questionId];
+                    questionIntentContext = {
+                        analysisTypes: mappings.map((m: any) => m.analysisType),
+                    };
+                }
+                // Also try to load from journeyProgress questionIntents
+                if (!questionIntentContext) {
+                    try {
+                        const jp = (project as any)?.journeyProgress;
+                        const storedIntents = jp?.questionIntents;
+                        if (Array.isArray(storedIntents)) {
+                            const matchingIntent = storedIntents.find((qi: any) =>
+                                qi.originalQuestion?.toLowerCase().includes(normalizedQ.substring(0, 40)) ||
+                                normalizedQ.includes((qi.originalQuestion || '').toLowerCase().substring(0, 40))
+                            );
+                            if (matchingIntent) {
+                                questionIntentContext = {
+                                    intentType: matchingIntent.intentType,
+                                    analysisTypes: matchingIntent.recommendedAnalysisTypes,
+                                    subjectConcept: matchingIntent.subjectConcept,
+                                };
+                            }
+                        }
+                    } catch { /* non-blocking */ }
+                }
+
                 const answer = await this.answerSingleQuestion({
                     question,
                     analysisContext,
                     audience,
                     analysisResults, // Phase 4: Pass full results for evidence extraction
-                    questionMappingMatch // GAP E: Pass mapping for enhanced traceability
+                    questionMappingMatch, // GAP E: Pass mapping for enhanced traceability
+                    questionIntentContext, // Phase 5B: Intent context for answer formatting
                 });
 
                 // GAP E: Enhance answer with evidence from mapping
@@ -249,10 +279,15 @@ export class QuestionAnswerService {
             requiredDataElements?: string[];
             transformationsNeeded?: string[];
         };
+        questionIntentContext?: { // Phase 5B: Intent context
+            intentType?: string;
+            analysisTypes?: string[];
+            subjectConcept?: string;
+        };
     }): Promise<QuestionAnswer> {
-        const { question, analysisContext, audience, analysisResults, questionMappingMatch } = params;
+        const { question, analysisContext, audience, analysisResults, questionMappingMatch, questionIntentContext } = params;
 
-        const prompt = this.buildAnswerPrompt(question, analysisContext, audience);
+        const prompt = this.buildAnswerPrompt(question, analysisContext, audience, questionIntentContext);
         const answer = await this.callAIForAnswer(prompt);
 
         const confidence = this.extractConfidence(answer, analysisContext);
@@ -285,12 +320,34 @@ export class QuestionAnswerService {
     private static buildAnswerPrompt(
         question: string,
         context: any,
-        audience?: AudienceContext
+        audience?: AudienceContext,
+        intentContext?: { intentType?: string; analysisTypes?: string[]; subjectConcept?: string }
     ): string {
         const audienceInstructions = this.getAudienceInstructions(
             audience?.primaryAudience || 'general',
             audience?.technicalLevel
         );
+
+        // Phase 5B: Build intent-aware answer guidance
+        let intentGuidance = '';
+        if (intentContext?.intentType) {
+            const guidanceMap: Record<string, string> = {
+                'probability': 'The user is asking about likelihood/probability. Focus on classification results, prediction confidence, and key factors that drive the outcome. Provide probability estimates if available.',
+                'comparison': 'The user wants to compare groups or categories. Focus on group differences, statistical significance, and which group performs better/worse.',
+                'trend': 'The user is asking about trends over time. Focus on time series patterns, growth rates, seasonality, and future projections.',
+                'relationship': 'The user wants to understand relationships between variables. Focus on correlation strength, direction, and which variables have the strongest associations.',
+                'segmentation': 'The user wants to understand distinct groups/segments in the data. Focus on cluster characteristics, segment sizes, and distinguishing features.',
+                'distribution': 'The user wants to understand data distribution. Focus on central tendency, spread, skewness, and any notable patterns.',
+                'aggregation': 'The user wants summary statistics. Focus on totals, averages, counts, and key metrics.',
+                'ranking': 'The user wants to know what ranks highest/lowest. Focus on ordered results and relative performance.',
+                'causal': 'The user wants to understand causal relationships. Focus on regression coefficients, effect sizes, and which factors have the strongest impact.',
+                'text_analysis': 'The user wants to understand themes, sentiment, or patterns in text data. Focus on common topics, sentiment distribution, and notable phrases or keywords.',
+            };
+            intentGuidance = guidanceMap[intentContext.intentType] || '';
+        }
+        if (intentContext?.subjectConcept) {
+            intentGuidance += `\nThe key concept the user is asking about is "${intentContext.subjectConcept}". Make sure your answer directly addresses this concept.`;
+        }
 
         return `You are a Project Manager helping a user understand their data analysis results.
 
@@ -299,7 +356,7 @@ USER'S QUESTION:
 
 ANALYSIS GOAL:
 ${context.goal}
-
+${intentGuidance ? `\nANSWER GUIDANCE:\n${intentGuidance}\n` : ''}
 ANALYSIS RESULTS:
 ${context.insights.length} insights found:
 ${context.insights.slice(0, 5).map((i: any, idx: number) =>

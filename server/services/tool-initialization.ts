@@ -578,7 +578,7 @@ export class ToolInitializationService {
         const { url, method = 'GET', headers = {}, params = {}, body, auth, timeout, retries } = input;
 
         // Use real API data fetcher
-        const { apiDataFetcher } = require('./api-data-fetcher');
+        const { apiDataFetcher } = await import('./api-data-fetcher');
 
         try {
           const startTime = Date.now();
