@@ -1779,6 +1779,62 @@ export class DataScienceOrchestrator {
         }
       }
 
+      // === Descriptive/survey/general question matching ===
+      // For questions that don't match specific keywords (survey questions, general questions),
+      // extract findings from descriptive stats and EDA results
+      if (findings.length === 0) {
+        // Extract from descriptive stats
+        if (statisticalReport.descriptiveStats && statisticalReport.descriptiveStats.length > 0) {
+          const topStats = statisticalReport.descriptiveStats.slice(0, 2);
+          for (const stat of topStats) {
+            const statAny = stat as any;
+            findings.push({
+              id: nanoid(),
+              analysisType: 'descriptive',
+              title: `${statAny.column || 'Variable'} summary statistics`,
+              description: statAny.mean !== undefined
+                ? `Mean=${Number(statAny.mean).toFixed(2)}, Median=${Number(statAny.median || 0).toFixed(2)} (n=${statAny.count || 'N/A'})`
+                : `Analyzed ${statAny.count || 0} values`,
+              significance: 'medium' as const,
+              evidence: statAny,
+              dataElementsUsed: statAny.column ? [statAny.column] : []
+            });
+          }
+        }
+
+        // Extract from EDA results if available
+        if (edaResults && typeof edaResults === 'object') {
+          const edaSummary = edaResults.summary || edaResults;
+          if (edaSummary.n_observations || edaSummary.distributions) {
+            findings.push({
+              id: nanoid(),
+              analysisType: 'descriptive',
+              title: 'Exploratory Data Analysis',
+              description: `Dataset contains ${edaSummary.n_observations || 'N/A'} observations across ${edaSummary.n_variables || 'N/A'} variables.`,
+              significance: 'low' as const,
+              evidence: edaSummary,
+              dataElementsUsed: []
+            });
+          }
+        }
+
+        // Extract from correlation results even for non-correlation questions
+        // (strong correlations are relevant to many question types)
+        if (findings.length === 0 && statisticalReport.correlationMatrix.significantCorrelations.length > 0) {
+          const topCorr = statisticalReport.correlationMatrix.significantCorrelations[0];
+          findings.push({
+            id: nanoid(),
+            analysisType: 'correlation',
+            title: `${topCorr.var1} and ${topCorr.var2} relationship`,
+            description: `Found ${topCorr.correlation > 0 ? 'positive' : 'negative'} correlation (r=${topCorr.correlation.toFixed(3)})`,
+            significance: Math.abs(topCorr.correlation) > 0.7 ? 'high' as const : 'medium' as const,
+            evidence: topCorr,
+            dataElementsUsed: [topCorr.var1, topCorr.var2],
+            statisticalSignificance: { pValue: topCorr.pValue }
+          });
+        }
+      }
+
       // Default to descriptive if no specific type identified
       if (analysisTypes.length === 0) {
         analysisTypes.push('descriptive');

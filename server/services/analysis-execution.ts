@@ -1933,6 +1933,65 @@ export class AnalysisExecutionService {
 
     let results: DataScienceResults;
 
+    // === SURVEY DATA AUTO-PREPROCESSING ===
+    // If journeyProgress indicates this is survey data and transformations weren't
+    // already applied in the transformation step, auto-apply them now
+    try {
+      const project = await storage.getProject(request.projectId);
+      const journeyProgress = (project as any)?.journeyProgress;
+      const surveyDetection = journeyProgress?.surveyDetection;
+
+      if (surveyDetection?.isSurvey && surveyDetection.confidence > 0.6) {
+        console.log(`📋 [Survey] Detected survey data (confidence: ${(surveyDetection.confidence * 100).toFixed(0)}%) — checking if preprocessing needed`);
+
+        // Check if transformations were already applied (user ran them in transform step)
+        const firstDatasetId = request.datasetIds?.[0];
+        if (firstDatasetId) {
+          const dataset = await storage.getDataset(firstDatasetId);
+          const ingestionMeta = dataset?.ingestionMetadata as any;
+          const alreadyTransformed = ingestionMeta?.transformationApplied ||
+                                      ingestionMeta?.surveyTransformed;
+
+          if (!alreadyTransformed) {
+            console.log(`🔄 [Survey] Auto-applying survey transformations (rename_to_topics + encode_likert)`);
+            const { SurveyPreprocessor } = await import('./survey-preprocessor');
+            const preprocessor = new SurveyPreprocessor();
+
+            const rawRows = extractDatasetRows(dataset, undefined);
+            if (rawRows && rawRows.length > 0) {
+              const transformResult = await preprocessor.applySurveyTransformations(rawRows, [
+                { type: 'rename_to_topics' },
+                { type: 'encode_likert' }
+              ]);
+
+              if (transformResult.success && transformResult.transformed_data.length > 0) {
+                // Store transformed data back to dataset for this execution
+                await storage.updateDataset(firstDatasetId, {
+                  ingestionMetadata: {
+                    ...(dataset?.ingestionMetadata || {}),
+                    transformedData: transformResult.transformed_data,
+                    surveyTransformed: true,
+                    surveyColumnMapping: transformResult.column_mapping,
+                    surveyEncodedColumns: transformResult.encoded_columns,
+                    surveyQuestionLookup: transformResult.question_lookup
+                  }
+                } as any);
+                console.log(`✅ [Survey] Auto-transformed: ${transformResult.transformed_data.length} rows, ` +
+                  `${Object.keys(transformResult.column_mapping).length} columns renamed, ` +
+                  `${transformResult.encoded_columns.length} Likert columns encoded`);
+              } else {
+                console.warn(`⚠️ [Survey] Transform returned no data or failed: ${transformResult.error || 'unknown'}`);
+              }
+            }
+          } else {
+            console.log(`⏭️ [Survey] Transformations already applied — skipping auto-preprocessing`);
+          }
+        }
+      }
+    } catch (surveyErr: any) {
+      console.warn(`⚠️ [Survey] Auto-preprocessing failed (non-blocking): ${surveyErr.message}`);
+    }
+
     // Phase 4D-1: Direct question-to-analysis mapping from Python results
     // Declared at outer scope so it's available for legacyResults construction
     let directQuestionMap: Record<string, Array<{
@@ -2238,6 +2297,7 @@ export class AnalysisExecutionService {
         const analysisInsights: AnalysisInsight[] = [];
 
         // Extract insights from this single analysis result
+        // === Correlation insights (existing) ===
         for (const corr of (singleResult.statisticalAnalysisReport?.correlationMatrix?.significantCorrelations || []).slice(0, 3)) {
           analysisInsights.push({
             id: insightIdCounter++,
@@ -2248,6 +2308,127 @@ export class AnalysisExecutionService {
             category: analysis.analysisName,
             dataSource: analysisType,
             details: { ...corr, sourceAnalysisId: analysisId }
+          });
+        }
+
+        // === Descriptive stats insights ===
+        const descriptiveStats = singleResult.descriptiveStats || singleResult.numeric_variables ||
+          singleResult.statisticalAnalysisReport?.descriptiveStats;
+        if (descriptiveStats && typeof descriptiveStats === 'object') {
+          const statsEntries: Array<[string, any]> = Array.isArray(descriptiveStats)
+            ? descriptiveStats.map((s: any) => [s.column || s.name || 'unknown', s] as [string, any])
+            : Object.entries(descriptiveStats);
+          for (const [colName, colStats] of statsEntries.slice(0, 5)) {
+            if (colStats && typeof colStats === 'object' && (colStats.mean !== undefined || colStats.count !== undefined || colStats.basic_statistics)) {
+              // Handle nested stats from Python (numeric_variables returns { basic_statistics: {...}, percentiles: {...}, ... })
+              const stats = colStats.basic_statistics || colStats;
+              analysisInsights.push({
+                id: insightIdCounter++,
+                title: `[${analysis.analysisName}] ${colName} Summary`,
+                description: stats.mean !== undefined
+                  ? `Mean: ${Number(stats.mean).toFixed(2)}, Median: ${Number(stats.median || 0).toFixed(2)}, Std Dev: ${Number(stats.std || 0).toFixed(2)} (n=${stats.count || 'N/A'})`
+                  : `${stats.count || 0} observations analyzed`,
+                impact: 'Medium',
+                confidence: 75,
+                category: analysis.analysisName,
+                dataSource: analysisType,
+                details: { column: colName, ...stats, sourceAnalysisId: analysisId }
+              });
+            }
+          }
+        }
+
+        // === Categorical distribution insights ===
+        const categoricalVars = singleResult.categorical_variables || singleResult.categoricalStats;
+        if (categoricalVars && typeof categoricalVars === 'object') {
+          for (const [colName, catData] of Object.entries(categoricalVars).slice(0, 3)) {
+            const data = catData as any;
+            if (data && (data.mode || data.n_unique || data.top_values)) {
+              const topValue = data.mode || (data.top_values ? Object.keys(data.top_values)[0] : 'N/A');
+              const topFreq = data.mode_count || (data.top_values ? Object.values(data.top_values)[0] : 0);
+              analysisInsights.push({
+                id: insightIdCounter++,
+                title: `[${analysis.analysisName}] ${colName} Distribution`,
+                description: `Most common: "${topValue}" (${topFreq} occurrences). ${data.n_unique || 'N/A'} unique values.`,
+                impact: 'Medium',
+                confidence: 70,
+                category: analysis.analysisName,
+                dataSource: analysisType,
+                details: { column: colName, ...data, sourceAnalysisId: analysisId }
+              });
+            }
+          }
+        }
+
+        // === Executive summary key findings ===
+        const keyFindings = singleResult.executiveSummary?.keyFindings || [];
+        for (const finding of keyFindings.slice(0, 3)) {
+          if (typeof finding === 'string' && finding.length > 5) {
+            analysisInsights.push({
+              id: insightIdCounter++,
+              title: `[${analysis.analysisName}] ${finding.substring(0, 80)}`,
+              description: finding,
+              impact: 'Medium',
+              confidence: 70,
+              category: analysis.analysisName,
+              dataSource: analysisType,
+              details: { sourceAnalysisId: analysisId, source: 'executive_summary' }
+            });
+          }
+        }
+
+        // === ML model results ===
+        for (const model of (singleResult.mlModels || [])) {
+          if (model.metrics) {
+            const metricDesc = model.problemType === 'regression'
+              ? `R²=${(model.metrics.r2 || 0).toFixed(3)}, RMSE=${(model.metrics.rmse || 0).toFixed(3)}`
+              : model.problemType === 'classification'
+              ? `Accuracy=${((model.metrics.accuracy || 0) * 100).toFixed(1)}%`
+              : model.problemType === 'clustering'
+              ? `Silhouette=${(model.metrics.silhouetteScore || 0).toFixed(3)}`
+              : 'Model trained';
+            analysisInsights.push({
+              id: insightIdCounter++,
+              title: `[${analysis.analysisName}] ${model.modelType || model.problemType} Model`,
+              description: `${model.problemType} model on "${model.targetColumn || 'data'}": ${metricDesc}`,
+              impact: 'High',
+              confidence: 80,
+              category: analysis.analysisName,
+              dataSource: analysisType,
+              details: { ...model.metrics, sourceAnalysisId: analysisId }
+            });
+          }
+        }
+
+        // === Data quality insights ===
+        const dqReport = singleResult.dataQualityReport;
+        if (dqReport && dqReport.overallScore !== undefined) {
+          if (dqReport.overallScore < 70 || (dqReport.outlierDetection || []).length > 0) {
+            analysisInsights.push({
+              id: insightIdCounter++,
+              title: `[${analysis.analysisName}] Data Quality: ${dqReport.overallScore}%`,
+              description: `Quality score: ${dqReport.overallScore}%. ${(dqReport.outlierDetection || []).length} outliers detected, ${(dqReport.missingValueAnalysis || []).length} columns with missing values.`,
+              impact: dqReport.overallScore < 60 ? 'High' : 'Low',
+              confidence: 90,
+              category: 'data_quality',
+              dataSource: analysisType,
+              details: { ...dqReport, sourceAnalysisId: analysisId }
+            });
+          }
+        }
+
+        // === Overall summary from Python (n_observations, n_variables) ===
+        const overall = singleResult.overall;
+        if (overall && (overall.n_observations || overall.total_cells)) {
+          analysisInsights.push({
+            id: insightIdCounter++,
+            title: `[${analysis.analysisName}] Dataset Overview`,
+            description: `Analyzed ${overall.n_observations || 'N/A'} observations across ${overall.n_variables || 'N/A'} variables. ${overall.n_numeric_variables || 0} numeric, ${overall.n_categorical_variables || 0} categorical columns. ${(overall.missing_percentage || 0).toFixed(1)}% missing values.`,
+            impact: 'Low',
+            confidence: 95,
+            category: analysis.analysisName,
+            dataSource: analysisType,
+            details: { ...overall, sourceAnalysisId: analysisId }
           });
         }
 
@@ -2357,6 +2538,25 @@ export class AnalysisExecutionService {
       const completedCount = Array.from(perAnalysisResults.values()).filter(r => r.status === 'completed').length;
       console.log(`📊 [Phase 6] Completed ${completedCount}/${analysisPath.length} analyses`);
 
+      // FIX: Compute actual row/column counts from datasets instead of hardcoding zeros
+      let actualTotalRows = 0;
+      let actualTotalColumns = 0;
+      try {
+        for (const dsId of (request.datasetIds || [])) {
+          const ds = await storage.getDataset(dsId);
+          if (ds) {
+            const rows = extractDatasetRows(ds, undefined);
+            if (rows && rows.length > 0) {
+              actualTotalRows += rows.length;
+              actualTotalColumns = Math.max(actualTotalColumns, Object.keys(rows[0]).length);
+            }
+          }
+        }
+        console.log(`📊 [Phase 6] Computed actual metrics: ${actualTotalRows} rows, ${actualTotalColumns} columns`);
+      } catch (countErr: any) {
+        console.warn(`⚠️ [Phase 6] Could not compute actual row/column counts: ${countErr.message}`);
+      }
+
       // Create a synthetic DataScienceResults from merged data
       const executionStartTime = new Date();
       results = {
@@ -2386,8 +2586,8 @@ export class AnalysisExecutionService {
         },
         questionAnalysisLinks: [],
         metadata: {
-          totalRows: 0,
-          totalColumns: 0,
+          totalRows: actualTotalRows,
+          totalColumns: actualTotalColumns,
           analysisTypes: request.analysisTypes,
           executionTimeMs: Array.from(perAnalysisResults.values()).reduce((sum, r) => sum + (r.executionTimeMs || 0), 0),
           pythonScriptsUsed: analysisPath.map(a => a.analysisType || 'unknown')
