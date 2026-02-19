@@ -506,7 +506,7 @@ router.get('/:projectId/plan', ensureAuthenticated, async (req, res) => {
         version: plan.version,
         status: plan.status,
         executiveSummary: plan.executiveSummary,
-        dataAssessment: plan.dataAssessment,
+        dataAssessment: plan.dataAssessment || null,
         analysisSteps: plan.analysisSteps,
         visualizations: safeVisualizations,
         businessContext: plan.businessContext,

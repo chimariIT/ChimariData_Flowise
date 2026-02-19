@@ -2746,7 +2746,7 @@ export class DataScientistAgent implements AgentHandler {
     if (analysisTypes.length > 0) {
       for (const analysisType of analysisTypes) {
         const analysisLower = analysisType.toLowerCase();
-        const analysisSpecificElements = this.getAnalysisTypeRequirements(analysisType, userQuestions, params.industry);
+        const analysisSpecificElements = this.getAnalysisTypeRequirements(analysisType, userQuestions, params.industry, datasetSchema);
 
         // Add analysis-specific elements if not already present
         for (const reqElement of analysisSpecificElements) {
@@ -3143,9 +3143,9 @@ Respond with the JSON array ONLY:`;
             calculationType: "derived",
             formula: {
               businessDescription: "Average of survey response scores for engagement-related questions",
-              componentFields: ["Q1_Score", "Q2_Score", "Q3_Score"],
+              componentFields: ["survey_response_col1", "survey_response_col2", "survey_response_col3"],
               aggregationMethod: "average",
-              pseudoCode: "AVERAGE(Q1_Score, Q2_Score, Q3_Score)"
+              pseudoCode: "AVERAGE(survey_response_columns)"
             }
           }
         };
@@ -3280,7 +3280,7 @@ Respond with the JSON array ONLY:`;
    * Get required data elements for specific analysis types
    * Aligns data requirements to the exact needs of each analysis
    */
-  private getAnalysisTypeRequirements(analysisType: string, userQuestions: string[], industry?: string): Array<{
+  private getAnalysisTypeRequirements(analysisType: string, userQuestions: string[], industry?: string, datasetSchema?: Record<string, any>): Array<{
     elementName: string;
     description: string;
     dataType: 'numeric' | 'categorical' | 'datetime' | 'text' | 'boolean';
@@ -3326,7 +3326,7 @@ Respond with the JSON array ONLY:`;
               businessDescription: 'Average of survey response scores (e.g., Q1, Q2, Q3) that measure engagement-related factors like satisfaction, motivation, and commitment',
               componentFields: ['survey_scores', 'engagement_questions'],
               aggregationMethod: 'average' as const,
-              pseudoCode: 'AVERAGE(Q1_Score, Q2_Score, Q3_Score, ...engagement_related_questions)'
+              pseudoCode: 'AVERAGE(survey_response_columns)'
             },
             comparisonGroups: {
               groupingField: 'Department',
@@ -3829,7 +3829,7 @@ Respond with the JSON array ONLY:`;
           formula: isEngagementAnalysis ? {
             businessDescription: 'Engagement score calculated from survey responses',
             aggregationMethod: 'average' as const,
-            pseudoCode: 'AVERAGE(Q1, Q2, Q3, ...) engagement questions'
+            pseudoCode: 'AVERAGE(survey_response_columns)'
           } : undefined,
           notes: 'Map to numeric column for correlation analysis'
         }
@@ -3944,7 +3944,123 @@ Respond with the JSON array ONLY:`;
       });
     }
 
+    // Ground all elements to actual dataset schema columns when available
+    if (datasetSchema && Object.keys(datasetSchema).length > 0) {
+      return elements.map(el => this.groundElementToSchema(el, datasetSchema));
+    }
+
     return elements;
+  }
+
+  /**
+   * Ground a hardcoded element's componentFields, pseudoCode, and groupingField
+   * to actual dataset column names when schema is available.
+   * Falls back to the original abstract name if no match is found.
+   */
+  private groundElementToSchema(element: any, datasetSchema: Record<string, any>): any {
+    if (!datasetSchema || Object.keys(datasetSchema).length === 0) {
+      return element;
+    }
+
+    const columns = Object.keys(datasetSchema);
+    const grounded = { ...element };
+
+    // Ground componentFields in calculation formulas
+    if (grounded.calculationDefinition?.formula?.componentFields) {
+      const resolvedFields: string[] = [];
+      for (const abstractField of grounded.calculationDefinition.formula.componentFields) {
+        const match = this.findBestColumnMatch(abstractField, columns);
+        resolvedFields.push(match || abstractField); // Keep abstract if no match
+      }
+
+      // Only rewrite if we found at least one real match
+      const hasRealMatch = resolvedFields.some(f => columns.includes(f));
+      if (hasRealMatch) {
+        grounded.calculationDefinition = {
+          ...grounded.calculationDefinition,
+          formula: {
+            ...grounded.calculationDefinition.formula,
+            componentFields: resolvedFields,
+            pseudoCode: this.rewritePseudoCodeWithColumns(
+              grounded.calculationDefinition.formula.pseudoCode || '',
+              grounded.calculationDefinition.formula.componentFields,
+              resolvedFields
+            )
+          }
+        };
+      }
+    }
+
+    // Ground groupingField in comparison groups
+    if (grounded.calculationDefinition?.comparisonGroups?.groupingField) {
+      const groupField = grounded.calculationDefinition.comparisonGroups.groupingField;
+      const match = this.findBestColumnMatch(groupField, columns);
+      if (match) {
+        grounded.calculationDefinition = {
+          ...grounded.calculationDefinition,
+          comparisonGroups: {
+            ...grounded.calculationDefinition.comparisonGroups,
+            groupingField: match
+          }
+        };
+      }
+    }
+
+    return grounded;
+  }
+
+  /**
+   * Find the best matching column name for an abstract field name.
+   * Uses word-boundary-aware fuzzy matching: splits on _ / - / spaces, compares tokens.
+   */
+  private findBestColumnMatch(abstractField: string, columns: string[]): string | null {
+    const abstractTokens = abstractField.toLowerCase().replace(/[_\-\s]+/g, ' ').split(' ').filter(t => t.length > 2);
+
+    let bestMatch: string | null = null;
+    let bestScore = 0;
+
+    for (const col of columns) {
+      const colTokens = col.toLowerCase().replace(/[_\-\s]+/g, ' ').split(' ').filter(t => t.length > 2);
+
+      // Score: count how many abstract tokens appear as substrings in col tokens or vice versa
+      let score = 0;
+      for (const at of abstractTokens) {
+        for (const ct of colTokens) {
+          if (ct.includes(at) || at.includes(ct)) {
+            score++;
+            break;
+          }
+        }
+      }
+
+      // Normalize by the number of abstract tokens to prefer more complete matches
+      const normalizedScore = abstractTokens.length > 0 ? score / abstractTokens.length : 0;
+
+      if (normalizedScore > bestScore && normalizedScore >= 0.5) {
+        bestScore = normalizedScore;
+        bestMatch = col;
+      }
+    }
+
+    return bestMatch;
+  }
+
+  /**
+   * Rewrite pseudoCode by replacing abstract field names with actual column names.
+   */
+  private rewritePseudoCodeWithColumns(
+    pseudoCode: string,
+    abstractFields: string[],
+    resolvedFields: string[]
+  ): string {
+    let rewritten = pseudoCode;
+    for (let i = 0; i < abstractFields.length && i < resolvedFields.length; i++) {
+      if (abstractFields[i] !== resolvedFields[i]) {
+        const escaped = abstractFields[i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        rewritten = rewritten.replace(new RegExp(escaped, 'gi'), resolvedFields[i]);
+      }
+    }
+    return rewritten;
   }
 
   /**

@@ -1388,10 +1388,18 @@ export class ProjectAgentOrchestrator {
             }
 
             if (step.id.includes('kpi') || step.id.includes('metrics')) {
-              // Generate business KPIs
+              // Get dataset column names for data-grounded KPI filtering
+              const projectDatasets = await storage.getProjectDatasets(projectId);
+              const firstRow = (projectDatasets?.[0] as any)?.ingestionMetadata?.transformedData?.[0]
+                || (projectDatasets?.[0] as any)?.data?.[0]
+                || (projectDatasets?.[0] as any)?.preview?.[0];
+              const datasetColumnNames = firstRow && typeof firstRow === 'object' ? Object.keys(firstRow) : [];
+
+              // Generate business KPIs grounded to actual dataset columns
               const kpis = await this.businessAgent.generateBusinessKPIs(
                 journeyProgress.industry || 'general',
-                projectData.analysisType || 'descriptive'
+                projectData.analysisType || 'descriptive',
+                datasetColumnNames
               );
 
               await storage.atomicMergeJourneyProgress(projectId, {

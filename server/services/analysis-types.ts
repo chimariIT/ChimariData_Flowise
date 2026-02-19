@@ -137,6 +137,7 @@ export interface AnalysisResults {
     totalAnalyses: number;
     dataRowsProcessed: number;
     columnsAnalyzed: number;
+    datasetCount?: number;
     executionTime: string;
     qualityScore: number;
     // FIX 3C: Optional chart-rendering data generated from insights

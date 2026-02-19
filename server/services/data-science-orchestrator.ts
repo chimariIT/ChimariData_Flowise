@@ -1200,12 +1200,12 @@ export class DataScienceOrchestrator {
 
     return Object.entries(result.numeric_variables).map(([column, stats]: [string, any]) => ({
       column,
-      count: stats?.basic_stats?.count || 0,
-      mean: stats?.basic_stats?.mean || 0,
-      median: stats?.basic_stats?.median || 0,
-      std: stats?.basic_stats?.std || 0,
-      min: stats?.basic_stats?.min || 0,
-      max: stats?.basic_stats?.max || 0,
+      count: stats?.basic_statistics?.count || 0,
+      mean: stats?.basic_statistics?.mean || 0,
+      median: stats?.basic_statistics?.median || 0,
+      std: stats?.basic_statistics?.std || 0,
+      min: stats?.basic_statistics?.min || 0,
+      max: stats?.basic_statistics?.max || 0,
       percentiles: {
         p25: stats?.percentiles?.['25th'] || 0,
         p50: stats?.percentiles?.['50th'] || 0,
@@ -1226,8 +1226,8 @@ export class DataScienceOrchestrator {
 
     const significantCorrelations: StatisticalAnalysisReport['correlationMatrix']['significantCorrelations'] = [];
 
-    if (result.significant_correlations) {
-      for (const corr of result.significant_correlations) {
+    if (result.strong_correlations || result.significant_correlations) {
+      for (const corr of (result.strong_correlations || result.significant_correlations)) {
         significantCorrelations.push({
           var1: corr.variable1,
           var2: corr.variable2,
@@ -1241,15 +1241,24 @@ export class DataScienceOrchestrator {
   }
 
   private parseHypothesisTests(result: any): StatisticalAnalysisReport['hypothesisTests'] {
-    if (!result?.tests) return [];
+    // statistical_tests.py returns a single test result object, not an array
+    // Normalize: wrap single result in array, or use existing .tests array
+    let tests: any[] = [];
+    if (result?.tests && Array.isArray(result.tests)) {
+      tests = result.tests;
+    } else if (result?.success && result?.test_type) {
+      // Single test result — wrap in array
+      tests = [result];
+    }
+    if (tests.length === 0) return [];
 
-    return result.tests.map((test: any) => ({
-      testName: test.test_name || 'Unknown Test',
+    return tests.map((test: any) => ({
+      testName: test.test_name || test.test_type || 'Unknown Test',
       variables: test.variables || [],
-      statistic: test.statistic || 0,
+      statistic: test.statistic || test.f_statistic || test.t_statistic || test.chi2_statistic || 0,
       pValue: test.p_value || 1,
-      interpretation: test.interpretation || 'No interpretation available',
-      effectSize: test.effect_size
+      interpretation: test.interpretation || (test.p_value < 0.05 ? 'Statistically significant' : 'Not statistically significant'),
+      effectSize: test.effect_size || test.cohens_d || test.eta_squared
     }));
   }
 

@@ -1928,6 +1928,7 @@ export class AnalysisExecutionService {
       recommendations: any[];
       error?: string;
       executionTimeMs?: number;
+      rawResult?: any;
     }>();
 
     // Check if we have analysisPath from DS recommendations
@@ -2703,7 +2704,7 @@ export class AnalysisExecutionService {
           sourceAnalysisName: analysis.analysisName
         }));
 
-        // Store per-analysis result
+        // Store per-analysis result (rawResult for metadata fallback in row count computation)
         perAnalysisResults.set(analysisId, {
           status: 'completed',
           insights: analysisInsights,
@@ -2712,7 +2713,8 @@ export class AnalysisExecutionService {
             ...r,
             sourceAnalysisId: analysisId
           })),
-          executionTimeMs
+          executionTimeMs,
+          rawResult: singleResult
         });
 
         // Merge into overall results
@@ -2781,6 +2783,20 @@ export class AnalysisExecutionService {
         console.log(`📊 [Phase 6] Computed actual metrics: ${actualTotalRows} rows, ${actualTotalColumns} columns`);
       } catch (countErr: any) {
         console.warn(`⚠️ [Phase 6] Could not compute actual row/column counts: ${countErr.message}`);
+      }
+
+      // Fallback: extract row/column counts from orchestrator metadata if dataset loading failed
+      if (actualTotalRows === 0) {
+        for (const [, r] of perAnalysisResults) {
+          const rawMeta = (r as any).rawResult?.metadata;
+          if (rawMeta?.totalRows) {
+            actualTotalRows = Math.max(actualTotalRows, rawMeta.totalRows);
+            actualTotalColumns = Math.max(actualTotalColumns, rawMeta.totalColumns || 0);
+          }
+        }
+        if (actualTotalRows > 0) {
+          console.log(`📊 [Phase 6] Row count fallback from orchestrator metadata: ${actualTotalRows} rows, ${actualTotalColumns} columns`);
+        }
       }
 
       // Create a synthetic DataScienceResults from merged data
@@ -2930,9 +2946,12 @@ export class AnalysisExecutionService {
         config: v.config
       })),
       summary: {
-        totalAnalyses: request.analysisTypes.length,
+        totalAnalyses: usePerAnalysisExecution
+          ? Array.from(perAnalysisResults.values()).filter(r => r.status === 'completed').length
+          : request.analysisTypes.length,
         dataRowsProcessed: results.metadata.totalRows,
         columnsAnalyzed: results.metadata.totalColumns,
+        datasetCount: request.datasetIds?.length || 1,
         executionTime: `${(results.metadata.executionTimeMs / 1000).toFixed(1)} seconds`,
         qualityScore: results.dataQualityReport.overallScore,
         // FIX 3C: Generate trendData from insights for chart rendering

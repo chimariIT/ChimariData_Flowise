@@ -1409,56 +1409,64 @@ export default function PlanStep({
               <CardTitle>Data Quality & Infrastructure Assessment</CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <div className="text-sm font-medium mb-2">Quality Score</div>
-                  <Progress value={plan.dataAssessment.qualityScore} className="h-2" />
-                  <div className="text-sm text-muted-foreground mt-1">
-                    {plan.dataAssessment.qualityScore}%
-                  </div>
-                </div>
-                <div>
-                  <div className="text-sm font-medium mb-2">Completeness</div>
-                  <Progress value={plan.dataAssessment.completenessScore} className="h-2" />
-                  <div className="text-sm text-muted-foreground mt-1">
-                    {plan.dataAssessment.completenessScore}%
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <div className="text-sm font-medium mb-2">Dataset Size</div>
-                  <p>{plan.dataAssessment.recordCount} rows × {plan.dataAssessment.columnCount} columns</p>
-                </div>
-                <div>
-                  <div className="text-sm font-medium mb-2">Processing Time</div>
-                  <p>{plan.dataAssessment.estimatedProcessingTime}</p>
-                </div>
-              </div>
-
-              {plan.dataAssessment.infrastructureNeeds.useSpark && (
-                <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Database className="h-5 w-5 text-blue-600" />
-                    <div className="font-medium">Spark Processing Required</div>
-                  </div>
-                  <p className="text-sm text-muted-foreground">
-                    Estimated Memory: {plan.dataAssessment.infrastructureNeeds.estimatedMemoryGB} GB
-                  </p>
-                </div>
-              )}
-
-              {plan.dataAssessment.recommendedTransformations && plan.dataAssessment.recommendedTransformations.length > 0 && (
-                <div>
-                  <div className="text-sm font-medium mb-2">Recommended Transformations</div>
-                  <div className="space-y-2">
-                    {plan.dataAssessment.recommendedTransformations.map((transform, i) => (
-                      <div key={i} className="p-3 border rounded">
-                        <p className="text-sm">{transform}</p>
+              {plan.dataAssessment ? (
+                <>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <div className="text-sm font-medium mb-2">Quality Score</div>
+                      <Progress value={plan.dataAssessment.qualityScore} className="h-2" />
+                      <div className="text-sm text-muted-foreground mt-1">
+                        {plan.dataAssessment.qualityScore}%
                       </div>
-                    ))}
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium mb-2">Completeness</div>
+                      <Progress value={plan.dataAssessment.completenessScore} className="h-2" />
+                      <div className="text-sm text-muted-foreground mt-1">
+                        {plan.dataAssessment.completenessScore}%
+                      </div>
+                    </div>
                   </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <div className="text-sm font-medium mb-2">Dataset Size</div>
+                      <p>{plan.dataAssessment.recordCount} rows × {plan.dataAssessment.columnCount} columns</p>
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium mb-2">Processing Time</div>
+                      <p>{plan.dataAssessment.estimatedProcessingTime}</p>
+                    </div>
+                  </div>
+
+                  {plan.dataAssessment.infrastructureNeeds?.useSpark && (
+                    <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Database className="h-5 w-5 text-blue-600" />
+                        <div className="font-medium">Spark Processing Required</div>
+                      </div>
+                      <p className="text-sm text-muted-foreground">
+                        Estimated Memory: {plan.dataAssessment.infrastructureNeeds?.estimatedMemoryGB} GB
+                      </p>
+                    </div>
+                  )}
+
+                  {plan.dataAssessment.recommendedTransformations && plan.dataAssessment.recommendedTransformations.length > 0 && (
+                    <div>
+                      <div className="text-sm font-medium mb-2">Recommended Transformations</div>
+                      <div className="space-y-2">
+                        {plan.dataAssessment.recommendedTransformations.map((transform, i) => (
+                          <div key={i} className="p-3 border rounded">
+                            <p className="text-sm">{transform}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="text-sm text-muted-foreground italic p-4 text-center">
+                  Data assessment is not yet available for this plan.
                 </div>
               )}
             </CardContent>

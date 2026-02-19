@@ -1466,13 +1466,17 @@ export class ProjectManagerAgent {
                 });
 
                 // Call BA Agent's actual method directly, with 20s timeout
+                // Pass dataset column names so BA can ground KPIs to actual data
+                const baColumnNames = primaryDataset?.schema ? Object.keys(primaryDataset.schema) : [];
+
                 businessContext = await withTimeout(
                     this.businessAgent.provideBusinessContext({
                         journeyType: projectRecord.journeyType || 'non-tech',
                         industry,
                         goals,
                         analysisTypes: analysisContext.analysisTypes,
-                        dataAssessment
+                        dataAssessment,
+                        columnNames: baColumnNames
                     }),
                     20000,
                     defaultBusinessContext,

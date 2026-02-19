@@ -960,13 +960,15 @@ Return ONLY valid JSON with 3-5 recommendations.`;
         goals?: string[];
         analysisTypes?: string[];
         dataAssessment?: DataAssessment;
+        columnNames?: string[];
     }): Promise<PlanBusinessContext> {
         const {
             journeyType,
             industry,
             goals = [],
             analysisTypes = [],
-            dataAssessment
+            dataAssessment,
+            columnNames = []
         } = params;
 
         const sanitizedGoals = goals.filter(goal => typeof goal === 'string' && goal.trim().length > 0);
@@ -976,8 +978,11 @@ Return ONLY valid JSON with 3-5 recommendations.`;
         const regulatoryFrameworks = industry ? await this.getApplicableRegulations(industry) : [];
 
         const metricSuggestions = await this.suggestBusinessMetrics(
-            industry || 'general',
-            sanitizedGoals.length > 0 ? sanitizedGoals : ['Overall performance']
+            {
+                industry: industry || 'general',
+                goals: sanitizedGoals.length > 0 ? sanitizedGoals : ['Overall performance'],
+                columnNames
+            }
         );
 
         const benchmarkCandidates = industryTemplate?.keyMetrics?.map(metric => `${metric} benchmark`) || [];
@@ -1228,7 +1233,7 @@ Return ONLY valid JSON with 3-5 recommendations.`;
         return complianceReport;
     }
 
-    async generateBusinessKPIs(industry: string, analysisType: string): Promise<any> {
+    async generateBusinessKPIs(industry: string, analysisType: string, columnNames?: string[]): Promise<any> {
         const industryTemplate = await this.getIndustryTemplate(industry);
 
         if (!industryTemplate) {
@@ -1335,6 +1340,30 @@ Return ONLY valid JSON with 3-5 recommendations.`;
             default:
                 kpis.primaryKPIs = industryTemplate.keyMetrics.slice(0, 3);
                 kpis.secondaryKPIs = industryTemplate.keyMetrics.slice(3, 6);
+        }
+
+        // Filter secondary KPIs by column availability when dataset schema is known
+        // Primary KPIs are kept as industry-standard goals regardless of current data
+        if (columnNames && columnNames.length > 0) {
+            const colNamesLower = columnNames.map(c => c.toLowerCase());
+
+            kpis.secondaryKPIs = kpis.secondaryKPIs.filter(kpi => {
+                const kpiLower = kpi.toLowerCase();
+                // HR-specific KPIs that need specific columns
+                if (kpiLower.includes('time to hire') && !colNamesLower.some(c => c.includes('hire') || c.includes('recruit') || c.includes('posting') || c.includes('offer'))) return false;
+                if (kpiLower.includes('absenteeism') && !colNamesLower.some(c => c.includes('absent') || c.includes('attendance') || c.includes('leave'))) return false;
+                if (kpiLower.includes('promotion') && !colNamesLower.some(c => c.includes('promot') || c.includes('career'))) return false;
+                if (kpiLower.includes('training') && !colNamesLower.some(c => c.includes('train') || c.includes('course') || c.includes('certif'))) return false;
+                // Education-specific
+                if (kpiLower.includes('placement') && !colNamesLower.some(c => c.includes('employ') || c.includes('placement') || c.includes('job'))) return false;
+                if (kpiLower.includes('teacher') && !colNamesLower.some(c => c.includes('teacher') || c.includes('instructor') || c.includes('faculty'))) return false;
+                // Healthcare-specific
+                if (kpiLower.includes('readmission') && !colNamesLower.some(c => c.includes('readmi') || c.includes('admit'))) return false;
+                if (kpiLower.includes('length of stay') && !colNamesLower.some(c => c.includes('stay') || c.includes('los') || c.includes('admit') || c.includes('discharge'))) return false;
+                return true; // Keep KPI if no exclusion rule triggered
+            });
+
+            console.log(`📊 [BA KPI Grounding] Filtered secondaryKPIs to ${kpis.secondaryKPIs.length} items based on ${columnNames.length} dataset columns`);
         }
 
         return kpis;
@@ -1689,17 +1718,19 @@ Return ONLY valid JSON with 3-5 recommendations.`;
      * Suggest industry-specific business metrics
      */
     async suggestBusinessMetrics(
-        industryOrRequest: string | { industry?: string; goals?: string[] } | undefined,
+        industryOrRequest: string | { industry?: string; goals?: string[]; columnNames?: string[] } | undefined,
         goalsArg?: string[]
     ): Promise<MetricRecommendations> {
         let industry = '';
         let goals: string[] | undefined = goalsArg;
+        let columnNames: string[] = [];
 
         if (typeof industryOrRequest === 'string') {
             industry = industryOrRequest;
         } else if (industryOrRequest && typeof industryOrRequest === 'object' && !Array.isArray(industryOrRequest)) {
             industry = industryOrRequest.industry ?? '';
             goals = industryOrRequest.goals ?? goalsArg;
+            columnNames = industryOrRequest.columnNames ?? [];
         }
 
         console.log(`💼 Business Agent: Suggesting metrics for industry="${industry || 'general'}", goals=[${Array.isArray(goals) ? goals.slice(0, 3).join(', ') : 'none'}]`);
@@ -1905,6 +1936,35 @@ Return ONLY valid JSON with 3-5 recommendations.`;
         if (secondaryMetrics.length === 0) {
             pushMetric(secondaryMetrics, 'Market share');
             pushMetric(secondaryMetrics, 'Customer retention');
+        }
+
+        // Filter secondary metrics by column availability when dataset schema is known
+        // Primary metrics are kept as industry-standard goals regardless of current data
+        if (columnNames.length > 0) {
+            const colNamesLower = columnNames.map(c => c.toLowerCase());
+            const originalCount = secondaryMetrics.length;
+
+            // Remove secondary metrics whose required data is not in the dataset
+            const filteredSecondary = secondaryMetrics.filter(metric => {
+                const metricName = (typeof metric === 'string' ? metric : metric.name).toLowerCase();
+                // HR-specific
+                if (metricName.includes('time to hire') && !colNamesLower.some(c => c.includes('hire') || c.includes('recruit'))) return false;
+                if (metricName.includes('absenteeism') && !colNamesLower.some(c => c.includes('absent') || c.includes('attendance') || c.includes('leave'))) return false;
+                if (metricName.includes('promotion') && !colNamesLower.some(c => c.includes('promot') || c.includes('career'))) return false;
+                // Education-specific
+                if (metricName.includes('course completion') && !colNamesLower.some(c => c.includes('course') || c.includes('enrol') || c.includes('complet'))) return false;
+                // Retail-specific
+                if (metricName.includes('cart abandonment') && !colNamesLower.some(c => c.includes('cart') || c.includes('abandon'))) return false;
+                return true;
+            });
+
+            // Only apply filter if it doesn't empty the list
+            if (filteredSecondary.length > 0 || originalCount === 0) {
+                secondaryMetrics.length = 0;
+                secondaryMetrics.push(...filteredSecondary);
+            }
+
+            console.log(`📊 [BA Metrics Grounding] Filtered secondaryMetrics from ${originalCount} to ${secondaryMetrics.length} based on ${columnNames.length} dataset columns`);
         }
 
         const response: MetricRecommendations = {

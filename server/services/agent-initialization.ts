@@ -539,7 +539,8 @@ export class AgentInitializationService {
                 case 'business_analysis':
                   resultData = await businessAgent.generateBusinessKPIs(
                     payload.industry ?? 'general',
-                    payload.analysisType ?? 'business_analysis'
+                    payload.analysisType ?? 'business_analysis',
+                    payload.columnNames
                   );
                   break;
 
