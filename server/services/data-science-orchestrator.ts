@@ -299,6 +299,16 @@ export interface DataScienceResults {
   mlModels: MLModelArtifact[];
   visualizations: VisualizationArtifact[];
 
+  // Fix 1A: EDA results (comparative, group, text analysis from Phase 2)
+  edaResults?: {
+    comparativeAnalysis?: any;
+    groupAnalysis?: any;
+    descriptiveStats?: any;
+    correlations?: any;
+    crossTabs?: any;
+    textAnalysis?: any;
+  };
+
   // Question-Answer Evidence Chain
   questionAnalysisLinks: QuestionAnalysisLink[];
 
@@ -617,7 +627,8 @@ export class DataScienceOrchestrator {
       datasetData,
       statisticalReport,
       mlModels,
-      projectArtifactDir
+      projectArtifactDir,
+      edaResults // Fix 1C: Pass EDA results for comparative/group visualizations
     );
 
     // Phase 6: Build Question-Analysis Evidence Chain
@@ -665,6 +676,8 @@ export class DataScienceOrchestrator {
       completedAt,
       dataQualityReport,
       statisticalAnalysisReport: statisticalReport,
+      // Fix 1B: Include EDA results (comparative, group, text analysis from Phase 2)
+      edaResults: edaResults && Object.keys(edaResults).length > 0 ? edaResults : undefined,
       mlModels,
       visualizations,
       questionAnalysisLinks,
@@ -1063,8 +1076,8 @@ export class DataScienceOrchestrator {
       crossTabs: null
     };
 
-    // Run descriptive stats
-    if (analysisTypes.includes('descriptive') || analysisTypes.length === 0) {
+    // Run descriptive stats — Fix 2: Also match 'descriptive_statistics' (the canonical name)
+    if (analysisTypes.includes('descriptive') || analysisTypes.includes('descriptive_statistics') || analysisTypes.length === 0) {
       results.descriptiveStats = await this.executePythonScript('descriptive_stats.py',
         getConfig('descriptive', { data_path: tempDataPath })
       );
@@ -1086,8 +1099,8 @@ export class DataScienceOrchestrator {
     }
 
     // FIX 2F: Run comparative analysis (cross-group statistical comparison)
-    // Also handles statistical_tests since comparative_analysis.py performs ANOVA, t-tests, chi-square
-    if (analysisTypes.includes('comparative') || analysisTypes.includes('comparative_analysis') || analysisTypes.includes('statistical_tests')) {
+    // Also handles statistical_tests and statistical_analysis since comparative_analysis.py performs ANOVA, t-tests, chi-square
+    if (analysisTypes.includes('comparative') || analysisTypes.includes('comparative_analysis') || analysisTypes.includes('statistical_tests') || analysisTypes.includes('statistical_analysis')) {
       results.comparativeAnalysis = await this.executePythonScript('comparative_analysis.py',
         getConfig('comparative', { data_path: tempDataPath })
       );
@@ -1585,7 +1598,8 @@ export class DataScienceOrchestrator {
     datasetData: { rows: any[]; schema: any; totalRows: number; totalColumns: number },
     statisticalReport: StatisticalAnalysisReport,
     mlModels: MLModelArtifact[],
-    outputDir: string
+    outputDir: string,
+    edaResults?: any // Fix 1C/5: EDA results for comparative/group visualizations
   ): Promise<VisualizationArtifact[]> {
     const visualizations: VisualizationArtifact[] = [];
 
@@ -1640,6 +1654,62 @@ export class DataScienceOrchestrator {
         description: 'Visualization of data clusters',
         data: { model: clusterModel },
         config: { showCentroids: true, showLabels: true }
+      });
+    }
+
+    // Fix 5: Comparative analysis visualizations from EDA results
+    if (edaResults?.comparativeAnalysis) {
+      const compTests = edaResults.comparativeAnalysis.tests;
+      if (Array.isArray(compTests) && compTests.length > 0) {
+        // Significant tests → box plots showing group comparisons
+        const significantTests = compTests.filter((t: any) => t.significant);
+        for (const test of significantTests.slice(0, 3)) {
+          visualizations.push({
+            id: nanoid(),
+            type: 'box',
+            title: `${test.test_name || 'Statistical Test'}: ${test.variable} by Group`,
+            description: `Comparison of ${test.variable} across groups (p=${Number(test.p_value || 0).toFixed(4)})`,
+            data: { test, groups: test.group_stats || test.groups },
+            config: { showOutliers: true, showMean: true }
+          });
+        }
+
+        // Summary visualization of all tests
+        if (compTests.length > 1) {
+          visualizations.push({
+            id: nanoid(),
+            type: 'bar',
+            title: 'Statistical Comparison Summary',
+            description: `${significantTests.length} of ${compTests.length} variables showed significant group differences`,
+            data: {
+              tests: compTests.map((t: any) => ({
+                variable: t.variable,
+                testName: t.test_name,
+                pValue: t.p_value,
+                significant: t.significant,
+                effectSize: t.effect_size
+              })),
+              summary: edaResults.comparativeAnalysis.summary
+            },
+            config: { showSignificanceThreshold: true }
+          });
+        }
+      }
+    }
+
+    // Fix 5: Group analysis visualizations from EDA results
+    if (edaResults?.groupAnalysis?.group_profiles) {
+      visualizations.push({
+        id: nanoid(),
+        type: 'bar',
+        title: 'Group Profile Comparison',
+        description: `Side-by-side comparison of ${Object.keys(edaResults.groupAnalysis.group_profiles).length} group characteristics`,
+        data: {
+          profiles: edaResults.groupAnalysis.group_profiles,
+          summary: edaResults.groupAnalysis.summary,
+          distinctiveFeatures: edaResults.groupAnalysis.distinctive_features
+        },
+        config: { showMetrics: true }
       });
     }
 

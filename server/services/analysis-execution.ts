@@ -2240,6 +2240,11 @@ export class AnalysisExecutionService {
           );
           const singleResult = dsToolResult?.result as DataScienceResults;
 
+          // Fix 3A: Null guard — if orchestrator returned no result, fail explicitly
+          if (!singleResult) {
+            throw new Error(`Analysis tool returned no result for ${analysisType} (status: ${dsToolResult?.status || 'unknown'})`);
+          }
+
           const executionTimeMs = Date.now() - startTime;
           console.log(`  ✅ Completed: ${analysis.analysisName} (${executionTimeMs}ms)`);
 

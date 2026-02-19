@@ -8,6 +8,7 @@ import type { AnalysisStep, MLModelSpec, VisualizationSpec, DataAssessment } fro
 import { ChimaridataAI } from '../chimaridata-ai';
 import { businessDefinitionRegistry } from './business-definition-registry';
 import { QuestionIntentAnalyzer } from './question-intent-analyzer';
+import { getAnalysisRequirementsForTypes } from './analysis-requirements-registry';
 
 // ==========================================
 // CONSULTATION INTERFACES (Multi-Agent Coordination)
@@ -2925,6 +2926,25 @@ ${userGoals.map((g, i) => `${i + 1}. ${g}`).join('\n')}
 ## Planned Analysis Types:
 ${analysisTypes.length > 0 ? analysisTypes.map((a, i) => `${i + 1}. ${a}`).join('\n') : '(None specified - infer from questions)'}
 
+${(() => {
+  // Fix 6: Inject structured per-analysis-type requirements from the registry
+  if (analysisTypes.length === 0) return '';
+  try {
+    const reqs = getAnalysisRequirementsForTypes(analysisTypes);
+    if (reqs.length === 0) return '';
+    const lines = reqs.map(req => {
+      const parts: string[] = [];
+      if (req.columnRequirements.minNumericColumns) parts.push(`needs ≥${req.columnRequirements.minNumericColumns} numeric columns`);
+      if (req.columnRequirements.minCategoricalColumns) parts.push(`needs ≥${req.columnRequirements.minCategoricalColumns} categorical columns`);
+      if (req.columnRequirements.minDatetimeColumns) parts.push(`needs ≥${req.columnRequirements.minDatetimeColumns} datetime columns`);
+      if (req.columnRequirements.needsTargetVariable) parts.push('REQUIRES a target/dependent variable');
+      if (req.columnRequirements.needsFeatureColumns) parts.push('REQUIRES feature/independent columns');
+      if (req.transformationRequirements.needsGrouping) parts.push('REQUIRES a grouping/categorical column for segment comparison');
+      return `- **${req.displayName}** (${req.analysisType}): ${parts.join(', ') || 'standard data columns'}`;
+    });
+    return `## Analysis-Specific Data Requirements (MANDATORY — you MUST generate elements that satisfy these):\n${lines.join('\n')}\n\nIMPORTANT: For each analysis type above, ensure your generated elements include the required column types. For example, if Comparative Analysis needs a grouping column, you MUST include a categorical element suitable for grouping.\n`;
+  } catch { return ''; }
+})()}
 ## Available Dataset Schema:
 ${schemaDescription}
 ${industryDirective}

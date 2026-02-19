@@ -842,6 +842,8 @@ const PHASE_MAP: Record<string, string[]> = {
   text: ['quality', 'ml'],
   statistical_tests: ['quality', 'eda', 'statistical'],
   hypothesis_testing: ['quality', 'eda', 'statistical'],
+  // Fix 4: statistical_analysis was missing, causing fallback to ALL phases (including unnecessary ML)
+  statistical_analysis: ['quality', 'eda', 'statistical'],
 };
 
 /**
