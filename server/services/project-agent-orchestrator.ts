@@ -632,6 +632,37 @@ export class ProjectAgentOrchestrator {
       }
     }
 
+    // Fix 3: Third lookup — search journeyProgress.checkpoints (where project.ts stores them)
+    if (!checkpoint) {
+      console.log(`⚠️ [Checkpoint] Not in agentCheckpoints DB either, checking journeyProgress for ${checkpointId}...`);
+      try {
+        const project = await storage.getProject(projectId);
+        const jpCheckpoints = (project as any)?.journeyProgress?.checkpoints || [];
+        const found = jpCheckpoints.find((cp: any) => cp.id === checkpointId);
+        if (found) {
+          // Reconstruct AgentCheckpoint from journeyProgress shape
+          const restoredCheckpoint: AgentCheckpoint = {
+            id: found.id,
+            projectId: found.projectId || projectId,
+            agentType: (found.agentId || 'project_manager') as AgentCheckpoint['agentType'],
+            stepName: found.stage || 'unknown',
+            status: (found.status || 'pending') as AgentCheckpoint['status'],
+            message: found.message || '',
+            data: found.metadata || {},
+            userFeedback: '',
+            requiresUserInput: found.requiresApproval !== false,
+            timestamp: found.createdAt ? new Date(found.createdAt) : new Date()
+          };
+          checkpoint = restoredCheckpoint;
+          checkpoints.push(restoredCheckpoint);
+          this.checkpoints.set(projectId, checkpoints);
+          console.log(`✅ [Checkpoint] Restored from journeyProgress: ${checkpointId}`);
+        }
+      } catch (jpErr) {
+        console.error('❌ [Checkpoint] journeyProgress lookup failed:', jpErr);
+      }
+    }
+
     if (!checkpoint) {
       throw new Error(`Checkpoint not found: ${checkpointId}`);
     }
@@ -670,6 +701,21 @@ export class ProjectAgentOrchestrator {
     } catch (dbError) {
       console.error(`❌ [GAP 8 FIX] Failed to persist checkpoint ${checkpointId} to database:`, dbError);
       // Continue with in-memory operation - don't fail the user action
+    }
+
+    // Fix 3: Also update journeyProgress.checkpoints so SSOT stays in sync
+    try {
+      const project = await storage.getProject(projectId);
+      const jp = (project as any)?.journeyProgress || {};
+      const jpCheckpoints: any[] = jp.checkpoints || [];
+      const cpIdx = jpCheckpoints.findIndex((cp: any) => cp.id === checkpointId);
+      if (cpIdx >= 0) {
+        jpCheckpoints[cpIdx] = { ...jpCheckpoints[cpIdx], status: approved ? 'approved' : 'rejected', feedback: userFeedback, updatedAt: new Date().toISOString() };
+        await storage.atomicMergeJourneyProgress(projectId, { checkpoints: jpCheckpoints });
+        console.log(`✅ [Fix 3] Updated checkpoint ${checkpointId} in journeyProgress`);
+      }
+    } catch (jpUpdateErr) {
+      console.error(`⚠️ [Fix 3] Failed to update journeyProgress checkpoint:`, jpUpdateErr);
     }
 
     // Get or restore project context (handles server restart scenario)

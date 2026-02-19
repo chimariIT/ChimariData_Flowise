@@ -2849,6 +2849,19 @@ export class DataScientistAgent implements AgentHandler {
   }
 
   /**
+   * Convert a snake_case or camelCase column name to a human-readable title.
+   * e.g. "turnover_rate" → "Turnover Rate", "employeeId" → "Employee Id"
+   */
+  private static humanizeColumnName(column: string): string {
+    return column
+      .replace(/[_-]/g, ' ')
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(' ');
+  }
+
+  /**
    * AI-powered inference of required data elements using ChimaridataAI
    * Uses fallback chain: Gemini → OpenAI → Claude
    * Returns structured data elements with calculation definitions
@@ -3054,7 +3067,22 @@ Respond with the JSON array ONLY:`;
               if (bestMatch) {
                 if (!calcDef.formula) (calcDef as any).formula = { businessDescription: '' };
                 calcDef.formula!.componentFields = [bestMatch];
-                console.log(`   ✅ Auto-corrected: mapped to "${bestMatch}"`);
+                // Fix 2B: Also rename abstract elementName to match the actual column
+                const oldName = el.elementName;
+                el.elementName = DataScientistAgent.humanizeColumnName(bestMatch);
+                console.log(`   ✅ Auto-corrected: "${oldName}" → "${el.elementName}" (mapped to "${bestMatch}")`);
+              }
+            }
+
+            // Fix 2B part 2: If element HAS a schema match via single componentField but
+            // the elementName itself is abstract (doesn't match any column), rename it
+            if (hasSchemaMatch && componentFields.length === 1 && schemaColumnsSet.has(componentFields[0])) {
+              if (!schemaColumnsSet.has(elNameLower)) {
+                const oldName = el.elementName;
+                el.elementName = DataScientistAgent.humanizeColumnName(componentFields[0]);
+                if (oldName !== el.elementName) {
+                  console.log(`   📝 [Fix 2B] Grounded element name: "${oldName}" → "${el.elementName}"`);
+                }
               }
             }
           }

@@ -20,7 +20,10 @@ import {
   CheckCircle2,
   BookOpen,
   Beaker,
-  Info
+  Info,
+  ChevronDown,
+  ChevronRight,
+  GitBranch
 } from "lucide-react";
 import { apiClient } from "@/lib/api";
 
@@ -46,6 +49,10 @@ interface RequiredDataElement {
   sourceField?: string;
   sourceColumn?: string;  // FIX: Backend may set sourceColumn instead of sourceField
   sourceAvailable: boolean;
+  // Fix 1C: Hierarchical decomposition fields
+  parentElementId?: string;
+  isAtomic?: boolean;
+  decompositionLevel?: number;
   transformationRequired: boolean;
   transformationLogic?: {
     operation: string;
@@ -450,6 +457,51 @@ export function DataElementsMappingUI({
   const requiredElements = safeElements.filter(e => e.required);
   const optionalElements = safeElements.filter(e => !e.required);
 
+  // Fix 1C: Build parent/child hierarchy for decomposed elements
+  // Auto-expand all parents on initial render so users see the full hierarchy
+  const [expandedParents, setExpandedParents] = useState<Set<string>>(() => {
+    const parentIds = new Set<string>();
+    for (const el of (Array.isArray(requiredDataElements) ? requiredDataElements : [])) {
+      if (el.parentElementId) parentIds.add(el.parentElementId);
+    }
+    return parentIds;
+  });
+  const toggleParentExpanded = useCallback((parentId: string) => {
+    setExpandedParents(prev => {
+      const next = new Set(prev);
+      if (next.has(parentId)) {
+        next.delete(parentId);
+      } else {
+        next.add(parentId);
+      }
+      return next;
+    });
+  }, []);
+
+  // Group required elements into tree: top-level items + children grouped under parents
+  const elementTree = (() => {
+    const parentIds = new Set(
+      requiredElements
+        .filter(el => el.parentElementId)
+        .map(el => el.parentElementId!)
+    );
+    const childrenByParent = new Map<string, RequiredDataElement[]>();
+    const topLevel: RequiredDataElement[] = [];
+
+    for (const el of requiredElements) {
+      if (el.parentElementId) {
+        // This is a child element — group under its parent
+        const siblings = childrenByParent.get(el.parentElementId) || [];
+        siblings.push(el);
+        childrenByParent.set(el.parentElementId, siblings);
+      } else {
+        topLevel.push(el);
+      }
+    }
+
+    return { topLevel, childrenByParent, parentIds };
+  })();
+
   const getMappingStatus = (element: RequiredDataElement) => {
     const mapping = mappings[element.elementId];
 
@@ -661,7 +713,7 @@ export function DataElementsMappingUI({
           </AlertDescription>
         </Alert>
 
-        {/* Required Elements Mapping */}
+        {/* Required Elements Mapping — Fix 1C: Hierarchical tree display */}
         {requiredElements.length > 0 && (
           <div className="space-y-3">
             <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
@@ -669,7 +721,160 @@ export function DataElementsMappingUI({
               Required Elements ({requiredElements.length})
             </h3>
             <div className="space-y-3">
-              {requiredElements.map((element) => {
+              {elementTree.topLevel.map((element) => {
+                const hasChildren = elementTree.childrenByParent.has(element.elementId);
+                const children = elementTree.childrenByParent.get(element.elementId) || [];
+                const isExpanded = expandedParents.has(element.elementId);
+
+                // ─── Parent composite element with children ───
+                if (hasChildren) {
+                  // Count how many children are mapped
+                  const childrenMapped = children.filter(c => {
+                    const cm = mappings[c.elementId] || {};
+                    return !!(cm.sourceField || c.sourceField || c.sourceColumn);
+                  }).length;
+
+                  return (
+                    <div key={element.elementId} className="rounded-lg border border-indigo-200 overflow-hidden">
+                      {/* Parent header — collapsible */}
+                      <button
+                        onClick={() => toggleParentExpanded(element.elementId)}
+                        className="w-full flex items-center gap-3 p-4 bg-gradient-to-r from-indigo-50 to-purple-50 hover:from-indigo-100 hover:to-purple-100 transition-colors text-left"
+                      >
+                        {isExpanded
+                          ? <ChevronDown className="w-4 h-4 text-indigo-600 flex-shrink-0" />
+                          : <ChevronRight className="w-4 h-4 text-indigo-600 flex-shrink-0" />
+                        }
+                        <GitBranch className="w-4 h-4 text-indigo-500 flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="font-semibold text-sm text-indigo-900">
+                              {element.elementName}
+                            </h4>
+                            <Badge variant="outline" className="text-xs bg-indigo-100 text-indigo-800 border-indigo-300">
+                              Composite
+                            </Badge>
+                            <Badge variant="outline" className="text-xs">
+                              {childrenMapped}/{children.length} sub-elements mapped
+                            </Badge>
+                          </div>
+                          <p className="text-xs text-indigo-700 mt-0.5">{safeString(element.description)}</p>
+                          {/* Show formula if available */}
+                          {(element.businessDefinition?.formula || element.calculationDefinition?.formula) && (
+                            <p className="text-xs font-mono text-indigo-600 mt-1 bg-white/50 px-2 py-0.5 rounded inline-block">
+                              {safeString(element.businessDefinition?.formula || element.calculationDefinition?.formula)}
+                            </p>
+                          )}
+                        </div>
+                      </button>
+
+                      {/* Children — shown when expanded */}
+                      {isExpanded && (
+                        <div className="border-t border-indigo-200 bg-white">
+                          <div className="pl-6 pr-4 py-3 space-y-3">
+                            {children.map((child) => {
+                              const status = getMappingStatus(child);
+                              const isEditing = editingElement === child.elementId;
+                              const mapping = mappings[child.elementId] || {};
+
+                              return (
+                                <div
+                                  key={child.elementId}
+                                  className="bg-gray-50 rounded-lg border border-gray-200 p-3 ml-2 relative before:content-[''] before:absolute before:left-[-12px] before:top-1/2 before:w-3 before:h-px before:bg-indigo-200"
+                                >
+                                  <div className="flex items-start justify-between mb-2">
+                                    <div className="flex-1">
+                                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 flex-shrink-0" />
+                                        <h4 className="font-medium text-sm text-gray-900">
+                                          {child.elementName}
+                                        </h4>
+                                        <Badge variant="outline" className="text-xs">
+                                          {child.dataType}
+                                        </Badge>
+                                        {child.isAtomic && (
+                                          <Badge variant="outline" className="text-xs bg-green-50 text-green-700 border-green-200">
+                                            Atomic
+                                          </Badge>
+                                        )}
+                                        {getStatusBadge(status)}
+                                      </div>
+                                      <p className="text-xs text-gray-600 ml-4">{safeString(child.description)}</p>
+                                    </div>
+                                    {!isEditing && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 text-xs"
+                                        onClick={() => handleEditElement(child.elementId)}
+                                      >
+                                        <Edit className="w-3 h-3 mr-1" />
+                                        Edit
+                                      </Button>
+                                    )}
+                                  </div>
+
+                                  {/* Source Column Mapping for child */}
+                                  <div className="flex items-center gap-2 text-sm ml-4">
+                                    <span className="text-gray-600 w-28 text-xs">Source Column:</span>
+                                    {isEditing ? (
+                                      <select
+                                        className="flex-1 border rounded px-2 py-1 text-sm"
+                                        value={mapping.sourceField || child.sourceField || child.sourceColumn || ''}
+                                        onChange={(e) => handleMappingChange(child.elementId, 'sourceField', e.target.value)}
+                                      >
+                                        <option value="">Select column...</option>
+                                        {availableColumns.map((col) => (
+                                          <option key={col} value={col}>
+                                            {col}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    ) : (
+                                      <span className="font-medium text-gray-900 text-sm">
+                                        {mapping.sourceField || child.sourceField || child.sourceColumn || (
+                                          <span className="text-red-600 flex items-center gap-1">
+                                            <AlertCircle className="w-3 h-3" />
+                                            Not mapped
+                                          </span>
+                                        )}
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  {/* Edit actions for child */}
+                                  {isEditing && (
+                                    <div className="flex items-center gap-2 pt-2 mt-2 border-t ml-4">
+                                      <Button
+                                        size="sm"
+                                        className="h-7 text-xs bg-green-600 hover:bg-green-700"
+                                        onClick={() => handleSaveElement(child.elementId)}
+                                      >
+                                        <Save className="w-3 h-3 mr-1" />
+                                        Save
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 text-xs"
+                                        onClick={handleCancelEdit}
+                                      >
+                                        <X className="w-3 h-3 mr-1" />
+                                        Cancel
+                                      </Button>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+
+                // ─── Regular top-level element (no children) ───
                 const status = getMappingStatus(element);
                 const isEditing = editingElement === element.elementId;
                 const mapping = mappings[element.elementId] || {};

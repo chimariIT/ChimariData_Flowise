@@ -33,6 +33,11 @@ export interface RequiredDataElement {
     relatedQuestions: string[]; // The business questions this element helps answer
     questionIds?: string[]; // Optional: IDs of related questions for tracking
 
+    // Hierarchical decomposition (Fix 1A)
+    parentElementId?: string;   // If this is a sub-element, ID of the parent composite element
+    isAtomic?: boolean;         // true = maps directly to a column; false = computed from sub-elements
+    decompositionLevel?: number; // 0 = top-level, 1 = first decomposition, 2 = second, etc.
+
     // Source mapping (populated when dataset available)
     sourceField?: string;
     sourceColumn?: string;  // FIX: Alias for frontend compatibility (frontend expects sourceColumn)
@@ -1354,7 +1359,7 @@ export class RequiredDataElementsTool {
         structuredQuestions?: Array<{ id: string; text: string; order?: number }>,
         industry?: string
     ): Promise<RequiredDataElement[]> {
-        const elements: RequiredDataElement[] = [];
+        let elements: RequiredDataElement[] = [];
 
         console.log(`📊 [Data Elements Tool] Inferring data elements from ${analysisPath.length} analyses and ${userQuestions.length} questions`);
         console.log(`   User Goals: ${userGoals.join('; ')}`);
@@ -1514,7 +1519,8 @@ export class RequiredDataElementsTool {
         // P1-7 FIX: Post-process element names to ensure clean metric/dimension naming
         for (const el of elements) {
             // Clean sentence-like element names (e.g., "Company Is Turnover Rate" → "Turnover Rate")
-            if (el.elementName && el.elementName.split(/\s+/).length > 4) {
+            // Fix 2A: Lowered threshold from >4 to >=3 to catch 3-4 word abstract names
+            if (el.elementName && el.elementName.split(/\s+/).length >= 3) {
                 // Remove common prefixes that make names too long
                 const cleaned = el.elementName
                     .replace(/^(the|a|an|company|organization|org|department|dept)\s+(is|has|with|for)\s+/i, '')
@@ -1534,7 +1540,324 @@ export class RequiredDataElementsTool {
             }
         }
 
+        // Fix 1B: Decompose composite elements into atomic sub-elements
+        try {
+            const expandedElements = await this.decomposeCompositeElements(elements, datasetSchema);
+            if (expandedElements.length > elements.length) {
+                console.log(`🔬 [Decomposition] Expanded ${elements.length} elements → ${expandedElements.length} (added ${expandedElements.length - elements.length} atomic sub-elements)`);
+            }
+            elements = expandedElements;
+        } catch (decompErr: any) {
+            console.warn(`⚠️ [Decomposition] Non-blocking error: ${decompErr.message}`);
+        }
+
+        // Fix 2C: Deduplicate elements by normalized name
+        {
+            const seenNames = new Map<string, number>();
+            const toRemove: number[] = [];
+
+            for (let i = 0; i < elements.length; i++) {
+                const normalized = elements[i].elementName.toLowerCase().replace(/[\s_-]+/g, ' ').trim();
+                const existingIdx = seenNames.get(normalized);
+                if (existingIdx !== undefined) {
+                    const kept = elements[existingIdx];
+                    const dup = elements[i];
+                    // Merge relatedQuestions (deduplicated)
+                    kept.relatedQuestions = [...new Set([...(kept.relatedQuestions || []), ...(dup.relatedQuestions || [])])];
+                    // Merge questionIds (deduplicated)
+                    if (dup.questionIds?.length) {
+                        kept.questionIds = [...new Set([...(kept.questionIds || []), ...dup.questionIds])];
+                    }
+                    // Merge analysisUsage (deduplicated)
+                    kept.analysisUsage = [...new Set([...(kept.analysisUsage || []), ...(dup.analysisUsage || [])])];
+                    // Prefer element with more complete calculationDefinition
+                    if (!kept.calculationDefinition?.formula?.componentFields?.length &&
+                        dup.calculationDefinition?.formula?.componentFields?.length) {
+                        kept.calculationDefinition = dup.calculationDefinition;
+                    }
+                    console.log(`   🔄 [Dedup] Merged duplicate: "${dup.elementName}" into "${kept.elementName}"`);
+                    toRemove.push(i);
+                } else {
+                    seenNames.set(normalized, i);
+                }
+            }
+
+            for (const idx of toRemove.reverse()) {
+                elements.splice(idx, 1);
+            }
+            if (toRemove.length > 0) {
+                console.log(`✅ [Dedup] Removed ${toRemove.length} duplicate elements, ${elements.length} remain`);
+            }
+        }
+
         return elements;
+    }
+
+    // ========================================================================
+    // Fix 1B: Atomic Decomposition of Composite Elements
+    // ========================================================================
+
+    /**
+     * Decompose composite/derived elements into atomic sub-elements that map
+     * directly to dataset columns. Uses the Business Definition Registry to
+     * find componentFieldDescriptors for known KPIs.
+     *
+     * Example: "Turnover Rate" (composite) → sub-elements:
+     *   - "Employees Left" (derived from termination_date column)
+     *   - "Total Employees" (aggregated from employee_id column)
+     *   - "Period Date" (direct from roster_date column)
+     */
+    private async decomposeCompositeElements(
+        elements: RequiredDataElement[],
+        datasetSchema?: Record<string, any>
+    ): Promise<RequiredDataElement[]> {
+        const expandedElements: RequiredDataElement[] = [];
+        const schemaColumns = datasetSchema ? Object.keys(datasetSchema) : [];
+        const schemaColumnsLower = schemaColumns.map(c => c.toLowerCase());
+
+        for (const element of elements) {
+            // Always include the original element
+            expandedElements.push(element);
+
+            const calcType = element.calculationDefinition?.calculationType;
+            if (!calcType || calcType === 'direct') {
+                // Direct elements are already atomic
+                element.isAtomic = true;
+                element.decompositionLevel = element.decompositionLevel ?? 0;
+                continue;
+            }
+
+            // Only decompose derived/aggregated/composite elements
+            if (!['derived', 'aggregated', 'composite'].includes(calcType)) {
+                continue;
+            }
+
+            element.isAtomic = false;
+            element.decompositionLevel = element.decompositionLevel ?? 0;
+
+            // Try to find in business definition registry
+            let descriptors: any[] | undefined;
+            try {
+                const { businessDefinitionRegistry } = await import('../business-definition-registry');
+                const lookupResult = await businessDefinitionRegistry.lookupDefinition(
+                    element.elementName,
+                    {}
+                );
+                const cfDescriptors = lookupResult.definition?.componentFieldDescriptors as any[] | undefined;
+                if (lookupResult.found && cfDescriptors?.length) {
+                    descriptors = cfDescriptors;
+                    console.log(`📋 [Decomposition] Found ${descriptors.length} descriptors for "${element.elementName}" via ${lookupResult.source} match`);
+                }
+            } catch (regErr: any) {
+                console.warn(`⚠️ [Decomposition] Registry lookup failed for "${element.elementName}": ${regErr.message}`);
+            }
+
+            // Also check if element.calculationDefinition.notes contains a registry key
+            if (!descriptors?.length) {
+                const registryKeyMatch = element.calculationDefinition?.notes?.match(/Registry-matched KPI:\s*(\S+)/);
+                if (registryKeyMatch) {
+                    try {
+                        const { businessDefinitionRegistry } = await import('../business-definition-registry');
+                        const lookupResult = await businessDefinitionRegistry.lookupDefinition(registryKeyMatch[1]);
+                        const cfDescriptors2 = lookupResult.definition?.componentFieldDescriptors as any[] | undefined;
+                        if (lookupResult.found && cfDescriptors2?.length) {
+                            descriptors = cfDescriptors2;
+                            console.log(`📋 [Decomposition] Found ${descriptors.length} descriptors via registry key "${registryKeyMatch[1]}"`);
+                        }
+                    } catch { /* non-blocking */ }
+                }
+            }
+
+            if (descriptors && descriptors.length > 0) {
+                // Decompose using registry descriptors
+                for (const descriptor of descriptors) {
+                    const subElementName = this.humanizeAbstractName(descriptor.abstractName);
+
+                    // Try to match to actual dataset columns using descriptor patterns
+                    const { matchedColumn, matchConfidence } = this.matchDescriptorToColumn(
+                        descriptor,
+                        schemaColumns,
+                        schemaColumnsLower
+                    );
+
+                    // Determine calculationType based on columnMatchType
+                    let subCalcType: RequiredDataElement['calculationDefinition'] = {
+                        calculationType: 'direct',
+                        notes: descriptor.derivationLogic || `Atomic component of ${element.elementName}`
+                    };
+                    if (descriptor.columnMatchType === 'date_presence_indicator') {
+                        subCalcType = {
+                            calculationType: 'derived',
+                            formula: {
+                                businessDescription: descriptor.semanticMeaning,
+                                componentFields: matchedColumn ? [matchedColumn] : [],
+                                pseudoCode: `IF ${matchedColumn || descriptor.abstractName} IS NOT NULL THEN 1 ELSE 0`
+                            },
+                            notes: `Derived indicator: ${descriptor.nullMeaning || 'NULL = no event'} / ${descriptor.presenceMeaning || 'Non-NULL = event occurred'}`
+                        };
+                    } else if (descriptor.columnMatchType === 'count_distinct') {
+                        subCalcType = {
+                            calculationType: 'aggregated',
+                            formula: {
+                                businessDescription: descriptor.semanticMeaning,
+                                componentFields: matchedColumn ? [matchedColumn] : [],
+                                aggregationMethod: 'count'
+                            },
+                            notes: 'Count distinct values'
+                        };
+                    } else if (matchedColumn) {
+                        subCalcType = {
+                            calculationType: 'direct',
+                            formula: {
+                                businessDescription: descriptor.semanticMeaning,
+                                componentFields: [matchedColumn]
+                            },
+                            notes: 'Direct column mapping'
+                        };
+                    }
+
+                    const subElement: RequiredDataElement = {
+                        elementId: `elem-${nanoid(6)}`,
+                        elementName: subElementName,
+                        description: descriptor.semanticMeaning || `Component of ${element.elementName}`,
+                        dataType: this.mapDescriptorDataType(descriptor.dataTypeExpected),
+                        purpose: `Atomic component needed to calculate ${element.elementName}`,
+                        analysisUsage: element.analysisUsage,
+                        required: element.required,
+                        relatedQuestions: element.relatedQuestions || [],
+                        questionIds: element.questionIds,
+                        parentElementId: element.elementId,
+                        isAtomic: descriptor.columnMatchType !== 'date_presence_indicator' || !!matchedColumn,
+                        decompositionLevel: (element.decompositionLevel ?? 0) + 1,
+                        sourceField: matchedColumn || undefined,
+                        sourceColumn: matchedColumn || undefined,
+                        sourceAvailable: !!matchedColumn,
+                        transformationRequired: descriptor.columnMatchType !== 'direct' && descriptor.columnMatchType !== 'count_distinct',
+                        calculationDefinition: subCalcType,
+                        qualityRequirements: { completeness: element.required ? 90 : 70 }
+                    };
+
+                    expandedElements.push(subElement);
+                    console.log(`   ➕ [Decomposition] Sub-element: "${subElementName}" ${matchedColumn ? `→ ${matchedColumn} (${matchConfidence}%)` : '(no column match)'}`);
+                }
+            } else if (element.calculationDefinition?.formula?.componentFields?.length) {
+                // No registry match — decompose from componentFields directly
+                for (const field of element.calculationDefinition.formula.componentFields) {
+                    const subElementName = this.humanizeAbstractName(field);
+
+                    // Try direct column match
+                    const fieldLower = field.toLowerCase();
+                    const matchedColumn = schemaColumns.find(
+                        col => col.toLowerCase() === fieldLower
+                    ) || schemaColumns.find(
+                        col => col.toLowerCase().includes(fieldLower) || fieldLower.includes(col.toLowerCase())
+                    );
+
+                    const subElement: RequiredDataElement = {
+                        elementId: `elem-${nanoid(6)}`,
+                        elementName: subElementName,
+                        description: `Component field for ${element.elementName}`,
+                        dataType: 'numeric',
+                        purpose: `Required to calculate ${element.elementName}`,
+                        analysisUsage: element.analysisUsage,
+                        required: element.required,
+                        relatedQuestions: element.relatedQuestions || [],
+                        questionIds: element.questionIds,
+                        parentElementId: element.elementId,
+                        isAtomic: true,
+                        decompositionLevel: (element.decompositionLevel ?? 0) + 1,
+                        sourceField: matchedColumn || undefined,
+                        sourceColumn: matchedColumn || undefined,
+                        sourceAvailable: !!matchedColumn,
+                        transformationRequired: false,
+                        calculationDefinition: {
+                            calculationType: 'direct',
+                            formula: {
+                                businessDescription: `Direct mapping of ${field}`,
+                                componentFields: matchedColumn ? [matchedColumn] : [field]
+                            }
+                        },
+                        qualityRequirements: { completeness: element.required ? 90 : 70 }
+                    };
+
+                    expandedElements.push(subElement);
+                    console.log(`   ➕ [Decomposition] Sub-element (from componentField): "${subElementName}" ${matchedColumn ? `→ ${matchedColumn}` : '(no match)'}`);
+                }
+            }
+        }
+
+        return expandedElements;
+    }
+
+    /**
+     * Convert abstract field name to human-readable title.
+     * e.g., "employees_left" → "Employees Left"
+     */
+    private humanizeAbstractName(name: string): string {
+        return name
+            .replace(/[_-]/g, ' ')
+            .replace(/([a-z])([A-Z])/g, '$1 $2')
+            .split(' ')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+            .join(' ');
+    }
+
+    /**
+     * Map descriptor's dataTypeExpected to RequiredDataElement's dataType.
+     */
+    private mapDescriptorDataType(expected?: string): RequiredDataElement['dataType'] {
+        if (!expected) return 'numeric';
+        const lower = expected.toLowerCase();
+        if (lower.includes('date') || lower.includes('time')) return 'datetime';
+        if (lower.includes('identifier') || lower.includes('id') || lower.includes('text') || lower.includes('string')) return 'text';
+        if (lower.includes('categorical') || lower.includes('category')) return 'categorical';
+        if (lower.includes('boolean') || lower.includes('bool')) return 'boolean';
+        return 'numeric';
+    }
+
+    /**
+     * Match a componentFieldDescriptor to an actual dataset column using its
+     * columnMatchPatterns, columnMatchType, and semantic meaning.
+     */
+    private matchDescriptorToColumn(
+        descriptor: any,
+        schemaColumns: string[],
+        schemaColumnsLower: string[]
+    ): { matchedColumn: string | null; matchConfidence: number } {
+        const patterns: string[] = descriptor.columnMatchPatterns || [];
+
+        // 1. Exact match against patterns
+        for (const pattern of patterns) {
+            const patternLower = pattern.toLowerCase();
+            const idx = schemaColumnsLower.indexOf(patternLower);
+            if (idx !== -1) {
+                return { matchedColumn: schemaColumns[idx], matchConfidence: 100 };
+            }
+        }
+
+        // 2. Substring match: column name contains a pattern word
+        for (const pattern of patterns) {
+            const patternLower = pattern.toLowerCase();
+            for (let i = 0; i < schemaColumnsLower.length; i++) {
+                if (schemaColumnsLower[i].includes(patternLower) || patternLower.includes(schemaColumnsLower[i])) {
+                    return { matchedColumn: schemaColumns[i], matchConfidence: 85 };
+                }
+            }
+        }
+
+        // 3. Word overlap: column name words overlap with pattern words
+        for (const pattern of patterns) {
+            const patternWords = pattern.toLowerCase().split(/[_\s-]/).filter(w => w.length > 2);
+            for (let i = 0; i < schemaColumnsLower.length; i++) {
+                const colWords = schemaColumnsLower[i].split(/[_\s-]/).filter(w => w.length > 2);
+                const overlap = patternWords.some(pw => colWords.some(cw => pw.includes(cw) || cw.includes(pw)));
+                if (overlap) {
+                    return { matchedColumn: schemaColumns[i], matchConfidence: 65 };
+                }
+            }
+        }
+
+        return { matchedColumn: null, matchConfidence: 0 };
     }
 
     // ========================================================================
