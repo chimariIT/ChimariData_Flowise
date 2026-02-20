@@ -489,6 +489,31 @@ router.post('/execute', ensureAuthenticated, async (req, res) => {
             console.log(`📋 [Artifacts] Built ${comprehensiveResults.executiveSummary.answeredQuestions.length} answered questions for artifact generation`);
           }
 
+          // Add per-analysis breakdown for PPTX slides (from legacyResults stored in DB)
+          if (results.perAnalysisBreakdown) {
+            comprehensiveResults.perAnalysisBreakdown = Object.fromEntries(
+              Object.entries(results.perAnalysisBreakdown as Record<string, any>).map(([id, r]) => [id, {
+                status: r.status,
+                insights: (r.insights || []).slice(0, 3).map((i: any) => ({
+                  title: i.title || '',
+                  description: i.description || ''
+                })),
+                error: r.error,
+                executionTimeMs: r.executionTimeMs
+              }])
+            );
+          }
+          if (results.analysisStatuses) {
+            comprehensiveResults.analysisStatuses = (results.analysisStatuses as any[]).map((s: any) => ({
+              analysisId: s.analysisId,
+              analysisName: s.analysisName || 'Unknown',
+              analysisType: s.analysisType || 'unknown',
+              status: s.status,
+              insightCount: s.insightCount || 0,
+              errorMessage: s.errorMessage
+            }));
+          }
+
           const artifacts = await artifactGenerator.generateArtifacts({
             projectId,
             projectName: project.name || projectId, // Pass project name for folder structure

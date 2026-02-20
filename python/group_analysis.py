@@ -3,38 +3,59 @@
 Group Analysis Script
 Per-group descriptive statistics and profiling.
 Identifies distinctive features per group vs overall population.
+
+Dual-engine: Polars (fast path) / Pandas (fallback).
 """
 
 import json
 import sys
-import pandas as pd
-import numpy as np
-from scipy import stats
 import warnings
 warnings.filterwarnings('ignore')
+
+from engine_utils import (
+    load_dataframe, to_pandas, POLARS_AVAILABLE, PANDAS_AVAILABLE,
+    select_numeric_columns, select_categorical_columns,
+    safe_float, safe_int, filter_rows, drop_nulls,
+    value_counts, unique_count, null_count, row_count,
+    get_columns, column_to_list, to_numpy_array
+)
+
+if POLARS_AVAILABLE:
+    import polars as pl
+
+if PANDAS_AVAILABLE:
+    import pandas as pd
+    import numpy as np
 
 
 def perform_group_analysis(config):
     """Perform segment/cohort profiling with cross-group comparisons"""
     try:
-        # Load data
-        data_path = config['data_path']
-        data = pd.read_json(data_path)
+        # Load data via dual-engine dispatch
+        data, engine_used = load_dataframe(config)
 
         group_column = config.get('group_column')
         analysis_columns = config.get('columns')
 
         # Auto-detect grouping column if not specified
+        # (uses Pandas — small detection op, relies on dtype checks)
         if not group_column:
-            group_column = _detect_group_column(data)
+            pd_data = to_pandas(data)
+            group_column = _detect_group_column(pd_data)
 
-        if not group_column or group_column not in data.columns:
+        all_columns = get_columns(data, engine_used)
+        if not group_column or group_column not in all_columns:
             return {
                 'success': False,
-                'error': f'No suitable grouping column found. Available columns: {list(data.columns)}'
+                'error': f'No suitable grouping column found. Available columns: {all_columns}'
             }
 
-        groups = data[group_column].dropna().unique()
+        # Get unique groups
+        if engine_used == 'polars' and POLARS_AVAILABLE:
+            groups = data[group_column].drop_nulls().unique().to_list()
+        else:
+            groups = data[group_column].dropna().unique().tolist()
+
         n_groups = len(groups)
 
         if n_groups < 2:
@@ -50,9 +71,9 @@ def perform_group_analysis(config):
             }
 
         # Determine columns to analyze
-        numeric_cols = data.select_dtypes(include=[np.number]).columns.tolist()
+        numeric_cols = select_numeric_columns(data, engine_used)
         numeric_cols = [c for c in numeric_cols if c != group_column]
-        categorical_cols = data.select_dtypes(include=['object', 'category']).columns.tolist()
+        categorical_cols = select_categorical_columns(data, engine_used)
         categorical_cols = [c for c in categorical_cols if c != group_column]
 
         if analysis_columns:
@@ -63,25 +84,41 @@ def perform_group_analysis(config):
         numeric_cols = numeric_cols[:20]
         categorical_cols = categorical_cols[:10]
 
+        total_rows = row_count(data, engine_used)
+
         # Overall statistics
         overall_stats = {}
         for col in numeric_cols:
-            col_data = data[col].dropna()
-            if len(col_data) == 0:
+            cleaned = drop_nulls(data, col, engine_used)
+            n_cleaned = row_count(cleaned, engine_used)
+            if n_cleaned == 0:
                 continue
-            overall_stats[col] = {
-                'mean': float(col_data.mean()),
-                'median': float(col_data.median()),
-                'std': float(col_data.std()),
-                'min': float(col_data.min()),
-                'max': float(col_data.max())
-            }
+
+            if engine_used == 'polars' and POLARS_AVAILABLE:
+                col_series = cleaned[col]
+                overall_stats[col] = {
+                    'mean': safe_float(col_series.mean()),
+                    'median': safe_float(col_series.median()),
+                    'std': safe_float(col_series.std()),
+                    'min': safe_float(col_series.min()),
+                    'max': safe_float(col_series.max())
+                }
+            else:
+                col_data = cleaned[col]
+                overall_stats[col] = {
+                    'mean': float(col_data.mean()),
+                    'median': float(col_data.median()),
+                    'std': float(col_data.std()),
+                    'min': float(col_data.min()),
+                    'max': float(col_data.max())
+                }
 
         results = {
             'success': True,
+            'engine_used': engine_used,
             'group_column': group_column,
             'n_groups': int(n_groups),
-            'n_observations': int(len(data)),
+            'n_observations': int(total_rows),
             'overall_stats': overall_stats,
             'group_profiles': {},
             'group_comparisons': [],
@@ -91,12 +128,13 @@ def perform_group_analysis(config):
 
         # Per-group profiling
         for g in groups:
-            g_data = data[data[group_column] == g]
+            g_data = filter_rows(data, group_column, g, engine_used)
             g_key = str(g)
+            g_rows = row_count(g_data, engine_used)
 
             profile = {
-                'n': int(len(g_data)),
-                'percentage': float(len(g_data) / len(data) * 100),
+                'n': int(g_rows),
+                'percentage': float(g_rows / total_rows * 100),
                 'numeric': {},
                 'categorical': {},
                 'distinctive': []
@@ -104,25 +142,37 @@ def perform_group_analysis(config):
 
             # Numeric stats per group
             for col in numeric_cols:
-                col_data = g_data[col].dropna()
-                if len(col_data) == 0:
+                g_cleaned = drop_nulls(g_data, col, engine_used)
+                n_cleaned = row_count(g_cleaned, engine_used)
+                if n_cleaned == 0:
                     continue
 
-                g_mean = float(col_data.mean())
-                g_median = float(col_data.median())
-                g_std = float(col_data.std())
+                if engine_used == 'polars' and POLARS_AVAILABLE:
+                    col_series = g_cleaned[col]
+                    g_mean = safe_float(col_series.mean())
+                    g_median = safe_float(col_series.median())
+                    g_std = safe_float(col_series.std())
+                    g_min = safe_float(col_series.min())
+                    g_max = safe_float(col_series.max())
+                else:
+                    col_data = g_cleaned[col]
+                    g_mean = float(col_data.mean())
+                    g_median = float(col_data.median())
+                    g_std = float(col_data.std())
+                    g_min = float(col_data.min())
+                    g_max = float(col_data.max())
 
                 # Compare to overall
                 overall_mean = overall_stats.get(col, {}).get('mean', g_mean)
                 overall_std = overall_stats.get(col, {}).get('std', 1)
-                deviation = (g_mean - overall_mean) / overall_std if overall_std > 0 else 0
+                deviation = (g_mean - overall_mean) / overall_std if overall_std and overall_std > 0 else 0
 
                 profile['numeric'][col] = {
                     'mean': g_mean,
                     'median': g_median,
                     'std': g_std,
-                    'min': float(col_data.min()),
-                    'max': float(col_data.max()),
+                    'min': g_min,
+                    'max': g_max,
                     'deviation_from_overall': float(deviation),
                     'direction': 'above' if deviation > 0.3 else 'below' if deviation < -0.3 else 'similar'
                 }
@@ -136,15 +186,20 @@ def perform_group_analysis(config):
 
             # Categorical mode per group
             for col in categorical_cols:
-                col_data = g_data[col].dropna()
-                if len(col_data) == 0:
+                vc = value_counts(g_data, col, engine_used, top_n=10)
+                if not vc:
                     continue
-                vc = col_data.value_counts()
+                top_items = list(vc.items())
+                mode_val = top_items[0][0] if top_items else ''
+                mode_count = top_items[0][1] if top_items else 0
+                n_unique = unique_count(g_data, col, engine_used)
+                n_non_null = g_rows - null_count(g_data, col, engine_used)
+
                 profile['categorical'][col] = {
-                    'mode': str(vc.index[0]),
-                    'mode_percentage': float(vc.iloc[0] / len(col_data) * 100),
-                    'n_unique': int(col_data.nunique()),
-                    'top_3': {str(k): int(v) for k, v in vc.head(3).items()}
+                    'mode': str(mode_val),
+                    'mode_percentage': float(mode_count / n_non_null * 100) if n_non_null > 0 else 0.0,
+                    'n_unique': int(n_unique),
+                    'top_3': {str(k): int(v) for k, v in top_items[:3]}
                 }
 
             results['group_profiles'][g_key] = profile
@@ -153,9 +208,14 @@ def perform_group_analysis(config):
         for col in numeric_cols[:10]:
             group_means = {}
             for g in groups:
-                g_data = data[data[group_column] == g][col].dropna()
-                if len(g_data) > 0:
-                    group_means[str(g)] = float(g_data.mean())
+                g_data = filter_rows(data, group_column, g, engine_used)
+                g_cleaned = drop_nulls(g_data, col, engine_used)
+                n_cleaned = row_count(g_cleaned, engine_used)
+                if n_cleaned > 0:
+                    if engine_used == 'polars' and POLARS_AVAILABLE:
+                        group_means[str(g)] = safe_float(g_cleaned[col].mean())
+                    else:
+                        group_means[str(g)] = float(g_cleaned[col].mean())
 
             if len(group_means) >= 2:
                 sorted_groups = sorted(group_means.items(), key=lambda x: x[1], reverse=True)
@@ -179,11 +239,15 @@ def perform_group_analysis(config):
             if profile['distinctive']:
                 results['distinctive_features'][g_key] = profile['distinctive'][:5]
 
-        # Summary
+        # Summary — use engine-agnostic helpers
+        group_sizes = {str(g): row_count(filter_rows(data, group_column, g, engine_used), engine_used) for g in groups}
+        largest_group = max(group_sizes, key=group_sizes.get)
+        smallest_group = min(group_sizes, key=group_sizes.get)
+
         results['summary'] = {
             'n_groups': int(n_groups),
-            'largest_group': str(max(groups, key=lambda g: len(data[data[group_column] == g]))),
-            'smallest_group': str(min(groups, key=lambda g: len(data[data[group_column] == g]))),
+            'largest_group': largest_group,
+            'smallest_group': smallest_group,
             'most_distinctive_group': max(
                 results['group_profiles'].items(),
                 key=lambda x: len(x[1].get('distinctive', [])),
@@ -210,7 +274,7 @@ def perform_group_analysis(config):
 
 
 def _detect_group_column(data):
-    """Auto-detect the best grouping column"""
+    """Auto-detect the best grouping column (Pandas-only — small detection op)"""
     best_col = None
     best_score = -1
 

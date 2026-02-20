@@ -1,54 +1,114 @@
 #!/usr/bin/env python3
 """
 Correlation Analysis Script
-Uses pandas and scipy for comprehensive correlation analysis
+Uses dual-engine (Polars/Pandas) with scipy for p-value calculations.
+
+Polars handles: loading, numeric column selection, dropna.
+Pandas/scipy handles: correlation matrix, p-values, multicollinearity.
 """
 
 import json
 import sys
-import pandas as pd
 import numpy as np
 from scipy import stats
 import warnings
 warnings.filterwarnings('ignore')
 
+from engine_utils import (
+    load_dataframe, to_pandas, POLARS_AVAILABLE, PANDAS_AVAILABLE,
+    select_numeric_columns, filter_columns, get_columns, row_count
+)
+
+if POLARS_AVAILABLE:
+    import polars as pl
+    import polars.selectors as cs
+
 
 def perform_correlation_analysis(config):
     """Perform comprehensive correlation analysis"""
     try:
-        # Load data
-        data_path = config['data_path']
-        data = pd.read_json(data_path)
+        # Load data via dual-engine dispatch
+        data, engine_used = load_dataframe(config)
 
         method = config.get('method', 'pearson')
 
         # Phase 4C-3: Accept explicit column list from AnalysisDataPreparer
         columns = config.get('columns')
-        if columns:
-            available = [c for c in columns if c in data.columns]
-            if available:
-                numeric_data = data[available].select_dtypes(include=[np.number])
+
+        if engine_used == 'polars' and POLARS_AVAILABLE:
+            # Polars fast path: select numeric columns, filter, dropna
+            all_cols = get_columns(data, engine_used)
+
+            if columns:
+                available = [c for c in columns if c in all_cols]
+                if available:
+                    data_subset = data.select(available)
+                    # Select only numeric from subset
+                    try:
+                        numeric_data_pl = data_subset.select(cs.numeric())
+                    except Exception:
+                        numeric_data_pl = data_subset.select([c for c in data_subset.columns
+                                                              if data_subset[c].dtype.is_numeric()])
+                else:
+                    try:
+                        numeric_data_pl = data.select(cs.numeric())
+                    except Exception:
+                        numeric_data_pl = data.select([c for c in data.columns
+                                                       if data[c].dtype.is_numeric()])
+            else:
+                try:
+                    numeric_data_pl = data.select(cs.numeric())
+                except Exception:
+                    numeric_data_pl = data.select([c for c in data.columns
+                                                   if data[c].dtype.is_numeric()])
+
+            if numeric_data_pl.shape[1] < 2:
+                return {
+                    'success': False,
+                    'error': 'Need at least 2 numeric columns for correlation analysis'
+                }
+
+            # Drop nulls across all numeric columns (Polars fast path)
+            numeric_data_pl = numeric_data_pl.drop_nulls()
+
+            if len(numeric_data_pl) == 0:
+                return {
+                    'success': False,
+                    'error': 'No data remaining after removing missing values'
+                }
+
+            # Convert to Pandas for corr() matrix and p-value calculations
+            # (scipy-heavy — Polars doesn't have native corr matrix)
+            import sys as _sys
+            print(f"✅ [Engine] Polars loaded {len(numeric_data_pl)} rows, converting to Pandas for correlation matrix", file=_sys.stderr)
+            numeric_data = numeric_data_pl.to_pandas()
+
+        else:
+            # Pandas path (original behavior)
+            if columns:
+                available = [c for c in columns if c in data.columns]
+                if available:
+                    numeric_data = data[available].select_dtypes(include=[np.number])
+                else:
+                    numeric_data = data.select_dtypes(include=[np.number])
             else:
                 numeric_data = data.select_dtypes(include=[np.number])
-        else:
-            # Select only numeric columns (original behavior)
-            numeric_data = data.select_dtypes(include=[np.number])
 
-        if numeric_data.shape[1] < 2:
-            return {
-                'success': False,
-                'error': 'Need at least 2 numeric columns for correlation analysis'
-            }
+            if numeric_data.shape[1] < 2:
+                return {
+                    'success': False,
+                    'error': 'Need at least 2 numeric columns for correlation analysis'
+                }
 
-        # Handle missing values
-        numeric_data = numeric_data.dropna()
+            numeric_data = numeric_data.dropna()
 
-        if len(numeric_data) == 0:
-            return {
-                'success': False,
-                'error': 'No data remaining after removing missing values'
-            }
+            if len(numeric_data) == 0:
+                return {
+                    'success': False,
+                    'error': 'No data remaining after removing missing values'
+                }
 
+        # From here on, numeric_data is always a Pandas DataFrame
         # Calculate correlation matrix
         if method == 'pearson':
             corr_matrix = numeric_data.corr(method='pearson')
@@ -65,54 +125,48 @@ def perform_correlation_analysis(config):
         # Calculate p-values for each correlation
         p_values = {}
         n = len(numeric_data)
-        columns = numeric_data.columns.tolist()
+        col_names = numeric_data.columns.tolist()
 
-        for i, col1 in enumerate(columns):
+        for i, col1 in enumerate(col_names):
             p_values[col1] = {}
-            for col2 in columns:
+            for col2 in col_names:
                 if col1 == col2:
                     p_values[col1][col2] = 0.0
                 else:
-                    # Calculate p-value based on correlation coefficient
                     r = corr_matrix.loc[col1, col2]
 
                     if method == 'pearson':
-                        # Pearson p-value
                         t_stat = r * np.sqrt(n - 2) / np.sqrt(1 - r ** 2) if abs(r) < 1 else 0
                         p_val = 2 * (1 - stats.t.cdf(abs(t_stat), n - 2))
                     elif method == 'spearman':
-                        # Spearman p-value (approximation)
                         t_stat = r * np.sqrt(n - 2) / np.sqrt(1 - r ** 2) if abs(r) < 1 else 0
                         p_val = 2 * (1 - stats.t.cdf(abs(t_stat), n - 2))
                     else:
                         # Kendall p-value using normal approximation
-                        # P1-8 FIX: Replace placeholder with actual calculation
-                        # For Kendall's tau, the z-statistic is tau / sqrt(2(2n+5)/(9n(n-1)))
                         if n >= 10:
                             var_tau = (2 * (2 * n + 5)) / (9 * n * (n - 1))
                             z_stat = r / np.sqrt(var_tau) if var_tau > 0 else 0
                             p_val = 2 * (1 - stats.norm.cdf(abs(z_stat)))
                         else:
-                            # For small samples, use scipy's kendalltau directly
                             try:
                                 _, p_val = stats.kendalltau(
-                                    numeric_df[col1].dropna().values[:n],
-                                    numeric_df[col2].dropna().values[:n]
+                                    numeric_data[col1].dropna().values[:n],
+                                    numeric_data[col2].dropna().values[:n]
                                 )
                                 p_val = float(p_val) if not np.isnan(p_val) else 1.0
                             except Exception:
-                                p_val = 1.0  # Conservative: assume not significant
+                                p_val = 1.0
 
                     p_values[col1][col2] = float(p_val)
 
         # Find strong correlations
         strong_correlations = []
-        for i, col1 in enumerate(columns):
-            for col2 in columns[i + 1:]:
+        for i, col1 in enumerate(col_names):
+            for col2 in col_names[i + 1:]:
                 corr_value = corr_matrix.loc[col1, col2]
                 p_value = p_values[col1][col2]
 
-                if abs(corr_value) > 0.5:  # Strong correlation threshold
+                if abs(corr_value) > 0.5:
                     strong_correlations.append({
                         'variable1': col1,
                         'variable2': col2,
@@ -123,23 +177,22 @@ def perform_correlation_analysis(config):
                         'direction': 'positive' if corr_value > 0 else 'negative'
                     })
 
-        # Sort by absolute correlation value
         strong_correlations.sort(key=lambda x: abs(x['correlation']), reverse=True)
 
         # Summary statistics
+        upper_tri = corr_matrix.values[np.triu_indices_from(corr_matrix.values, k=1)]
         summary = {
-            'n_variables': len(columns),
+            'n_variables': len(col_names),
             'n_observations': int(n),
             'method': method,
-            'average_correlation': float(np.mean(np.abs(corr_matrix.values[np.triu_indices_from(corr_matrix.values, k=1)]))),
-            'max_correlation': float(np.max(np.abs(corr_matrix.values[np.triu_indices_from(corr_matrix.values, k=1)]))),
+            'average_correlation': float(np.mean(np.abs(upper_tri))),
+            'max_correlation': float(np.max(np.abs(upper_tri))) if len(upper_tri) > 0 else 0.0,
             'n_strong_correlations': len([c for c in strong_correlations if c['strength'] == 'strong'])
         }
 
-        # Detect multicollinearity (VIF-like metric)
+        # Detect multicollinearity
         multicollinearity_warnings = []
-        for col in columns:
-            # Count how many strong correlations this variable has
+        for col in col_names:
             strong_corr_count = sum(1 for c in strong_correlations
                                    if (c['variable1'] == col or c['variable2'] == col)
                                    and c['strength'] == 'strong')
@@ -150,21 +203,24 @@ def perform_correlation_analysis(config):
                     'warning': f'{col} is highly correlated with {strong_corr_count} other variables'
                 })
 
-        # Phase 4C-1: Pass through business context for evidence chain
         result = {
             'success': True,
+            'engine_used': engine_used,
             'method': method,
             'correlation_matrix': corr_dict,
             'p_values': p_values,
             'strong_correlations': strong_correlations,
             'summary': summary,
             'multicollinearity_warnings': multicollinearity_warnings,
-            'variables': columns
+            'variables': col_names
         }
+
+        # Phase 4C-1: Pass through business context for evidence chain
         business_context = config.get('business_context', {})
         if business_context:
             result['business_context'] = business_context
             result['question_ids'] = business_context.get('question_ids', [])
+
         return result
 
     except Exception as e:

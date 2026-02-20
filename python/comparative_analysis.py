@@ -3,6 +3,8 @@
 Comparative Analysis Script
 Cross-group statistical comparison: t-tests, ANOVA, chi-square, effect sizes.
 Auto-detects grouping columns and comparison variables.
+
+Dual-engine: Polars for fast loading, Pandas/scipy for all statistical tests.
 """
 
 import json
@@ -13,13 +15,16 @@ from scipy import stats
 import warnings
 warnings.filterwarnings('ignore')
 
+from engine_utils import load_dataframe, to_pandas
+
 
 def perform_comparative_analysis(config):
     """Perform cross-group statistical comparisons"""
     try:
-        # Load data
-        data_path = config['data_path']
-        data = pd.read_json(data_path)
+        # Load data via dual-engine dispatch, then convert to Pandas
+        # (scipy-heavy — all statistical tests require Pandas/numpy)
+        data, engine_used = load_dataframe(config)
+        data = to_pandas(data)
 
         group_column = config.get('group_column')
         comparison_columns = config.get('comparison_columns')
@@ -64,6 +69,7 @@ def perform_comparative_analysis(config):
 
         results = {
             'success': True,
+            'engine_used': engine_used,
             'group_column': group_column,
             'n_groups': int(n_groups),
             'group_sizes': {str(g): int(data[data[group_column] == g].shape[0]) for g in groups},

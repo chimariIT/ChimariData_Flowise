@@ -3,6 +3,8 @@
 Time Series Analysis Script
 Trend decomposition, seasonality detection, stationarity tests, ARIMA forecasting.
 Auto-detects datetime and target columns.
+
+Dual-engine: Polars for fast loading, Pandas/statsmodels for all time series ops.
 """
 
 import json
@@ -13,13 +15,15 @@ from scipy import stats
 import warnings
 warnings.filterwarnings('ignore')
 
+from engine_utils import load_dataframe, to_pandas
+
 
 def perform_time_series_analysis(config):
     """Perform comprehensive time series analysis"""
     try:
-        # Load data
-        data_path = config['data_path']
-        data = pd.read_json(data_path)
+        # Load data via dual-engine dispatch, convert to Pandas for statsmodels
+        data, engine_used = load_dataframe(config)
+        data = to_pandas(data)
 
         time_column = config.get('time_column')
         target_column = config.get('target_column')
@@ -74,6 +78,7 @@ def perform_time_series_analysis(config):
 
         results = {
             'success': True,
+            'engine_used': engine_used,
             'time_column': time_column,
             'target_column': target_column,
             'n_periods': int(len(ts)),

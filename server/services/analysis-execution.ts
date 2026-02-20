@@ -1373,7 +1373,12 @@ export class AnalysisExecutionService {
             totalColumns: results.metadata?.totalColumns || 0,
             analysisTypes: results.metadata?.analysisTypes || request.analysisTypes || [],
             executionTimeMs: results.metadata?.executionTimeMs || 0
-          }
+          },
+          // Note: perAnalysisBreakdown and analysisStatuses are only populated
+          // in the executeComprehensiveAnalysis() path, not in this legacy path.
+          // The PPTX generator handles undefined gracefully (skips those slides).
+          perAnalysisBreakdown: undefined,
+          analysisStatuses: undefined
         };
 
         // P0-12 FIX: Check for existing artifacts to prevent duplicate generation on retry
@@ -2959,24 +2964,128 @@ export class AnalysisExecutionService {
         datasetCount: request.datasetIds?.length || 1,
         executionTime: `${(results.metadata.executionTimeMs / 1000).toFixed(1)} seconds`,
         qualityScore: results.dataQualityReport.overallScore,
-        // FIX 3C: Generate trendData from insights for chart rendering
-        trendData: legacyInsights.slice(0, 10).map((insight, idx) => ({
-          label: insight.title?.substring(0, 30) || `Insight ${idx + 1}`,
-          value: insight.confidence ?? (insight as any).score ?? 0,
-          category: insight.category || 'general'
-        })),
-        // FIX 3C: Generate categoryBreakdown from insight categories
-        categoryBreakdown: (() => {
-          const catCounts: Record<string, number> = {};
-          for (const insight of legacyInsights) {
-            const cat = insight.category || 'general';
-            catCounts[cat] = (catCounts[cat] || 0) + 1;
+        // Build chart data from ACTUAL analysis results (not insight meta-info)
+        trendData: (() => {
+          const trend: Array<{label: string; value: number; category: string}> = [];
+          const colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4', '#ec4899', '#84cc16'];
+
+          if (usePerAnalysisExecution) {
+            for (const [, result] of perAnalysisResults) {
+              if (result.status !== 'completed' || !(result as any).rawResult) continue;
+              const raw = (result as any).rawResult;
+
+              // 1. Column means from descriptive stats
+              const descStats = raw.descriptiveStats || raw.numeric_variables ||
+                raw.statisticalAnalysisReport?.descriptiveStats;
+              if (descStats && typeof descStats === 'object') {
+                const entries: any[] = Array.isArray(descStats)
+                  ? descStats
+                  : Object.entries(descStats).map(([col, s]: [string, any]) => ({
+                      column: col, mean: s?.basic_statistics?.mean ?? s?.mean
+                    }));
+                for (const stat of entries.slice(0, 8)) {
+                  const colName = stat.column || stat.name || 'unknown';
+                  const meanVal = stat.mean ?? stat.basic_statistics?.mean;
+                  if (meanVal !== undefined && !isNaN(Number(meanVal)) && trend.length < 12) {
+                    trend.push({
+                      label: String(colName).substring(0, 25),
+                      value: Number(Number(meanVal).toFixed(2)),
+                      category: 'descriptive'
+                    });
+                  }
+                }
+              }
+
+              // 2. Correlation strengths
+              const sigCorrs = raw.statisticalAnalysisReport?.correlationMatrix?.significantCorrelations;
+              if (Array.isArray(sigCorrs) && sigCorrs.length > 0 && trend.length < 12) {
+                for (const corr of sigCorrs.slice(0, 5)) {
+                  trend.push({
+                    label: `${corr.var1} vs ${corr.var2}`.substring(0, 25),
+                    value: Number(Math.abs(corr.correlation).toFixed(3)),
+                    category: 'correlation'
+                  });
+                }
+              }
+
+              // 3. Comparative effect sizes
+              const compTests = raw.comparativeAnalysis?.tests || raw.edaResults?.comparativeAnalysis?.tests;
+              if (Array.isArray(compTests) && compTests.length > 0 && trend.length < 12) {
+                for (const test of compTests.filter((t: any) => t.significant).slice(0, 3)) {
+                  trend.push({
+                    label: `${test.variable} (${test.test_name || 'test'})`.substring(0, 25),
+                    value: Number((test.effect_size || 0).toFixed(3)),
+                    category: 'comparative'
+                  });
+                }
+              }
+            }
           }
-          return Object.entries(catCounts).map(([category, count]) => ({
-            category,
-            count,
-            percentage: legacyInsights.length > 0 ? Math.round((count / legacyInsights.length) * 100) : 0
-          }));
+
+          // Fallback: insight-based data for legacy/monolithic mode
+          if (trend.length === 0) {
+            for (const insight of legacyInsights.slice(0, 10)) {
+              trend.push({
+                label: insight.title?.substring(0, 30) || `Insight`,
+                value: insight.confidence ?? 0,
+                category: insight.category || 'general'
+              });
+            }
+          }
+          return trend;
+        })(),
+        // Build pie chart from ACTUAL categorical distributions (not insight category counts)
+        categoryBreakdown: (() => {
+          const breakdown: Array<{label: string; value: number; color?: string}> = [];
+          const chartColors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4', '#ec4899', '#84cc16'];
+
+          if (usePerAnalysisExecution) {
+            for (const [, result] of perAnalysisResults) {
+              if (result.status !== 'completed' || !(result as any).rawResult) continue;
+              const raw = (result as any).rawResult;
+
+              // Extract first categorical column's top_values as pie chart
+              const catVars = raw.categorical_variables || raw.categoricalStats;
+              if (catVars && typeof catVars === 'object') {
+                for (const [colName, catData] of Object.entries(catVars).slice(0, 1)) {
+                  const data = catData as any;
+                  const topValues = data?.top_values || data?.value_counts;
+                  if (topValues && typeof topValues === 'object') {
+                    let colorIdx = 0;
+                    for (const [valName, count] of Object.entries(topValues).slice(0, 8)) {
+                      breakdown.push({
+                        label: String(valName).substring(0, 25),
+                        value: Number(count) || 0,
+                        color: chartColors[colorIdx % chartColors.length]
+                      });
+                      colorIdx++;
+                    }
+                    if (breakdown.length > 0) break; // Got data from first categorical column
+                  }
+                }
+                if (breakdown.length > 0) break; // Got data from first analysis
+              }
+            }
+          }
+
+          // Fallback: insight category counts (with correct field names)
+          if (breakdown.length === 0) {
+            const catCounts: Record<string, number> = {};
+            for (const insight of legacyInsights) {
+              const cat = insight.category || 'general';
+              catCounts[cat] = (catCounts[cat] || 0) + 1;
+            }
+            let colorIdx = 0;
+            for (const [cat, count] of Object.entries(catCounts)) {
+              breakdown.push({
+                label: cat,
+                value: count,
+                color: chartColors[colorIdx % chartColors.length]
+              });
+              colorIdx++;
+            }
+          }
+          return breakdown;
         })(),
         // FIX 3E: Per-analysis status summary
         analysisStatus: usePerAnalysisExecution

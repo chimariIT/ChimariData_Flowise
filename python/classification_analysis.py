@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Classification Analysis Script
-Uses scikit-learn for classification with comprehensive metrics
+Uses dual-engine (Polars/Pandas) for loading, scikit-learn for classification.
 """
 
 import json
@@ -22,13 +22,15 @@ from sklearn.preprocessing import LabelEncoder
 import warnings
 warnings.filterwarnings('ignore')
 
+from engine_utils import load_dataframe, to_pandas
+
 
 def perform_classification_analysis(config):
     """Perform comprehensive classification analysis"""
     try:
-        # Load data
-        data_path = config['data_path']
-        data = pd.read_json(data_path)
+        # Load data via dual-engine dispatch, convert to Pandas for sklearn
+        data, engine_used = load_dataframe(config)
+        data = to_pandas(data)
 
         target_column = config.get('target_column')
         model_type = config.get('model_type', 'random_forest')
@@ -155,6 +157,7 @@ def perform_classification_analysis(config):
         # Phase 4C-1: Pass through business context for evidence chain
         result = {
             'success': True,
+            'engine_used': engine_used,
             'model_type': model_type,
             'n_classes': n_classes,
             'class_names': class_names,
@@ -191,15 +194,41 @@ def perform_classification_analysis(config):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
+    import os
+
+    config = None
+
+    # Priority 1: Check CONFIG environment variable
+    if os.environ.get('CONFIG'):
+        try:
+            config = json.loads(os.environ['CONFIG'])
+        except:
+            pass
+
+    # Priority 2: Check stdin
+    if config is None and not sys.stdin.isatty():
+        try:
+            stdin_data = sys.stdin.read().strip()
+            if stdin_data:
+                config = json.loads(stdin_data)
+        except:
+            pass
+
+    # Priority 3: Check command line argument
+    if config is None and len(sys.argv) == 2:
+        try:
+            config = json.loads(sys.argv[1])
+        except:
+            pass
+
+    if config is None:
         print(json.dumps({
             'success': False,
-            'error': 'Usage: python3 classification_analysis.py <config_json>'
+            'error': 'Usage: python classification_analysis.py <config_json> OR pipe JSON to stdin OR set CONFIG env var'
         }))
         sys.exit(1)
 
     try:
-        config = json.loads(sys.argv[1])
         result = perform_classification_analysis(config)
         print(json.dumps(result))
         sys.exit(0 if result.get('success') else 1)

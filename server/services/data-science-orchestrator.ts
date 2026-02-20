@@ -283,6 +283,7 @@ export interface VisualizationArtifact {
   title: string;
   description: string;
   data: any;
+  normalizedData?: Array<{ name: string; value: number }>; // Uniform chart-ready data for frontend rendering
   config: any;
   filePath?: string; // Path to saved image
 }
@@ -327,6 +328,7 @@ export interface DataScienceResults {
     analysisTypes: string[];
     executionTimeMs: number;
     pythonScriptsUsed: string[];
+    computeEngineUsed?: string;
   };
 }
 
@@ -368,7 +370,9 @@ export class DataScienceOrchestrator {
     console.log(`🎯 Goals: ${normalizedGoals.length}`);
 
     // VI-1 FIX: Route to Spark for large datasets
-    if (computeEngine === 'spark' && process.env.SPARK_ENABLED === 'true') {
+    // ComputeEngineSelector already applies robust thresholds (>1M rows or >500MB).
+    // No additional env var gate needed — selection logic is the gate.
+    if (computeEngine === 'spark') {
       console.log(`🚀 [VI-1] Routing to Spark for distributed processing`);
       try {
         const { SparkProcessor } = await import('./spark-processor');
@@ -582,43 +586,82 @@ export class DataScienceOrchestrator {
 
     // Phase 1: Data Quality Assessment (always runs)
     console.log(`📋 Phase 1: Data Quality Assessment`);
-    const dataQualityReport = await this.runDataQualityAnalysis(datasetData, projectArtifactDir);
+    const dataQualityReport = await this.runDataQualityAnalysis(datasetData, projectArtifactDir, computeEngine);
+
+    // ---- Phases 2-4: Run EDA, Statistical, and ML in parallel ----
+    // These phases are independent — all read from the same dataset, no cross-dependencies.
+    // Phase 5 (Visualization) needs all 3 results, so we await all before proceeding.
+    const phasePromises: { key: string; promise: Promise<any> }[] = [];
 
     // Phase 2: Exploratory Data Analysis (skip for ML-only types)
-    let edaResults: any = {};
     if (relevantPhases.includes('eda')) {
-      console.log(`📊 Phase 2: Exploratory Data Analysis`);
-      edaResults = await this.runExploratoryAnalysis(datasetData, request.analysisTypes, projectArtifactDir, request.analysisPreparation);
+      console.log(`📊 Phase 2: Exploratory Data Analysis (parallel)`);
+      phasePromises.push({
+        key: 'eda',
+        promise: this.runExploratoryAnalysis(datasetData, request.analysisTypes, projectArtifactDir, request.analysisPreparation, computeEngine)
+      });
     } else {
       console.log(`⏭️ Phase 2: EDA skipped for ${primaryType}`);
     }
 
     // Phase 3: Statistical Analysis (skip for text, ML-only types)
-    let statisticalReport: any = {};
     if (relevantPhases.includes('statistical')) {
-      console.log(`📈 Phase 3: Statistical Analysis`);
-      statisticalReport = await this.runStatisticalAnalysis(datasetData, request.analysisTypes, projectArtifactDir);
+      console.log(`📈 Phase 3: Statistical Analysis (parallel)`);
+      phasePromises.push({
+        key: 'statistical',
+        promise: this.runStatisticalAnalysis(datasetData, request.analysisTypes, projectArtifactDir, computeEngine)
+      });
     } else {
       console.log(`⏭️ Phase 3: Statistical Analysis skipped for ${primaryType}`);
     }
 
     // Phase 4: ML Model Training (skip for descriptive-only types)
-    let mlModels: any[] = [];
     if (relevantPhases.includes('ml')) {
-      console.log(`🤖 Phase 4: ML Model Training`);
-
-      // Health check before ML operations
-      const healthCheck = await performMLHealthCheck();
-      if (!healthCheck.healthy) {
-        console.warn(`⚠️ [DataScienceOrchestrator] ML health check failed, proceeding with caution`);
-        for (const warning of healthCheck.warnings) {
-          console.warn(`  - ${warning}`);
-        }
-      }
-
-      mlModels = await this.runMLAnalysis(datasetData, request.analysisTypes, projectArtifactDir, request.analysisPreparation);
+      console.log(`🤖 Phase 4: ML Model Training (parallel)`);
+      // Wrap ML phase with its health check inside the parallel promise
+      phasePromises.push({
+        key: 'ml',
+        promise: (async () => {
+          const healthCheck = await performMLHealthCheck();
+          if (!healthCheck.healthy) {
+            console.warn(`⚠️ [DataScienceOrchestrator] ML health check failed, proceeding with caution`);
+            for (const warning of healthCheck.warnings) {
+              console.warn(`  - ${warning}`);
+            }
+          }
+          return this.runMLAnalysis(datasetData, request.analysisTypes, projectArtifactDir, request.analysisPreparation, computeEngine);
+        })()
+      });
     } else {
       console.log(`⏭️ Phase 4: ML Model Training skipped for ${primaryType}`);
+    }
+
+    // Execute all enabled phases in parallel
+    let edaResults: any = {};
+    let statisticalReport: any = {};
+    let mlModels: any[] = [];
+
+    if (phasePromises.length > 0) {
+      console.log(`  🚀 [Pipeline] Running ${phasePromises.length} phases in parallel: ${phasePromises.map(p => p.key).join(', ')}`);
+      const phaseSettled = await Promise.allSettled(phasePromises.map(p => p.promise));
+
+      for (let i = 0; i < phasePromises.length; i++) {
+        const phase = phasePromises[i];
+        const result = phaseSettled[i];
+
+        if (result.status === 'rejected') {
+          console.error(`❌ [Pipeline] Phase "${phase.key}" rejected: ${result.reason}`);
+          continue;
+        }
+
+        if (phase.key === 'eda') {
+          edaResults = result.value || {};
+        } else if (phase.key === 'statistical') {
+          statisticalReport = result.value || {};
+        } else if (phase.key === 'ml') {
+          mlModels = result.value || [];
+        }
+      }
     }
 
     // Phase 5: Generate Visualizations
@@ -687,7 +730,8 @@ export class DataScienceOrchestrator {
         totalColumns: datasetData.totalColumns,
         analysisTypes: request.analysisTypes,
         executionTimeMs,
-        pythonScriptsUsed: this.getPythonScriptsUsed(request.analysisTypes)
+        pythonScriptsUsed: this.getPythonScriptsUsed(request.analysisTypes),
+        computeEngineUsed: computeEngine || 'local'
       }
     };
   }
@@ -725,30 +769,39 @@ export class DataScienceOrchestrator {
       // Load datasets for Spark processing
       const datasetData = await this.loadProjectDatasets(request.projectId, request.datasetIds);
 
-      // Route each analysis type through Spark's performAnalysis method
-      for (const analysisType of request.analysisTypes) {
-        console.log(`  🔬 [Spark] Running ${analysisType} analysis...`);
+      // Route all analysis types through Spark in parallel (no inter-analysis dependencies)
+      console.log(`  🚀 [Spark] Running ${request.analysisTypes.length} analyses in parallel: ${request.analysisTypes.join(', ')}`);
 
-        try {
-          const sparkResult = await sparkProcessor.performAnalysis(
-            datasetData.rows,
-            analysisType,
-            request.computeEngineConfig || {}
-          );
+      const sparkPromises = request.analysisTypes.map(analysisType =>
+        sparkProcessor.performAnalysis(
+          datasetData.rows,
+          analysisType,
+          request.computeEngineConfig || {}
+        ).then((sparkResult: any) => ({ analysisType, sparkResult, error: null }))
+         .catch((err: any) => ({ analysisType, sparkResult: null, error: err }))
+      );
 
-          // Collect insights from Spark results
-          if (sparkResult?.result) {
-            insights.push(`${analysisType}: ${sparkResult.result}`);
-          }
-          if (sparkResult?.insights) {
-            insights.push(...(Array.isArray(sparkResult.insights) ? sparkResult.insights : [sparkResult.insights]));
-          }
+      const sparkResults = await Promise.allSettled(sparkPromises);
 
-          console.log(`  ✅ [Spark] ${analysisType} completed`);
-        } catch (analysisError: any) {
-          console.error(`  ❌ [Spark] ${analysisType} failed: ${analysisError.message}`);
-          insights.push(`${analysisType} analysis encountered an error: ${analysisError.message}`);
+      for (const settled of sparkResults) {
+        if (settled.status === 'rejected') continue;
+        const { analysisType, sparkResult, error } = settled.value;
+
+        if (error) {
+          console.error(`  ❌ [Spark] ${analysisType} failed: ${error.message}`);
+          insights.push(`${analysisType} analysis encountered an error: ${error.message}`);
+          continue;
         }
+
+        // Collect insights from Spark results
+        if (sparkResult?.result) {
+          insights.push(`${analysisType}: ${sparkResult.result}`);
+        }
+        if (sparkResult?.insights) {
+          insights.push(...(Array.isArray(sparkResult.insights) ? sparkResult.insights : [sparkResult.insights]));
+        }
+
+        console.log(`  ✅ [Spark] ${analysisType} completed`);
       }
 
       // Generate summary
@@ -847,7 +900,8 @@ export class DataScienceOrchestrator {
 
   private async runDataQualityAnalysis(
     datasetData: { rows: any[]; schema: any; totalRows: number; totalColumns: number },
-    outputDir: string
+    outputDir: string,
+    computeEngine?: string
   ): Promise<DataQualityReport> {
 
     const { rows, schema } = datasetData;
@@ -857,9 +911,11 @@ export class DataScienceOrchestrator {
     fs.writeFileSync(tempDataPath, JSON.stringify(rows));
 
     // Run descriptive stats script for quality assessment
+    const engineKey = (computeEngine && computeEngine !== 'local') ? computeEngine : 'pandas';
     const result = await this.executePythonScript('descriptive_stats.py', {
       data_path: tempDataPath,
-      output_dir: outputDir
+      output_dir: outputDir,
+      engine: engineKey
     });
 
     // FIX 3A: Check Python script success
@@ -1042,7 +1098,8 @@ export class DataScienceOrchestrator {
     datasetData: { rows: any[]; schema: any; totalRows: number; totalColumns: number },
     analysisTypes: string[],
     outputDir: string,
-    analysisPreparation?: import('./analysis-data-preparer').AnalysisPreparation
+    analysisPreparation?: import('./analysis-data-preparer').AnalysisPreparation,
+    computeEngine?: string
   ): Promise<any> {
     const tempDataPath = path.join(outputDir, 'temp_eda_data.json');
     fs.writeFileSync(tempDataPath, JSON.stringify(datasetData.rows));
@@ -1061,13 +1118,18 @@ export class DataScienceOrchestrator {
     }
 
     // Helper: get config for a script (enhanced if available, bare otherwise)
+    const engineKey = (computeEngine && computeEngine !== 'local') ? computeEngine : 'pandas';
     const getConfig = (scriptType: string, bareConfig: Record<string, any>): Record<string, any> => {
+      let config: Record<string, any>;
       if (enhancedConfigBuilder) {
-        const enhanced = enhancedConfigBuilder(scriptType);
-        console.log(`  📋 [Enhanced Config] ${scriptType}: ${JSON.stringify(Object.keys(enhanced).filter(k => k !== 'data_path' && k !== 'output_dir'))}`);
-        return enhanced;
+        config = enhancedConfigBuilder(scriptType);
+        console.log(`  📋 [Enhanced Config] ${scriptType}: ${JSON.stringify(Object.keys(config).filter(k => k !== 'data_path' && k !== 'output_dir'))}`);
+      } else {
+        config = bareConfig;
       }
-      return bareConfig;
+      // Inject compute engine for Python dual-engine dispatch
+      config.engine = engineKey;
+      return config;
     };
 
     const results: any = {
@@ -1076,66 +1138,84 @@ export class DataScienceOrchestrator {
       crossTabs: null
     };
 
-    // Run descriptive stats — Fix 2: Also match 'descriptive_statistics' (the canonical name)
+    // === PARALLEL EXECUTION: Run all EDA scripts simultaneously ===
+    // All scripts read from the same temp JSON file (read-only) — no inter-script dependencies.
+    // Using Promise.allSettled for graceful degradation (one failure doesn't block others).
+
+    type EdaTask = { key: string; scriptName: string; promise: Promise<any> };
+    const edaTasks: EdaTask[] = [];
+
+    // Descriptive stats
     if (analysisTypes.includes('descriptive') || analysisTypes.includes('descriptive_statistics') || analysisTypes.length === 0) {
-      results.descriptiveStats = await this.executePythonScript('descriptive_stats.py',
-        getConfig('descriptive', { data_path: tempDataPath })
-      );
-      // FIX 3A: Check Python script success
-      if (!results.descriptiveStats || results.descriptiveStats.success === false) {
-        console.error(`❌ [Basic Analysis] descriptive_stats.py failed: ${results.descriptiveStats?.error || 'unknown'}`);
-      }
+      edaTasks.push({
+        key: 'descriptiveStats',
+        scriptName: 'descriptive_stats.py',
+        promise: this.executePythonScript('descriptive_stats.py', getConfig('descriptive', { data_path: tempDataPath }))
+      });
     }
 
-    // Run correlation analysis
+    // Correlation analysis
     if (analysisTypes.includes('correlation') || analysisTypes.includes('correlation_analysis')) {
-      results.correlations = await this.executePythonScript('correlation_analysis.py',
-        getConfig('correlation', { data_path: tempDataPath, method: 'pearson' })
-      );
-      // FIX 3A: Check Python script success
-      if (!results.correlations || results.correlations.success === false) {
-        console.error(`❌ [Basic Analysis] correlation_analysis.py failed: ${results.correlations?.error || 'unknown'}`);
-      }
+      edaTasks.push({
+        key: 'correlations',
+        scriptName: 'correlation_analysis.py',
+        promise: this.executePythonScript('correlation_analysis.py', getConfig('correlation', { data_path: tempDataPath, method: 'pearson' }))
+      });
     }
 
-    // FIX 2F: Run comparative analysis (cross-group statistical comparison)
-    // Also handles statistical_tests and statistical_analysis since comparative_analysis.py performs ANOVA, t-tests, chi-square
+    // Comparative analysis (ANOVA, t-tests, chi-square)
     if (analysisTypes.includes('comparative') || analysisTypes.includes('comparative_analysis') || analysisTypes.includes('statistical_tests') || analysisTypes.includes('statistical_analysis')) {
-      results.comparativeAnalysis = await this.executePythonScript('comparative_analysis.py',
-        getConfig('comparative', { data_path: tempDataPath })
-      );
-      if (!results.comparativeAnalysis || results.comparativeAnalysis.success === false) {
-        console.error(`❌ [Analysis] comparative_analysis.py failed: ${results.comparativeAnalysis?.error || 'unknown'}`);
-      }
+      edaTasks.push({
+        key: 'comparativeAnalysis',
+        scriptName: 'comparative_analysis.py',
+        promise: this.executePythonScript('comparative_analysis.py', getConfig('comparative', { data_path: tempDataPath }))
+      });
     }
 
-    // FIX 2F: Run group analysis (segment/cohort profiling)
+    // Group analysis (segment/cohort profiling)
     if (analysisTypes.includes('group_analysis') || analysisTypes.includes('group')) {
-      results.groupAnalysis = await this.executePythonScript('group_analysis.py',
-        getConfig('group_analysis', { data_path: tempDataPath })
-      );
-      if (!results.groupAnalysis || results.groupAnalysis.success === false) {
-        console.error(`❌ [Analysis] group_analysis.py failed: ${results.groupAnalysis?.error || 'unknown'}`);
-      }
+      edaTasks.push({
+        key: 'groupAnalysis',
+        scriptName: 'group_analysis.py',
+        promise: this.executePythonScript('group_analysis.py', getConfig('group_analysis', { data_path: tempDataPath }))
+      });
     }
 
-    // FIX 2F: Run text analysis (NLP: topics, sentiment, keywords)
+    // Text analysis (NLP: topics, sentiment, keywords)
     if (analysisTypes.includes('text_analysis') || analysisTypes.includes('text')) {
-      results.textAnalysis = await this.executePythonScript('text_analysis.py',
-        getConfig('text_analysis', { data_path: tempDataPath })
-      );
-      if (!results.textAnalysis || results.textAnalysis.success === false) {
-        console.error(`❌ [Analysis] text_analysis.py failed: ${results.textAnalysis?.error || 'unknown'}`);
-      }
+      edaTasks.push({
+        key: 'textAnalysis',
+        scriptName: 'text_analysis.py',
+        promise: this.executePythonScript('text_analysis.py', getConfig('text_analysis', { data_path: tempDataPath }))
+      });
     }
 
-    // FIX 2F: Run time series analysis (trend, decomposition, forecasting)
+    // Time series analysis (trend, decomposition, forecasting)
     if (analysisTypes.includes('time_series') || analysisTypes.includes('time-series') || analysisTypes.includes('time_series_analysis') || analysisTypes.includes('trend') || analysisTypes.includes('trend_analysis')) {
-      results.timeSeriesAnalysis = await this.executePythonScript('time_series_analysis.py',
-        getConfig('time_series', { data_path: tempDataPath })
-      );
-      if (!results.timeSeriesAnalysis || results.timeSeriesAnalysis.success === false) {
-        console.error(`❌ [Analysis] time_series_analysis.py failed: ${results.timeSeriesAnalysis?.error || 'unknown'}`);
+      edaTasks.push({
+        key: 'timeSeriesAnalysis',
+        scriptName: 'time_series_analysis.py',
+        promise: this.executePythonScript('time_series_analysis.py', getConfig('time_series', { data_path: tempDataPath }))
+      });
+    }
+
+    // Execute all EDA scripts in parallel
+    if (edaTasks.length > 0) {
+      console.log(`  🚀 [EDA] Running ${edaTasks.length} scripts in parallel: ${edaTasks.map(t => t.scriptName).join(', ')}`);
+      const settled = await Promise.allSettled(edaTasks.map(t => t.promise));
+
+      for (let i = 0; i < edaTasks.length; i++) {
+        const task = edaTasks[i];
+        const result = settled[i];
+        if (result.status === 'fulfilled') {
+          results[task.key] = result.value;
+          if (!result.value || result.value.success === false) {
+            console.error(`❌ [EDA] ${task.scriptName} failed: ${result.value?.error || 'unknown'}`);
+          }
+        } else {
+          console.error(`❌ [EDA] ${task.scriptName} rejected: ${result.reason}`);
+          results[task.key] = null;
+        }
       }
     }
 
@@ -1158,37 +1238,47 @@ export class DataScienceOrchestrator {
   private async runStatisticalAnalysis(
     datasetData: { rows: any[]; schema: any; totalRows: number; totalColumns: number },
     analysisTypes: string[],
-    outputDir: string
+    outputDir: string,
+    computeEngine?: string
   ): Promise<StatisticalAnalysisReport> {
     const tempDataPath = path.join(outputDir, 'temp_stats_data.json');
     fs.writeFileSync(tempDataPath, JSON.stringify(datasetData.rows));
 
-    // Run descriptive stats
-    const descriptiveResult = await this.executePythonScript('descriptive_stats.py', {
-      data_path: tempDataPath
-    });
-    // FIX 3A: Check Python script success
+    // Determine engine for Python scripts
+    const engineKey = (computeEngine && computeEngine !== 'local') ? computeEngine : 'pandas';
+
+    // === PARALLEL EXECUTION: Run all 3 statistical scripts simultaneously ===
+    // No inter-script dependencies — all read from same temp JSON.
+    console.log(`  🚀 [Stats] Running 3 scripts in parallel: descriptive_stats, correlation_analysis, statistical_tests`);
+
+    const [descSettled, corrSettled, testsSettled] = await Promise.allSettled([
+      this.executePythonScript('descriptive_stats.py', {
+        data_path: tempDataPath,
+        engine: engineKey
+      }),
+      this.executePythonScript('correlation_analysis.py', {
+        data_path: tempDataPath,
+        method: 'pearson',
+        engine: engineKey
+      }),
+      this.executePythonScript('statistical_tests.py', {
+        data_path: tempDataPath,
+        engine: engineKey
+      })
+    ]);
+
+    const descriptiveResult = descSettled.status === 'fulfilled' ? descSettled.value : null;
+    const correlationResult = corrSettled.status === 'fulfilled' ? corrSettled.value : null;
+    const testsResult = testsSettled.status === 'fulfilled' ? testsSettled.value : null;
+
     if (!descriptiveResult || descriptiveResult.success === false) {
-      console.error(`❌ [Stats] descriptive_stats.py failed: ${descriptiveResult?.error || 'unknown'}`);
+      console.error(`❌ [Stats] descriptive_stats.py failed: ${descriptiveResult?.error || (descSettled.status === 'rejected' ? descSettled.reason : 'unknown')}`);
     }
-
-    // Run correlation analysis
-    const correlationResult = await this.executePythonScript('correlation_analysis.py', {
-      data_path: tempDataPath,
-      method: 'pearson'
-    });
-    // FIX 3A: Check Python script success
     if (!correlationResult || correlationResult.success === false) {
-      console.error(`❌ [Stats] correlation_analysis.py failed: ${correlationResult?.error || 'unknown'}`);
+      console.error(`❌ [Stats] correlation_analysis.py failed: ${correlationResult?.error || (corrSettled.status === 'rejected' ? corrSettled.reason : 'unknown')}`);
     }
-
-    // Run statistical tests
-    const testsResult = await this.executePythonScript('statistical_tests.py', {
-      data_path: tempDataPath
-    });
-    // FIX 3A: Check Python script success
     if (!testsResult || testsResult.success === false) {
-      console.error(`❌ [Stats] statistical_tests.py failed: ${testsResult?.error || 'unknown'}`);
+      console.error(`❌ [Stats] statistical_tests.py failed: ${testsResult?.error || (testsSettled.status === 'rejected' ? testsSettled.reason : 'unknown')}`);
     }
 
     // Clean up
@@ -1408,7 +1498,8 @@ export class DataScienceOrchestrator {
     datasetData: { rows: any[]; schema: any; totalRows: number; totalColumns: number },
     analysisTypes: string[],
     outputDir: string,
-    analysisPreparation?: import('./analysis-data-preparer').AnalysisPreparation
+    analysisPreparation?: import('./analysis-data-preparer').AnalysisPreparation,
+    computeEngine?: string
   ): Promise<MLModelArtifact[]> {
     const models: MLModelArtifact[] = [];
 
@@ -1434,151 +1525,195 @@ export class DataScienceOrchestrator {
     const roles = analysisPreparation?.columnRoles;
     const bizCtx = analysisPreparation?.businessContext;
 
+    // Determine engine for Python scripts
+    const engineKey = (computeEngine && computeEngine !== 'local') ? computeEngine : 'pandas';
+
+    // ---- Run all ML scripts in parallel (no inter-script dependencies) ----
+    type MlTask = { key: string; scriptName: string; promise: Promise<any> };
+    const mlTasks: MlTask[] = [];
+
     // Clustering analysis
     if (analysisTypes.includes('clustering') || analysisTypes.includes('segmentation')) {
-      const clusterResult = await this.executePythonScript('clustering_analysis.py', {
-        data_path: tempDataPath,
-        n_clusters: roles?.n_clusters || 'auto',
-        method: roles?.method,
-        features: roles?.features,
-        output_dir: outputDir,
-        ...(bizCtx?.questionIds?.length ? { business_context: bizCtx } : {}),
+      mlTasks.push({
+        key: 'clustering',
+        scriptName: 'clustering_analysis.py',
+        promise: this.executePythonScript('clustering_analysis.py', {
+          data_path: tempDataPath,
+          n_clusters: roles?.n_clusters || 'auto',
+          method: roles?.method,
+          features: roles?.features,
+          output_dir: outputDir,
+          engine: engineKey,
+          ...(bizCtx?.questionIds?.length ? { business_context: bizCtx } : {}),
+        })
       });
-
-      if (clusterResult?.success) {
-        // Python returns metrics nested under .metrics or at top level
-        const clusterMetrics = clusterResult.metrics || clusterResult;
-        models.push({
-          modelId: nanoid(),
-          modelType: clusterResult.method || clusterResult.algorithm || 'kmeans',
-          problemType: 'clustering',
-          features: clusterResult.feature_names || clusterResult.features_used || [],
-          metrics: {
-            silhouetteScore: clusterMetrics.silhouette_score || clusterMetrics.silhouetteScore,
-            inertia: clusterMetrics.inertia
-          },
-          featureImportance: [],
-          modelPath: clusterResult.model_path
-        });
-      }
     }
 
     // Regression analysis
     if (analysisTypes.includes('regression') || analysisTypes.includes('predictive')) {
-      const regressionResult = await this.executePythonScript('regression_analysis.py', {
-        data_path: tempDataPath,
-        target_column: roles?.target_column,
-        features: roles?.features,
-        output_dir: outputDir,
-        ...(bizCtx?.questionIds?.length ? { business_context: bizCtx } : {}),
+      mlTasks.push({
+        key: 'regression',
+        scriptName: 'regression_analysis.py',
+        promise: this.executePythonScript('regression_analysis.py', {
+          data_path: tempDataPath,
+          target_column: roles?.target_column,
+          features: roles?.features,
+          output_dir: outputDir,
+          engine: engineKey,
+          ...(bizCtx?.questionIds?.length ? { business_context: bizCtx } : {}),
+        })
       });
-
-      if (regressionResult?.success) {
-        // Python returns metrics nested under .metrics.test and .metrics.train
-        const regTestMetrics = regressionResult.metrics?.test || regressionResult.metrics || regressionResult;
-        models.push({
-          modelId: nanoid(),
-          modelType: regressionResult.model || regressionResult.model_type || 'linear_regression',
-          problemType: 'regression',
-          targetColumn: regressionResult.target_column,
-          features: regressionResult.feature_columns || regressionResult.features || [],
-          metrics: {
-            r2: regTestMetrics.r2 || regressionResult.r2_score,
-            rmse: regTestMetrics.rmse || regressionResult.rmse,
-            mae: regTestMetrics.mae || regressionResult.mae
-          },
-          featureImportance: (regressionResult.coefficients || []).map((c: any) =>
-            typeof c === 'object' ? { feature: c.feature || c.name, importance: Math.abs(c.coefficient || c.importance || 0) } : c
-          ),
-          crossValidation: regressionResult.cv_results,
-          modelPath: regressionResult.model_path
-        });
-      }
     }
 
     // Classification analysis
     if (analysisTypes.includes('classification')) {
-      const classResult = await this.executePythonScript('classification_analysis.py', {
-        data_path: tempDataPath,
-        target_column: roles?.target_column,
-        model_type: roles?.model_type,
-        output_dir: outputDir,
-        ...(bizCtx?.questionIds?.length ? { business_context: bizCtx } : {}),
+      mlTasks.push({
+        key: 'classification',
+        scriptName: 'classification_analysis.py',
+        promise: this.executePythonScript('classification_analysis.py', {
+          data_path: tempDataPath,
+          target_column: roles?.target_column,
+          engine: engineKey,
+          model_type: roles?.model_type,
+          output_dir: outputDir,
+          ...(bizCtx?.questionIds?.length ? { business_context: bizCtx } : {}),
+        })
       });
-
-      if (classResult?.success) {
-        // Python returns metrics nested under .metrics, or at top level
-        const classMetrics = classResult.metrics || classResult;
-        models.push({
-          modelId: nanoid(),
-          modelType: classResult.model_type || 'random_forest',
-          problemType: 'classification',
-          targetColumn: classResult.target_column,
-          features: (classResult.feature_importance || []).map((f: any) => f.feature || f.name || f),
-          metrics: {
-            accuracy: classMetrics.accuracy,
-            precision: classMetrics.precision,
-            recall: classMetrics.recall,
-            f1Score: classMetrics.f1_score || classMetrics.f1Score,
-            auc: classMetrics.roc_auc || classMetrics.auc
-          },
-          featureImportance: classResult.feature_importance || [],
-          crossValidation: classResult.cross_validation || classResult.cv_results,
-          modelPath: classResult.model_path
-        });
-      }
     }
 
     // General ML training if no specific type - use enhanced pipeline
+    // Note: This has internal fallback (enhanced → basic), handled as a chained promise
     if (analysisTypes.includes('ml') || analysisTypes.includes('machine-learning')) {
-      // Try enhanced ML pipeline first (with feature selection, model comparison)
-      let mlResult = await this.executePythonScript('enhanced_ml_pipeline.py', {
-        data_path: tempDataPath,
-        column_mapping_path: columnMappingPath,
-        output_dir: outputDir,
-        pre_embedded: embeddedRows.length > 0 ? 'true' : 'false'
-      });
-
-      // Fallback to basic ml_training.py if enhanced fails
-      if (!mlResult?.success) {
-        console.log(`⚠️ [ML] Enhanced pipeline failed, falling back to basic ml_training.py`);
-        mlResult = await this.executePythonScript('ml_training.py', {
+      const generalMlPromise = (async () => {
+        // Try enhanced ML pipeline first (with feature selection, model comparison)
+        let mlResult = await this.executePythonScript('enhanced_ml_pipeline.py', {
           data_path: tempDataPath,
-          model_type: 'auto',
-          output_dir: outputDir
+          column_mapping_path: columnMappingPath,
+          output_dir: outputDir,
+          pre_embedded: embeddedRows.length > 0 ? 'true' : 'false'
         });
-      }
 
-      if (mlResult?.success) {
-        // Map embedded feature names back to original columns for interpretability
-        const originalFeatures = (mlResult.features || []).map((feat: string) => {
-          // Check if this is an embedded feature (e.g., "department_Sales" -> "department")
-          for (const [original, derived] of Object.entries(columnMapping)) {
-            if ((derived as string[]).includes(feat)) {
-              return `${original} (${feat})`;
+        // Fallback to basic ml_training.py if enhanced fails
+        if (!mlResult?.success) {
+          console.log(`⚠️ [ML] Enhanced pipeline failed, falling back to basic ml_training.py`);
+          mlResult = await this.executePythonScript('ml_training.py', {
+            data_path: tempDataPath,
+            model_type: 'auto',
+            output_dir: outputDir
+          });
+        }
+        return mlResult;
+      })();
+
+      mlTasks.push({
+        key: 'general_ml',
+        scriptName: 'enhanced_ml_pipeline.py',
+        promise: generalMlPromise
+      });
+    }
+
+    // Execute all ML tasks in parallel
+    if (mlTasks.length > 0) {
+      console.log(`  🚀 [ML] Running ${mlTasks.length} scripts in parallel: ${mlTasks.map(t => t.scriptName).join(', ')}`);
+      const settled = await Promise.allSettled(mlTasks.map(t => t.promise));
+
+      for (let i = 0; i < mlTasks.length; i++) {
+        const task = mlTasks[i];
+        const result = settled[i];
+
+        if (result.status === 'rejected') {
+          console.error(`❌ [ML] ${task.scriptName} rejected: ${result.reason}`);
+          continue;
+        }
+
+        const scriptResult = result.value;
+        if (!scriptResult?.success) {
+          console.error(`❌ [ML] ${task.scriptName} failed: ${scriptResult?.error || 'unknown'}`);
+          continue;
+        }
+
+        // Map results to MLModelArtifact based on task type
+        if (task.key === 'clustering') {
+          const clusterMetrics = scriptResult.metrics || scriptResult;
+          models.push({
+            modelId: nanoid(),
+            modelType: scriptResult.method || scriptResult.algorithm || 'kmeans',
+            problemType: 'clustering',
+            features: scriptResult.feature_names || scriptResult.features_used || [],
+            metrics: {
+              silhouetteScore: clusterMetrics.silhouette_score || clusterMetrics.silhouetteScore,
+              inertia: clusterMetrics.inertia
+            },
+            featureImportance: [],
+            modelPath: scriptResult.model_path
+          });
+        } else if (task.key === 'regression') {
+          const regTestMetrics = scriptResult.metrics?.test || scriptResult.metrics || scriptResult;
+          models.push({
+            modelId: nanoid(),
+            modelType: scriptResult.model || scriptResult.model_type || 'linear_regression',
+            problemType: 'regression',
+            targetColumn: scriptResult.target_column,
+            features: scriptResult.feature_columns || scriptResult.features || [],
+            metrics: {
+              r2: regTestMetrics.r2 || scriptResult.r2_score,
+              rmse: regTestMetrics.rmse || scriptResult.rmse,
+              mae: regTestMetrics.mae || scriptResult.mae
+            },
+            featureImportance: (scriptResult.coefficients || []).map((c: any) =>
+              typeof c === 'object' ? { feature: c.feature || c.name, importance: Math.abs(c.coefficient || c.importance || 0) } : c
+            ),
+            crossValidation: scriptResult.cv_results,
+            modelPath: scriptResult.model_path
+          });
+        } else if (task.key === 'classification') {
+          const classMetrics = scriptResult.metrics || scriptResult;
+          models.push({
+            modelId: nanoid(),
+            modelType: scriptResult.model_type || 'random_forest',
+            problemType: 'classification',
+            targetColumn: scriptResult.target_column,
+            features: (scriptResult.feature_importance || []).map((f: any) => f.feature || f.name || f),
+            metrics: {
+              accuracy: classMetrics.accuracy,
+              precision: classMetrics.precision,
+              recall: classMetrics.recall,
+              f1Score: classMetrics.f1_score || classMetrics.f1Score,
+              auc: classMetrics.roc_auc || classMetrics.auc
+            },
+            featureImportance: scriptResult.feature_importance || [],
+            crossValidation: scriptResult.cross_validation || scriptResult.cv_results,
+            modelPath: scriptResult.model_path
+          });
+        } else if (task.key === 'general_ml') {
+          // Map embedded feature names back to original columns for interpretability
+          const originalFeatures = (scriptResult.features || []).map((feat: string) => {
+            for (const [original, derived] of Object.entries(columnMapping)) {
+              if ((derived as string[]).includes(feat)) {
+                return `${original} (${feat})`;
+              }
             }
-          }
-          return feat;
-        });
+            return feat;
+          });
 
-        models.push({
-          modelId: nanoid(),
-          modelType: mlResult.model_type || mlResult.best_model || 'auto',
-          problemType: mlResult.problem_type || 'classification',
-          targetColumn: mlResult.target_column,
-          features: originalFeatures,
-          metrics: mlResult.metrics || mlResult.best_metrics || {},
-          featureImportance: (mlResult.feature_importance || []).map((fi: any) => ({
-            ...fi,
-            // Map feature names back to original for display
-            originalFeature: Object.entries(columnMapping).find(
-              ([_, derived]) => (derived as string[]).includes(fi.feature)
-            )?.[0] || fi.feature
-          })),
-          crossValidation: mlResult.cv_results,
-          modelPath: mlResult.model_path,
-          learningCurve: mlResult.learning_curve
-        });
+          models.push({
+            modelId: nanoid(),
+            modelType: scriptResult.model_type || scriptResult.best_model || 'auto',
+            problemType: scriptResult.problem_type || 'classification',
+            targetColumn: scriptResult.target_column,
+            features: originalFeatures,
+            metrics: scriptResult.metrics || scriptResult.best_metrics || {},
+            featureImportance: (scriptResult.feature_importance || []).map((fi: any) => ({
+              ...fi,
+              originalFeature: Object.entries(columnMapping).find(
+                ([_, derived]) => (derived as string[]).includes(fi.feature)
+              )?.[0] || fi.feature
+            })),
+            crossValidation: scriptResult.cv_results,
+            modelPath: scriptResult.model_path,
+            learningCurve: scriptResult.learning_curve
+          });
+        }
       }
     }
 
@@ -1605,12 +1740,31 @@ export class DataScienceOrchestrator {
 
     // Correlation heatmap
     if (statisticalReport.correlationMatrix.columns.length > 0) {
+      // Build normalizedData: top correlations as {name, value} pairs
+      const corrNormalized: Array<{name: string; value: number}> = [];
+      const corrMatrix = statisticalReport.correlationMatrix;
+      if (corrMatrix.matrix && corrMatrix.columns) {
+        for (let i = 0; i < corrMatrix.columns.length; i++) {
+          for (let j = i + 1; j < corrMatrix.columns.length; j++) {
+            const val = corrMatrix.matrix[i]?.[j];
+            if (val !== undefined && Math.abs(val) > 0.1) {
+              corrNormalized.push({
+                name: `${corrMatrix.columns[i]} vs ${corrMatrix.columns[j]}`,
+                value: Math.round(val * 1000) / 1000
+              });
+            }
+          }
+        }
+      }
+      corrNormalized.sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+
       visualizations.push({
         id: nanoid(),
         type: 'correlation_heatmap',
         title: 'Correlation Matrix',
         description: 'Heatmap showing correlations between numeric variables',
         data: statisticalReport.correlationMatrix,
+        normalizedData: corrNormalized.slice(0, 15),
         config: { colorScale: 'RdBu', showValues: true }
       });
     }
@@ -1626,6 +1780,14 @@ export class DataScienceOrchestrator {
           column: stat.column,
           stats: stat
         },
+        normalizedData: [
+          { name: 'Min', value: stat.min ?? 0 },
+          { name: 'Q1', value: stat.percentiles?.p25 ?? 0 },
+          { name: 'Median', value: stat.median ?? 0 },
+          { name: 'Mean', value: stat.mean ?? 0 },
+          { name: 'Q3', value: stat.percentiles?.p75 ?? 0 },
+          { name: 'Max', value: stat.max ?? 0 }
+        ],
         config: { bins: 30, showMean: true, showMedian: true }
       });
     }
@@ -1633,12 +1795,17 @@ export class DataScienceOrchestrator {
     // Feature importance plots for ML models
     for (const model of mlModels) {
       if (model.featureImportance.length > 0) {
+        const topFeatures = model.featureImportance.slice(0, 10);
         visualizations.push({
           id: nanoid(),
           type: 'feature_importance',
           title: `Feature Importance - ${model.modelType}`,
           description: `Top features driving the ${model.problemType} model`,
-          data: model.featureImportance.slice(0, 10),
+          data: topFeatures,
+          normalizedData: topFeatures.map((f: any) => ({
+            name: f.feature || f.name || 'Unknown',
+            value: Math.round((f.importance || f.value || 0) * 1000) / 1000
+          })),
           config: { horizontal: true, showValues: true }
         });
       }
@@ -1647,12 +1814,24 @@ export class DataScienceOrchestrator {
     // Clustering visualization
     const clusterModel = mlModels.find(m => m.problemType === 'clustering');
     if (clusterModel) {
+      // Normalize cluster sizes if available
+      const clusterNorm: Array<{name: string; value: number}> = [];
+      if ((clusterModel as any).clusterSizes) {
+        Object.entries((clusterModel as any).clusterSizes).forEach(([k, v]) => {
+          clusterNorm.push({ name: `Cluster ${k}`, value: v as number });
+        });
+      } else if ((clusterModel as any).clusters) {
+        ((clusterModel as any).clusters as any[]).forEach((c: any, i: number) => {
+          clusterNorm.push({ name: c.label || `Cluster ${i}`, value: c.size || c.count || 0 });
+        });
+      }
       visualizations.push({
         id: nanoid(),
         type: 'cluster',
         title: 'Cluster Analysis',
         description: 'Visualization of data clusters',
         data: { model: clusterModel },
+        normalizedData: clusterNorm.length > 0 ? clusterNorm : undefined,
         config: { showCentroids: true, showLabels: true }
       });
     }
@@ -1664,18 +1843,28 @@ export class DataScienceOrchestrator {
         // Significant tests → box plots showing group comparisons
         const significantTests = compTests.filter((t: any) => t.significant);
         for (const test of significantTests.slice(0, 3)) {
+          // Normalize group means for box plots
+          const groupStats = test.group_stats || test.groups || [];
+          const boxNorm = Array.isArray(groupStats)
+            ? groupStats.map((g: any) => ({ name: String(g.group || g.name || 'Group'), value: g.mean ?? g.value ?? 0 }))
+            : Object.entries(groupStats).map(([k, v]: [string, any]) => ({ name: k, value: v?.mean ?? v ?? 0 }));
           visualizations.push({
             id: nanoid(),
             type: 'box',
             title: `${test.test_name || 'Statistical Test'}: ${test.variable} by Group`,
             description: `Comparison of ${test.variable} across groups (p=${Number(test.p_value || 0).toFixed(4)})`,
             data: { test, groups: test.group_stats || test.groups },
+            normalizedData: boxNorm,
             config: { showOutliers: true, showMean: true }
           });
         }
 
         // Summary visualization of all tests
         if (compTests.length > 1) {
+          const testBarNorm = compTests.map((t: any) => ({
+            name: t.variable || 'Unknown',
+            value: Math.round(Math.abs(t.effect_size || 0) * 1000) / 1000
+          })).filter((d: any) => d.value > 0);
           visualizations.push({
             id: nanoid(),
             type: 'bar',
@@ -1691,6 +1880,7 @@ export class DataScienceOrchestrator {
               })),
               summary: edaResults.comparativeAnalysis.summary
             },
+            normalizedData: testBarNorm,
             config: { showSignificanceThreshold: true }
           });
         }
@@ -1699,16 +1889,22 @@ export class DataScienceOrchestrator {
 
     // Fix 5: Group analysis visualizations from EDA results
     if (edaResults?.groupAnalysis?.group_profiles) {
+      const profiles = edaResults.groupAnalysis.group_profiles;
+      const groupBarNorm = Object.entries(profiles).map(([groupName, profile]: [string, any]) => ({
+        name: groupName,
+        value: profile?.count || profile?.size || profile?.n || 0
+      }));
       visualizations.push({
         id: nanoid(),
         type: 'bar',
         title: 'Group Profile Comparison',
-        description: `Side-by-side comparison of ${Object.keys(edaResults.groupAnalysis.group_profiles).length} group characteristics`,
+        description: `Side-by-side comparison of ${Object.keys(profiles).length} group characteristics`,
         data: {
-          profiles: edaResults.groupAnalysis.group_profiles,
+          profiles,
           summary: edaResults.groupAnalysis.summary,
           distinctiveFeatures: edaResults.groupAnalysis.distinctive_features
         },
+        normalizedData: groupBarNorm,
         config: { showMetrics: true }
       });
     }
@@ -2430,6 +2626,14 @@ export class DataScienceOrchestrator {
         console.warn(`⚠️ Python script not found: ${scriptPath}`);
         resolve({ success: false, error: `Script not found: ${scriptName}` });
         return;
+      }
+
+      // Layer 4c-d: Inject Spark connection config when engine is 'spark'
+      // so engine_utils.get_or_create_spark_session() can connect to the cluster
+      if (config.engine === 'spark') {
+        config.spark_master = process.env.SPARK_MASTER_URL || 'local[*]';
+        config.spark_executor_memory = process.env.SPARK_EXECUTOR_MEMORY || '2g';
+        config.spark_driver_memory = process.env.SPARK_DRIVER_MEMORY || '1g';
       }
 
       const configJson = JSON.stringify(config);

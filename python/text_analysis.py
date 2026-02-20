@@ -3,6 +3,8 @@
 Text Analysis Script
 NLP analysis: word frequency, n-grams, TF-IDF keywords, topic modeling (LDA), sentiment.
 Auto-detects text columns and performs comprehensive text analytics.
+
+Dual-engine: Polars for fast loading, Pandas/sklearn for NLP operations.
 """
 
 import json
@@ -14,13 +16,15 @@ from collections import Counter
 import warnings
 warnings.filterwarnings('ignore')
 
+from engine_utils import load_dataframe, to_pandas
+
 
 def perform_text_analysis(config):
     """Perform comprehensive text/NLP analysis"""
     try:
-        # Load data
-        data_path = config['data_path']
-        data = pd.read_json(data_path)
+        # Load data via dual-engine dispatch, convert to Pandas for NLP ops
+        data, engine_used = load_dataframe(config)
+        data = to_pandas(data)
 
         text_columns = config.get('text_columns') or config.get('columns')
 
@@ -36,6 +40,7 @@ def perform_text_analysis(config):
 
         results = {
             'success': True,
+            'engine_used': engine_used,
             'text_columns_analyzed': text_columns,
             'n_columns': len(text_columns),
             'per_column': {},

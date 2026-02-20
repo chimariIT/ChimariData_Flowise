@@ -62,6 +62,20 @@ export interface ArtifactConfig {
       analysisTypes: string[];
       executionTimeMs: number;
     };
+    perAnalysisBreakdown?: Record<string, {
+      status: string;
+      insights: Array<{ title: string; description: string }>;
+      error?: string;
+      executionTimeMs?: number;
+    }>;
+    analysisStatuses?: Array<{
+      analysisId: string;
+      analysisName: string;
+      analysisType: string;
+      status: string;
+      insightCount: number;
+      errorMessage?: string;
+    }>;
   };
 }
 
@@ -1153,60 +1167,168 @@ export class ArtifactGenerator {
       });
     }
 
-    // ========== SLIDE 7: Q&A (if available) ==========
+    // ========== SLIDES 7+: Q&A (multi-slide pagination — all questions) ==========
     if (comp?.executiveSummary?.answeredQuestions?.length) {
-      const qaSlide = pptx.addSlide();
-      qaSlide.addText('Questions Answered', {
-        x: 0.5,
-        y: 0.3,
-        w: 9,
-        h: 0.6,
-        fontSize: 28,
-        bold: true,
-        color: primaryColor
-      });
+      const allQA = comp.executiveSummary.answeredQuestions;
+      const QA_PER_SLIDE = 3;
+      const totalSlides = Math.ceil(allQA.length / QA_PER_SLIDE);
 
-      let qaY = 1.0;
-      comp.executiveSummary.answeredQuestions.slice(0, 3).forEach((qa, i) => {
-        // Question
-        qaSlide.addText(`Q${i + 1}: ${qa.question}`, {
+      for (let slideIdx = 0; slideIdx < totalSlides; slideIdx++) {
+        const qaSlide = pptx.addSlide();
+        const pageLabel = totalSlides > 1 ? ` (${slideIdx + 1}/${totalSlides})` : '';
+        qaSlide.addText(`Questions Answered${pageLabel}`, {
           x: 0.5,
-          y: qaY,
+          y: 0.3,
           w: 9,
-          h: 0.4,
-          fontSize: 11,
+          h: 0.6,
+          fontSize: 28,
           bold: true,
-          color: textColor
+          color: primaryColor
         });
-        qaY += 0.45;
 
-        // Answer
-        qaSlide.addText(`A: ${qa.answer.substring(0, 200)}${qa.answer.length > 200 ? '...' : ''}`, {
-          x: 0.5,
-          y: qaY,
-          w: 9,
-          h: 0.7,
-          fontSize: 10,
-          color: '4B5563',
-          valign: 'top'
-        });
-        qaY += 0.8;
+        let qaY = 1.0;
+        const startIdx = slideIdx * QA_PER_SLIDE;
+        const pageQAs = allQA.slice(startIdx, startIdx + QA_PER_SLIDE);
 
-        // Confidence
-        const confidenceColor = qa.confidence >= 0.8 ? secondaryColor : qa.confidence >= 0.6 ? accentColor : '6B7280';
-        qaSlide.addText(`Confidence: ${(qa.confidence * 100).toFixed(0)}%`, {
-          x: 0.5,
-          y: qaY,
-          w: 2,
-          h: 0.3,
-          fontSize: 9,
-          color: confidenceColor
+        pageQAs.forEach((qa, i) => {
+          const globalIdx = startIdx + i;
+          // Question
+          qaSlide.addText(`Q${globalIdx + 1}: ${qa.question}`, {
+            x: 0.5,
+            y: qaY,
+            w: 9,
+            h: 0.4,
+            fontSize: 11,
+            bold: true,
+            color: textColor
+          });
+          qaY += 0.45;
+
+          // Answer
+          qaSlide.addText(`A: ${qa.answer.substring(0, 200)}${qa.answer.length > 200 ? '...' : ''}`, {
+            x: 0.5,
+            y: qaY,
+            w: 9,
+            h: 0.7,
+            fontSize: 10,
+            color: '4B5563',
+            valign: 'top'
+          });
+          qaY += 0.8;
+
+          // Confidence
+          const confidenceColor = qa.confidence >= 0.8 ? secondaryColor : qa.confidence >= 0.6 ? accentColor : '6B7280';
+          qaSlide.addText(`Confidence: ${(qa.confidence * 100).toFixed(0)}%`, {
+            x: 0.5,
+            y: qaY,
+            w: 2,
+            h: 0.3,
+            fontSize: 9,
+            color: confidenceColor
+          });
+          qaY += 0.5;
         });
-        qaY += 0.5;
-      });
+      }
     }
 
-    // ========== SLIDE 8: THANK YOU ==========
+    // ========== PER-ANALYSIS BREAKDOWN SLIDES (before Thank You) ==========
+    if (comp?.analysisStatuses?.length) {
+      const statuses = comp.analysisStatuses;
+      const ANALYSES_PER_SLIDE = 2;
+      const totalBreakdownSlides = Math.ceil(statuses.length / ANALYSES_PER_SLIDE);
+      const breakdown = comp.perAnalysisBreakdown || {};
+
+      for (let slideIdx = 0; slideIdx < totalBreakdownSlides; slideIdx++) {
+        const bkSlide = pptx.addSlide();
+        const pageLabel = totalBreakdownSlides > 1 ? ` (${slideIdx + 1}/${totalBreakdownSlides})` : '';
+        bkSlide.addText(`Analysis Breakdown${pageLabel}`, {
+          x: 0.5,
+          y: 0.3,
+          w: 9,
+          h: 0.6,
+          fontSize: 28,
+          bold: true,
+          color: primaryColor
+        });
+
+        let bkY = 1.0;
+        const startIdx = slideIdx * ANALYSES_PER_SLIDE;
+        const pageStatuses = statuses.slice(startIdx, startIdx + ANALYSES_PER_SLIDE);
+
+        pageStatuses.forEach((status) => {
+          const statusColor = status.status === 'completed' ? secondaryColor : status.status === 'failed' ? 'DC2626' : accentColor;
+          const statusBadge = status.status === 'completed' ? '✓' : status.status === 'failed' ? '✗' : '—';
+
+          // Analysis name + status badge
+          bkSlide.addText(`${statusBadge} ${status.analysisName}`, {
+            x: 0.5,
+            y: bkY,
+            w: 7,
+            h: 0.4,
+            fontSize: 14,
+            bold: true,
+            color: textColor
+          });
+          bkSlide.addText(status.status.toUpperCase(), {
+            x: 7.5,
+            y: bkY,
+            w: 2,
+            h: 0.4,
+            fontSize: 10,
+            bold: true,
+            color: statusColor,
+            align: 'right'
+          });
+          bkY += 0.5;
+
+          // Type badge
+          bkSlide.addText(`Type: ${status.analysisType} | Insights: ${status.insightCount}`, {
+            x: 0.7,
+            y: bkY,
+            w: 8.5,
+            h: 0.3,
+            fontSize: 9,
+            color: '6B7280'
+          });
+          bkY += 0.4;
+
+          // Top insights from breakdown
+          const detail = breakdown[status.analysisId];
+          if (detail?.insights?.length) {
+            detail.insights.slice(0, 3).forEach((insight) => {
+              bkSlide.addText(`• ${insight.title}: ${insight.description?.substring(0, 120) || ''}${(insight.description?.length || 0) > 120 ? '...' : ''}`, {
+                x: 0.7,
+                y: bkY,
+                w: 8.5,
+                h: 0.4,
+                fontSize: 9,
+                color: '4B5563',
+                valign: 'top'
+              });
+              bkY += 0.45;
+            });
+          }
+
+          // Error message if failed
+          if (status.errorMessage) {
+            bkSlide.addText(`Error: ${status.errorMessage.substring(0, 150)}`, {
+              x: 0.7,
+              y: bkY,
+              w: 8.5,
+              h: 0.4,
+              fontSize: 9,
+              color: 'DC2626',
+              valign: 'top'
+            });
+            bkY += 0.5;
+          }
+
+          bkY += 0.3; // spacing between analyses
+        });
+      }
+    }
+
+    // ========== THANK YOU SLIDE ==========
     const endSlide = pptx.addSlide();
     endSlide.addText('Thank You', {
       x: 0.5,

@@ -295,6 +295,13 @@ export default function ProjectResults({
     return []; // No placeholder data — show empty state instead
   }, [analysisResults]);
 
+  // Per-analysis visualization specs from orchestrator
+  const visualizationSpecs = useMemo(() => {
+    const vizArray = analysisResults?.visualizations;
+    if (!Array.isArray(vizArray) || vizArray.length === 0) return [];
+    return vizArray.filter((v: any) => v && v.type && (v.normalizedData?.length > 0 || v.data));
+  }, [analysisResults]);
+
   const fieldCount = Object.keys(project.schema || {}).length;
   const insightCount = insightList.length;
   const totalRecords = analysisSummary.dataRowsProcessed || project.recordCount || 0;
@@ -744,7 +751,7 @@ export default function ProjectResults({
 
           {/* Visualizations Tab */}
           <TabsContent value="visualizations">
-            {chartData.length === 0 && pieData.length === 0 ? (
+            {chartData.length === 0 && pieData.length === 0 && visualizationSpecs.length === 0 ? (
               <Card>
                 <CardContent className="pt-6">
                   <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -853,6 +860,83 @@ export default function ProjectResults({
                     </Card>
                   )}
                 </div>
+
+                {/* Detailed Analysis Charts from per-analysis visualization specs */}
+                {visualizationSpecs.length > 0 && (
+                  <div className="mt-8">
+                    <div className="flex items-center gap-2 mb-4">
+                      <Brain className="w-5 h-5 text-primary" />
+                      <h3 className="font-semibold text-lg">Detailed Analysis Charts</h3>
+                      <Badge variant="secondary" className="ml-2">{visualizationSpecs.length} charts</Badge>
+                    </div>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                      {visualizationSpecs.map((viz: any) => {
+                        // Get chart data: prefer normalizedData, else parse from data
+                        const vizData: Array<{name: string; value: number}> = viz.normalizedData || [];
+
+                        if (vizData.length === 0) return null;
+
+                        // Determine chart color by type
+                        const colorByType: Record<string, string> = {
+                          distribution: '#8b5cf6',
+                          feature_importance: '#10b981',
+                          correlation_heatmap: '#f59e0b',
+                          box: '#06b6d4',
+                          bar: '#3b82f6',
+                          cluster: '#ec4899',
+                        };
+                        const fillColor = colorByType[viz.type] || '#3b82f6';
+
+                        // Badge label
+                        const typeLabels: Record<string, string> = {
+                          distribution: 'Distribution',
+                          feature_importance: 'Feature Importance',
+                          correlation_heatmap: 'Correlations',
+                          box: 'Group Comparison',
+                          bar: 'Comparison',
+                          cluster: 'Clusters',
+                        };
+
+                        return (
+                          <Card key={viz.id}>
+                            <CardHeader className="pb-2">
+                              <div className="flex items-center justify-between">
+                                <CardTitle className="text-sm font-medium">{viz.title}</CardTitle>
+                                <Badge variant="outline" className="text-xs">{typeLabels[viz.type] || viz.type}</Badge>
+                              </div>
+                              {viz.description && (
+                                <CardDescription className="text-xs">{viz.description}</CardDescription>
+                              )}
+                            </CardHeader>
+                            <CardContent>
+                              <ResponsiveContainer width="100%" height={250}>
+                                <BarChart
+                                  data={vizData}
+                                  layout={viz.type === 'feature_importance' ? 'vertical' : 'horizontal'}
+                                  margin={viz.type === 'feature_importance' ? { left: 80 } : undefined}
+                                >
+                                  {viz.type === 'feature_importance' ? (
+                                    <>
+                                      <XAxis type="number" />
+                                      <YAxis dataKey="name" type="category" width={75} tick={{ fontSize: 11 }} />
+                                    </>
+                                  ) : (
+                                    <>
+                                      <XAxis dataKey="name" tick={{ fontSize: 11 }} angle={vizData.length > 6 ? -30 : 0} textAnchor={vizData.length > 6 ? "end" : "middle"} height={vizData.length > 6 ? 60 : 30} />
+                                      <YAxis />
+                                    </>
+                                  )}
+                                  <Tooltip formatter={(value: number) => [value.toFixed(3), 'Value']} />
+                                  <Bar dataKey="value" fill={fillColor} radius={[4, 4, 0, 0]} />
+                                </BarChart>
+                              </ResponsiveContainer>
+                            </CardContent>
+                          </Card>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </TabsContent>

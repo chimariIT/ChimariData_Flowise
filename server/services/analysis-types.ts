@@ -142,7 +142,7 @@ export interface AnalysisResults {
     qualityScore: number;
     // FIX 3C: Optional chart-rendering data generated from insights
     trendData?: Array<{ label: string; value: number; category: string }>;
-    categoryBreakdown?: Array<{ category: string; count: number; percentage: number }>;
+    categoryBreakdown?: Array<{ label: string; value: number; color?: string }>;
     // FIX 3E: Per-analysis status summary
     analysisStatus?: Record<string, { status: string; insightCount: number; error?: string }>;
   };

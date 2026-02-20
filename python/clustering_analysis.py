@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
 Clustering Analysis Script
-Uses scikit-learn for unsupervised clustering analysis
+Uses dual-engine (Polars/Pandas) for loading, scikit-learn for clustering.
+
+Polars handles: loading, numeric column selection, fillna.
+Pandas/sklearn handles: StandardScaler, KMeans, DBSCAN, PCA, metrics.
 """
 
 import json
 import sys
-import pandas as pd
 import numpy as np
 from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering
 from sklearn.preprocessing import StandardScaler
@@ -15,38 +17,90 @@ from sklearn.decomposition import PCA
 import warnings
 warnings.filterwarnings('ignore')
 
+from engine_utils import (
+    load_dataframe, to_pandas, POLARS_AVAILABLE, PANDAS_AVAILABLE,
+    select_numeric_columns, filter_columns, get_columns, row_count
+)
+
+if POLARS_AVAILABLE:
+    import polars as pl
+    import polars.selectors as cs
+
+import pandas as pd
+
 
 def perform_clustering_analysis(config):
     """Perform comprehensive clustering analysis"""
     try:
-        # Load data
-        data_path = config['data_path']
-        data = pd.read_json(data_path)
+        # Load data via dual-engine dispatch
+        data, engine_used = load_dataframe(config)
 
         n_clusters = config.get('n_clusters', 3)
         method = config.get('method', 'kmeans')
 
         # Phase 4C-2: Accept explicit feature columns from AnalysisDataPreparer
         features = config.get('features')
-        if features:
-            available = [f for f in features if f in data.columns]
-            if available:
-                numeric_data = data[available].select_dtypes(include=[np.number])
+
+        if engine_used == 'polars' and POLARS_AVAILABLE:
+            all_cols = get_columns(data, engine_used)
+
+            if features:
+                available = [f for f in features if f in all_cols]
+                if available:
+                    data_subset = data.select(available)
+                    try:
+                        numeric_pl = data_subset.select(cs.numeric())
+                    except Exception:
+                        numeric_pl = data_subset.select([c for c in data_subset.columns
+                                                         if data_subset[c].dtype.is_numeric()])
+                else:
+                    try:
+                        numeric_pl = data.select(cs.numeric())
+                    except Exception:
+                        numeric_pl = data.select([c for c in data.columns
+                                                   if data[c].dtype.is_numeric()])
+            else:
+                try:
+                    numeric_pl = data.select(cs.numeric())
+                except Exception:
+                    numeric_pl = data.select([c for c in data.columns
+                                               if data[c].dtype.is_numeric()])
+
+            if numeric_pl.shape[1] == 0:
+                return {
+                    'success': False,
+                    'error': 'No numeric columns found for clustering'
+                }
+
+            # Fill nulls with column means (Polars)
+            numeric_pl = numeric_pl.fill_null(strategy='mean')
+
+            # Convert to Pandas for sklearn pipeline
+            print(f"✅ [Engine] Polars loaded {len(numeric_pl)} rows, converting to Pandas for sklearn", file=sys.stderr)
+            numeric_data = numeric_pl.to_pandas()
+            # Also keep full data as Pandas for sample features
+            data_pd = to_pandas(data)
+        else:
+            # Pandas path (original behavior)
+            if features:
+                available = [f for f in features if f in data.columns]
+                if available:
+                    numeric_data = data[available].select_dtypes(include=[np.number])
+                else:
+                    numeric_data = data.select_dtypes(include=[np.number])
             else:
                 numeric_data = data.select_dtypes(include=[np.number])
-        else:
-            # Select only numeric columns (original behavior)
-            numeric_data = data.select_dtypes(include=[np.number])
 
-        if numeric_data.shape[1] == 0:
-            return {
-                'success': False,
-                'error': 'No numeric columns found for clustering'
-            }
+            if numeric_data.shape[1] == 0:
+                return {
+                    'success': False,
+                    'error': 'No numeric columns found for clustering'
+                }
 
-        # Handle missing values
-        numeric_data = numeric_data.fillna(numeric_data.mean())
+            numeric_data = numeric_data.fillna(numeric_data.mean())
+            data_pd = data
 
+        # From here on, numeric_data is always a Pandas DataFrame
         # Standardize features
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(numeric_data)
@@ -65,7 +119,7 @@ def perform_clustering_analysis(config):
             labels = model.fit_predict(X_scaled)
             cluster_centers = None
             inertia = None
-            n_clusters = len(set(labels)) - (1 if -1 in labels else 0)  # Exclude noise points
+            n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
 
         elif method == 'hierarchical':
             linkage = config.get('linkage', 'ward')
@@ -75,7 +129,6 @@ def perform_clustering_analysis(config):
             inertia = None
 
         else:
-            # Default to k-means
             model = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
             labels = model.fit_predict(X_scaled)
             cluster_centers = model.cluster_centers_
@@ -109,10 +162,9 @@ def perform_clustering_analysis(config):
                 for i in range(len(centers_original))
             }
         else:
-            # Calculate mean of each cluster
             cluster_centers_dict = {}
             for cluster_id in set(labels):
-                if cluster_id != -1:  # Skip noise points in DBSCAN
+                if cluster_id != -1:
                     cluster_mask = labels == cluster_id
                     cluster_mean = numeric_data[cluster_mask].mean()
                     cluster_centers_dict[int(cluster_id)] = cluster_mean.to_dict()
@@ -129,7 +181,7 @@ def perform_clustering_analysis(config):
         # Sample points from each cluster
         cluster_samples = {}
         for cluster_id in set(labels):
-            if cluster_id != -1:  # Skip noise points
+            if cluster_id != -1:
                 cluster_mask = labels == cluster_id
                 cluster_indices = np.where(cluster_mask)[0]
                 sample_indices = cluster_indices[:min(10, len(cluster_indices))]
@@ -138,12 +190,12 @@ def perform_clustering_analysis(config):
                     {
                         'index': int(idx),
                         'pca_coordinates': X_pca[idx].tolist() if X_pca is not None else None,
-                        'features': data.iloc[idx].to_dict()
+                        'features': data_pd.iloc[idx].to_dict()
                     }
                     for idx in sample_indices
                 ]
 
-        # Cluster profiles (feature averages per cluster)
+        # Cluster profiles
         cluster_profiles = {}
         for cluster_id in set(labels):
             if cluster_id != -1:
@@ -158,6 +210,7 @@ def perform_clustering_analysis(config):
         # Phase 4C-1: Pass through business context for evidence chain
         result = {
             'success': True,
+            'engine_used': engine_used,
             'method': method,
             'n_clusters': n_clusters,
             'metrics': {
@@ -188,15 +241,41 @@ def perform_clustering_analysis(config):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
+    import os
+
+    config = None
+
+    # Priority 1: Check CONFIG environment variable
+    if os.environ.get('CONFIG'):
+        try:
+            config = json.loads(os.environ['CONFIG'])
+        except:
+            pass
+
+    # Priority 2: Check stdin
+    if config is None and not sys.stdin.isatty():
+        try:
+            stdin_data = sys.stdin.read().strip()
+            if stdin_data:
+                config = json.loads(stdin_data)
+        except:
+            pass
+
+    # Priority 3: Check command line argument
+    if config is None and len(sys.argv) == 2:
+        try:
+            config = json.loads(sys.argv[1])
+        except:
+            pass
+
+    if config is None:
         print(json.dumps({
             'success': False,
-            'error': 'Usage: python3 clustering_analysis.py <config_json>'
+            'error': 'Usage: python clustering_analysis.py <config_json> OR pipe JSON to stdin OR set CONFIG env var'
         }))
         sys.exit(1)
 
     try:
-        config = json.loads(sys.argv[1])
         result = perform_clustering_analysis(config)
         print(json.dumps(result))
         sys.exit(0 if result.get('success') else 1)
