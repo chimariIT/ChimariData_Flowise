@@ -1142,6 +1142,47 @@ export class SourceColumnMapper {
 
     if (candidates.length === 0) return null;
 
+    // Disqualify columns that are clearly NOT identifiers (negative signals)
+    if (preview && preview.length > 0) {
+      const beforeCount = candidates.length;
+      const disqualified: string[] = [];
+      const filteredCandidates = candidates.filter(c => {
+        const values = preview.slice(0, 20).map(row => String(row[c.column] || ''));
+        const avgLength = values.reduce((sum, v) => sum + v.length, 0) / values.length;
+        // Reject: avg value length > 50 chars (likely free text or question text, not an ID)
+        if (avgLength > 50) {
+          disqualified.push(`${c.column} (avg value length ${avgLength.toFixed(0)} chars)`);
+          return false;
+        }
+        // Reject: column name starts with a number or looks like a survey question
+        if (/^\d+[\.\)]|^(how|what|which|rate|rank|do you|are you|to what|please)/i.test(c.column)) {
+          disqualified.push(`${c.column} (question-like column name)`);
+          return false;
+        }
+        // Reject: values look like Likert scale responses (1-5 or 1-7 with low cardinality)
+        const numericValues = values.map(v => Number(v)).filter(n => !isNaN(n));
+        if (numericValues.length > values.length * 0.8) {
+          const uniqueVals = new Set(numericValues);
+          if (uniqueVals.size <= 7 && Math.min(...numericValues) >= 1 && Math.max(...numericValues) <= 10) {
+            disqualified.push(`${c.column} (Likert-scale values: ${uniqueVals.size} unique in 1-10 range)`);
+            return false;
+          }
+        }
+        return true;
+      });
+      if (disqualified.length > 0) {
+        console.log(`🚫 [Identifier] Disqualified ${disqualified.length} columns: ${disqualified.join(', ')}`);
+      }
+      // Only replace if we haven't eliminated ALL candidates
+      if (filteredCandidates.length > 0) {
+        candidates.length = 0;
+        candidates.push(...filteredCandidates);
+      } else if (beforeCount > 0) {
+        console.log(`⚠️ [Identifier] All ${beforeCount} candidates disqualified — returning null (no valid ID column)`);
+        return null;
+      }
+    }
+
     // If we have preview data, use cardinality to rank candidates
     // A true row-level identifier should have near-100% unique values
     if (preview && preview.length >= 10 && candidates.length > 1) {

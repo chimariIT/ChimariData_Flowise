@@ -2417,23 +2417,75 @@ export class DataScientistAgent implements AgentHandler {
 
     // If KPI decomposition produced elements, combine with a unique identifier and return
     if (kpiElements.length > 0) {
-      // Add unique identifier at the beginning
-      kpiElements.unshift({
-        elementName: 'Unique Identifier',
-        description: 'Unique ID for each record in the dataset',
-        dataType: 'text' as const,
-        purpose: 'Uniquely identify and track each record throughout the analysis',
-        required: true,
-        relatedQuestions: [],
-        calculationDefinition: {
-          calculationType: 'direct' as const,
-          formula: {
-            businessDescription: 'Direct mapping from source ID column (e.g., record_id, campaign_id, customer_id, row_number)',
-            pseudoCode: 'SELECT id_column AS unique_identifier FROM source_data'
-          },
-          notes: 'Use existing ID column or generate row numbers if none exists'
+      // Add unique identifier at the beginning — but ONLY if the schema has an actual ID column
+      const schemaIdColKpi = datasetSchema
+        ? Object.keys(datasetSchema).find(col => /^id$|[_-]id$|^.*_id$|^key$|identifier/i.test(col))
+        : undefined;
+
+      if (schemaIdColKpi) {
+        // Use the actual ID column from the schema
+        kpiElements.unshift({
+          elementName: schemaIdColKpi,
+          description: `Unique identifier from ${schemaIdColKpi} column`,
+          dataType: 'text' as const,
+          purpose: 'Uniquely identify and track each record throughout the analysis',
+          required: true,
+          relatedQuestions: [],
+          calculationDefinition: {
+            calculationType: 'direct' as const,
+            formula: {
+              businessDescription: `Direct mapping from ${schemaIdColKpi} column`,
+              componentFields: [schemaIdColKpi],
+              pseudoCode: `SELECT ${schemaIdColKpi} AS unique_identifier FROM source_data`
+            },
+            notes: `Using actual schema column: ${schemaIdColKpi}`
+          }
+        });
+      } else if (datasetSchema) {
+        // Check if this looks like survey data (columns starting with numbers or question words)
+        const cols = Object.keys(datasetSchema);
+        const surveyLikeCount = cols.filter(c => /^\d+[\.\)]|^(how|what|which|rate|rank|do you|are you|to what|please)/i.test(c)).length;
+        if (surveyLikeCount > cols.length * 0.3) {
+          // Survey dataset — skip ID element, use row index for tracking
+          console.log(`📋 [DS Agent] Survey dataset detected (${surveyLikeCount}/${cols.length} question columns), skipping Unique Identifier`);
+        } else {
+          // Non-survey, add Row Index as synthetic element
+          kpiElements.unshift({
+            elementName: 'Row Index',
+            description: 'Auto-generated row number (no natural ID column found in dataset)',
+            dataType: 'numeric' as const,
+            purpose: 'Uniquely identify and track each record throughout the analysis',
+            required: false,
+            relatedQuestions: [],
+            calculationDefinition: {
+              calculationType: 'derived' as const,
+              formula: {
+                businessDescription: 'Auto-generated sequential identifier',
+                pseudoCode: 'ROW_NUMBER() OVER (ORDER BY insertion_order)'
+              },
+              notes: 'No natural ID column found — using synthetic row number'
+            }
+          });
         }
-      });
+      } else {
+        // No schema available, add generic identifier
+        kpiElements.unshift({
+          elementName: 'Unique Identifier',
+          description: 'Unique ID for each record in the dataset',
+          dataType: 'text' as const,
+          purpose: 'Uniquely identify and track each record throughout the analysis',
+          required: true,
+          relatedQuestions: [],
+          calculationDefinition: {
+            calculationType: 'direct' as const,
+            formula: {
+              businessDescription: 'Direct mapping from source ID column (e.g., record_id, campaign_id, customer_id, row_number)',
+              pseudoCode: 'SELECT id_column AS unique_identifier FROM source_data'
+            },
+            notes: 'Use existing ID column or generate row numbers if none exists'
+          }
+        });
+      }
 
       // Also run regex patterns for questions NOT handled by KPI decomposition
       // to catch dimension/metric elements that the decomposition didn't cover
@@ -2470,28 +2522,59 @@ export class DataScientistAgent implements AgentHandler {
     const allText = [...userGoals, ...userQuestions].join(' ').toLowerCase();
 
     // Always need a unique identifier (skip if already added by KPI decomposition)
-    if (!kpiElements.some(e => e.elementName === 'Unique Identifier' || (datasetSchema && Object.keys(datasetSchema).some(col => /id$|_id$/i.test(col) && e.elementName.toLowerCase().replace(/[\s-]/g, '_') === col.toLowerCase())))) {
+    const hasIdFromKpi = kpiElements.some(e =>
+      e.elementName === 'Unique Identifier' || e.elementName === 'Row Index' ||
+      (datasetSchema && Object.keys(datasetSchema).some(col => /id$|_id$/i.test(col) && e.elementName.toLowerCase().replace(/[\s-]/g, '_') === col.toLowerCase()))
+    );
+    if (!hasIdFromKpi) {
       // Find actual ID column from schema instead of using placeholder
       const actualIdCol = findSchemaColumn([/^id$/i, /[_-]id$/i, /^.*_id$/i, /^key$/i, /identifier/i, /^code$/i, /^record/i]);
-      const idName = actualIdCol || 'Unique Identifier';
 
-      requiredElements.push({
-        elementName: idName,
-        description: actualIdCol ? `Unique identifier from ${actualIdCol} column` : 'Unique ID for each record in the dataset',
-        dataType: 'text' as const,
-        purpose: 'Uniquely identify and track each record throughout the analysis',
-        required: true,
-        relatedQuestions: [],
-        calculationDefinition: {
-          calculationType: 'direct' as const,
-          formula: {
-            businessDescription: `Direct mapping from ${actualIdCol || 'source ID'} column`,
-            componentFields: actualIdCol ? [actualIdCol] : [],
-            pseudoCode: `SELECT ${(actualIdCol || 'id_column')} AS unique_identifier FROM source_data`
-          },
-          notes: actualIdCol ? `Schema-matched ID column: ${actualIdCol}` : 'Use existing ID column or generate row numbers if none exists'
+      if (actualIdCol) {
+        requiredElements.push({
+          elementName: actualIdCol,
+          description: `Unique identifier from ${actualIdCol} column`,
+          dataType: 'text' as const,
+          purpose: 'Uniquely identify and track each record throughout the analysis',
+          required: true,
+          relatedQuestions: [],
+          calculationDefinition: {
+            calculationType: 'direct' as const,
+            formula: {
+              businessDescription: `Direct mapping from ${actualIdCol} column`,
+              componentFields: [actualIdCol],
+              pseudoCode: `SELECT ${actualIdCol} AS unique_identifier FROM source_data`
+            },
+            notes: `Schema-matched ID column: ${actualIdCol}`
+          }
+        });
+      } else if (datasetSchema) {
+        // Check if survey-like dataset — skip ID if so
+        const cols = Object.keys(datasetSchema);
+        const surveyLikeCount = cols.filter(c => /^\d+[\.\)]|^(how|what|which|rate|rank|do you|are you|to what|please)/i.test(c)).length;
+        if (surveyLikeCount > cols.length * 0.3) {
+          console.log(`📋 [DS Agent] Survey dataset detected (${surveyLikeCount}/${cols.length} question columns), skipping Unique Identifier in regex fallback`);
+        } else {
+          // Non-survey, add Row Index
+          requiredElements.push({
+            elementName: 'Row Index',
+            description: 'Auto-generated row number (no natural ID column found)',
+            dataType: 'numeric' as const,
+            purpose: 'Uniquely identify and track each record throughout the analysis',
+            required: false,
+            relatedQuestions: [],
+            calculationDefinition: {
+              calculationType: 'derived' as const,
+              formula: {
+                businessDescription: 'Auto-generated sequential identifier',
+                componentFields: [],
+                pseudoCode: 'ROW_NUMBER() OVER (ORDER BY insertion_order)'
+              },
+              notes: 'No natural ID column found — using synthetic row number'
+            }
+          });
         }
-      });
+      }
     }
 
     // For each question, use AI reasoning to infer what data is needed
@@ -3112,7 +3195,7 @@ Respond with the JSON array ONLY:`;
 
       // Ensure we have at least a unique identifier — use actual schema ID column if available
       const hasUniqueId = validatedElements.some(el =>
-        /unique.*id|identifier|record.*id|primary.*key/i.test(el.elementName) ||
+        /unique.*id|identifier|record.*id|primary.*key|row.?index/i.test(el.elementName) ||
         // Also check if any element name matches a schema ID column
         (datasetSchema && Object.keys(datasetSchema).some(col =>
           /id$|_id$|^id_|^key$|identifier/i.test(col) && el.elementName.toLowerCase().replace(/[\s-]/g, '_') === col.toLowerCase()
@@ -3124,25 +3207,54 @@ Respond with the JSON array ONLY:`;
         const schemaIdCol = datasetSchema
           ? Object.keys(datasetSchema).find(col => /^id$|[_-]id$|^.*_id$|^key$|identifier/i.test(col))
           : undefined;
-        const idColName = schemaIdCol || 'Unique Identifier';
 
-        validatedElements.unshift({
-          elementName: idColName,
-          description: schemaIdCol ? `Unique identifier from ${schemaIdCol} column` : 'Unique ID for each record in the dataset',
-          dataType: 'text' as const,
-          purpose: 'Uniquely identify and track each record throughout the analysis',
-          required: true,
-          relatedQuestions: [],
-          calculationDefinition: {
-            calculationType: 'direct' as const,
-            formula: {
-              businessDescription: `Direct mapping from ${idColName} column`,
-              componentFields: schemaIdCol ? [schemaIdCol] : [],
-              pseudoCode: `SELECT ${idColName.replace(/\s+/g, '_').toLowerCase()} AS unique_identifier FROM source_data`
-            },
-            notes: schemaIdCol ? `Using actual schema column: ${schemaIdCol}` : 'Use existing ID column or generate row numbers if none exists'
+        if (schemaIdCol) {
+          // Use actual ID column from schema
+          validatedElements.unshift({
+            elementName: schemaIdCol,
+            description: `Unique identifier from ${schemaIdCol} column`,
+            dataType: 'text' as const,
+            purpose: 'Uniquely identify and track each record throughout the analysis',
+            required: true,
+            relatedQuestions: [],
+            calculationDefinition: {
+              calculationType: 'direct' as const,
+              formula: {
+                businessDescription: `Direct mapping from ${schemaIdCol} column`,
+                componentFields: [schemaIdCol],
+                pseudoCode: `SELECT ${schemaIdCol} AS unique_identifier FROM source_data`
+              },
+              notes: `Using actual schema column: ${schemaIdCol}`
+            }
+          });
+        } else if (datasetSchema) {
+          // Check if this looks like survey data
+          const schemaCols = Object.keys(datasetSchema);
+          const surveyLikeCount = schemaCols.filter(c => /^\d+[\.\)]|^(how|what|which|rate|rank|do you|are you|to what|please)/i.test(c)).length;
+          if (surveyLikeCount > schemaCols.length * 0.3) {
+            // Survey dataset — skip ID element entirely, surveys don't need row-level IDs for descriptive analysis
+            console.log(`📋 [DS Agent AI] Survey dataset detected (${surveyLikeCount}/${schemaCols.length} question columns), skipping Unique Identifier`);
+          } else {
+            // Non-survey, add Row Index as synthetic element
+            validatedElements.unshift({
+              elementName: 'Row Index',
+              description: 'Auto-generated row number (no natural ID column found in dataset)',
+              dataType: 'numeric' as const,
+              purpose: 'Uniquely identify and track each record throughout the analysis',
+              required: false,
+              relatedQuestions: [],
+              calculationDefinition: {
+                calculationType: 'derived' as const,
+                formula: {
+                  businessDescription: 'Auto-generated sequential identifier',
+                  componentFields: [],
+                  pseudoCode: 'ROW_NUMBER() OVER (ORDER BY insertion_order)'
+                },
+                notes: 'No natural ID column found — using synthetic row number'
+              }
+            });
           }
-        });
+        }
       }
 
       console.log(`✅ [DS Agent AI] Successfully inferred ${validatedElements.length} elements using ${provider}`);

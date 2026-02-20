@@ -1084,6 +1084,7 @@ Return ONLY valid JSON with 3-5 recommendations.`;
         }
 
         // Add goal-specific recommendations
+        const goalsText = sanitizedGoals.join(' ').toLowerCase();
         for (const goal of sanitizedGoals.slice(0, 2)) {
             const goalLower = goal.toLowerCase();
             if (goalLower.includes('engag') || goalLower.includes('satisf')) {
@@ -1093,6 +1094,24 @@ Return ONLY valid JSON with 3-5 recommendations.`;
             } else if (goalLower.includes('cost') || goalLower.includes('efficienc')) {
                 recommendations.add(`Quantify potential savings from recommended optimizations to build business case.`);
             }
+        }
+
+        // Fix 3C: Survey/questionnaire-specific recommendations
+        if (/survey|questionnaire|response|feedback|rating|satisfaction|likert|poll/i.test(goalsText)) {
+            recommendations.add('Analyze response distributions and identify key themes across demographic segments.');
+            recommendations.add('Compare satisfaction levels across respondent groups to identify equity gaps.');
+        }
+
+        // Fix 3C: Education/school-specific recommendations
+        if (/school|education|student|parent|teacher|classroom|grade|academic|curriculum|district/i.test(goalsText)) {
+            recommendations.add('Benchmark program effectiveness against grade-level expectations and district averages.');
+            recommendations.add('Disaggregate findings by grade level and demographics to identify achievement gaps.');
+        }
+
+        // Fix 3C: Nonprofit/community-specific recommendations
+        if (/nonprofit|community|program|impact|stakeholder|donor|grant|outreach|volunteer/i.test(goalsText)) {
+            recommendations.add('Measure program impact through participant outcome data and satisfaction scores.');
+            recommendations.add('Prepare findings in funder-ready format with clear outcome metrics and trend analysis.');
         }
 
         if (recommendations.size === 0) {
@@ -1926,6 +1945,31 @@ Return ONLY valid JSON with 3-5 recommendations.`;
                 description: 'Growth rate after accounting for upgrades, downgrades, and churn',
                 calculation: '((MRR Start + Expansion - Contraction - Churn) / MRR Start) × 100'
             });
+        }
+
+        // Fix 3B: Generate KPIs from dataset schema when templates/keywords don't match
+        if (primaryMetrics.length === 0 && columnNames.length > 0) {
+          // Extract meaningful metric names from numeric/score-like columns
+          const metricCandidates = columnNames.filter(c =>
+            !/^id$|_id$|timestamp|date|index|row|unnamed/i.test(c)
+          );
+          // Prefer columns that look like metrics (score, rate, count, amount, etc.)
+          const metricLikeCols = metricCandidates.filter(c =>
+            /score|rate|count|amount|total|average|mean|percent|ratio|index|level|satisfaction|engagement|performance/i.test(c)
+          );
+          const colsToUse = metricLikeCols.length > 0 ? metricLikeCols : metricCandidates;
+          for (const col of colsToUse.slice(0, 5)) {
+            const metricName = col.replace(/[_-]/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
+            pushMetric(primaryMetrics, {
+              name: metricName,
+              description: `Key metric derived from ${col} column in the dataset`,
+              calculation: `Aggregate analysis of ${col} values`,
+              businessImpact: `Tracks ${metricName.toLowerCase()} performance across the dataset`
+            });
+          }
+          if (primaryMetrics.length > 0) {
+            console.log(`💼 [BA] Generated ${primaryMetrics.length} KPIs from dataset schema columns`);
+          }
         }
 
         if (primaryMetrics.length === 0) {

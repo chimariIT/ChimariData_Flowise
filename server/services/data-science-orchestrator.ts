@@ -1871,23 +1871,149 @@ export class DataScienceOrchestrator {
         }
       }
 
-      // === Descriptive/survey/general question matching ===
-      // For questions that don't match specific keywords (survey questions, general questions),
-      // extract findings from descriptive stats and EDA results
-      if (findings.length === 0) {
-        // Extract from descriptive stats
+      // === Fix 2A: Descriptive/distribution keywords ===
+      if (/average|mean|median|distribution|frequency|how (many|much|often)|rate|score|level|satisfaction|overall|majority|most|top|general|typical|common/i.test(questionLower)) {
+        analysisTypes.push('descriptive');
+        // Match descriptive stats columns to question keywords for relevance
+        const questionKeywords = questionLower.match(/\b\w{4,}\b/g) || [];
         if (statisticalReport.descriptiveStats && statisticalReport.descriptiveStats.length > 0) {
-          const topStats = statisticalReport.descriptiveStats.slice(0, 2);
-          for (const stat of topStats) {
+          for (const stat of statisticalReport.descriptiveStats) {
+            const statAny = stat as any;
+            const colLower = (statAny.column || '').toLowerCase();
+            const isRelevant = questionKeywords.some((kw: string) => colLower.includes(kw) || kw.includes(colLower.replace(/[_-]/g, '')));
+            if (isRelevant) {
+              findings.push({
+                id: nanoid(),
+                analysisType: 'descriptive',
+                title: `${statAny.column} statistics`,
+                description: statAny.mean !== undefined
+                  ? `Mean=${Number(statAny.mean).toFixed(2)}, Median=${Number(statAny.median || 0).toFixed(2)}, Std Dev=${Number(statAny.std || 0).toFixed(2)} (n=${statAny.count || 'N/A'})`
+                  : `Analyzed ${statAny.count || 0} values`,
+                significance: 'medium' as const,
+                evidence: statAny,
+                dataElementsUsed: statAny.column ? [statAny.column] : []
+              });
+              dataElements.push(statAny.column);
+            }
+          }
+        }
+      }
+
+      // === Fix 2A: Comparison keywords (survey: lower vs upper grade, team vs team) ===
+      if (/compar|differ|versus|vs\.?|between|lower.*upper|more.*than|less.*than|better|worse|gap|equity|equal/i.test(questionLower)) {
+        analysisTypes.push('comparative');
+        // Extract from EDA comparative analysis results
+        if (edaResults && typeof edaResults === 'object') {
+          const compAnalysis = edaResults.comparativeAnalysis || edaResults.comparative_analysis;
+          if (compAnalysis?.tests) {
+            const significantTests = compAnalysis.tests.filter((t: any) => t.significant).slice(0, 3);
+            for (const test of significantTests) {
+              findings.push({
+                id: nanoid(),
+                analysisType: 'comparative',
+                title: `${test.variable || test.test_name}: ${test.test_name || 'Statistical Test'}`,
+                description: test.interpretation || `Significant difference found (p=${(test.p_value || 0).toFixed(4)}, effect size=${(test.effect_size || 0).toFixed(3)})`,
+                significance: (test.effect_size || 0) > 0.14 ? 'high' as const : 'medium' as const,
+                evidence: test,
+                dataElementsUsed: test.variable ? [test.variable] : []
+              });
+              if (test.variable) dataElements.push(test.variable);
+            }
+          }
+        }
+      }
+
+      // === Fix 2A: Priority/ranking keywords (survey: "top priorities", "most important") ===
+      if (/priorit|rank|top|important|prefer|favorite|first|second|main|theme|key|critical|leading/i.test(questionLower)) {
+        analysisTypes.push('descriptive');
+        // For ranking questions, show frequency distributions / mode / top values
+        if (statisticalReport.descriptiveStats && statisticalReport.descriptiveStats.length > 0) {
+          const questionKeywords = questionLower.match(/\b\w{4,}\b/g) || [];
+          // Try to match relevant columns first
+          let relevantStats = statisticalReport.descriptiveStats.filter((stat: any) => {
+            const colLower = (stat.column || '').toLowerCase();
+            return questionKeywords.some((kw: string) => colLower.includes(kw) || kw.includes(colLower.replace(/[_-]/g, '')));
+          });
+          // If no match, use top 3 stats
+          if (relevantStats.length === 0) relevantStats = statisticalReport.descriptiveStats.slice(0, 3);
+          for (const stat of relevantStats.slice(0, 3)) {
             const statAny = stat as any;
             findings.push({
               id: nanoid(),
               analysisType: 'descriptive',
-              title: `${statAny.column || 'Variable'} summary statistics`,
+              title: `Distribution of ${statAny.column || 'Variable'}`,
+              description: statAny.min !== undefined
+                ? `Range: ${Number(statAny.min).toFixed(1)} to ${Number(statAny.max || 0).toFixed(1)}, IQR: ${Number(statAny.percentiles?.p25 || statAny.q1 || 0).toFixed(1)} - ${Number(statAny.percentiles?.p75 || statAny.q3 || 0).toFixed(1)} (n=${statAny.count || 'N/A'})`
+                : `Analyzed ${statAny.count || 0} values`,
+              significance: 'medium' as const,
+              evidence: statAny,
+              dataElementsUsed: statAny.column ? [statAny.column] : []
+            });
+            if (statAny.column) dataElements.push(statAny.column);
+          }
+        }
+      }
+
+      // === Fix 2A: Survey/opinion/attitude keywords ===
+      if (/agree|disagree|opinion|feel|think|believe|like|dislike|percei|percept|attitud|view|respon/i.test(questionLower)) {
+        analysisTypes.push('descriptive');
+        // Use descriptive stats for all survey-related columns
+        if (statisticalReport.descriptiveStats && statisticalReport.descriptiveStats.length > 0) {
+          const questionKeywords = questionLower.match(/\b\w{4,}\b/g) || [];
+          for (const stat of statisticalReport.descriptiveStats) {
+            const statAny = stat as any;
+            const colLower = (statAny.column || '').toLowerCase();
+            const isRelevant = questionKeywords.some((kw: string) => colLower.includes(kw) || kw.includes(colLower.replace(/[_-]/g, '')));
+            if (isRelevant && findings.length < 5) {
+              findings.push({
+                id: nanoid(),
+                analysisType: 'descriptive',
+                title: `${statAny.column} response distribution`,
+                description: statAny.mean !== undefined
+                  ? `Mean response=${Number(statAny.mean).toFixed(2)}, Median=${Number(statAny.median || 0).toFixed(2)} (n=${statAny.count || 'N/A'})`
+                  : `Analyzed ${statAny.count || 0} responses`,
+                significance: 'medium' as const,
+                evidence: statAny,
+                dataElementsUsed: statAny.column ? [statAny.column] : []
+              });
+              if (statAny.column) dataElements.push(statAny.column);
+            }
+          }
+        }
+      }
+
+      // === Fix 2B: Question-specific fallback (replaces generic first-2 stats for ALL questions) ===
+      if (findings.length === 0) {
+        // Try to match descriptive stats columns to question keywords
+        const questionKeywords = questionLower.match(/\b\w{4,}\b/g) || [];
+
+        if (statisticalReport.descriptiveStats && statisticalReport.descriptiveStats.length > 0) {
+          // First attempt: keyword-match columns to question content
+          let matchedStats = statisticalReport.descriptiveStats.filter((stat: any) => {
+            const colLower = (stat.column || '').toLowerCase();
+            return questionKeywords.some((kw: string) =>
+              colLower.includes(kw) || kw.includes(colLower.replace(/[_-]/g, ''))
+            );
+          });
+
+          // If no keyword match, fall back to first 2 stats but indicate it's general context
+          const isGeneral = matchedStats.length === 0;
+          if (isGeneral) {
+            matchedStats = statisticalReport.descriptiveStats.slice(0, 2);
+          }
+
+          for (const stat of matchedStats.slice(0, 3)) {
+            const statAny = stat as any;
+            findings.push({
+              id: nanoid(),
+              analysisType: 'descriptive',
+              title: isGeneral
+                ? `${statAny.column || 'Variable'} (general context)`
+                : `${statAny.column || 'Variable'} summary statistics`,
               description: statAny.mean !== undefined
                 ? `Mean=${Number(statAny.mean).toFixed(2)}, Median=${Number(statAny.median || 0).toFixed(2)} (n=${statAny.count || 'N/A'})`
                 : `Analyzed ${statAny.count || 0} values`,
-              significance: 'medium' as const,
+              significance: isGeneral ? 'low' as const : 'medium' as const,
               evidence: statAny,
               dataElementsUsed: statAny.column ? [statAny.column] : []
             });
