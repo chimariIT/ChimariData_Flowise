@@ -1960,6 +1960,81 @@ export class DataScienceOrchestrator {
       }
     }
 
+    // ============================================
+    // FIX 5: Build column-to-findings indexes for column-aware matching
+    // ============================================
+    // Collect ALL column names from analysis results for matching
+    const allStatColumns = new Set<string>();
+    const statsByColumn = new Map<string, any>();
+    if (statisticalReport.descriptiveStats) {
+      for (const stat of statisticalReport.descriptiveStats) {
+        const col = (stat as any).column;
+        if (col) {
+          allStatColumns.add(col.toLowerCase());
+          statsByColumn.set(col.toLowerCase(), stat);
+        }
+      }
+    }
+    // Build correlation lookup: column → all correlations involving it
+    const corrByColumn = new Map<string, Array<typeof statisticalReport.correlationMatrix.significantCorrelations[0]>>();
+    for (const corr of statisticalReport.correlationMatrix.significantCorrelations) {
+      const v1 = corr.var1.toLowerCase();
+      const v2 = corr.var2.toLowerCase();
+      if (!corrByColumn.has(v1)) corrByColumn.set(v1, []);
+      if (!corrByColumn.has(v2)) corrByColumn.set(v2, []);
+      corrByColumn.get(v1)!.push(corr);
+      corrByColumn.get(v2)!.push(corr);
+    }
+    // Build ML feature lookup
+    const mlByColumn = new Map<string, MLModelArtifact[]>();
+    for (const model of mlModels) {
+      for (const feat of model.features) {
+        const fl = feat.toLowerCase();
+        if (!mlByColumn.has(fl)) mlByColumn.set(fl, []);
+        mlByColumn.get(fl)!.push(model);
+      }
+      if (model.targetColumn) {
+        const tl = model.targetColumn.toLowerCase();
+        if (!mlByColumn.has(tl)) mlByColumn.set(tl, []);
+        mlByColumn.get(tl)!.push(model);
+      }
+    }
+    // Build EDA group/comparative lookup
+    const edaComparative = edaResults?.comparativeAnalysis || edaResults?.comparative_analysis;
+    const edaGroupAnalysis = edaResults?.groupAnalysis || edaResults?.group_analysis;
+
+    console.log(`🔗 [Fix 5] Column indexes built: ${allStatColumns.size} stat columns, ${corrByColumn.size} corr columns, ${mlByColumn.size} ML columns`);
+
+    // Helper: extract column-like terms from question text
+    const extractColumnCandidates = (text: string): string[] => {
+      const candidates: string[] = [];
+      // Match patterns like Q1, Q2, Q1_Leadership, Employee_ID, composite_engagement_score
+      const colPatterns = text.match(/\b[A-Za-z]\w*(?:_\w+)+\b/g) || [];
+      candidates.push(...colPatterns.map(c => c.toLowerCase()));
+      // Match short column-like tokens (Q1, Q2, etc.)
+      const shortCols = text.match(/\bQ\d+\b/gi) || [];
+      candidates.push(...shortCols.map(c => c.toLowerCase()));
+      return [...new Set(candidates)];
+    };
+
+    // Helper: find matching columns from candidates against analysis results
+    const findMatchingColumns = (candidates: string[]): string[] => {
+      const matched: string[] = [];
+      for (const cand of candidates) {
+        if (allStatColumns.has(cand)) {
+          matched.push(cand);
+        } else {
+          // Fuzzy: check if any stat column contains the candidate or vice versa
+          for (const statCol of allStatColumns) {
+            if (statCol.includes(cand) || cand.includes(statCol)) {
+              matched.push(statCol);
+            }
+          }
+        }
+      }
+      return [...new Set(matched)];
+    };
+
     for (let i = 0; i < questions.length; i++) {
       const question = questions[i];
       const questionLower = normalizeForLookup(question);
@@ -1978,6 +2053,89 @@ export class DataScienceOrchestrator {
 
       if (preMapping) {
         console.log(`🔗 [P0-3] Question ${i + 1} matched to pre-mapping: [${analysisTypes.join(', ')}]`);
+      }
+
+      // ============================================
+      // FIX 5: Column-aware matching using element names + question text
+      // ============================================
+      // Collect column candidates from: relevantDataElements + question text
+      const columnCandidates = [
+        ...dataElements.map(e => e.toLowerCase()),
+        ...extractColumnCandidates(question)
+      ];
+      const matchedColumns = findMatchingColumns(columnCandidates);
+
+      if (matchedColumns.length > 0) {
+        console.log(`🔗 [Fix 5] Q${i + 1}: Matched ${matchedColumns.length} columns: [${matchedColumns.join(', ')}]`);
+
+        // Search descriptive stats for matched columns
+        for (const col of matchedColumns) {
+          const stat = statsByColumn.get(col);
+          if (stat && findings.length < 6) {
+            const statAny = stat as any;
+            findings.push({
+              id: nanoid(),
+              analysisType: 'descriptive',
+              title: `${statAny.column} statistics`,
+              description: statAny.mean !== undefined
+                ? `Mean=${Number(statAny.mean).toFixed(2)}, Median=${Number(statAny.median || 0).toFixed(2)}, Std Dev=${Number(statAny.std || 0).toFixed(2)} (n=${statAny.count || 'N/A'})`
+                : `Analyzed ${statAny.count || 0} values`,
+              significance: 'medium' as const,
+              evidence: statAny,
+              dataElementsUsed: [statAny.column]
+            });
+            if (statAny.column) dataElements.push(statAny.column);
+          }
+
+          // Search correlations for matched columns
+          const colCorrs = corrByColumn.get(col);
+          if (colCorrs && findings.length < 6) {
+            for (const corr of colCorrs.slice(0, 2)) {
+              // Avoid duplicate findings
+              if (!findings.some(f => f.title.includes(corr.var1) && f.title.includes(corr.var2))) {
+                findings.push({
+                  id: nanoid(),
+                  analysisType: 'correlation',
+                  title: `${corr.var1} and ${corr.var2} correlation`,
+                  description: `Found ${corr.correlation > 0 ? 'positive' : 'negative'} correlation (r=${corr.correlation.toFixed(3)})`,
+                  significance: Math.abs(corr.correlation) > 0.7 ? 'high' : Math.abs(corr.correlation) > 0.4 ? 'medium' : 'low',
+                  evidence: corr,
+                  dataElementsUsed: [corr.var1, corr.var2],
+                  statisticalSignificance: { pValue: corr.pValue }
+                });
+                if (!analysisTypes.includes('correlation')) analysisTypes.push('correlation');
+                dataElements.push(corr.var1, corr.var2);
+              }
+            }
+          }
+
+          // Search ML models for matched columns
+          const colModels = mlByColumn.get(col);
+          if (colModels && findings.length < 6) {
+            for (const model of colModels.slice(0, 1)) {
+              if (!findings.some(f => f.title.includes(model.targetColumn || ''))) {
+                const isTarget = model.targetColumn?.toLowerCase() === col;
+                findings.push({
+                  id: nanoid(),
+                  analysisType: model.problemType === 'regression' ? 'regression' : model.problemType === 'clustering' ? 'clustering' : 'classification',
+                  title: isTarget
+                    ? `Predictive model for ${model.targetColumn}`
+                    : `${col} as factor in ${model.targetColumn} model`,
+                  description: model.problemType === 'regression'
+                    ? `Model explains ${((model.metrics.r2 || 0) * 100).toFixed(1)}% of variance`
+                    : model.problemType === 'clustering'
+                    ? `Silhouette score: ${(model.metrics.silhouetteScore || 0).toFixed(3)}`
+                    : `Accuracy: ${((model.metrics.accuracy || 0) * 100).toFixed(1)}%`,
+                  significance: 'high' as const,
+                  evidence: model.metrics,
+                  dataElementsUsed: model.features
+                });
+                if (!analysisTypes.includes(model.problemType)) analysisTypes.push(model.problemType);
+                dataElements.push(...model.features);
+              }
+            }
+          }
+        }
       }
 
       // Correlation keywords
@@ -2178,7 +2336,7 @@ export class DataScienceOrchestrator {
         }
       }
 
-      // === Fix 2B: Question-specific fallback (replaces generic first-2 stats for ALL questions) ===
+      // === Fix 2B + Fix 5: Question-specific fallback with column-aware search ===
       if (findings.length === 0) {
         // Try to match descriptive stats columns to question keywords
         const questionKeywords = questionLower.match(/\b\w{4,}\b/g) || [];
@@ -2209,6 +2367,7 @@ export class DataScienceOrchestrator {
               description: statAny.mean !== undefined
                 ? `Mean=${Number(statAny.mean).toFixed(2)}, Median=${Number(statAny.median || 0).toFixed(2)} (n=${statAny.count || 'N/A'})`
                 : `Analyzed ${statAny.count || 0} values`,
+              // Fix 5: General context findings get 'low' significance (→ 0.30 confidence in exec summary)
               significance: isGeneral ? 'low' as const : 'medium' as const,
               evidence: statAny,
               dataElementsUsed: statAny.column ? [statAny.column] : []
@@ -2254,12 +2413,48 @@ export class DataScienceOrchestrator {
         analysisTypes.push('descriptive');
       }
 
+      // Fix 5: Compute answer and confidence directly from findings
+      let answer = '';
+      let confidence = 0.30; // Default: no data found → low confidence (not 0.50)
+      const evidence: string[] = [];
+
+      if (findings.length > 0) {
+        // Determine if findings came from column-aware match vs keyword match
+        const hasColumnMatch = matchedColumns.length > 0 && findings.some(f =>
+          f.dataElementsUsed.some(de => matchedColumns.includes(de.toLowerCase()))
+        );
+
+        const topFinding = findings[0];
+        answer = topFinding.description;
+        evidence.push(topFinding.title);
+
+        if (hasColumnMatch) {
+          // Direct column match → high confidence
+          confidence = topFinding.significance === 'high' ? 0.90 : topFinding.significance === 'medium' ? 0.80 : 0.65;
+        } else {
+          // Keyword match → moderate confidence
+          confidence = topFinding.significance === 'high' ? 0.85 : topFinding.significance === 'medium' ? 0.70 : 0.50;
+        }
+
+        // Add additional findings context
+        if (findings.length > 1) {
+          answer += `. Additionally: ${findings.slice(1, 3).map(f => f.description).join('; ')}`;
+        }
+
+        if (topFinding.statisticalSignificance?.pValue) {
+          answer += ` (p=${topFinding.statisticalSignificance.pValue.toFixed(4)})`;
+          evidence.push(`p-value: ${topFinding.statisticalSignificance.pValue.toFixed(4)}`);
+        }
+      }
+
       links.push({
         questionId: `q_${i + 1}`,
         questionText: question,
         analysisTypes,
         dataElements: [...new Set(dataElements)],
-        findings
+        findings,
+        answer: answer || undefined,
+        confidence
       });
     }
 
@@ -2313,16 +2508,28 @@ export class DataScienceOrchestrator {
       }
     }
 
-    // Generate answers to questions
+    // Fix 5: Use pre-computed answers from buildEvidenceChain when available
     const answersToQuestions = questionLinks.map(link => {
+      // If buildEvidenceChain already computed answer and confidence, use them
+      if (link.answer && link.confidence !== undefined) {
+        const evidence: string[] = link.findings.map(f => f.title).slice(0, 3);
+        return {
+          question: link.questionText,
+          answer: `Based on the analysis, ${link.answer}`,
+          confidence: link.confidence,
+          evidence
+        };
+      }
+
+      // Legacy fallback: compute from findings
       let answer = 'Based on the analysis, ';
-      let confidence = 0.5;
+      let confidence = 0.30;
       const evidence: string[] = [];
 
       if (link.findings.length > 0) {
         const topFinding = link.findings[0];
         answer += topFinding.description + '. ';
-        confidence = topFinding.significance === 'high' ? 0.85 : topFinding.significance === 'medium' ? 0.7 : 0.5;
+        confidence = topFinding.significance === 'high' ? 0.85 : topFinding.significance === 'medium' ? 0.70 : 0.50;
         evidence.push(topFinding.title);
 
         if (topFinding.statisticalSignificance?.pValue) {

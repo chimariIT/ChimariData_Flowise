@@ -340,21 +340,32 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
 
     try {
       const response = await apiClient.getProjectArtifacts(pid);
-      const normalized = (response?.artifacts || []).map((artifact: any, index: number) => {
-        const primaryRef = artifact.fileRefs?.find((ref: any) => ref?.url || ref?.signedUrl) || artifact.fileRefs?.[0];
-        const sizeLabel = primaryRef?.sizeMB
-          ? `${Number(primaryRef.sizeMB).toFixed(1)} MB`
-          : primaryRef?.size
-            ? primaryRef.size
-            : '—';
-        return {
-          id: artifact.id || `artifact-${index}`,
-          name: artifact.name || artifact.type || `Artifact ${index + 1}`,
-          type: (primaryRef?.type || artifact.type || 'file').toUpperCase(),
-          size: sizeLabel,
-          url: primaryRef?.url || primaryRef?.signedUrl || null,
-          createdAt: artifact.createdAt,
-        };
+      // Fix 6: Flatten fileRefs — create one entry per file reference instead of one per DB row
+      // Each DB row can contain multiple fileRefs (pdf, pptx, csv, json, dashboard).
+      // The dropdown filters by type, so we need individual entries per file type.
+      const normalized = (response?.artifacts || []).flatMap((artifact: any, index: number) => {
+        const refs = artifact.fileRefs || [];
+        if (refs.length === 0) {
+          // No fileRefs — fall back to artifact-level info
+          return [{
+            id: artifact.id || `artifact-${index}`,
+            name: artifact.name || artifact.type || `Artifact ${index + 1}`,
+            type: (artifact.type || 'file').toUpperCase(),
+            size: '—',
+            url: null,
+            createdAt: artifact.createdAt,
+          }];
+        }
+        return refs
+          .filter((ref: any) => ref.type !== 'dashboard') // Exclude dashboard type from downloads
+          .map((ref: any) => ({
+            id: `${artifact.id || `artifact-${index}`}-${ref.type || 'file'}`,
+            name: ref.filename || `${(ref.type || 'file').toUpperCase()} Export`,
+            type: (ref.type || 'file').toUpperCase(),
+            size: ref.sizeMB ? `${Number(ref.sizeMB).toFixed(1)} MB` : ref.size || '—',
+            url: ref.url || ref.signedUrl || null,
+            createdAt: artifact.createdAt,
+          }));
       });
 
       if (normalized.length > 0) {
@@ -1660,15 +1671,7 @@ export default function DashboardStep({ journeyType, onNext, onPrevious }: Dashb
                   <>
                     <DropdownMenuItem disabled>
                       <FileText className="w-4 h-4 mr-2" />
-                      Export as PDF (No artifacts available)
-                    </DropdownMenuItem>
-                    <DropdownMenuItem disabled>
-                      <BarChart3 className="w-4 h-4 mr-2" />
-                      Export as Excel (No artifacts available)
-                    </DropdownMenuItem>
-                    <DropdownMenuItem disabled>
-                      <Image className="w-4 h-4 mr-2" />
-                      Export as PowerPoint (No artifacts available)
+                      {artifactsLoading ? 'Generating reports...' : artifactsError ? 'Report generation in progress...' : 'No artifacts available'}
                     </DropdownMenuItem>
                   </>
                 )}

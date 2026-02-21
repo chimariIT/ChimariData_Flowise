@@ -3240,6 +3240,9 @@ IMPORTANT RULES:
 3. Confidence should be 0.6+ for semantic matches, 0.9+ for exact matches
 4. Use JAVASCRIPT syntax for transformationCode (not Python)
 5. Always include null/error handling in transformationCode
+6. CRITICAL: sourceField and ALL entries in componentFields MUST be EXACT column names from the AVAILABLE DATASET COLUMNS list above. NEVER invent column names. NEVER use abstract names like "employees_left" or "survey_q1" when the actual column is "Termination_Date" or "Q1".
+7. If the industry domain is specified, ONLY map to columns that make sense for that industry. Do NOT map HR elements to financial columns or vice versa.
+8. For survey data with Q-columns (Q1, Q2, ..., Q10, etc.), include ALL matching Q-columns in componentFields for aggregated/composite scores — do not hardcode to 5 columns if more exist.
 
 Return ONLY valid JSON array.`;
 
@@ -3872,27 +3875,53 @@ assert df['${element.sourceField}'].nunique() == len(df), "Field must have uniqu
         // Score-based detection — require 2+ signals for confidence
         const industryScores: Record<string, number> = {};
 
-        const marketingSignals = (fullContext.match(/\b(campaign|impression|click.?rate|ad.?spend|ctr|cpc|cpm|marketing|seo|sem|social.?media|lead.?gen|conversion.?rate)\b/gi) || []).length;
+        // --- Text-based signals (goals + questions + column names combined) ---
+
+        const marketingSignals = (fullContext.match(/\b(campaign|impression|click.?rate|click.?through|ad.?spend|ctr|cpc|cpm|marketing|seo|sem|social.?media|lead.?gen|conversion.?rate|bounce.?rate|open.?rate|landing.?page|email.?campaign|subscriber|newsletter)\b/gi) || []).length;
         if (marketingSignals >= 2) industryScores['marketing'] = marketingSignals;
 
-        // HR: require HR-specific terms — "engagement" alone is NOT enough
-        const hrSignals = (fullContext.match(/\b(employee|hr\b|human.?resource|turnover|headcount|attrition|hire|onboard|payroll|fte|termination|separation)\b/gi) || []).length;
+        // HR: expanded with compound signals and common HR column patterns
+        const hrSignals = (fullContext.match(/\b(employee|hr\b|human.?resource|turnover|headcount|attrition|hire|onboard|payroll|fte|termination|separation|retention|tenure|workforce|staff|supervisor|engagement.?score|satisfaction.?score|performance.?review|absenteeism|department|manager|team.?lead)\b/gi) || []).length;
         if (hrSignals >= 2) industryScores['hr'] = hrSignals;
 
-        const salesSignals = (fullContext.match(/\b(sales.?pipeline|deal|quota|close.?rate|sales.?rep|opportunity|account.?exec)\b/gi) || []).length;
+        const salesSignals = (fullContext.match(/\b(sales.?pipeline|deal|quota|close.?rate|sales.?rep|opportunity|account.?exec|revenue|pipeline.?stage|win.?rate|sales.?cycle)\b/gi) || []).length;
         if (salesSignals >= 2) industryScores['sales'] = salesSignals;
 
-        const ecomSignals = (fullContext.match(/\b(cart|checkout|product.?page|sku|order.?id|ecommerce|shopif|aov|add.?to.?cart)\b/gi) || []).length;
+        const ecomSignals = (fullContext.match(/\b(cart|checkout|product.?page|sku|order.?id|ecommerce|shopif|aov|add.?to.?cart|wishlist|inventory|fulfillment)\b/gi) || []).length;
         if (ecomSignals >= 2) industryScores['ecommerce'] = ecomSignals;
 
-        const finSignals = (fullContext.match(/\b(profit|loss|balance.?sheet|p&l|ledger|accounts.?payable|accounts.?receivable|budget)\b/gi) || []).length;
+        const finSignals = (fullContext.match(/\b(profit|loss|balance.?sheet|p&l|ledger|accounts.?payable|accounts.?receivable|budget|cash.?flow|roi\b|depreciation|equity|dividend|fiscal)\b/gi) || []).length;
         if (finSignals >= 2) industryScores['finance'] = finSignals;
 
-        const eduSignals = (fullContext.match(/\b(student|grade|gpa|course|enrollment|semester|academic|faculty)\b/gi) || []).length;
+        const eduSignals = (fullContext.match(/\b(student|grade|gpa|course|enrollment|semester|academic|faculty|graduation|curriculum|exam|course.?completion|transcript)\b/gi) || []).length;
         if (eduSignals >= 2) industryScores['education'] = eduSignals;
 
-        const healthSignals = (fullContext.match(/\b(patient|diagnosis|clinical|treatment|hospital|icd|cpt|ehr|readmission)\b/gi) || []).length;
+        const healthSignals = (fullContext.match(/\b(patient|diagnosis|clinical|treatment|hospital|icd|cpt|ehr|readmission|prescription|dosage|symptom|patient.?id|vitals)\b/gi) || []).length;
         if (healthSignals >= 2) industryScores['healthcare'] = healthSignals;
+
+        // --- Column-name signal boost: scan actual column names for industry-specific patterns ---
+        // Column names are strong signals because they reflect the actual data, not just user phrasing
+        if (datasetColumns.length > 0) {
+            const colStr = columnContext; // already lowercased
+            const columnIndustryPatterns: Record<string, RegExp> = {
+                'hr': /\b(employee.?id|emp.?id|hire.?date|termination.?date|department|manager|team|supervisor|staff.?id|tenure|salary|position|job.?title|performance)\b/gi,
+                'marketing': /\b(campaign.?id|ad.?spend|impressions|clicks|ctr|cpc|cpm|channel|utm|audience|creative)\b/gi,
+                'finance': /\b(account.?id|transaction|debit|credit|balance|ledger|invoice|payment|amount|currency)\b/gi,
+                'education': /\b(student.?id|grade|gpa|course.?id|enrollment|semester|score|exam|assignment)\b/gi,
+                'healthcare': /\b(patient.?id|diagnosis|icd|cpt|admission|discharge|prescription|lab.?result|blood.?pressure)\b/gi,
+                'ecommerce': /\b(order.?id|product.?id|sku|cart|price|quantity|shipping|category|brand)\b/gi,
+                'sales': /\b(deal.?id|opportunity|pipeline|stage|close.?date|quota|territory|account.?name)\b/gi,
+            };
+            for (const [industry, pattern] of Object.entries(columnIndustryPatterns)) {
+                const colMatches = (colStr.match(pattern) || []).length;
+                if (colMatches > 0) {
+                    industryScores[industry] = (industryScores[industry] || 0) + colMatches;
+                    if (colMatches >= 1) {
+                        console.log(`   Column-name boost: +${colMatches} for ${industry} (from column names)`);
+                    }
+                }
+            }
+        }
 
         // Pick highest-scoring industry from data signals
         const topIndustry = Object.entries(industryScores).sort((a, b) => b[1] - a[1])[0];

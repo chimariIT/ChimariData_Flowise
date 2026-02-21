@@ -3190,7 +3190,69 @@ Respond with the JSON array ONLY:`;
             }
           }
         }
-        console.log(`✅ [DS Agent AI] Post-AI validation complete for ${validatedElements.length} elements`);
+
+        // POST-AI VALIDATION PHASE 2: Validate derived/composite/aggregated elements
+        // Ensure componentFields reference actual schema columns (not abstract placeholders)
+        const schemaColumnsOriginal = Object.keys(datasetSchema);
+        const schemaLookup = new Map(schemaColumnsOriginal.map(c => [c.toLowerCase(), c]));
+
+        for (const el of validatedElements) {
+          const calcDef = el.calculationDefinition;
+          const calcType = calcDef?.calculationType;
+          if (calcType === 'direct') continue; // Already handled above
+
+          if (calcType === 'derived' || calcType === 'composite' || calcType === 'aggregated') {
+            const cFields = calcDef?.formula?.componentFields || [];
+            if (cFields.length === 0) continue;
+
+            const correctedFields: string[] = [];
+            let anyCorrected = false;
+
+            for (const cf of cFields) {
+              const cfLower = cf.toLowerCase().replace(/[\s-]/g, '_');
+              // Check exact match (case-insensitive)
+              if (schemaLookup.has(cfLower)) {
+                correctedFields.push(schemaLookup.get(cfLower)!);
+                continue;
+              }
+              // Check if original casing matches
+              if (schemaLookup.has(cf.toLowerCase())) {
+                correctedFields.push(schemaLookup.get(cf.toLowerCase())!);
+                continue;
+              }
+              // Fuzzy match: find best column by word overlap
+              let bestCol: string | null = null;
+              let bestOverlap = 0;
+              const cfWords = cfLower.split(/[_\s-]/).filter((w: string) => w.length > 1);
+              for (const [colLower, colOriginal] of schemaLookup) {
+                const colWords = colLower.split(/[_\s-]/).filter((w: string) => w.length > 1);
+                // Count overlapping words
+                const overlap = cfWords.filter((cw: string) => colWords.some((colW: string) =>
+                  cw.includes(colW) || colW.includes(cw)
+                )).length;
+                const overlapRatio = cfWords.length > 0 ? overlap / cfWords.length : 0;
+                if (overlapRatio > bestOverlap && overlapRatio >= 0.5) {
+                  bestOverlap = overlapRatio;
+                  bestCol = colOriginal;
+                }
+              }
+              if (bestCol) {
+                correctedFields.push(bestCol);
+                anyCorrected = true;
+                console.log(`   🔧 [DS Agent AI] Corrected componentField: "${cf}" → "${bestCol}" (${el.elementName})`);
+              } else {
+                // Keep original — might be an abstract name resolved later by business definitions
+                correctedFields.push(cf);
+              }
+            }
+
+            if (anyCorrected && calcDef?.formula) {
+              calcDef.formula.componentFields = correctedFields;
+            }
+          }
+        }
+
+        console.log(`✅ [DS Agent AI] Post-AI validation complete for ${validatedElements.length} elements (direct + derived)`);
       }
 
       // Ensure we have at least a unique identifier — use actual schema ID column if available

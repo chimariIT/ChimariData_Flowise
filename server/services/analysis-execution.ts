@@ -2055,6 +2055,203 @@ export class AnalysisExecutionService {
       console.warn(`⚠️ [Survey] Auto-preprocessing failed (non-blocking): ${surveyErr.message}`);
     }
 
+    // ==========================================
+    // DERIVED COLUMN AUTO-CREATION from requirements document
+    // When transformation step didn't create derived columns, attempt to create them
+    // pre-analysis using the requirements document's element definitions.
+    // This is a general-purpose engine: it reads aggregationMethod + componentFields
+    // from ANY industry's business definitions.
+    // ==========================================
+    try {
+      const project = await storage.getProject(request.projectId);
+      const journeyProgress = (project as any)?.journeyProgress || {};
+      const reqDoc = journeyProgress?.requirementsDocument;
+      const derivedElements = (reqDoc?.requiredDataElements || []).filter((el: any) => {
+        const calcType = el.calculationDefinition?.calculationType;
+        return calcType === 'derived' || calcType === 'aggregated' || calcType === 'composite';
+      });
+
+      if (derivedElements.length > 0) {
+        const firstDatasetId = request.datasetIds?.[0];
+        if (firstDatasetId) {
+          const dataset = await storage.getDataset(firstDatasetId);
+          const rows = extractDatasetRows(dataset, undefined);
+
+          if (rows && rows.length > 0) {
+            const existingColumns = new Set(Object.keys(rows[0]));
+            let derivedCount = 0;
+            const derivedColumnNames: string[] = [];
+
+            console.log(`🔬 [Derived Columns] Checking ${derivedElements.length} derived/aggregated/composite elements against ${existingColumns.size} existing columns...`);
+
+            for (const element of derivedElements) {
+              const targetName = element.elementName;
+              // Skip if column already exists (transformation step already created it)
+              const targetKey = targetName.toLowerCase().replace(/[\s-]/g, '_');
+              const alreadyExists = Array.from(existingColumns).some(
+                col => col.toLowerCase().replace(/[\s-]/g, '_') === targetKey
+              );
+              if (alreadyExists) continue;
+
+              const calcDef = element.calculationDefinition;
+              const formula = calcDef?.formula;
+              const method = formula?.aggregationMethod || calcDef?.aggregationMethod || 'average';
+              let componentFields = formula?.componentFields || [];
+              const sourceCol = element.sourceColumn;
+
+              // Resolve componentFields to actual column names
+              const resolvedFields: string[] = [];
+              for (const cf of componentFields) {
+                // Exact match
+                if (existingColumns.has(cf)) {
+                  resolvedFields.push(cf);
+                  continue;
+                }
+                // Case-insensitive match
+                const match = Array.from(existingColumns).find(
+                  col => col.toLowerCase() === cf.toLowerCase()
+                );
+                if (match) {
+                  resolvedFields.push(match);
+                  continue;
+                }
+                // Pattern match (for Q1, Q2 etc. from survey_responses abstract name)
+                if (/survey_responses|all.*q.*columns/i.test(cf)) {
+                  const qCols = Array.from(existingColumns).filter(col => /^q\d+$/i.test(col) || /^q\d+[\s_-]/i.test(col));
+                  if (qCols.length > 0) {
+                    resolvedFields.push(...qCols);
+                    continue;
+                  }
+                }
+                // Fuzzy match: column name contains the abstract field or vice versa
+                const fuzzy = Array.from(existingColumns).find(col => {
+                  const colLower = col.toLowerCase().replace(/[\s_-]/g, '');
+                  const cfLower = cf.toLowerCase().replace(/[\s_-]/g, '');
+                  return colLower.includes(cfLower) || cfLower.includes(colLower);
+                });
+                if (fuzzy) resolvedFields.push(fuzzy);
+              }
+
+              // Also try sourceColumn if componentFields didn't resolve
+              if (resolvedFields.length === 0 && sourceCol) {
+                const srcCols = sourceCol.split(',').map((s: string) => s.trim());
+                for (const sc of srcCols) {
+                  const match = Array.from(existingColumns).find(
+                    col => col.toLowerCase() === sc.toLowerCase()
+                  );
+                  if (match) resolvedFields.push(match);
+                }
+              }
+
+              if (resolvedFields.length === 0) {
+                console.log(`   ⚠️ [Derived] "${targetName}": no component columns resolved, skipping`);
+                continue;
+              }
+
+              console.log(`   🔧 [Derived] Creating "${targetName}" from [${resolvedFields.join(', ')}] using ${method}`);
+
+              // Apply derivation to each row
+              try {
+                for (const row of rows) {
+                  let derivedValue: any = null;
+
+                  if (method === 'average' || method === 'avg' || method === 'mean') {
+                    const nums = resolvedFields.map(f => parseFloat(row[f])).filter(n => !isNaN(n));
+                    derivedValue = nums.length > 0 ? nums.reduce((a, b) => a + b, 0) / nums.length : null;
+
+                  } else if (method === 'sum') {
+                    const nums = resolvedFields.map(f => parseFloat(row[f])).filter(n => !isNaN(n));
+                    derivedValue = nums.length > 0 ? nums.reduce((a, b) => a + b, 0) : null;
+
+                  } else if (method === 'count') {
+                    derivedValue = resolvedFields.filter(f => row[f] !== null && row[f] !== undefined && row[f] !== '').length;
+
+                  } else if (method === 'count_ratio') {
+                    // Boolean flag: 1 if primary field is non-null/non-empty, 0 otherwise
+                    // Used for turnover flag (Termination_Date present = left)
+                    const primaryField = resolvedFields[0];
+                    const val = row[primaryField];
+                    derivedValue = (val !== null && val !== undefined && val !== '' && val !== 'N/A') ? 1 : 0;
+
+                  } else if (method === 'min') {
+                    const nums = resolvedFields.map(f => parseFloat(row[f])).filter(n => !isNaN(n));
+                    derivedValue = nums.length > 0 ? Math.min(...nums) : null;
+
+                  } else if (method === 'max') {
+                    const nums = resolvedFields.map(f => parseFloat(row[f])).filter(n => !isNaN(n));
+                    derivedValue = nums.length > 0 ? Math.max(...nums) : null;
+
+                  } else if (method === 'custom' || method === 'weighted_average') {
+                    // Attempt to use pseudoCode if available
+                    const pseudoCode = formula?.pseudoCode;
+                    if (pseudoCode && typeof pseudoCode === 'string') {
+                      try {
+                        const fn = new Function('row', 'cols', pseudoCode);
+                        derivedValue = fn(row, resolvedFields);
+                      } catch { /* pseudoCode execution failed, skip */ }
+                    }
+                    // Fallback: try average
+                    if (derivedValue === null || derivedValue === undefined) {
+                      const nums = resolvedFields.map(f => parseFloat(row[f])).filter(n => !isNaN(n));
+                      derivedValue = nums.length > 0 ? nums.reduce((a, b) => a + b, 0) / nums.length : null;
+                    }
+                  }
+
+                  // Date difference derivation (for tenure-like calculations)
+                  if (derivedValue === null && /tenure|duration|age|length.*service/i.test(targetName)) {
+                    // Find a date column among resolved fields
+                    const dateVal = row[resolvedFields[0]];
+                    if (dateVal) {
+                      try {
+                        const startDate = new Date(dateVal);
+                        // Use termination date if available, otherwise current date
+                        let endDate = new Date();
+                        if (resolvedFields.length > 1 && row[resolvedFields[1]]) {
+                          const endVal = new Date(row[resolvedFields[1]]);
+                          if (!isNaN(endVal.getTime())) endDate = endVal;
+                        }
+                        if (!isNaN(startDate.getTime())) {
+                          derivedValue = Math.round((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+                        }
+                      } catch { /* date parsing failed */ }
+                    }
+                  }
+
+                  if (derivedValue !== null && derivedValue !== undefined) {
+                    row[targetName] = typeof derivedValue === 'number' ? Math.round(derivedValue * 100) / 100 : derivedValue;
+                  }
+                }
+
+                derivedCount++;
+                derivedColumnNames.push(targetName);
+                existingColumns.add(targetName);
+              } catch (deriveErr: any) {
+                console.warn(`   ⚠️ [Derived] Failed to create "${targetName}": ${deriveErr.message}`);
+              }
+            }
+
+            if (derivedCount > 0) {
+              console.log(`✅ [Derived Columns] Created ${derivedCount} derived columns: [${derivedColumnNames.join(', ')}]`);
+
+              // Persist augmented data back to dataset for this execution
+              await storage.updateDataset(firstDatasetId, {
+                ingestionMetadata: {
+                  ...(dataset?.ingestionMetadata || {}),
+                  transformedData: rows,
+                  derivedColumnsAdded: derivedColumnNames,
+                  derivedColumnsCreatedAt: new Date().toISOString()
+                }
+              } as any);
+            } else {
+              console.log(`ℹ️ [Derived Columns] No new derived columns needed (all already exist or none resolvable)`);
+            }
+          }
+        }
+      }
+    } catch (derivedErr: any) {
+      console.warn(`⚠️ [Derived Columns] Auto-creation failed (non-blocking): ${derivedErr.message}`);
+    }
+
     // Phase 4D-1: Direct question-to-analysis mapping from Python results
     // Declared at outer scope so it's available for legacyResults construction
     let directQuestionMap: Record<string, Array<{

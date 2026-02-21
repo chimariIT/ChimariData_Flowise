@@ -877,16 +877,27 @@ Respond ONLY with the JSON, no other text.`;
         {
           conceptName: 'engagement_score',
           displayName: 'Employee Engagement Score',
-          businessDescription: 'Composite metric measuring employee engagement based on survey responses',
+          businessDescription: 'Composite metric measuring employee engagement based on survey responses. Computed as the row-wise average of ALL survey question columns (e.g., Q1 through Q10, or any Likert-scale response columns).',
           calculationType: 'aggregated',
-          formula: 'AVG(survey_q1, survey_q2, survey_q3, survey_q4, survey_q5)',
-          componentFields: ['survey_q1', 'survey_q2', 'survey_q3', 'survey_q4', 'survey_q5'],
+          formula: 'AVG(all survey question columns matching Q-pattern)',
+          componentFields: ['survey_responses'],
           aggregationMethod: 'average',
           expectedDataType: 'numeric',
           valueRange: { min: 1, max: 5 },
-          matchPatterns: ['engagement', 'eng_score', 'employee_engagement', 'satisfaction'],
-          synonyms: ['satisfaction_score', 'morale_score'],
-          confidence: 0.95
+          matchPatterns: ['engagement', 'eng_score', 'employee_engagement', 'satisfaction', 'composite_engagement', 'overall_engagement'],
+          synonyms: ['satisfaction_score', 'morale_score', 'composite_engagement_score'],
+          confidence: 0.95,
+          componentFieldDescriptors: [
+            {
+              abstractName: 'survey_responses',
+              semanticMeaning: 'All Likert-scale survey question response columns (variable count: Q1-Q5, Q1-Q10, Q1-Q20, etc.)',
+              derivationLogic: 'AVG of all numeric columns matching survey question pattern. Include ALL matching columns, not a fixed subset.',
+              columnMatchPatterns: ['^q\\d+$', '^q\\d+_', 'survey_q\\d+', 'question_\\d+', 'item_\\d+', '^q\\d+\\s*-\\s*'],
+              columnMatchType: 'pattern_match_all',
+              dataTypeExpected: 'numeric',
+              isIntermediate: false
+            }
+          ]
         },
         {
           conceptName: 'turnover_rate',
@@ -1357,7 +1368,80 @@ Respond ONLY with the JSON, no other text.`;
     // Identifier patterns
     const identifierPatterns = /employee_id|emp_id|staff_id|worker_id|person_id|customer_id|student_id|id/i;
 
+    // Check componentFieldDescriptors for pattern_match_all type (dynamic column discovery)
+    const descriptors = (definition as any).componentFieldDescriptors as Array<{
+      abstractName: string;
+      columnMatchPatterns?: string[];
+      columnMatchType?: string;
+      dataTypeExpected?: string;
+      semanticMeaning?: string;
+    }> | undefined;
+
+    if (descriptors?.length) {
+      for (const descriptor of descriptors) {
+        if (descriptor.columnMatchType === 'pattern_match_all' && descriptor.columnMatchPatterns?.length) {
+          // Find ALL columns matching any of the patterns
+          const matchedColumns: string[] = [];
+          for (const col of schemaColumns) {
+            const colLower = col.toLowerCase();
+            for (const pattern of descriptor.columnMatchPatterns) {
+              try {
+                if (new RegExp(pattern, 'i').test(colLower)) {
+                  // Verify it's the expected data type (numeric for survey responses)
+                  if (descriptor.dataTypeExpected === 'numeric') {
+                    const colInfo = datasetSchema[col];
+                    const colType = (typeof colInfo === 'string' ? colInfo : (colInfo as any)?.type || '').toLowerCase();
+                    if (/number|integer|float|numeric|decimal/i.test(colType)) {
+                      matchedColumns.push(col);
+                    } else if (preview.length > 0) {
+                      // Check sample values for numeric content
+                      const sampleVal = preview[0]?.[col];
+                      if (sampleVal !== null && sampleVal !== undefined && !isNaN(Number(sampleVal))) {
+                        matchedColumns.push(col);
+                      }
+                    }
+                  } else {
+                    matchedColumns.push(col);
+                  }
+                  break; // One pattern match per column is enough
+                }
+              } catch { /* invalid regex, skip */ }
+            }
+          }
+
+          if (matchedColumns.length > 0) {
+            console.log(`🔧 [BA Registry] pattern_match_all for "${descriptor.abstractName}": found ${matchedColumns.length} columns [${matchedColumns.join(', ')}]`);
+            // Replace the abstract placeholder in componentFields with actual column names
+            const idx = componentFields.indexOf(descriptor.abstractName);
+            if (idx >= 0) {
+              componentFields.splice(idx, 1, ...matchedColumns);
+            }
+            // Add a resolved field for each matched column
+            for (const col of matchedColumns) {
+              resolvedFields.push({
+                abstractName: descriptor.abstractName,
+                resolvedColumn: col,
+                role: 'metric_source',
+                resolution: `Pattern-matched survey column "${col}" for "${descriptor.abstractName}"`
+              });
+            }
+          } else {
+            console.log(`⚠️ [BA Registry] pattern_match_all for "${descriptor.abstractName}": no columns matched`);
+            resolvedFields.push({
+              abstractName: descriptor.abstractName,
+              resolvedColumn: null,
+              role: 'metric_source',
+              resolution: `No columns matched patterns for "${descriptor.abstractName}"`
+            });
+          }
+        }
+      }
+    }
+
     for (const abstractField of componentFields) {
+      // Skip fields that were already resolved by pattern_match_all
+      if (resolvedFields.some(f => f.resolvedColumn && f.abstractName === abstractField)) continue;
+
       const normalizedAbstract = abstractField.toLowerCase().replace(/[_\s-]+/g, '');
 
       // Classify the abstract field's semantic role
