@@ -2415,6 +2415,18 @@ export class AnalysisExecutionService {
 
           // U2A2A2U: Execute single analysis via MCP tool registry
           const { executeTool: execAnalysisTool } = await import('./mcp-tool-registry');
+
+          // FIX: Transform questionAnswerMapping to orchestrator shape for evidence chain
+          const qaMapping = request.questionAnswerMapping || [];
+          const orchestratorQAMapping = qaMapping.length > 0
+            ? qaMapping.map((qam: any) => ({
+                questionId: qam.questionId,
+                questionText: qam.questionText,
+                relevantAnalyses: qam.recommendedAnalyses || qam.relevantAnalyses || [],
+                relevantDataElements: qam.requiredDataElements || qam.relevantDataElements || [],
+              }))
+            : undefined;
+
           const dsToolResult = await execAnalysisTool(
             'comprehensive_analysis',
             'data_scientist',
@@ -2436,7 +2448,9 @@ export class AnalysisExecutionService {
               computeEngineConfig: ComputeEngineSelector.getEngineConfig(selectedEngine.engine, {
                 recordCount: totalRecordCount,
                 analysisType: analysisType
-              })
+              }),
+              // FIX: Pass question-answer mapping so orchestrator can build evidence chain
+              questionAnswerMapping: orchestratorQAMapping
             },
             { userId: request.userId, projectId: request.projectId }
           );
@@ -2939,6 +2953,23 @@ export class AnalysisExecutionService {
             sourceAnalysisId: analysisId
           }))
         );
+      }
+
+      // FIX: De-duplicate mergedQuestionAnswers — keep best answer per question
+      if (mergedQuestionAnswers.length > 1) {
+        const bestByQuestion = new Map<string, any>();
+        for (const qa of mergedQuestionAnswers) {
+          const qKey = (qa.question || '').toLowerCase().trim();
+          if (!qKey) continue;
+          const existing = bestByQuestion.get(qKey);
+          if (!existing || (qa.confidence || 0) > (existing.confidence || 0)) {
+            bestByQuestion.set(qKey, qa);
+          }
+        }
+        if (bestByQuestion.size > 0 && bestByQuestion.size < mergedQuestionAnswers.length) {
+          console.log(`📊 [QA Merge] De-duplicated ${mergedQuestionAnswers.length} → ${bestByQuestion.size} question answers (kept highest confidence per question)`);
+          mergedQuestionAnswers = Array.from(bestByQuestion.values());
+        }
       }
 
       // Phase 4D-2: Tag merged insights with answersQuestions using directQuestionMap

@@ -2927,6 +2927,84 @@ export class DataScientistAgent implements AgentHandler {
       }
     }
 
+    // ============================================================
+    // SCHEMA COVERAGE PASS: Ensure every dataset column is covered
+    // ============================================================
+    // Abstract elements from regex extraction often can't be matched by Phase 2.
+    // This pass creates direct-mapped elements for columns not already referenced,
+    // ensuring the transformation step has at least one element per actual column.
+    if (datasetSchema && Object.keys(datasetSchema).length > 0) {
+      const schemaCols = Object.keys(datasetSchema);
+
+      // Build a set of all columns already referenced by existing elements
+      const coveredColumns = new Set<string>();
+      for (const el of requiredElements) {
+        // Check elementName match (case-insensitive, normalized)
+        const elNorm = (el.elementName || '').toLowerCase().replace(/[\s_-]/g, '');
+        for (const col of schemaCols) {
+          const colNorm = col.toLowerCase().replace(/[\s_-]/g, '');
+          if (elNorm === colNorm || elNorm.includes(colNorm) || colNorm.includes(elNorm)) {
+            coveredColumns.add(col);
+          }
+        }
+        // Check sourceField / sourceColumn
+        if (el.sourceField) coveredColumns.add(el.sourceField);
+        if (el.sourceColumn) coveredColumns.add(el.sourceColumn);
+        // Check componentFields
+        const compFields = el.calculationDefinition?.formula?.componentFields || [];
+        for (const cf of compFields) {
+          // Case-insensitive match against schema
+          const cfLower = cf.toLowerCase();
+          for (const col of schemaCols) {
+            if (col.toLowerCase() === cfLower) coveredColumns.add(col);
+          }
+        }
+      }
+
+      // Create direct-mapped elements for uncovered columns
+      const uncoveredCols = schemaCols.filter(col => !coveredColumns.has(col));
+      if (uncoveredCols.length > 0) {
+        console.log(`📋 [Schema Coverage] ${coveredColumns.size}/${schemaCols.length} columns covered by elements. Adding ${uncoveredCols.length} direct-mapped elements.`);
+        for (const col of uncoveredCols) {
+          const colType = datasetSchema[col];
+          const inferredType = typeof colType === 'string'
+            ? (/int|float|numeric|number|decimal|double/i.test(colType) ? 'numeric' as const
+              : /date|time|timestamp/i.test(colType) ? 'datetime' as const
+              : /bool/i.test(colType) ? 'boolean' as const
+              : 'categorical' as const)
+            : (colType?.type === 'number' ? 'numeric' as const
+              : colType?.type === 'date' ? 'datetime' as const
+              : colType?.type === 'boolean' ? 'boolean' as const
+              : 'categorical' as const);
+
+          const humanName = DataScientistAgent.humanizeColumnName(col);
+          requiredElements.push({
+            elementName: humanName,
+            description: `Direct mapping from dataset column "${col}"`,
+            dataType: inferredType,
+            purpose: `Include ${humanName.toLowerCase()} data in the analysis`,
+            required: false,
+            relatedQuestions: [],
+            sourceColumn: col,
+            sourceField: col,
+            sourceAvailable: true,
+            calculationDefinition: {
+              calculationType: 'direct' as const,
+              formula: {
+                businessDescription: `Direct mapping from "${col}" column`,
+                componentFields: [col],
+                pseudoCode: `SELECT "${col}" AS "${col}" FROM source_data`
+              },
+              notes: `Schema coverage: auto-mapped from dataset column "${col}"`
+            }
+          });
+        }
+        console.log(`📋 [Schema Coverage] Total elements after coverage pass: ${requiredElements.length}`);
+      } else {
+        console.log(`📋 [Schema Coverage] All ${schemaCols.length} columns covered by existing elements`);
+      }
+    }
+
     console.log(`✅ [Data Scientist] Identified ${requiredElements.length} required data elements`);
 
     return requiredElements;

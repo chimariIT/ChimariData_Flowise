@@ -910,7 +910,7 @@ export default function DataTransformationStep({
                             if (calcDef.formula?.businessDescription) {
                                 suggestedTransformation = calcDef.formula.businessDescription;
                             } else if (calcDef.formula?.aggregationMethod && calcDef.formula?.componentFields?.length) {
-                                suggestedTransformation = `${calcDef.formula.aggregationMethod.toUpperCase()} of ${calcDef.formula.componentFields.join(', ')}`;
+                                suggestedTransformation = `${(calcDef.formula.aggregationMethod || 'COMPUTE').toUpperCase()} of ${calcDef.formula.componentFields.join(', ')}`;
                             } else if (calcDef.calculationType === 'derived' && calcDef.formula?.componentFields?.length) {
                                 suggestedTransformation = `Derived from: ${calcDef.formula.componentFields.join(', ')}`;
                             }
@@ -4147,7 +4147,7 @@ export default function DataTransformationStep({
                         <Alert>
                             <Info className="h-4 w-4" />
                             <AlertDescription>
-                                By approving, the datasets will be merged using a {joinConfig.type.toUpperCase()} JOIN.
+                                By approving, the datasets will be merged using a {(joinConfig.type || 'LEFT').toUpperCase()} JOIN.
                                 This operation combines data from all datasets into a single unified view for analysis.
                             </AlertDescription>
                         </Alert>

@@ -3469,7 +3469,9 @@ export async function executeTool(
             requiredColumnTypes: input.requiredColumnTypes,
             analysisPreparation: input.analysisPreparation,
             computeEngine: input.computeEngine,
-            computeEngineConfig: input.computeEngineConfig
+            computeEngineConfig: input.computeEngineConfig,
+            // FIX: Pass question-answer mapping for evidence chain building
+            questionAnswerMapping: input.questionAnswerMapping
           });
           result = {
             executionId: executionContext.executionId,
